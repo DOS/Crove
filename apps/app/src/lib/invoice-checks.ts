@@ -24,6 +24,11 @@ export function invoiceCheckMessage(check: Check, t: Translate, money: (amount: 
       return has('taxCode') ? t('invoiceChecks.seller_tax_code.checksum', { taxCode: p.taxCode ?? '' }) : check.message;
     case 'seller_tax_code.ok':
       return has('taxCode') ? t('invoiceChecks.seller_tax_code.ok', { taxCode: p.taxCode ?? '' }) : check.message;
+    case 'related.replaces':
+    case 'related.adjusts':
+    case 'related.replaces_missing':
+    case 'related.adjusts_missing':
+      return has('invoice') ? t(`invoiceChecks.${code}`, { invoice: p.invoice ?? '' }) : check.message;
     case 'issue_date.ok':
       return has('date') ? t('invoiceChecks.issue_date.ok', { date: p.date ?? '' }) : check.message;
     case 'lines_sum.ok':

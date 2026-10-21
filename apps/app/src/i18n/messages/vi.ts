@@ -294,6 +294,15 @@ export const vi = {
     namePlaceholder: 'Tên, ví dụ Vietcombank',
     add: 'Thêm',
   },
+  yearClosing: {
+    title: 'Kết chuyển cuối năm',
+    intro:
+      'Crove lập bút toán kết chuyển từ sổ: chuyển số dư doanh thu, thu nhập, giá vốn và chi phí (loại 5 đến 8) sang 911, rồi chuyển lãi hoặc lỗ của năm sang 4212, ghi ngày 31/12. Chủ sở hữu hoặc quản trị viên duyệt trong Hộp thư; khi duyệt, Crove cấp số NVK và ghi sổ. Báo cáo kết quả kinh doanh và bảng cân đối kế toán không đổi.',
+    year: 'Năm kết chuyển',
+    submit: 'Lập bút toán kết chuyển',
+    created: 'Đã tạo đề xuất kết chuyển năm {year}.',
+    viewProposal: 'Xem đề xuất',
+  },
   journalVoucher: {
     title: 'Phiếu kế toán khác',
     intro:
@@ -339,6 +348,7 @@ export const vi = {
   journal: {
     title: 'Bút toán',
     newJournalVoucher: 'Lập phiếu kế toán',
+    yearClosing: 'Kết chuyển cuối năm',
     subtitle: 'Sổ nhật ký chung theo TT133. Xuất Excel dạng Nợ/Có từng dòng cho kế toán.',
     export: 'Xuất Excel',
     exportFile: 'crove-but-toan-{org}.xlsx',
@@ -2741,6 +2751,12 @@ export const vi = {
     },
     source: { ai: 'Đọc bằng AI từ ảnh/PDF, cần người kiểm tra' },
     duplicate: { found: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' },
+    related: {
+      replaces: 'Hóa đơn thay thế cho hóa đơn {invoice}: khi duyệt, Crove đảo bút toán và hủy chứng từ của hóa đơn gốc',
+      adjusts: 'Hóa đơn điều chỉnh cho hóa đơn {invoice}: ghi sổ phần chênh lệch, liên kết với hóa đơn gốc',
+      replaces_missing: 'Hóa đơn thay thế cho hóa đơn {invoice}, nhưng chưa thấy hóa đơn gốc trong sổ; kiểm tra trước khi duyệt',
+      adjusts_missing: 'Hóa đơn điều chỉnh cho hóa đơn {invoice}, nhưng chưa thấy hóa đơn gốc trong sổ; kiểm tra trước khi duyệt',
+    },
   },
   kernelErrors: {
     codes: {
@@ -2857,6 +2873,12 @@ export const vi = {
       PARENT_NOT_DEEPEST: 'Mã này nằm dưới một tài khoản chi tiết hơn; hãy chọn tài khoản đó làm tài khoản cha',
       VOUCHER_INVALID: 'Chứng từ chưa hợp lệ; hãy kiểm tra tài khoản tiền, đối tượng và các dòng hạch toán',
       JOURNAL_VOUCHER_INVALID: 'Phiếu kế toán không hợp lệ; hãy kiểm tra các dòng hạch toán',
+      YEAR_NOT_ENDED: 'Năm này chưa kết thúc nên chưa kết chuyển được',
+      YEAR_CLOSED: 'Năm này đã kết chuyển; muốn làm lại thì đảo bút toán kết chuyển với ngày 31/12 của năm đó trước',
+      CLOSING_EMPTY: 'Năm này không có số dư doanh thu, chi phí để kết chuyển',
+      CLOSING_UNSUPPORTED: 'Không lập được bút toán kết chuyển tự động (quá nhiều tài khoản hoặc có số tiền lẻ dưới 1 đồng); hãy kết chuyển bằng phiếu kế toán',
+      CLOSING_STALE: 'Sổ của năm đã thay đổi từ khi lập đề xuất kết chuyển; hãy từ chối đề xuất này và lập lại',
+      REPLACEMENT_BEFORE_ORIGINAL: 'Hóa đơn thay thế ghi sổ trước ngày ghi sổ của hóa đơn gốc; hãy chọn ngày ghi sổ từ ngày của hóa đơn gốc trở đi',
       PARTY_NOT_FOUND: 'Không tìm thấy đối tượng (khách hàng hoặc nhà cung cấp)',
       BANK_LINE_NOT_FOUND: 'Không tìm thấy dòng sao kê; hãy tải lại trang ngân hàng',
       BANK_LINE_MISMATCH: 'Chứng từ phải theo dòng sao kê: cùng tài khoản ngân hàng, cùng ngày, cùng chiều tiền và đúng số tiền của dòng',

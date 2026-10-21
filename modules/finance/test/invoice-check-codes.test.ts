@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { INVOICE_CHECK_CODES, zCheck } from '@crove/kernel-contract';
 import { checkInvoice, enterpriseCheckDigit, SIGNATURE_REASONS, type InvoiceCheck, type ParsedInvoice } from '@crove/l10n-vn';
+import { relatedCheck } from '../src/extract.ts';
 
 const parsed = JSON.parse(readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.parsed.json', import.meta.url), 'utf8')) as ParsedInvoice;
 // A checksum-valid code for the "valid" outcome, computed here rather than written out, so no valid code sits in a
@@ -57,7 +58,18 @@ const VARIANTS: ParsedInvoice[] = [
 const DUPLICATE: InvoiceCheck = { id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' };
 
 describe('invoice check codes', () => {
-  const checks = [...VARIANTS.flatMap((v) => checkInvoice(v, '2026-10-13')), DUPLICATE];
+  // And these, for a replacement or an adjustment invoice whose original is in the books or not (#916).
+  const related = (kind: 'replacement' | 'adjustment', documentId: string | null) =>
+    relatedCheck({ kind, template: '1', series: 'C26TAB', number: '1234', issueDate: '2026-09-15', documentId });
+  const ORIGINAL = '00000000-0000-7000-8000-000000000001';
+  const checks = [
+    ...VARIANTS.flatMap((v) => checkInvoice(v, '2026-10-13')),
+    DUPLICATE,
+    related('replacement', ORIGINAL),
+    related('adjustment', ORIGINAL),
+    related('replacement', null),
+    related('adjustment', null),
+  ];
 
   it('gives every check a listed code named after its id, and fits the stored check schema', () => {
     for (const check of checks) {

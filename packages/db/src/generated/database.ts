@@ -184,6 +184,7 @@ export interface FinanceJournalVoucherTable {
   proposal_id: ColumnType<string | null, string | null, NotGranted>;
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  closing_year: ColumnType<number | null, number | null, NotGranted>;
 }
 
 /** crove_finance.org_account */
@@ -276,6 +277,11 @@ export interface FinancePurchaseDocumentTable {
   replaces_document_id: ColumnType<string | null, string | null, NotGranted>;
   direction: ColumnType<string, string | undefined, NotGranted>;
   search: ColumnType<string | null, never, NotGranted>;
+  correction_kind: ColumnType<string | null, string | null, NotGranted>;
+  corrects_document_id: ColumnType<string | null, string | null, NotGranted>;
+  corrected_series: ColumnType<string | null, string | null, NotGranted>;
+  corrected_number: ColumnType<string | null, string | null, NotGranted>;
+  corrected_date: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.purchase_document_void */

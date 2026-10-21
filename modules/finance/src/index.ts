@@ -2,6 +2,7 @@ import { createAccount, setVendorDefaultAccount, updateAccount } from './account
 import { recordPurchase, revisePurchase } from './record.ts';
 import { cashVouchers, prepareVoucher, recordVoucher, vouchersList } from './cash-voucher.ts';
 import { prepareJournalVoucher, recordJournalVoucher } from './journal-voucher.ts';
+import { prepareYearClosing, recordYearClosing } from './year-closing.ts';
 import { prepareReversal, reverseEntry } from './reversal.ts';
 import { openingBalancePost, openingBalancePreview } from './opening-balance.ts';
 import { fileForExtraction, purchaseLookup } from './extract.ts';
@@ -77,7 +78,7 @@ export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type Ledger
 export { SEARCH_LIMIT, searchAmount, type SearchResult } from './search.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, portalListImport, portalListRemove, portalListRecord];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord];
 export const financeQueries = [
   fileForExtraction,
   purchaseLookup,

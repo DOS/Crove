@@ -296,6 +296,15 @@ export const en = {
     namePlaceholder: 'Name, for example Vietcombank',
     add: 'Add',
   },
+  yearClosing: {
+    title: 'Year-end closing',
+    intro:
+      "Crove builds the closing entry from the books: it moves the balances of revenue, income, cost and expense accounts (classes 5 to 8) to 911, then the year's profit or loss to 4212, dated 31 December. An owner or admin approves it in the Inbox; approving numbers it NVK and posts it. The income statement and the balance sheet do not change.",
+    year: 'Year to close',
+    submit: 'Propose the closing entry',
+    created: 'Closing of {year} proposed.',
+    viewProposal: 'View proposal',
+  },
   journalVoucher: {
     title: 'General journal voucher',
     intro:
@@ -341,6 +350,7 @@ export const en = {
   journal: {
     title: 'Journal',
     newJournalVoucher: 'New journal voucher',
+    yearClosing: 'Year-end closing',
     subtitle: 'General journal under Circular 133. Export to Excel with one debit or credit per line for your accountant.',
     export: 'Export to Excel',
     exportFile: 'crove-journal-{org}.xlsx',
@@ -2741,6 +2751,12 @@ export const en = {
     },
     source: { ai: 'Read by AI from a photo or PDF; a person must check it' },
     duplicate: { found: 'This invoice is already in the Inbox or in the books' },
+    related: {
+      replaces: 'Replaces invoice {invoice}: approving reverses its entry and voids its document',
+      adjusts: 'Adjusts invoice {invoice}: the difference is recorded and linked to the original',
+      replaces_missing: 'Replacement invoice for invoice {invoice}, but the original is not in the books; check before approving',
+      adjusts_missing: 'Adjustment invoice for invoice {invoice}, but the original is not in the books; check before approving',
+    },
   },
   kernelErrors: {
     codes: {
@@ -2857,6 +2873,12 @@ export const en = {
       PARENT_NOT_DEEPEST: 'This code falls under a more detailed account. Pick that account as the parent.',
       VOUCHER_INVALID: 'The voucher is not valid. Check the cash account, the party and the posting lines.',
       JOURNAL_VOUCHER_INVALID: 'The journal voucher is not valid; check its lines.',
+      YEAR_NOT_ENDED: 'This year has not ended yet, so it cannot be closed.',
+      YEAR_CLOSED: "This year is already closed. To close it again, first reverse its closing entry dated 31 December of that year.",
+      CLOSING_EMPTY: 'This year has no revenue or expense balances to close.',
+      CLOSING_UNSUPPORTED: 'The closing entry cannot be built automatically (too many accounts, or amounts below 1 dong); close the year with a journal voucher.',
+      CLOSING_STALE: "The year's books changed after the closing was proposed; reject this proposal and propose the closing again.",
+      REPLACEMENT_BEFORE_ORIGINAL: "The replacement invoice would post before its original's posting date; choose a posting date on or after the original's.",
       PARTY_NOT_FOUND: 'Party (customer or vendor) not found.',
       BANK_LINE_NOT_FOUND: 'Statement line not found. Reload the bank page.',
       BANK_LINE_MISMATCH: "The voucher must follow its statement line: the same bank account, date, direction and amount.",
