@@ -1,7 +1,7 @@
 // A web page's head for a link preview (#641), and its main text for AI drafts (#779): which tags win, decoding, and
 // what is never read.
 import { describe, expect, it } from 'vitest';
-import { EXTRACT_LIMITS } from '@crove/extract-contract';
+import { EXTRACT_LIMITS, zExtractedPage } from '@crove/extract-contract';
 import { parse } from '../src/parse.ts';
 import { readHtmlMeta } from '../src/html-meta.ts';
 
@@ -37,14 +37,21 @@ describe('readHtmlMeta', () => {
     });
   });
 
-  it('caps every field, on a code point', () => {
+  it('caps every field in UTF-16 units, as the contract counts them, never inside a surrogate pair', () => {
     const long = 'ư'.repeat(EXTRACT_LIMITS.maxPageTitleChars + 50);
     expect(readHtmlMeta(page(`<title>${long}</title>`)).title).toHaveLength(EXTRACT_LIMITS.maxPageTitleChars);
-    const emoji = '😀'.repeat(EXTRACT_LIMITS.maxPageTitleChars + 1);
-    expect(Array.from(readHtmlMeta(page(`<title>${emoji}</title>`)).title ?? '')).toHaveLength(EXTRACT_LIMITS.maxPageTitleChars);
+    const emoji = readHtmlMeta(page(`<title>a${'😀'.repeat(EXTRACT_LIMITS.maxPageTitleChars)}</title>`)).title ?? '';
+    expect(emoji.length).toBeLessThanOrEqual(EXTRACT_LIMITS.maxPageTitleChars);
+    expect(emoji.endsWith('😀')).toBe(true);
+    // A long page full of emoji still answers within the contract (#779).
+    const text = readHtmlMeta(page('', `<p>a${'😀'.repeat(EXTRACT_LIMITS.maxPageTextChars)}</p>`)).text ?? '';
+    expect(text.length).toBeLessThanOrEqual(EXTRACT_LIMITS.maxPageTextChars);
+    expect(text.endsWith('😀')).toBe(true);
   });
 
   it('answers through the contract, and refuses what is not HTML', async () => {
+    // Emoji-heavy fields stay within the contract's limits.
+    expect(zExtractedPage.safeParse(readHtmlMeta(page(`<title>${'😀'.repeat(400)}</title>`, `<p>${'😀'.repeat(5000)}</p>`))).success).toBe(true);
     expect(await parse('html_meta', page('<title>Trang</title>'))).toEqual({ ok: true, kind: 'html_meta', page: { title: 'Trang', description: null, siteName: null, text: 'body' } });
     expect(await parse('html_meta', new TextEncoder().encode('{"json": true}'))).toEqual({ ok: false, code: 'invalid', message: 'Trang không phải HTML' });
     expect(await parse('html_meta', page(''))).toEqual({ ok: true, kind: 'html_meta', page: { title: null, description: null, siteName: null, text: 'body' } });

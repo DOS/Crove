@@ -39,6 +39,13 @@ function entities(s: string): string {
   });
 }
 
+// At most max UTF-16 units, as the contract's limits count them, never ending inside a surrogate pair.
+function cut(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const end = text.charCodeAt(max - 1);
+  return text.slice(0, end >= 0xd800 && end <= 0xdbff ? max - 1 : max);
+}
+
 function clean(raw: string | undefined, max: number): string | null {
   if (raw === undefined) return null;
   const text = entities(raw)
@@ -48,8 +55,7 @@ function clean(raw: string | undefined, max: number): string | null {
     .replace(/\s+/g, ' ')
     .trim();
   if (text === '') return null;
-  // Cut on a code point, never inside a surrogate pair.
-  return Array.from(text).slice(0, max).join('').trim() || null;
+  return cut(text, max).trim() || null;
 }
 
 // The attributes of one tag: name="value", name='value' or name=value.
@@ -149,7 +155,7 @@ function mainText(html: string): string | null {
     .map((line) => clean(line, EXTRACT_LIMITS.maxPageTextChars))
     .filter((line): line is string => line !== null);
   if (lines.length === 0) return null;
-  return Array.from(lines.join('\n')).slice(0, EXTRACT_LIMITS.maxPageTextChars).join('').trim() || null;
+  return cut(lines.join('\n'), EXTRACT_LIMITS.maxPageTextChars).trim() || null;
 }
 
 export function readHtmlMeta(bytes: Uint8Array): ExtractedPage {
