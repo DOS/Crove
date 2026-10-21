@@ -44,6 +44,8 @@ const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_kernel.notification',
   'crove_kernel.notification_mute',
+  'crove_kernel.org_usage',
+  'crove_kernel.usage_deferral',
   'crove_social.chat_alert',
   'crove_social.chat_alert_target',
   'crove_social.media_tag',
@@ -523,6 +525,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.oauth_state': {
     make: (o) => ({ row: { org_id: o.id, user_id: o.owner, provider: 'sandbox', state_hash: `sha256:${hex64()}`, expires_at: '2099-01-01T00:00:00Z' } }),
   },
+  // What an org used of its daily abuse limits (#675), recorded by the worker: append-only, tenants read and insert.
+  'crove_kernel.org_usage': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), metric: 'inbound_emails', amount: '1' } }) },
   'crove_kernel.outbox_event': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), type: 'rls.matrix', payload: '{}' } }) },
   'crove_kernel.outbox_pending': { make: (o) => ({ row: { org_id: o.id, event_id: randomUUID() } }) },
   'crove_kernel.party': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: 'RLS matrix party' } }) },
@@ -556,6 +560,10 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => ({ row: { org_id: o.id, slug: `rls-${tag()}`, name: 'RLS matrix', created_by: o.owner } }),
   },
   'crove_kernel.tenant_member': { make: (o) => ({ row: { org_id: o.id, user_id: o.freshUser(), role: 'member' } }) },
+  // An item kept for an org's next daily budget (#675): append-only, tenants read and insert.
+  'crove_kernel.usage_deferral': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), metric: 'extraction_pages', subject_type: 'file', subject_id: randomUUID(), retry_at: '2099-01-01T00:00:00Z' } }),
+  },
   // A channel's daily count of followers (#645), recorded by the worker: one per channel and day.
   'crove_social.account_snapshot': {
     make: (o) => {
