@@ -739,7 +739,8 @@ function ContactEmailField({ email, canManage }: { email: string | null; canMana
     orpc.org.setContactEmail.mutationOptions({
       onSuccess: async () => {
         setEditing(false);
-        await queryClient.invalidateQueries({ queryKey: orpc.org.get.key() });
+        // The reconciliation screen's request card reads the contact email from its own query.
+        await Promise.all([queryClient.invalidateQueries({ queryKey: orpc.org.get.key() }), queryClient.invalidateQueries({ queryKey: orpc.missingInvoices.status.key() })]);
       },
     }),
   );
