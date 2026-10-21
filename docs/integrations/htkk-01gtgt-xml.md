@@ -57,8 +57,9 @@ Root `HSoThueDTu` in GDT's namespace, `HSoKhaiThue id="ID_1"`, then:
   scope), `soLan` 0. `KyKKhaiThue`: a month is `kieuKy` `M`, `kyKKhai` `MM/YYYY` (as the schema notes say); a quarter is
   `kieuKy` `Q`, `kyKKhai` `Q/YYYY` with its first and last month (as S3); the first and last day as `DD/MM/YYYY`.
   `ngayLapTKhai` and `ngayKy` are the day of the download in Vietnam time, `YYYY-MM-DD` (`ngayKy` is an `xs:date`).
-  The tax office, the signer and the line of business are empty. `NNT`: the org's tax code and name; address and
-  contacts empty (Crove does not hold them). No `DLyThue` (tax agent) block.
+  The tax office, the signer and the line of business are empty. `NNT`: the org's tax code, name and, when it is set
+  in Settings (#324), its address in `dchiNNT` as one line (#692). The address parts (`phuongXa`, district, province)
+  and the contacts stay empty: Crove holds the address as one line and no contacts. No `DLyThue` (tax agent) block.
 - **`CTieuTKhaiChinh`**: `ma_NganhNghe` `00` (ordinary business), `tieuMucHachToan` `1701` (domestic VAT), an empty
   `Header` ([09] to [11c]), then every indicator from [21] to [43], all numbers (the schema types them `xs:long`,
   `xs:nonNegativeInteger` for [22], [40a], [40] and [41], and `xs:boolean` for [21]; an empty number would fail it).
@@ -70,9 +71,9 @@ Root `HSoThueDTu` in GDT's namespace, `HSoKhaiThue id="ID_1"`, then:
 | [22] VAT carried forward from the previous period | 0 |
 | [23], [24] purchases and their VAT | Crove: all purchase invoices of the period |
 | [23a], [24a] of which imports | 0 (import declarations are not in Crove) |
-| [25] deductible input VAT | **0**; the accountant enters it |
+| [25] deductible input VAT | **0** by default; the accountant enters it. Optionally [24] (all input VAT), chosen per download with "Ghi chỉ tiêu [25] bằng [24]" on the VAT screen (`?deductInput=1`, recorded in the export's audit row); the accountant then reduces it by what may not be deducted (#692) |
 | [26] to [35] sales | Crove: `form01Indicators` (8% sales in [32] and [33] with 10%) |
-| [36] = [35] - [25] | worked out, so equal to [35] until [25] is entered |
+| [36] = [35] - [25] | worked out, so equal to [35] while [25] is 0 |
 | [37], [38], [39a], [40b], [42] | 0 |
 | [40a], [41] | worked out from x = [36] - [22] + [37] - [38] - [39a]: [40a] = x when x >= 0, else [41] = -x |
 | [40] = [40a] - [40b], [43] = [41] - [42] | worked out |
@@ -88,6 +89,9 @@ values so the file obeys the form's formulas exactly. An amount beyond HTKK's 14
   `01_GTGT_TT80_283.xsd` (which redefines `TKhaiThue.xsd`) with lxml; broken variants (a missing [25], a negative
   [40a], a wrong budget sub-item, a missing [43], a 5-digit tax code) are rejected. Re-run it against the XSDs of a
   current HTKK install when the version changes.
+- #692 adds two samples, `address` (an address in `dchiNNT`) and `deduct` ([25] = [24]). The unit test checks that
+  both keep the template's element order and that the values follow the formulas; they have not been run against the
+  XSDs yet (they are not in the repo). Do so with the next HTKK check.
 - Not verified: an import into HTKK and an upload on eTax. That is the acceptance step of #332 and needs the partner's
   accountant.
 
@@ -98,9 +102,12 @@ values so the file obeys the form's formulas exactly. An amount beyond HTKK's 14
 2. How do you load the file: through HTKK, or by uploading it on eTax directly? Does either refuse `maDVu` `CROVE`
    (the software name) or the empty `ttinNhaCCapDVu`?
 3. Month periods: HTKK writes `kyKKhai` as `09/2026` or `9/2026`?
-4. [25] is 0 in the file, so the payable VAT ([36], [40]) counts no deduction until you enter it. Would you rather
-   Crove put [24] (all input VAT) in [25] and let you reduce it?
+4. [25] is 0 in the file by default, so the payable VAT ([36], [40]) counts no deduction until you enter it. Crove
+   can already write [24] (all input VAT) in [25] when you tick the option before downloading (#692). Should that be
+   the default?
 5. Which of [21], [22], [23a]/[24a], [37], [38], [39a], [40b], [42] do your clients use, and from where should Crove
    take them later (the previous return for [22], import declarations for [23a]/[24a])?
-6. Does the file need the tax office (`maCQTNoiNop`), the signer and the address filled before HTKK or eTax takes it?
+6. Does the file need the tax office (`maCQTNoiNop`) and the signer filled before HTKK or eTax takes it? The address is
+   now written from Settings as one line in `dchiNNT` (#692); do HTKK or eTax also need the ward, district and
+   province codes?
 7. Do you need the reduced-rate appendix (Decree 174/2025) in the same file, or do you prepare it in HTKK?

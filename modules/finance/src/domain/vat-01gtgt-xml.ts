@@ -11,7 +11,9 @@
 // Crove fills what it computes from invoices ([23], [24], [26] to [35], see form01Indicators) and the form's formulas
 // that follow from them. What needs the accountant's judgement or the previous return is 0: [21], [22], [23a], [24a],
 // [25] (so [36] equals [35] until the accountant enters it), [37], [38], [39a], [40b] and [42]. So are the tax
-// office, the signer and the address, which Crove does not hold. The accountant completes them in HTKK before filing.
+// office and the signer, which Crove does not hold. The accountant completes them in HTKK before filing.
+// Two choices of the accountant's (#692): the taxpayer's address is written when the org has one (#324), and [25]
+// may be filled with [24] (all input VAT deducted) for the accountant to reduce; it stays 0 unless asked.
 import { Decimal, money, type DecimalValue, type Money } from '@crove/l10n-vn';
 import { el, serializeXml, type XmlElement } from './xml.ts';
 import type { FormIndicator, VatPeriod } from './vat-return.ts';
@@ -62,6 +64,13 @@ export interface Vat01Input {
 export interface Vat01Taxpayer {
   taxCode: string;
   name: string;
+  // The org's address (kernel.org.set_address, #324), or null when it has none: dchiNNT is then empty.
+  address?: string | null;
+}
+
+export interface Vat01Values {
+  // Put [24] in [25]: every input VAT of the period deducted, before the accountant takes out what may not be.
+  deductInput?: boolean;
 }
 
 function wholeDong(value: Money | DecimalValue): DecimalValue {
@@ -72,15 +81,16 @@ function wholeDong(value: Money | DecimalValue): DecimalValue {
  * Every indicator of the form as a whole number of dong (a decimal string; [21] is 0, the box not ticked). The
  * computed indicators are rounded half up to whole dong, then the totals and the payable or carried-forward VAT are
  * worked out from the rounded values with the form's formulas:
- * [36] = [35] - [25]; with x = [36] - [22] + [37] - [38] - [39a]: [40a] = x when x >= 0, [41] = -x when x < 0;
+ * [25] is 0, or [24] when options.deductInput is set. [36] = [35] - [25]; with x = [36] - [22] + [37] - [38] - [39a]: [40a] = x when x >= 0, [41] = -x when x < 0;
  * [40] = [40a] - [40b]; [43] = [41] - [42]. Refuses an amount HTKK cannot hold.
  */
-export function form01XmlValues(indicators: ReadonlyArray<FormIndicator>): Record<Form01Code, string> {
+export function form01XmlValues(indicators: ReadonlyArray<FormIndicator>, options: Vat01Values = {}): Record<Form01Code, string> {
   const v = new Map<Form01Code, DecimalValue>(FORM_01_CODES.map((code) => [code, money(0)]));
   for (const indicator of indicators) {
     if (COMPUTED.has(indicator.code)) v.set(indicator.code as Form01Code, wholeDong(indicator.amount));
   }
   const get = (code: Form01Code) => v.get(code) ?? money(0);
+  if (options.deductInput) v.set('25', get('24'));
   // Re-derive the sums from the rounded parts, so the file obeys the form's formulas to the dong.
   v.set('27', get('29').plus(get('30')).plus(get('32')).plus(get('32a')));
   v.set('28', get('31').plus(get('33')));
@@ -126,7 +136,7 @@ function periodElements(period: VatPeriod): XmlElement[] {
   ];
 }
 
-export interface Vat01Options {
+export interface Vat01Options extends Vat01Values {
   // The day the file is made, YYYY-MM-DD (Vietnam time, @crove/kernel-contract vietnamToday); it is the return's date
   // and the signing date.
   today: string;
@@ -136,12 +146,14 @@ export interface Vat01Options {
 export function buildForm01Xml(input: Vat01Input, taxpayer: Vat01Taxpayer, options: Vat01Options): string {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(options.today)) throw new Error(`not a date: ${JSON.stringify(options.today)}`);
   if (!/^(\d{10}(-\d{3})?|\d{12})$/.test(taxpayer.taxCode)) throw new Error('the taxpayer has no valid tax code');
-  const ct = form01XmlValues(input.indicators);
+  const ct = form01XmlValues(input.indicators, options);
   const c = (code: Form01Code) => el(`ct${code}`, ct[code]);
   const empty = (...names: string[]) => names.map((name) => el(name, ''));
   const f = HTKK_01GTGT;
-  // tenNNT is an xs:token: no line breaks or runs of spaces.
-  const name = taxpayer.name.replace(/\s+/g, ' ').trim();
+  // tenNNT and dchiNNT are xs:token: no line breaks or runs of spaces.
+  const token = (text: string) => text.replace(/\s+/g, ' ').trim();
+  const name = token(taxpayer.name);
+  const address = token(taxpayer.address ?? '');
 
   const general = el('TTinChung', [
     el('TTinDVu', [el('maDVu', f.service.code), el('tenDVu', f.service.name), el('pbanDVu', f.service.version), el('ttinNhaCCapDVu', '')]),
@@ -165,7 +177,8 @@ export function buildForm01Xml(input: Vat01Input, taxpayer: Vat01Taxpayer, optio
       el('NNT', [
         el('mst', taxpayer.taxCode),
         el('tenNNT', name),
-        ...empty('dchiNNT', 'phuongXa', 'maHuyenNNT', 'tenHuyenNNT', 'maTinhNNT', 'tenTinhNNT', 'dthoaiNNT', 'faxNNT', 'emailNNT'),
+        el('dchiNNT', address),
+        ...empty('phuongXa', 'maHuyenNNT', 'tenHuyenNNT', 'maTinhNNT', 'tenTinhNNT', 'dthoaiNNT', 'faxNNT', 'emailNNT'),
       ]),
     ]),
   ]);

@@ -237,10 +237,11 @@ export const vatPeriodQuery = defineQuery({
   handler: (ctx, input): Promise<VatReport> => loadVatReport(ctx, input.period),
 });
 
-// The taxpayer block of the HTKK return (issue #332): the org's tax code (#313) and name.
+// The taxpayer block of the HTKK return (issue #332): the org's tax code (#313), name and address (#324, #692).
 export interface VatTaxpayer {
   taxCode: string;
   name: string;
+  address: string | null;
 }
 
 export interface VatDeclaration {
@@ -255,7 +256,7 @@ export const vatDeclarationQuery = defineQuery({
   input: zVatPeriodInput,
   access: ALL,
   handler: async (ctx, input): Promise<VatDeclaration> => {
-    const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['tax_code', 'name', 'vat_filing_period']).where('org_id', '=', ctx.orgId).executeTakeFirst();
+    const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['tax_code', 'name', 'address', 'vat_filing_period']).where('org_id', '=', ctx.orgId).executeTakeFirst();
     if (!org?.tax_code) {
       throw new DomainError('TAX_CODE_REQUIRED', 422, 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi xuất lại.');
     }
@@ -272,7 +273,7 @@ export const vatDeclarationQuery = defineQuery({
           : 'Tổ chức khai thuế GTGT theo quý nên không xuất được tờ khai XML theo tháng. Chọn một quý, hoặc đổi kỳ khai trong Cài đặt.',
       );
     }
-    return { report: await loadVatReport(ctx, input.period), taxpayer: { taxCode: org.tax_code, name: org.name } };
+    return { report: await loadVatReport(ctx, input.period), taxpayer: { taxCode: org.tax_code, name: org.name, address: org.address } };
   },
 });
 
@@ -281,18 +282,25 @@ export const vatDeclarationQuery = defineQuery({
 export const VAT_EXPORT_FORMATS = ['htkk_01gtgt_xml'] as const;
 
 // Records one export of a period's VAT working after the file is built. It changes nothing: its audit row is the
-// record, with the period, the number of invoices and the format, never their content. Same roles as
+// record, with the period, the number of invoices, the format and the [25] choice, never their content. Same roles as
 // finance.vat.period.
 export const vatExport = defineCommand({
   name: 'finance.vat.export',
   input: zVatPeriodInput.extend({
     documents: z.number().int().nonnegative().max(2 * VAT_PERIOD_LIMIT),
     format: z.enum(VAT_EXPORT_FORMATS).optional(),
+    // The HTKK XML with [25] = [24] (#692), the accountant's choice for that download.
+    deductInput: z.boolean().optional(),
   }),
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
-    ctx.audit(input.format ? { period: input.period, documents: input.documents, format: input.format } : { period: input.period, documents: input.documents });
+    ctx.audit({
+      period: input.period,
+      documents: input.documents,
+      ...(input.format ? { format: input.format } : {}),
+      ...(input.deductInput ? { deduct_input: true } : {}),
+    });
     return { ok: true as const };
   },
 });
