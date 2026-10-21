@@ -23,6 +23,7 @@ import { PostActivity } from '../components/social-activity.tsx';
 import { ReviewChanges } from '../components/social-review-diff.tsx';
 import { LabelPicker } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
+import { BestTimeButton } from '../components/social-best-time.tsx';
 import { EmojiPicker } from '../components/social-emoji.tsx';
 import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -1716,6 +1717,7 @@ function SchedulePanel({ post, names, onDone }: { post: Post; names: Map<string,
     onSuccess: onDone,
   });
   if (ready.length === 0) return null;
+  const only = ready.length === 1 ? ready[0] : undefined;
   const min = toLocalInput(new Date().toISOString());
   return (
     <Card className="block space-y-3 border-primary/40 p-4">
@@ -1736,7 +1738,13 @@ function SchedulePanel({ post, names, onDone }: { post: Post; names: Map<string,
           </button>
         ))}
       </div>
-      {mode === 'time' && !perChannel && <Input type="datetime-local" aria-label={t('atTime')} value={when} min={min} onChange={(e) => setWhen(e.target.value)} className="max-w-xs" />}
+      {mode === 'time' && !perChannel && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Input type="datetime-local" aria-label={t('atTime')} value={when} min={min} onChange={(e) => setWhen(e.target.value)} className="max-w-xs" />
+          {/* One channel: the shared time is its time (#980). */}
+          {only && <BestTimeButton connectionId={only.connectionId} timeZone={post.timeZone} exceptVariantId={only.id} onPick={(at) => setWhen(toLocalInput(at))} />}
+        </div>
+      )}
       {mode === 'time' && ready.length > 1 && (
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           <input type="checkbox" checked={perChannel} onChange={(e) => setPerChannel(e.target.checked)} className="size-4 accent-primary" />
@@ -1746,12 +1754,13 @@ function SchedulePanel({ post, names, onDone }: { post: Post; names: Map<string,
       {mode === 'time' && perChannel && (
         <div className="space-y-2">
           {ready.map((v) => (
-            <label key={v.id} className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="min-w-40 text-foreground">
+            <div key={v.id} className="flex flex-wrap items-center gap-2 text-sm">
+              <span id={`time-${v.id}`} className="min-w-40 text-foreground">
                 {names.get(v.connectionId) ?? providerName(v.provider)} <span className="text-xs text-subtle-foreground">{providerName(v.provider)}</span>
               </span>
-              <Input type="datetime-local" value={timeOf(v.id)} min={min} onChange={(e) => setTimes((prev) => ({ ...prev, [v.id]: e.target.value }))} className="max-w-xs" />
-            </label>
+              <Input type="datetime-local" aria-labelledby={`time-${v.id}`} value={timeOf(v.id)} min={min} onChange={(e) => setTimes((prev) => ({ ...prev, [v.id]: e.target.value }))} className="max-w-xs" />
+              <BestTimeButton connectionId={v.connectionId} timeZone={post.timeZone} exceptVariantId={v.id} onPick={(at) => setTimes((prev) => ({ ...prev, [v.id]: toLocalInput(at) }))} />
+            </div>
           ))}
         </div>
       )}
@@ -1945,7 +1954,7 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
 }
 
 // Another time for a scheduled channel, its approvals kept (#580): the calendar's drag, from the keyboard.
-function MoveTime({ variantId, at, onDone }: { variantId: string; at: string | null; onDone: () => void }) {
+function MoveTime({ variantId, connectionId, timeZone, at, onDone }: { variantId: string; connectionId: string; timeZone: string; at: string | null; onDone: () => void }) {
   const t = useTranslations('social');
   const [open, setOpen] = useState(false);
   const [when, setWhen] = useState(() => toLocalInput(at ?? new Date(Date.now() + 3_600_000).toISOString()));
@@ -1974,6 +1983,7 @@ function MoveTime({ variantId, at, onDone }: { variantId: string; at: string | n
   return (
     <span className="flex flex-wrap items-center gap-2">
       <Input type="datetime-local" aria-label={t('moveTime')} value={when} min={toLocalInput(new Date().toISOString())} onChange={(e) => setWhen(e.target.value)} className="h-8 max-w-56" />
+      <BestTimeButton connectionId={connectionId} timeZone={timeZone} exceptVariantId={variantId} disabled={move.isPending} onPick={(next) => setWhen(toLocalInput(next))} />
       <Button size="sm" disabled={move.isPending || !fromLocalInput(when)} onClick={() => move.mutate()}>
         {t('moveTimeSave')}
       </Button>
@@ -2386,7 +2396,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                           </Button>
                         </>
                       )}
-                      {canDecide && v.status === 'scheduled' && !v.queuePaused && <MoveTime variantId={v.id} at={v.effectiveAt} onDone={refresh} />}
+                      {canDecide && v.status === 'scheduled' && !v.queuePaused && <MoveTime variantId={v.id} connectionId={v.connectionId} timeZone={p.timeZone} at={v.effectiveAt} onDone={refresh} />}
                       {canDecide && ['scheduled', 'paused'].includes(v.status) && (
                         <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
                           {t('unschedule')}
