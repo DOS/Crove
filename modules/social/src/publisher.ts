@@ -13,6 +13,7 @@ import { DomainError, readVerified, type BlobStore, type CredentialBroker, type 
 import { COVER_RULES, THREAD_PARTS_MAX, VIDEO_READY, coverKind, coverOf, isProvider, scopeNeeded, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 import type { CommentWork } from './comments.ts';
+import type { RemoveRecord, RemoveWork } from './remove.ts';
 import type { ThreadWork } from './thread.ts';import { shortened, shortUrl } from './short-links.ts';
 
 
@@ -250,6 +251,35 @@ export async function runCommentJob(deps: PublishDeps, orgId: string, variantId:
     }
   }
   const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.comment.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
+  return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
+}
+
+/** The removal of a published variant a person asked for (#860): begin, one call, record. after: the last remove call the ask saw. */
+export async function runRemoveJob(deps: PublishDeps, orgId: string, variantId: string, provider: string, after: string | null): Promise<{ action: string; reason?: string; state?: string }> {
+  const publisher = deps.publishers[provider];
+  if (!publisher?.remove) return { action: 'none', reason: 'provider_not_configured' };
+  const begun = await deps.runtime.execute<RemoveWork>('social.remove.begin', { variantId, provider, after }, { actor: ACTOR, orgId });
+  if (begun.action === 'none') return { action: 'none', reason: begun.reason };
+  const credential = await openCredential(deps, orgId, begun.connectionId);
+  let result: RemoveRecord;
+  if ('blocked' in credential) result = { kind: 'blocked', code: credential.blocked };
+  else {
+    const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    try {
+      const r = await withTimeout(timeout, () => publisher.remove!({ ...credential, externalId: begun.externalId, settings: begun.settings }));
+      // What the record takes: codes and messages cut to their columns; a retry time is not kept (a person asks again).
+      result =
+        r.kind === 'removed'
+          ? r
+          : r.kind === 'unknown'
+            ? { kind: 'unknown', ...(r.code !== undefined ? { code: r.code.slice(0, 200) } : {}) }
+            : { kind: 'rejected', error: r.error, ...(r.code !== undefined ? { code: r.code.slice(0, 200) } : {}), ...(r.message !== undefined ? { message: r.message.slice(0, 2000) } : {}) };
+    } catch (error) {
+      // A throw or a timeout after the call may have reached the platform.
+      result = { kind: 'unknown', code: error instanceof Timeout ? 'TIMEOUT' : 'ADAPTER_ERROR' };
+    }
+  }
+  const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.remove.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
   return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
 }
 

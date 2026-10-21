@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, sentLink, SENT_TO_APP, tiktokModeOf, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, SENT_TO_APP, tiktokModeOf } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -1645,6 +1645,71 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
   }
 }
 
+// Takes a published channel down from its platform (#860), after a confirmation with an optional reason. again: an
+// earlier ask failed or its outcome is unclear.
+function RemoveFromChannel({ variantId, channel, again, onDone }: { variantId: string; channel: string; again: boolean; onDone: () => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const remove = useMutation({
+    mutationFn: () => client.social.variants.remove({ variantId, ...(reason.trim() ? { reason: reason.trim() } : {}) }),
+    onSuccess: () => {
+      setOpen(false);
+      setReason('');
+      onDone();
+    },
+  });
+  if (!open) {
+    return (
+      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
+        {t(again ? 'remove.retry' : 'remove.action')}
+      </Button>
+    );
+  }
+  return (
+    <div className="w-full space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+      <p className="text-sm text-foreground">{t('remove.confirm', { channel })}</p>
+      <Label htmlFor={`${id}-reason`}>{t('remove.reason')}</Label>
+      <Textarea id={`${id}-reason`} rows={2} maxLength={500} value={reason} placeholder={t('remove.reasonHint')} onChange={(e) => setReason(e.target.value)} />
+      <div className="flex flex-wrap gap-2">
+        <Button variant="destructive" size="sm" disabled={remove.isPending} onClick={() => remove.mutate()}>
+          {t('remove.submit')}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+          {t('keep')}
+        </Button>
+      </div>
+      {remove.error && <ErrorText>{errorMessage(remove.error)}</ErrorText>}
+    </div>
+  );
+}
+
+// A channel removed from its platform (#860): when, by whom and why; or where a removal someone asked for stands.
+function RemovalNote({ variant: v }: { variant: Variant }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const org = useQuery(orpc.org.get.queryOptions());
+  if (v.status === 'removed' && v.removedAt) {
+    const member = v.removedBy ? org.data?.members.find((m) => m.userId === v.removedBy) : undefined;
+    const name = member ? (member.displayName ?? member.email) : null;
+    return (
+      <div className="space-y-1">
+        <p>{name ? t('remove.removedBy', { when: f.dateTime(v.removedAt), name }) : t('remove.removedAt', { when: f.dateTime(v.removedAt) })}</p>
+        {v.removeReason && <p className="text-subtle-foreground [overflow-wrap:anywhere]">{t('remove.reasonWas', { reason: v.removeReason })}</p>}
+      </div>
+    );
+  }
+  if (!v.removal) return null;
+  const known = v.removal.code === 'TELEGRAM_CANNOT_DELETE' || v.removal.code === 'REMOVE_NOT_RUN' ? v.removal.code : null;
+  return (
+    <div className="space-y-1">
+      <p className={v.removal.state === 'pending' ? '' : 'text-warning'}>{t(`remove.${v.removal.state}`)}</p>
+      {known ? <p className="text-subtle-foreground">{t(`remove.code.${known}`)}</p> : v.removal.state === 'failed' && v.removal.code ? <p className="font-mono text-subtle-foreground">{v.removal.code}</p> : null}
+    </div>
+  );
+}
+
 // Another time for a scheduled channel, its approvals kept (#580): the calendar's drag, from the keyboard.
 function MoveTime({ variantId, at, onDone }: { variantId: string; at: string | null; onDone: () => void }) {
   const t = useTranslations('social');
@@ -2032,7 +2097,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                     {v.status === 'in_review' && v.review.required > 1 && <p>{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</p>}
                     {v.status === 'in_review' && v.review.client && <p>{t(v.review.clientVerdict === 'approved' ? 'clientApproved' : 'clientWaiting')}</p>}
                     <Outcome variant={v} slug={slug} />
-                    {v.externalUrl && (
+                    <RemovalNote variant={v} />
+                    {v.externalUrl && v.status !== 'removed' && (
                       <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
                         {t('openPost')}
                       </a>
@@ -2081,6 +2147,9 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                         <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
                           {t('unschedule')}
                         </Button>
+                      )}
+                      {canDecide && v.status === 'published' && isProvider(v.provider) && REMOVE_READY.has(v.provider) && v.removal?.state !== 'pending' && (
+                        <RemoveFromChannel variantId={v.id} channel={names.get(v.connectionId) ?? providerName(v.provider)} again={v.removal !== null} onDone={refresh} />
                       )}
                       {canWrite && CANCELLABLE.includes(v.status) && (canDecide || !['approved', 'scheduled', 'paused'].includes(v.status)) && (
                         <Button variant="ghost" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(v.id)}>

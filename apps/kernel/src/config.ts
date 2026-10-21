@@ -286,6 +286,10 @@ const schema = z.object({
   MAIL_PROVIDER: z.preprocess((v) => (v === '' ? undefined : v), z.enum(['smtp', 'resend']).default('smtp')),
   RESEND_API_KEY: optional,
   RESEND_WEBHOOK_SECRET: optional.pipe(z.string().regex(/^whsec_[A-Za-z0-9+/=]{24,}$/, 'RESEND_WEBHOOK_SECRET is the whsec_... signing secret of the webhook').optional()),
+  // The build this image was made from (#892): the git SHA the release workflow passes as the image's CROVE_BUILD build
+  // argument. GET /version reports it, so the deploy's smoke test can tell the new image from the old one. Unset (a
+  // local build): "dev".
+  CROVE_BUILD: optional.pipe(z.string().regex(/^[A-Za-z0-9._-]{1,64}$/, 'CROVE_BUILD is a build id: letters, digits, dot, dash, underscore').optional()),
   // Where the app's "Góp ý / Hỗ trợ" (feedback and support) link goes: an https: page (a chat group, a help desk) or
   // a mailto: address. Unset hides the link. Browsers see it through /api/config, so it must hold nothing secret.
   SUPPORT_URL: optional.pipe(

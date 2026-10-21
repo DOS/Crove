@@ -9,8 +9,8 @@
 // kernel hands in (public addresses only, the connection pinned to the checked address, no redirects). Without one,
 // such accounts are refused (UnsupportedPds). The resolution is kept 10 minutes, so an account that moves PDS is
 // followed on a later call.
-import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
-import { commentResult } from './comment.ts';
+import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { requestSignal, type Fetch } from './oauth.ts';
 
@@ -525,6 +525,31 @@ export class BlueskyPublisher implements Publisher {
       return { kind: 'accepted', externalId: answer.uri };
     } catch (error) {
       return commentResult(blueskyResult(error));
+    }
+  }
+
+  // Takes the account's own post down (#860): com.atproto.repo.deleteRecord on its PDS, by the record key in its at://
+  // URI. Bluesky answers a record already gone like a deletion; a PDS that names it (RecordNotFound, 404) counts too.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = secretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' };
+    const parts = /^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/([A-Za-z0-9._:~-]{1,512})$/.exec(input.externalId);
+    if (!parts) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    let session: Session;
+    try {
+      session = await this.xrpc.session(s.identifier, s.appPassword);
+    } catch (error) {
+      // Opening a session removes nothing, so an unclear answer is a failure to try again.
+      const result = blueskyResult(error);
+      return removeResult(result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) });
+    }
+    if (parts[1] !== session.did) return { kind: 'rejected', error: 'bad_request', code: 'NOT_OWN_POST' };
+    try {
+      await this.xrpc.call(session.pds, 'POST', 'com.atproto.repo.deleteRecord', { token: session.accessJwt, json: { repo: session.did, collection: POST_COLLECTION, rkey: parts[2] as string } });
+      return { kind: 'removed' };
+    } catch (error) {
+      if (error instanceof BlueskyError && (error.status === 404 || error.status === 410 || error.code === 'RecordNotFound')) return { kind: 'removed' };
+      return removeResult(blueskyResult(error));
     }
   }
 

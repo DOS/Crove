@@ -11,8 +11,8 @@
 // is posted (POST /api/v1/statuses) with the call's key as its Idempotency-Key, so a repeat of the same call within the
 // instance's window posts nothing new. A content warning (spoiler text) and the visibility (public or unlisted) come
 // from the variant's settings. The limits are the instance's own (GET /api/v2/instance), read before the post.
-import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
-import { commentResult } from './comment.ts';
+import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { ConnectorError, type Fetch } from './oauth.ts';
 
@@ -75,7 +75,7 @@ class MastodonClient {
     this.fetch = fetchImpl;
   }
 
-  async call<T>(s: MastodonSecret, method: 'GET' | 'POST', path: string, body?: { json?: unknown; form?: FormData }, headers: Record<string, string> = {}): Promise<{ status: number; data: T }> {
+  async call<T>(s: MastodonSecret, method: 'GET' | 'POST' | 'DELETE', path: string, body?: { json?: unknown; form?: FormData }, headers: Record<string, string> = {}): Promise<{ status: number; data: T }> {
     const response = await this.fetch(`${s.instance}${path}`, {
       method,
       headers: { accept: 'application/json', authorization: `Bearer ${s.accessToken}`, ...(body?.json !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
@@ -267,6 +267,21 @@ export class MastodonPublisher implements Publisher {
       return { kind: 'accepted', externalId: data.id };
     } catch (error) {
       return commentResult(mastodonResult(error));
+    }
+  }
+
+  // Deletes the account's own status (#860): DELETE /api/v1/statuses/:id. A status the instance no longer has (404) is
+  // gone already.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = mastodonSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!STATUS_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      await this.client.call(s, 'DELETE', `/api/v1/statuses/${input.externalId}`);
+      return { kind: 'removed' };
+    } catch (error) {
+      if (error instanceof MastodonError && (error.status === 404 || error.status === 410)) return { kind: 'removed' };
+      return removeResult(mastodonResult(error));
     }
   }
 

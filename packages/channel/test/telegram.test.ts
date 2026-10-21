@@ -155,3 +155,35 @@ describe('Telegram publish', () => {
     expect(seen).toEqual(['api.telegram.org']);
   });
 });
+
+describe('Telegram remove (#860)', () => {
+  const remove = (fetchImpl: Fetch, externalId = `${CHAT}:42`) => new TelegramPublisher(fetchImpl).remove({ externalAccountId: CHAT, secret: SECRET, externalId });
+
+  it('deletes the channel message named by the post id', async () => {
+    const { fetchImpl, calls } = bot({ deleteMessage: [ok(true)] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls).toEqual([{ method: 'deleteMessage', token: TOKEN, json: { chat_id: CHAT, message_id: 42 }, form: null }]);
+  });
+
+  it('counts a message already gone as removed, and says when Telegram no longer lets the bot delete it', async () => {
+    const gone = bot({ deleteMessage: [fail(400, 'Bad Request: message to delete not found')] });
+    expect(await remove(gone.fetchImpl)).toEqual({ kind: 'removed' });
+    // Past 48 hours a bot may not delete a channel post.
+    const old = bot({ deleteMessage: [fail(400, "Bad Request: message can't be deleted")] });
+    expect(await remove(old.fetchImpl)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'TELEGRAM_CANNOT_DELETE', message: "Bad Request: message can't be deleted" });
+  });
+
+  it('maps a revoked token, a flood wait and a server error, and calls nothing for another chat', async () => {
+    const revoked = bot({ deleteMessage: [fail(401, 'Unauthorized')] });
+    expect(await remove(revoked.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'TELEGRAM_401' });
+    const flood = bot({ deleteMessage: [fail(429, 'Too Many Requests: retry after 7', { parameters: { retry_after: 7 } })] });
+    const limited = await remove(flood.fetchImpl);
+    expect(limited).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    expect(limited.kind === 'rejected' && limited.retryAt instanceof Date).toBe(true);
+    const down = bot({ deleteMessage: [fail(502, 'Bad Gateway')] });
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'TELEGRAM_502' });
+    const none = bot({});
+    expect(await remove(none.fetchImpl, '-1009999999999:42')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(none.calls).toHaveLength(0);
+  });
+});

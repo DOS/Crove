@@ -90,6 +90,8 @@ async function searchParties(ctx: QueryContext, q: string): Promise<SearchResult
       ]).as('customer_only'),
     )
     .where('p.org_id', '=', ctx.orgId)
+    // A party marked as a duplicate (#887) is not listed; its documents still are, under its own name.
+    .where('p.duplicate_of', 'is', null)
     .where(sql<boolean>`${PARTY_VECTOR} @@ crove_kernel.search_query(${q})`)
     // The exact tax code first, then the rows that match more of the words, then by name.
     .orderBy(sql`p.tax_code IS NOT DISTINCT FROM ${q.trim()}`, 'desc')

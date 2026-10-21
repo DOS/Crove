@@ -49,6 +49,7 @@ import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } fr
 import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
 import { repostCommands } from './repost.ts';
+import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { clientReviewCommands } from './client-review.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
@@ -945,6 +946,12 @@ export interface VariantView {
   attempt: number;
   externalUrl: string | null;
   publishedAt: string | null;
+  // Taken down from its platform (#860): when the platform confirmed it, and who asked and why. removal: where a
+  // person's ask to remove a published channel stands, until it is removed.
+  removedAt: string | null;
+  removedBy: string | null;
+  removeReason: string | null;
+  removal: RemoveState | null;
   error: { kind: string | null; code: string | null; action: string | null; message: string | null; retryAt: string | null } | null;
   issues: Issue[];
   latestDecision: { decision: SocialDecision; comment: string | null; decidedBy: string; at: string; revision: number; current: boolean } | null;
@@ -1050,6 +1057,10 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
       return [v.id, { state: s.state, posted: s.posted, total: s.total }] as const;
     }),
   );
+  // The removals people asked for on published channels (#860).
+  const asked = variants.filter((v) => v.status === 'published' && v.remove_requested_at !== null);
+  const removeCalls = await removeCallsOf(ctx.trx, ctx.orgId, asked);
+  const removals = new Map(asked.map((v) => [v.id, removeState(removeCalls.get(v.id) ?? [], v.remove_requested_at, now)]));
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
@@ -1109,7 +1120,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               revision: v.revision,
               contentHash: v.content_hash,
               status: v.status,
-              effectiveAt: iso(v.status === 'published' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
+              effectiveAt: iso(v.status === 'published' || v.status === 'removed' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
               queueSlotAt: iso(v.queue_slot_at),
               commentStatus: comments.get(v.id) ?? null,
               threadStatus: threads.get(v.id) ?? null,
@@ -1118,6 +1129,10 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               attempt: v.attempt,
               externalUrl: v.external_url,
               publishedAt: iso(v.published_at),
+              removedAt: iso(v.removed_at),
+              removedBy: v.status === 'removed' ? v.removed_by : null,
+              removeReason: v.status === 'removed' ? v.remove_reason : null,
+              removal: removals.get(v.id) ?? null,
               error: v.error_kind || v.error_code || v.error_message ? { kind: v.error_kind, code: v.error_code, action: v.error_action, message: v.error_message, retryAt: iso(v.error_retry_at) } : null,
               issues: isProvider(v.provider) ? issuesOf(b, row) : [],
               latestDecision: d
@@ -1264,7 +1279,7 @@ export const postList = defineQuery({
             .whereRef('v.post_id', '=', 'p.id')
             .where('v.status', '<>', 'cancelled')
             .where((w) => {
-              const at = sql`CASE WHEN v.status = 'published' THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END`;
+              const at = sql`CASE WHEN v.status IN ('published', 'removed') THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END`;
               const parts = [];
               if (input.from) parts.push(w(at, '>=', new Date(Date.parse(input.from))));
               if (input.to) parts.push(w(at, '<', new Date(Date.parse(input.to))));
@@ -1346,6 +1361,7 @@ export const socialCommands = [
   ...threadCommands,
   ...autoReplyCommands,
   ...repostCommands,
+  ...removeCommands,
   ...policyCommands,
   ...clientReviewCommands,
   ...assignCommands,
