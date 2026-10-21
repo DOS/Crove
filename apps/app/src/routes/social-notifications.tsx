@@ -38,7 +38,9 @@ function useLine() {
         const v = n.detail.verdict;
         return t(v === 'approved' ? 'text.client_approved' : v === 'changes_requested' ? 'text.client_changes_requested' : 'text.client_comment', { name: n.detail.name ?? '' });
       }
+      // A planned takedown that did not happen (#861).
       case 'failed':
+        return t(n.detail.removal === 'scheduled' ? 'text.remove_failed' : 'text.failed', { provider });
       case 'needs_attention':
         return t(`text.${n.kind}`, { provider });
       case 'channel_expired':

@@ -41,6 +41,11 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
   return copyPost(ctx, source, targets, { repostOf: source.id, submit });
 }
 
+const withoutRemoveAt = (settings: Record<string, unknown>): Record<string, unknown> => {
+  const { removeAt: _gone, ...rest } = settings;
+  return rest;
+};
+
 // A new post with the content of `source`'s channels `targets` (#393, #575). A repost's base is what the channels
 // went out with; a duplicate's is the source's own base. Either way a channel whose content or images differ from the
 // copy's base keeps them as its own, with its settings.
@@ -101,7 +106,8 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
       ...(kept.body !== shared.body ? { body: kept.body } : {}),
       ...(kept.title !== shared.title && kept.title !== null ? { title: kept.title } : {}),
       ...(kept.linkUrl !== shared.linkUrl && kept.linkUrl !== null ? { linkUrl: kept.linkUrl } : {}),
-      settings: settingsOf(v) as Record<string, z.core.util.JSONType>,
+      // A copy never takes the source's planned takedown (#861): its time belonged to that post.
+      settings: withoutRemoveAt(settingsOf(v)) as Record<string, z.core.util.JSONType>,
       ownMedia: own,
     };
   });

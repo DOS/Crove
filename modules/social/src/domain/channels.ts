@@ -397,6 +397,51 @@ export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 
 // their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of it.
 export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x']);
 
+// A post that comes down by itself (#861): `settings.removeAt`, a full ISO 8601 time with Z or an offset, on a channel
+// in REMOVE_READY. It must be at least REMOVE_AT_MIN_GAP_MS and at most the channel's window (REMOVE_WINDOW_MS, else
+// REMOVE_AT_MAX_MS) after the time the post goes out. The commands check that where the time becomes known (a time, a
+// queue slot, a retry now); the worker's sweep checks it again against the time the post really went out, which a rate
+// limit, a paused channel or a queue edit can move, and leaves a post outside it up. The same pattern guards the
+// database's crove_social.remove_at_of.
+export const REMOVE_AT_MIN_GAP_MS = 5 * 60_000;
+// The furthest a takedown may be planned, so stale or far values never stay in the worker's scan.
+export const REMOVE_AT_MAX_MS = 365 * 24 * 3_600_000;
+// How long after a post the platform still lets Crove take it down, where it limits that: Telegram lets a bot delete a
+// channel post within 48 hours only.
+export const REMOVE_WINDOW_MS: Readonly<Partial<Record<Provider, number>>> = { telegram: 48 * 3_600_000 };
+// The furthest a takedown may come after the post on this channel.
+export const removeWindowMs = (provider: string): number => Math.min(isProvider(provider) ? (REMOVE_WINDOW_MS[provider] ?? REMOVE_AT_MAX_MS) : REMOVE_AT_MAX_MS, REMOVE_AT_MAX_MS);
+const REMOVE_AT = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/;
+
+// The planned takedown in a variant's settings, as an ISO instant in UTC; null when there is none, 'invalid' when it is
+// not a real calendar time in that form.
+export function removeAtOf(settings: Readonly<Record<string, unknown>> | undefined): string | 'invalid' | null {
+  const value = settings?.removeAt;
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') return 'invalid';
+  const m = REMOVE_AT.exec(value);
+  if (!m) return 'invalid';
+  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  // Date.parse rolls 31 February over into March; the database refuses it.
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return 'invalid';
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : 'invalid';
+}
+
+// Whether a variant's planned takedown fits the time it goes out: null when it does (or there is none, or it is
+// malformed, which validation names); too_soon under REMOVE_AT_MIN_GAP_MS after it; too_late past the channel's window,
+// with that window in hours.
+export function removeAtFit(provider: string, settings: Readonly<Record<string, unknown>> | undefined, publishAt: Date): { problem: 'too_soon' } | { problem: 'too_late'; hours: number } | null {
+  const at = removeAtOf(settings);
+  if (at === null || at === 'invalid') return null;
+  const t = Date.parse(at);
+  if (t < publishAt.getTime() + REMOVE_AT_MIN_GAP_MS) return { problem: 'too_soon' };
+  const window = removeWindowMs(provider);
+  if (t > publishAt.getTime() + window) return { problem: 'too_late', hours: Math.round(window / 3_600_000) };
+  return null;
+}
+
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
   sandbox: {
