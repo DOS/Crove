@@ -627,11 +627,13 @@ describe('uploads through the kernel (#432)', () => {
     form.append('file', new File([bytes], name, { type: 'application/octet-stream' }));
     if (!withLength) return app.request('/api/files', { method: 'POST', body: form, headers });
     const encoded = new Response(form);
+    // Read before the body: Bun drops a Response's generated multipart content type once its body has been read (#768).
+    const contentType = encoded.headers.get('content-type') ?? '';
     const body = new Uint8Array(await encoded.arrayBuffer());
     return app.request('/api/files', {
       method: 'POST',
       body,
-      headers: { ...headers, 'content-type': encoded.headers.get('content-type') ?? '', 'content-length': String(body.byteLength) },
+      headers: { ...headers, 'content-type': contentType, 'content-length': String(body.byteLength) },
     });
   }
 

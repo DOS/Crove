@@ -319,8 +319,9 @@ export function egressFetch(options: EgressOptions & { httpsOnly?: boolean }): (
     if (init?.body !== undefined && init.body !== null) {
       // The platform's own encoding (a FormData boundary, a string's UTF-8), read back as bytes.
       const encoded = new Request('https://encode.invalid/', { method: 'POST', body: init.body, headers: init.headers ?? {} });
-      body = Buffer.from(await encoded.arrayBuffer());
+      // The type before the bytes: Bun drops a generated multipart type once the body has been read (#768).
       const type = encoded.headers.get('content-type');
+      body = Buffer.from(await encoded.arrayBuffer());
       if (type) headers['content-type'] = type;
     }
     const answer = await guardedRequest(input, { method, headers, ...(body ? { body } : {}) }, options);
