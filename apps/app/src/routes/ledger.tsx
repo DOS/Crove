@@ -13,6 +13,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { PeriodLockPanel } from '../components/period-lock.tsx';
+import { YearArchivePanel } from '../components/year-archive.tsx';
 import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
@@ -390,6 +391,7 @@ export function LedgerPage() {
         {data && <p className="pb-1.5 text-sm text-muted-foreground">{t('range', { from: f.date(data.period.from), to: f.date(data.period.to) })}</p>}
       </div>
       <PeriodLockPanel />
+      <YearArchivePanel />
       {exportXlsx.error && (
         <div className="mb-4">
           <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>
