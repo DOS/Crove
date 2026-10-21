@@ -670,6 +670,11 @@ export const variantSchedule = defineCommand({
     }
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     const all = await lockVariants(ctx.trx, ctx.orgId, post.id);
+    // A channel added between the read of the queues and the lock of the post (#851) has no queue locked: the post
+    // changed meanwhile, so the member tries again rather than seeing its channel as having no queue.
+    if (input.queue && all.some((v) => !queues.has(v.channel_connection_id))) {
+      throw new DomainError('STALE_REVISION', 409, 'Bài đăng đã được sửa ở nơi khác, hãy tải lại', { revision: post.revision });
+    }
     const times = new Map((input.times ?? []).map((x) => [x.variantId, new Date(Date.parse(x.at))]));
     // The post's labels, read once, for the slots of content categories (#745).
     let labels: Set<string> | null = null;
@@ -1300,7 +1305,9 @@ export const queueGet = defineQuery({
     const spec: QueueSpec = { timeZone: queue.time_zone, slots: slots.filter((s) => s.active).map((s) => ({ weekday: s.weekday, minute: s.minute, labelId: s.label_id })) };
     const taken = await takenSlots(ctx.trx, ctx.orgId, input.connectionId);
     const nextFree: string[] = [];
-    let after = Date.now();
+    // The transaction's own clock (#851): the same instant the slots taken were read at, whatever the host's clock says.
+    const clock = await sql<{ now: Date }>`SELECT pg_catalog.now() AS now`.execute(ctx.trx);
+    let after = (clock.rows[0]?.now ?? new Date()).getTime();
     for (let i = 0; i < 5; i++) {
       const at = nextFreeSlot(spec, after, taken);
       if (at === null) break;

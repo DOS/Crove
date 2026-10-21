@@ -95,7 +95,9 @@ export interface MailToSend {
   to: string;
   subject?: string | null;
   // 'sending': the caller sends it now and records the outcome; 'queued': the worker sends it (step E1b).
-  status: 'sending' | 'queued';
+  // suppressed: a mail the sender decided not to send (a cap of its own), recorded with errorCode.
+  status: 'sending' | 'queued' | 'suppressed';
+  errorCode?: string;
   messageIdDomain?: string | undefined;
   // The merge data the worker renders a queued mail from (never a secret); dropped 30 days after a final status.
   payload?: Readonly<Record<string, unknown>> | null;
@@ -127,6 +129,7 @@ export async function createMailMessage(ctx: CommandContext, mail: MailToSend): 
       payload: mail.payload ? JSON.stringify(mail.payload) : null,
       message_id_header: messageIdHeader,
       status,
+      ...(status === 'suppressed' && mail.status === 'suppressed' && mail.errorCode ? { error_code: mail.errorCode.slice(0, 200) } : {}),
       created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
     })
     .returning('id')

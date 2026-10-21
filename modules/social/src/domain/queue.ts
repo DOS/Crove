@@ -55,7 +55,13 @@ function formatter(timeZone: string): Intl.DateTimeFormat {
   return f;
 }
 
+// An IANA zone name the runtime knows (UTC, or Area/Location), never an offset like +07:00: an offset has no
+// daylight-saving rules, so a schedule in it would drift for half the year in a zone that has them (#850). The name is
+// kept as given: the runtime spells some zones by their old names (Asia/Saigon for Asia/Ho_Chi_Minh), which the app's
+// lists do not show.
+const ZONE_NAME = /^(?:UTC|[A-Za-z][A-Za-z_]*(?:\/[A-Za-z0-9_+-]+)+)$/;
 export function isValidTimeZone(timeZone: string): boolean {
+  if (timeZone.length > 64 || !ZONE_NAME.test(timeZone)) return false;
   try {
     formatter(timeZone);
     return true;

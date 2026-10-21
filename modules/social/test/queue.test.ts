@@ -27,6 +27,12 @@ describe('time zones', () => {
     expect(isValidTimeZone('Mars/Olympus')).toBe(false);
   });
 
+  it('takes zone names only, never an offset (#850)', () => {
+    expect(isValidTimeZone('UTC')).toBe(true);
+    expect(isValidTimeZone('America/Argentina/Buenos_Aires')).toBe(true);
+    for (const offset of ['+07:00', '-05:00', 'GMT+7', '']) expect(isValidTimeZone(offset), offset).toBe(false);
+  });
+
   it('converts Ho Chi Minh City local time (UTC+7, no DST)', () => {
     expect(zonedToEpoch({ year: 2026, month: 10, day: 19, hour: 9, minute: 0 }, HCM)).toBe(monday9);
     expect(localTime(monday9, HCM)).toEqual({ year: 2026, month: 10, day: 19, hour: 9, minute: 0, weekday: 1 });

@@ -2048,6 +2048,7 @@ export const vi = {
       IMAGE_TOO_SMALL: 'Ảnh {n, number} rộng {actual, number} px; kênh này cần ít nhất {limit, number} px',
       VIDEO_TOO_LARGE: 'Video quá lớn cho kênh này',
       VIDEO_TOO_LONG: 'Video quá dài cho kênh này',
+      VIDEO_LENGTH_UNKNOWN: 'Không đọc được độ dài video; hãy tải video lên lại (MP4 hoặc MOV)',
       TOO_MANY_LINKS: 'Bài có {actual, number} liên kết, kênh này cho tối đa {limit, number}',
       COMMENT_TOO_LONG: 'Bình luận đầu tiên dài {actual, number}, kênh này cho tối đa {limit, number}',
       VISIBILITY_INVALID: 'Chỉ chọn được công khai hoặc không hiện trên dòng thời gian chung',

@@ -36,6 +36,14 @@ const jpeg = (sizeBytes = 100_000): MediaItem => ({ kind: 'image', mime: 'image/
 const png = (): MediaItem => ({ kind: 'image', mime: 'image/png', sizeBytes: 100_000, durationSeconds: null });
 const mp4 = (durationSeconds = 30, sizeBytes = 10_000_000): MediaItem => ({ kind: 'video', mime: 'video/mp4', sizeBytes, durationSeconds });
 
+describe('video length (#850)', () => {
+  it('flags a video whose length could not be read on a channel with a length limit', () => {
+    const codes = (provider: 'tiktok' | 'sandbox', durationSeconds: number | null) => validateVariant({ provider, body: 'x', title: null, media: [mp4(durationSeconds as number)] }).map((i) => i.code);
+    expect(codes('tiktok', null)).toContain('VIDEO_LENGTH_UNKNOWN');
+    expect(codes('tiktok', 30)).not.toContain('VIDEO_LENGTH_UNKNOWN');
+  });
+});
+
 describe('countText', () => {
   it('counts Vietnamese the same whether typed precomposed or with combining marks', () => {
     const nfc = 'Tiếng Việt';
