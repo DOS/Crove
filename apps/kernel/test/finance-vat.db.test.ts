@@ -370,6 +370,37 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(await xmlAudits()).toHaveLength(before + 4);
   });
 
+  it('writes the org address and, when asked, [24] in [25], and records that choice (#692)', async () => {
+    const owned = await tokenFor(owner);
+    const before = (await xmlAudits()).length;
+    const deducted = await app.request(`/api/export/vat-01gtgt.xml?${new URLSearchParams({ period: '2026-09', deductInput: '1' })}`, {
+      headers: { authorization: `Bearer ${owned}`, 'x-crove-org': org.slug },
+    });
+    expect(deducted.status).toBe(200);
+    const xml = await deducted.text();
+    expect(['ct24', 'ct25', 'ct36'].map((tag) => valueOf(xml, tag))).toEqual(['180000', '180000', '-180000']);
+    expect(valueOf(xml, 'ct43')).toBe('180000');
+    // No address yet: an empty element, as before.
+    expect(xml).toContain('<dchiNNT/>');
+    // Any other value of the parameter keeps [25] at 0.
+    const plain = await app.request(`/api/export/vat-01gtgt.xml?${new URLSearchParams({ period: '2026-09', deductInput: 'true' })}`, {
+      headers: { authorization: `Bearer ${owned}`, 'x-crove-org': org.slug },
+    });
+    expect(valueOf(await plain.text(), 'ct25')).toBe('0');
+
+    expect((await rpc('org/setAddress', owned, { address: 'Số 2 Đường Thử, Phường Bến Nghé, TP Hồ Chí Minh' }, org.slug)).status).toBe(200);
+    try {
+      expect(valueOf(await (await exportXml(owned, '2026-09')).text(), 'dchiNNT')).toBe('Số 2 Đường Thử, Phường Bến Nghé, TP Hồ Chí Minh');
+    } finally {
+      expect((await rpc('org/setAddress', owned, { address: null }, org.slug)).status).toBe(200);
+    }
+    expect((await xmlAudits()).slice(before).map((row: { detail: unknown }) => row.detail)).toEqual([
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml', deduct_input: true },
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml' },
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml' },
+    ]);
+  });
+
   it('keeps the HTKK XML to members of the org', async () => {
     const before = (await xmlAudits()).length;
     const foreign = await exportXml(await tokenFor(outsider), '2026-09');

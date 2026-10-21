@@ -246,6 +246,7 @@ export const vi = {
     exportFile: 'crove-gtgt-{period}-{org}.xlsx',
     exportXml: 'Xuất XML cho HTKK',
     exportXmlFile: 'crove-01gtgt-{period}-{org}.xml',
+    xmlDeductInput: 'Ghi chỉ tiêu [25] bằng [24] trong file XML (khấu trừ toàn bộ thuế GTGT đầu vào; kế toán giảm bớt phần không được khấu trừ)',
     xmlNote:
       'File XML cho HTKK (mẫu 01/GTGT theo Thông tư 80/2021, bản XML 2.8.3) có sẵn các chỉ tiêu trên. Các chỉ tiêu [21], [22], [23a], [24a], [25], [37], [38], [39a], [40b] và [42] được ghi là 0, còn cơ quan thuế quản lý và người ký để trống; khi chưa nhập [25], số thuế phải nộp trong file đang tính như chưa được khấu trừ đồng nào. Kế toán bổ sung và kiểm tra trong HTKK hoặc trên eTax trước khi nộp.',
     exportXmlWrongKind:

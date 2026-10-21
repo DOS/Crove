@@ -248,6 +248,7 @@ export const en = {
     exportFile: 'crove-vat-{period}-{org}.xlsx',
     exportXml: 'Export XML for HTKK',
     exportXmlFile: 'crove-01gtgt-{period}-{org}.xml',
+    xmlDeductInput: 'Write [25] as [24] in the XML file (all input VAT deducted; your accountant reduces what may not be deducted)',
     xmlNote:
       'The XML file for HTKK (form 01/GTGT of Circular 80/2021, XML version 2.8.3) carries the indicators above. Indicators [21], [22], [23a], [24a], [25], [37], [38], [39a], [40b] and [42] are written as 0, and the tax office and the signer are left blank; until [25] is entered, the payable VAT in the file assumes no input VAT is deducted. Your accountant completes and checks it in HTKK or on eTax before filing.',
     exportXmlWrongKind:
