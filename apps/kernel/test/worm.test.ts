@@ -212,6 +212,20 @@ describe('archive writer races (#1004)', () => {
     expect(store.puts).toBe(6);
   });
 
+  it('lets a run whose record loses on batch after batch go on and finish', async () => {
+    const { db, state, recordFirst } = fakeArchiveDb(6);
+    let races = 5;
+    // This run's write succeeds, but the other run records each of the first five sequences first: archive_record
+    // refuses this run's record with 40001, as in the failure that #1004 reports.
+    const store = memoryStore((_key, body) => {
+      if (races-- <= 0) return;
+      recordFirst(JSON.parse(new TextDecoder().decode(body)) as ArchiveBatch);
+    });
+    await expect(writeArchive(db, store, { lagSeconds: 600 })).resolves.toBe(1);
+    expect(state.head).toBe(6);
+    expect(store.puts).toBe(6);
+  });
+
   it('still stops a run that keeps losing on one sequence', async () => {
     const { db, state } = fakeArchiveDb(2);
     // The key is taken, yet nothing records it and the object is never readable: the head never moves.
