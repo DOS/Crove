@@ -79,6 +79,7 @@ import {
   zOrgExport,
   zOrgSummary,
   zParty,
+  zDuplicateHint,
   zProposalStatus,
   zPurchaseDocument,
   zDocumentExport,
@@ -689,6 +690,12 @@ export const contract = {
         }),
       )
       .output(z.object({ partyId: zId, version: z.number().int() })),
+    // Owners and admins (R1, #887): partyId becomes a duplicate of keepId, hidden from lists and search and reported
+    // under it; nothing is deleted. unmarkDuplicate undoes it.
+    markDuplicate: oc.input(z.object({ partyId: zId, keepId: zId })).output(z.object({ partyId: zId, keepId: zId })),
+    unmarkDuplicate: oc.input(z.object({ partyId: zId })).output(z.object({ partyId: zId })),
+    // Owners, admins and members: pairs of parties that look like duplicates, strongest first.
+    duplicateHints: oc.input(z.object({})).output(z.array(zDuplicateHint)),
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),

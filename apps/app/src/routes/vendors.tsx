@@ -112,7 +112,114 @@ function EditVendor({ vendor, onDone }: { vendor: Party; onDone: () => void }) {
   );
 }
 
-function VendorRow({ vendor, accounts, canManage, canEdit }: { vendor: Party; accounts: readonly ChartAccount[]; canManage: boolean; canEdit: boolean }) {
+const refreshParties = () => {
+  void queryClient.invalidateQueries({ queryKey: orpc.parties.list.key() });
+  void queryClient.invalidateQueries({ queryKey: orpc.parties.duplicateHints.key() });
+};
+
+// Owners and admins mark this vendor as a duplicate of another (#887): it leaves the list, and its documents count
+// under the one kept. Nothing is deleted; "Tách" on the kept vendor undoes it.
+function MergeVendor({ vendor, others }: { vendor: Party; others: readonly Party[] }) {
+  const t = useTranslations('vendors');
+  const [keepId, setKeepId] = useState('');
+  const mark = useMutation(orpc.parties.markDuplicate.mutationOptions({ onSuccess: refreshParties }));
+  if (vendor.duplicates.length > 0) return <p className="text-xs text-subtle-foreground">{t('mergeHasDuplicates')}</p>;
+  return (
+    <form
+      className="flex flex-wrap items-end gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (keepId) mark.mutate({ partyId: vendor.id, keepId });
+      }}
+    >
+      <div className="flex flex-col gap-1">
+        <Label htmlFor={`merge-${vendor.id}`}>{t('mergeInto')}</Label>
+        <NativeSelect id={`merge-${vendor.id}`} size="sm" className="w-72" value={keepId} onChange={(e) => setKeepId(e.target.value)}>
+          <NativeSelectOption value="">{t('mergeChoose')}</NativeSelectOption>
+          {others
+            .filter((o) => o.id !== vendor.id)
+            .map((o) => (
+              <NativeSelectOption key={o.id} value={o.id}>
+                {o.taxCode ? `${o.name} · ${o.taxCode}` : o.name}
+              </NativeSelectOption>
+            ))}
+        </NativeSelect>
+      </div>
+      <Button type="submit" variant="outline" size="sm" disabled={!keepId || mark.isPending}>
+        {t('merge')}
+      </Button>
+      {mark.error && <ErrorText>{errorMessage(mark.error)}</ErrorText>}
+    </form>
+  );
+}
+
+// The vendors marked as duplicates of this one, each with "Tách" for owners and admins.
+function Duplicates({ vendor, canManage }: { vendor: Party; canManage: boolean }) {
+  const t = useTranslations('vendors');
+  const unmark = useMutation(orpc.parties.unmarkDuplicate.mutationOptions({ onSuccess: refreshParties }));
+  if (vendor.duplicates.length === 0) return null;
+  return (
+    <ul className="mt-1 flex flex-col gap-1 text-xs text-subtle-foreground">
+      {vendor.duplicates.map((d) => (
+        <li key={d.id} className="flex items-center gap-2">
+          <span>{t('merged', { name: d.taxCode ? `${d.name} · ${d.taxCode}` : d.name })}</span>
+          {canManage && (
+            <Button variant="ghost" size="sm" disabled={unmark.isPending} onClick={() => unmark.mutate({ partyId: d.id })} aria-label={t('unmergeOf', { name: d.name })}>
+              {t('unmerge')}
+            </Button>
+          )}
+        </li>
+      ))}
+      {unmark.error && <ErrorText>{errorMessage(unmark.error)}</ErrorText>}
+    </ul>
+  );
+}
+
+// Pairs of vendors that look like one (same enterprise tax code, same phone, or names alike), strongest first, each
+// with "Gộp" for owners and admins.
+function DuplicateHints({ canManage }: { canManage: boolean }) {
+  const t = useTranslations('vendors');
+  const hints = useQuery(orpc.parties.duplicateHints.queryOptions({ input: {} }));
+  const mark = useMutation(orpc.parties.markDuplicate.mutationOptions({ onSuccess: refreshParties }));
+  if (!hints.data || hints.data.length === 0) return null;
+  const label = (p: { name: string; taxCode: string | null }) => (p.taxCode ? `${p.name} (${p.taxCode})` : p.name);
+  return (
+    <section aria-label={t('hintsTitle')} className="mb-4 rounded-xl border bg-card p-4">
+      <h2 className="text-sm font-medium text-foreground">{t('hintsTitle')}</h2>
+      <p className="mb-2 text-xs text-subtle-foreground">{t('hintsIntro')}</p>
+      <ul className="flex flex-col gap-2 text-sm">
+        {hints.data.map((h) => (
+          <li key={`${h.keep.id}-${h.duplicate.id}`} className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-foreground">
+              {t('hint', { duplicate: label(h.duplicate), keep: label(h.keep) })}
+              <span className="ml-2 text-xs text-subtle-foreground">{h.reasons.map((r) => t(`reasons.${r}`)).join(', ')}</span>
+            </span>
+            {canManage && (
+              <Button variant="outline" size="sm" disabled={mark.isPending} onClick={() => mark.mutate({ partyId: h.duplicate.id, keepId: h.keep.id })}>
+                {t('mergeHint', { keep: h.keep.name })}
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {mark.error && <ErrorText>{errorMessage(mark.error)}</ErrorText>}
+    </section>
+  );
+}
+
+function VendorRow({
+  vendor,
+  others,
+  accounts,
+  canManage,
+  canEdit,
+}: {
+  vendor: Party;
+  others: readonly Party[];
+  accounts: readonly ChartAccount[];
+  canManage: boolean;
+  canEdit: boolean;
+}) {
   const t = useTranslations('vendors');
   const f = useFormat();
   const [editing, setEditing] = useState(false);
@@ -122,6 +229,7 @@ function VendorRow({ vendor, accounts, canManage, canEdit }: { vendor: Party; ac
         <TableCell className="px-4 py-3">
           <p className="font-medium text-foreground">{vendor.name}</p>
           {(vendor.email || vendor.phone) && <p className="text-xs text-subtle-foreground">{[vendor.phone, vendor.email].filter(Boolean).join(' · ')}</p>}
+          <Duplicates vendor={vendor} canManage={canManage} />
         </TableCell>
         <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{vendor.taxCode}</TableCell>
         <TableCell className="px-4 py-3 text-subtle-foreground">{vendor.address}</TableCell>
@@ -143,6 +251,11 @@ function VendorRow({ vendor, accounts, canManage, canEdit }: { vendor: Party; ac
         <TableRow>
           <TableCell colSpan={6} className="px-4 py-3">
             <EditVendor vendor={vendor} onDone={() => setEditing(false)} />
+            {canManage && (
+              <div className="mt-4 border-t pt-3">
+                <MergeVendor vendor={vendor} others={others} />
+              </div>
+            )}
           </TableCell>
         </TableRow>
       )}
@@ -167,6 +280,7 @@ export function VendorsPage() {
   return (
     <>
       <PageHeader title={t('title')} subtitle={t('subtitle')} />
+      {canEdit && <DuplicateHints canManage={canManage} />}
       <div className="mb-4 max-w-sm">
         <Input placeholder={t('search')} value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
@@ -181,7 +295,7 @@ export function VendorsPage() {
           head={[t('columns.name'), t('columns.taxCode'), t('columns.address'), t('columns.documents'), t('columns.defaultAccount'), ...(canEdit ? [''] : [])]}
         >
           {vendors.data?.map((v) => (
-            <VendorRow key={v.id} vendor={v} accounts={accounts.data ?? []} canManage={canManage} canEdit={canEdit} />
+            <VendorRow key={v.id} vendor={v} others={vendors.data ?? []} accounts={accounts.data ?? []} canManage={canManage} canEdit={canEdit} />
           ))}
         </DataTable>
       )}
