@@ -379,6 +379,8 @@ export type SocialLinkPreviewStatus = (typeof SOCIAL_LINK_PREVIEW_STATUSES)[numb
 export type SocialLinkPreviewError = (typeof SOCIAL_LINK_PREVIEW_ERRORS)[number];
 // The palette a label's colour comes from (#639); the app maps each name to a theme tone.
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
+// The corner of an image the org's logo watermark goes in (#834).
+export const SOCIAL_WATERMARK_CORNERS = ['top_left', 'top_right', 'bottom_left', 'bottom_right'] as const;
 // The stages of an idea on the ideas board (#701).
 export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
 // Scheduled client report mail (#704): how often, the period each mail covers, and a run's kind.
@@ -394,6 +396,7 @@ export type SocialAccountSnapshotError = (typeof SOCIAL_ACCOUNT_SNAPSHOT_ERRORS)
 export type SocialNotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
 export type SocialLabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
 export type SocialIdeaStage = (typeof SOCIAL_IDEA_STAGES)[number];
+export type SocialWatermarkCorner = (typeof SOCIAL_WATERMARK_CORNERS)[number];
 export type SocialReportCadence = (typeof SOCIAL_REPORT_CADENCES)[number];
 export type SocialReportPeriod = (typeof SOCIAL_REPORT_PERIODS)[number];
 export type SocialReportRunKind = (typeof SOCIAL_REPORT_RUN_KINDS)[number];
@@ -425,6 +428,7 @@ export type SocialLinkPreviewTable = Refine<
 export type SocialNotificationTable = Refine<G.SocialNotificationTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialNotificationMuteTable = Refine<G.SocialNotificationMuteTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialCalendarNoteTable = Refine<G.SocialCalendarNoteTable, { color: Generated<SocialLabelColor> }>;
+export type SocialWatermarkTable = Refine<G.SocialWatermarkTable, { corner: SocialWatermarkCorner }>;
 export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
 export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<SocialIdeaStage> }>;
 export type SocialReportScheduleTable = Refine<G.SocialReportScheduleTable, { cadence: SocialReportCadence; period: SocialReportPeriod }>;
@@ -476,6 +480,7 @@ type Refined = Tables<{
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
   'crove_social.calendar_note': SocialCalendarNoteTable;
+  'crove_social.watermark': SocialWatermarkTable;
   'crove_social.label': SocialLabelTable;
   'crove_social.idea': SocialIdeaTable;
   'crove_social.report_schedule': SocialReportScheduleTable;

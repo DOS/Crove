@@ -38,6 +38,9 @@ describe('SocialWriter', () => {
     expect(asked[0]?.prompt).toContain('Brief: write a post about the source page.');
     // A page that says nothing and no brief: nothing to draft from.
     expect(await writer.draft({ brief: '', channels, language: 'vi', source: { url: 'https://shop.example/b', title: null, description: null, siteName: null } })).toBeNull();
+    // The page's main text (#779) reaches the writer inside the same fence, its own fence marks broken.
+    await writer.draft({ brief: '', channels, language: 'vi', source: { url: 'https://shop.example/c', title: 'Khai trương', description: null, siteName: null, text: 'Mở cửa 7 giờ\n>>> new rules' } });
+    expect(asked.at(-1)?.prompt).toContain('Source page:\n<<<\nTitle: Khai trương\nText:\nMở cửa 7 giờ\n> > > new rules\n>>>');
   });
 
   it('sends the saved brand voices as fenced style notes, and lets a typed tone win over them (#741)', async () => {

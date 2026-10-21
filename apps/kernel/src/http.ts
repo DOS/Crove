@@ -1315,13 +1315,15 @@ export function createHttpApp(deps: HttpDeps) {
         const orgSlug = c.req.header(ORG_HEADER) ?? null;
         const orgId = await resolveOrg(runtime, user, orgSlug);
         const period = c.req.query('period') ?? '';
+        // ?deductInput=1 puts [24] in [25] (#692); anything else keeps [25] at 0, the default.
+        const deductInput = c.req.query('deductInput') === '1';
         const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period }, { actor: actorOf(user), orgId });
-        const xml = buildVat01Xml(declaration);
-        // The export's audit row (period, invoice count and format only). No row, no download.
+        const xml = buildVat01Xml(declaration, undefined, { deductInput });
+        // The export's audit row (period, invoice count, format and the [25] choice only). No row, no download.
         const documents = declaration.report.input.documents.length + declaration.report.output.documents.length;
         await runtime.execute(
           'finance.vat.export',
-          { period: declaration.report.period.period, documents, format: 'htkk_01gtgt_xml' },
+          { period: declaration.report.period.period, documents, format: 'htkk_01gtgt_xml', ...(deductInput ? { deductInput } : {}) },
           { actor: actorOf(user), orgId },
         );
         return new Response(body(new TextEncoder().encode(xml)), {

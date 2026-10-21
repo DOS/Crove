@@ -34,6 +34,7 @@ import { bioCommands, bioQueries } from './bio-page.ts';
 import { feedCommands, feedQueries } from './feeds.ts';
 import { reportScheduleCommands, reportScheduleQueries } from './report-schedules.ts';
 import { brandVoiceCommands, brandVoiceQueries } from './brand-voice.ts';
+import { watermarkCommands, watermarkQueries } from './watermark.ts';
 import { channelSetCommands, channelSetQueries } from './channel-sets.ts';
 import { calendarNoteCommands, calendarNoteQueries } from './calendar-notes.ts';
 import { CONTENT_MANAGER_TEMPLATE, preReviewTask, type PreReview } from './agent.ts';
@@ -1347,6 +1348,7 @@ export const socialCommands = [
   ...feedCommands,
   ...reportScheduleCommands,
   ...brandVoiceCommands,
+  ...watermarkCommands,
   ...channelSetCommands,
   ...calendarNoteCommands,
   ...reviewLinkCommands,
@@ -1398,4 +1400,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...channelSetQueries, ...calendarNoteQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
+export const socialQueries = [postGet, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...channelSetQueries, ...calendarNoteQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];

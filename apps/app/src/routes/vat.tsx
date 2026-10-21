@@ -4,6 +4,8 @@ import { useTranslations } from 'use-intl';
 import type { VAT_RATES, VAT_WARNINGS } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
+import { Checkbox } from '@crove/ui/components/checkbox';
+import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
@@ -84,8 +86,10 @@ export function VatPage() {
   // The XML is a filing, so the server refuses the other kind (PERIOD_KIND_MISMATCH); the button says why first.
   const wrongKind = filing !== null && filing !== choice.kind;
 
-  const download = async (path: string, filename: string) => {
-    const response = await apiFetch(`${path}?${new URLSearchParams({ period })}`);
+  // [25] = [24] in the XML (#692): off by default, the accountant's choice per download.
+  const [deductInput, setDeductInput] = useState(false);
+  const download = async (path: string, filename: string, extra: Record<string, string> = {}) => {
+    const response = await apiFetch(`${path}?${new URLSearchParams({ period, ...extra })}`);
     const url = URL.createObjectURL(await response.blob());
     const a = document.createElement('a');
     a.href = url;
@@ -97,7 +101,7 @@ export function VatPage() {
     mutationFn: () => download('/api/export/vat.xlsx', t('exportFile', { period, org: getCurrentOrg() ?? 'org' })),
   });
   const exportXml = useMutation({
-    mutationFn: () => download('/api/export/vat-01gtgt.xml', t('exportXmlFile', { period, org: getCurrentOrg() ?? 'org' })),
+    mutationFn: () => download('/api/export/vat-01gtgt.xml', t('exportXmlFile', { period, org: getCurrentOrg() ?? 'org' }), deductInput ? { deductInput: '1' } : {}),
   });
   const exportError = exportXlsx.error ?? exportXml.error;
 
@@ -192,6 +196,10 @@ export function VatPage() {
             </DataTable>
             <p className="mt-2 text-xs text-subtle-foreground">{t('indicatorsNote')}</p>
             <p className="mt-1 text-xs text-subtle-foreground">{t('xmlNote')}</p>
+            <Label className="mt-2 text-xs font-normal text-muted-foreground">
+              <Checkbox checked={deductInput} onCheckedChange={(checked) => setDeductInput(checked)} />
+              {t('xmlDeductInput')}
+            </Label>
             {!isZeroAmount(otherSales) && <p className="mt-2 text-sm text-warning">{t('otherSales', { amount: f.money(otherSales) })}</p>}
           </section>
 

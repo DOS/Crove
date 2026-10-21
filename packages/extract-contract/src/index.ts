@@ -46,6 +46,8 @@ export const EXTRACT_LIMITS = {
   maxPageTitleChars: 300,
   maxPageDescriptionChars: 1000,
   maxPageSiteChars: 200,
+  // The page's main text (#779), for an AI draft written from it.
+  maxPageTextChars: 4000,
   // A blog's feed (#708): at most this many bytes, of which the newest items come back.
   maxFeedBytes: 1024 * 1024,
   maxFeedItems: 50,
@@ -144,6 +146,7 @@ export const zExtractedPage = z.strictObject({
   title: z.string().min(1).max(EXTRACT_LIMITS.maxPageTitleChars).nullable(),
   description: z.string().min(1).max(EXTRACT_LIMITS.maxPageDescriptionChars).nullable(),
   siteName: z.string().min(1).max(EXTRACT_LIMITS.maxPageSiteChars).nullable(),
+  text: z.string().min(1).max(EXTRACT_LIMITS.maxPageTextChars).nullable(),
 });
 export type ExtractedPage = z.infer<typeof zExtractedPage>;
 
