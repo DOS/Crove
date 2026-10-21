@@ -153,7 +153,7 @@ suite('finding a person in the org (#923)', () => {
       c.query(
         `INSERT INTO crove_social.report_schedule (org_id, name, cadence, weekday, period, recipients, next_run_at, created_by)
          VALUES ($1, 'Báo cáo tuần', 'weekly', 1, 'previous_week', ARRAY['so.tran@example.vn', 'ke.toan@example.vn'], now(), $2),
-                ($1, 'Chỉ một người', 'weekly', 1, 'previous_week', ARRAY['SO.TRAN@example.vn'], now(), $2)`,
+                ($1, 'Chỉ một người', 'weekly', 1, 'previous_week', ARRAY['SO.TRAN@example.vn', 'so.tran@example.vn'], now(), $2)`,
         [org.orgId, org.owner],
       ),
     );

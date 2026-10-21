@@ -268,13 +268,14 @@ export const personalDataErase = defineCommand({
          WHERE t.org_id = ${ctx.orgId}::uuid AND ${match('email', 't.contact_email') ?? never}`.execute(ctx.trx);
       add('crove_kernel.tenant.contact_email', Number(contact.numAffectedRows ?? 0));
       // A schedule keeps its other recipients; one left with nobody is deleted (it mailed only this person).
+      // Deleted first, so an address listed twice in different cases never leaves an empty list.
+      const dropped = await sql`
+        DELETE FROM crove_social.report_schedule t
+         WHERE t.org_id = ${ctx.orgId}::uuid AND ${match('email_list', 't.recipients') ?? never}
+           AND NOT EXISTS (SELECT 1 FROM pg_catalog.unnest(t.recipients) AS r(v) WHERE pg_catalog.lower(r.v) <> ${probe.email})`.execute(ctx.trx);
       const schedules = await sql`
         UPDATE crove_social.report_schedule t
            SET recipients = ARRAY(SELECT r.v FROM pg_catalog.unnest(t.recipients) AS r(v) WHERE pg_catalog.lower(r.v) <> ${probe.email})
-         WHERE t.org_id = ${ctx.orgId}::uuid AND ${match('email_list', 't.recipients') ?? never}
-           AND pg_catalog.cardinality(t.recipients) > 1`.execute(ctx.trx);
-      const dropped = await sql`
-        DELETE FROM crove_social.report_schedule t
          WHERE t.org_id = ${ctx.orgId}::uuid AND ${match('email_list', 't.recipients') ?? never}`.execute(ctx.trx);
       add('crove_social.report_schedule.recipients', Number(schedules.numAffectedRows ?? 0) + Number(dropped.numAffectedRows ?? 0));
     }
