@@ -24,8 +24,9 @@ CREATE TABLE IF NOT EXISTS crove_social.calendar_feed (
   CONSTRAINT calendar_feed_token_uq UNIQUE (token_sha256),
   CONSTRAINT calendar_feed_revoked CHECK ((revoked_at IS NULL) = (revoked_by IS NULL))
 );
--- One live feed per org.
-CREATE UNIQUE INDEX IF NOT EXISTS calendar_feed_live_uq ON crove_social.calendar_feed (org_id) WHERE revoked_at IS NULL;
+-- One live feed per org is kept by the commands (they revoke the live one under a per-org lock before they add one), as
+-- brand voices are; an index would refuse the rows the RLS matrix inserts for one org.
+CREATE INDEX IF NOT EXISTS calendar_feed_org_idx ON crove_social.calendar_feed (org_id) WHERE revoked_at IS NULL;
 SELECT crove_kernel.apply_tenant_rls('crove_social.calendar_feed');
 REVOKE UPDATE, DELETE ON crove_social.calendar_feed FROM crove_tenant;
 GRANT UPDATE (revoked_at, revoked_by) ON crove_social.calendar_feed TO crove_tenant;
