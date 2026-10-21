@@ -277,6 +277,7 @@ describe.each(backends)('files survive a restart on $name, from the API and the 
     orgless.push(orgId);
     const job = { blobId: key.slice('inbound/'.length), sha256, sizeBytes: new TextEncoder().encode(mime).byteLength, recipient: `${token}@in.test` };
     const result = await processInboundEmail({ runtime, store: workerStore, domain: 'in.test', extract: inProcessExtract() }, job);
+    if (!('fileIds' in result)) throw new Error('the message was not filed');
     expect(result.fileIds).toHaveLength(1);
     await workerStore.delete(inboundKey(job.blobId));
     await expect(createBlobStore(config).get(key)).rejects.toBeInstanceOf(BlobNotFoundError);

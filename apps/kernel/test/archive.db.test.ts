@@ -363,6 +363,7 @@ suite('bulk intake of a ZIP archive on PostgreSQL (issue #314)', () => {
       { runtime: workerRuntime, store, domain: 'in.test', extract },
       { blobId, sha256: sha256Hex(raw), sizeBytes: raw.byteLength, recipient: `${token}@in.test` },
     );
+    if (!('fileIds' in received)) throw new Error('the message was not filed');
     // The first MAX_EMAIL_ARCHIVES ZIPs and the XML are filed; the third ZIP is skipped.
     expect(received.fileIds).toHaveLength(MAX_EMAIL_ARCHIVES + 1);
     const filed = await admin(async (c) =>

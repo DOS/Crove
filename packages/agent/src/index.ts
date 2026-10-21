@@ -68,6 +68,18 @@ export function chatModel(config: AiConfig) {
   return provider.chatModel(config.model);
 }
 
+// The tokens one model call used, as the provider reported them (0 when it reported none). The per-org AI cost limit
+// (#675) prices them.
+export interface AiUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+export type AiUsageSink = (usage: AiUsage) => void;
+
+function reportUsage(sink: AiUsageSink | undefined, usage: { inputTokens: number | undefined; outputTokens: number | undefined }): void {
+  sink?.({ inputTokens: usage.inputTokens ?? 0, outputTokens: usage.outputTokens ?? 0 });
+}
+
 export class InvoiceExtractor {
   private readonly config: AiConfig;
 
@@ -79,19 +91,20 @@ export class InvoiceExtractor {
     return chatModel(this.config);
   }
 
-  async fromText(text: string): Promise<ParsedInvoice | null> {
-    const { output } = await generateText({
+  async fromText(text: string, onUsage?: AiUsageSink): Promise<ParsedInvoice | null> {
+    const { output, usage } = await generateText({
       model: this.model(),
       output: Output.object({ schema: zExtracted }),
       system: INSTRUCTIONS,
       prompt: `Invoice text extracted from a PDF:\n\n${text.slice(0, 60_000)}`,
       abortSignal: AbortSignal.timeout(this.config.timeoutMs ?? 120_000),
     });
+    reportUsage(onUsage, usage);
     return output ? toParsed(output) : null;
   }
 
-  async fromImage(bytes: Uint8Array, mediaType: string): Promise<ParsedInvoice | null> {
-    const { output } = await generateText({
+  async fromImage(bytes: Uint8Array, mediaType: string, onUsage?: AiUsageSink): Promise<ParsedInvoice | null> {
+    const { output, usage } = await generateText({
       model: this.model(),
       output: Output.object({ schema: zExtracted }),
       system: INSTRUCTIONS,
@@ -106,6 +119,7 @@ export class InvoiceExtractor {
       ],
       abortSignal: AbortSignal.timeout(this.config.timeoutMs ?? 120_000),
     });
+    reportUsage(onUsage, usage);
     return output ? toParsed(output) : null;
   }
 }

@@ -1129,6 +1129,7 @@ export const vi = {
     },
     fileStatus: {
       processing: 'Đang đọc',
+      waiting: 'Chờ hạn mức ngày mai',
       proposed: 'Đã có đề xuất',
       duplicate: 'Trùng hóa đơn',
       failed: 'Không đọc được',
@@ -1149,6 +1150,7 @@ export const vi = {
         uploading: 'Đang tải lên',
         upload_failed: 'Không tải được',
         processing: 'Đang đọc',
+        waiting: 'Chờ hạn mức ngày mai',
         proposed: 'Đã có đề xuất',
         duplicate: 'Trùng',
         failed: 'Không đọc được',

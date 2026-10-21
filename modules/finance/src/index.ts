@@ -22,7 +22,7 @@ import { documentExports } from './document-exports.ts';
 import { customersList } from './parties.ts';
 import { financeNotificationCommands } from './notifications.ts';
 
-export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
+export { aiCost, extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
 export {
   checkPortalList,
   firstPerOutcome,
