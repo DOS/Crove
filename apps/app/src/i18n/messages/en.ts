@@ -2372,6 +2372,22 @@ export const en = {
     backToChannels: 'Back to Channels',
   },
   // Kernel errors worded by the SPA (lib/kernel-errors.ts). Shown instead of the kernel's Vietnamese message.
+  invoiceChecks: {
+    currency: { unsupported: 'The invoice is in {currency}; posting in a foreign currency is not supported yet' },
+    lines_sum: { ok: 'The lines add up to the amount before VAT', mismatch: 'The lines add up to {lines}, not to the amount before VAT ({subtotal})' },
+    total: { ok: 'Amount before VAT plus VAT matches the total', mismatch: 'Amount before VAT plus VAT does not match the total' },
+    vat_breakdown: { ok: 'The VAT table matches the VAT total', mismatch: 'The VAT table does not match the VAT total' },
+    seller_tax_code: {
+      unreadable: "Could not read the seller's tax code",
+      checksum: "The seller's tax code {taxCode} fails its check digit",
+      ok: "The seller's tax code {taxCode} is valid",
+    },
+    issue_date: { invalid: 'The issue date is not a valid date', future: 'The issue date is in the future', ok: 'Issued on {date}' },
+    tax_authority_code: { present: "Has the tax authority's code", missing: "No tax authority's code" },
+    signature: { unverified: 'Digitally signed; the signature is not verified against an official source yet', missing: 'No digital signature' },
+    source: { ai: 'Read by AI from a photo or PDF; a person must check it' },
+    duplicate: { found: 'This invoice is already in the Inbox or in the books' },
+  },
   kernelErrors: {
     codes: {
       UNAUTHENTICATED: 'Your session has ended. Sign in again.',

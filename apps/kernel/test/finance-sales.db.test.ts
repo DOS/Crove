@@ -284,6 +284,18 @@ suite('sales e-invoices (#313)', () => {
     const copy = await read(invoice('5001', { salt: '\n' }));
     const detail = await rpc('inbox/get', await tokenFor(owner), { id: copy });
     expect(detail.body.payload.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'duplicate', status: 'fail' })]));
+    // The checks keep their code and parameters (#677) through kernel.extraction.record, in the proposal and the run.
+    expect(detail.body.payload.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'duplicate', code: 'duplicate.found' }),
+        expect.objectContaining({ id: 'issue_date', code: 'issue_date.ok', params: { date: expect.any(String) } }),
+      ]),
+    );
+    const [run] = await admin(
+      async (c) =>
+        (await c.query(`SELECT r.checks FROM crove_kernel.extraction r JOIN crove_kernel.proposal p ON p.org_id = r.org_id AND p.source_file_id = r.file_id WHERE p.id = $1`, [copy])).rows,
+    );
+    expect(run?.checks).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'duplicate.found' })]));
     await expect(approve(copy, { acceptFailedChecks: true })).rejects.toMatchObject({ code: 'DUPLICATE_INVOICE', status: 409 });
     await runtime.execute('kernel.proposal.reject', { id: copy }, { actor: asUser(owner.userId), orgId: org.orgId });
     // The same series and number issued to someone else (here a customer with no tax code) is still the same invoice.

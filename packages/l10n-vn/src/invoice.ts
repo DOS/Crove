@@ -55,10 +55,15 @@ export interface ParsedInvoice {
 
 export type CheckStatus = 'pass' | 'warn' | 'fail';
 
+// id names the check (stable, BLOCKING_CHECK_IDS refers to it); code names its outcome and wording (one of
+// INVOICE_CHECK_CODES in @crove/kernel-contract, issue #677), with params filling the wording. message is the
+// Vietnamese sentence, kept for older readers and as the fallback.
 export interface InvoiceCheck {
   id: string;
   status: CheckStatus;
   message: string;
+  code: string;
+  params?: Record<string, string>;
 }
 
 // Normalized invoice identifiers used for storage and duplicate detection.
@@ -95,65 +100,76 @@ export function checkInvoice(
 ): InvoiceCheck[] {
   const checks: InvoiceCheck[] = [];
   if (invoice.currency.toUpperCase() !== baseCurrency) {
-    checks.push({ id: 'currency', status: 'fail', message: `Hóa đơn bằng ${invoice.currency}; chưa hỗ trợ ghi sổ ngoại tệ` });
+    // The code as read can be any text (an XML element, a model's answer): only its start is shown.
+    const currency = Array.from(invoice.currency.trim()).slice(0, 20).join('');
+    checks.push({ id: 'currency', status: 'fail', code: 'currency.unsupported', params: { currency }, message: `Hóa đơn bằng ${currency}; chưa hỗ trợ ghi sổ ngoại tệ` });
   }
   const linesTotal = sum(invoice.lines.map(lineContribution));
 
   checks.push(
     approxEqual(linesTotal, invoice.subtotal, '0')
-      ? { id: 'lines_sum', status: 'pass', message: 'Tổng các dòng khớp tiền trước thuế' }
+      ? { id: 'lines_sum', status: 'pass', code: 'lines_sum.ok', message: 'Tổng các dòng khớp tiền trước thuế' }
       : {
           id: 'lines_sum',
           status: 'fail',
+          code: 'lines_sum.mismatch',
+          params: { lines: toMoney(linesTotal), subtotal: invoice.subtotal },
           message: `Tổng các dòng (${toMoney(linesTotal)}) lệch tiền trước thuế (${invoice.subtotal})`,
         },
   );
 
   checks.push(
     approxEqual(money(invoice.subtotal).plus(money(invoice.vatTotal)), invoice.total, '0')
-      ? { id: 'total', status: 'pass', message: 'Tiền trước thuế + VAT khớp tổng thanh toán' }
-      : { id: 'total', status: 'fail', message: 'Tiền trước thuế + VAT lệch tổng thanh toán' },
+      ? { id: 'total', status: 'pass', code: 'total.ok', message: 'Tiền trước thuế + VAT khớp tổng thanh toán' }
+      : { id: 'total', status: 'fail', code: 'total.mismatch', message: 'Tiền trước thuế + VAT lệch tổng thanh toán' },
   );
 
   if (invoice.taxBreakdown.length > 0) {
     const vat = sum(invoice.taxBreakdown.map((t) => t.vatAmount));
     checks.push(
       approxEqual(vat, invoice.vatTotal, '0')
-        ? { id: 'vat_breakdown', status: 'pass', message: 'Bảng thuế suất khớp tổng VAT' }
-        : { id: 'vat_breakdown', status: 'fail', message: 'Bảng thuế suất lệch tổng VAT' },
+        ? { id: 'vat_breakdown', status: 'pass', code: 'vat_breakdown.ok', message: 'Bảng thuế suất khớp tổng VAT' }
+        : { id: 'vat_breakdown', status: 'fail', code: 'vat_breakdown.mismatch', message: 'Bảng thuế suất lệch tổng VAT' },
     );
   }
 
   const seller = parseTaxCode(invoice.seller.taxCode);
   if (!seller) {
-    checks.push({ id: 'seller_tax_code', status: 'warn', message: 'Không đọc được MST người bán' });
+    checks.push({ id: 'seller_tax_code', status: 'warn', code: 'seller_tax_code.unreadable', message: 'Không đọc được MST người bán' });
   } else if (seller.checksumValid === false) {
-    checks.push({ id: 'seller_tax_code', status: 'warn', message: `MST người bán ${seller.normalized} sai số kiểm tra` });
+    checks.push({
+      id: 'seller_tax_code',
+      status: 'warn',
+      code: 'seller_tax_code.checksum',
+      params: { taxCode: seller.normalized },
+      message: `MST người bán ${seller.normalized} sai số kiểm tra`,
+    });
   } else {
-    checks.push({ id: 'seller_tax_code', status: 'pass', message: `MST người bán ${seller.normalized} hợp lệ` });
+    checks.push({ id: 'seller_tax_code', status: 'pass', code: 'seller_tax_code.ok', params: { taxCode: seller.normalized }, message: `MST người bán ${seller.normalized} hợp lệ` });
   }
 
   if (!isCalendarDate(invoice.issueDate)) {
-    checks.push({ id: 'issue_date', status: 'fail', message: 'Ngày lập hóa đơn không hợp lệ' });
+    checks.push({ id: 'issue_date', status: 'fail', code: 'issue_date.invalid', message: 'Ngày lập hóa đơn không hợp lệ' });
   } else if (invoice.issueDate > today) {
-    checks.push({ id: 'issue_date', status: 'warn', message: 'Ngày lập hóa đơn ở tương lai' });
+    checks.push({ id: 'issue_date', status: 'warn', code: 'issue_date.future', message: 'Ngày lập hóa đơn ở tương lai' });
   } else {
-    checks.push({ id: 'issue_date', status: 'pass', message: `Ngày lập ${invoice.issueDate}` });
+    checks.push({ id: 'issue_date', status: 'pass', code: 'issue_date.ok', params: { date: invoice.issueDate }, message: `Ngày lập ${invoice.issueDate}` });
   }
 
   if (invoice.source === 'einvoice_xml') {
     checks.push(
       invoice.taxAuthorityCode
-        ? { id: 'tax_authority_code', status: 'pass', message: 'Có mã của cơ quan thuế' }
-        : { id: 'tax_authority_code', status: 'warn', message: 'Không có mã của cơ quan thuế' },
+        ? { id: 'tax_authority_code', status: 'pass', code: 'tax_authority_code.present', message: 'Có mã của cơ quan thuế' }
+        : { id: 'tax_authority_code', status: 'warn', code: 'tax_authority_code.missing', message: 'Không có mã của cơ quan thuế' },
     );
     checks.push({
       id: 'signature',
       status: 'warn',
+      code: invoice.hasSignature ? 'signature.unverified' : 'signature.missing',
       message: invoice.hasSignature ? 'Có chữ ký số, chưa xác minh với nguồn chính thức' : 'Không có chữ ký số',
     });
   } else {
-    checks.push({ id: 'source', status: 'warn', message: 'Đọc bằng AI từ ảnh/PDF, cần người kiểm tra' });
+    checks.push({ id: 'source', status: 'warn', code: 'source.ai', message: 'Đọc bằng AI từ ảnh/PDF, cần người kiểm tra' });
   }
   return checks;
 }

@@ -268,7 +268,7 @@ export async function extractAndPropose(
 
   const checks = checkInvoice(invoice, deps.today?.());
   if (lookup.duplicateDocumentId || lookup.duplicateProposalId) {
-    checks.unshift({ id: 'duplicate', status: 'fail', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
+    checks.unshift({ id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
   }
   // A sale (issue #313) books every line to revenue; a purchase proposes an expense or asset account per line.
   const sale = lookup.direction === 'sale';
