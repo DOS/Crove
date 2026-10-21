@@ -4,9 +4,10 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { ExtractClient, ExtractFailure } from '@crove/extract-contract';
+import type { UsageMetric } from '@crove/db';
 import { zId, zLocalDate, zPurchaseProposal, zRelatedInvoiceRef, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
 import { defineQuery, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
-import { AiNotConfiguredError, AmountFormatError, type InvoiceReader } from '@crove/agent';
+import { AiNotConfiguredError, AmountFormatError, type AiUsage, type InvoiceReader } from '@crove/agent';
 import { journalMemo } from './memo.ts';
 import { BOOK_CURRENCY, convertInvoice, type ForeignAmounts } from './domain/foreign-currency.ts';
 import { isOwnTaxCode } from './own-tax-code.ts';
@@ -20,6 +21,7 @@ import {
   lineContribution,
   looksLikeEInvoiceXml,
   money,
+  Decimal,
   parseTaxCode,
   type InvoiceCheck,
   type ParsedInvoice,
@@ -219,6 +221,29 @@ export interface ExtractDeps {
   // The crove-extract client. The worker never parses PDF or XML itself.
   extract: ExtractClient;
   today?: () => string;
+  // The per-org abuse limits (#675): extraction pages and AI cost in any 24 hours. Without them nothing is checked;
+  // what a run used is recorded either way, for the usage report.
+  limits?: Readonly<Record<UsageMetric, string>> | undefined;
+  // The price of one million input and output tokens of the AI model, in the unit of the ai_cost limit. Without it AI
+  // cost counts as zero.
+  aiPrice?: { inputPerMTok: string; outputPerMTok: string } | undefined;
+}
+
+// What reading one document used: its pages once read (a PDF's page count, 1 for an image or an e-invoice XML; a file
+// the sandbox refuses counts none) and the tokens of the AI calls made for it.
+interface ReadUsage {
+  pages: number;
+  ai: AiUsage[];
+}
+
+// The cost of the AI calls of one read, as a decimal string with 6 decimals.
+export function aiCost(usage: readonly AiUsage[], price: { inputPerMTok: string; outputPerMTok: string } | undefined): string {
+  if (!price) return '0';
+  let cost = new Decimal(0);
+  for (const call of usage) {
+    cost = cost.plus(new Decimal(call.inputTokens).times(price.inputPerMTok)).plus(new Decimal(call.outputTokens).times(price.outputPerMTok));
+  }
+  return cost.dividedBy(1_000_000).toFixed(6);
 }
 
 type Method = 'einvoice_xml' | 'pdf_text_ai' | 'image_ai' | 'unsupported';
@@ -247,7 +272,11 @@ async function readInvoice(
   deps: ExtractDeps,
   file: { filename: string; content_type: string; aiStopped: boolean },
   bytes: Uint8Array,
+  used: ReadUsage,
 ): Promise<{ method: Method; invoice: ParsedInvoice | null; error: string | null }> {
+  const onUsage = (usage: AiUsage) => {
+    used.ai.push(usage);
+  };
   // This process has no parser (External-tenant gate T12): without the crove-extract client it fails closed,
   // in tests as everywhere else, and the job is retried.
   const sandbox = deps.extract as ExtractClient | undefined;
@@ -259,6 +288,7 @@ async function readInvoice(
     if (isXml) {
       const result = await sandbox.extract('einvoice_xml', bytes);
       if (!result.ok) return { method: 'einvoice_xml', invoice: null, error: unreadable(result) };
+      used.pages = 1;
       return { method: 'einvoice_xml', invoice: result.invoice, error: null };
     }
     if (file.content_type === 'application/pdf' || name.endsWith('.pdf')) {
@@ -266,15 +296,17 @@ async function readInvoice(
       if (file.aiStopped) return { method: 'pdf_text_ai', invoice: null, error: AI_STOPPED_MESSAGE };
       const result = await sandbox.extract('pdf_text', bytes);
       if (!result.ok) return { method: 'pdf_text_ai', invoice: null, error: unreadable(result) };
+      used.pages = Math.max(result.pages, 1);
       const text = result.text.trim();
       if (text.length < 40) return { method: 'pdf_text_ai', invoice: null, error: 'PDF dạng ảnh scan chưa được hỗ trợ; hãy gửi ảnh chụp hoặc tệp XML' };
-      const invoice = await deps.extractor.fromText(text);
+      const invoice = await deps.extractor.fromText(text, onUsage);
       return { method: 'pdf_text_ai', invoice, error: invoice ? null : 'Tài liệu không phải hóa đơn mua vào' };
     }
     if (IMAGE_TYPES.includes(file.content_type)) {
       if (!deps.extractor) throw new AiNotConfiguredError('Chưa cấu hình AI nên chưa đọc được ảnh; hãy gửi tệp XML hóa đơn điện tử');
       if (file.aiStopped) return { method: 'image_ai', invoice: null, error: AI_STOPPED_MESSAGE };
-      const invoice = await deps.extractor.fromImage(bytes, file.content_type);
+      used.pages = 1;
+      const invoice = await deps.extractor.fromImage(bytes, file.content_type, onUsage);
       return { method: 'image_ai', invoice, error: invoice ? null : 'Ảnh không phải hóa đơn mua vào' };
     }
     return { method: 'unsupported', invoice: null, error: 'Định dạng tệp chưa được hỗ trợ (chỉ nhận XML, PDF, JPG, PNG, WEBP)' };
@@ -343,14 +375,54 @@ export async function extractAndPropose(
   orgId: string,
   fileId: string,
   version?: number,
-): Promise<{ proposalId: string | null }> {
+): Promise<{ proposalId: string | null; deferred?: string }> {
   const actor = { type: 'system' as const, component: 'finance.extract' };
   const file = await deps.runtime.query<ExtractionFile | null>('finance.extraction.file', { fileId, version }, { actor, orgId });
   if (!file || !file.due) return { proposalId: null };
 
+  // Over the org's daily extraction pages or AI cost (#675) the document is kept and not read. A first read waits for
+  // the org's next budget: the worker queues it again for `deferred`, and the Inbox shows it as waiting. A re-extraction
+  // someone asked for is recorded as failed with when to ask again, so the pending proposal is not held for a day.
+  if (deps.limits) {
+    const { extraction_pages, ai_cost } = deps.limits;
+    const over = await deps.runtime.query<{ metric: UsageMetric; retryAt: string } | null>(
+      'kernel.usage.over',
+      { metrics: ['extraction_pages', 'ai_cost'], limits: { extraction_pages, ai_cost } },
+      { actor, orgId },
+    );
+    if (over && version !== undefined) {
+      await recordExtractionFailure(deps.runtime, orgId, fileId, 'Tổ chức đã dùng hết hạn mức đọc chứng từ trong 24 giờ; hãy bấm Đọc lại vào ngày mai', version);
+      return { proposalId: null };
+    }
+    if (over) {
+      await deps.runtime.execute('kernel.usage.defer', { metric: over.metric, subjectType: 'file', subjectId: fileId, retryAt: over.retryAt }, { actor, orgId });
+      return { proposalId: null, deferred: over.retryAt };
+    }
+  }
+
   // The exact version the file row recorded, checked against its sha256 (ADR-0013): a swapped object is never parsed.
   const bytes = await readVerified(deps.store, { key: file.storage_key, generation: file.generation, sha256: file.sha256 });
-  const { method, invoice, error } = await readInvoice(deps, file, bytes);
+  const used: ReadUsage = { pages: 0, ai: [] };
+  let read: Awaited<ReturnType<typeof readInvoice>>;
+  try {
+    read = await readInvoice(deps, file, bytes, used);
+  } finally {
+    // What the read used counts against the org's limits even when the job fails after it and is retried. Best
+    // effort: a failure to record is logged and never hides the read's own error or result.
+    const cost = aiCost(used.ai, deps.aiPrice);
+    if (used.pages > 0 || /[1-9]/.test(cost)) {
+      try {
+        await deps.runtime.execute(
+          'kernel.usage.record',
+          { entries: [{ metric: 'extraction_pages', amount: String(used.pages) }, { metric: 'ai_cost', amount: cost }] },
+          { actor, orgId },
+        );
+      } catch (recordError) {
+        console.error(`[extract] file ${fileId}: could not record its usage`, recordError instanceof Error ? recordError.message : recordError);
+      }
+    }
+  }
+  const { method, invoice, error } = read;
 
   const fail = (message: string, checks: InvoiceCheck[] = []) =>
     deps.runtime.execute<{ proposalId: string | null }>(

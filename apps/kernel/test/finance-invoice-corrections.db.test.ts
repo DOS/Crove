@@ -224,6 +224,27 @@ suite('replacement and adjustment invoices (#916)', () => {
     expect(row.rows).toEqual([{ correction_kind: 'replacement', corrects_document_id: null, corrected_number: '7777' }]);
   });
 
+  it('shows the links both ways on the documents list and in the journal', async () => {
+    type Doc = { id: string; number: string; corrects: unknown; correctedBy: unknown[] };
+    const docs = await runtime.query<Doc[]>('finance.documents.list', {}, { actor: asUser(owner), orgId });
+    const byNumber = new Map(docs.map((d) => [d.number, d]));
+    expect(byNumber.get('8001')).toMatchObject({ corrects: null, correctedBy: [{ kind: 'replacement', documentId: replacement, series: 'C26TAB', number: '8002' }] });
+    expect(byNumber.get('8002')).toMatchObject({
+      corrects: { kind: 'replacement', series: 'C26TAB', number: '8001', documentId: original },
+      correctedBy: [{ kind: 'adjustment', series: 'C26TAB', number: '8003' }],
+    });
+    expect(byNumber.get('8003')).toMatchObject({ corrects: { kind: 'adjustment', number: '8002', documentId: replacement }, correctedBy: [] });
+    expect(byNumber.get('8004')).toMatchObject({ corrects: { kind: 'replacement', number: '7777', documentId: null } });
+
+    const journal = await runtime.query<Array<{ document?: { number: string; corrects?: unknown; correctedBy?: unknown[] } }>>(
+      'finance.journal.list',
+      {},
+      { actor: asUser(owner), orgId },
+    );
+    const entry = journal.find((e) => e.document?.number === '8002');
+    expect(entry?.document).toMatchObject({ corrects: { kind: 'replacement', number: '8001' }, correctedBy: [{ kind: 'adjustment', number: '8003' }] });
+  });
+
   it('refuses a link to a document of another invoice, or an adjustment of a voided one', async () => {
     const insert = (kind: string, corrects: string, number: string) =>
       admin((c) =>

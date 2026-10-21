@@ -58,7 +58,7 @@ import {
 import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
 import { socialAgentPrograms, socialCommands, socialQueries } from '@crove/mod-social';
 import { createAuthenticator, type Authenticate } from './auth.ts';
-import { AVAILABLE_MODULES, assertExportKey, type Config, type ModuleId } from './config.ts';
+import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { rebindExports as rebindOrgExports } from './export-rebind.ts';
 import { exportSealer } from './export-seal.ts';
@@ -387,6 +387,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).
             mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
             archive: { store: archiveStore, lagSeconds: config.ARCHIVE_LAG_SECONDS },
+            usageLimits: usageLimits(config),
+            aiPrice: { inputPerMTok: config.AI_PRICE_INPUT_PER_MTOK, outputPerMTok: config.AI_PRICE_OUTPUT_PER_MTOK },
           }),
         );
       }

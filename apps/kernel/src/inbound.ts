@@ -9,6 +9,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { sql } from 'kysely';
 import { EXTRACT_LIMIT_RETRIES, type ExtractClient } from '@crove/extract-contract';
 import { ACCEPTED_ARCHIVE_TYPES, ACCEPTED_UPLOAD_TYPES, MAX_EMAIL_ARCHIVES, MAX_UPLOAD_BYTES } from '@crove/kernel-contract';
+import type { UsageLimits, UsageOver } from '@crove/kernel';
 import { DomainError, fileKey, inboundKey, newInboundBlobId, putFile, sha256Hex, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { safeFilename, sniffType } from './sniff.ts';
 
@@ -107,6 +108,14 @@ export interface InboundProcessDeps {
   domain: string | null;
   // crove-extract parses the message.
   extract: ExtractClient;
+  // The per-org abuse limits (#675); without them no limit is checked.
+  limits?: UsageLimits | undefined;
+}
+
+// A message kept for later because its org is over a daily limit (#675): the worker queues it again for retryAt and
+// keeps its raw blob.
+export interface InboundDeferred {
+  deferred: string;
 }
 
 // Worker side: has the stored message parsed, resolves the org by token and records it in system context.
@@ -150,6 +159,22 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
   if (!orgId) {
     await countDrop(deps.runtime, token);
     throw unknownRecipient();
+  }
+
+  // Over a daily limit of the org (#675) the message is kept, not filed: the worker tries it again once the org is back
+  // under it. The check comes before anything is stored for the org.
+  if (deps.limits) {
+    const actor = { type: 'system' as const, component: 'inbound.email' };
+    const { inbound_emails, attachment_bytes } = deps.limits;
+    const over = await deps.runtime.query<UsageOver | null>(
+      'kernel.usage.over',
+      { metrics: ['inbound_emails', 'attachment_bytes'], limits: { inbound_emails, attachment_bytes } },
+      { actor, orgId },
+    );
+    if (over) {
+      await deps.runtime.execute('kernel.usage.defer', { metric: over.metric, subjectType: 'inbound_email', subjectId: rawSha256, retryAt: over.retryAt }, { actor, orgId });
+      return { deferred: over.retryAt } satisfies InboundDeferred;
+    }
   }
 
   const files = [];

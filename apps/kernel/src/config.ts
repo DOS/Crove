@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import type { UsageLimits } from '@crove/kernel';
 import { SIGNUP_POLICIES, parseAllowedDomains } from './auth-signup-policy.ts';
 import { exportSealer } from './export-seal.ts';
 
@@ -179,6 +180,16 @@ const schema = z.object({
   // across API instances, on top of the per-org limits (50 invites per org and 3 per email in any 24 hours). An
   // org's first invite of an address in the window always passes; only repeats are refused.
   INVITE_LIMIT_PER_RECIPIENT_PER_DAY: z.coerce.number().int().min(1).max(1000).default(5),
+  // Per-org abuse limits (#675), counted in the database over any 24 hours and enforced by the worker: an inbound
+  // message or a document over a limit is kept and handled once the org is back under it, and its owners get a mail.
+  // ORG_LIMIT_AI_COST_PER_DAY is in the unit of AI_PRICE_INPUT_PER_MTOK and AI_PRICE_OUTPUT_PER_MTOK (the price of one
+  // million input and output tokens, for example USD); with no prices AI cost counts as zero and only pages bound it.
+  ORG_LIMIT_INBOUND_EMAILS_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(300),
+  ORG_LIMIT_ATTACHMENT_MB_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(1000),
+  ORG_LIMIT_EXTRACTION_PAGES_PER_DAY: z.coerce.number().int().min(1).max(999_999).default(1500),
+  ORG_LIMIT_AI_COST_PER_DAY: z.string().regex(/^\d{1,9}(\.\d{1,6})?$/).default('20'),
+  AI_PRICE_INPUT_PER_MTOK: z.string().regex(/^\d{1,6}(\.\d{1,6})?$/).default('0'),
+  AI_PRICE_OUTPUT_PER_MTOK: z.string().regex(/^\d{1,6}(\.\d{1,6})?$/).default('0'),
   // Bound on denied/failed audit rows (issue #162), counted in the database across API instances: in each fixed
   // window of REFUSAL_AUDIT_WINDOW_SECONDS, an actor's refusals get an audit row until the actor has
   // REFUSAL_AUDIT_LIMIT_PER_ACTOR or the org REFUSAL_AUDIT_LIMIT_PER_ORG refusals in it; later ones are only counted
@@ -525,4 +536,14 @@ export function publicAuthUrl(config: Config): string {
 // directly when it is proxied, otherwise the Auth URL the SPA signs in with. null: not configured.
 export function liveAuthUrl(config: Config): string | null {
   return config.AUTH_UPSTREAM_URL ?? config.PUBLIC_AUTH_URL ?? null;
+}
+
+// The per-org abuse limits (#675) the worker checks, from ORG_LIMIT_*: attachment MB as bytes.
+export function usageLimits(config: Config): UsageLimits {
+  return {
+    inbound_emails: String(config.ORG_LIMIT_INBOUND_EMAILS_PER_DAY),
+    attachment_bytes: String(config.ORG_LIMIT_ATTACHMENT_MB_PER_DAY * 1024 * 1024),
+    extraction_pages: String(config.ORG_LIMIT_EXTRACTION_PAGES_PER_DAY),
+    ai_cost: config.ORG_LIMIT_AI_COST_PER_DAY,
+  };
 }

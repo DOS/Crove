@@ -15,6 +15,7 @@ import { isZeroAmount } from '../lib/decimal.ts';
 import { OPENING_BALANCE_SOURCE, canImportOpeningBalance } from '../lib/opening-balance.ts';
 import { MAX_REASON_LENGTH, canAskReversal, defaultReversalDate, reversalErrorMessage, reversalFormError } from '../lib/reversal.ts';
 import { canEnterVoucher } from '../lib/vouchers.ts';
+import { InvoiceCorrections } from '../components/invoice-corrections.tsx';
 import { JournalVoucherFormCard } from './journal-voucher.tsx';
 import { YearClosingFormCard } from './year-closing.tsx';
 
@@ -255,6 +256,8 @@ export function JournalPage() {
                   <p className="text-xs text-subtle-foreground">{f.date(entry.entryDate)}</p>
                 </div>
               </div>
+              {/* A replacement or an adjustment invoice and the one it corrects (#916). */}
+              {entry.document && <InvoiceCorrections corrects={entry.document.corrects} correctedBy={entry.document.correctedBy} />}
               {/* The reversal link both ways (#138); it scrolls to the other entry when it is in the range shown. */}
               {(entry.reverses || entry.reversedBy) && (
                 <p className="mt-1 text-xs">
