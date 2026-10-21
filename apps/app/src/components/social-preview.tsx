@@ -19,9 +19,19 @@ export interface PreviewContent {
   cover?: Cover | null;
   // The channel's post type (#644): a Story shows only its image or video, in a phone frame.
   postType?: string;
-  // A Threads poll's options and topic tag (#711).
+  // A Threads or X poll's options and a Threads topic tag (#711, #948); an X poll's length in minutes.
   poll?: readonly string[];
+  pollMinutes?: number;
   topicTag?: string;
+  // Who may reply to an X post, when not everyone (#948).
+  replySettings?: 'following' | 'mentionedUsers';
+}
+
+// A poll's length as X shows it under the options: days, else hours, else minutes.
+function pollLength(minutes: number): { unit: 'days' | 'hours' | 'minutes'; n: number } {
+  if (minutes % 1440 === 0) return { unit: 'days', n: minutes / 1440 };
+  if (minutes % 60 === 0) return { unit: 'hours', n: minutes / 60 };
+  return { unit: 'minutes', n: minutes };
 }
 
 function hostOf(link: string): string {
@@ -223,7 +233,11 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
           ))}
         </ul>
       )}
+      {content.poll && content.poll.length > 0 && content.pollMinutes !== undefined && (
+        <p className="mt-1 text-xs text-subtle-foreground">{t(`previewPollLength.${pollLength(content.pollMinutes).unit}`, { n: pollLength(content.pollMinutes).n })}</p>
+      )}
       <Media media={content.media} layout="feed" max={rule.gridMax} />
+      {content.replySettings && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewReplySettings.${content.replySettings}`)}</p>}
       {card}
     </div>
   );

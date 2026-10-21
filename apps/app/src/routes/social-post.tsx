@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, X_REPLY_SETTINGS, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -224,6 +224,36 @@ function ProviderSettings({ provider, settings, onChange, disabled, inboxOffered
         </Label>
         <Input id="mastodon-cw" value={typeof settings.contentWarning === 'string' ? settings.contentWarning : ''} disabled={disabled} onChange={(e) => onChange(e.target.value ? { ...settings, contentWarning: e.target.value } : without('contentWarning'))} />
         <p className="text-xs text-subtle-foreground">{t('mastodonContentWarningHint')}</p>
+      </div>
+    );
+  }
+  // X (#948): who may reply; everyone unless chosen.
+  if (provider === 'x') {
+    const current = typeof settings.replySettings === 'string' ? settings.replySettings : 'everyone';
+    const known = (X_REPLY_SETTINGS as readonly string[]).includes(current);
+    return (
+      <div className="space-y-1.5">
+        <Label htmlFor="x-reply-settings" className="text-xs">
+          {t('xReplySettings')}
+        </Label>
+        <NativeSelect
+          id="x-reply-settings"
+          size="sm"
+          className="w-full max-w-xs"
+          value={current}
+          disabled={disabled}
+          onChange={(e) => {
+            const { replySettings: _gone, ...rest } = settings;
+            onChange(e.target.value === 'everyone' ? rest : { ...rest, replySettings: e.target.value });
+          }}
+        >
+          {!known && <NativeSelectOption value={current}>{current}</NativeSelectOption>}
+          {X_REPLY_SETTINGS.map((v) => (
+            <NativeSelectOption key={v} value={v}>
+              {t(`xReplySettingsOption.${v}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
       </div>
     );
   }
@@ -758,21 +788,34 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
   );
 }
 
-// Threads polls and topic tags (#711): a poll of 2 to 4 short options on a post without media, and one topic tag. The
-// options are kept as typed; the server trims them.
+// The lengths offered for a poll that takes one (X, #948), in minutes: from 5 minutes to 7 days.
+const POLL_LENGTHS: readonly number[] = [5, 15, 30, 60, 360, 720, 1440, 2880, 4320, 10_080];
+
+// Threads and X polls and Threads topic tags (#711, #948): a poll of 2 to 4 short options on a post without media (with
+// its length on X), and one topic tag. The options are kept as typed; the server trims them.
 function PollAndTagField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social.threadsExtras');
   if (!isProvider(provider)) return null;
   const pollRule = POLL_RULES[provider];
   const tagRule = TOPIC_TAG_RULES[provider];
   if (!pollRule && !tagRule) return null;
-  const rawOptions = (settings.poll as { options?: unknown } | undefined)?.options;
+  const rawPoll = settings.poll && typeof settings.poll === 'object' && !Array.isArray(settings.poll) ? (settings.poll as Record<string, unknown>) : null;
+  const rawOptions = rawPoll?.options;
   const options = Array.isArray(rawOptions) ? rawOptions.map((o) => (typeof o === 'string' ? o : '')) : null;
   const without = (key: string) => {
     const { [key]: _gone, ...rest } = settings;
     return rest;
   };
-  const setOptions = (next: string[] | null) => onChange(next ? { ...settings, poll: { options: next } } : without('poll'));
+  // The poll's length stays when its options change (X, #948).
+  const setOptions = (next: string[] | null) => onChange(next ? { ...settings, poll: { ...rawPoll, options: next } } : without('poll'));
+  const duration = pollRule?.duration;
+  const minutes = duration ? (pollDurationOf(settings) ?? duration.default) : null;
+  const setMinutes = (value: number) => {
+    const { durationMinutes: _gone, ...rest } = rawPoll ?? {};
+    onChange({ ...settings, poll: duration && value === duration.default ? rest : { ...rest, durationMinutes: value } });
+  };
+  const lengths = duration ? POLL_LENGTHS.filter((m) => m >= duration.min && m <= duration.max) : [];
+  const lengthLabel = (m: number) => (m % 1440 === 0 ? t('pollLengthDays', { n: m / 1440 }) : m % 60 === 0 ? t('pollLengthHours', { n: m / 60 }) : t('pollLengthMinutes', { n: m }));
   const tag = typeof settings.topicTag === 'string' ? settings.topicTag : '';
   return (
     <div className="space-y-2">
@@ -806,6 +849,21 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
                 <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => setOptions([...options, ''])}>
                   {t('addOption')}
                 </Button>
+              )}
+              {duration && minutes !== null && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Label htmlFor={`poll-length-${provider}`} className="text-xs">
+                    {t('pollLength')}
+                  </Label>
+                  <NativeSelect id={`poll-length-${provider}`} size="sm" className="w-40" value={String(minutes)} disabled={disabled} onChange={(e) => setMinutes(Number(e.target.value))}>
+                    {minutes === 'invalid' || !lengths.includes(minutes) ? <NativeSelectOption value={String(minutes)}>{minutes === 'invalid' ? '?' : lengthLabel(minutes)}</NativeSelectOption> : null}
+                    {lengths.map((m) => (
+                      <NativeSelectOption key={m} value={String(m)}>
+                        {lengthLabel(m)}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </div>
               )}
               <p className="text-xs text-subtle-foreground">{t('pollHint', { max: String(pollRule.maxChars) })}</p>
             </div>
@@ -975,6 +1033,9 @@ function ChannelEditor({
   const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings, own.custom ? own.body : base.body) : base.linkUrl) ?? '';
   const postType = postTypeOf(own.settings) ?? 'feed';
   const poll = pollOptionsOf(own.settings);
+  const pollRule = isProvider(provider) ? POLL_RULES[provider] : undefined;
+  const pollMinutes = pollDurationOf(own.settings);
+  const replySettings = provider === 'x' && (own.settings.replySettings === 'following' || own.settings.replySettings === 'mentionedUsers') ? (own.settings.replySettings as 'following' | 'mentionedUsers') : null;
   const tag = topicTagOf(own.settings);
   const content = {
     body: own.custom ? own.body : base.body,
@@ -984,7 +1045,9 @@ function ChannelEditor({
     cover: coverOf(own.settings),
     postType,
     ...(Array.isArray(poll) ? { poll } : {}),
+    ...(Array.isArray(poll) && pollRule?.duration ? { pollMinutes: typeof pollMinutes === 'number' ? pollMinutes : pollRule.duration.default } : {}),
     ...(typeof tag === 'string' && tag ? { topicTag: tag } : {}),
+    ...(replySettings ? { replySettings } : {}),
   };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
