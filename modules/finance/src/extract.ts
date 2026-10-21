@@ -52,7 +52,9 @@ export const fileForExtraction = defineQuery({
       .where((eb) => eb.or([eb('scope', '=', 'org'), eb.and([eb('scope', '=', 'module'), eb('target', '=', 'finance')])]))
       .limit(1)
       .executeTakeFirst();
-    return file ? { ...file, hasExtraction: Boolean(extraction), due, aiStopped: Boolean(stopped) } : null;
+    // And the operator's switch for every org (#886).
+    const { rows: global } = await sql<{ on: boolean }>`SELECT crove_kernel.global_kill_switch_on('ai') AS on`.execute(ctx.trx);
+    return file ? { ...file, hasExtraction: Boolean(extraction), due, aiStopped: Boolean(stopped) || global[0]?.on === true } : null;
   },
 });
 
