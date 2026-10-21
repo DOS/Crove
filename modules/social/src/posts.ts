@@ -47,6 +47,7 @@ import { attentionInboxQueries } from './attention-inbox.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
+import { planExportCommands } from './plan-export.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { recurringCommands } from './recurring.ts';
 import { parseRecurrence, type Recurrence } from './domain/recurrence.ts';
@@ -1477,6 +1478,7 @@ export const socialCommands = [
   ...publishingCommands,
   ...publishHoldCommands,
   ...metricsCommands,
+  ...planExportCommands,
   ...evergreenCommands,
   ...recurringCommands,
   ...commentCommands,

@@ -9,6 +9,7 @@ export * from './publishing.ts';
 export * from './publisher.ts';
 export * from './publish-hold.ts';
 export * from './metrics.ts';
+export * from './plan-export.ts';
 export * from './evergreen.ts';
 export * from './domain/recurrence.ts';
 export * from './recurring.ts';

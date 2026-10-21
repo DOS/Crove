@@ -1,6 +1,6 @@
 // WordPress against recorded answers (shapes from developer.wordpress.org/rest-api/reference); no live call.
 import { describe, expect, it } from 'vitest';
-import { connectWordPress, wordpressHtml, wordpressLogin, WordPressPublisher, wordpressSecretOf, wordpressSite, type Fetch, type PublishInput } from '../src/index.ts';
+import { connectWordPress, wordpressHtml, wordpressLogin, wordpressOptionsOf, WordPressPublisher, wordpressSecretOf, wordpressSite, type Fetch, type PublishInput } from '../src/index.ts';
 
 const PASSWORD = 'testtesttesttesttesttest';
 const SITE = 'https://tiemcuaban.vn';
@@ -219,7 +219,7 @@ describe('WordPress publish', () => {
     const publisher = new WordPressPublisher(fetchImpl);
     expect(await publisher.reconcile(ask)).toEqual({ found: true, externalId: '120', url: `${SITE}/khai-truong/` });
     const list = new URL(calls[1]?.url ?? '');
-    expect(Object.fromEntries(list.searchParams)).toEqual({ context: 'edit', status: 'publish,future,pending', per_page: '20', after: '2026-10-20T03:00:00.000Z', author: '3', _fields: 'id,link,date_gmt,title' });
+    expect(Object.fromEntries(list.searchParams)).toEqual({ context: 'edit', status: 'publish,future,draft,pending', per_page: '20', after: '2026-10-20T03:00:00.000Z', author: '3', _fields: 'id,link,date_gmt,status,title' });
     // Another title in the window (a plugin may rewrite titles): unclear, for a person, never a second post.
     expect(await publisher.reconcile(ask)).toEqual({ found: 'unknown' });
     // Nothing of the user's in the window: not there.
@@ -264,9 +264,136 @@ describe('WordPress publish', () => {
     expect(await new WordPressPublisher(redirecting).publish(input())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'SITE_REDIRECTS' });
   });
 
+  it('finds a draft or a post pending review as such, with no address', async () => {
+    const after = new Date('2026-10-21T03:00:00Z');
+    const before = new Date('2026-10-21T03:05:00Z');
+    const ask = { externalAccountId: ACCOUNT, secret: SECRET, callKey: 'k', contentHash: 'h', content: { body: 'Thực đơn mùa thu', title: null, linkUrl: null, media: [] }, settings: { wordpress: { status: 'draft' } }, after, before };
+    // A draft's date_gmt as WordPress shows it in the edit context, and its preview link, which is not public.
+    const { fetchImpl } = site({
+      [ME]: [{ body: { id: 3 } }, { body: { id: 3 } }],
+      [LIST]: [
+        { body: [{ id: 130, link: `${SITE}/?p=130`, date_gmt: '2026-10-21T03:01:00', status: 'draft', title: { raw: 'Thực đơn mùa thu' } }] },
+        { body: [{ id: 131, link: `${SITE}/?p=131`, date_gmt: '2026-10-21T03:01:00', status: 'pending', title: { raw: 'Thực đơn mùa thu' } }] },
+      ],
+    });
+    const publisher = new WordPressPublisher(fetchImpl);
+    expect(await publisher.reconcile(ask)).toEqual({ found: true, externalId: '130', url: null, draft: 'draft' });
+    expect(await publisher.reconcile(ask)).toEqual({ found: true, externalId: '131', url: null, draft: 'pending' });
+  });
+
   it('escapes every character of the text and links, never passing markup through', () => {
     expect(wordpressHtml({ body: '<img src=x onerror=alert(1)> https://a.vn/"><script>', linkUrl: 'javascript:alert(1)' }, [])).toBe(
       '<p>&lt;img src=x onerror=alert(1)&gt; <a href="https://a.vn/">https://a.vn/</a>&quot;&gt;&lt;script&gt;</p>\n<p>javascript:alert(1)</p>',
     );
+  });
+});
+
+describe('WordPress categories, tags, excerpt and status (#981)', () => {
+  const CATEGORIES = 'GET tiemcuaban.vn/wp-json/wp/v2/categories';
+  const TAGS = 'GET tiemcuaban.vn/wp-json/wp/v2/tags';
+  const NEW_TAG = 'POST tiemcuaban.vn/wp-json/wp/v2/tags';
+  const wp = (wordpress: Record<string, unknown>, media: PublishInput['content']['media'] = []) => input({ content: { body: 'Món mới', title: 'Thực đơn tháng 10', linkUrl: null, media }, settings: { wordpress } });
+  const query = (url: string) => Object.fromEntries(new URL(url).searchParams);
+
+  it('resolves category and tag names to ids by exact name, creates a missing tag, and sends them with the excerpt', async () => {
+    const { fetchImpl, calls } = site({
+      // WordPress searches names and slugs for the text: only the exact name counts, case and entities aside.
+      [CATEGORIES]: [
+        { body: [{ id: 7, name: 'Tin tức nội bộ' }, { id: 5, name: 'Tin Tức' }] },
+        { body: [{ id: 9, name: 'Khuyến mãi &amp; Quà' }] },
+      ],
+      [TAGS]: [{ body: [{ id: 21, name: 'bánh mì' }, { id: 22, name: 'bánh mì que' }] }, { body: [] }],
+      [NEW_TAG]: [{ status: 201, body: { id: 23, name: 'Mới', slug: 'moi' } }],
+      [POSTS]: [{ status: 201, body: { id: 140, link: `${SITE}/thuc-don-thang-10/`, status: 'publish' } }],
+    });
+    const result = await new WordPressPublisher(fetchImpl).publish(wp({ categories: ['tin tức', 'Khuyến mãi & Quà'], tags: ['Bánh mì', 'Mới', 'mới'], excerpt: '  Thực đơn <mới> & giá  ' }));
+    expect(result).toEqual({ kind: 'accepted', externalId: '140', url: `${SITE}/thuc-don-thang-10/` });
+    expect(calls.map((c) => c.route)).toEqual([CATEGORIES, CATEGORIES, TAGS, TAGS, NEW_TAG, POSTS]);
+    expect(query(calls[0]?.url ?? '')).toEqual({ search: 'tin tức', per_page: '100', _fields: 'id,name' });
+    // The search is the name as WordPress stores it, & as &amp;.
+    expect(query(calls[1]?.url ?? '').search).toBe('Khuyến mãi &amp; Quà');
+    expect(calls[4]?.json).toEqual({ name: 'Mới' });
+    expect(calls.every((c) => c.auth === BASIC && c.redirect === 'manual')).toBe(true);
+    expect(calls[5]?.json).toEqual({
+      status: 'publish',
+      title: 'Thực đơn tháng 10',
+      content: '<p>Món mới</p>',
+      categories: [5, 9],
+      tags: [21, 23],
+      excerpt: 'Thực đơn &lt;mới&gt; &amp; giá',
+    });
+  });
+
+  it('saves a draft or sends a post for review, recorded with no address', async () => {
+    const { fetchImpl, calls } = site({
+      [POSTS]: [
+        { status: 201, body: { id: 141, link: `${SITE}/?p=141`, status: 'draft' } },
+        { status: 201, body: { id: 142, link: `${SITE}/?p=142`, status: 'pending' } },
+        // A review plugin may hold back a post asked to go out: the site's answer decides.
+        { status: 201, body: { id: 143, link: `${SITE}/?p=143`, status: 'pending' } },
+      ],
+    });
+    const publisher = new WordPressPublisher(fetchImpl);
+    expect(await publisher.publish(wp({ status: 'draft' }))).toEqual({ kind: 'accepted', externalId: '141', url: null, draft: 'draft' });
+    expect(await publisher.publish(wp({ status: 'pending' }))).toEqual({ kind: 'accepted', externalId: '142', url: null, draft: 'pending' });
+    expect(await publisher.publish(wp({}))).toEqual({ kind: 'accepted', externalId: '143', url: null, draft: 'pending' });
+    expect(calls.map((c) => (c.json as { status: string }).status)).toEqual(['draft', 'pending', 'publish']);
+    expect(calls[0]?.json).toEqual({ status: 'draft', title: 'Thực đơn tháng 10', content: '<p>Món mới</p>' });
+  });
+
+  it('posts nothing, and uploads nothing, when the site has no category by that name or two of them', async () => {
+    const missing = site({ [CATEGORIES]: [{ body: [{ id: 7, name: 'Tin tức nội bộ' }] }] });
+    const result = await new WordPressPublisher(missing.fetchImpl).publish(wp({ categories: ['Tin tức'], tags: ['bánh mì'] }, [image('f1', null)]));
+    expect(result).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_CATEGORY_NOT_FOUND', message: 'Tin tức' });
+    expect(missing.calls.map((c) => c.route)).toEqual([CATEGORIES]);
+    // The same name under two parents: Crove cannot tell which one the person meant.
+    const twice = site({ [CATEGORIES]: [{ body: [{ id: 5, name: 'Tin tức' }, { id: 6, name: 'Tin tức' }] }] });
+    expect(await new WordPressPublisher(twice.fetchImpl).publish(wp({ categories: ['Tin tức'] }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_CATEGORY_AMBIGUOUS' });
+    expect(twice.calls.some((c) => c.route === POSTS)).toBe(false);
+  });
+
+  // An Author may publish and assign the site's categories but not create them (manage_categories), which is why Crove
+  // never creates a category. WordPress core lets anyone who can assign tags create one (assign_post_tags, since 4.9.8);
+  // a site whose roles were narrowed answers the create with 403 rest_cannot_create, recorded here.
+  it('posts nothing when the site will not let the user create a tag, and takes a tag made meanwhile', async () => {
+    const author = { body: { id: 4, name: 'Tác giả', capabilities: { publish_posts: true, upload_files: true, manage_categories: false } } };
+    const refused = site({
+      [ME]: [author],
+      [CATEGORIES]: [{ body: [{ id: 5, name: 'Tin tức' }] }],
+      [TAGS]: [{ body: [] }],
+      [NEW_TAG]: [{ status: 403, body: { code: 'rest_cannot_create', message: 'Sorry, you are not allowed to create terms in this taxonomy.', data: { status: 403 } } }],
+    });
+    // The Author connects: it may publish posts.
+    expect(await connectWordPress(wordpressLogin({ site: SITE, username: 'chutiem', appPassword: PASSWORD }), refused.fetchImpl)).toMatchObject({ externalAccountId: ACCOUNT });
+    const result = await new WordPressPublisher(refused.fetchImpl).publish(wp({ categories: ['Tin tức'], tags: ['Mới'] }, [image('f1', null)]));
+    expect(result).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_TAG_NOT_ALLOWED', message: 'Mới', httpStatus: 403 });
+    expect(refused.calls.some((c) => c.route === MEDIA || c.route === POSTS)).toBe(false);
+    // Another post made the tag between the lookup and the create: WordPress names it.
+    const raced = site({
+      [TAGS]: [{ body: [] }],
+      [NEW_TAG]: [{ status: 400, body: { code: 'term_exists', message: 'A term with the name provided already exists in this taxonomy.', data: { status: 400, term_id: 24 } } }],
+      [POSTS]: [{ status: 201, body: { id: 144, link: `${SITE}/p/`, status: 'publish' } }],
+    });
+    expect(await new WordPressPublisher(raced.fetchImpl).publish(wp({ tags: ['Mới'] }))).toMatchObject({ kind: 'accepted', externalId: '144' });
+    expect(raced.calls.at(-1)?.json).toMatchObject({ tags: [24] });
+  });
+
+  it('retries a lookup the site did not answer, and pauses on a refused password, with nothing posted', async () => {
+    const down = site({ [CATEGORIES]: [{ status: 502, body: '<html>Bad gateway</html>' }] });
+    expect(await new WordPressPublisher(down.fetchImpl).publish(wp({ categories: ['Tin tức'] }))).toMatchObject({ kind: 'rejected', error: 'transient', code: 'WORDPRESS_502' });
+    const revoked = site({ [TAGS]: [{ status: 401, body: { code: 'incorrect_password', message: 'The provided password is an invalid application password.' } }] });
+    expect(await new WordPressPublisher(revoked.fetchImpl).publish(wp({ tags: ['Mới'] }))).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    expect([...down.calls, ...revoked.calls].some((c) => c.route === POSTS)).toBe(false);
+  });
+
+  it('refuses settings it cannot read before any call, and reads the shape the composer saves', async () => {
+    const none = site({});
+    const publisher = new WordPressPublisher(none.fetchImpl);
+    for (const bad of [{ status: 'private' }, { categories: 'Tin tức' }, { tags: Array.from({ length: 21 }, (_, i) => `t${i}`) }, { excerpt: 'x'.repeat(501) }, { categories: ['<b>'] }]) {
+      expect(await publisher.publish(wp(bad)), JSON.stringify(bad)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_SETTINGS_INVALID' });
+    }
+    expect(none.calls).toEqual([]);
+    expect(wordpressOptionsOf({})).toEqual({ categories: [], tags: [], excerpt: '', status: 'publish' });
+    expect(wordpressOptionsOf({ wordpress: { categories: [' Tin   tức ', 'tin tức'], status: 'pending' } })).toEqual({ categories: ['Tin tức'], tags: [], excerpt: '', status: 'pending' });
   });
 });
