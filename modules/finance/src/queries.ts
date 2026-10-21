@@ -1,7 +1,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { voucherCode, zId, zLocalDate, type DocumentDirection, type VoucherType } from '@crove/kernel-contract';
-import type { MemberRole } from '@crove/db';
+import type { CorrectionKind, MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { RECEIVABLE_ACCOUNT, VAT_OUTPUT, money } from '@crove/l10n-vn';
 import { chartAccounts, type OrgChartAccount } from './accounts.ts';
@@ -79,6 +79,35 @@ export const vendorsList = defineQuery({
   },
 });
 
+type CorrectedBy = { kind: CorrectionKind; documentId: string; series: string; number: string };
+
+// The documents that correct each of `ids` (#916): replacement and adjustment invoices linked to them, oldest first.
+async function correctionsOf(ctx: QueryContext, ids: readonly string[]): Promise<Map<string, CorrectedBy[]>> {
+  const byDocument = new Map<string, CorrectedBy[]>();
+  if (ids.length === 0) return byDocument;
+  const rows = await ctx.trx
+    .selectFrom('crove_finance.purchase_document')
+    .select(['id', 'corrects_document_id', 'correction_kind', 'invoice_series', 'invoice_number'])
+    .where('org_id', '=', ctx.orgId)
+    .where('corrects_document_id', 'in', [...ids])
+    .orderBy('created_at')
+    .execute();
+  for (const r of rows) {
+    if (!r.corrects_document_id || !r.correction_kind) continue;
+    const list = byDocument.get(r.corrects_document_id) ?? [];
+    list.push({ kind: r.correction_kind, documentId: r.id, series: r.invoice_series, number: r.invoice_number });
+    byDocument.set(r.corrects_document_id, list);
+  }
+  return byDocument;
+}
+
+// What a replacement or an adjustment document corrects (#916), or null for any other document.
+function correctionOf(r: { correction_kind: CorrectionKind | null; corrected_series: string | null; corrected_number: string | null; corrects_document_id: string | null }) {
+  return r.correction_kind && r.corrected_series !== null && r.corrected_number !== null
+    ? { kind: r.correction_kind, series: r.corrected_series, number: r.corrected_number, documentId: r.corrects_document_id }
+    : null;
+}
+
 // Recorded documents, purchases and sales (issue #313) together, newest first.
 export const documentsList = defineQuery({
   name: 'finance.documents.list',
@@ -109,6 +138,10 @@ export const documentsList = defineQuery({
         'd.exchange_rate',
         'd.exchange_rate_source',
         'd.foreign_total',
+        'd.correction_kind',
+        'd.corrected_series',
+        'd.corrected_number',
+        'd.corrects_document_id',
         'j.id as journal_entry_id',
         'v.reversal_entry_id as void_entry_id',
         'v.reason as void_reason',
@@ -120,7 +153,12 @@ export const documentsList = defineQuery({
       .limit(1000);
     if (input.from) query = query.where('d.invoice_date', '>=', input.from);
     if (input.to) query = query.where('d.invoice_date', '<=', input.to);
-    return (await query.execute()).map((r) => ({
+    const rows = await query.execute();
+    const correctedBy = await correctionsOf(
+      ctx,
+      rows.map((r) => r.id),
+    );
+    return rows.map((r) => ({
       id: r.id,
       direction: r.direction,
       partyId: r.party_id,
@@ -142,6 +180,8 @@ export const documentsList = defineQuery({
         r.exchange_rate && r.exchange_rate_source && r.foreign_total
           ? { currency: r.currency, rate: money(r.exchange_rate).toFixed(), source: r.exchange_rate_source, total: money(r.foreign_total).toFixed() }
           : null,
+      corrects: correctionOf(r),
+      correctedBy: correctedBy.get(r.id) ?? [],
     }));
   },
 });
@@ -173,6 +213,9 @@ export interface JournalEntryView {
     partyName: string;
     partyTaxCode: string | null;
     voided: boolean;
+    // The correction links of the document, both ways (#916).
+    corrects?: { kind: CorrectionKind; series: string; number: string; documentId: string | null } | null;
+    correctedBy?: CorrectedBy[];
   };
   // The cash or bank voucher the entry posts (#327).
   voucher?: { id: string; type: VoucherType; code: string; partyName: string | null };
@@ -213,6 +256,10 @@ async function loadEntries(
       'd.invoice_date',
       'p.name as party_name',
       'p.tax_code as party_tax_code',
+      'd.correction_kind',
+      'd.corrected_series',
+      'd.corrected_number',
+      'd.corrects_document_id',
       'v.document_id as voided_document_id',
       'o.id as reverses_id',
       'o.entry_date as reverses_date',
@@ -262,6 +309,10 @@ async function loadEntries(
     )
     .execute();
   const pendingByEntry = new Map(pending.map((p) => [p.entry_id, p.id]));
+  const correctedBy = await correctionsOf(
+    ctx,
+    rows.flatMap((r) => (r.document_id ? [r.document_id] : [])),
+  );
   const byEntry = new Map<string, JournalEntryView['lines']>();
   for (const l of lines) {
     const list = byEntry.get(l.entry_id) ?? [];
@@ -289,6 +340,8 @@ async function loadEntries(
             partyName: r.party_name,
             partyTaxCode: r.party_tax_code,
             voided: r.voided_document_id !== null,
+            corrects: correctionOf(r),
+            correctedBy: correctedBy.get(r.document_id) ?? [],
           },
         }
       : {}),

@@ -222,6 +222,13 @@ export const en = {
       sale: 'Sale',
     },
     voidReason: 'Reason: {reason}',
+    correction: {
+      replaces: 'Replaces invoice {invoice}',
+      adjusts: 'Adjusts invoice {invoice}',
+      notInBooks: '(the original is not in the books)',
+      replacedBy: 'Replaced by invoice {invoice}',
+      adjustedBy: 'Adjusted by invoice {invoice}',
+    },
   },
   customers: {
     title: 'Customers',
