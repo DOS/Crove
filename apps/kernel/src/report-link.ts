@@ -17,7 +17,9 @@ export interface ReportPage {
   expiresAt: string;
   posts: number;
   totals: Record<string, number>;
-  channels: { channel: string; provider: string; posts: number; totals: Record<string, number> }[];
+  // The period of the same length just before (#947), on the same channels; in each channel, its counts then.
+  previous: { periodStart: string; periodEnd: string; posts: number; totals: Record<string, number> };
+  channels: { channel: string; provider: string; posts: number; totals: Record<string, number>; previous: { posts: number; totals: Record<string, number> } }[];
   top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Record<string, number> }[];
 }
 

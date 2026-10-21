@@ -29,6 +29,7 @@ import {
   zSocialPostUpdate,
   zSocialQueue,
   zSocialMetricsRow,
+  zSocialWindowTotals,
   zSocialChannelInsights,
   zSocialBioPage,
   zSocialBioSave,
@@ -379,10 +380,9 @@ export const contract = {
       // postId: that post's published channels, whenever they went out.
       // labelId: only posts with that label (#639).
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional(), labelId: zId.optional() })).output(z.array(zSocialMetricsRow)),
-      // The window's totals over every published channel (#397), summed by the server.
-      totals: oc
-        .input(z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() }))
-        .output(z.object({ posts: z.number().int(), metrics: z.record(z.string(), z.number()), clicks: z.number().nullable() })),
+      // The window's totals over every published channel (#397), summed by the server, and per channel; previous: the
+      // same for the window of the same length just before (#947).
+      totals: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() })).output(zSocialWindowTotals.extend({ previous: zSocialWindowTotals })),
       // What works (#705): each channel's posts against its own median, by label, format, weekday, hour and hashtag.
       insights: oc
         .input(z.object({ days: z.number().int().min(1).max(365), labelId: zId.optional(), timeZone: z.string().min(1).max(64) }))
