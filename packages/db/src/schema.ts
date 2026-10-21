@@ -283,6 +283,9 @@ export type BudgetPolicyTable = Refine<G.KernelBudgetPolicyTable, { scope: Agent
 // customer), issue #313. Both live in purchase_document; the table keeps its name.
 export const DOCUMENT_DIRECTIONS = ['purchase', 'sale'] as const;
 export type DocumentDirection = (typeof DOCUMENT_DIRECTIONS)[number];
+// A replacement (thay thế) or an adjustment (điều chỉnh) invoice of another (#916).
+export const CORRECTION_KINDS = ['replacement', 'adjustment'] as const;
+export type CorrectionKind = (typeof CORRECTION_KINDS)[number];
 
 export type PurchaseDocumentTable = Refine<
   G.FinancePurchaseDocumentTable,
@@ -290,6 +293,7 @@ export type PurchaseDocumentTable = Refine<
     // The voided document of the same invoice that this one replaces (#165), or null for the first one.
     replaces_document_id: ColumnType<string | null, string | null | undefined, never>;
     direction: ColumnType<DocumentDirection, DocumentDirection | undefined, never>;
+    correction_kind: ColumnType<CorrectionKind | null, CorrectionKind | null | undefined, never>;
   }
 >;
 

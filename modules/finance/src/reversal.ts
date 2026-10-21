@@ -144,61 +144,74 @@ export const reverseEntry = defineCommand({
   handler: async (ctx, { payload }) => {
     if (!ctx.proposalId) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
     const entry = await reversibleEntry(ctx, payload);
-    const lines = await ctx.trx
-      .selectFrom('crove_finance.journal_line')
-      .select(['line_no', 'account_code', 'debit', 'credit', 'party_id', 'memo'])
-      .where('org_id', '=', ctx.orgId)
-      .where('entry_id', '=', entry.id)
-      .orderBy('line_no')
-      .execute();
-    const journalEntryId = await postJournalEntry(ctx, {
-      entryDate: payload.entryDate,
-      description: `Đảo bút toán ngày ${entry.entry_date}: ${entry.description} (lý do: ${payload.reason})`,
-      // The approval that ordered it; the original is reverses_entry_id.
-      sourceType: 'kernel.proposal',
-      sourceId: ctx.proposalId,
-      reversesEntryId: entry.id,
-      lines: lines.map((l) => ({
-        lineNo: l.line_no,
-        accountCode: l.account_code,
-        debit: l.credit,
-        credit: l.debit,
-        partyId: l.party_id,
-        memo: l.memo,
-      })),
-    }).catch((error: { code?: string; constraint?: string; message?: string }) => {
-      // A concurrent reversal of the same entry committed first: its insert held the unique index.
-      if (error?.code === '23505' && error.constraint === 'journal_entry_reverses_uq') throw ALREADY_REVERSED();
-      // The original is posted, so it balances and has at least 2 lines, and the date and reversal rules were checked
-      // above: a mirror the database still refuses (not a mirror, unbalanced, too few lines) was built from fewer lines
-      // than the entry has, because the approver cannot see them all.
-      if (error?.code === '23514' && /does not mirror the entry it reverses|does not balance|needs at least 2 lines/.test(error.message ?? '')) {
-        throw PARTIAL_MIRROR();
-      }
-      throw error;
-    });
-    // A purchase entry: void Crove's record of its document, naming this reversal (the database checks the link).
-    const voidedDocumentId = entry.source_type === PURCHASE_SOURCE ? entry.source_id : null;
-    if (voidedDocumentId) {
-      await ctx.trx
-        .insertInto('crove_finance.purchase_document_void')
-        .values({
-          org_id: ctx.orgId,
-          document_id: voidedDocumentId,
-          reversal_entry_id: journalEntryId,
-          reason: payload.reason,
-          voided_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
-        })
-        .execute();
-      // The event keeps its name for sales too (finance.purchase_document holds both directions) and says which it was.
-      const direction = (await documentDirection(ctx, entry)) ?? 'purchase';
-      const voided = direction === 'sale' ? 'Hủy chứng từ bán do đảo bút toán' : 'Hủy chứng từ mua do đảo bút toán';
-      await ctx.activity('finance.purchase_document', voidedDocumentId, direction === 'sale' ? 'sale.voided' : 'purchase.voided', `${voided}: ${entry.description}`);
-      await ctx.emit('finance.purchase.voided', { documentId: voidedDocumentId, reversalEntryId: journalEntryId, direction });
-    }
-    ctx.audit({ reversed_entry_id: entry.id, reversal_entry_id: journalEntryId, voided_document_id: voidedDocumentId });
-    await ctx.activity('finance.journal_entry', entry.id, 'journal_entry.reversed', `Đảo bút toán: ${entry.description}`);
-    await ctx.emit('finance.journal_entry.reversed', { entryId: entry.id, reversalEntryId: journalEntryId });
-    return { journalEntryId, reversedEntryId: entry.id, ...(voidedDocumentId ? { voidedDocumentId } : {}) };
+    return postReversal(ctx, entry, payload.entryDate, payload.reason);
   },
 });
+
+// Posts the mirror of `entry` on `entryDate` and, for a document's entry, voids the document: the approval of a
+// reversal, and of a replacement invoice whose original is in the books (#916, record.ts). The caller has checked that
+// the entry may be reversed on that date; the database checks it again.
+export async function postReversal(
+  ctx: CommandContext,
+  entry: { id: string; entry_date: string; description: string; source_type: string; source_id: string },
+  entryDate: string,
+  reason: string,
+) {
+  if (!ctx.proposalId) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
+  const lines = await ctx.trx
+    .selectFrom('crove_finance.journal_line')
+    .select(['line_no', 'account_code', 'debit', 'credit', 'party_id', 'memo'])
+    .where('org_id', '=', ctx.orgId)
+    .where('entry_id', '=', entry.id)
+    .orderBy('line_no')
+    .execute();
+  const journalEntryId = await postJournalEntry(ctx, {
+    entryDate,
+    description: `Đảo bút toán ngày ${entry.entry_date}: ${entry.description} (lý do: ${reason})`,
+    // The approval that ordered it; the original is reverses_entry_id.
+    sourceType: 'kernel.proposal',
+    sourceId: ctx.proposalId,
+    reversesEntryId: entry.id,
+    lines: lines.map((l) => ({
+      lineNo: l.line_no,
+      accountCode: l.account_code,
+      debit: l.credit,
+      credit: l.debit,
+      partyId: l.party_id,
+      memo: l.memo,
+    })),
+  }).catch((error: { code?: string; constraint?: string; message?: string }) => {
+    // A concurrent reversal of the same entry committed first: its insert held the unique index.
+    if (error?.code === '23505' && error.constraint === 'journal_entry_reverses_uq') throw ALREADY_REVERSED();
+    // The original is posted, so it balances and has at least 2 lines, and the date and reversal rules were checked
+    // above: a mirror the database still refuses (not a mirror, unbalanced, too few lines) was built from fewer lines
+    // than the entry has, because the approver cannot see them all.
+    if (error?.code === '23514' && /does not mirror the entry it reverses|does not balance|needs at least 2 lines/.test(error.message ?? '')) {
+      throw PARTIAL_MIRROR();
+    }
+    throw error;
+  });
+  // A purchase entry: void Crove's record of its document, naming this reversal (the database checks the link).
+  const voidedDocumentId = entry.source_type === PURCHASE_SOURCE ? entry.source_id : null;
+  if (voidedDocumentId) {
+    await ctx.trx
+      .insertInto('crove_finance.purchase_document_void')
+      .values({
+        org_id: ctx.orgId,
+        document_id: voidedDocumentId,
+        reversal_entry_id: journalEntryId,
+        reason,
+        voided_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
+      })
+      .execute();
+    // The event keeps its name for sales too (finance.purchase_document holds both directions) and says which it was.
+    const direction = (await documentDirection(ctx, entry)) ?? 'purchase';
+    const voided = direction === 'sale' ? 'Hủy chứng từ bán do đảo bút toán' : 'Hủy chứng từ mua do đảo bút toán';
+    await ctx.activity('finance.purchase_document', voidedDocumentId, direction === 'sale' ? 'sale.voided' : 'purchase.voided', `${voided}: ${entry.description}`);
+    await ctx.emit('finance.purchase.voided', { documentId: voidedDocumentId, reversalEntryId: journalEntryId, direction });
+  }
+  ctx.audit({ reversed_entry_id: entry.id, reversal_entry_id: journalEntryId, voided_document_id: voidedDocumentId });
+  await ctx.activity('finance.journal_entry', entry.id, 'journal_entry.reversed', `Đảo bút toán: ${entry.description}`);
+  await ctx.emit('finance.journal_entry.reversed', { entryId: entry.id, reversalEntryId: journalEntryId });
+  return { journalEntryId, reversedEntryId: entry.id, ...(voidedDocumentId ? { voidedDocumentId } : {}) };
+}

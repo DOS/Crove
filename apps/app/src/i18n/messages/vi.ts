@@ -2726,6 +2726,12 @@ export const vi = {
     signature: { unverified: 'Có chữ ký số, chưa xác minh với nguồn chính thức', missing: 'Không có chữ ký số' },
     source: { ai: 'Đọc bằng AI từ ảnh/PDF, cần người kiểm tra' },
     duplicate: { found: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' },
+    related: {
+      replaces: 'Hóa đơn thay thế cho hóa đơn {invoice}: khi duyệt, Crove đảo bút toán và hủy chứng từ của hóa đơn gốc',
+      adjusts: 'Hóa đơn điều chỉnh cho hóa đơn {invoice}: ghi sổ phần chênh lệch, liên kết với hóa đơn gốc',
+      replaces_missing: 'Hóa đơn thay thế cho hóa đơn {invoice}, nhưng chưa thấy hóa đơn gốc trong sổ; kiểm tra trước khi duyệt',
+      adjusts_missing: 'Hóa đơn điều chỉnh cho hóa đơn {invoice}, nhưng chưa thấy hóa đơn gốc trong sổ; kiểm tra trước khi duyệt',
+    },
   },
   kernelErrors: {
     codes: {
@@ -2846,6 +2852,7 @@ export const vi = {
       CLOSING_EMPTY: 'Năm này không có số dư doanh thu, chi phí để kết chuyển',
       CLOSING_UNSUPPORTED: 'Không lập được bút toán kết chuyển tự động (quá nhiều tài khoản hoặc có số tiền lẻ dưới 1 đồng); hãy kết chuyển bằng phiếu kế toán',
       CLOSING_STALE: 'Sổ của năm đã thay đổi từ khi lập đề xuất kết chuyển; hãy từ chối đề xuất này và lập lại',
+      REPLACEMENT_BEFORE_ORIGINAL: 'Hóa đơn thay thế ghi sổ trước ngày ghi sổ của hóa đơn gốc; hãy chọn ngày ghi sổ từ ngày của hóa đơn gốc trở đi',
       PARTY_NOT_FOUND: 'Không tìm thấy đối tượng (khách hàng hoặc nhà cung cấp)',
       BANK_LINE_NOT_FOUND: 'Không tìm thấy dòng sao kê; hãy tải lại trang ngân hàng',
       BANK_LINE_MISMATCH: 'Chứng từ phải theo dòng sao kê: cùng tài khoản ngân hàng, cùng ngày, cùng chiều tiền và đúng số tiền của dòng',
