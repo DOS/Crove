@@ -31,7 +31,7 @@ export const QUEUES = {
   socialLinkPreview: 'social-link-preview',
   // Created by the Social notifications migration (20261021140000).
   socialNotify: 'social-notify',
-  // Created by the team chat alert migration (20261023150000).
+  // Created by the team chat alert migration (20261023143000).
   socialChatAlert: 'social-chat-alert',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
