@@ -61,7 +61,7 @@ export function CustomersPage() {
             {rows.map((c) => (
               <Fragment key={c.id}>
                 <TableRow>
-                  <TableCell className="px-4 py-3">
+                  <TableCell className="min-w-48 px-4 py-3">
                     <span className="font-medium text-foreground">{c.name}</span>
                     {c.address && <p className="text-xs text-subtle-foreground">{c.address}</p>}
                   </TableCell>
