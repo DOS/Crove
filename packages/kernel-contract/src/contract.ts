@@ -103,13 +103,13 @@ import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance
 import { zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 
-// The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 // Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
 export const zProposalPolicy = z.object({
   remindAfterDays: z.number().int().min(1).max(30).nullable(),
   escalateAfterDays: z.number().int().min(1).max(60).nullable(),
 });
 
+// The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
   me: {
     get: oc.output(zMe),
