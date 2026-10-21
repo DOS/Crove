@@ -2710,6 +2710,7 @@ export const vi = {
       ARCHIVE_NOT_READ: 'Tệp ZIP chỉ được mở thành từng chứng từ một lần; hãy đọc lại từng chứng từ',
       CHECKS_BLOCKING: 'Số tiền trên hóa đơn không khớp nhau nên không ghi sổ được; hãy từ chối và xin hóa đơn điều chỉnh',
       CHECKS_FAILED: 'Còn kiểm tra không đạt; hãy xác nhận đã đối chiếu chứng từ gốc',
+      SIGNATURE_UNVERIFIED: 'Chưa xác minh được chữ ký số của hóa đơn này; hãy kiểm tra hóa đơn gốc rồi xác nhận khi duyệt',
       DUPLICATE_INVOICE: 'Hóa đơn này đã được ghi sổ',
       UNBALANCED: 'Bút toán không cân',
       UNKNOWN_ACCOUNT: 'Có tài khoản không có trong hệ thống tài khoản của tổ chức',

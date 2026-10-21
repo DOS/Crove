@@ -124,7 +124,7 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
 
   const view = (orgId: string, userId: string, id: string) => runtime.query<Detail>('kernel.inbox.get', { id }, { actor: asUser(userId), orgId });
   const approveAs = (orgId: string, userId: string, id: string, revision: number) =>
-    runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', { id, revision }, { actor: asMfa(userId), orgId });
+    runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', { acceptUnverifiedSignature: true, id, revision }, { actor: asMfa(userId), orgId });
 
   // A new revision authored by the editor: the first line moves to another expense account.
   async function editAs(orgId: string, userId: string, id: string): Promise<number> {
@@ -387,7 +387,7 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     const gate = { code: 'FORBIDDEN', status: 403, details: { rule: 'proposal_state' } };
     const attempts: Array<[string, Record<string, unknown>, (id: string) => Promise<unknown>]> = [
       ['kernel.proposal.edit', notFound, (id) => runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts }, { actor: asUser(owner), orgId: a.orgId })],
-      ['kernel.proposal.approve', notFound, (id) => runtime.execute('kernel.proposal.approve', { id, revision: 1 }, { actor: asMfa(owner), orgId: a.orgId })],
+      ['kernel.proposal.approve', notFound, (id) => runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id, revision: 1 }, { actor: asMfa(owner), orgId: a.orgId })],
       ['kernel.proposal.reject', notFound, (id) => runtime.execute('kernel.proposal.reject', { id }, { actor: asUser(owner), orgId: a.orgId })],
       ['kernel.inbox.get', notFound, (id) => runtime.query('kernel.inbox.get', { id }, { actor: asUser(owner), orgId: a.orgId })],
       [

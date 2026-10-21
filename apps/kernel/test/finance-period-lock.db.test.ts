@@ -156,7 +156,7 @@ suite('period lock (#329)', () => {
 
   // The owner uploads and the admin approves (four-eyes, P10); in the other org its owner is the only approver.
   const approve = async (proposalId: string, who: Account = adminUser, slug = org.slug) =>
-    rpc('inbox/approve', await tokenFor(who, { mfa: true }), { id: proposalId, revision: 1, idempotencyKey: randomUUID() }, slug);
+    rpc('inbox/approve', await tokenFor(who, { mfa: true }), { acceptUnverifiedSignature: true, id: proposalId, revision: 1, idempotencyKey: randomUUID() }, slug);
 
   async function record(date: string, target: OrgRef = org, who: Account = owner): Promise<string> {
     const approved = await approve(await propose(date, target, who), target === org ? adminUser : who, target.slug);
@@ -307,8 +307,8 @@ suite('period lock (#329)', () => {
     const september = await propose('2026-09-12');
     const bulk = await rpc('inbox/approveMany', await tokenFor(adminUser, { mfa: true }), {
       items: [
-        { id: pending, revision: 1 },
-        { id: september, revision: 1 },
+        { id: pending, revision: 1, acceptUnverifiedSignature: true },
+        { id: september, revision: 1, acceptUnverifiedSignature: true },
       ],
       idempotencyKey: randomUUID(),
     });

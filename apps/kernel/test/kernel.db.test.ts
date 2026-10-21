@@ -101,7 +101,7 @@ suite('kernel on PostgreSQL', () => {
     const { fileId } = await ingest(orgA, users.owner, bytes);
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, orgA, fileId);
     const detail = await runtime.query<{ revision: number }>('kernel.inbox.get', { id: proposalId }, { actor: asUser(users.owner), orgId: orgA });
-    return { id: proposalId, revision: detail.revision };
+    return { id: proposalId, revision: detail.revision, acceptUnverifiedSignature: true };
   }
 
   async function withAdmin<T>(fn: (admin: pg.Client) => Promise<T>): Promise<T> {
@@ -373,7 +373,7 @@ suite('kernel on PostgreSQL', () => {
     expect(detail.payload.invoice.total).toBe('1980000');
 
     await expect(
-      runtime.execute('kernel.proposal.approve', { id: proposalId, revision: detail.revision }, { actor: asUser(users.viewer), orgId: orgA }),
+      runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: proposalId, revision: detail.revision }, { actor: asUser(users.viewer), orgId: orgA }),
     ).rejects.toMatchObject({ status: 403 });
     await expect(
       runtime.execute('finance.purchase.record', { payload: detail.payload, lineAccounts: [] }, { actor: asUser(users.owner), orgId: orgA }),
@@ -382,12 +382,12 @@ suite('kernel on PostgreSQL', () => {
     const approvalRequest = randomUUID();
     const first = await runtime.execute<{ documentId: string; journalEntryId: string }>(
       'kernel.proposal.approve',
-      { id: proposalId, revision: detail.revision, lineAccounts: [{ lineNo: 1, debitAccount: '6422' }] },
+      { acceptUnverifiedSignature: true, id: proposalId, revision: detail.revision, lineAccounts: [{ lineNo: 1, debitAccount: '6422' }] },
       { actor: asMfa(users.owner), orgId: orgA, idempotencyKey: approvalRequest },
     );
     const replay = await runtime.execute(
       'kernel.proposal.approve',
-      { id: proposalId, revision: detail.revision, lineAccounts: [{ lineNo: 1, debitAccount: '6422' }] },
+      { acceptUnverifiedSignature: true, id: proposalId, revision: detail.revision, lineAccounts: [{ lineNo: 1, debitAccount: '6422' }] },
       { actor: asMfa(users.owner), orgId: orgA, idempotencyKey: approvalRequest },
     );
     expect(replay).toEqual(first);
@@ -399,7 +399,7 @@ suite('kernel on PostgreSQL', () => {
       expect(rows).toEqual([{ created_by: users.owner, stamped: true }]);
     });
     await expect(
-      runtime.execute('kernel.proposal.approve', { id: proposalId, revision: detail.revision }, { actor: asMfa(users.owner), orgId: orgA }),
+      runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: proposalId, revision: detail.revision }, { actor: asMfa(users.owner), orgId: orgA }),
     ).rejects.toMatchObject({ code: 'PROPOSAL_DECIDED' });
 
     const journal = await runtime.query<Array<{ lines: Array<{ accountCode: string; debit: string; credit: string }> }>>(

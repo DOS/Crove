@@ -187,8 +187,13 @@ export function InboxPage() {
   const sending = bulk?.sending ?? false;
   // Invoices whose digital signature is unverified (#674): approving them, in bulk as one by one, asks the approver to
   // confirm they checked the original invoice.
-  const unverifiedChosen = chosen.filter((item) => item.signatureStatus === 'unverified').length;
-  const [confirmUnverified, setConfirmUnverified] = useState(false);
+  // The confirmation names each unverified invoice and the revision it was given for, so a proposal selected (or read
+  // again) after the box was ticked is not covered by it; only the confirmed ones are sent with the confirmation.
+  const confirmKey = (item: { id: string; revision: number }) => `${item.id}:${item.revision}`;
+  const unverifiedItems = chosen.filter((item) => item.signatureStatus === 'unverified');
+  const unverifiedChosen = unverifiedItems.length;
+  const [confirmedUnverified, setConfirmedUnverified] = useState<ReadonlySet<string>>(() => new Set());
+  const confirmUnverified = unverifiedItems.every((item) => confirmedUnverified.has(confirmKey(item)));
 
   async function sendBulk(run: BulkRun) {
     setBulk({ ...run, sending: true, stopped: false, progress: { ...run.progress, error: null } });
@@ -204,10 +209,17 @@ export function InboxPage() {
   }
 
   function startBulk() {
-    if (chosen.length === 0 || sending || (unverifiedChosen > 0 && !confirmUnverified)) return;
-    setConfirmUnverified(false);
+    if (chosen.length === 0 || sending || !confirmUnverified) return;
+    const confirmed = confirmedUnverified;
+    setConfirmedUnverified(new Set());
     void sendBulk({
-      batches: planBatches(chosen.map((item) => ({ id: item.id, revision: item.revision }))),
+      batches: planBatches(
+        chosen.map((item) => ({
+          id: item.id,
+          revision: item.revision,
+          ...(item.signatureStatus === 'unverified' && confirmed.has(confirmKey(item)) ? { acceptUnverifiedSignature: true } : {}),
+        })),
+      ),
       progress: { results: [], next: 0, error: null },
       names: Object.fromEntries(chosen.map((item) => [item.id, proposalName(item)])),
       total: chosen.length,
@@ -409,7 +421,7 @@ export function InboxPage() {
                   {t('bulk.clear')}
                 </Button>
               )}
-              <Button size="lg" disabled={chosen.length === 0 || sending || (unverifiedChosen > 0 && !confirmUnverified)} onClick={startBulk}>
+              <Button size="lg" disabled={chosen.length === 0 || sending || !confirmUnverified} onClick={startBulk}>
                 {sending ? <Spinner className="text-current" /> : null}
                 {sending && bulk
                   ? t('bulk.sending', { done: Math.min(bulk.progress.next + 1, bulk.batches.length), total: bulk.batches.length })
@@ -418,7 +430,7 @@ export function InboxPage() {
             </div>
             {unverifiedChosen > 0 && (
               <Label className="w-full font-normal text-warning">
-                <Checkbox checked={confirmUnverified} disabled={sending} onCheckedChange={(checked) => setConfirmUnverified(checked === true)} />
+                <Checkbox checked={confirmUnverified} disabled={sending} onCheckedChange={(checked) => setConfirmedUnverified(checked === true ? new Set(unverifiedItems.map(confirmKey)) : new Set())} />
                 {t('bulk.confirmUnverified', { count: unverifiedChosen })}
               </Label>
             )}

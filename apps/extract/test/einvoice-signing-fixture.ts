@@ -147,7 +147,9 @@ export function testPki(): TestPki {
   const taxAuthority = issue({ subject: { commonName: 'TEST ONLY CỤC THUẾ', organization: 'TEST ONLY BỘ TÀI CHÍNH' }, issuer: intermediate, ca: false });
   const otherRoot = issue({ subject: { commonName: 'TEST ONLY Untrusted CA', organization: 'Crove test fixtures' }, ca: true });
   const otherSeller = issue({ subject: { commonName: 'TEST ONLY Untrusted seller', uid: `MST:${TEST_SELLER_TAX_CODE}` }, issuer: otherRoot, ca: false });
-  cached = { root, intermediate, seller, taxAuthority, otherRoot, otherSeller, trust: { roots: [root.cert], intermediates: [intermediate.cert] } };
+  // The test tax authority's certificate is pinned, as trust/tax-authority.crt pins the real one.
+  const trust = { roots: [root.cert], intermediates: [intermediate.cert], taxAuthorities: [taxAuthority.cert] };
+  cached = { root, intermediate, seller, taxAuthority, otherRoot, otherSeller, trust };
   return cached;
 }
 

@@ -632,7 +632,7 @@ export const contract = {
           lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).optional(),
           note: z.string().max(500).optional(),
           acceptFailedChecks: z.boolean().optional(),
-          // The approver confirmed an invoice whose digital signature is unverified (#674). Recorded in the audit row.
+          // The approver confirmed this revision of an invoice whose digital signature is unverified (#674); required for one.
           acceptUnverifiedSignature: z.boolean().optional(),
           // A purchase invoice dated in a locked month (#478): the date its journal entry is posted on, in an open month,
           // chosen by the approver. Omitted, the entry is dated on the invoice date.

@@ -19,7 +19,14 @@
 //     names the MCCQT too. xml-crypto then digests exactly that element, as ids are unique;
 //   - there is no processing instruction inside HDon (the parser would read around it, Canonical XML keeps it).
 // Comments inside a value are read the way Canonical XML without comments reads them (the text around them, joined),
-// and DOCTYPE and ENTITY declarations never get this far (einvoice-xml.ts refuses them).
+// character references are decoded by both, and DOCTYPE and ENTITY declarations never get this far (einvoice-xml.ts
+// refuses them). A SignedInfo with more than a few references or transforms is refused before any digest is computed:
+// xml-crypto validates references in quadratic time.
+//
+// Who signed: the seller's certificate must name the seller's tax code (or, for a person, their 12-digit number) in
+// its UID attribute; a certificate of anyone else, or of no one, is signer_mismatch. The tax authority's signature
+// counts only from a certificate pinned in trust/tax-authority.crt. An invoice series with a tax authority code (C,
+// except cash register invoices, type M) must carry the code and the tax authority's signature.
 import { X509Certificate } from 'node:crypto';
 import { DOMParser } from '@xmldom/xmldom';
 import { SignedXml } from 'xml-crypto';
@@ -31,6 +38,9 @@ const ID_ATTRIBUTES = ['Id', 'ID', 'id'];
 // Certificates read from one KeyInfo, and the longest chain built from them.
 const MAX_KEYINFO_CERTS = 10;
 const MAX_CHAIN = 6;
+// What one SignedInfo may hold. An e-invoice signature references the invoice data, the code and a SigningTime object.
+const MAX_REFERENCES = 8;
+const MAX_TRANSFORMS = 4;
 // Vietnam's offset, for a SigningTime or invoice date written without one.
 const VN_OFFSET = '+07:00';
 
@@ -91,10 +101,30 @@ function commonName(dn: string): string | null {
   return line ? line.slice(3).slice(0, 300) : null;
 }
 
-// The tax code a Vietnamese CA writes in a certificate subject, as UID=MST:0101234567 (an organization) or
-// MST:0101234567-001 (a branch). Personal certificates carry CMND, CCCD or HC instead, and give no tax code.
-function subjectTaxCode(cert: X509Certificate): string | null {
-  return /\bMST\s*[:=]\s*(\d{10})/i.exec(cert.subject)?.[1] ?? null;
+// The identifiers a Vietnamese CA writes in the UID attribute of a certificate subject: MST:0101234567 (an
+// organization), MST:0101234567-001 (a branch), MST or CCCD with 12 digits (a person). Only the UID attribute counts,
+// never a number written in the common name.
+function signerIds(cert: X509Certificate): { mst: string[]; personal: string[] } {
+  const mst: string[] = [];
+  const personal: string[] = [];
+  for (const attribute of cert.subject.split('\n').flatMap((line) => line.split(' + '))) {
+    const m = /^UID=(MST|CCCD)\s*[:=]\s*(\d{10}(?:-\d{3})?|\d{12})$/i.exec(attribute.trim());
+    if (!m) continue;
+    const value = m[2] as string;
+    if (m[1]?.toUpperCase() === 'MST') mst.push(value);
+    else personal.push(value);
+  }
+  return { mst, personal };
+}
+
+// Whether the certificate belongs to the seller: the same tax code, a company's certificate for one of its branches
+// (0101234567 for 0101234567-001), or a person's 12-digit number for a seller identified by it.
+export function signerMatches(cert: X509Certificate, sellerTaxCode: string | null): boolean {
+  const seller = sellerTaxCode?.replace(/\s+/g, '') ?? '';
+  if (!/^(\d{10}(-\d{3})?|\d{12})$/.test(seller)) return false;
+  const { mst, personal } = signerIds(cert);
+  if (mst.some((code) => code === seller || (code.length === 10 && seller.startsWith(code + '-')))) return true;
+  return seller.length === 12 && personal.includes(seller);
 }
 
 // A date-time from the XML: with an offset as written, without one in Vietnam's time. A bare date is noon that day.
@@ -157,7 +187,14 @@ function keyInfoCertificates(signature: Element): X509Certificate[] {
 function referenceUris(signature: Element): string[] {
   const signedInfo = childrenNamed(signature, 'SignedInfo', DSIG);
   if (signedInfo.length !== 1) throw new Malformed('one SignedInfo expected');
-  return childrenNamed(signedInfo[0] as Element, 'Reference', DSIG).map((r) => r.getAttribute('URI') ?? '');
+  // Counted by local name, as xml-crypto reads them, whatever their namespace.
+  const references = elementChildren(signedInfo[0] as Element).filter((e) => e.localName === 'Reference');
+  if (references.length > MAX_REFERENCES) throw new Malformed('too many references');
+  for (const reference of references) {
+    const transforms = elementChildren(reference).filter((e) => e.localName === 'Transforms');
+    if (transforms.length > 1 || transforms.some((t) => elementChildren(t).length > MAX_TRANSFORMS)) throw new Malformed('too many transforms');
+  }
+  return references.map((r) => r.getAttribute('URI') ?? '');
 }
 
 function covers(uris: readonly string[], element: Element): boolean {
@@ -180,7 +217,8 @@ function signedSigningTime(signature: Element, uris: readonly string[]): Date | 
   return null;
 }
 
-function verifyOne(xml: string, signature: Element, mustCover: readonly Element[], trust: TrustStore, fallbackTime: Date): Outcome {
+// pinned: the only certificates the signature may come from (the tax authority's); without it, a chain to a root.
+function verifyOne(xml: string, signature: Element, mustCover: readonly Element[], trust: TrustStore, fallbackTime: Date, pinned?: readonly X509Certificate[]): Outcome {
   let uris: string[];
   try {
     uris = referenceUris(signature);
@@ -207,15 +245,14 @@ function verifyOne(xml: string, signature: Element, mustCover: readonly Element[
     if (/algorithm/i.test(message)) return { ok: false, reason: 'unsupported_algorithm', leaf, signedAt };
     return { ok: false, reason: 'malformed', leaf, signedAt };
   }
+  if (pinned) {
+    if (!pinned.some((c) => c.fingerprint256 === leaf.fingerprint256)) return { ok: false, reason: 'untrusted_certificate', leaf, signedAt };
+    if (!validAt(leaf, signedAt)) return { ok: false, reason: 'certificate_expired', leaf, signedAt };
+    return { ok: true, leaf, signedAt };
+  }
   const chain = chainTo(leaf, certs, trust, signedAt);
   if (chain !== 'ok') return { ok: false, reason: chain, leaf, signedAt };
   return { ok: true, leaf, signedAt };
-}
-
-// The tax authority's certificate names it: Tổng cục Thuế, since 2025 Cục Thuế (diacritics and case aside).
-function namesTaxAuthority(cert: X509Certificate): boolean {
-  const subject = cert.subject.normalize('NFD').replace(/\p{M}/gu, '').replace(/đ/gi, 'd').toUpperCase();
-  return /\bTHUE\b|\bTAX\b/.test(subject);
 }
 
 function result(status: InvoiceSignature['status'], reason: SignatureReason | null, leaf: X509Certificate | null, signedAt: Date | null): InvoiceSignature {
@@ -231,6 +268,15 @@ function result(status: InvoiceSignature['status'], reason: SignatureReason | nu
 const unverified = (reason: SignatureReason, leaf: X509Certificate | null = null, signedAt: Date | null = null) => result('unverified', reason, leaf, signedAt);
 
 export function verifyEInvoiceSignatures(xml: string, facts: SignatureFacts, trust: TrustStore): InvoiceSignature {
+  // Whatever goes wrong while verifying, the invoice is still read: a failure here is an unverified signature.
+  try {
+    return verify(xml, facts, trust);
+  } catch {
+    return unverified('malformed');
+  }
+}
+
+function verify(xml: string, facts: SignatureFacts, trust: TrustStore): InvoiceSignature {
   let doc: Document;
   try {
     doc = parseDom(xml);
@@ -267,24 +313,27 @@ export function verifyEInvoiceSignatures(xml: string, facts: SignatureFacts, tru
 
   const seller = verifyOne(xml, sellerSignature, [dlhdon], trust, fallbackTime);
   if (!seller.ok) return unverified(seller.reason, seller.leaf, seller.signedAt);
-  const certTaxCode = subjectTaxCode(seller.leaf);
-  const invoiceTaxCode = facts.sellerTaxCode?.replace(/\D/g, '').slice(0, 10) ?? null;
-  if (certTaxCode && invoiceTaxCode && certTaxCode !== invoiceTaxCode) return unverified('signer_mismatch', seller.leaf, seller.signedAt);
+  if (!signerMatches(seller.leaf, facts.sellerTaxCode)) return unverified('signer_mismatch', seller.leaf, seller.signedAt);
 
-  // An invoice with a tax authority code: the tax authority signs the invoice data and the code.
+  // An invoice with a tax authority code: the tax authority signs the invoice data and the code. A series of the
+  // invoices with a code (C) must carry it, except a cash register invoice (type M), whose code its seller's system
+  // generates and the tax authority does not sign.
   const code = codes[0];
-  if (facts.taxAuthorityCode && code) {
+  const cashRegister = facts.series.charAt(3).toUpperCase() === 'M';
+  if (facts.series.charAt(0).toUpperCase() === 'C' && !cashRegister && !(facts.taxAuthorityCode && code)) {
+    return unverified('tax_authority_missing', seller.leaf, seller.signedAt);
+  }
+  if (facts.taxAuthorityCode && code && !cashRegister) {
     const authoritySlots = slot('CQT');
     const authoritySignatures = authoritySlots.length === 1 && authoritySlots[0] ? childrenNamed(authoritySlots[0], 'Signature', DSIG) : [];
     if (authoritySlots.length > 1 || authoritySignatures.length > 1) return unverified('ambiguous', seller.leaf, seller.signedAt);
     const authoritySignature = authoritySignatures[0];
     if (!authoritySignature) return unverified('tax_authority_missing', seller.leaf, seller.signedAt);
-    const authority = verifyOne(xml, authoritySignature, [dlhdon, code], trust, seller.signedAt);
+    const authority = verifyOne(xml, authoritySignature, [dlhdon, code], trust, seller.signedAt, trust.taxAuthorities);
     if (!authority.ok) {
       const reason = authority.reason === 'untrusted_certificate' ? 'tax_authority_untrusted' : 'tax_authority_invalid';
       return unverified(reason, seller.leaf, seller.signedAt);
     }
-    if (!namesTaxAuthority(authority.leaf)) return unverified('tax_authority_invalid', seller.leaf, seller.signedAt);
   }
   return result('verified', null, seller.leaf, seller.signedAt);
 }

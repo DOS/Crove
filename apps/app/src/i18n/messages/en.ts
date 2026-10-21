@@ -2710,6 +2710,7 @@ export const en = {
       ARCHIVE_NOT_READ: 'A ZIP file is opened into separate documents once. Read each document again instead.',
       CHECKS_BLOCKING: 'The amounts on the invoice do not match, so it cannot be recorded. Reject it and ask the seller for an adjusted invoice.',
       CHECKS_FAILED: 'Some checks failed. Confirm that you compared the original document.',
+      SIGNATURE_UNVERIFIED: 'The digital signature of this invoice could not be verified. Check the original invoice, then confirm it when you approve.',
       DUPLICATE_INVOICE: 'This invoice is already recorded.',
       UNBALANCED: 'The journal entry does not balance.',
       UNKNOWN_ACCOUNT: "An account is not in the organization's chart of accounts.",

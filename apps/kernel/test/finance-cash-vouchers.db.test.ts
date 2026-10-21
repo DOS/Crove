@@ -115,7 +115,7 @@ suite('cash and bank vouchers (#327)', () => {
   const ask = async (who: Account, input: Record<string, unknown>, slug = org.slug) =>
     rpc('inbox/request', await tokenFor(who), { command: 'finance.voucher.record', input, idempotencyKey: randomUUID() }, slug);
   const approve = async (who: Account, id: string, slug = org.slug) =>
-    rpc('inbox/approve', await tokenFor(who, { mfa: true }), { id, revision: 1, idempotencyKey: randomUUID() }, slug);
+    rpc('inbox/approve', await tokenFor(who, { mfa: true }), { acceptUnverifiedSignature: true, id, revision: 1, idempotencyKey: randomUUID() }, slug);
   const payment = (amount: string, extra: Record<string, unknown> = {}) => ({
     type: 'cash_payment',
     date: '2026-09-20',
@@ -255,7 +255,7 @@ suite('cash and bank vouchers (#327)', () => {
     expect((await rpc('inbox/get', await tokenFor(member), { id })).body).toMatchObject({ canApprove: false, approveReason: 'not_eligible' });
 
     // Approving needs a fresh second factor (R3).
-    expect((await rpc('inbox/approve', await tokenFor(owner), { id, revision: 1, idempotencyKey: randomUUID() })).body).toMatchObject({ code: 'STEP_UP_REQUIRED' });
+    expect((await rpc('inbox/approve', await tokenFor(owner), { acceptUnverifiedSignature: true, id, revision: 1, idempotencyKey: randomUUID() })).body).toMatchObject({ code: 'STEP_UP_REQUIRED' });
     const approved = await approve(owner, id);
     expect(approved).toMatchObject({ status: 200, body: { voucherId: expect.any(String), journalEntryId: expect.any(String) } });
     paymentEntry = String(approved.body.journalEntryId);
@@ -404,7 +404,7 @@ suite('cash and bank vouchers (#327)', () => {
       lines: [{ account: '6422', amount: '22000' }],
     });
     const id = String(asked.body.proposalId);
-    const result = await rpc('inbox/approveMany', await tokenFor(owner, { mfa: true }), { items: [{ id, revision: 1 }], idempotencyKey: randomUUID() });
+    const result = await rpc('inbox/approveMany', await tokenFor(owner, { mfa: true }), { items: [{ id, revision: 1, acceptUnverifiedSignature: true }], idempotencyKey: randomUUID() });
     expect(result.body).toEqual({ results: [{ id, outcome: 'approved', journalEntryId: expect.any(String), voucherId: expect.any(String) }] });
     const vouchers = (await rpc('vouchers/list', await tokenFor(viewer), { type: 'bank_debit' })).body.items as any[];
     expect(vouchers).toEqual([expect.objectContaining({ code: 'BN00001', party: null, amount: expect.stringMatching(/^22000(\.0+)?$/) })]);
@@ -553,7 +553,7 @@ suite('cash and bank vouchers (#327)', () => {
     expect([...ids].sort()).toEqual(ids);
     const [r1, p1, p2, r2] = ids as [string, string, string, string];
     const batch = async (items: string[]) =>
-      rpc('inbox/approveMany', await tokenFor(owner, { mfa: true }), { items: items.map((id) => ({ id, revision: 1 })), idempotencyKey: randomUUID() });
+      rpc('inbox/approveMany', await tokenFor(owner, { mfa: true }), { items: items.map((id) => ({ id, revision: 1, acceptUnverifiedSignature: true })), idempotencyKey: randomUUID() });
     const [first, second] = await Promise.all([batch([r1, p1]), batch([p2, r2])]);
     for (const result of [first, second]) {
       expect(result.status).toBe(200);

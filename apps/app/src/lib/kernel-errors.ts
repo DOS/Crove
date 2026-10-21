@@ -67,6 +67,7 @@ export const KERNEL_ERROR_CODES = [
   // Recording purchases and journal reversals (finance module).
   'CHECKS_BLOCKING',
   'CHECKS_FAILED',
+  'SIGNATURE_UNVERIFIED',
   'DUPLICATE_INVOICE',
   'UNBALANCED',
   'UNKNOWN_ACCOUNT',

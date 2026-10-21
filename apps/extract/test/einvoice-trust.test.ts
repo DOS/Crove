@@ -35,6 +35,13 @@ describe('shipped e-invoice trust data', () => {
     const store = shippedTrustStore();
     expect(store.roots.map(fingerprint)).toEqual(roots.map((r) => fingerprint(r.cert)));
     expect(store.intermediates.map(fingerprint)).toEqual(intermediates.map((i) => fingerprint(i.cert)));
+    // The tax authority's pinned certificates: none until one comes from an official source, each with its comment block.
+    const pinned = annotated(read('tax-authority.crt'));
+    expect(store.taxAuthorities.map(fingerprint)).toEqual(pinned.map((p) => fingerprint(p.cert)));
+    for (const entry of pinned) {
+      expect(entry.sha256).toBe(fingerprint(entry.cert));
+      expect(entry.sources.length).toBeGreaterThan(0);
+    }
   });
 
   it('holds only self-signed root CAs as anchors, and only CAs those roots issued beside them', () => {

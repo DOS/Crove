@@ -241,14 +241,16 @@ export function checkInvoice(
         : { id: 'tax_authority_code', status: 'warn', code: 'tax_authority_code.missing', message: 'Không có mã của cơ quan thuế' },
     );
     // Verified in the sandbox (#674). An unverified signature is a warning, never a failed check: it must not block
-    // the invoice, and the Inbox asks the approver to confirm it instead. Without a verification (an answer from a
-    // sandbox older than #674) it stays a warning, as before.
+    // the invoice; approving it needs the approver's confirmation (kernel.proposal.approve). Without a verification
+    // (an answer from a sandbox older than #674) it stays a warning, as before.
     const signature = invoice.signature;
     checks.push(
       signature
         ? {
             id: 'signature',
-            status: signature.status === 'unverified' ? 'warn' : 'pass',
+            // Only a verified signature passes. A cash register invoice (not applicable) stays a warning: its series is
+            // what the file says, so an unsigned forgery could claim it.
+            status: signature.status === 'verified' ? 'pass' : 'warn',
             code: signatureCheckCode(signature),
             ...(signature.status === 'verified' && signature.signer ? { params: { signer: signature.signer.slice(0, 200) } } : {}),
             message: signatureMessage(signature),

@@ -123,7 +123,7 @@ suite('VAT working per month or quarter (#316)', () => {
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-17' }, org.orgId, fileId);
     return runtime.execute<{ documentId: string; journalEntryId: string }>(
       'kernel.proposal.approve',
-      { id: proposalId, revision: 1 },
+      { acceptUnverifiedSignature: true, id: proposalId, revision: 1 },
       { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() },
     );
   }
@@ -197,7 +197,7 @@ suite('VAT working per month or quarter (#316)', () => {
       idempotencyKey: randomUUID(),
     });
     expect(asked.status).toBe(200);
-    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
+    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { acceptUnverifiedSignature: true, id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
     expect(approved.body).toMatchObject({ voidedDocumentId: voided.documentId });
   });
 

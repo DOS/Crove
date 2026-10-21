@@ -324,7 +324,8 @@ export const MAX_BULK_APPROVE = 50;
 // The proposals of one bulk approval, each named once with the revision the caller saw. Shared by the RPC contract
 // and kernel.proposal.approve_many, so the route and the command accept the same input.
 export const zBulkApproveItems = z
-  .array(z.object({ id: zId, revision: z.number().int().positive() }))
+  // acceptUnverifiedSignature: the approver confirmed this revision of an invoice whose signature is unverified (#674).
+  .array(z.object({ id: zId, revision: z.number().int().positive(), acceptUnverifiedSignature: z.boolean().optional() }))
   .min(1)
   .max(MAX_BULK_APPROVE)
   .refine((items) => new Set(items.map((i) => i.id)).size === items.length, 'each proposal once');

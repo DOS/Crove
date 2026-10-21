@@ -35,8 +35,13 @@ const parser = new XMLParser({
   parseTagValue: false,
   parseAttributeValue: false,
   trimValues: true,
-  processEntities: false,
-  htmlEntities: false,
+  // The predefined XML entities and character references are decoded, as Canonical XML decodes them for the signature
+  // (#674): read raw, "&#49;234" would be a different invoice number than the "1234" that was signed. fast-xml-parser
+  // decodes character references only with htmlEntities, which also decodes HTML names such as &nbsp;; those are not
+  // XML, so the strict signature parse refuses such a file (unverified). DOCTYPE is refused below, so no entity can
+  // be declared.
+  processEntities: true,
+  htmlEntities: true,
   isArray: (name) => ['HHDVu', 'LTSuat', 'TTin'].includes(name),
 });
 

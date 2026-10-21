@@ -492,12 +492,10 @@ export const editProposal = defineCommand({
   },
 });
 
-// What the approval's audit row says about the invoice's signature (#674) when the approver confirmed it: the status
-// they confirmed. The row is unchanged when no confirmation was sent (an API call, a bulk item, an agent).
-function signatureAudit(payload: unknown, accepted: boolean | undefined): Record<string, unknown> {
-  if (accepted === undefined) return {};
+// The signature status stored on an invoice proposal (#674), or null for a proposal without one.
+function signatureStatusOf(payload: unknown): string | null {
   const parsed = zProposalSignature.safeParse((payload as { signature?: unknown } | null)?.signature);
-  return { accept_unverified_signature: accepted, signature_status: parsed.success ? parsed.data.status : null };
+  return parsed.success ? parsed.data.status : null;
 }
 
 export const approveProposal = defineCommand({
@@ -509,8 +507,10 @@ export const approveProposal = defineCommand({
     lineAccounts: zLineAccounts.optional(),
     note: z.string().max(500).optional(),
     acceptFailedChecks: z.boolean().optional(),
-    // The approver confirmed an invoice whose digital signature is unverified (#674). The Inbox asks for it and the audit
-    // row records it. An unverified signature is a warning, so the server does not require it (yet: see the PR).
+    // The approver confirmed this revision of an invoice whose digital signature is unverified (#674). Required for
+    // such an invoice (SIGNATURE_UNVERIFIED otherwise); the revision above binds it to what the approver saw. An
+    // approval of such an invoice that went through was therefore confirmed: its audit row and the revision's payload
+    // (signature.status) say so.
     acceptUnverifiedSignature: z.boolean().optional(),
     // A purchase invoice dated in a locked month (#478): the approver posts its entry on this date, in an open month.
     // An approval-time choice like acceptFailedChecks, never part of the revision: finance.purchase.record checks it
@@ -540,6 +540,11 @@ export const approveProposal = defineCommand({
     if (decision.reason !== 'ok') {
       throw new DomainError('NOT_ELIGIBLE', 403, 'Bạn không có quyền duyệt đề xuất này', { rule: 'P12' });
     }
+    // An invoice whose digital signature could not be verified (#674) is approved only with the approver's explicit
+    // confirmation of this revision. It never blocks the invoice otherwise: confirmed, it is approved as any other.
+    if (proposal.command === PURCHASE_COMMAND && signatureStatusOf(proposal.payload) === 'unverified' && input.acceptUnverifiedSignature !== true) {
+      throw new DomainError('SIGNATURE_UNVERIFIED', 422, 'Chưa xác minh được chữ ký số của hóa đơn này; hãy kiểm tra hóa đơn gốc rồi xác nhận khi duyệt');
+    }
     ctx.audit({
       revision: proposal.revision,
       aal: ctx.actor.aal,
@@ -547,7 +552,6 @@ export const approveProposal = defineCommand({
       eligible_approvers: decision.eligibleCount,
       self_approved: decision.selfApproved,
       accept_failed_checks: input.acceptFailedChecks ?? false,
-      ...signatureAudit(proposal.payload, input.acceptUnverifiedSignature),
       ...(input.postingDate !== undefined ? { posting_date: input.postingDate } : {}),
     });
     // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
@@ -596,6 +600,8 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // The approval policy (decideApproval): P10 and P12.
   'FOUR_EYES_REQUIRED',
   'NOT_ELIGIBLE',
+  // An invoice whose digital signature is unverified, sent without its confirmation (#674).
+  'SIGNATURE_UNVERIFIED',
   // Recording a purchase (finance.purchase.record and its account check).
   'CHECKS_BLOCKING',
   'CHECKS_FAILED',
@@ -691,7 +697,9 @@ export const approveProposals = defineCommand({
     const voucherTypes = new Map(vouchers.map((v) => [v.id, v.voucher_type ?? '']));
     const outcomes = new Map<string, BulkApproveResult>();
     for (const item of bulkApproveOrder(input.items, voucherTypes)) {
-      const attempt = await ctx.tryRun<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision }, { recover: isBulkItemRefusal });
+      // An item's confirmation of an unverified signature (#674) is passed on with its own id and revision.
+      const confirm = item.acceptUnverifiedSignature === true ? { acceptUnverifiedSignature: true } : {};
+      const attempt = await ctx.tryRun<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision, ...confirm }, { recover: isBulkItemRefusal });
       if (attempt.status === 'ok') {
         outcomes.set(item.id, { id: item.id, outcome: 'approved', result: attempt.value });
       } else {

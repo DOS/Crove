@@ -1,0 +1,7 @@
+# The tax authority's own signing certificates (#674), pinned: a signature in the tax authority's slot of an e-invoice
+# (HDon/DSCKS/CQT) counts only from one of these certificates. Licensed CAs issue certificates to any company, so
+# neither a chain to a national root nor a name in the subject proves that a certificate is the tax authority's.
+#
+# Empty for now: no copy of the tax authority's signing certificate from an official source has been obtained yet
+# (see README.md). Until one is added here, with the same comment block as roots.crt (subject, issuer, validity,
+# SHA-256 and source), the tax authority's signature is reported as not verified (tax_authority_untrusted).

@@ -302,7 +302,8 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [acceptFailed, setAcceptFailed] = useState(false);
   // An invoice whose digital signature is unverified (#674): the approver confirms they checked the original first.
-  const [acceptUnverified, setAcceptUnverified] = useState(false);
+  // The confirmation holds for the revision it was given on: a new reading of the file (a new revision) asks again.
+  const [acceptUnverifiedRevision, setAcceptUnverifiedRevision] = useState<number | null>(null);
   // A purchase invoice dated in a locked month (#478), or on or before the opening balances (#366): the approver may
   // post it on a later date, by choice only (unticked, the approval posts on the invoice date and the kernel refuses
   // it, as before). The date starts at the first day after both.
@@ -376,6 +377,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
   const unverified = payload?.signature?.status === 'unverified';
+  const acceptUnverified = item !== undefined && acceptUnverifiedRevision === item.revision;
   const signatureCheck = payload?.checks.find((c) => c.id === 'signature');
   // The approve buttons are enabled exactly when this holds, and the A shortcut uses the same value.
   const approveReady =
@@ -659,7 +661,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           <p className="text-sm text-muted-foreground">{t('signatureUnverifiedHint')}</p>
           {pending && item.canApprove && (
             <Label className="font-normal text-muted-foreground">
-              <Checkbox checked={acceptUnverified} onCheckedChange={(checked) => setAcceptUnverified(checked)} />
+              <Checkbox checked={acceptUnverified} onCheckedChange={(checked) => setAcceptUnverifiedRevision(checked ? item.revision : null)} />
               {t('acceptUnverified')}
             </Label>
           )}

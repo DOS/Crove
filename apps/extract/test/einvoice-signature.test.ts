@@ -63,6 +63,15 @@ describe('e-invoice signature verification', () => {
     expect(verify(signInvoice(unsigned, pki.seller, { slot: 'NBan', keyInfo: [pki.otherSeller.cert] }))).toMatchObject({ status: 'unverified', reason: 'bad_signature' });
     const stranger = issue({ subject: { commonName: 'TEST ONLY other company', uid: 'MST:0309876546' }, issuer: pki.intermediate, ca: false });
     expect(verify(signInvoice(unsigned, stranger, { slot: 'NBan' }))).toMatchObject({ status: 'unverified', reason: 'signer_mismatch' });
+    // A person's certificate, or one that names nobody, does not sign for the company.
+    const person = issue({ subject: { commonName: 'TEST ONLY NGUYEN VAN A', uid: 'CCCD:001234567890' }, issuer: pki.intermediate, ca: false });
+    expect(verify(signInvoice(unsigned, person, { slot: 'NBan' })).reason).toBe('signer_mismatch');
+    const nobody = issue({ subject: { commonName: `TEST ONLY MST:${TEST_SELLER_TAX_CODE}` }, issuer: pki.intermediate, ca: false });
+    expect(verify(signInvoice(unsigned, nobody, { slot: 'NBan' })).reason).toBe('signer_mismatch');
+    // The seller's tax code must be a tax code: not a longer string that starts with the certificate's.
+    expect(verify(signInvoice(unsigned.replace(`<MST>${TEST_SELLER_TAX_CODE}</MST>`, `<MST>${TEST_SELLER_TAX_CODE}-0309876546</MST>`), pki.seller, { slot: 'NBan' })).reason).toBe(
+      'signer_mismatch',
+    );
     // A CA certificate sent alongside does not make an untrusted chain trusted.
     expect(verify(signInvoice(unsigned, pki.otherSeller, { slot: 'NBan', keyInfo: [pki.otherSeller.cert, pki.otherRoot.cert] }))).toMatchObject({
       reason: 'untrusted_certificate',
@@ -92,17 +101,25 @@ describe('e-invoice signature verification', () => {
 
   it('checks the tax authority signature on an invoice with a tax authority code', () => {
     expect(verify(sellerSigned)).toMatchObject({ status: 'unverified', reason: 'tax_authority_missing', signer: 'TEST ONLY CÔNG TY TNHH DỊCH VỤ MẪU' });
-    // Signed by a certificate that does not name the tax authority.
-    expect(verify(signInvoice(sellerSigned, pki.seller, { slot: 'CQT', references: ['data', 'tax'] })).reason).toBe('tax_authority_invalid');
+    // Signed by a certificate from a trusted CA that is not the pinned tax authority certificate, even one naming it.
+    expect(verify(signInvoice(sellerSigned, pki.seller, { slot: 'CQT', references: ['data', 'tax'] })).reason).toBe('tax_authority_untrusted');
+    const agent = issue({ subject: { commonName: 'TEST ONLY CÔNG TY TNHH ĐẠI LÝ THUẾ ABC', uid: 'MST:0109999999' }, issuer: pki.intermediate, ca: false });
+    expect(verify(signInvoice(sellerSigned, agent, { slot: 'CQT', references: ['data', 'tax'] })).reason).toBe('tax_authority_untrusted');
+    // With no pinned certificate (the shipped state today), the tax authority's signature is never verified.
+    expect(verify(fullySigned, { ...pki.trust, taxAuthorities: [] }).reason).toBe('tax_authority_untrusted');
     // Covering the code but not the invoice data.
     expect(verify(signInvoice(sellerSigned, pki.taxAuthority, { slot: 'CQT', references: ['tax'] })).reason).toBe('tax_authority_invalid');
     const otherAuthority = issue({ subject: { commonName: 'TEST ONLY CỤC THUẾ giả' }, issuer: pki.otherRoot, ca: false });
     expect(verify(signInvoice(sellerSigned, otherAuthority, { slot: 'CQT', references: ['data', 'tax'] })).reason).toBe('tax_authority_untrusted');
     // An edited tax authority code breaks its signature.
     expect(verify(fullySigned.replace('M2-26-ABCDE-00001234567', 'M2-26-ABCDE-00009999999')).reason).toBe('tax_authority_invalid');
-    // Without a code, nothing is asked of the tax authority.
-    const noCode = signInvoice(unsigned.replace(/<MCCQT[^>]*>[^<]*<\/MCCQT>/, ''), pki.seller, { slot: 'NBan' });
-    expect(verify(noCode)).toMatchObject({ status: 'verified' });
+    // A series without a code (K) asks nothing of the tax authority; a series with one (C) must carry it.
+    const withoutCode = unsigned.replace(/<MCCQT[^>]*>[^<]*<\/MCCQT>/, '');
+    expect(verify(signInvoice(withoutCode.replace('<KHHDon>C26TAB</KHHDon>', '<KHHDon>K26TAB</KHHDon>'), pki.seller, { slot: 'NBan' }))).toMatchObject({ status: 'verified' });
+    expect(verify(signInvoice(withoutCode, pki.seller, { slot: 'NBan' })).reason).toBe('tax_authority_missing');
+    // A cash register invoice (type M) carries a code its seller's system made, with no tax authority signature.
+    const cashRegister = unsigned.replace('<KHHDon>C26TAB</KHHDon>', '<KHHDon>C26MAB</KHHDon>');
+    expect(verify(signInvoice(cashRegister, pki.seller, { slot: 'NBan' }))).toMatchObject({ status: 'verified' });
   });
 
   describe('signature wrapping', () => {
@@ -151,6 +168,26 @@ describe('e-invoice signature verification', () => {
       expect(verify(fullySigned.replace('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>1980000<?x y?></TgTTTBSo>')).reason).toBe('ambiguous');
     });
 
+    it('reads character references the way the signature does', () => {
+      // Canonical XML decodes &#49; to 1 before digesting; the parser decodes it too, so both read invoice 1234.
+      const referenced = fullySigned.replace('<SHDon>1234</SHDon>', '<SHDon>&#49;234</SHDon>').replace('M2-26-ABCDE', '&#77;2-26-ABCDE');
+      const invoice = parseEInvoiceXml(bytes(referenced), { trust: pki.trust });
+      expect(invoice.number).toBe('1234');
+      expect(invoice.taxAuthorityCode).toBe('M2-26-ABCDE-00001234567');
+      expect(invoice.signature?.status).toBe('verified');
+      // An HTML entity is not XML: the parser reads it, the signature check refuses the file.
+      expect(verify(fullySigned.replace('<SHDon>1234</SHDon>', '<SHDon>12&nbsp;34</SHDon>')).reason).toBe('malformed');
+    });
+
+    it('refuses a SignedInfo with too many references before digesting them', () => {
+      const reference = /<Reference URI="#data">[\s\S]*?<\/Reference>/.exec(sellerSigned)?.[0] ?? '';
+      expect(reference).not.toBe('');
+      const many = sellerSigned.replace(reference, reference.repeat(400));
+      const started = performance.now();
+      expect(verify(many).reason).toBe('malformed');
+      expect(performance.now() - started).toBeLessThan(2000);
+    });
+
     it('reads a comment inside a signed value the way the signature does', () => {
       // Canonical XML without comments drops the comment; the parser joins the text around it. Both read 1980000.
       const commented = fullySigned.replace('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>198<!-- x -->0000</TgTTTBSo>');
@@ -176,9 +213,9 @@ describe('e-invoice signature verification', () => {
   it('builds the chain from the roots, prefers an issuer valid at the signing time and stops at expired ones', () => {
     const at = new Date('2026-09-15T00:00:00Z');
     expect(chainTo(pki.seller.cert, [], pki.trust, at)).toBe('ok');
-    expect(chainTo(pki.seller.cert, [], { roots: [pki.root.cert], intermediates: [] }, at)).toBe('untrusted_certificate');
+    expect(chainTo(pki.seller.cert, [], { roots: [pki.root.cert], intermediates: [], taxAuthorities: [] }, at)).toBe('untrusted_certificate');
     // The intermediate may come from the document instead of the shipped list.
-    expect(chainTo(pki.seller.cert, [pki.intermediate.cert], { roots: [pki.root.cert], intermediates: [] }, at)).toBe('ok');
+    expect(chainTo(pki.seller.cert, [pki.intermediate.cert], { roots: [pki.root.cert], intermediates: [], taxAuthorities: [] }, at)).toBe('ok');
     expect(chainTo(pki.seller.cert, [], pki.trust, new Date('2050-01-01T00:00:00Z'))).toBe('certificate_expired');
     expect(chainTo(pki.otherSeller.cert, [pki.otherRoot.cert], pki.trust, at)).toBe('untrusted_certificate');
   });

@@ -104,7 +104,7 @@ suite('kernel invariants on PostgreSQL', () => {
     const { fileId } = await ingest(orgA, users.owner, bytes);
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, orgA, fileId);
     const detail = await runtime.query<{ revision: number }>('kernel.inbox.get', { id: proposalId }, { actor: asUser(users.owner), orgId: orgA });
-    return { id: proposalId, revision: detail.revision };
+    return { id: proposalId, revision: detail.revision, acceptUnverifiedSignature: true };
   }
 
   async function withAdmin<T>(fn: (admin: pg.Client) => Promise<T>): Promise<T> {
@@ -867,7 +867,7 @@ suite('kernel invariants on PostgreSQL', () => {
   const view = (orgId: string, userId: string, id: string) =>
     runtime.query<Decision & { payload: { lines: Array<{ lineNo: number; debitAccount: string }> } }>('kernel.inbox.get', { id }, { actor: asUser(userId), orgId });
   const approveAs = (orgId: string, userId: string, id: string, revision: number) =>
-    runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', { id, revision }, { actor: asMfa(userId), orgId });
+    runtime.execute<{ journalEntryId: string }>('kernel.proposal.approve', { acceptUnverifiedSignature: true, id, revision }, { actor: asMfa(userId), orgId });
 
   async function approvalAudit(proposalId: string) {
     return withAdmin(async (admin) => {
@@ -1015,7 +1015,7 @@ suite('kernel invariants on PostgreSQL', () => {
 
     // Approve never carries an edit.
     await expect(
-      runtime.execute('kernel.proposal.approve', { id, revision: 1, lineAccounts: changed }, { actor: asMfa(owner), orgId }),
+      runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id, revision: 1, lineAccounts: changed }, { actor: asMfa(owner), orgId }),
     ).rejects.toMatchObject({ code: 'CONTENT_CHANGED' });
     // An edit that changes nothing creates no revision.
     await expect(
