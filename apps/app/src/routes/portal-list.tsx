@@ -171,12 +171,13 @@ function MissingInvoiceRequest({ period, missing, editor, canManage, slug }: { p
               aria-label={t('reminder')}
               className="mt-1 w-36"
               value={data.reminderDay ?? ''}
-              disabled={reminder.isPending || (!contact && data.reminderDay === null)}
+              disabled={reminder.isPending}
               onChange={(e) => reminder.mutate({ day: e.target.value ? Number(e.target.value) : null })}
             >
               <NativeSelectOption value="">{t('reminderOff')}</NativeSelectOption>
               {REMINDER_DAYS.map((day) => (
-                <NativeSelectOption key={day} value={day}>
+                // Without a contact email the reminder can only be turned off (the kernel refuses a day with CONTACT_EMAIL_REQUIRED).
+                <NativeSelectOption key={day} value={day} disabled={!contact}>
                   {t('reminderDay', { day: String(day) })}
                 </NativeSelectOption>
               ))}
@@ -195,6 +196,7 @@ function MissingInvoiceRequest({ period, missing, editor, canManage, slug }: { p
         </div>
       )}
       <p className="mt-2 text-xs text-subtle-foreground">{data.reminderDay !== null ? t('reminderOn', { day: String(data.reminderDay) }) : t('reminderHint')}</p>
+      {!contact && editor && <p className="mt-1 text-xs text-subtle-foreground">{t('reminderNeedsContact')}</p>}
       {data.mails.length > 0 && (
         <div className="mt-4">
           <h3 className="text-sm font-medium text-foreground">{t('historyTitle')}</h3>

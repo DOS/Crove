@@ -416,6 +416,7 @@ export const vi = {
       reminderHint:
         'Vào ngày đã chọn, Crove gửi email nhắc liệt kê các hóa đơn còn thiếu trong 12 tháng gần nhất, và tự dừng khi không còn hóa đơn nào thiếu.',
       reminderOn: 'Đang nhắc vào ngày {day} hằng tháng.',
+      reminderNeedsContact: 'Cần có email liên hệ của công ty thì mới bật được nhắc hằng tháng.',
       historyTitle: 'Email đã gửi',
       kind: {
         request: 'Đề nghị',

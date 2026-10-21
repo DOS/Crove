@@ -418,6 +418,7 @@ export const en = {
       reminderHint:
         'On the chosen day, Crove emails a reminder listing the invoices still missing over the last 12 months, and stops on its own once nothing is missing.',
       reminderOn: 'Reminding on day {day} of each month.',
+      reminderNeedsContact: "The monthly reminder needs the company's contact email.",
       historyTitle: 'Emails sent',
       kind: {
         request: 'Request',

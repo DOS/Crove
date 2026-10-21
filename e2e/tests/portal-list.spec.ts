@@ -76,8 +76,8 @@ const row = (n: number, number: string, sellerTaxCode: string, sellerName: strin
 ];
 
 async function choosePeriod(page: Page) {
-  await page.getByRole('combobox', { name: 'Tháng' }).selectOption('9');
-  await page.getByRole('combobox', { name: 'Năm' }).selectOption('2026');
+  await page.getByRole('combobox', { name: 'Tháng', exact: true }).selectOption('9');
+  await page.getByRole('combobox', { name: 'Năm', exact: true }).selectOption('2026');
 }
 
 test('import the tax portal purchase list and see which invoices Crove lacks', async ({ page }) => {
@@ -167,7 +167,7 @@ test('import the tax portal purchase list and see which invoices Crove lacks', a
   });
 
   await test.step('another period has its own lists', async () => {
-    await page.getByRole('combobox', { name: 'Tháng' }).selectOption('10');
+    await page.getByRole('combobox', { name: 'Tháng', exact: true }).selectOption('10');
     await expect(page.getByText('Kỳ này chưa có danh sách nào')).toBeVisible();
   });
 });
