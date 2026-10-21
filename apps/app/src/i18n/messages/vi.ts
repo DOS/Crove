@@ -2677,6 +2677,7 @@ export const vi = {
       CHAT_ALERT_UNREACHABLE: 'Không kết nối được tới Telegram hoặc Discord lúc này; hãy thử lại sau',
       CHAT_ALERT_OWNER_LEFT: 'Người đã lưu nhóm chat không còn là chủ sở hữu hoặc quản trị viên; hãy lưu lại nhóm chat',
       CHAT_ALERT_TEST_LIMIT: 'Bạn vừa gửi nhiều tin thử; hãy đợi một phút rồi thử lại',
+      CHAT_ALERT_SAVE_LIMIT: 'Bạn vừa lưu nhóm chat nhiều lần; hãy đợi một phút rồi thử lại',
       WORDPRESS_SITE_INVALID: 'Hãy nhập địa chỉ trang WordPress qua https, ví dụ https://tiemcuaban.vn',
       WORDPRESS_LOGIN_INVALID: 'Hãy nhập tên người dùng và mật khẩu ứng dụng (24 chữ cái và chữ số) mà WordPress tạo cho bạn',
       WORDPRESS_LOGIN_REFUSED: 'WordPress không chấp nhận tên người dùng hoặc mật khẩu ứng dụng này',

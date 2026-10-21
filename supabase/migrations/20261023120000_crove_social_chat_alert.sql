@@ -14,6 +14,12 @@
 --                                                           org, and only while the member who saved the chat is still
 --                                                           an owner or admin of the org and not disabled;
 --                                   chat_alert_target_drop  forgets it (remove; the cascade from chat_alert also does).
+--                                 After a credential key rotation the worker reseals the targets still under the
+--                                 previous key, as it does channel credentials (#776): chat_alert_target_reseal_due
+--                                 lists them (ids and key ids only), chat_alert_target_reseal stores the new envelope
+--                                 only if the stored one is still the one it read, and chat_alert_target_key_counts says
+--                                 how many each key still seals, of usable targets and of the others (whose saver left:
+--                                 those reseal when the chat is saved again).
 --                                 So the API seals a target in and never reads it back; only the worker opens it, to
 --                                 post an alert or an owner's test line.
 -- social-chat-alert               the worker's queue: one job per alerting outbox event, and test lines.
@@ -136,13 +142,85 @@ BEGIN
   DELETE FROM crove_social.chat_alert_target t WHERE t.org_id = v_org AND t.alert_id = p_alert_id;
 END $$;
 
-REVOKE ALL ON FUNCTION crove_social.chat_alert_target_put(uuid, text, bytea) FROM PUBLIC, crove_tenant, crove_app, crove_worker;
-REVOKE ALL ON FUNCTION crove_social.chat_alert_target_get(uuid) FROM PUBLIC, crove_tenant, crove_app, crove_worker;
-REVOKE ALL ON FUNCTION crove_social.chat_alert_target_drop(uuid) FROM PUBLIC, crove_tenant, crove_app, crove_worker;
+-- Whether the worker may use the target of this alert: the member who saved it is still an owner or admin of the org
+-- and not disabled (the rule of chat_alert_target_get).
+CREATE OR REPLACE FUNCTION crove_social.chat_alert_target_usable(p_org_id uuid, p_alert_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM crove_social.chat_alert a
+    JOIN crove_kernel.tenant_member m ON m.org_id = a.org_id AND m.user_id = a.updated_by AND m.role IN ('owner', 'admin')
+    JOIN crove_kernel.user_account u ON u.id = m.user_id AND u.disabled_at IS NULL
+    WHERE a.org_id = p_org_id AND a.id = p_alert_id
+  )
+$$;
+
+-- The worker's scan, across active orgs, of usable targets sealed with a key other than the given (current) one: ids
+-- and key ids only, in pages after a (sealed_at, alert_id) cursor, so a target that cannot be resealed never holds back
+-- the ones after it.
+CREATE OR REPLACE FUNCTION crove_social.chat_alert_target_reseal_due(p_key_id text, p_limit int, p_after_sealed timestamptz, p_after_id uuid)
+RETURNS TABLE (org_id uuid, alert_id uuid, key_id text, sealed_at timestamptz)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+  SELECT k.org_id, k.alert_id, k.key_id, k.sealed_at
+  FROM crove_social.chat_alert_target k
+  JOIN crove_kernel.tenant t ON t.org_id = k.org_id AND t.status = 'active'
+  WHERE k.key_id <> p_key_id
+    AND crove_social.chat_alert_target_usable(k.org_id, k.alert_id)
+    AND (p_after_sealed IS NULL OR (k.sealed_at, k.alert_id) > (p_after_sealed, p_after_id))
+  ORDER BY k.sealed_at, k.alert_id
+  LIMIT LEAST(GREATEST(p_limit, 1), 1000)
+$$;
+
+-- How many targets each key id still seals: usable ones (resealed by the worker) and the others.
+CREATE OR REPLACE FUNCTION crove_social.chat_alert_target_key_counts()
+RETURNS TABLE (key_id text, active bigint, inactive bigint)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+  SELECT k.key_id,
+    count(*) FILTER (WHERE crove_social.chat_alert_target_usable(k.org_id, k.alert_id)),
+    count(*) FILTER (WHERE NOT crove_social.chat_alert_target_usable(k.org_id, k.alert_id))
+  FROM crove_social.chat_alert_target k
+  GROUP BY k.key_id
+$$;
+
+-- Stores a resealed target, for the worker in the system context of its org, only if the stored envelope is still the
+-- one it read (its key id and the hex SHA-256 of its bytes), the key changes, and the target is still usable. Returns
+-- whether it stored it. Raises NO_CONTEXT (42501) outside a system context.
+CREATE OR REPLACE FUNCTION crove_social.chat_alert_target_reseal(p_alert_id uuid, p_from_key_id text, p_from_sha256 text, p_key_id text, p_envelope bytea)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v_org uuid := crove_kernel.ctx_org_id();
+  v_target crove_social.chat_alert_target%ROWTYPE;
+BEGIN
+  IF v_org IS NULL OR crove_kernel.ctx_actor_type() IS DISTINCT FROM 'system' THEN
+    RAISE EXCEPTION 'NO_CONTEXT' USING ERRCODE = '42501';
+  END IF;
+  SELECT * INTO v_target FROM crove_social.chat_alert_target t WHERE t.org_id = v_org AND t.alert_id = p_alert_id FOR UPDATE;
+  IF NOT FOUND OR v_target.key_id IS DISTINCT FROM p_from_key_id OR p_from_key_id = p_key_id
+     OR pg_catalog.encode(pg_catalog.sha256(v_target.envelope), 'hex') IS DISTINCT FROM p_from_sha256
+     OR NOT crove_social.chat_alert_target_usable(v_org, p_alert_id) THEN
+    RETURN false;
+  END IF;
+  UPDATE crove_social.chat_alert_target t SET key_id = p_key_id, envelope = p_envelope, sealed_at = pg_catalog.now()
+  WHERE t.org_id = v_org AND t.alert_id = p_alert_id;
+  RETURN true;
+END $$;
+
+REVOKE ALL ON FUNCTION crove_social.chat_alert_target_put(uuid, text, bytea) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+REVOKE ALL ON FUNCTION crove_social.chat_alert_target_get(uuid) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+REVOKE ALL ON FUNCTION crove_social.chat_alert_target_drop(uuid) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+REVOKE ALL ON FUNCTION crove_social.chat_alert_target_usable(uuid, uuid) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+REVOKE ALL ON FUNCTION crove_social.chat_alert_target_reseal_due(text, int, timestamptz, uuid) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+REVOKE ALL ON FUNCTION crove_social.chat_alert_target_key_counts() FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+REVOKE ALL ON FUNCTION crove_social.chat_alert_target_reseal(uuid, text, text, text, bytea) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_social.chat_alert_target_put(uuid, text, bytea) TO crove_app, crove_worker;
 GRANT EXECUTE ON FUNCTION crove_social.chat_alert_target_drop(uuid) TO crove_app, crove_worker;
 -- Reading a target out is the worker's alone: the API seals targets in, it never reads them back.
 GRANT EXECUTE ON FUNCTION crove_social.chat_alert_target_get(uuid) TO crove_worker;
+-- Resealing after a key rotation is the worker's alone too.
+GRANT EXECUTE ON FUNCTION crove_social.chat_alert_target_reseal_due(text, int, timestamptz, uuid) TO crove_worker;
+GRANT EXECUTE ON FUNCTION crove_social.chat_alert_target_key_counts() TO crove_worker;
+GRANT EXECUTE ON FUNCTION crove_social.chat_alert_target_reseal(uuid, text, text, text, bytea) TO crove_worker;
 
 -- create_queue skips a queue that exists.
 SELECT crove_jobs.create_queue('social-chat-alert', '{"policy":"standard"}'::jsonb);

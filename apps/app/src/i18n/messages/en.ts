@@ -2676,6 +2676,7 @@ export const en = {
       CHAT_ALERT_UNREACHABLE: 'Telegram or Discord cannot be reached right now; try again later',
       CHAT_ALERT_OWNER_LEFT: 'The member who saved the chat is no longer an owner or admin; save the chat again',
       CHAT_ALERT_TEST_LIMIT: 'You sent several tests just now; wait a minute and try again',
+      CHAT_ALERT_SAVE_LIMIT: 'You saved the team chat several times just now; wait a minute and try again',
       WORDPRESS_SITE_INVALID: 'Enter the WordPress site address over https, such as https://yourshop.com',
       WORDPRESS_LOGIN_INVALID: 'Enter the user name and the application password (24 letters and digits) WordPress made for you',
       WORDPRESS_LOGIN_REFUSED: 'WordPress did not accept this user name or application password',

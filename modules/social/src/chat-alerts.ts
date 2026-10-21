@@ -209,15 +209,39 @@ async function sealedOf(ctx: QueryContext, row: { id: string; kind: ChatAlertTar
   return { id: row.id, kind: row.kind, keyId: target.key_id, envelope: target.envelope.toString('base64') };
 }
 
-// For the worker's test line: the org's sealed chat. Refuses CHAT_ALERT_NOT_SET and CHAT_ALERT_OWNER_LEFT.
+// For the worker: the org's sealed chat (a test line), or the one with this id (a reseal). Refuses CHAT_ALERT_NOT_SET
+// and CHAT_ALERT_OWNER_LEFT.
 export const chatAlertTarget = defineQuery({
   name: 'social.chat_alert.target',
-  input: z.strictObject({}),
+  input: z.strictObject({ alertId: zId.optional() }),
   access: 'system',
-  handler: async (ctx): Promise<SealedChatAlert> => {
-    const row = await alertOf(ctx);
+  handler: async (ctx, input): Promise<SealedChatAlert> => {
+    const row = input.alertId
+      ? await ctx.trx.selectFrom('crove_social.chat_alert').select(['id', 'kind', 'events']).where('org_id', '=', ctx.orgId).where('id', '=', input.alertId).executeTakeFirst()
+      : await alertOf(ctx);
     if (!row) throw new DomainError('CHAT_ALERT_NOT_SET', 404, 'Chưa có nhóm chat nào nhận tin báo');
     return sealedOf(ctx, row);
+  },
+});
+
+// After a credential key rotation (#776): the worker stores the target sealed again with the current key, only if the
+// stored envelope is still the one it read (its key id and SHA-256), which the definer checks under a row lock.
+export const chatAlertReseal = defineCommand({
+  name: 'social.chat_alert.reseal',
+  input: z.strictObject({ alertId: zId, fromKeyId: zKeyId, fromEnvelopeSha256: z.string().regex(/^[0-9a-f]{64}$/), keyId: zKeyId, envelope: zEnvelope }),
+  risk: 'R1',
+  access: 'system',
+  target: (input) => ({ type: 'social.chat_alert', id: input.alertId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    const { rows } = await sql<{ resealed: boolean }>`
+      SELECT crove_social.chat_alert_target_reseal(${input.alertId}::uuid, ${input.fromKeyId}, ${input.fromEnvelopeSha256}, ${input.keyId}, decode(${input.envelope}, 'base64')) AS resealed`
+      .execute(ctx.trx)
+      .catch(targetError);
+    const resealed = rows[0]?.resealed === true;
+    // Key ids only: they name a key without revealing it.
+    if (resealed) ctx.audit({ alert_id: input.alertId, from_key_id: input.fromKeyId, key_id: input.keyId });
+    return { resealed };
   },
 });
 
@@ -357,5 +381,5 @@ export const chatAlertPrepare = defineQuery({
   },
 });
 
-export const chatAlertCommands = [chatAlertSave, chatAlertRemove, chatAlertTest, chatAlertTested];
+export const chatAlertCommands = [chatAlertSave, chatAlertRemove, chatAlertTest, chatAlertTested, chatAlertReseal];
 export const chatAlertQueries = [chatAlertGet, chatAlertPrepare, chatAlertTarget];

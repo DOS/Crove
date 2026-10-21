@@ -18,7 +18,22 @@ export interface ChatAlertApiDeps {
   broker: Pick<CredentialBroker, 'id' | 'seal'>;
   // The platforms' fetch (tests); every call still goes through the adapters' host allowlist.
   fetch?: Fetch;
+  // Saves that reach the platform, per org (default: a budget of its own).
+  saves?: ChatAlertSaveBudget;
 }
+
+// A few saves a minute per org: each one calls Telegram or Discord, so an admin's form cannot drive calls in a loop.
+export class ChatAlertSaveBudget {
+  private readonly limiter: RateLimiter;
+  constructor(perMinute = 10, now?: () => number) {
+    this.limiter = new RateLimiter({ perMinute, ...(now ? { now } : {}) });
+  }
+  take(orgId: string) {
+    const decision = this.limiter.take(orgId);
+    if (!decision.allowed) throw new DomainError('CHAT_ALERT_SAVE_LIMIT', 429, 'Bạn vừa lưu nhóm chat nhiều lần; hãy đợi một phút rồi thử lại', { retryAfterSeconds: decision.retryAfterSeconds });
+  }
+}
+const defaultSaves = new ChatAlertSaveBudget();
 
 export interface ChatAlertScope {
   orgId: string;
@@ -59,6 +74,7 @@ export async function saveChatAlert(deps: ChatAlertApiDeps, scope: ChatAlertScop
   // Checked before any call, so a member cannot make the server call a platform.
   requireAdmin(scope);
   if (deps.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
+  (deps.saves ?? defaultSaves).take(scope.orgId);
   let checked: { target: TelegramChatTarget | DiscordChatTarget; label: string };
   try {
     if (input.kind === 'telegram') {

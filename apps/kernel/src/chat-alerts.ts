@@ -33,23 +33,32 @@ export const CHAT_ALERT_TEST_TEXT = 'Crove: tin thử. Từ giờ nhóm sẽ nh�
 // The line
 // ---------------------------------------------------------------------------
 
-// Control characters and bidirectional overrides would garble the line or reorder it; any run of whitespace is one space.
-const UNSAFE = /[\p{Cc}\p{Zl}\p{Zp}‪-‮⁦-⁩]/gu;
+// Control characters and line separators would garble the line: each is a space, and any run of whitespace one space.
+// Format characters (bidirectional overrides and isolates, zero-width ones, soft hyphens) could reorder or hide text,
+// so they go.
+const CONTROL = /[\p{Cc}\p{Zl}\p{Zp}]/gu;
+const FORMAT = /\p{Cf}/gu;
 export function clip(text: string, max: number): string {
-  const s = text.replace(UNSAFE, ' ').replace(/\s+/g, ' ').trim();
+  const s = text.replace(FORMAT, '').replace(CONTROL, ' ').replace(/\s+/g, ' ').trim();
   const chars = [...s];
   return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : s;
 }
 
 // Discord reads markdown, masked links and mentions in a message (mentions never ping: allowed_mentions parses none);
-// a backslash keeps each of those characters as it is. Telegram gets plain text, with no parse mode.
+// a backslash keeps each of those characters as it is.
 export function discordEscape(text: string): string {
   return text.replace(/[\\*_~`|>#[\]()<@]/g, '\\$&');
 }
 
+// Telegram gets plain text, with no parse mode, but still notifies a member named @username in it: an at sign in what a
+// person wrote becomes the fullwidth one (U+FF20), which reads the same and mentions nobody.
+export function telegramEscape(text: string): string {
+  return text.replace(/@/g, '\uFF20');
+}
+
 // The one line an alert posts, in Vietnamese: what happened, to which post and on which channels, and the post's link.
 export function chatAlertText(facts: ChatAlertFacts, options: { publicUrl: string; target: ChatAlertTarget }): string {
-  const esc = options.target === 'discord' ? discordEscape : (s: string) => s;
+  const esc = options.target === 'discord' ? discordEscape : telegramEscape;
   const title = facts.postText ? clip(facts.postText, CHAT_ALERT_TITLE_MAX) : '';
   const post = (capital: boolean) => (title ? `${capital ? 'Bài' : 'bài'} «${esc(title)}»` : capital ? 'Một bài' : 'một bài');
   const named = facts.channels.map((c) => esc(clip(c, CHANNEL_MAX))).filter(Boolean);

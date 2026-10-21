@@ -25,7 +25,7 @@ import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract
 import { DomainError, egressFetch, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { DraftBudget } from './ai-draft-limit.ts';
 import { BlueskyLoginBudget } from './bluesky-login-limit.ts';
-import { ChatAlertTestBudget, requestChatAlertTest, saveChatAlert } from './chat-alert-save.ts';
+import { ChatAlertSaveBudget, ChatAlertTestBudget, requestChatAlertTest, saveChatAlert } from './chat-alert-save.ts';
 import { actorOf, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
@@ -254,6 +254,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
   // The org's team chat for Social alerts (#863): the target is checked with the platform and sealed here, then saved by
   // the command. The API never reads it back: a test line is only asked for, and the worker sends it.
   const chatAlertTests = new ChatAlertTestBudget();
+  const chatAlertSaves = new ChatAlertSaveBudget();
   const chatAlertScope = async (context: RpcContext) => {
     if (!social) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun mạng xã hội chưa được bật' });
     const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
@@ -646,7 +647,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           guard(async () => {
             const scope = await chatAlertScope(context);
             if (!channels) throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
-            return saveChatAlert({ runtime, broker: channels.broker }, scope, input);
+            return saveChatAlert({ runtime, broker: channels.broker, saves: chatAlertSaves }, scope, input);
           }),
         ),
         remove: os.social.chatAlert.remove.handler(socialCommand('social.chat_alert.remove')),

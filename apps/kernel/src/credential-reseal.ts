@@ -5,13 +5,19 @@
 //
 // Only credentials of active connections whose connecting member may still use them are resealed (the rule of
 // credential_get); the others reseal when they are reconnected, and the counts say how many there are. No token is ever logged.
+//
+// The sealed targets of team chat alerts (#863, crove_social.chat_alert_target) go through the same pass, under the
+// same lock, when the Social module is on: those whose saver is still an owner or admin are resealed, the others when
+// the chat is saved again, and both are in the counts.
 import { createHash } from 'node:crypto';
 import { sql } from 'kysely';
 import type { Db } from '@crove/db';
 import { DomainError, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import type { SealedChannelCredential } from '@crove/kernel';
+import { CHAT_ALERT_PROVIDER, type SealedChatAlert } from '@crove/mod-social';
 
 const ACTOR: SystemActor = { type: 'system', component: 'kernel.channel.reseal' };
+const CHAT_ACTOR: SystemActor = { type: 'system', component: 'social.chat_alert.reseal' };
 export const RESEAL_SWEEP_MS = 10 * 60_000;
 const RESEAL_LIMIT = 200;
 // At most this many pages a pass; the rest waits for the next pass.
@@ -65,8 +71,13 @@ export async function resealCredentials(deps: ResealDeps): Promise<ResealOutcome
         if (!last || rows.length < RESEAL_LIMIT) break;
         after = { sealed: last.sealed_at, id: last.connection_id };
       }
+      const social = deps.runtime.installed('social');
+      if (social) await resealChatAlerts(deps, db, current, outcome);
       const { rows: counts } = await sql<{ key_id: string; active: string; inactive: string }>`SELECT key_id, active, inactive FROM crove_kernel.credential_key_counts()`.execute(db);
-      for (const c of counts) {
+      const { rows: chatCounts } = social
+        ? await sql<{ key_id: string; active: string; inactive: string }>`SELECT key_id, active, inactive FROM crove_social.chat_alert_target_key_counts()`.execute(db)
+        : { rows: [] };
+      for (const c of [...counts, ...chatCounts]) {
         if (c.key_id === current) continue;
         outcome.leftActive += Number(c.active);
         outcome.leftInactive += Number(c.inactive);
@@ -95,6 +106,50 @@ async function resealOne(deps: ResealDeps, row: { org_id: string; connection_id:
   const stored = await deps.runtime.execute<{ resealed: boolean }>(
     'kernel.channel.reseal',
     { connectionId: row.connection_id, fromKeyId: sealed.keyId, fromEnvelopeSha256: createHash('sha256').update(Buffer.from(sealed.envelope, 'base64')).digest('hex'), credential: { keyId: next.keyId, envelope: next.envelope.toString('base64') } },
+    options,
+  );
+  return stored.resealed;
+}
+
+// The team chat alert targets still under an older key, page after page as the credentials.
+async function resealChatAlerts(deps: ResealDeps, db: Db, current: string, outcome: ResealOutcome): Promise<void> {
+  let after = null as { sealed: Date; id: string } | null;
+  for (let page = 0; page < RESEAL_PAGES; page += 1) {
+    const { rows } = await sql<{ org_id: string; alert_id: string; key_id: string; sealed_at: Date }>`
+      SELECT org_id, alert_id, key_id, sealed_at FROM crove_social.chat_alert_target_reseal_due(${current}, ${RESEAL_LIMIT}::int, ${after?.sealed ?? null}::timestamptz, ${after?.id ?? null}::uuid)`.execute(db);
+    for (const row of rows) {
+      const done = await resealChatAlert(deps, row).catch((error: unknown) => {
+        // The alert id only: never the envelope or what it holds.
+        console.error(`[credential-reseal] chat alert ${row.alert_id.slice(0, 8)}`, error instanceof Error ? error.name : typeof error);
+        return false;
+      });
+      if (done) outcome.resealed += 1;
+      else outcome.failed += 1;
+    }
+    const last = rows.at(-1);
+    if (!last || rows.length < RESEAL_LIMIT) break;
+    after = { sealed: last.sealed_at, id: last.alert_id };
+  }
+}
+
+async function resealChatAlert(deps: ResealDeps, row: { org_id: string; alert_id: string }): Promise<boolean> {
+  const options = { actor: CHAT_ACTOR, orgId: row.org_id };
+  let sealed: SealedChatAlert;
+  try {
+    sealed = await deps.runtime.query<SealedChatAlert>('social.chat_alert.target', { alertId: row.alert_id }, options);
+  } catch (error) {
+    // The member who saved it is no longer an owner or admin, or it was removed since the scan: it reseals when saved again.
+    if (error instanceof DomainError) return false;
+    throw error;
+  }
+  const binding = { orgId: row.org_id, provider: CHAT_ALERT_PROVIDER, externalAccountId: sealed.id };
+  const envelope = Buffer.from(sealed.envelope, 'base64');
+  let secret: string | null = deps.broker.open({ keyId: sealed.keyId, envelope }, binding);
+  const next = deps.broker.seal(secret, binding);
+  secret = null;
+  const stored = await deps.runtime.execute<{ resealed: boolean }>(
+    'social.chat_alert.reseal',
+    { alertId: sealed.id, fromKeyId: sealed.keyId, fromEnvelopeSha256: createHash('sha256').update(envelope).digest('hex'), keyId: next.keyId, envelope: next.envelope.toString('base64') },
     options,
   );
   return stored.resealed;
