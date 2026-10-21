@@ -1334,6 +1334,7 @@ Superseded design (kept only so older references resolve): Crove-issued session 
   - spikes in `NOT_A_MEMBER` or RLS errors;
   - DDL outside the pipeline on the Crove DB (event trigger logging; Cloud adds pgaudit);
   - owner and admin grants in Crove (audit events), and, with DOS org sync later, role changes at DOS and projection drift found by reconcile.
+  - On `main` since #996: the worker alerts on one user acting in more than N orgs, on refusal spikes (the refusal tally) and on owner and admin grants, through the worker-only `crove_kernel.security_signals`, to the log and the prober's webhook ([alerts.md](../runbooks/alerts.md), "Security alerts"). Not yet: one worker context across orgs (system actors carry no instance in the audit rows), out-of-pipeline DDL.
 
 ### 7.9 DR, legal retention, PDPL, deletion, offboarding
 
