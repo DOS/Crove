@@ -188,8 +188,8 @@ export interface SettingChange {
 export function diffSettings(before: Readonly<Record<string, unknown>>, after: Readonly<Record<string, unknown>>): SettingChange[] {
   const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort();
   return keys.flatMap((key) => {
-    const a = Object.hasOwn(before, key) && before[key] !== undefined ? before[key] : undefined;
-    const b = Object.hasOwn(after, key) && after[key] !== undefined ? after[key] : undefined;
+    const a = Object.hasOwn(before, key) ? before[key] : undefined;
+    const b = Object.hasOwn(after, key) ? after[key] : undefined;
     if (a === undefined && b === undefined) return [];
     if (a !== undefined && b !== undefined && canonical(a) === canonical(b)) return [];
     return [{ key, before: a === undefined ? null : compactValue(a), after: b === undefined ? null : compactValue(b) }];
