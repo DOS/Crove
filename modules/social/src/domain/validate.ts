@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, REPLY_SETTINGS, LINKEDIN_VISIBILITY } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, LINKEDIN_VISIBILITY } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -130,6 +130,9 @@ export type IssueCode =
   | 'YT_TAGS_TOO_LONG'
   // Zalo OA (#943): settings.comments is set and is not true or false.
   | 'ZALO_COMMENTS_INVALID'
+  // Telegram (#982): settings.telegram on another channel; or not { silent?, pin? } with true or false values.
+  | 'TELEGRAM_NOT_SUPPORTED'
+  | 'TELEGRAM_INVALID'
   // WordPress (#981), settings.wordpress: set on another channel, or not an object; more than WORDPRESS_CATEGORIES_MAX
   // categories or WORDPRESS_TAGS_MAX tags (limit, actual); a name that is not text, is empty, holds < or >, or is over
   // WORDPRESS_TERM_MAX characters (field settings.wordpress.categories.<index> or .tags.<index>); an excerpt over
@@ -353,6 +356,12 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   // Zalo OA (#943): comments on the article, on when absent.
   if (variant.provider === 'zalo_oa' && variant.settings?.comments !== undefined && typeof variant.settings.comments !== 'boolean') {
     issues.push({ code: 'ZALO_COMMENTS_INVALID', field: 'settings.comments', limit: null, actual: null });
+  }
+  // Telegram (#982): a silent post and a pin, off when absent.
+  const telegram = telegramOptionsOf(variant.settings);
+  if (telegram !== null) {
+    if (variant.provider !== 'telegram') issues.push({ code: 'TELEGRAM_NOT_SUPPORTED', field: 'settings.telegram', limit: null, actual: null });
+    else if (telegram === 'invalid') issues.push({ code: 'TELEGRAM_INVALID', field: 'settings.telegram', limit: null, actual: null });
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkPollAndTag(issues, variant, caps);

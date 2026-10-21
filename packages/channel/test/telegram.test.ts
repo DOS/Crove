@@ -1,6 +1,6 @@
 // Telegram against recorded Bot API answers (shapes from core.telegram.org/bots/api); no live call.
 import { describe, expect, it } from 'vitest';
-import { checkTelegramChat, connectTelegram, sendTelegramText, telegramChatLogin, telegramChatTargetOf, telegramLogin, TelegramPublisher, telegramSecretOf, type Fetch, type PublishInput } from '../src/index.ts';
+import { checkTelegramChat, connectTelegram, sendTelegramText, telegramChatLogin, telegramChatTargetOf, telegramLogin, TELEGRAM_PIN_SCOPE, TelegramPublisher, telegramSecretOf, type Fetch, type PublishInput } from '../src/index.ts';
 
 const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw1';
 const CHAT = '-1001234567890';
@@ -50,6 +50,19 @@ describe('Telegram connect', () => {
     expect(calls.map((c) => c.method)).toEqual(['getMe', 'getChat', 'getChatMember']);
     expect(calls[1]?.json).toEqual({ chat_id: '@quanpho' });
     expect(calls[2]?.json).toEqual({ chat_id: -1001234567890, user_id: 987654321 });
+  });
+
+  it('reads whether the bot may pin (#982): in a channel that is the right to edit messages, or owning it', async () => {
+    const connect = (member: Record<string, unknown>) =>
+      connectTelegram(
+        { botToken: TOKEN, channel: '@quanpho' },
+        bot({ getMe: [ok({ id: 1, is_bot: true })], getChat: [ok({ id: -1001234567890, type: 'channel', title: 'Quán Phở' })], getChatMember: [ok(member)] }).fetchImpl,
+      );
+    expect((await connect({ status: 'administrator', can_post_messages: true, can_edit_messages: true })).scopes).toEqual([TELEGRAM_PIN_SCOPE]);
+    expect((await connect({ status: 'creator' })).scopes).toEqual([TELEGRAM_PIN_SCOPE]);
+    expect((await connect({ status: 'administrator', can_post_messages: true, can_edit_messages: false })).scopes).toEqual([]);
+    // can_pin_messages is a group's right: a channel's bot with it alone still may not pin.
+    expect((await connect({ status: 'administrator', can_post_messages: true, can_pin_messages: true })).scopes).toEqual([]);
   });
 
   it('refuses a malformed token or channel before any call', () => {
@@ -115,6 +128,35 @@ describe('Telegram publish', () => {
       { type: 'video', media: 'attach://file1' },
     ]);
     expect(form.get('file1')).toBeInstanceOf(Blob);
+  });
+
+  it('sends a silent post with disable_notification on every send call, and a post as usual without it (#982)', async () => {
+    const silent = { telegram: { silent: true } };
+    const text = bot({ sendMessage: [ok({ message_id: 1 })] });
+    await new TelegramPublisher(text.fetchImpl).publish(input({ settings: silent }));
+    expect(text.calls[0]?.json).toEqual({ chat_id: CHAT, text: 'Khai trương! Xem https://example.com/a', disable_notification: true });
+
+    const one = bot({ sendPhoto: [ok({ message_id: 2 })], sendVideo: [ok({ message_id: 3 })] });
+    const publisher = new TelegramPublisher(one.fetchImpl);
+    await publisher.publish(input({ settings: silent, content: { body: 'Món mới', title: null, linkUrl: null, media: [photo('f1')] } }));
+    await publisher.publish(input({ settings: silent, content: { body: '', title: null, linkUrl: null, media: [video('v1')] } }));
+    expect(one.calls.map((c) => [c.method, c.form?.get('disable_notification')])).toEqual([
+      ['sendPhoto', 'true'],
+      ['sendVideo', 'true'],
+    ]);
+
+    const album = bot({ sendMediaGroup: [ok([{ message_id: 4 }, { message_id: 5 }])] });
+    await new TelegramPublisher(album.fetchImpl).publish(input({ settings: silent, content: { body: 'Album', title: null, linkUrl: null, media: [photo('f1'), photo('f2')] } }));
+    expect(album.calls[0]?.form?.get('disable_notification')).toBe('true');
+
+    // Unset, false or a malformed value: nothing more is sent.
+    const usual = bot({ sendMessage: [ok({ message_id: 6 }), ok({ message_id: 7 })], sendPhoto: [ok({ message_id: 8 })], sendMediaGroup: [ok([{ message_id: 9 }])] });
+    const plain = new TelegramPublisher(usual.fetchImpl);
+    await plain.publish(input({ settings: { telegram: { silent: false, pin: true } } }));
+    await plain.publish(input({ settings: { telegram: 'silent' } }));
+    await plain.publish(input({ content: { body: 'Món mới', title: null, linkUrl: null, media: [photo('f1')] } }));
+    await plain.publish(input({ content: { body: 'Album', title: null, linkUrl: null, media: [photo('f1'), photo('f2')] } }));
+    expect(usual.calls.map((c) => (c.json ? 'disable_notification' in c.json : c.form?.has('disable_notification')))).toEqual([false, false, false, false]);
   });
 
   it('refuses what Telegram would refuse without calling it, and posts nothing when a file cannot be read', async () => {
@@ -206,6 +248,39 @@ describe('Telegram team alerts (#863)', () => {
     expect(telegramChatTargetOf(JSON.stringify({ botToken: TOKEN, chatId: '-4012345678' }))).toEqual({ botToken: TOKEN, chatId: '-4012345678' });
     expect(telegramChatTargetOf(JSON.stringify({ botToken: TOKEN, chatId: '@nhomshop' }))).toBeNull();
     expect(telegramChatTargetOf('not json')).toBeNull();
+  });
+});
+
+describe('Telegram pin (#982)', () => {
+  const pin = (fetchImpl: Fetch, over: { externalId?: string; silent?: boolean } = {}) =>
+    new TelegramPublisher(fetchImpl).pin({ externalAccountId: CHAT, secret: SECRET, externalId: over.externalId ?? `${CHAT}:42`, silent: over.silent ?? false, callKey: 'pin-1' });
+
+  it('pins the message named by the post id, silently when the post was silent', async () => {
+    const { fetchImpl, calls } = bot({ pinChatMessage: [ok(true), ok(true)] });
+    expect(await pin(fetchImpl)).toEqual({ kind: 'accepted', externalId: `${CHAT}:42` });
+    expect(await pin(fetchImpl, { silent: true })).toEqual({ kind: 'accepted', externalId: `${CHAT}:42` });
+    expect(calls).toEqual([
+      { method: 'pinChatMessage', token: TOKEN, json: { chat_id: CHAT, message_id: 42 }, form: null },
+      { method: 'pinChatMessage', token: TOKEN, json: { chat_id: CHAT, message_id: 42, disable_notification: true }, form: null },
+    ]);
+  });
+
+  it('says when the bot may not pin, and maps a revoked token and a server error', async () => {
+    const refused = bot({ pinChatMessage: [fail(400, 'Bad Request: not enough rights to manage pinned messages in the chat')] });
+    expect(await pin(refused.fetchImpl)).toEqual({ kind: 'rejected', error: 'permission', code: 'TELEGRAM_CANNOT_PIN', message: 'Bad Request: not enough rights to manage pinned messages in the chat' });
+    const admin = bot({ pinChatMessage: [fail(400, 'Bad Request: CHAT_ADMIN_REQUIRED')] });
+    expect(await pin(admin.fetchImpl)).toMatchObject({ kind: 'rejected', code: 'TELEGRAM_CANNOT_PIN' });
+    const revoked = bot({ pinChatMessage: [fail(401, 'Unauthorized')] });
+    expect(await pin(revoked.fetchImpl)).toEqual({ kind: 'rejected', error: 'token_expired', code: 'TELEGRAM_401', message: 'Unauthorized' });
+    const down = bot({ pinChatMessage: [fail(502, 'Bad Gateway')] });
+    expect(await pin(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'TELEGRAM_502' });
+  });
+
+  it('calls nothing for a post of another chat or without a bot token', async () => {
+    const none = bot({});
+    expect(await pin(none.fetchImpl, { externalId: '-1009999999999:42' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await new TelegramPublisher(none.fetchImpl).pin({ externalAccountId: CHAT, secret: '{}', externalId: `${CHAT}:42`, silent: false, callKey: 'pin-1' })).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    expect(none.calls).toHaveLength(0);
   });
 });
 

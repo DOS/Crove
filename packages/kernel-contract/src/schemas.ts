@@ -1190,6 +1190,8 @@ export const zSocialVariant = z.object({
   queueSlotAt: z.string().nullable(),
   // The first comment of a published channel (#587): pending, posted, failed, unknown; null without one.
   commentStatus: z.enum(['pending', 'posted', 'failed', 'reconnect', 'unknown']).nullable(),
+  // The pin of a published Telegram channel (#982): not_allowed when the bot may not pin there; null without one.
+  pinStatus: z.enum(['pending', 'pinned', 'failed', 'not_allowed', 'unknown']).nullable(),
   // The thread of a published channel (#742): parts out (the post is one) of the total, and the next part's state.
   threadStatus: z.object({ state: z.enum(['pending', 'posted', 'failed', 'unknown']), posted: z.number().int().min(1), total: z.number().int().min(2) }).nullable(),
   // Waiting on a slot of a queue a person paused.
