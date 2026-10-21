@@ -1,8 +1,8 @@
-# Runbook: the WORM archive of audit events and journal entries
+# Runbook: the WORM archive of audit events, journal entries and voucher numbers
 
 The audit and ledger tables refuse updates and deletes by trigger, but the database owner (`postgres`) can turn a trigger off. The WORM fact stream (plan §4.10, issue #891) is how such an edit is noticed. WORM means write once, read many.
 
-- **Archiver.** The worker copies the hash of every audit event and every journal entry (with its lines) into an archive that the database cannot change.
+- **Archiver.** The worker copies the hash of every audit event, every journal entry (with its lines), every voucher number and every voided purchase document into an archive that the database cannot change.
 - **Verifier.** Every night it compares the database with that archive.
 
 This runbook covers setting the archive up, reading its two alerts, and what to do about each one.
@@ -10,7 +10,10 @@ This runbook covers setting the archive up, reading its two alerts, and what to 
 ## How it works
 
 - **Batches.** Every minute, the worker cuts the rows that are not yet archived into batches. The rows of one batch span at most 5 minutes. A row is archived no earlier than `ARCHIVE_LAG_SECONDS` (default 600) after it is written, so a transaction that is still open is not cut off. The code is `apps/kernel/src/worm.ts`.
-- **What a batch holds.** References and hashes only: `audit:<id>` or `journal:<org>:<id>`, each with the SHA-256 of a fixed set of columns (`crove_kernel.archive_row_hashes`, migration `20261023230000`). It also holds a batch hash and a chain hash, which folds in the previous batch.
+- **What a batch holds.** References and hashes only, each with the SHA-256 of a fixed set of columns. It also holds a batch hash and a chain hash, which folds in the previous batch.
+  - Version 1 batches (#891): `audit:<id>` and `journal:<org>:<id>` (`crove_kernel.archive_row_hashes`, migration `20261023230000`).
+  - Version 2 batches (#977), written from migration `20261026230000` on: the same, plus `cash_voucher:<org>:<id>` (a PT, PC, BC or BN with its type, number, date, account and amount), `journal_voucher:<org>:<id>` (an NVK and its number) and `document_void:<org>:<document>` (a voided purchase document and its reversal entry), from `crove_kernel.archive_number_hashes`. A voucher keeps its number when its entry is reversed; the reversal is a journal entry that names the original.
+  - The first version 2 batch takes in every voucher and void made before it (its `numbersFrom` is the epoch); later batches take their own window. The verifier checks each batch with the version it was written with.
 - **Where batches go.** Each batch is written once to `chain/v1/<sequence>.json` in the archive store, then recorded in `crove_kernel.archive_batch`.
 - **The nightly check.** At 03:10 Vietnam time the verifier reads every batch back from the store, checks the chain, and recomputes every row hash from the database. The result goes to `crove_kernel.archive_verification`.
 - **How alerts reach you.** Both jobs fail loudly:
@@ -90,11 +93,12 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
 
 | Code | Meaning |
 |---|---|
-| `row_changed` | The row's columns differ from what was archived. For a journal entry, a line was edited, added or removed. |
+| `row_changed` | The row's columns differ from what was archived. For a journal entry, a line was edited, added or removed. For a `cash_voucher` or `journal_voucher`, its number, type, date or amount changed: a voucher was renumbered. |
 | `row_missing` | An archived row is no longer in the database (deleted, or lost to a restore). |
 | `row_added` | A row sits in a window that was already archived: it was inserted with a backdated time. |
 | `chain_broken`, `window_gap`, `batch_hash_mismatch`, `chain_hash_mismatch`, `object_unreadable`, `object_out_of_order` | A batch in the store was changed, removed or replaced. With `s3` and Object Lock this should be impossible; check the bucket's lock and access logs. |
 | `object_missing` | The database recorded a batch the store does not have. |
+| `version_regressed`, `numbers_gap` | A version 1 batch follows a version 2 one, or a version 2 batch does not take its numbers from where the last one stopped: a worker older than #977 wrote to the archive, or a batch was replaced. Voucher numbers in that stretch are not anchored. Find the deploy that ran the old worker. |
 | `record_mismatch` | `crove_kernel.archive_batch` disagrees with the store. The store is the authority. |
 
 **What to do**

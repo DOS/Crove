@@ -1,9 +1,15 @@
-// The WORM fact stream (plan §4.10, issue #891). The worker anchors every audit event and journal entry outside the
-// database, so an edit by the database owner (a trigger disabled, a row changed or deleted, a row backdated) shows:
+// The WORM fact stream (plan §4.10, issues #891 and #977). The worker anchors every audit event, journal entry, voucher
+// number and void outside the database, so an edit by the database owner (a trigger disabled, a row changed or
+// deleted, a row backdated, a voucher renumbered) shows:
 //   - writeArchive, every minute: cuts the rows not yet archived into windows whose rows span at most 5 minutes,
 //     stopping ARCHIVE_LAG_SECONDS before now so a transaction still open is not cut off. Each window becomes one
-//     batch: the version 1 hash of each row (crove_kernel.archive_row_hashes), a batch hash over them and a chain hash
-//     that folds in the previous batch. The batch is written once to the archive store, then recorded in the database.
+//     batch: the hash of each row, a batch hash over them and a chain hash that folds in the previous batch. The
+//     batch is written once to the archive store, then recorded in the database.
+//   - Batch versions: version 1 (#891) holds audit events and journal entries (crove_kernel.archive_row_hashes).
+//     Version 2 (#977) adds the voucher numbers and voids (crove_kernel.archive_number_hashes) created from
+//     `numbersFrom` to the end of its window: the epoch for the first version 2 batch, so it takes in every voucher
+//     and void made before the switch, and its own window's start for every later one. Each batch verifies with the
+//     version it was written with; a version 1 batch after a version 2 one means numbers went unanchored.
 //   - verifyArchive, nightly: reads every batch back from the store, checks the chain, and recomputes every row hash
 //     from the database. A changed, missing or added row, a broken chain, a window gap, or a store and database that
 //     disagree fail the run: the job fails without a retry, and the prober alerts on the dead letter.
@@ -183,9 +189,11 @@ export class S3ArchiveStore implements ArchiveStore {
 
 export interface ArchiveBatch {
   format: 'crove-archive';
-  version: 1;
+  version: 1 | 2;
   seq: number;
   window: { from: string; to: string };
+  // Version 2: where its voucher numbers and voids start (the epoch, or the window's start).
+  numbersFrom?: string;
   prevChainSha256: string;
   // [ref, row hash], sorted by ref.
   rows: Array<[string, string]>;
@@ -207,16 +215,31 @@ export function chainSha256(prev: string, seq: number, from: string, to: string,
 
 const byRef = (a: [string, string], b: [string, string]) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
 
-async function rowHashes(db: Db, from: string, to: string): Promise<Array<[string, string]>> {
+// The rows of a batch as the database holds them now: version 1 rows of the window, plus for version 2 the numbers and
+// voids from numbersFrom.
+async function rowHashes(db: Db, batch: Pick<ArchiveBatch, 'version' | 'window' | 'numbersFrom'>): Promise<Array<[string, string]>> {
+  const { from, to } = batch.window;
   const { rows } = await sql<{ ref: string; row_sha256: string }>`
     SELECT ref, row_sha256 FROM crove_kernel.archive_row_hashes(${from}::timestamptz, ${to}::timestamptz)`.execute(db);
-  return rows.map((r): [string, string] => [r.ref, r.row_sha256]).sort(byRef);
+  const numbers =
+    batch.version === 2
+      ? (
+          await sql<{ ref: string; row_sha256: string }>`
+            SELECT ref, row_sha256 FROM crove_kernel.archive_number_hashes(${batch.numbersFrom ?? from}::timestamptz, ${to}::timestamptz)`.execute(db)
+        ).rows
+      : [];
+  return [...rows, ...numbers].map((r): [string, string] => [r.ref, r.row_sha256]).sort(byRef);
 }
+
+// Where a version 2 batch's numbers start: the epoch when it is the first version 2 batch, its window's start after.
+const numbersFromAfter = (previous: ArchiveBatch | null, from: string) => (previous?.version === 2 ? from : EPOCH);
 
 function parseBatch(bytes: Uint8Array): ArchiveBatch | null {
   try {
     const value = JSON.parse(new TextDecoder().decode(bytes)) as ArchiveBatch;
-    return value && value.format === 'crove-archive' && value.version === 1 && Array.isArray(value.rows) ? value : null;
+    if (!value || value.format !== 'crove-archive' || !Array.isArray(value.rows)) return null;
+    if (value.version === 1) return value;
+    return value.version === 2 && typeof value.numbersFrom === 'string' ? value : null;
   } catch {
     return null;
   }
@@ -258,13 +281,17 @@ export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSe
     } else {
       const end = Math.min(next.horizon.getTime(), next.first_row_at.getTime() + ARCHIVE_WINDOW_MS);
       const to = new Date(end).toISOString();
-      const rows = await rowHashes(db, from, to);
+      // The head's batch tells whether this one is the first of version 2. When it cannot be read (the verifier reports
+      // that), this batch takes the numbers from the epoch again: anchoring a number twice loses nothing.
+      const previousBytes = head ? await store.get(archiveKey(seq - 1)) : null;
+      const previous = previousBytes ? parseBatch(previousBytes) : null;
+      const shape = { version: 2 as const, window: { from, to }, numbersFrom: numbersFromAfter(previous, from) };
+      const rows = await rowHashes(db, shape);
       const batchHash = batchSha256(rows);
       batch = {
         format: 'crove-archive',
-        version: 1,
+        ...shape,
         seq,
-        window: { from, to },
         prevChainSha256: prev,
         rows,
         batchSha256: batchHash,
@@ -301,7 +328,9 @@ export interface ArchiveProblem {
     | 'record_mismatch'
     | 'row_changed'
     | 'row_missing'
-    | 'row_added';
+    | 'row_added'
+    | 'version_regressed'
+    | 'numbers_gap';
   seq: number;
   ref?: string;
 }
@@ -329,6 +358,7 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
   const keys = await store.list(ARCHIVE_PREFIX);
   let prev = GENESIS_SHA256;
   let prevTo = EPOCH;
+  let previous: ArchiveBatch | null = null;
   let rowsChecked = 0;
   let seq = 0;
   for (const key of keys) {
@@ -345,6 +375,9 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     }
     if (batch.prevChainSha256 !== prev) note({ code: 'chain_broken', seq });
     if (batch.window.from !== prevTo) note({ code: 'window_gap', seq });
+    // Numbers are anchored from the first version 2 batch on, each from where the last one stopped.
+    if (batch.version < (previous?.version ?? 1)) note({ code: 'version_regressed', seq });
+    if (batch.version === 2 && batch.numbersFrom !== numbersFromAfter(previous, batch.window.from)) note({ code: 'numbers_gap', seq });
     const batchHash = batchSha256(batch.rows);
     if (batchHash !== batch.batchSha256) note({ code: 'batch_hash_mismatch', seq });
     if (chainSha256(batch.prevChainSha256, seq, batch.window.from, batch.window.to, batch.batchSha256) !== batch.chainSha256) {
@@ -360,7 +393,7 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     }
 
     const archived = new Map(batch.rows);
-    const current = await rowHashes(db, batch.window.from, batch.window.to);
+    const current = await rowHashes(db, batch);
     rowsChecked += current.length;
     for (const [ref, hash] of current) {
       const kept = archived.get(ref);
@@ -372,6 +405,7 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
 
     prev = batch.chainSha256;
     prevTo = batch.window.to;
+    previous = batch;
   }
   // Batches the database recorded that the store does not have.
   for (const recordedSeq of recorded.keys()) if (recordedSeq > seq) note({ code: 'object_missing', seq: recordedSeq });
