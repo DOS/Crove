@@ -540,8 +540,6 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_social.brand_voice': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), description: 'RLS matrix voice', updated_by: o.owner } }) },
   // A private calendar feed of the org's posts (#862): the SHA-256 of its token, who made it, its revocation.
   'crove_social.calendar_feed': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), token_sha256: hex64(), created_by: o.owner } }) },
-  // The org's team chat for Social alerts (#863): a Telegram or Discord target, sealed, and the kinds it gets.
-  'crove_social.chat_alert': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), kind: 'discord', key_id: 'rls-matrix', envelope: '\\x00', events: '{needs_approval}', updated_by: o.owner } }) },
   // A team's note on calendar dates (#794): a title over one day or a range, with a colour from the app's palette.
   'crove_social.calendar_note': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), starts_on: '2026-10-20', ends_on: '2026-10-22', title: 'RLS matrix note', created_by: o.owner, updated_by: o.owner } }) },
   // The review policy of a channel (S9, issue #394): how many people approve a variant, and whether its reviewers
@@ -557,6 +555,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // A saved set of channels for the composer (#774): a name and the connections it picks.
   'crove_social.channel_set': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: `RLS matrix set ${randomUUID().slice(0, 6)}`, updated_by: o.owner } }) },
+  // The org's team chat for Social alerts (#863): a Telegram or Discord target, sealed, and the kinds it gets.
+  'crove_social.chat_alert': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), kind: 'discord', key_id: 'rls-matrix', envelope: '\\x00', events: '{needs_approval}', updated_by: o.owner } }) },
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
   // An org's label for posts (#639): a name and a colour from the app's palette.
   // A blog feed an org drafts posts from (#708).
