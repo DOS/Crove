@@ -34,6 +34,7 @@ export * from './review-inbox.ts';
 export * from './attention-inbox.ts';
 export * from './auto-reply.ts';
 export * from './repost.ts';
+export * from './remove.ts';
 export * from './accounts.ts';
 export * from './link-preview.ts';
 export * from './notifications.ts';

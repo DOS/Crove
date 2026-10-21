@@ -17,7 +17,8 @@ export type VariantStatus =
   | 'ambiguous'
   | 'needs_attention'
   | 'paused'
-  | 'cancelled';
+  | 'cancelled'
+  | 'removed';
 
 type Tone = 'secondary' | 'brand' | 'success' | 'warning' | 'destructive' | 'outline';
 
@@ -36,6 +37,7 @@ export const VARIANT_TONE: Record<VariantStatus, Tone> = {
   needs_attention: 'destructive',
   paused: 'warning',
   cancelled: 'outline',
+  removed: 'outline',
 };
 
 // Short names of the providers, the same in every language.

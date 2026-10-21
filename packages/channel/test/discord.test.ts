@@ -204,3 +204,35 @@ describe('Discord publish', () => {
     expect(seen).toEqual(['discord.com', 'discord.com', 'discord.com']);
   });
 });
+
+describe('Discord remove (#860)', () => {
+  const MESSAGE = '1234567890123456790';
+  const remove = (fetchImpl: Fetch, externalId = MESSAGE) => new DiscordPublisher(fetchImpl).remove({ externalAccountId: HOOK, secret: SECRET, externalId });
+
+  it('deletes the webhook message, answered 204', async () => {
+    const { fetchImpl, calls } = discord([{ status: 204, body: undefined }]);
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.method, c.url.toString()])).toEqual([['DELETE', `https://discord.com/api/v10/webhooks/${HOOK}/${TOKEN}/messages/${MESSAGE}`]]);
+  });
+
+  it('counts an unknown message as removed, but an unknown webhook needs connecting again', async () => {
+    const gone = discord([fail(404, 10008, 'Unknown Message')]);
+    expect(await remove(gone.fetchImpl)).toEqual({ kind: 'removed' });
+    const hook = discord([fail(404, 10015, 'Unknown Webhook')]);
+    expect(await remove(hook.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'DISCORD_10015' });
+  });
+
+  it('maps a changed token, a rate limit and a server error, and calls nothing for a malformed id', async () => {
+    const changed = discord([fail(401, 50027, 'Invalid Webhook Token')]);
+    expect(await remove(changed.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    const limited = discord([fail(429, 0, 'You are being rate limited.', { retry_after: 1.5 })]);
+    const answer = await remove(limited.fetchImpl);
+    expect(answer).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    expect(answer.kind === 'rejected' && answer.retryAt instanceof Date).toBe(true);
+    const down = discord([{ status: 502, body: { code: 0, message: 'Bad Gateway' } }]);
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'DISCORD_502' });
+    const none = discord([]);
+    expect(await remove(none.fetchImpl, '../../x')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(none.calls).toHaveLength(0);
+  });
+});

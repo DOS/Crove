@@ -289,3 +289,35 @@ describe('X followers (#819)', () => {
     expect(await publisher.accountMetrics?.({ externalAccountId: USER, secret: SECRET })).toBeNull();
   });
 });
+
+describe('X remove (#860)', () => {
+  const POST = '1445880548472328192';
+  const DELETE = `DELETE api.x.com/2/tweets/${POST}`;
+  const remove = (fetchImpl: Fetch, externalId = POST) => new XPublisher(APP, fetchImpl).remove({ externalAccountId: USER, secret: SECRET, externalId });
+
+  it('deletes the post with the account token', async () => {
+    const { fetchImpl, calls } = x({ [DELETE]: [{ body: { data: { deleted: true } } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.route, c.headers.get('authorization')])).toEqual([[DELETE, 'Bearer x-access-1']]);
+  });
+
+  it('counts a post X no longer has as removed, and an answer that deleted nothing as unclear', async () => {
+    const gone = x({ [DELETE]: [{ status: 404, body: { title: 'Not Found Error', detail: 'Could not find tweet', type: 'https://api.x.com/2/problems/resource-not-found' } }] });
+    expect(await remove(gone.fetchImpl)).toEqual({ kind: 'removed' });
+    const kept = x({ [DELETE]: [{ body: { data: { deleted: false } } }] });
+    expect(await remove(kept.fetchImpl)).toEqual({ kind: 'unknown', code: 'NOT_DELETED' });
+  });
+
+  it('maps an expired token, a rate limit and a server error, and calls nothing for a malformed id', async () => {
+    const expired = x({ [DELETE]: [{ status: 401, body: { title: 'Unauthorized', type: 'about:blank', status: 401, detail: 'Unauthorized' } }] });
+    expect(await remove(expired.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    const reset = Math.floor(Date.now() / 1000) + 900;
+    const limited = x({ [DELETE]: [{ status: 429, body: { title: 'Too Many Requests', type: 'about:blank', status: 429 }, headers: { 'x-rate-limit-reset': String(reset) } }] });
+    expect(await remove(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited', retryAt: new Date(reset * 1000) });
+    const down = x({ [DELETE]: [{ status: 503, body: { title: 'Service Unavailable', type: 'about:blank', status: 503 } }] });
+    expect(await remove(down.fetchImpl)).toMatchObject({ kind: 'unknown' });
+    const none = x({});
+    expect(await remove(none.fetchImpl, 'not-a-post')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(none.calls).toHaveLength(0);
+  });
+});

@@ -33,10 +33,12 @@ function Chip({ item, slug, name, draggable }: { item: CalendarItem; slug: strin
       params={{ slug, id: item.post.id }}
       draggable={draggable}
       onDragStart={draggable ? onDragStart : undefined}
-      title={`${f.time(item.at.toISOString())} · ${providerName(item.v.provider)}${name ? ` · ${name}` : ''}${item.planned ? ` · ${t('calendar.planned')}` : ''}`}
+      title={`${f.time(item.at.toISOString())} · ${providerName(item.v.provider)}${name ? ` · ${name}` : ''}${item.planned ? ` · ${t('calendar.planned')}` : ''}${item.v.status === 'removed' ? ` · ${t('status.removed')}` : ''}`}
       className={cn(
         'block truncate rounded-md border px-1.5 py-0.5 text-xs text-foreground transition-colors hover:border-ring/60',
         item.planned ? 'border-dashed bg-background text-muted-foreground' : 'bg-card',
+        // Taken down from its platform (#860): still on its day, struck through.
+        item.v.status === 'removed' && 'text-muted-foreground line-through',
         draggable && 'cursor-grab active:cursor-grabbing',
       )}
     >

@@ -752,6 +752,8 @@ export const SOCIAL_VARIANT_STATUSES = [
   'needs_attention',
   'paused',
   'cancelled',
+  // Taken down from its platform (#860).
+  'removed',
 ] as const;
 export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
 export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
@@ -881,6 +883,11 @@ export const zSocialVariant = z.object({
   attempt: z.number().int(),
   externalUrl: z.string().nullable(),
   publishedAt: z.string().nullable(),
+  // Taken down from its platform (#860): when, who asked and why; removal: where an ask on a published channel stands.
+  removedAt: z.string().nullable(),
+  removedBy: zId.nullable(),
+  removeReason: z.string().nullable(),
+  removal: z.object({ state: z.enum(['pending', 'failed', 'unknown']), code: z.string().nullable() }).nullable(),
   error: z
     .object({ kind: z.string().nullable(), code: z.string().nullable(), action: z.string().nullable(), message: z.string().nullable(), retryAt: z.string().nullable() })
     .nullable(),
@@ -1027,7 +1034,7 @@ export const zSocialReviewLinks = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),

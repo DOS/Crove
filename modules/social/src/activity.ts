@@ -119,6 +119,8 @@ export const ACTIVITY_KINDS = [
   // The repost when a post takes off (#773): made, or not (its code says why).
   'reposted',
   'repost_failed',
+  // Taken down from its platform (#860), by the member who asked, with their reason.
+  'removed',
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
@@ -168,7 +170,7 @@ export const postActivity = defineQuery({
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
     const variants = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at'])
+      .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at', 'removed_at', 'removed_by', 'remove_reason'])
       .where('org_id', '=', ctx.orgId)
       .where('post_id', '=', post.id)
       .execute();
@@ -229,6 +231,10 @@ export const postActivity = defineQuery({
       })),
       ...variants.flatMap((v): ActivityItem[] => {
         if (v.status === 'published' && v.published_at) return [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id, url: v.external_url }];
+        if (v.status === 'removed' && v.removed_at) {
+          const removed: ActivityItem = { ...none, id: `removed:${v.id}`, kind: 'removed', at: v.removed_at.toISOString(), userId: v.removed_by, variantId: v.id, body: v.remove_reason };
+          return v.published_at ? [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id }, removed] : [removed];
+        }
         if (v.status === 'failed' || v.status === 'needs_attention') return [{ ...none, id: `failed:${v.id}`, kind: 'failed', at: v.updated_at.toISOString(), variantId: v.id, code: v.error_code }];
         if (v.status === 'cancelled') return [{ ...none, id: `cancelled:${v.id}`, kind: 'cancelled', at: v.updated_at.toISOString(), variantId: v.id }];
         return [];
