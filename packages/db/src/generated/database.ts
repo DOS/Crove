@@ -18,6 +18,7 @@ export interface CroveFinanceSchema {
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
+  'crove_finance.journal_voucher': FinanceJournalVoucherTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
   'crove_finance.period_lock': FinancePeriodLockTable;
   'crove_finance.portal_invoice_list': FinancePortalInvoiceListTable;
@@ -169,6 +170,18 @@ export interface FinanceJournalLineTable {
   credit: ColumnType<string, NotGranted, NotGranted>;
   party_id: ColumnType<string | null, NotGranted, NotGranted>;
   memo: ColumnType<string | null, NotGranted, NotGranted>;
+}
+
+/** crove_finance.journal_voucher */
+export interface FinanceJournalVoucherTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  number: ColumnType<number, number, NotGranted>;
+  voucher_date: ColumnType<string, string, NotGranted>;
+  description: ColumnType<string, string, NotGranted>;
+  proposal_id: ColumnType<string | null, string | null, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_finance.org_account */
