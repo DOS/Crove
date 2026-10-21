@@ -151,6 +151,52 @@ describe('ThreadsPublisher', () => {
     expect(none.calls).toHaveLength(0);
   });
 
+  it('sends who may reply as reply_control on the published container, nothing for everyone, and refuses an unknown value before any call (#983)', async () => {
+    const ids = ['9301', '9302', '9303', '9304', '9305', '9306', '9307', '9308'];
+    const { fetchImpl, calls } = threads({
+      [`POST /v1.0/${USER}/threads`]: ids.map((id) => ({ body: { id } })),
+      ...Object.fromEntries(ids.map((id) => [`GET /v1.0/${id}`, [{ body: { status: 'FINISHED' } }]])),
+      [`POST /v1.0/${USER}/threads_publish`]: ids.map((_, i) => ({ body: { id: `1810000000000030${i}` } })),
+      ...Object.fromEntries(ids.map((_, i) => [`GET /v1.0/1810000000000030${i}`, [{ body: {} }]])),
+    });
+    const publisher = new ThreadsPublisher(fetchImpl, fast);
+    const creates = () => calls.filter((c) => c.route === `POST /v1.0/${USER}/threads`).map((c) => c.form);
+    // Everyone, said or not, sends exactly what was sent before the setting existed.
+    await publisher.publish(input({ settings: { replySettings: 'everyone' } }));
+    await publisher.publish(input({ settings: { replySettings: 'following' } }));
+    await publisher.publish(input({ settings: { replySettings: 'mentionedUsers' } }));
+    await publisher.publish(input({ settings: { replySettings: 'followers' } }));
+    expect(creates()).toEqual([
+      { media_type: 'TEXT', text: 'Khai trương!' },
+      { media_type: 'TEXT', text: 'Khai trương!', reply_control: 'accounts_you_follow' },
+      { media_type: 'TEXT', text: 'Khai trương!', reply_control: 'mentioned_only' },
+      { media_type: 'TEXT', text: 'Khai trương!', reply_control: 'followers_only' },
+    ]);
+    // An image, and a carousel: on the carousel's container, not its items.
+    const one = { body: 'Ảnh', title: null, linkUrl: null, media: [{ fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 10, altText: null }] };
+    await publisher.publish(input({ content: one, settings: { replySettings: 'followers' } }));
+    const two = { ...one, media: [...one.media, { fileId: 'f-2', mime: 'video/mp4', sizeBytes: 10, altText: null }] };
+    await publisher.publish(input({ content: two, settings: { replySettings: 'mentionedUsers' } }));
+    expect(creates().slice(4)).toEqual([
+      { media_type: 'IMAGE', image_url: 'https://bucket.example/f-1', text: 'Ảnh', reply_control: 'followers_only' },
+      { media_type: 'IMAGE', image_url: 'https://bucket.example/f-1', is_carousel_item: 'true' },
+      { media_type: 'VIDEO', video_url: 'https://bucket.example/f-2', is_carousel_item: 'true' },
+      { media_type: 'CAROUSEL', children: '9306,9307', text: 'Ảnh', reply_control: 'mentioned_only' },
+    ]);
+
+    // Nothing at all goes out, the quota read included.
+    let fetched = 0;
+    const none = threads({});
+    const refused = new ThreadsPublisher(async (url, init) => {
+      fetched += 1;
+      return none.fetchImpl(url, init);
+    }, fast);
+    for (const replySettings of ['accounts_you_follow', 'verified', 'toString', 3]) {
+      expect(await refused.publish(input({ settings: { replySettings } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'REPLY_SETTINGS_INVALID' });
+    }
+    expect(fetched).toBe(0);
+  });
+
   it('makes a carousel of images, and refuses without image URLs before creating anything', async () => {
     const { fetchImpl, calls } = threads({
       [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }, { body: { id: '9003' } }],

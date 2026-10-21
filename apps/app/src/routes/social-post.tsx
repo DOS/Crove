@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, X_REPLY_SETTINGS, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, REPLY_SETTINGS, LINKEDIN_VISIBILITY, replySettingOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -228,17 +228,18 @@ function ProviderSettings({ provider, settings, onChange, disabled, inboxOffered
       </div>
     );
   }
-  // X (#948): who may reply; everyone unless chosen.
-  if (provider === 'x') {
+  // X (#948) and Threads (#983): who may reply; everyone unless chosen. One field, each channel's own choices.
+  const replyChoices = isProvider(provider) ? REPLY_SETTINGS[provider] : undefined;
+  if (replyChoices) {
     const current = typeof settings.replySettings === 'string' ? settings.replySettings : 'everyone';
-    const known = (X_REPLY_SETTINGS as readonly string[]).includes(current);
+    const known = (replyChoices as readonly string[]).includes(current);
     return (
       <div className="space-y-1.5">
-        <Label htmlFor="x-reply-settings" className="text-xs">
-          {t('xReplySettings')}
+        <Label htmlFor={`${provider}-reply-settings`} className="text-xs">
+          {t('replySettings')}
         </Label>
         <NativeSelect
-          id="x-reply-settings"
+          id={`${provider}-reply-settings`}
           size="sm"
           className="w-full max-w-xs"
           value={current}
@@ -249,9 +250,39 @@ function ProviderSettings({ provider, settings, onChange, disabled, inboxOffered
           }}
         >
           {!known && <NativeSelectOption value={current}>{current}</NativeSelectOption>}
-          {X_REPLY_SETTINGS.map((v) => (
+          {replyChoices.map((v) => (
             <NativeSelectOption key={v} value={v}>
-              {t(`xReplySettingsOption.${v}`)}
+              {t(`replySettingsOption.${v}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+    );
+  }
+  // LinkedIn (#983): who sees the post; anyone unless chosen.
+  if (provider === 'linkedin') {
+    const current = typeof settings.visibility === 'string' ? settings.visibility : 'public';
+    const known = (LINKEDIN_VISIBILITY as readonly string[]).includes(current);
+    return (
+      <div className="space-y-1.5">
+        <Label htmlFor="linkedin-visibility" className="text-xs">
+          {t('linkedinVisibility')}
+        </Label>
+        <NativeSelect
+          id="linkedin-visibility"
+          size="sm"
+          className="w-full max-w-xs"
+          value={current}
+          disabled={disabled}
+          onChange={(e) => {
+            const { visibility: _gone, ...rest } = settings;
+            onChange(e.target.value === 'public' ? rest : { ...rest, visibility: e.target.value });
+          }}
+        >
+          {!known && <NativeSelectOption value={current}>{current}</NativeSelectOption>}
+          {LINKEDIN_VISIBILITY.map((v) => (
+            <NativeSelectOption key={v} value={v}>
+              {t(`linkedinVisibilityOption.${v}`)}
             </NativeSelectOption>
           ))}
         </NativeSelect>
@@ -1050,7 +1081,8 @@ function ChannelEditor({
   const poll = pollOptionsOf(own.settings);
   const pollRule = isProvider(provider) ? POLL_RULES[provider] : undefined;
   const pollMinutes = pollDurationOf(own.settings);
-  const replySettings = provider === 'x' && (own.settings.replySettings === 'following' || own.settings.replySettings === 'mentionedUsers') ? (own.settings.replySettings as 'following' | 'mentionedUsers') : null;
+  const replySettings = replySettingOf(provider, own.settings);
+  const linkedinVisibility = provider === 'linkedin' && (own.settings.visibility === 'connections' || own.settings.visibility === 'loggedIn') ? (own.settings.visibility as 'connections' | 'loggedIn') : null;
   const tag = topicTagOf(own.settings);
   const content = {
     body: own.custom ? own.body : base.body,
@@ -1063,6 +1095,7 @@ function ChannelEditor({
     ...(Array.isArray(poll) && pollRule?.duration ? { pollMinutes: typeof pollMinutes === 'number' ? pollMinutes : pollRule.duration.default } : {}),
     ...(typeof tag === 'string' && tag ? { topicTag: tag } : {}),
     ...(replySettings ? { replySettings } : {}),
+    ...(linkedinVisibility ? { visibility: linkedinVisibility } : {}),
   };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
