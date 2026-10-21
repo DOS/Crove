@@ -584,14 +584,14 @@ read_registry_password() {
 }
 
 do_deploy() {
-  local release="" image="" extract="" compose="" build=""
+  local release="" image="" extract="" compose="" build="" build_given=0
   while (($# > 0)); do
     case "$1" in
       --release) release="${2:-}"; shift 2 ;;
       --image) image="${2:-}"; shift 2 ;;
       --extract-image) extract="${2:-}"; shift 2 ;;
       --compose) compose="${2:-}"; shift 2 ;;
-      --build) build="${2:-}"; shift 2 ;;
+      --build) build="${2:-}"; build_given=1; shift 2 ;;
       *)
         common_option "$@"
         ((OPT_SHIFT > 0)) || die "$EXIT_USAGE" "unknown option $1"
@@ -603,7 +603,7 @@ do_deploy() {
   valid_image "$image" || die "$EXIT_USAGE" "--image must be pinned by digest (name@sha256:...): '$image'"
   valid_image "$extract" || die "$EXIT_USAGE" "--extract-image must be pinned by digest (name@sha256:...): '$extract'"
   [ -f "$compose" ] || die "$EXIT_USAGE" "--compose file not found: '$compose'"
-  [ -z "$build" ] || valid_build "$build" || die "$EXIT_USAGE" "--build must match [A-Za-z0-9._-]{1,64}: '$build'"
+  ((build_given == 0)) || valid_build "$build" || die "$EXIT_USAGE" "--build must match [A-Za-z0-9._-]{1,64}: '$build'"
   read_registry_password
   preflight
   acquire_lock

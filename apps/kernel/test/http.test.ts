@@ -228,10 +228,22 @@ describe('GET /version', () => {
     expect(await behind.json()).toEqual({ build: 'dev', migrationsMissing: ['20260102000000_crove_kernel_second.sql'] });
   });
 
-  it('answers 503 with the build when the database cannot be reached', async () => {
+  it('answers 503 with the build when the database cannot be reached or the ledger read fails', async () => {
     const down = await app({ CROVE_BUILD: 'v1.2.3' }, { connect: async () => Promise.reject(new Error('refused')) } as unknown as Partial<pg.Pool>).request('/version');
     expect(down.status).toBe(503);
     expect(await down.json()).toEqual({ build: 'v1.2.3', migrationsMissing: null });
+    const lost = Object.assign(new Error('Connection terminated unexpectedly'), { code: '57P01' });
+    const dropped = { connect: async () => ({ query: async () => Promise.reject(lost), release: () => undefined }) } as unknown as Partial<pg.Pool>;
+    const midway = await app({ CROVE_BUILD: 'v1.2.3' }, dropped).request('/version');
+    expect(midway.status).toBe(503);
+    expect(await midway.json()).toEqual({ build: 'v1.2.3', migrationsMissing: null });
+    // A database no migration has run on misses every migration.
+    const fresh = Object.assign(new Error('relation "crove_meta.schema_migrations" does not exist'), { code: '42P01' });
+    const empty = { connect: async () => ({ query: async () => Promise.reject(fresh), release: () => undefined }) } as unknown as Partial<pg.Pool>;
+    expect(await (await app({}, empty).request('/version')).json()).toEqual({
+      build: 'dev',
+      migrationsMissing: ['20260101000000_crove_kernel_first.sql', '20260102000000_crove_kernel_second.sql'],
+    });
   });
 
   it('takes a build id of letters, digits, dot, dash and underscore only', () => {

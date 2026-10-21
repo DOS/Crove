@@ -160,10 +160,12 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
       expect(back.out).toContain(`smoke ok: /version answers build ${build('a')} with every migration applied`);
     });
 
-    it('refuses a build id with other characters', () => {
-      const res = run(['deploy', '--release', 'v1.0.0', '--image', image('a'), '--extract-image', extract('a'), '--compose', compose, '--build', "a'b"]);
-      expect(res.status).toBe(2);
-      expect(res.out).toContain('--build must match');
+    it('refuses a build id with other characters, or an empty one', () => {
+      for (const id of ["a'b", '']) {
+        const res = run(['deploy', '--release', 'v1.0.0', '--image', image('a'), '--extract-image', extract('a'), '--compose', compose, '--build', id]);
+        expect(res.status, id).toBe(2);
+        expect(res.out).toContain('--build must match');
+      }
     });
   });
 
