@@ -7,6 +7,11 @@ import { VAT_FILING_PERIODS } from './vat-deadline.ts';
 export const zId = z.uuid();
 // At most 16 integer digits, the size of the numeric(20,4) money columns.
 export const zMoney = z.string().regex(/^-?\d{1,16}(\.\d{1,8})?$/, 'decimal string');
+// VND per unit of a foreign currency (#918): positive, up to 10 decimals (FX_RATE_SCALE in @crove/mod-finance).
+export const zExchangeRate = z
+  .string()
+  .regex(/^\d{1,13}(\.\d{1,10})?$/, 'decimal string')
+  .refine((v) => /[1-9]/.test(v), 'positive');
 // YYYY-MM-DD that names a real day, year 0001 or later (PostgreSQL rejects year 0000 in date input).
 // Never throws (toISOString() does on an Invalid Date).
 export function isCalendarDate(value: string): boolean {
@@ -30,6 +35,8 @@ export const zSlug = z.string().regex(/^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/);
 // code it does not know.
 export const INVOICE_CHECK_CODES = [
   'currency.unsupported',
+  'currency.converted',
+  'currency.rate_entered',
   'lines_sum.ok',
   'lines_sum.mismatch',
   'total.ok',
@@ -166,6 +173,21 @@ export const zPurchaseProposal = z.object({
     // (điều chỉnh). documentId is the original's document when extraction found it in force; recording looks it up
     // again. Absent on every other invoice.
     related: zRelatedInvoiceRef.optional(),
+    // A foreign-currency invoice booked in VND (#918): currency stays the invoice's, every amount above, the lines and
+    // the journal are in VND at this rate, and these are the invoice's own totals. rate comes from the e-invoice XML
+    // (source 'invoice') or from the accountant's revision (source 'entered'). Absent on VND invoices, and on a
+    // foreign-currency proposal still waiting for its rate (its amounts are then the invoice's, and it cannot be
+    // recorded).
+    foreign: z
+      .object({
+        currency: z.string().regex(/^[A-Z]{3}$/),
+        rate: zExchangeRate,
+        source: z.enum(['invoice', 'entered']),
+        subtotal: zMoney,
+        vatTotal: zMoney,
+        total: zMoney,
+      })
+      .optional(),
   }),
   lines: z.array(zProposedLine).min(1).max(1000),
   journal: z.array(zJournalLineDraft).min(2).max(1010),
@@ -624,6 +646,8 @@ export const zPurchaseDocument = z.object({
   voided: z.object({ reversalEntryId: zId, reason: z.string(), voidedAt: z.string() }).nullable(),
   // The voided document of the same invoice that this one replaces, when the invoice was recorded again.
   replacesDocumentId: zId.nullable(),
+  // An invoice in a foreign currency (#918): the amounts above are in VND at this rate; total is the invoice's own.
+  foreign: z.object({ currency: z.string(), rate: z.string(), source: z.enum(['invoice', 'entered']), total: zMoney }).nullable(),
 });
 
 const zEntryRef = z.object({ id: zId, entryDate: zLocalDate });

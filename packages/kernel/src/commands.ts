@@ -9,6 +9,7 @@ import {
   VOUCHER_TYPES,
   zAccountCode,
   zBulkApproveItems,
+  zExchangeRate,
   zId,
   zLocalDate,
   zProposalSignature,
@@ -463,7 +464,10 @@ function changesContent(payload: unknown, lineAccounts: z.infer<typeof zLineAcco
 export const editProposal = defineCommand({
   name: 'kernel.proposal.edit',
   proposalEditor: true,
-  input: z.object({ id: zId, revision: z.number().int().positive(), lineAccounts: zLineAccounts.min(1) }),
+  // lineAccounts, an exchangeRate for a foreign-currency invoice read without one (#918), or both.
+  input: z
+    .object({ id: zId, revision: z.number().int().positive(), lineAccounts: zLineAccounts.min(1).optional(), exchangeRate: zExchangeRate.optional() })
+    .refine((v) => v.lineAccounts !== undefined || v.exchangeRate !== undefined, 'lineAccounts or exchangeRate'),
   risk: 'R1',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.proposal', id: input.id }),
@@ -478,7 +482,7 @@ export const editProposal = defineCommand({
     if (!authors) throw new DomainError('NOT_EDITABLE', 422, 'Đề xuất thiếu thông tin người soạn nên không chỉnh sửa được');
     const revised = await ctx.run<{ changed: boolean; payload: unknown }>(
       reviser,
-      { payload: proposal.payload, lineAccounts: input.lineAccounts },
+      { payload: proposal.payload, lineAccounts: input.lineAccounts ?? [], ...(input.exchangeRate ? { exchangeRate: input.exchangeRate } : {}) },
       { proposalId: proposal.id },
     );
     if (!revised.changed) return { revision: proposal.revision, changed: false };

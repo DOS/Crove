@@ -297,6 +297,11 @@ export interface FinancePurchaseDocumentTable {
   corrected_series: ColumnType<string | null, string | null, NotGranted>;
   corrected_number: ColumnType<string | null, string | null, NotGranted>;
   corrected_date: ColumnType<string | null, string | null, NotGranted>;
+  exchange_rate: ColumnType<string | null, string | null, NotGranted>;
+  exchange_rate_source: ColumnType<string | null, string | null, NotGranted>;
+  foreign_subtotal: ColumnType<string | null, string | null, NotGranted>;
+  foreign_vat_amount: ColumnType<string | null, string | null, NotGranted>;
+  foreign_total: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_finance.purchase_document_void */

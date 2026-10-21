@@ -18,6 +18,9 @@ export function invoiceCheckMessage(check: Check, t: Translate, money: (amount: 
   switch (code) {
     case 'currency.unsupported':
       return has('currency') ? t('invoiceChecks.currency.unsupported', { currency: p.currency ?? '' }) : check.message;
+    case 'currency.converted':
+    case 'currency.rate_entered':
+      return has('currency', 'rate') ? t(`invoiceChecks.${code}`, { currency: p.currency ?? '', rate: p.rate ?? '' }) : check.message;
     case 'lines_sum.mismatch':
       return has('lines', 'subtotal') ? t('invoiceChecks.lines_sum.mismatch', { lines: money(p.lines ?? ''), subtotal: money(p.subtotal ?? '') }) : check.message;
     case 'seller_tax_code.checksum':

@@ -8,6 +8,7 @@ import { zId, zLocalDate, zPurchaseProposal, zRelatedInvoiceRef, type DocumentDi
 import { defineQuery, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type InvoiceReader } from '@crove/agent';
 import { journalMemo } from './memo.ts';
+import { BOOK_CURRENCY, convertInvoice, type ForeignAmounts } from './domain/foreign-currency.ts';
 import { isOwnTaxCode } from './own-tax-code.ts';
 import {
   bookableLines,
@@ -15,7 +16,10 @@ import {
   buildPurchaseJournal,
   buildSalesJournal,
   checkInvoice,
+  invoiceExchangeRate,
+  lineContribution,
   looksLikeEInvoiceXml,
+  money,
   parseTaxCode,
   type InvoiceCheck,
   type ParsedInvoice,
@@ -285,6 +289,22 @@ async function readInvoice(
 // The invoice's own VAT table (#685), from e-invoice XML only: the VAT working splits the invoice by rate with it. A
 // table the proposal cannot hold (a rate longer than a line's, an amount out of range) is left out rather than failing
 // the extraction; the VAT working then estimates the split from the lines, as for a PDF.
+// The invoice in VND when it is in another currency with its own exchange rate (#918), else null.
+function bookedInVnd(invoice: ParsedInvoice): { invoice: ParsedInvoice; foreign: ForeignAmounts } | null {
+  if (invoice.currency.toUpperCase() === BOOK_CURRENCY) return null;
+  const rate = invoiceExchangeRate(invoice);
+  if (!rate) return null;
+  // A discount line carries a positive amount that counts negatively (lineContribution): it is converted by what it
+  // counts for and keeps its sign convention.
+  const flipped = (l: ParsedInvoice['lines'][number]) => l.nature === 'discount' && money(l.amount).isPositive();
+  return convertInvoice<ParsedInvoice['lines'][number], ParsedInvoice>(
+    invoice,
+    rate,
+    (l) => lineContribution(l),
+    (l, amount) => ({ ...l, amount: flipped(l) ? money(amount).negated().toFixed() : amount }),
+  );
+}
+
 function invoiceTaxTable(method: Method, invoice: ParsedInvoice): Pick<PurchaseProposal['invoice'], 'taxBreakdown'> {
   if (method !== 'einvoice_xml' || invoice.taxBreakdown.length === 0) return {};
   const parsed = zPurchaseProposal.shape.invoice.shape.taxBreakdown.safeParse(invoice.taxBreakdown);
@@ -356,6 +376,9 @@ export async function extractAndPropose(
   );
 
   const checks = checkInvoice(invoice, deps.today?.());
+  // A foreign-currency e-invoice with its own rate is proposed in VND (#918); the checks above read it as issued.
+  const converted = bookedInVnd(invoice);
+  const booked = converted?.invoice ?? invoice;
   if (lookup.duplicateDocumentId || lookup.duplicateProposalId) {
     checks.unshift({ id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
   }
@@ -363,7 +386,7 @@ export async function extractAndPropose(
   if (related) checks.push(relatedCheck(related));
   // A sale (issue #313) books every line to revenue; a purchase proposes an expense or asset account per line.
   const sale = lookup.direction === 'sale';
-  const lines = sale ? bookableSaleLines(invoice) : bookableLines(invoice, lookup.vendorDefault);
+  const lines = sale ? bookableSaleLines(booked) : bookableLines(booked, lookup.vendorDefault);
   if (lines.length === 0) return fail('Hóa đơn không có dòng hàng hóa, dịch vụ để hạch toán', checks);
 
   const seller = { ...invoice.seller, taxCode: sellerTaxCode ?? invoice.seller.taxCode };
@@ -379,17 +402,19 @@ export async function extractAndPropose(
       series: invoice.series,
       number: invoice.number,
       issueDate: invoice.issueDate,
-      currency: invoice.currency,
+      // Upper case, as the document stores it (purchase_document_foreign_amounts compares it with 'VND').
+      currency: invoice.currency.toUpperCase(),
       paymentMethod: invoice.paymentMethod,
       taxAuthorityCode: invoice.taxAuthorityCode,
-      subtotal: invoice.subtotal,
-      vatTotal: invoice.vatTotal,
-      total: invoice.total,
-      ...invoiceTaxTable(method, invoice),
+      subtotal: booked.subtotal,
+      vatTotal: booked.vatTotal,
+      total: booked.total,
+      ...invoiceTaxTable(method, booked),
       ...(related ? { related } : {}),
+      ...(converted ? { foreign: { ...converted.foreign, source: 'invoice' as const } } : {}),
     },
     lines,
-    journal: sale ? buildSalesJournal(lines, invoice.vatTotal, memo) : buildPurchaseJournal(lines, invoice.vatTotal, memo),
+    journal: sale ? buildSalesJournal(lines, booked.vatTotal, memo) : buildPurchaseJournal(lines, booked.vatTotal, memo),
     checks,
     sourceFileId: fileId,
     extractionMethod: method === 'unsupported' ? 'einvoice_xml' : method,

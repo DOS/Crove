@@ -62,7 +62,14 @@ export function DocumentsPage() {
               <TableCell className="px-4 py-3 text-foreground">{d.partyName}</TableCell>
               <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{f.money(d.subtotal)}</TableCell>
               <TableCell className="px-4 py-3 text-right text-muted-foreground tabular-nums">{f.money(d.vatAmount)}</TableCell>
-              <TableCell className="px-4 py-3 text-right font-medium text-foreground tabular-nums">{f.money(d.total)}</TableCell>
+              <TableCell className="px-4 py-3 text-right font-medium text-foreground tabular-nums">
+                {f.money(d.total)}
+                {d.foreign && (
+                  <span className="block text-xs font-normal text-subtle-foreground">
+                    {t('foreign', { total: f.money(d.foreign.total, d.foreign.currency), rate: f.number(d.foreign.rate) })}
+                  </span>
+                )}
+              </TableCell>
               <TableCell className="px-4 py-3">
                 {/* Voided by reversing its entry (#165): Crove no longer counts it; the supplier's invoice is unchanged. */}
                 {d.voided ? (
