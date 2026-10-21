@@ -113,3 +113,15 @@ It reads usage as `crove_reporter` (set `CROVE_REPORTER_DB_PASSWORD`, applied by
 
    Use the directory that holds the deployment's `docker-compose.yml` and `.env`. The table is dropped (`> /dev/null`); the log keeps the one-line result of each run. To also keep the numbers, send stdout to a file instead, for example `--csv --post > /var/log/crove-usage-$(date +\%F).csv` (cron needs the `%` escaped).
 3. A missed Monday is not caught up by itself: run step 1 by hand, or look at the log. A post that fails is not retried; the next Monday's run posts as usual.
+
+## Security alerts
+
+Besides outages, the worker watches for signs of abuse (issue #996, plan §7.8 "Detective controls"). Every 5 minutes it asks the database for the signals below and, for each new one, logs `[security] ALERT <signal>: ...` and posts `[Crove] Security alert from <instance>: ...` to the same webhook as the prober (`ALERT_WEBHOOK_URL`, Telegram, Slack or Discord; set it on the worker too, as `docker-compose.yml` does). Without a webhook the alerts are in the worker's log only. The messages hold ids and counts, never an email, a name or a token.
+
+| Signal | Fires when | What to do |
+|---|---|---|
+| `actor_many_orgs` | one user has successful or refused commands in more than `SECURITY_ALERT_ORG_THRESHOLD` orgs (default 20) within `SECURITY_ALERT_WINDOW_SECONDS` (default 300) | Look the user up (`SELECT email FROM crove_kernel.user_account WHERE id = '<id>'`, as staff) and at their audit rows. An accountant serving many clients can be legitimate: raise the threshold. Probing (mostly `NOT_A_MEMBER` refusals) or a stolen account: block it with `user-disable` ([user-disable.md](user-disable.md)). |
+| `refusal_spike` | more than `SECURITY_ALERT_REFUSAL_THRESHOLD` (default 500) refused requests across the deployment within the window (the refusal tally, `NOT_A_MEMBER` and permission errors included) | Find the source: `SELECT actor_key, code, sum(refusals) FROM crove_kernel.refusal_tally WHERE last_at > now() - interval '10 minutes' GROUP BY 1, 2 ORDER BY 3 DESC`. A broken client or integration: tell its owner. Probing: block the account and, at the proxy, the address. |
+| `privileged_grant` | an owner or admin role was given in an org, by a role change or an invite acceptance (creating an org is not a grant) | Usually routine. Confirm with the org's owner when it is unexpected, for example a grant right after an `actor_many_orgs` alert. |
+
+A signal that lasts repeats after `SECURITY_ALERT_REPEAT_MINUTES` (default 60); a grant alerts once. Several workers alert once between them: the database remembers what was alerted (`crove_kernel.security_signal_seen`, read and written only by the worker's definer). An alert whose post failed is not retried until it repeats; the worker's log keeps the line.

@@ -62,6 +62,8 @@ import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type Modu
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { rebindExports as rebindOrgExports } from './export-rebind.ts';
 import { exportSealer } from './export-seal.ts';
+import { webhookTarget, type WebhookTarget } from './alert.ts';
+import type { SecurityThresholds } from './security-signals.ts';
 import { runUserDisable } from './user-disable.ts';
 import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
@@ -392,6 +394,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
             archive: { store: archiveStore, lagSeconds: config.ARCHIVE_LAG_SECONDS },
             usageLimits: usageLimits(config),
+            securityAlerts: securityAlerts(config),
             aiPrice: { inputPerMTok: config.AI_PRICE_INPUT_PER_MTOK, outputPerMTok: config.AI_PRICE_OUTPUT_PER_MTOK },
           }),
         );
@@ -470,4 +473,31 @@ export function defaultAdapters(config: Config): KernelAdapters {
     // crove-local: the vault keyed by CREDENTIAL_KEY or CREDENTIAL_KEY_FILE; none without a key (ADR-0025).
     broker: createCredentialBroker(config),
   };
+}
+
+// The worker's detective security alerts (#996): the thresholds, and the prober's webhook when it is set. A webhook the
+// prober would refuse (a Telegram one without its chat id) is reported once and the alerts stay in the log.
+function securityAlerts(config: Config): { target: WebhookTarget | null; thresholds: SecurityThresholds } {
+  const thresholds: SecurityThresholds = {
+    windowSeconds: config.SECURITY_ALERT_WINDOW_SECONDS,
+    orgThreshold: config.SECURITY_ALERT_ORG_THRESHOLD,
+    refusalThreshold: config.SECURITY_ALERT_REFUSAL_THRESHOLD,
+    repeatSeconds: config.SECURITY_ALERT_REPEAT_MINUTES * 60,
+  };
+  try {
+    const target = webhookTarget(
+      {
+        ALERT_WEBHOOK_URL: config.ALERT_WEBHOOK_URL,
+        ALERT_WEBHOOK_FORMAT: config.ALERT_WEBHOOK_FORMAT,
+        ALERT_TELEGRAM_CHAT_ID: config.ALERT_TELEGRAM_CHAT_ID,
+        ALERT_INSTANCE: config.ALERT_INSTANCE,
+        PUBLIC_URL: config.PUBLIC_URL,
+      },
+      'security alerts',
+    );
+    return { target, thresholds };
+  } catch (error) {
+    console.error(`[security] ALERT ${error instanceof Error ? error.message : String(error)}; security alerts go to the log only`);
+    return { target: null, thresholds };
+  }
 }
