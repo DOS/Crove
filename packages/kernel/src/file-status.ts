@@ -8,6 +8,9 @@ import { EDITOR_ROLES } from './approval.ts';
 import { MAX_EXTRACTION_VERSIONS, REEXTRACT_STALE_MINUTES, STALE_RUN_ERROR, voidedProposals } from './extraction.ts';
 import { isArchiveType } from './files.ts';
 
+// What a document kept for the org's next daily budget (#675) shows as its error.
+export const WAITING_FOR_BUDGET = 'Tổ chức đã dùng hết hạn mức đọc chứng từ trong 24 giờ; tệp được giữ lại và sẽ được đọc khi có hạn mức mới';
+
 // What kernel.file.archive.record keeps in the archive's extraction result, one item per entry.
 export const zStoredArchiveEntry = z.object({
   name: z.string(),
@@ -82,6 +85,11 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
       'p.id as proposal_id',
       'p.status as proposal_status',
       'p.duplicate_of',
+      // Kept for the org's next daily budget (#675): a deferral of the file that is not due yet.
+      sql<boolean>`EXISTS (
+        SELECT 1 FROM crove_kernel.usage_deferral d
+        WHERE d.org_id = f.org_id AND d.subject_type = 'file' AND d.subject_id = f.id::text AND d.retry_at > pg_catalog.now()
+      )`.as('waiting'),
     ])
     .where('f.org_id', '=', ctx.orgId)
     // Images of Social posts (#372) and import spreadsheets (#465) are not documents, unless the same bytes were also
@@ -97,8 +105,10 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
   const editor = ctx.actor.type === 'user' && ctx.role !== null && EDITOR_ROLES.includes(ctx.role);
   return rows.map((r) => {
     const archive = isArchiveType(r.content_type);
-    const status: FileStatus['status'] =
-      !r.extraction_status || r.in_flight
+    const waiting = !r.extraction_status && r.waiting;
+    const status: FileStatus['status'] = waiting
+      ? 'waiting'
+      : !r.extraction_status || r.in_flight
         ? 'processing'
         : r.method === 'archive'
           ? r.extraction_status === 'done'
@@ -115,7 +125,13 @@ export async function fileStatuses(ctx: QueryContext, filter: FileStatusFilter):
         filename: r.filename,
         contentType: r.content_type,
         status,
-        error: r.extraction_status === 'failed' ? r.error : r.extraction_status === 'pending' && !r.in_flight ? STALE_RUN_ERROR : null,
+        error: waiting
+          ? WAITING_FOR_BUDGET
+          : r.extraction_status === 'failed'
+            ? r.error
+            : r.extraction_status === 'pending' && !r.in_flight
+              ? STALE_RUN_ERROR
+              : null,
         proposalId: r.proposal_id,
         version: r.version ?? null,
         // The same checks kernel.file.reextract makes; an archive is opened once and never read again.

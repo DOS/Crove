@@ -269,6 +269,14 @@ export type MailSuppressionTable = Refine<
 export const MAIL_EVENT_KINDS = ['delivered', 'deferred', 'bounce_hard', 'bounce_soft', 'complaint'] as const;
 export type MailEventTable = Refine<G.KernelMailEventTable, { kind: (typeof MAIL_EVENT_KINDS)[number] }>;
 
+// Per-org abuse limits (#675): what an org used, and the items kept for its next day's budget.
+export const USAGE_METRICS = ['inbound_emails', 'attachment_bytes', 'extraction_pages', 'ai_cost'] as const;
+export type UsageMetric = (typeof USAGE_METRICS)[number];
+export const USAGE_DEFERRAL_SUBJECTS = ['inbound_email', 'file'] as const;
+export type UsageDeferralSubject = (typeof USAGE_DEFERRAL_SUBJECTS)[number];
+export type OrgUsageTable = Refine<G.KernelOrgUsageTable, { metric: UsageMetric }>;
+export type UsageDeferralTable = Refine<G.KernelUsageDeferralTable, { metric: UsageMetric; subject_type: UsageDeferralSubject }>;
+
 export const AGENT_WAKEUP_STATUSES = ['pending', 'claimed', 'done'] as const;
 export type AgentWakeupTable = Refine<G.KernelAgentWakeupTable, { status: Generated<(typeof AGENT_WAKEUP_STATUSES)[number]> }>;
 
@@ -412,7 +420,7 @@ export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment
 // A review link of one post (#589), or of a content plan's posts (#902).
 export const SOCIAL_REVIEW_LINK_KINDS = ['post', 'plan'] as const;
 // What an in-app notification is about (#637); a member may turn each kind off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention'] as const;
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold'] as const;
 // Why a channel's daily account snapshot has no counts (#645).
 export const SOCIAL_ACCOUNT_SNAPSHOT_ERRORS = ['no_answer', 'token_expired', 'permission'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
@@ -517,6 +525,8 @@ type Refined = Tables<{
   'crove_kernel.mail_message': MailMessageTable;
   'crove_kernel.mail_suppression': MailSuppressionTable;
   'crove_kernel.mail_event': MailEventTable;
+  'crove_kernel.org_usage': OrgUsageTable;
+  'crove_kernel.usage_deferral': UsageDeferralTable;
   'crove_finance.purchase_document': PurchaseDocumentTable;
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;

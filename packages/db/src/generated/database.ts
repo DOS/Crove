@@ -55,6 +55,7 @@ export interface CroveKernelSchema {
   'crove_kernel.member_invite': KernelMemberInviteTable;
   'crove_kernel.notification': KernelNotificationTable;
   'crove_kernel.notification_mute': KernelNotificationMuteTable;
+  'crove_kernel.org_usage': KernelOrgUsageTable;
   'crove_kernel.outbox_event': KernelOutboxEventTable;
   'crove_kernel.party': KernelPartyTable;
   'crove_kernel.position': KernelPositionTable;
@@ -64,6 +65,7 @@ export interface CroveKernelSchema {
   'crove_kernel.task_comment': KernelTaskCommentTable;
   'crove_kernel.tenant': KernelTenantTable;
   'crove_kernel.tenant_member': KernelTenantMemberTable;
+  'crove_kernel.usage_deferral': KernelUsageDeferralTable;
 }
 
 export interface CroveSocialSchema {
@@ -93,6 +95,7 @@ export interface CroveSocialSchema {
   'crove_social.post_label': SocialPostLabelTable;
   'crove_social.post_media': SocialPostMediaTable;
   'crove_social.post_variant': SocialPostVariantTable;
+  'crove_social.publish_hold': SocialPublishHoldTable;
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
   'crove_social.report_link': SocialReportLinkTable;
@@ -697,6 +700,15 @@ export interface KernelNotificationTable {
   read_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
+/** crove_kernel.org_usage */
+export interface KernelOrgUsageTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  metric: ColumnType<string, string, NotGranted>;
+  amount: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
 /** crove_kernel.outbox_event */
 export interface KernelOutboxEventTable {
   org_id: ColumnType<string, NotGranted, NotGranted>;
@@ -854,6 +866,18 @@ export interface KernelTenantTable {
   address: string | null;
   contact_email: string | null;
   missing_invoice_reminder_day: number | null;
+}
+
+/** crove_kernel.usage_deferral */
+export interface KernelUsageDeferralTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  metric: ColumnType<string, string, NotGranted>;
+  subject_type: ColumnType<string, string, NotGranted>;
+  subject_id: ColumnType<string, string, NotGranted>;
+  retry_at: ColumnType<Date, Date | string, NotGranted>;
+  notified: ColumnType<boolean, boolean | undefined, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.account_snapshot */
@@ -1213,6 +1237,17 @@ export interface SocialPostVariantTable {
   removed_by: string | null;
   remove_reason: string | null;
   remove_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_social.publish_hold */
+export interface SocialPublishHoldTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  reason: ColumnType<string, string, NotGranted>;
+  held_by: ColumnType<string, string, NotGranted>;
+  held_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  released_by: string | null;
+  released_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.queue_slot */

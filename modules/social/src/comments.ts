@@ -10,6 +10,7 @@ import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-r
 import { COMMENT_RULES, firstCommentOf, isProvider } from './domain/channels.ts';
 import { publishCallKey } from './domain/publish.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
+import { publishingHeld } from './publish-hold.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const COMMENT_STEP = 'comment';
@@ -89,6 +90,8 @@ export const commentBegin = defineCommand({
   access: 'system',
   handler: async (ctx, input): Promise<CommentWork> => {
     requireSystem(ctx);
+    // Nothing goes out while the org's publishing is held (#946); a person asks again after the release.
+    if (await publishingHeld(ctx)) return { action: 'none', reason: 'held' };
     const v = await lockVariant(ctx, input.variantId);
     if (v.provider !== input.provider) return { action: 'none', reason: 'provider_mismatch' };
     const text = firstCommentOf(settingsOf(v));

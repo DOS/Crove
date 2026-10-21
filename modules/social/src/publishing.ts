@@ -17,7 +17,7 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { shortOfPolicy } from './policy.ts';
-import { PUBLISH_LIMITS, SENT_TO_APP, isProvider, limitWait } from './domain/channels.ts';
+import { PUBLISH_LIMITS, SENT_TO_APP, STATUS_PUBLISHES, isProvider, limitWait } from './domain/channels.ts';
 import { sentLink } from './domain/utm.ts';
 import { withShortLink } from './short-links.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
@@ -42,6 +42,7 @@ import {
   type VariantRow,
 } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
+import { publishingHeld } from './publish-hold.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const PUBLISH_STEP = 'publish';
@@ -288,6 +289,8 @@ export const publishBegin = defineCommand({
   access: 'system',
   handler: async (ctx, input): Promise<BeginResult> => {
     requireSystem(ctx);
+    // The org's publishing hold (#946), read under its lock before the post's: while it is on, nothing is sent.
+    const held = await publishingHeld(ctx);
     const locked = await lockVariant(ctx, input.variantId);
     if (!locked) return none('not_found');
     const { post, v } = locked;
@@ -300,6 +303,8 @@ export const publishBegin = defineCommand({
       case 'scheduled': {
         const due = v.error_retry_at ?? v.scheduled_at ?? v.queue_slot_at;
         if (!due || due.getTime() > now) return none('not_due');
+        // Held: it stays scheduled, and goes out after the release (or waits for a person if held too long).
+        if (held) return none('held');
         const decision = await latestDecision(ctx.trx, ctx.orgId, v.id);
         if (decision?.decision !== 'approved' || !approvalCovers({ revision: decision.revision, contentHash: decision.content_hash }, { revision: v.revision, contentHash: v.content_hash })) {
           // Cannot happen through the commands (an edit sends a variant back to draft); never publish it if it does.
@@ -351,6 +356,8 @@ export const publishBegin = defineCommand({
       }
       case 'publishing': {
         if (now - v.updated_at.getTime() < (input.staleSeconds ?? PUBLISH_STALE_SECONDS) * 1000) return none('in_flight');
+        // Its resume may call again: not while held. Picked up after the release.
+        if (held) return none('held');
         const existing = await callRow(ctx, key);
         result = await resume(ctx, post, v, key, input.safety, existing, await connectionOf(ctx, v.channel_connection_id));
         if (result.action === 'call') await setVariant(ctx, v.id, {});
@@ -358,6 +365,9 @@ export const publishBegin = defineCommand({
       }
       case 'processing': {
         if (!v.next_check_at || v.next_check_at.getTime() > now) return none('not_due');
+        // A status check that would post the processed container (#946): not while held. Another channel's check only
+        // records a post already submitted, and goes on.
+        if (held && isProvider(v.provider) && STATUS_PUBLISHES.has(v.provider)) return none('held');
         const existing = await callRow(ctx, key);
         const startedAt = existing?.started_at ?? v.updated_at;
         const connection = await connectionOf(ctx, v.channel_connection_id);

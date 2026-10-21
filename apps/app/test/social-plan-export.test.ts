@@ -37,7 +37,7 @@ describe('content plan export (#978)', () => {
     expect(unguard("'=SUM(A1)")).toBe('=SUM(A1)');
     expect(unguard("'Tết")).toBe("'Tết");
     expect(unguard('- Giảm')).toBe('- Giảm');
-    const csv = '﻿text,title,link,channels,time,status,labels,assignee,post_id\r\n"\'- Giảm 20%, tuần đầu",\'+ Ưu đãi,,Quán A,2099-11-01 09:00,scheduled,"Tết, Khai trương",Lan,p1\r\n';
+    const csv = '\uFEFFtext,title,link,channels,time,status,labels,assignee,post_id\r\n"\'- Giảm 20%, tuần đầu",\'+ Ưu đãi,,Quán A,2099-11-01 09:00,scheduled,"Tết, Khai trương",Lan,p1\r\n';
     const rows = importRows(parseCsv(csv), [{ id: 'fb1', displayName: 'Quán A', provider: 'facebook_page', status: 'active' }], new Date(2026, 9, 22).getTime());
     expect(rows).toEqual([{ row: 2, body: '- Giảm 20%, tuần đầu', title: '+ Ưu đãi', link: '', connectionIds: ['fb1'], plannedAt: new Date(2099, 10, 1, 9, 0).toISOString(), problems: [] }]);
   });

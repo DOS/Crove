@@ -57,7 +57,7 @@ export function planCsv(rows: readonly PlanRow[], timeZone: string): string {
     // semicolons there could tip it.
     [r.body, r.title, r.linkUrl, r.channel, planTime(r.at, timeZone), r.status, r.labels.join(', '), r.assignee, r.postId].map(csvCell).join(','),
   );
-  return `﻿${[PLAN_CSV_COLUMNS.join(','), ...lines].join('\r\n')}\r\n`;
+  return `\uFEFF${[PLAN_CSV_COLUMNS.join(','), ...lines].join('\r\n')}\r\n`;
 }
 
 const zInstant = z.iso.datetime({ offset: true });

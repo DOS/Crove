@@ -30,6 +30,7 @@ import {
   zSocialQueue,
   zSocialMetricsRow,
   zSocialPlanRow,
+  zSocialWindowTotals,
   zSocialChannelInsights,
   zSocialBioPage,
   zSocialBioSave,
@@ -380,10 +381,9 @@ export const contract = {
       // postId: that post's published channels, whenever they went out.
       // labelId: only posts with that label (#639).
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional(), labelId: zId.optional() })).output(z.array(zSocialMetricsRow)),
-      // The window's totals over every published channel (#397), summed by the server.
-      totals: oc
-        .input(z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() }))
-        .output(z.object({ posts: z.number().int(), metrics: z.record(z.string(), z.number()), clicks: z.number().nullable() })),
+      // The window's totals over every published channel (#397), summed by the server, and per channel; previous: the
+      // same for the window of the same length just before (#947).
+      totals: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() })).output(zSocialWindowTotals.extend({ previous: zSocialWindowTotals })),
       // What works (#705): each channel's posts against its own median, by label, format, weekday, hour and hashtag.
       insights: oc
         .input(z.object({ days: z.number().int().min(1).max(365), labelId: zId.optional(), timeZone: z.string().min(1).max(64) }))
@@ -497,6 +497,15 @@ export const contract = {
         .input(z.strictObject({ fileId: zId, corner: z.enum(SOCIAL_WATERMARK_CORNERS), scalePercent: z.number().int().min(5).max(50), opacityPercent: z.number().int().min(10).max(100) }))
         .output(z.object({ saved: z.boolean() })),
       remove: oc.input(z.strictObject({})).output(z.object({ removed: z.boolean() })),
+    },
+    // A hold on all of the org's publishing (#946), for a crisis or a mourning day: owners and admins put it on with a
+    // reason and take it off; every member reads who put it on, when and why.
+    publishing: {
+      get: oc
+        .input(z.object({}))
+        .output(z.object({ held: z.boolean(), hold: z.object({ id: zId, reason: z.string(), heldBy: zId, heldByName: z.string().nullable(), heldAt: z.string() }).nullable() })),
+      hold: oc.input(z.strictObject({ reason: z.string().trim().min(1).max(500) })).output(z.object({ holdId: zId, heldAt: z.string(), created: z.boolean() })),
+      release: oc.input(z.strictObject({})).output(z.object({ released: z.boolean(), heldTooLong: z.number().int() })),
     },
     // The org's team chat for Social alerts (#863): a Telegram chat (bot token and chat) or a Discord webhook, and the
     // kinds of alert it gets. The server checks the target with the platform and seals it; no answer carries it back.

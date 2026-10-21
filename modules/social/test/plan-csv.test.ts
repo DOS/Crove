@@ -21,7 +21,7 @@ describe('content plan CSV (#978)', () => {
   it("starts with the import template's columns, in its names, then the plan's own", () => {
     expect(PLAN_CSV_COLUMNS.slice(0, 5)).toEqual(['text', 'title', 'link', 'channels', 'time']);
     const csv = planCsv([row()], 'Asia/Ho_Chi_Minh');
-    expect(csv.startsWith('﻿')).toBe(true);
+    expect(csv.startsWith('\uFEFF')).toBe(true);
     expect(csv.slice(1).split('\r\n')).toEqual(['text,title,link,channels,time,status,labels,assignee,post_id', 'Khai trương chi nhánh Quận 3,,,Quán A,2026-11-01 09:00,scheduled,,,p1', '']);
   });
 

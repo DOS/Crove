@@ -86,7 +86,7 @@ suite('social content plan export on PostgreSQL (#978)', () => {
     );
   const exportPlan = (o: Org, user: string, input: Record<string, unknown>) => exec<Export>(o, user, 'social.plan.export', input);
   const refusal = (p: Promise<unknown>) => p.then(() => 'resolved', (e: unknown) => (e as { code?: string }).code ?? String(e));
-  const lines = (csv: string | null) => (csv ?? '').replace(/^﻿/, '').split('\r\n').filter((l) => l !== '');
+  const lines = (csv: string | null) => (csv ?? '').replace(/^\uFEFF/, '').split('\r\n').filter((l) => l !== '');
 
   // A day well ahead at 00:00 UTC, so every planned time is in the future and the import takes it.
   const base = new Date(Math.floor((Date.now() + 40 * DAY) / DAY) * DAY);
@@ -156,7 +156,7 @@ suite('social content plan export on PostgreSQL (#978)', () => {
     expect(file.truncated).toBe(false);
     expect(file.rows).toBeNull();
     expect(file.filename).toBe(`crove-ke-hoach-${base.toISOString().slice(0, 7)}.csv`);
-    expect(file.csv?.startsWith('﻿')).toBe(true);
+    expect(file.csv?.startsWith('\uFEFF')).toBe(true);
     const day = (offset: number) => new Date(base.getTime() + offset * DAY).toISOString().slice(0, 10);
     expect(lines(file.csv)).toEqual([
       'text,title,link,channels,time,status,labels,assignee,post_id',

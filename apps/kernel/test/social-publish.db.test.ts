@@ -1116,8 +1116,9 @@ suite('social publishing on PostgreSQL (S4)', () => {
     await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
     expect(most).toBe(2);
     const totals = await api.query<{ posts: number; metrics: Record<string, number>; clicks: number | null }>('social.metrics.totals', {}, { actor: asUser(o.owner), orgId: o.orgId });
-    expect(totals).toEqual({ posts: 4, metrics: expect.objectContaining({ impressions: 160, reach: 120, reactions: 12 }), clicks: null });
-    expect(await api.query('social.metrics.totals', { days: 1, labelId: randomUUID() }, { actor: asUser(o.owner), orgId: o.orgId })).toEqual({ posts: 0, metrics: {}, clicks: null });
+    expect(totals).toMatchObject({ posts: 4, metrics: expect.objectContaining({ impressions: 160, reach: 120, reactions: 12 }), clicks: null });
+    const none = { posts: 0, metrics: {}, clicks: null, channels: [] };
+    expect(await api.query('social.metrics.totals', { days: 1, labelId: randomUUID() }, { actor: asUser(o.owner), orgId: o.orgId })).toEqual({ ...none, previous: none });
   });
 
   // S8 (#238): the metrics sweep asks the platform about published variants and keeps a snapshot per 6-hour capture.

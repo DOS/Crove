@@ -44,6 +44,7 @@ import { setAddress, setContactEmail } from './org-address.ts';
 import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
+import { usageCommands } from './usage-limits.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // The command that records an invoice proposal (a purchase or a sale).
@@ -343,6 +344,15 @@ export const receiveInbound = defineCommand({
       .returning('id')
       .executeTakeFirst();
     if (!message) return { duplicate: true, fileIds: [] as string[] };
+    // What the org used of its daily limits (#675): the message, and the bytes of the attachments it keeps.
+    const bytes = input.files.reduce((total, file) => total + file.sizeBytes, 0);
+    await ctx.trx
+      .insertInto('crove_kernel.org_usage')
+      .values([
+        { org_id: ctx.orgId, metric: 'inbound_emails', amount: '1' },
+        ...(bytes > 0 ? [{ org_id: ctx.orgId, metric: 'attachment_bytes' as const, amount: String(bytes) }] : []),
+      ])
+      .execute();
     const fileIds: string[] = [];
     for (const file of input.files) {
       const result = await ctx.run<{ fileId: string }>('kernel.file.ingest', file);
@@ -898,6 +908,7 @@ const otherKernelCommands = [
   ...mailCommands,
   ...proposalReminderCommands,
   ...auditLogCommands,
+  ...usageCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

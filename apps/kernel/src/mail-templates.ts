@@ -5,6 +5,7 @@ import { MISSING_INVOICE_TEMPLATE, missingInvoiceMailTemplate } from './missing-
 import { notificationMailTemplate } from './notification-mail.ts';
 import { proposalReminderMailTemplate } from './proposal-reminder-mail.ts';
 import { reportMailTemplate } from './report-mail.ts';
+import { usageDeferredMailTemplate } from './usage-deferred-mail.ts';
 
 export const MAIL_TEMPLATES: MailTemplates = {
   // The scheduled client report (#704).
@@ -15,4 +16,6 @@ export const MAIL_TEMPLATES: MailTemplates = {
   'kernel.proposal.reminder': proposalReminderMailTemplate,
   // Finance's request to a client company for its missing purchase invoices, and the monthly reminder (#669).
   [MISSING_INVOICE_TEMPLATE]: missingInvoiceMailTemplate,
+  // An org over a daily abuse limit (#675).
+  'kernel.usage.deferred': usageDeferredMailTemplate,
 };

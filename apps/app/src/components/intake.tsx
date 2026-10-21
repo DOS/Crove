@@ -130,6 +130,7 @@ const VARIANT: Record<IntakeState, 'secondary' | 'brand' | 'success' | 'warning'
   uploading: 'brand',
   upload_failed: 'destructive',
   processing: 'brand',
+  waiting: 'warning',
   proposed: 'success',
   duplicate: 'warning',
   failed: 'destructive',

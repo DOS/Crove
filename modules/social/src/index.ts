@@ -7,6 +7,7 @@ export * from './domain/queue.ts';
 export * from './posts.ts';
 export * from './publishing.ts';
 export * from './publisher.ts';
+export * from './publish-hold.ts';
 export * from './metrics.ts';
 export * from './plan-export.ts';
 export * from './evergreen.ts';
