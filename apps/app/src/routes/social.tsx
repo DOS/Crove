@@ -355,7 +355,22 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   );
 }
 
-function Agenda({ posts, slug, names, labels }: { posts: Post[]; slug: string; names: Map<string, string>; labels: readonly SocialLabel[] }) {
+function Agenda({
+  posts,
+  slug,
+  names,
+  labels,
+  picked,
+  onPick,
+}: {
+  posts: Post[];
+  slug: string;
+  names: Map<string, string>;
+  labels: readonly SocialLabel[];
+  // The posts picked for a bulk move (#945), or null when the viewer may not move them; a line picks its whole post.
+  picked: Set<string> | null;
+  onPick: (next: Set<string>) => void;
+}) {
   const t = useTranslations('social');
   const f = useFormat();
   // One line per variant going out, grouped by local day.
@@ -368,33 +383,49 @@ function Agenda({ posts, slug, names, labels }: { posts: Post[]; slug: string; n
     const key = dayKey(item.v.effectiveAt as string);
     days.set(key, [...(days.get(key) ?? []), item]);
   }
+  const shown = [...new Set(items.map((i) => i.post.id))];
+  const toggle = (id: string) => {
+    if (!picked) return;
+    const next = new Set(picked);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onPick(next);
+  };
   return (
     <div className="space-y-6">
+      {picked && (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Checkbox checked={shown.every((id) => picked.has(id))} onCheckedChange={(on) => onPick(on === true ? new Set(shown) : new Set())} />
+          {t('bulk.selectAll')}
+        </label>
+      )}
       {[...days.entries()].map(([key, list]) => (
         <section key={key}>
           <h3 className="mb-2 text-sm font-medium text-muted-foreground">{f.date(key)}</h3>
           <div className="space-y-2">
             {list.map(({ post, v }) => (
-              <Link
-                key={v.id}
-                to="/o/$slug/social/$id"
-                params={{ slug, id: post.id }}
-                className="flex items-start gap-4 rounded-xl border bg-card px-4 py-3 transition-colors hover:border-ring/60"
-              >
-                <span className="w-14 shrink-0 pt-0.5 font-mono text-sm text-foreground tabular-nums">
-                  {f.time(v.effectiveAt)}
-                </span>
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <p className="line-clamp-2 text-sm [overflow-wrap:anywhere] text-foreground">{excerpt(v.effective.body) || t('emptyText')}</p>
-                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-subtle-foreground">
-                    <Badge variant="outline">{providerName(v.provider)}</Badge>
-                    <span className="truncate">{names.get(v.connectionId)}</span>
-                    {v.queueSlotAt && <span>· {t('fromQueue')}</span>}
-                    {v.status !== 'scheduled' && <Badge variant={variantTone(v)}>{t(`status.${variantStatusKey(v)}`)}</Badge>}
+              <div key={v.id} className="flex items-center gap-2">
+                {picked && <Checkbox checked={picked.has(post.id)} onCheckedChange={() => toggle(post.id)} aria-label={t('bulk.select', { text: excerpt(post.body, 40) || t('emptyText') })} />}
+                <Link
+                  to="/o/$slug/social/$id"
+                  params={{ slug, id: post.id }}
+                  className="flex min-w-0 flex-1 items-start gap-4 rounded-xl border bg-card px-4 py-3 transition-colors hover:border-ring/60"
+                >
+                  <span className="w-14 shrink-0 pt-0.5 font-mono text-sm text-foreground tabular-nums">
+                    {f.time(v.effectiveAt)}
+                  </span>
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <p className="line-clamp-2 text-sm [overflow-wrap:anywhere] text-foreground">{excerpt(v.effective.body) || t('emptyText')}</p>
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs text-subtle-foreground">
+                      <Badge variant="outline">{providerName(v.provider)}</Badge>
+                      <span className="truncate">{names.get(v.connectionId)}</span>
+                      {v.queueSlotAt && <span>· {t('fromQueue')}</span>}
+                      {v.status !== 'scheduled' && <Badge variant={variantTone(v)}>{t(`status.${variantStatusKey(v)}`)}</Badge>}
+                    </div>
+                    <PostLabels ids={post.labelIds} labels={labels} />
                   </div>
-                  <PostLabels ids={post.labelIds} labels={labels} />
-                </div>
-              </Link>
+                </Link>
+              </div>
             ))}
           </div>
         </section>
@@ -475,8 +506,20 @@ export function SocialPage() {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.mine]);
   const canDecide = role === 'owner' || role === 'admin';
-  const bulkActions: readonly BulkAction[] = !canWrite ? [] : listTab === 'review' ? (canDecide ? ['approve', 'cancel'] : ['cancel']) : listTab === 'drafts' ? (canDecide ? ['queue', 'cancel'] : ['cancel']) : listTab === 'attention' ? ['cancel'] : [];
+  // Moving by days or hours (#945) is for owners and admins, like a single reschedule; the agenda offers only that.
+  const bulkActions: readonly BulkAction[] = !canWrite
+    ? []
+    : listTab === 'review'
+      ? canDecide ? ['approve', 'move', 'cancel'] : ['cancel']
+      : listTab === 'drafts'
+        ? canDecide ? ['queue', 'move', 'cancel'] : ['cancel']
+        : listTab === 'attention'
+          ? canDecide ? ['move', 'cancel'] : ['cancel']
+          : [];
+  const agendaActions: readonly BulkAction[] = canDecide ? ['move'] : [];
   const toggle = (id: string) => setPicked((now) => { const next = new Set(now); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const excerptOf = (postId: string) => excerpt((rows.find((p) => p.id === postId) ?? upcoming.data?.find((p) => p.id === postId))?.body ?? '', 60) || t('emptyText');
+  const channelName = (connectionId: string) => names.get(connectionId) ?? t('bulk.move.channelGone');
 
   return (
     <>
@@ -601,7 +644,25 @@ export function SocialPage() {
           </div>
         )}
         <TabsContent value="upcoming">
-          {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} labels={labelList} />}
+          {agendaActions.length > 0 && (
+            <div className="mb-2">
+              <BulkBar
+                posts={(upcoming.data ?? []).filter((p) => picked.has(p.id))}
+                actions={agendaActions}
+                canDecide={canDecide}
+                excerptOf={excerptOf}
+                channelName={channelName}
+                onClear={() => setPicked(new Set())}
+              />
+            </div>
+          )}
+          {upcoming.isLoading ? (
+            <Spinner />
+          ) : upcoming.error ? (
+            <ErrorText>{errorMessage(upcoming.error)}</ErrorText>
+          ) : (
+            <Agenda posts={upcoming.data ?? []} slug={slug} names={names} labels={labelList} picked={agendaActions.length > 0 ? picked : null} onPick={setPicked} />
+          )}
         </TabsContent>
         <TabsContent value="calendar">
           {tab === 'calendar' && (
@@ -631,7 +692,8 @@ export function SocialPage() {
                       posts={rows.filter((p) => picked.has(p.id))}
                       actions={bulkActions}
                       canDecide={canDecide}
-                      excerptOf={(postId) => excerpt(rows.find((p) => p.id === postId)?.body ?? '', 60) || t('emptyText')}
+                      excerptOf={excerptOf}
+                      channelName={channelName}
                       onClear={() => setPicked(new Set())}
                     />
                     {/* One client review link for the posts selected (#902). */}

@@ -1,8 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { bulkRequest, runBulk, type BulkPost } from '../src/lib/social-bulk.ts';
+import { localTime } from '@crove/mod-social/contract';
+import { bulkRequest, moveSummary, planMove, runBulk, runMove, shiftTime, validMove, type BulkPost, type BulkVariant } from '../src/lib/social-bulk.ts';
 
-const v = (id: string, status: string) => ({ id, status, revision: 2, contentHash: `sha256:${'a'.repeat(64)}` });
-const post = (id: string, ...variants: ReturnType<typeof v>[]): BulkPost => ({ id, variants });
+const v = (id: string, status: string, at: string | null = null, queueSlotAt: string | null = null): BulkVariant => ({
+  id,
+  connectionId: `c-${id}`,
+  status,
+  revision: 2,
+  contentHash: `sha256:${'a'.repeat(64)}`,
+  effectiveAt: queueSlotAt ?? at,
+  queueSlotAt,
+});
+const post = (id: string, ...variants: BulkVariant[]): BulkPost => ({ id, timeZone: 'Asia/Ho_Chi_Minh', variants });
+const zoned = (timeZone: string, id: string, ...variants: BulkVariant[]): BulkPost => ({ id, timeZone, variants });
+const ms = (iso: string) => Date.parse(iso);
+const iso = (n: number) => new Date(n).toISOString();
 
 describe('bulk actions on the Social lists (#635)', () => {
   it('builds each post\'s request from what the list shows, for who may do it', () => {
@@ -27,5 +39,123 @@ describe('bulk actions on the Social lists (#635)', () => {
     expect(result.done).toEqual(['ok', 'ok2']);
     expect(result.skipped).toEqual(['none']);
     expect(result.refused.map((r) => [r.postId, (r.error as Error).message])).toEqual([['no', 'STALE_REVISION']]);
+  });
+});
+
+describe('moving posts by days or hours (#945)', () => {
+  it('keeps the local time of day across a daylight-saving change when moving by days', () => {
+    // New York moves to daylight time on 2026-03-08: 09:00 EST is 14:00Z, 09:00 EDT is 13:00Z.
+    expect(iso(shiftTime(ms('2026-03-05T14:00:00.000Z'), { amount: 7, unit: 'days' }, 'America/New_York'))).toBe('2026-03-12T13:00:00.000Z');
+    // And back, earlier.
+    expect(iso(shiftTime(ms('2026-03-12T13:00:00.000Z'), { amount: -7, unit: 'days' }, 'America/New_York'))).toBe('2026-03-05T14:00:00.000Z');
+    // London leaves summer time on 2026-10-25: 09:00 BST is 08:00Z, 09:00 GMT is 09:00Z.
+    expect(iso(shiftTime(ms('2026-10-24T08:00:00.000Z'), { amount: 1, unit: 'days' }, 'Europe/London'))).toBe('2026-10-25T09:00:00.000Z');
+  });
+
+  it('moves by calendar days in the post\'s zone, over month and year ends, keeping the seconds', () => {
+    // 23:30 in Ho Chi Minh City on 31 December is 16:30Z; a day later is 23:30 on 1 January.
+    expect(iso(shiftTime(ms('2026-12-31T16:30:15.000Z'), { amount: 1, unit: 'days' }, 'Asia/Ho_Chi_Minh'))).toBe('2027-01-01T16:30:15.000Z');
+    expect(iso(shiftTime(ms('2026-03-01T02:00:00.000Z'), { amount: -1, unit: 'days' }, 'Asia/Ho_Chi_Minh'))).toBe('2026-02-28T02:00:00.000Z');
+    // A local time the change skips (02:30 on 2026-03-08 in New York) lands just after it, as the queues place it.
+    expect(iso(shiftTime(ms('2026-03-07T07:30:00.000Z'), { amount: 1, unit: 'days' }, 'America/New_York'))).toBe('2026-03-08T07:30:00.000Z');
+  });
+
+  it('moves by exact hours, whatever the zone does', () => {
+    expect(iso(shiftTime(ms('2026-03-05T14:00:00.000Z'), { amount: 168, unit: 'hours' }, 'America/New_York'))).toBe('2026-03-12T14:00:00.000Z');
+    expect(iso(shiftTime(ms('2026-10-21T02:00:00.000Z'), { amount: -3, unit: 'hours' }, 'Asia/Ho_Chi_Minh'))).toBe('2026-10-20T23:00:00.000Z');
+  });
+
+  it('accepts whole, non-zero moves within the limit', () => {
+    expect(validMove({ amount: 7, unit: 'days' })).toBe(true);
+    expect(validMove({ amount: -2, unit: 'hours' })).toBe(true);
+    expect(validMove({ amount: 0, unit: 'days' })).toBe(false);
+    expect(validMove({ amount: 1.5, unit: 'hours' })).toBe(false);
+    expect(validMove({ amount: Number.NaN, unit: 'days' })).toBe(false);
+    expect(validMove({ amount: 1000, unit: 'days' })).toBe(false);
+  });
+
+  it('plans a move for each channel scheduled at a time and names why the others stay', () => {
+    const p = zoned(
+      'Europe/London',
+      'p1',
+      v('time', 'scheduled', '2026-10-24T08:00:00.000Z'),
+      v('slot', 'scheduled', null, '2026-10-24T10:00:00.000Z'),
+      v('out', 'published', '2026-10-20T08:00:00.000Z'),
+      v('going', 'publishing', '2026-10-21T08:00:00.000Z'),
+      v('gone', 'cancelled'),
+      v('draft', 'draft'),
+      v('ok', 'approved', '2026-10-24T08:00:00.000Z'),
+      v('held', 'paused', '2026-10-24T08:00:00.000Z'),
+      v('none', 'scheduled'),
+    );
+    expect(planMove(p, { amount: 1, unit: 'days' })).toEqual({
+      postId: 'p1',
+      moves: [{ variantId: 'time', at: '2026-10-25T09:00:00.000Z' }],
+      skipped: [
+        { variantId: 'slot', reason: 'queue' },
+        { variantId: 'out', reason: 'published' },
+        { variantId: 'going', reason: 'published' },
+        { variantId: 'gone', reason: 'cancelled' },
+        { variantId: 'draft', reason: 'unscheduled' },
+        { variantId: 'ok', reason: 'unscheduled' },
+        { variantId: 'held', reason: 'unscheduled' },
+        { variantId: 'none', reason: 'unscheduled' },
+      ],
+    });
+  });
+
+  it('keeps the times of day of a whole campaign moved by a week, across the clock change', () => {
+    // Twelve London posts at 09:00 and 18:30 local time from 13 October, while summer time runs (UTC+1); a week later
+    // some fall after 25 October, in winter time (UTC+0).
+    const london = (day: number, hour: number, minute: number) => Date.UTC(2026, 9, day, hour - 1, minute);
+    const posts = Array.from({ length: 12 }, (_, i) =>
+      zoned('Europe/London', `p${i}`, v(`a${i}`, 'scheduled', iso(london(13 + i, 9, 0))), v(`b${i}`, 'scheduled', iso(london(13 + i, 18, 30)))),
+    );
+    const moves = posts.flatMap((p) => planMove(p, { amount: 7, unit: 'days' }).moves);
+    expect(moves).toHaveLength(24);
+    for (const m of moves) expect(localTime(Date.parse(m.at), 'Europe/London')).toMatchObject(m.variantId.startsWith('a') ? { hour: 9, minute: 0 } : { hour: 18, minute: 30 });
+    expect(moves[0]).toEqual({ variantId: 'a0', at: '2026-10-20T08:00:00.000Z' });
+    // 23 October, 09:00 BST, moves to 30 October, 09:00 GMT.
+    expect(moves.find((m) => m.variantId === 'a10')).toEqual({ variantId: 'a10', at: '2026-10-30T09:00:00.000Z' });
+  });
+
+  it('sends one reschedule per channel, goes on after a refusal, and reports each post', async () => {
+    const posts = [
+      post('both', v('a', 'scheduled', '2026-11-02T02:00:00.000Z'), v('b', 'scheduled', '2026-11-02T03:00:00.000Z')),
+      post('half', v('c', 'scheduled', '2026-11-02T02:00:00.000Z'), v('d', 'scheduled', null, '2026-11-02T04:00:00.000Z')),
+      post('none', v('e', 'published', '2026-10-01T02:00:00.000Z')),
+      post('refused', v('f', 'scheduled', '2026-11-02T02:00:00.000Z'), v('g', 'scheduled', '2026-11-02T05:00:00.000Z')),
+    ];
+    const sent: { variantId: string; at: string }[] = [];
+    const progress: number[] = [];
+    const results = await runMove(
+      posts,
+      { amount: -2, unit: 'hours' },
+      async (r) => {
+        sent.push(r);
+        if (r.variantId === 'f') throw new Error('REMOVE_AT_BEFORE_PUBLISH');
+      },
+      (done, total) => progress.push(done * 10 + total),
+    );
+    expect(sent).toEqual([
+      { variantId: 'a', at: '2026-11-02T00:00:00.000Z' },
+      { variantId: 'b', at: '2026-11-02T01:00:00.000Z' },
+      { variantId: 'c', at: '2026-11-02T00:00:00.000Z' },
+      { variantId: 'f', at: '2026-11-02T00:00:00.000Z' },
+      { variantId: 'g', at: '2026-11-02T03:00:00.000Z' },
+    ]);
+    expect(progress).toEqual([14, 24, 34, 44]);
+    expect(results.map((r) => [r.postId, r.moved.map((m) => m.variantId), r.skipped.map((s) => `${s.variantId}:${s.reason}`), r.refused.map((x) => `${x.variantId}:${(x.error as Error).message}`)])).toEqual([
+      ['both', ['a', 'b'], [], []],
+      ['half', ['c'], ['d:queue'], []],
+      ['none', [], ['e:published'], []],
+      ['refused', ['g'], [], ['f:REMOVE_AT_BEFORE_PUBLISH']],
+    ]);
+    expect(moveSummary(results)).toEqual({ done: 3, skipped: 1, refused: 1, channels: 4 });
+  });
+
+  it('counts a post whose every channel was refused as refused, not as done', () => {
+    expect(moveSummary([{ postId: 'p', moved: [], skipped: [], refused: [{ variantId: 'a', error: new Error('SCHEDULE_IN_PAST') }] }])).toEqual({ done: 0, skipped: 0, refused: 1, channels: 0 });
+    expect(moveSummary([])).toEqual({ done: 0, skipped: 0, refused: 0, channels: 0 });
   });
 });
