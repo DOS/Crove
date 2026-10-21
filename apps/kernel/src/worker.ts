@@ -85,6 +85,9 @@ export const HEARTBEAT_INTERVAL_MS = 30_000;
 // Refusal tally windows (issue #162) older than the retention are deleted by the daily retention job, in batches.
 export const DEFAULT_REFUSAL_TALLY_RETENTION_DAYS = 7;
 const REFUSAL_TALLY_PRUNE_BATCH = 10_000;
+// Days of crove_kernel.security_event windows kept (plan §4.9: 30 days).
+export const SECURITY_EVENT_RETENTION_DAYS = 30;
+const SECURITY_EVENT_PRUNE_BATCH = 10_000;
 
 interface InboundRow {
   seq: string;
@@ -280,6 +283,21 @@ export async function pruneRefusalTally(workerDb: Db, keepDays: number): Promise
     const n = rows[0]?.n ?? 0;
     total += n;
     if (n < REFUSAL_TALLY_PRUNE_BATCH) return total;
+  }
+}
+
+/**
+ * Deletes security_event windows older than SECURITY_EVENT_RETENTION_DAYS (crove_kernel.security_event_prune,
+ * crove_worker only), batch by batch, and returns how many rows went.
+ */
+export async function pruneSecurityEvents(workerDb: Db): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const { rows } = await sql<{ n: number }>`
+      SELECT crove_kernel.security_event_prune(${SECURITY_EVENT_RETENTION_DAYS}::integer, ${SECURITY_EVENT_PRUNE_BATCH}::integer) AS n`.execute(workerDb);
+    const n = rows[0]?.n ?? 0;
+    total += n;
+    if (n < SECURITY_EVENT_PRUNE_BATCH) return total;
   }
 }
 
@@ -523,7 +541,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const mailCleared = await purgeMail(deps.workerDb);
       console.log(`[retention] ${Object.entries(mailCleared).map(([store, n]) => `${store}=${n}`).join(' ')}`);
       const pruned = await pruneRefusalTally(deps.workerDb, keepDays);
-      console.log(`[retention] refusal_tally=${pruned}`);
+      const securityEvents = await pruneSecurityEvents(deps.workerDb);
+      console.log(`[retention] refusal_tally=${pruned} security_event=${securityEvents}`);
     } finally {
       // Each catches its own errors; they run even when a database purge failed.
       await sweepStaging(deps.store);
