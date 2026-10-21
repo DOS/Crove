@@ -142,13 +142,14 @@ function receiver(before: string): string | null {
   return m?.[1] ? m[1].replace(/\s+/g, '') : null;
 }
 
-// sql`...` and sql<T>`...` templates with the argument of the .execute() that follows them. A template holding a
+// sql`...` and sql<T>`...` templates (a type argument of up to 300 characters, bounded so the pattern cannot backtrack
+// without end) with the argument of the .execute() that follows them. A template holding a
 // nested template literal is cut short, so its DML falls outside every template and is reported (fails safe).
 function sqlTemplates(body: string): Array<{ start: number; end: number; executeOn: string | null }> {
   const out: Array<{ start: number; end: number; executeOn: string | null }> = [];
-  for (const m of body.matchAll(/\bsql\s*(<[^`>]*(?:<[^`>]*>[^`>]*)*>)?\s*`([^`]*)`/g)) {
+  for (const m of body.matchAll(/\bsql\s*(<[^`]{0,300}?>)?\s*`([^`]*)`/g)) {
     const end = (m.index ?? 0) + m[0].length;
-    const execute = /^\s*\.\s*execute\s*\(\s*([^)]*?)\s*\)/.exec(body.slice(end, end + 300));
+    const execute = /^\s*\.\s*execute\s*\(([^)]*)\)/.exec(body.slice(end, end + 300));
     out.push({ start: m.index ?? 0, end, executeOn: execute?.[1] ? execute[1].replace(/\s+/g, '') : null });
   }
   return out;
