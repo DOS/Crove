@@ -125,11 +125,39 @@ function titleOf(head: string): string | undefined {
 
 // Page furniture: menus, banners, footers, forms and embeds, dropped with what they hold.
 const FURNITURE = ['nav', 'header', 'footer', 'aside', 'form', 'button', 'select', 'svg', 'iframe', 'object', 'canvas'];
-// The ends of blocks and line breaks, read as new lines. [^<>] keeps every scan linear on a page full of stray <.
-const BREAK = /<br\b[^<>]*>|<\/(?:p|div|li|h[1-6]|tr|blockquote|section|pre|dd|dt|figcaption)\s*>/gi;
-// Inline tags join their text to the words around it; every other tag is a space.
-const INLINE = /<\/?(?:a|b|i|u|s|q|em|strong|span|small|mark|code|abbr|sub|sup|time)\b[^<>]*>/gi;
-const TAG = /<[^<>]*>/g;
+// The ends of blocks (and <br>) are new lines; inline tags join their text to the words around it; every other tag
+// is a space.
+const BLOCKS = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'blockquote', 'section', 'pre', 'dd', 'dt', 'figcaption']);
+const INLINE = new Set(['a', 'b', 'i', 'u', 's', 'q', 'em', 'strong', 'span', 'small', 'mark', 'code', 'abbr', 'sub', 'sup', 'time']);
+const TAG_NAME = /^(\/?)([a-zA-Z][a-zA-Z0-9]{0,15})/;
+
+// The text of html without its tags, in one pass: a < with no > before the next < is a stray character, and no < or >
+// is left in the result, so nothing in it can read as markup. Linear: the next > is looked up only once it is behind.
+function plainText(html: string): string {
+  let out = '';
+  let at = 0;
+  let gt = html.indexOf('>');
+  while (at < html.length) {
+    const lt = html.indexOf('<', at);
+    if (lt < 0) {
+      out += html.slice(at);
+      break;
+    }
+    out += html.slice(at, lt);
+    if (gt >= 0 && gt < lt) gt = html.indexOf('>', lt);
+    const next = html.indexOf('<', lt + 1);
+    if (gt < 0 || (next >= 0 && next < gt)) {
+      out += ' ';
+      at = lt + 1;
+      continue;
+    }
+    const m = TAG_NAME.exec(html.slice(lt + 1, Math.min(gt, lt + 18)));
+    const name = m?.[2]?.toLowerCase() ?? '';
+    out += name === 'br' || (m?.[1] === '/' && BLOCKS.has(name)) ? '\n' : INLINE.has(name) ? '' : ' ';
+    at = gt + 1;
+  }
+  return out.replaceAll('>', ' ');
+}
 
 // The part of html inside the first <name ...> ... </name>; undefined when there is none.
 function inside(html: string, name: string): string | undefined {
@@ -147,12 +175,7 @@ function mainText(html: string): string | null {
   const bodyAt = html.search(/<body\b/i);
   const body = bodyAt >= 0 ? html.slice(bodyAt) : html;
   const scope = inside(body, 'article') ?? inside(body, 'main') ?? body;
-  const lines = stripHidden(scope, FURNITURE)
-    .replace(BREAK, '\n')
-    .replace(INLINE, '')
-    .replace(TAG, ' ')
-    // What is left of a broken tag: no < or > reaches the text, so nothing in it can read as markup.
-    .replace(/[<>]/g, ' ')
+  const lines = plainText(stripHidden(scope, FURNITURE))
     .split('\n')
     .map((line) => clean(line, EXTRACT_LIMITS.maxPageTextChars))
     .filter((line): line is string => line !== null);
