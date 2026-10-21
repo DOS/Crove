@@ -8,14 +8,15 @@
 // which is accurate, since it did read every one of them.
 //
 // The org's VAT filing period (monthly or quarterly) is set by owners and admins (kernel.org.set_vat_filing_period,
-// tax-code.ts).
+// tax-code.ts); the rest of its tax calendar (#921) by kernel.tax_profile.save (tax-calendar.ts).
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { nextVatDeadline, vietnamToday, type VatDeadline, type VatFilingPeriod } from '@crove/kernel-contract';
+import { nextVatDeadline, vietnamToday, type TaxDueView, type VatDeadline, type VatFilingPeriod } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { fileStatuses } from './file-status.ts';
 import { sessionOrgs } from './commands.ts';
+import { taxDuesOf } from './tax-calendar.ts';
 import type { OrgSummary } from './identity.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -35,6 +36,8 @@ export interface OrgOverview {
   lastActivityAt: string | null;
   vatFilingPeriod: VatFilingPeriod | null;
   vatDeadline: VatDeadline | null;
+  // The tax calendar (#921): what is due in the next 30 days or overdue and not marked done, by due date.
+  taxDues: TaxDueView[];
 }
 
 export interface ClientOverview extends OrgSummary {
@@ -74,6 +77,7 @@ export function orgOverviewQuery(options: { now?: () => Date } = {}) {
         lastActivityAt: last.at ? new Date(last.at).toISOString() : null,
         vatFilingPeriod: period,
         vatDeadline: period ? nextVatDeadline(period, vietnamToday(now())) : null,
+        taxDues: await taxDuesOf(ctx, period, vietnamToday(now())),
       };
     },
   });

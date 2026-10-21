@@ -6,6 +6,8 @@ import { MemberSessions, MySessions } from '../components/sessions.tsx';
 import { Badge } from '@crove/ui/components/badge';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
+import { PROFILE_OBLIGATIONS, type TaxProfile } from '@crove/kernel-contract';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
@@ -612,6 +614,112 @@ function VatFilingPeriodField({ period, canManage }: { period: 'month' | 'quarte
   );
 }
 
+// The tax calendar (issue #921): which recurring obligations apply to the org besides the VAT return, its PIT
+// withholding frequency and the last month of its fiscal year, for the home screen's list of what is due. Owners and
+// admins choose; everyone else sees the setting.
+function TaxCalendarField({ canManage }: { canManage: boolean }) {
+  const t = useTranslations('settings');
+  const tt = useTranslations('taxCalendar');
+  const profile = useQuery(orpc.org.taxProfile.queryOptions());
+  const [draft, setDraft] = useState<TaxProfile | null>(null);
+  const save = useMutation(
+    orpc.org.setTaxProfile.mutationOptions({
+      onSuccess: async () => {
+        setDraft(null);
+        await queryClient.invalidateQueries({ queryKey: orpc.org.taxProfile.key() });
+        await queryClient.invalidateQueries({ queryKey: orpc.me.clients.key() });
+      },
+    }),
+  );
+  const pitId = useId();
+  const fyId = useId();
+  // The stored calendar is not shown as empty while it loads.
+  if (profile.isLoading) {
+    return (
+      <div>
+        <dt className="text-subtle-foreground">{t('taxCalendar')}</dt>
+        <dd className="mt-1">
+          <Spinner />
+        </dd>
+      </div>
+    );
+  }
+  const stored: TaxProfile = profile.data
+    ? { obligations: profile.data.obligations, pitFilingPeriod: profile.data.pitFilingPeriod, fiscalYearEndMonth: profile.data.fiscalYearEndMonth }
+    : { obligations: [], pitFilingPeriod: null, fiscalYearEndMonth: 12 };
+  const current = draft ?? stored;
+  const toggle = (o: TaxProfile['obligations'][number], on: boolean) =>
+    setDraft({ ...current, obligations: on ? [...current.obligations, o] : current.obligations.filter((x) => x !== o) });
+  return (
+    <div>
+      <dt className="text-subtle-foreground">{t('taxCalendar')}</dt>
+      <dd className="mt-1 space-y-2">
+        <ul className="space-y-1">
+          {PROFILE_OBLIGATIONS.map((o) => (
+            <li key={o} className="flex items-center gap-2">
+              {canManage ? (
+                <label className="flex items-center gap-2">
+                  <Checkbox checked={current.obligations.includes(o)} disabled={save.isPending} onCheckedChange={(checked) => toggle(o, checked)} />
+                  <span>{tt(`obligations.${o}`)}</span>
+                </label>
+              ) : (
+                <span className={current.obligations.includes(o) ? 'text-foreground' : 'text-subtle-foreground line-through'}>{tt(`obligations.${o}`)}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {current.obligations.includes('pit_withholding') && (
+            <span className="flex items-center gap-2">
+              <label htmlFor={pitId} className="text-muted-foreground">
+                {t('pitFilingPeriod')}
+              </label>
+              <NativeSelect
+                id={pitId}
+                size="sm"
+                value={current.pitFilingPeriod ?? ''}
+                disabled={!canManage || save.isPending}
+                onChange={(e) => setDraft({ ...current, pitFilingPeriod: e.target.value === 'month' || e.target.value === 'quarter' ? e.target.value : null })}
+              >
+                <NativeSelectOption value="">{t('vatFilingUnset')}</NativeSelectOption>
+                <NativeSelectOption value="month">{t('vatFilingMonth')}</NativeSelectOption>
+                <NativeSelectOption value="quarter">{t('vatFilingQuarter')}</NativeSelectOption>
+              </NativeSelect>
+            </span>
+          )}
+          <span className="flex items-center gap-2">
+            <label htmlFor={fyId} className="text-muted-foreground">
+              {t('fiscalYearEnd')}
+            </label>
+            <NativeSelect
+              id={fyId}
+              size="sm"
+              value={String(current.fiscalYearEndMonth)}
+              disabled={!canManage || save.isPending}
+              onChange={(e) => setDraft({ ...current, fiscalYearEndMonth: Number(e.target.value) })}
+            >
+              {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                <NativeSelectOption key={m} value={String(m)}>
+                  {t('fiscalYearEndMonth', { month: String(m) })}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </span>
+          {canManage && draft && (
+            <Button size="sm" onClick={() => save.mutate(current)} disabled={save.isPending}>
+              {save.isPending ? <Spinner className="text-current" /> : null}
+              {t('taxCalendarSave')}
+            </Button>
+          )}
+        </div>
+      </dd>
+      <dd className="mt-1 text-xs text-subtle-foreground">{t('taxCalendarHint')}</dd>
+      {profile.error && <ErrorText>{errorMessage(profile.error)}</ErrorText>}
+      {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
+    </div>
+  );
+}
+
 // Approval reminders (issue #676): after how many days a pending proposal reminds the people who may approve it, and
 // after how many its owners are told. Owners and admins choose; everyone else sees the setting.
 const REMIND_DAYS = [1, 2, 3, 5, 7] as const;
@@ -838,6 +946,7 @@ export function SettingsPage() {
               <TaxCodeField key={`${org.data?.slug}:${org.data?.taxCode ?? ''}`} taxCode={org.data?.taxCode ?? null} canManage={canManage} />
             )}
             {getConfig().modules.includes('finance') && <VatFilingPeriodField period={org.data?.vatFilingPeriod ?? null} canManage={canManage} />}
+            {getConfig().modules.includes('finance') && <TaxCalendarField key={org.data?.slug} canManage={canManage} />}
             <AddressField key={`${org.data?.slug}:${org.data?.address ?? ''}`} address={org.data?.address ?? null} canManage={canManage} />
             {getConfig().modules.includes('finance') && (
               <ContactEmailField key={`${org.data?.slug}:${org.data?.contactEmail ?? ''}`} email={org.data?.contactEmail ?? null} canManage={canManage} />

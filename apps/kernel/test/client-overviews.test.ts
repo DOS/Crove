@@ -8,7 +8,7 @@ import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime
 const USER = '0198a3a0-0000-7000-8000-000000000001';
 const actor: UserActor = { type: 'user', userId: USER, aal: 'aal1', sessionId: '0198a3a0-0000-7000-8000-0000000000aa', mfaAt: null };
 const org = (n: number) => ({ orgId: `0198a3a0-0000-7000-8000-${String(n).padStart(12, '0')}`, slug: `org-${n}`, name: `Org ${n}`, role: 'member' as const });
-const figures = (n: number): OrgOverview => ({ pendingProposals: n, failedFiles: 0, lastActivityAt: null, vatFilingPeriod: null, vatDeadline: null });
+const figures = (n: number): OrgOverview => ({ pendingProposals: n, failedFiles: 0, lastActivityAt: null, vatFilingPeriod: null, vatDeadline: null, taxDues: [] });
 
 function fakeRuntime(orgs: ReturnType<typeof org>[], query: (orgId: string) => OrgOverview) {
   const calls: Array<{ name: string; orgId: string; userId: string }> = [];

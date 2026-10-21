@@ -122,6 +122,7 @@ import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-vo
 import { zDepreciationRequest, zJournalVoucherRequest, zYearClosingRequest } from './journal-voucher.ts';
 import { zFixedAsset, zFixedAssetCreate, zFixedAssetEnd } from './fixed-asset.ts';
 import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts';
+import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
@@ -165,6 +166,11 @@ export const contract = {
     // may approve it, and after how many its owners are told; null turns either off. Escalation must come later.
     proposalPolicy: oc.output(zProposalPolicy),
     setProposalPolicy: oc.input(zProposalPolicy).output(zProposalPolicy),
+    // The tax calendar (issue #921): everyone reads which obligations apply, owners and admins set them; owners, admins
+    // and members mark an obligation done for a period (or take the mark back), which removes it from the home screen.
+    taxProfile: oc.output(zTaxProfile.extend({ since: zLocalDate.nullable() })),
+    setTaxProfile: oc.input(zTaxProfile).output(zTaxProfile.extend({ since: zLocalDate.nullable() })),
+    markTaxObligation: oc.input(zTaxObligationMark.extend({ done: z.boolean() })).output(zTaxObligationMark.extend({ done: z.boolean() })),
     // Owners and admins (issue #672): the org's audit log, newest first, filtered and paged; the commands it holds, for
     // the filter; and the filtered list as a CSV file (the export leaves its own audit row).
     audit: oc.input(zAuditFilter.extend({ before: zAuditCursor.optional() })).output(zAuditPage),
