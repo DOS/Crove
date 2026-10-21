@@ -185,10 +185,16 @@ async function headline(ctx: CommandContext, start: Date, end: Date, ids: readon
 }
 
 // Writes a run and queues one mail per recipient; returns the run and how many were queued and suppressed.
+// Scheduled report mails one inbox may get in 24 hours from every org together (#735); one over is recorded as
+// suppressed (recipient_daily_cap) and not sent. A test goes to its sender and is not counted.
+export const REPORT_MAILS_PER_RECIPIENT_PER_DAY = 5;
+
 async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' | 'test', period: { start: number; end: number }, recipients: readonly string[], createdBy: string | null) {
   const start = new Date(period.start);
   const end = new Date(period.end);
   const numbers = await headline(ctx, start, end, s.connection_ids);
+  // The sending org, named in the mail's footer.
+  const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('name').where('org_id', '=', ctx.orgId).executeTakeFirst();
   const run = await ctx.trx
     .insertInto('crove_social.report_schedule_run')
     .values({ org_id: ctx.orgId, schedule_id: s.id, kind, period_start: start, period_end: end, created_by: createdBy, created_at: ctx.now })
@@ -196,6 +202,14 @@ async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' |
     .executeTakeFirstOrThrow();
   let mails = 0;
   let suppressed = 0;
+  // Gated in one order, sorted by address, so two runs holding inbox locks never wait on each other in a cycle.
+  const capped = new Set<string>();
+  if (kind === 'scheduled') {
+    for (const to of [...recipients].sort()) {
+      const gate = await sql<{ ok: boolean }>`SELECT crove_social.report_mail_recipient_gate(${to}, ${REPORT_MAILS_PER_RECIPIENT_PER_DAY}::int) AS ok`.execute(ctx.trx);
+      if (gate.rows[0]?.ok !== true) capped.add(to);
+    }
+  }
   for (const to of recipients) {
     const mail = await createMailMessage(ctx, {
       stream: 'transactional',
@@ -204,8 +218,8 @@ async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' |
       templateKey: REPORT_MAIL_TEMPLATE,
       to,
       subject: `Báo cáo mạng xã hội: ${s.name}`,
-      payload: { name: s.name, periodStart: start.toISOString(), periodEnd: end.toISOString(), timeZone: s.time_zone, test: kind === 'test', ...numbers },
-      status: 'queued',
+      payload: { name: s.name, periodStart: start.toISOString(), periodEnd: end.toISOString(), timeZone: s.time_zone, test: kind === 'test', ...(org?.name ? { orgName: org.name } : {}), ...numbers },
+      ...(capped.has(to) ? { status: 'suppressed' as const, errorCode: 'recipient_daily_cap' } : { status: 'queued' as const }),
     });
     if (mail.status === 'suppressed') suppressed++;
     else mails++;
