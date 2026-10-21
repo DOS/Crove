@@ -12,6 +12,7 @@ import { REPOST_PROVIDERS, isProvider, repostRuleOf } from './domain/channels.ts
 import { publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
+import { publishingHeld } from './publish-hold.ts';
 
 export const REPOST_STEP = 'repost';
 const ACTOR: SystemActor = { type: 'system', component: 'social.repost' };
@@ -58,6 +59,9 @@ export const repostBegin = defineCommand({
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<RepostWork> => {
     requireSystem(ctx);
+    // Nothing goes out while the org's publishing is held (#946): no call is recorded, so a sweep after the release
+    // makes the one repost.
+    if (await publishingHeld(ctx)) return { action: 'none', reason: 'held' };
     const v = await lockVariant(ctx, input.variantId);
     const rule = repostRuleOf(settingsOf(v));
     if (!rule || rule === 'invalid') return { action: 'none', reason: 'no_repost' };

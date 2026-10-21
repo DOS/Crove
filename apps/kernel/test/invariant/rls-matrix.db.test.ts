@@ -42,6 +42,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.tax_obligation_done',
+  'crove_kernel.tax_profile',
   'crove_social.publish_hold',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -171,6 +173,8 @@ const socialShortLinkRows = (o: { id: string; owner: string }) => {
   };
 };
 let portalListYear = 2000;
+// A tax obligation is marked done once per period (#921): each row its own year.
+let taxObligationYear = 2000;
 const portalListRow = (o: { id: string; file: string }) => ({
   org_id: o.id,
   id: randomUUID(),
@@ -583,6 +587,14 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         row: { org_id: o.id, task_id: task, body: 'RLS matrix', author_type: 'user' },
       };
     },
+  },
+  // A tax obligation of the org's calendar marked done for a period (#921), one per obligation and period.
+  'crove_kernel.tax_obligation_done': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), obligation: 'license_fee', period: String(taxObligationYear++), done_by: o.owner } }),
+  },
+  // #921: which tax obligations apply to the org, its PIT filing frequency and fiscal year end (one row per org).
+  'crove_kernel.tax_profile': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), pit_filing_period: 'month', fiscal_year_end_month: 12, obligations: '{vat_return}', updated_by: o.owner } }),
   },
   'crove_kernel.tenant': {
     seed: false,

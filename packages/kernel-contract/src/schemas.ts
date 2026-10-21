@@ -1438,6 +1438,11 @@ export const zSocialMetricsRow = z.object({
   clicks: z.number().int().nullable(),
 });
 
+// A window's totals of published posts (#397): variants out, the sum of each count, and the clicks on their short
+// links (null when none went out with one); and the same per channel, most posts first (#947).
+const zSocialTotals = z.object({ posts: z.number().int(), metrics: z.record(z.string(), z.number()), clicks: z.number().nullable() });
+export const zSocialWindowTotals = zSocialTotals.extend({ channels: z.array(zSocialTotals.extend({ connectionId: zId, provider: z.string() })) });
+
 export const zSocialQueue = z.object({
   connectionId: zId,
   queueId: zId.nullable(),
@@ -1519,7 +1524,7 @@ export const zSocialLinkPreview = z.object({
 });
 
 // In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention'] as const;
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold'] as const;
 export const zSocialNotificationKind = z.enum(SOCIAL_NOTIFICATION_KINDS);
 export const zSocialNotifications = z.object({
   items: z.array(

@@ -11,6 +11,7 @@ import { effectiveContent } from './domain/approval.ts';
 import { insertVariants, writePostMedia } from './posts.ts';
 import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
+import { publishingHeld } from './publish-hold.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const EVERGREEN_SWEEP_MS = 60 * 60_000;
@@ -167,6 +168,8 @@ export const postRepostEvergreen = defineCommand({
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    // No repost piles up for review while the org's publishing is held (#946); the post stays due for after the release.
+    if (await publishingHeld(ctx)) return { postId: null };
     // The scan ran outside this transaction: under the post's lock, check again that it is still evergreen and has no
     // repost on its way (another worker, or a person turning it off, may have come first).
     await lockPost(ctx.trx, ctx.orgId, input.postId);

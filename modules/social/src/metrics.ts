@@ -105,42 +105,92 @@ export const metricsSummary = defineQuery({
 // What the screens show at most, and what one export holds at most (it says when it was cut).
 const SUMMARY_LIMIT = 500;
 
+// A window's totals: how many variants went out, the sum of each count, and the clicks on their short links (null
+// when none went out with one).
+export interface MetricsTotals {
+  posts: number;
+  metrics: Record<string, number>;
+  clicks: number | null;
+}
+export interface ChannelTotals extends MetricsTotals {
+  connectionId: string;
+  provider: string;
+}
+export interface WindowTotals extends MetricsTotals {
+  channels: ChannelTotals[];
+}
+
 // The window's totals (#397), summed in SQL over every published channel, not only the rows the summary lists: the
-// last real answer of each, and the clicks on its short links (null when no channel sent links through them).
+// last real answer of each, and the clicks on its short links (null when no channel sent links through them); also
+// per channel. previous (#947): the same for the window of the same length just before, so a screen can show the
+// change. Both list every channel with posts in either window (0 posts and no counts in the one it did not post in),
+// in the same order (most posts now, then most before), so the channels add up to both windows' totals.
 export const metricsTotals = defineQuery({
   name: 'social.metrics.totals',
   input: z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() }),
   access: ALL,
-  handler: async (ctx, input): Promise<{ posts: number; metrics: Record<string, number>; clicks: number | null }> => {
-    const labelled = input.labelId
-      ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${input.labelId}::uuid)`
-      : sql``;
-    const { rows } = await sql<{ posts: string; metrics: Record<string, number>; clicks: string | null }>`
-      WITH v AS (
-        SELECT v.org_id, v.id FROM crove_social.post_variant v
-        WHERE v.org_id = ${ctx.orgId} AND v.status = 'published'
-          AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${input.days ?? 30}::int) ${labelled}
-      ), latest AS (
-        SELECT s.metrics FROM v CROSS JOIN LATERAL (
-          SELECT m.metrics FROM crove_social.metric_snapshot m
-          WHERE m.org_id = v.org_id AND m.variant_id = v.id
-          ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
-        ) s
-      )
-      SELECT (SELECT count(*) FROM v) AS posts,
-             (SELECT coalesce(jsonb_object_agg(t.key, t.total), '{}'::jsonb) FROM (
-                SELECT e.key, sum((e.value #>> '{}')::numeric) AS total FROM latest, jsonb_each(latest.metrics) e
-                WHERE jsonb_typeof(e.value) = 'number' GROUP BY e.key
-              ) t) AS metrics,
-             (SELECT CASE WHEN count(l.id) = 0 THEN NULL ELSE coalesce(sum(c.clicks), 0) END FROM v
-              JOIN crove_social.short_link l ON l.org_id = v.org_id AND l.variant_id = v.id
-              LEFT JOIN crove_social.short_link_click c ON c.org_id = l.org_id AND c.short_link_id = l.id) AS clicks`.execute(ctx.trx);
-    const row = rows[0];
-    const metrics: Record<string, number> = {};
-    for (const [name, value] of Object.entries(row?.metrics ?? {})) metrics[name] = Number(value);
-    return { posts: Number(row?.posts ?? 0), metrics, clicks: row?.clicks === null || row?.clicks === undefined ? null : Number(row.clicks) };
+  handler: async (ctx, input): Promise<WindowTotals & { previous: WindowTotals }> => {
+    const days = input.days ?? 30;
+    const current = await windowTotals(ctx.trx, ctx.orgId, days, 0, input.labelId);
+    const previous = await windowTotals(ctx.trx, ctx.orgId, days, days, input.labelId);
+    const now = new Map(current.channels.map((c) => [c.connectionId, c] as const));
+    const before = new Map(previous.channels.map((c) => [c.connectionId, c] as const));
+    const none = (c: ChannelTotals): ChannelTotals => ({ connectionId: c.connectionId, provider: c.provider, posts: 0, metrics: {}, clicks: null });
+    const ids = [...new Set([...now.keys(), ...before.keys()])].sort(
+      (a, b) => (now.get(b)?.posts ?? 0) - (now.get(a)?.posts ?? 0) || (before.get(b)?.posts ?? 0) - (before.get(a)?.posts ?? 0) || (a < b ? -1 : a > b ? 1 : 0),
+    );
+    const union = (own: Map<string, ChannelTotals>, other: Map<string, ChannelTotals>) => ids.map((id) => own.get(id) ?? none(other.get(id) as ChannelTotals));
+    return { ...current, channels: union(now, before), previous: { ...previous, channels: union(before, now) } };
   },
 });
+
+// The totals of the variants published in the days-long window that ends `before` days ago (0: now, open-ended).
+async function windowTotals(trx: Trx, orgId: string, days: number, before: number, labelId: string | undefined): Promise<WindowTotals> {
+  const labelled = labelId
+    ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${labelId}::uuid)`
+    : sql``;
+  const end = sql`pg_catalog.now() - pg_catalog.make_interval(days => ${before}::int)`;
+  const ends = before === 0 ? sql`` : sql`AND v.published_at <= ${end}`;
+  // A window before now counts its posts' short link clicks up to its end only, on the days (UTC) whose midday is in
+  // it, as the client report does; the later clicks belong to the windows after it. A post's clicks all come after it
+  // went out, so the start needs no bound.
+  const clickedBy = before === 0 ? sql`` : sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' <= ${end}`;
+  const { rows } = await sql<{ conn: string; provider: string; posts: string; metrics: Record<string, number>; clicks: string | null }>`
+    WITH v AS (
+      SELECT v.org_id, v.id, v.channel_connection_id AS conn, v.provider FROM crove_social.post_variant v
+      WHERE v.org_id = ${orgId} AND v.status = 'published'
+        AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${ends} ${labelled}
+    ), latest AS (
+      SELECT v.conn, s.metrics FROM v CROSS JOIN LATERAL (
+        SELECT m.metrics FROM crove_social.metric_snapshot m
+        WHERE m.org_id = v.org_id AND m.variant_id = v.id
+        ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
+      ) s
+    ), sums AS (
+      SELECT latest.conn, e.key, sum((e.value #>> '{}')::numeric) AS total FROM latest, jsonb_each(latest.metrics) e
+      WHERE jsonb_typeof(e.value) = 'number' GROUP BY latest.conn, e.key
+    ), clicks AS (
+      SELECT v.conn, coalesce(sum(c.clicks), 0) AS clicks FROM v
+      JOIN crove_social.short_link l ON l.org_id = v.org_id AND l.variant_id = v.id
+      LEFT JOIN crove_social.short_link_click c ON c.org_id = l.org_id AND c.short_link_id = l.id ${clickedBy}
+      GROUP BY v.conn
+    )
+    SELECT v.conn, min(v.provider) AS provider, count(*) AS posts,
+           (SELECT coalesce(jsonb_object_agg(s.key, s.total), '{}'::jsonb) FROM sums s WHERE s.conn = v.conn) AS metrics,
+           (SELECT k.clicks FROM clicks k WHERE k.conn = v.conn) AS clicks
+    FROM v GROUP BY v.conn
+    ORDER BY count(*) DESC, v.conn`.execute(trx);
+  const channels: ChannelTotals[] = rows.map((r) => {
+    const metrics: Record<string, number> = {};
+    for (const [name, value] of Object.entries(r.metrics ?? {})) metrics[name] = Number(value);
+    return { connectionId: r.conn, provider: r.provider, posts: Number(r.posts), metrics, clicks: r.clicks === null ? null : Number(r.clicks) };
+  });
+  // The window's totals are the sums of its channels' (counts, never money).
+  const metrics: Record<string, number> = {};
+  for (const c of channels) for (const [name, value] of Object.entries(c.metrics)) metrics[name] = (metrics[name] ?? 0) + value;
+  const linked = channels.filter((c) => c.clicks !== null);
+  return { posts: channels.reduce((sum, c) => sum + c.posts, 0), metrics, clicks: linked.length === 0 ? null : linked.reduce((sum, c) => sum + (c.clicks ?? 0), 0), channels };
+}
 export const EXPORT_LIMIT = 10_000;
 
 interface MetricsFilter {
