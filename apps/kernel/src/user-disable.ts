@@ -66,9 +66,16 @@ export async function setUserDisabled(runtime: Pick<Runtime, 'orgless' | 'execut
   });
   if (!row) throw new Error('crove_kernel.user_set_disabled returned no row');
   if (row.outcome !== 'ok' || !row.user_id || !row.org_ids) throw new Error(OUTCOMES[row.outcome] ?? `unexpected outcome ${row.outcome}`);
+  // One org's failed note does not keep the others from theirs; the run then fails naming them, and can be repeated.
+  const failed: string[] = [];
   for (const orgId of row.org_ids) {
-    await runtime.execute('kernel.user.status_note', { userId: row.user_id, disabled, changed: row.changed === true, reason: args.reason }, { actor: OPERATOR, orgId });
+    try {
+      await runtime.execute('kernel.user.status_note', { userId: row.user_id, disabled, changed: row.changed === true, reason: args.reason }, { actor: OPERATOR, orgId });
+    } catch (e) {
+      failed.push(`${orgId} (${e instanceof Error ? e.message : String(e)})`);
+    }
   }
+  if (failed.length > 0) throw new Error(`account ${row.user_id} was ${disabled ? 'disabled' : 'enabled'}, but the audit note failed in ${failed.join(', ')}; run it again`);
   return { userId: row.user_id, changed: row.changed === true, disabledAt: row.disabled_at, orgs: row.org_ids.length };
 }
 

@@ -428,7 +428,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
       await assertSystemContextAccess(pool, 'granted');
       return await runUserDisable({ runtime }, disabled, argv);
     } finally {
-      await pool.end();
+      // Best effort: a failure to close never hides the run's own outcome.
+      await pool.end().catch((error: unknown) => console.error('[user-status] could not close the pool', error));
     }
   }
 

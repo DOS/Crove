@@ -1,7 +1,7 @@
 // The user-disable and user-enable arguments and exit codes (issue #985). The database part is in
 // user-disable.db.test.ts.
 import { describe, expect, it } from 'vitest';
-import { USER_DISABLE_EXIT, parseUserDisableArgs, runUserDisable } from '../src/user-disable.ts';
+import { USER_DISABLE_EXIT, parseUserDisableArgs, runUserDisable, setUserDisabled } from '../src/user-disable.ts';
 
 describe('user-disable arguments', () => {
   it('takes one account and a reason', () => {
@@ -31,5 +31,19 @@ describe('user-disable arguments', () => {
     expect(await runUserDisable({ runtime, log: () => {}, error: (l) => errors.push(l) }, true, ['a@b.test'])).toBe(USER_DISABLE_EXIT.failed);
     expect(errors[0]).toMatch(/^\[user-disable\] --reason is required/);
     expect(calls).toBe(0);
+  });
+
+  it('notes the other orgs when one note fails, then fails naming it', async () => {
+    const noted: string[] = [];
+    const runtime = {
+      orgless: async () => ({ outcome: 'ok', user_id: 'u1', changed: true, disabled_at: new Date(), org_ids: ['org-a', 'org-b'] }) as never,
+      execute: async (_name: string, _input: unknown, options: { orgId: string }) => {
+        if (options.orgId === 'org-a') throw new Error('lock timeout');
+        noted.push(options.orgId);
+        return undefined as never;
+      },
+    } as unknown as Parameters<typeof setUserDisabled>[0];
+    await expect(setUserDisabled(runtime, true, { ref: 'a@b.test', reason: 'x' })).rejects.toThrow(/audit note failed in org-a \(lock timeout\); run it again/);
+    expect(noted).toEqual(['org-b']);
   });
 });
