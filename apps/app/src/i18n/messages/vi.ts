@@ -906,6 +906,12 @@ export const vi = {
     },
   },
   inboxDetail: {
+    timeline: 'Lịch sử chứng từ',
+    timelineEmpty: 'Chưa có hoạt động nào được ghi lại',
+    timelineMore: 'Chỉ hiện 200 hoạt động gần nhất',
+    timelineSystem: 'Hệ thống',
+    timelineAgent: 'tác tử AI',
+    timelineFormer: 'Thành viên cũ',
     back: '← Hộp thư chứng từ',
     openPdf: 'Mở PDF trong tab mới',
     xmlFile: 'Tệp XML hóa đơn điện tử',

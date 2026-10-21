@@ -908,6 +908,12 @@ export const en = {
     },
   },
   inboxDetail: {
+    timeline: 'Document history',
+    timelineEmpty: 'No activity recorded yet',
+    timelineMore: 'Only the latest 200 entries are shown',
+    timelineSystem: 'System',
+    timelineAgent: 'AI agent',
+    timelineFormer: 'Former member',
     back: '← Document inbox',
     openPdf: 'Open the PDF in a new tab',
     xmlFile: 'E-invoice XML file',

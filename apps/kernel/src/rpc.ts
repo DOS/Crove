@@ -1015,6 +1015,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       get: os.inbox.get.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.query('kernel.inbox.get', input, { actor, orgId })),
       ),
+      timeline: os.inbox.timeline.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.proposal.timeline', input, { actor, orgId }))),
       approve: os.inbox.approve.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;
