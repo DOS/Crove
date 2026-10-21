@@ -2048,6 +2048,7 @@ export const en = {
       IMAGE_TOO_SMALL: 'Image {n, number} is {actual, number} px wide; this channel needs at least {limit, number} px',
       VIDEO_TOO_LARGE: 'The video is too large for this channel',
       VIDEO_TOO_LONG: 'The video is too long for this channel',
+      VIDEO_LENGTH_UNKNOWN: 'The video’s length could not be read; upload it again (MP4 or MOV)',
       TOO_MANY_LINKS: 'The post has {actual, number} links; this channel allows {limit, number}',
       COMMENT_TOO_LONG: 'The first comment is {actual, number} long; this channel allows {limit, number}',
       VISIBILITY_INVALID: 'Pick public or unlisted',

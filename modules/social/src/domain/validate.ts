@@ -53,6 +53,7 @@ export type IssueCode =
   | 'IMAGE_TOO_SMALL'
   | 'VIDEO_TOO_LARGE'
   | 'VIDEO_TOO_LONG'
+  | 'VIDEO_LENGTH_UNKNOWN'
   // The platform takes video, Crove's adapter for it does not yet.
   | 'VIDEO_NOT_SUPPORTED_YET'
   // TikTok: the person posting picks who sees the video; there is no default.
@@ -228,6 +229,8 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
       if (maxSeconds !== null && m.durationSeconds !== null && m.durationSeconds > maxSeconds) {
         issues.push({ code: 'VIDEO_TOO_LONG', field, limit: maxSeconds, actual: m.durationSeconds });
       }
+      // A channel with a length limit and a video whose length could not be read (#850): checked, not let through.
+      if (maxSeconds !== null && m.durationSeconds === null) issues.push({ code: 'VIDEO_LENGTH_UNKNOWN', field, limit: maxSeconds, actual: null });
     }
   });
 
