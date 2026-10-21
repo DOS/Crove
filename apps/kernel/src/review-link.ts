@@ -20,18 +20,36 @@ const zFile = z.strictObject({ token: zToken, fileId: z.string().uuid() });
 const zText = (max: number) => z.string().trim().max(max).refine((s) => !s.includes('\u0000'), 'NUL is not allowed');
 const zAnswer = z.strictObject({
   token: zToken,
+  // The post answered on a plan link (#902); a single-post link's answer names none.
+  postId: z.string().uuid().optional(),
   name: zText(100).pipe(z.string().min(1)),
   verdict: z.enum(['approved', 'changes_requested', 'comment']),
   body: zText(2000).optional(),
 });
 
-export interface ReviewPage {
+type ReviewChannel = { provider: string; channel: string; status: string; body: string; title: string | null; linkUrl: string | null };
+type ReviewAnswer = { name: string; verdict: string; body: string | null; at: string };
+export interface ReviewPostPage {
+  kind?: undefined;
   org: string;
   expiresAt: string;
   changed: boolean;
-  channels: { provider: string; channel: string; status: string; body: string; title: string | null; linkUrl: string | null; mediaCount: number }[];
-  feedback: { name: string; verdict: string; body: string | null; at: string }[];
+  channels: (ReviewChannel & { mediaCount: number })[];
+  feedback: ReviewAnswer[];
 }
+// A plan link's page (#902): its posts in schedule order, each with its files' ids, or only gone when cancelled since.
+export interface ReviewPlanPage {
+  kind: 'plan';
+  org: string;
+  expiresAt: string;
+  from: string | null;
+  to: string | null;
+  posts: (
+    | { id: string; gone: true }
+    | { id: string; gone: false; at: string | null; changed: boolean; channels: (ReviewChannel & { media: { id: string; type: string }[] })[]; answers: number; feedback: ReviewAnswer[] }
+  )[];
+}
+export type ReviewPage = ReviewPostPage | ReviewPlanPage;
 
 // null: a malformed body, or a token that names no live link (the same answer either way).
 export async function reviewView(runtime: Runtime, body: unknown): Promise<ReviewPage | null> {
@@ -84,16 +102,19 @@ export async function reviewAnswer(runtime: Runtime, body: unknown): Promise<{ r
     }
     return null;
   }
-  const { token, name, verdict } = parsed.data;
+  const { token, postId, name, verdict } = parsed.data;
   const text = parsed.data.body ? parsed.data.body : null;
   if (verdict === 'comment' && !text) throw new DomainError('REVIEW_ANSWER_INVALID', 422, 'Hãy nhập tên của bạn; một bình luận cần có nội dung');
   return runtime.orgless(async (db) => {
     try {
-      const { rows } = await sql<{ done: { recorded: true } | null }>`SELECT crove_social.review_feedback_add(${token}, ${name}, ${verdict}, ${text}) AS done`.execute(db);
+      const { rows } = postId
+        ? await sql<{ done: { recorded: true } | null }>`SELECT crove_social.review_plan_feedback_add(${token}, ${postId}::uuid, ${name}, ${verdict}, ${text}) AS done`.execute(db)
+        : await sql<{ done: { recorded: true } | null }>`SELECT crove_social.review_feedback_add(${token}, ${name}, ${verdict}, ${text}) AS done`.execute(db);
       return rows[0]?.done ?? null;
     } catch (error) {
       const code = (error as { code?: unknown }).code;
       if (code === '54000') throw new DomainError('REVIEW_ANSWER_LIMIT', 429, 'Liên kết này đã nhận đủ số ý kiến tối đa');
+      if (code === '55000') throw new DomainError('REVIEW_POST_GONE', 409, 'Bài này không còn trong kế hoạch');
       if (code === '22023' || code === '22021' || code === '22P05') throw new DomainError('REVIEW_ANSWER_INVALID', 422, 'Hãy nhập tên của bạn; một bình luận cần có nội dung');
       throw error;
     }

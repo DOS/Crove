@@ -1,6 +1,6 @@
 // Client review links on the post screen (#589): owners and admins make one (shown once, to copy and send, often over
 // Zalo), revoke it, and everyone sees what clients answered. A client's answer is a signal for the team, never one of
-// the approvals a channel needs.
+// the approvals a channel needs. The plan links the post is in (#902) are listed too.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -12,12 +12,13 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
+import { reviewUrl } from '../lib/social-plan-review.ts';
 
 const DAYS = [3, 7, 14, 30] as const;
 
-// What review_feedback_add takes per link (REVIEW_LINK_ANSWERS_MAX on the server), and where the card starts warning.
-const ANSWERS_MAX = 100;
-const ANSWERS_WARN = 90;
+// Where the card starts warning, as a share of what a link takes (answersMax: REVIEW_LINK_ANSWERS_MAX per link, or
+// REVIEW_PLAN_ANSWERS_PER_POST for this post of a plan link, #902).
+const nearlyFull = (used: number, max: number) => used >= Math.ceil(max * 0.9);
 
 export function ReviewLinks({ postId, canDecide }: { postId: string; canDecide: boolean }) {
   const t = useTranslations('social.reviewLinks');
@@ -30,12 +31,18 @@ export function ReviewLinks({ postId, canDecide }: { postId: string; canDecide: 
   const create = useMutation({
     mutationFn: () => client.social.reviewLinks.create({ postId, days }),
     onSuccess: (r) => {
-      setMade({ url: `${window.location.origin}/-/review#${r.token}`, expiresAt: r.expiresAt });
+      setMade({ url: reviewUrl(window.location.origin, r.token), expiresAt: r.expiresAt });
       setCopied(false);
       refresh();
     },
   });
-  const revoke = useMutation({ mutationFn: (linkId: string) => client.social.reviewLinks.revoke({ linkId }), onSuccess: refresh });
+  const revoke = useMutation({
+    mutationFn: (linkId: string) => client.social.reviewLinks.revoke({ linkId }),
+    onSuccess: () => {
+      refresh();
+      void queryClient.invalidateQueries({ queryKey: orpc.social.reviewLinks.plans.key() });
+    },
+  });
   const copy = async () => {
     if (!made) return;
     try {
@@ -88,21 +95,28 @@ export function ReviewLinks({ postId, canDecide }: { postId: string; canDecide: 
           {live.map((l) => (
             <li key={l.id} className="flex flex-wrap items-center gap-2">
               <span>{t('liveUntil', { until: f.dateTime(l.expiresAt) })}</span>
+              {l.kind === 'plan' && <Badge variant="secondary">{t('inPlan', { count: l.posts })}</Badge>}
               {l.changed && <Badge variant="outline">{t('changedSince')}</Badge>}
-              {/* A link takes 100 answers (#626): near the end, the team sends a new one before the client hits the wall. */}
-              {l.answers >= ANSWERS_MAX ? (
+              {/* A link takes 100 answers (#626), a plan link 20 per post: near the end, the team sends a new one before the client hits the wall. */}
+              {l.answers >= l.answersMax ? (
                 <Badge variant="outline" className="border-destructive/50 text-destructive">
-                  {t('full', { max: ANSWERS_MAX })}
+                  {t('full', { max: l.answersMax })}
                 </Badge>
-              ) : l.answers >= ANSWERS_WARN ? (
+              ) : nearlyFull(l.answers, l.answersMax) ? (
                 <Badge variant="outline" className="border-warning/50 text-warning">
-                  {t('nearlyFull', { used: l.answers, max: ANSWERS_MAX })}
+                  {t('nearlyFull', { used: l.answers, max: l.answersMax })}
                 </Badge>
               ) : l.answers > 0 ? (
-                <span>{t('answers', { used: l.answers, max: ANSWERS_MAX })}</span>
+                <span>{t('answers', { used: l.answers, max: l.answersMax })}</span>
               ) : null}
               {canDecide && (
-                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={revoke.isPending} onClick={() => revoke.mutate(l.id)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs"
+                  disabled={revoke.isPending}
+                  onClick={() => (l.kind !== 'plan' || window.confirm(t('revokePlanConfirm', { count: l.posts }))) && revoke.mutate(l.id)}
+                >
                   {t('revoke')}
                 </Button>
               )}

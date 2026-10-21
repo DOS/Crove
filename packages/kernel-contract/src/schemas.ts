@@ -1151,11 +1151,44 @@ const zLabelName = z.string().trim().min(1).max(50);
 export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS).optional() });
 export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS) });
 // Client review links (#589): the team's view of a post's links and what clients said through them.
+// A plan link (#902) the post is in is listed too, with the posts it covers and its own cap of answers per post.
 export const zSocialReviewLinks = z.object({
-  links: z.array(z.object({ id: zId, answers: z.number().int().min(0), createdBy: zId, createdAt: z.string(), expiresAt: z.string(), revokedAt: z.string().nullable(), changed: z.boolean() })),
+  links: z.array(
+    z.object({
+      id: zId,
+      kind: z.enum(['post', 'plan']),
+      posts: z.number().int().min(1),
+      answers: z.number().int().min(0),
+      answersMax: z.number().int().min(1),
+      createdBy: zId,
+      createdAt: z.string(),
+      expiresAt: z.string(),
+      revokedAt: z.string().nullable(),
+      changed: z.boolean(),
+    }),
+  ),
   feedback: z.array(
     z.object({ id: zId, linkId: zId, name: z.string(), verdict: z.enum(['approved', 'changes_requested', 'comment']), body: z.string().nullable(), changed: z.boolean(), createdAt: z.string() }),
   ),
+});
+// One client review link for a content plan (#902): the posts picked in the posts list, or those going out in a
+// date range [from, to) on the chosen channels (none: all).
+export const zSocialReviewPlanCreate = z.strictObject({
+  postIds: z.array(zId).min(1).max(50).optional(),
+  range: z.strictObject({ from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }), connectionIds: z.array(zId).min(1).max(50).optional() }).optional(),
+  days: z.number().int().min(1).max(30).optional(),
+});
+export const zSocialReviewPlanLink = z.object({
+  id: zId,
+  createdBy: zId,
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  revokedAt: z.string().nullable(),
+  from: z.string().nullable(),
+  to: z.string().nullable(),
+  posts: z.number().int().min(0),
+  answered: z.number().int().min(0),
+  gone: z.number().int().min(0),
 });
 
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.

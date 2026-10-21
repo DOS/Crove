@@ -1,5 +1,6 @@
 // The client review page (#589): /-/review#<token>, opened from a link the agency sent (often over Zalo), with no
-// account. It shows the post as each channel will show it and takes the client's answer with the name they type.
+// account. It shows the post as each channel will show it and takes the client's answer with the name they type. A
+// plan link (#902) shows each of its posts in schedule order and takes an answer on each.
 // The token stays after the # (browsers never send it to a server in the address) and goes to the API in a POST
 // body only.
 import { useMutation, useQuery } from '@tanstack/react-query';
@@ -16,15 +17,30 @@ import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage } from '../lib/api.ts';
 import { apiErrorFromResponse } from '../lib/errors.ts';
+import { planProgress } from '../lib/social-plan-review.ts';
 
+type Verdict = 'approved' | 'changes_requested' | 'comment';
+type Answer = { name: string; verdict: Verdict; body: string | null; at: string };
+type Channel = { provider: string; channel: string; status: string; body: string; title: string | null; linkUrl: string | null };
 interface ReviewPage {
+  kind?: undefined;
   org: string;
   expiresAt: string;
   changed: boolean;
-  channels: { provider: string; channel: string; status: string; body: string; title: string | null; linkUrl: string | null; mediaCount: number }[];
-  feedback: { name: string; verdict: 'approved' | 'changes_requested' | 'comment'; body: string | null; at: string }[];
+  channels: (Channel & { mediaCount: number })[];
+  feedback: Answer[];
 }
-type Verdict = ReviewPage['feedback'][number]['verdict'];
+// A content plan (#902): its posts in schedule order, each answered on its own; a post cancelled since is only gone.
+type PlanPost = { id: string; gone: true } | { id: string; gone: false; at: string | null; changed: boolean; channels: (Channel & { media: { id: string; type: string }[] })[]; answers: number; feedback: Answer[] };
+interface PlanPage {
+  kind: 'plan';
+  org: string;
+  expiresAt: string;
+  from: string | null;
+  to: string | null;
+  posts: PlanPost[];
+}
+type FileFetcher = { key: string; fetch: (fileId: string) => Promise<Blob> };
 
 const NAME_KEY = 'crove.review.name';
 const tokenOf = () => {
@@ -60,12 +76,134 @@ async function reviewFile(token: string, fileId: string): Promise<Blob> {
   return res.blob();
 }
 
+const saveName = (name: string) => {
+  try {
+    window.localStorage.setItem(NAME_KEY, name);
+  } catch {
+    // A private window keeps no name; nothing else depends on it.
+  }
+};
+
+// One post of a plan: its previews, its answers through the link, and the client's answer on it alone.
+function PlanPostCard({ token, item, index, name, files, onAnswered }: { token: string; item: PlanPost; index: number; name: string; files: FileFetcher; onAnswered: () => void }) {
+  const t = useTranslations('social.clientReview');
+  const f = useFormat();
+  const [body, setBody] = useState('');
+  const [sent, setSent] = useState<Verdict | null>(null);
+  const answer = useMutation({
+    mutationFn: async (verdict: Verdict) => {
+      const done = await post<{ recorded: true }>('/api/review/answer', { token, postId: item.id, name: name.trim(), verdict, ...(body.trim() ? { body: body.trim() } : {}) });
+      if (!done) throw new Error(t('invalid'));
+      return verdict;
+    },
+    onSuccess: (verdict) => {
+      saveName(name.trim());
+      setSent(verdict);
+      setBody('');
+      onAnswered();
+    },
+  });
+  if (item.gone) {
+    return (
+      <Card className="block p-4 text-sm text-muted-foreground">
+        <p>
+          <span className="font-medium text-foreground">{t('planPost', { n: index + 1 })}</span> · {t('gone')}
+        </p>
+      </Card>
+    );
+  }
+  const decided = item.feedback.find((fb) => fb.verdict !== 'comment');
+  const bodyId = `plan-body-${item.id}`;
+  return (
+    <Card className="block space-y-3 p-4">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium text-foreground">{t('planPost', { n: index + 1 })}</span>
+        <span className="text-muted-foreground">{item.at ? f.dateTime(item.at) : t('noTime')}</span>
+        {decided && <span className={decided.verdict === 'approved' ? 'text-success' : 'text-warning'}>· {t(`verdict.${decided.verdict}`)}</span>}
+      </div>
+      {item.changed && <p className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">{t('planChanged')}</p>}
+      <div className="grid gap-4 md:grid-cols-2">
+        {item.channels.map((c, i) => (
+          <FileSource.Provider key={i} value={files}>
+            <PlatformPreview
+              channel={c.channel}
+              provider={c.provider}
+              content={{ body: c.body, title: c.title ?? '', linkUrl: c.linkUrl ?? '', media: c.media.map((m) => ({ fileId: m.id, altText: '', mime: m.type, sizeBytes: 0 })) }}
+            />
+          </FileSource.Provider>
+        ))}
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={bodyId}>{t('comment')}</Label>
+        <Textarea id={bodyId} value={body} maxLength={2000} rows={2} placeholder={t('commentPlaceholder')} onChange={(e) => setBody(e.target.value)} />
+      </div>
+      {sent && <p className="text-sm text-success">{t(`thanks.${sent}`)}</p>}
+      {answer.error && <ErrorText>{errorMessage(answer.error)}</ErrorText>}
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={answer.isPending || !name.trim()} onClick={() => answer.mutate('approved')}>
+          {t('approve')}
+        </Button>
+        <Button size="sm" variant="outline" disabled={answer.isPending || !name.trim()} onClick={() => answer.mutate('changes_requested')}>
+          {t('requestChanges')}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={answer.isPending || !name.trim() || !body.trim()} onClick={() => answer.mutate('comment')}>
+          {t('sendComment')}
+        </Button>
+      </div>
+      {item.feedback.length > 0 && (
+        <ul className="space-y-1 border-t pt-2 text-xs text-muted-foreground">
+          {item.feedback.map((fb, i) => (
+            <li key={i}>
+              <span className="font-medium text-foreground">{fb.name}</span> · {t(`verdict.${fb.verdict}`)} · {f.dateTime(fb.at)}
+              {fb.body && <span className="block whitespace-pre-wrap break-words text-foreground">{fb.body}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
+// The plan page (#902): the client's name once, then every post with its own answer.
+function PlanReview({ token, data, files, onAnswered }: { token: string; data: PlanPage; files: FileFetcher; onAnswered: () => void }) {
+  const t = useTranslations('social.clientReview');
+  const f = useFormat();
+  const [name, setName] = useState(readName);
+  const progress = planProgress(data.posts);
+  return (
+    <>
+      <div className="space-y-1">
+        <h1 className="text-lg font-semibold">{t('planTitle', { org: data.org })}</h1>
+        <p className="text-sm text-muted-foreground">
+          {data.from && data.to ? `${t('planPeriod', { from: f.date(data.from), to: f.date(new Date(Date.parse(data.to) - 1).toISOString()) })} · ` : ''}
+          {t('subtitle', { until: f.dateTime(data.expiresAt) })}
+        </p>
+        <p className="text-sm text-foreground">{t('planProgress', { answered: progress.answered, total: progress.total })}</p>
+      </div>
+      <Card className="block space-y-1.5 p-4">
+        <Label htmlFor="review-name">{t('name')}</Label>
+        <Input id="review-name" value={name} maxLength={100} autoComplete="name" onChange={(e) => setName(e.target.value)} />
+        <p className="text-xs text-subtle-foreground">{t('planNote')}</p>
+      </Card>
+      {data.posts.map((item, i) => (
+        <PlanPostCard key={`${token}:${item.id}`} token={token} item={item} index={i} name={name} files={files} onAnswered={onAnswered} />
+      ))}
+    </>
+  );
+}
+
 export function SocialReviewPage() {
   const t = useTranslations('social.clientReview');
   const f = useFormat();
   const [token] = useState(tokenOf);
-  const page = useQuery({ queryKey: ['client-review', token], queryFn: () => post<ReviewPage>('/api/review/view', { token }), enabled: token !== null, retry: false });
-  const media = useQuery({ queryKey: ['client-review-media', token], queryFn: () => post<{ channels: { id: string; type: string }[][] }>('/api/review/media', { token }), enabled: token !== null && page.isSuccess, retry: false });
+  const page = useQuery({ queryKey: ['client-review', token], queryFn: () => post<ReviewPage | PlanPage>('/api/review/view', { token }), enabled: token !== null, retry: false });
+  // A plan's page carries its files' ids itself.
+  const media = useQuery({
+    queryKey: ['client-review-media', token],
+    queryFn: () => post<{ channels: { id: string; type: string }[][] }>('/api/review/media', { token }),
+    enabled: token !== null && page.isSuccess && page.data?.kind !== 'plan',
+    retry: false,
+  });
   const [files] = useState(() => ({ key: `client-review-file:${token ?? ''}`, fetch: (fileId: string) => reviewFile(token ?? '', fileId) }));
   const [name, setName] = useState(readName);
   const [body, setBody] = useState('');
@@ -77,11 +215,7 @@ export function SocialReviewPage() {
       return verdict;
     },
     onSuccess: (verdict) => {
-      try {
-        window.localStorage.setItem(NAME_KEY, name.trim());
-      } catch {
-        // A private window keeps no name; nothing else depends on it.
-      }
+      saveName(name.trim());
       setSent(verdict);
       setBody('');
       void page.refetch();
@@ -101,6 +235,8 @@ export function SocialReviewPage() {
           <Spinner />
         ) : page.error ? (
           <ErrorText>{errorMessage(page.error)}</ErrorText>
+        ) : data?.kind === 'plan' ? (
+          token && <PlanReview token={token} data={data} files={files} onAnswered={() => void page.refetch()} />
         ) : data ? (
           <>
             <div>

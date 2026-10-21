@@ -53,6 +53,8 @@ import {
   zSocialLabelCreate,
   zSocialLabelUpdate,
   zSocialReviewLinks,
+  zSocialReviewPlanCreate,
+  zSocialReviewPlanLink,
   zSocialActivityItem,
   zSocialQueueSet,
   zSocialSchedule,
@@ -552,7 +554,11 @@ export const contract = {
     reviewLinks: {
       list: oc.input(z.object({ postId: zId })).output(zSocialReviewLinks),
       create: oc.input(z.strictObject({ postId: zId, days: z.number().int().min(1).max(30).optional() })).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),
-      revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId, postId: zId })),
+      // A plan link (#902): one link for several posts, answered one by one; the token is in this answer only.
+      createPlan: oc.input(zSocialReviewPlanCreate).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string(), posts: z.number().int().min(1) })),
+      plans: oc.input(z.object({})).output(z.array(zSocialReviewPlanLink)),
+      // postId is null for a plan link.
+      revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId, postId: zId.nullable() })),
     },
     // The media library (S9): the org's post images, newest first, and the posts that show one. Members tag files and
     // the list filters by one tag, whatever its case (#904); tags lists the org's tags for the filter.
