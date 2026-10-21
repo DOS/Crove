@@ -451,8 +451,8 @@ suite('kernel on PostgreSQL', () => {
     });
 
     type Payload = { invoice: { currency: string; subtotal: string; vatTotal: string; total: string; foreign?: unknown }; lines: Array<{ amount: string }>; checks: Array<{ id: string; status: string; code: string }> };
-    const payloadOf = async (id: string) => (await runtime.query<{ payload: Payload; revision: number }>('kernel.inbox.get', { id }, asAdmin));
-    const documentOf = (proposalId: string) =>
+    const payloadOf = async (id: string | null) => (await runtime.query<{ payload: Payload; revision: number }>('kernel.inbox.get', { id }, asAdmin));
+    const documentOf = (proposalId: string | null) =>
       withAdmin(async (c) => (await c.query(
         `SELECT currency, subtotal::text, vat_amount::text, total::text, exchange_rate::text, exchange_rate_source, foreign_subtotal::text, foreign_vat_amount::text, foreign_total::text
            FROM crove_finance.purchase_document WHERE org_id = $1 AND proposal_id = $2`,
