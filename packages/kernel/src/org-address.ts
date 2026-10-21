@@ -35,3 +35,28 @@ export const setAddress = defineCommand({
     return { address };
   },
 });
+
+// The org's contact email (issue #669): where the org's own mail goes, today Finance's request for the purchase
+// invoices the tax portal lists and Crove lacks. Owners and admins set or clear it in Settings; those mails name the
+// org's inbound address (which only they see) as the Reply-To, so nobody else may redirect them, and a database guard
+// (tenant_contact_email_guard) refuses any other writer. Stored lower-cased and trimmed. The audit row and the activity
+// feed say that it changed, never the address: both are kept for good, an address is personal data.
+export const CONTACT_EMAIL_MAX_LENGTH = 320;
+
+export const setContactEmail = defineCommand({
+  name: 'kernel.org.set_contact_email',
+  input: z.object({ email: z.email().max(CONTACT_EMAIL_MAX_LENGTH).nullable() }),
+  risk: 'R1',
+  access: ['owner', 'admin'],
+  handler: async (ctx, input) => {
+    const email = input.email === null ? null : input.email.trim().toLowerCase();
+    const before = await ctx.trx.selectFrom('crove_kernel.tenant').select('contact_email').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
+    const changed = before.contact_email !== email;
+    if (changed) {
+      await ctx.trx.updateTable('crove_kernel.tenant').set({ contact_email: email }).where('org_id', '=', ctx.orgId).execute();
+      await ctx.activity('kernel.tenant', ctx.orgId, 'org.contact_email_changed', email ? 'Cập nhật email liên hệ của tổ chức' : 'Xóa email liên hệ của tổ chức');
+    }
+    ctx.audit({ changed, cleared: email === null });
+    return { contactEmail: email };
+  },
+});

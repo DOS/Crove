@@ -20,6 +20,7 @@ import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.t
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
 import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, mailErrorCode, purgeMail, runMailJob, sweepMail, type MailJob, type MailQueueDeps } from './mail-queue.ts';
+import { MISSING_INVOICE_SWEEP_MS, sweepMissingInvoiceReminders } from './missing-invoice-mail.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { runLinkPreviewJob } from './link-preview.ts';
@@ -683,6 +684,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const proposalNudgeTimer = setInterval(() => void proposalNudgeSweep(), PROPOSAL_NUDGE_SWEEP_MS);
   void proposalNudgeSweep();
 
+  // Missing-invoice reminders (#669): every 15 minutes, the orgs whose monthly reminder is due.
+  let remindingInvoices = false;
+  const missingInvoiceSweep = async () => {
+    if (remindingInvoices) return;
+    remindingInvoices = true;
+    try {
+      const sent = await sweepMissingInvoiceReminders({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (sent > 0) console.log(`[missing-invoices] reminded ${sent} org(s)`);
+    } catch (error) {
+      console.error('[missing-invoices] sweep', error);
+    } finally {
+      remindingInvoices = false;
+    }
+  };
+  const missingInvoiceTimer = finance ? setInterval(() => void missingInvoiceSweep(), MISSING_INVOICE_SWEEP_MS) : null;
+  if (missingInvoiceTimer) void missingInvoiceSweep();
+
   // Scheduled client report mail (#704): every 5 minutes, the schedules due queue their mails (sent by the mail queue).
   let reporting = false;
   const reportSweep = async () => {
@@ -1033,6 +1051,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (mailTimer) clearInterval(mailTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (reminderTimer) clearInterval(reminderTimer);
+    if (missingInvoiceTimer) clearInterval(missingInvoiceTimer);
     clearInterval(proposalNudgeTimer);
     if (reportTimer) clearInterval(reportTimer);
     if (feedTimer) clearInterval(feedTimer);

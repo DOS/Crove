@@ -35,8 +35,8 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, readVerified, type BlobStore, type QueryContext, type Runtime } from '@crove/kernel-runtime';
 import { isCalendarDate, parseTaxCode, toMoney, money } from '@crove/l10n-vn';
 import { portalStatus } from './domain/portal-status.ts';
-import { reconcilePortalList, type CroveInvoice, type PortalRow } from './domain/portal-reconcile.ts';
-import { vatPeriod } from './domain/vat-return.ts';
+import { reconcilePortalList, type CroveInvoice, type PortalRow, type Reconciliation } from './domain/portal-reconcile.ts';
+import { vatPeriod, type VatPeriod } from './domain/vat-return.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const EDITORS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -433,57 +433,60 @@ export function firstPerOutcome<T extends { outcome: string }>(items: readonly T
   });
 }
 
+// The full reconciliation of one VAT period: the period, its lists and every item (uncut). The reconcile query cuts
+// the items per outcome; the missing-invoice request (#669) reads the 'missing' ones.
+export async function reconcilePeriod(ctx: QueryContext, periodKey: string): Promise<{ period: VatPeriod; lists: PortalListView[]; reconciliation: Reconciliation }> {
+  const period = vatPeriod(periodKey);
+  const lists = await periodLists(ctx, periodKey);
+  const done = lists.filter((l) => l.status === 'done').map((l) => l.id);
+  const rows: PortalRow[] =
+    done.length === 0
+      ? []
+      : (
+          await ctx.trx
+            .selectFrom('crove_finance.portal_invoice_row')
+            .select(['list_id', 'row_no', 'seller_tax_code', 'seller_name', 'template', 'series', 'number', 'issue_date', 'currency', 'subtotal', 'vat_amount', 'total', 'status', 'status_label'])
+            .where('org_id', '=', ctx.orgId)
+            .where('list_id', 'in', done)
+            .orderBy('list_id')
+            .orderBy('row_no')
+            .execute()
+        ).map((r) => ({
+          listId: r.list_id,
+          rowNo: r.row_no,
+          sellerTaxCode: r.seller_tax_code,
+          sellerName: r.seller_name,
+          template: r.template,
+          series: r.series,
+          number: r.number,
+          issueDate: r.issue_date,
+          currency: r.currency,
+          subtotal: r.subtotal,
+          vatAmount: r.vat_amount,
+          total: r.total,
+          status: r.status,
+          statusLabel: r.status_label,
+        }));
+  // Rows dated outside the period are still matched, so Crove's side is read for every date the rows have, and a
+  // month around it (an invoice booked on a slightly different date than the portal shows still counts).
+  const dates = rows.map((r) => r.issueDate).sort();
+  const from = addDays([period.from, dates[0] ?? period.from].sort()[0] ?? period.from, -31);
+  const to = addDays([period.to, dates.at(-1) ?? period.to].sort().at(-1) ?? period.to, 31);
+  // Without a list there is nothing to compare: Crove's invoices are not all reported as "not on the portal".
+  const reconciliation = done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to, period), period);
+  return { period, lists, reconciliation };
+}
+
 export const portalListReconcile = defineQuery({
   name: 'finance.portal_list.reconcile',
   input: z.object({ period: zVatPeriod }),
   access: ALL,
   handler: async (ctx, input): Promise<PortalReconciliation> => {
-    const period = vatPeriod(input.period);
-    const lists = await periodLists(ctx, input.period);
-    const done = lists.filter((l) => l.status === 'done').map((l) => l.id);
-    const rows: PortalRow[] =
-      done.length === 0
-        ? []
-        : (
-            await ctx.trx
-              .selectFrom('crove_finance.portal_invoice_row')
-              .select(['list_id', 'row_no', 'seller_tax_code', 'seller_name', 'template', 'series', 'number', 'issue_date', 'currency', 'subtotal', 'vat_amount', 'total', 'status', 'status_label'])
-              .where('org_id', '=', ctx.orgId)
-              .where('list_id', 'in', done)
-              .orderBy('list_id')
-              .orderBy('row_no')
-              .execute()
-          ).map((r) => ({
-            listId: r.list_id,
-            rowNo: r.row_no,
-            sellerTaxCode: r.seller_tax_code,
-            sellerName: r.seller_name,
-            template: r.template,
-            series: r.series,
-            number: r.number,
-            issueDate: r.issue_date,
-            currency: r.currency,
-            subtotal: r.subtotal,
-            vatAmount: r.vat_amount,
-            total: r.total,
-            status: r.status,
-            statusLabel: r.status_label,
-          }));
-    // Rows dated outside the period are still matched, so Crove's side is read for every date the rows have, and a
-    // month around it (an invoice booked on a slightly different date than the portal shows still counts).
-    const dates = rows.map((r) => r.issueDate).sort();
-    const from = addDays([period.from, dates[0] ?? period.from].sort()[0] ?? period.from, -31);
-    const to = addDays([period.to, dates.at(-1) ?? period.to].sort().at(-1) ?? period.to, 31);
-    // Without a list there is nothing to compare: Crove's invoices are not all reported as "not on the portal".
-    const reconciliation =
-      done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to, period), period);
+    const { period, lists, reconciliation } = await reconcilePeriod(ctx, input.period);
     const items = firstPerOutcome(reconciliation.items, PORTAL_RECONCILE_ITEMS_PER_OUTCOME);
     return { period, lists, summary: reconciliation.summary, items, truncated: items.length < reconciliation.items.length };
   },
 });
-
-// ---------------------------------------------------------------------------------------------------------------------
-// Worker side
 
 export interface PortalListDeps {
   runtime: Runtime;

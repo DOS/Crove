@@ -172,6 +172,9 @@ export const zOrgDetail = z.object({
   vatFilingPeriod: zVatFilingPeriod.nullable(),
   // The org's address as the tax registry records it (issue #324); null until an owner or admin sets it.
   address: z.string().nullable(),
+  // Where the org's own mail goes, such as a request for missing invoices (issue #669); null until an owner or admin
+  // sets it.
+  contactEmail: z.string().nullable(),
   inboundAddress: z.string().nullable(),
   // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
   inboundDroppedCount: z.number().int().nonnegative().nullable(),

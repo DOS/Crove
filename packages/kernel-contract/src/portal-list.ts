@@ -119,3 +119,26 @@ export const zPortalReconciliation = z.object({
   truncated: z.boolean(),
 });
 export type PortalReconciliation = z.infer<typeof zPortalReconciliation>;
+
+// Asking the client company for its missing purchase invoices by email (issue #669). The mail goes to the org's contact
+// email (Settings); reminderDay is the day of the month (1 to 28) of the monthly reminder, null when it is off.
+export const MISSING_INVOICE_REMINDER_DAY_MAX = 28;
+export const MISSING_INVOICE_MAIL_STATUSES = ['queued', 'sending', 'sent', 'delivered', 'bounced', 'complained', 'suppressed', 'failed', 'ambiguous'] as const;
+export const zMissingInvoiceStatus = z.object({
+  contactEmail: z.string().nullable(),
+  reminderDay: z.number().int().min(1).max(MISSING_INVOICE_REMINDER_DAY_MAX).nullable(),
+  // The latest requests and reminders, newest first. periods and count are empty and null once the mail's merge data
+  // is gone (30 days after its final status).
+  mails: z.array(
+    z.object({
+      id: zId,
+      kind: z.enum(['request', 'reminder']),
+      status: z.enum(MISSING_INVOICE_MAIL_STATUSES),
+      periods: z.array(zVatPeriod),
+      count: z.number().int().nonnegative().nullable(),
+      createdAt: z.iso.datetime(),
+      sentAt: z.iso.datetime().nullable(),
+    }),
+  ),
+});
+export type MissingInvoiceStatusView = z.infer<typeof zMissingInvoiceStatus>;
