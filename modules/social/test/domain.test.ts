@@ -145,7 +145,18 @@ describe('validateVariant', () => {
 
   it('reports a disallowed media kind once, not also as a mix', () => {
     const codes = validateVariant({ provider: 'zalo_oa', body: 'x', title: 'T', media: [jpeg(), mp4()] }).map((i) => i.code);
-    expect(codes).toEqual(['TOO_MANY_MEDIA', 'MEDIA_KIND_NOT_ALLOWED']);
+    expect(codes).toEqual(['MEDIA_KIND_NOT_ALLOWED']);
+  });
+
+  it('takes up to 10 images of 1 MB each on a Zalo OA article, and comments on or off (#943)', () => {
+    const zalo = (media: MediaItem[], settings: Record<string, unknown> = {}) => validateVariant({ provider: 'zalo_oa', body: 'x', title: 'T', media, settings });
+    expect(zalo(Array.from({ length: 4 }, () => jpeg()))).toEqual([]);
+    expect(zalo(Array.from({ length: 10 }, () => jpeg()))).toEqual([]);
+    expect(zalo(Array.from({ length: 11 }, () => jpeg()))).toEqual([{ code: 'TOO_MANY_MEDIA', field: 'media', limit: 10, actual: 11 }]);
+    expect(zalo([jpeg(), jpeg(1024 * 1024 + 1)])).toEqual([{ code: 'IMAGE_TOO_LARGE', field: 'media.1', limit: 1024 * 1024, actual: 1024 * 1024 + 1 }]);
+    expect(zalo([jpeg()], { comments: false })).toEqual([]);
+    expect(zalo([jpeg()], { comments: true })).toEqual([]);
+    expect(zalo([jpeg()], { comments: 'hide' })).toEqual([{ code: 'ZALO_COMMENTS_INVALID', field: 'settings.comments', limit: null, actual: null }]);
   });
 
   it('requires media on Instagram and accepts only JPEG images', () => {

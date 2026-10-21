@@ -187,13 +187,22 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
     );
   }
   if (rule.layout === 'article') {
-    // Zalo OA: an article card, the cover, the title and the opening of the text.
+    // An article card: the cover, the title and the opening of the text. On Zalo OA (#943) the first image is the
+    // cover and every other image follows the text in order, its alt text as the caption under it.
+    const zalo = provider === 'zalo_oa';
+    const after = zalo ? content.media.slice(1) : [];
     return (
       <div className="rounded-xl border bg-background p-3">
         {header}
-        <Media media={content.media} layout="article" max={1} />
+        <Media media={zalo ? content.media.slice(0, 1) : content.media} layout="article" max={1} />
         <p className="mt-3 text-sm font-semibold text-foreground">{title || t('previewNoTitle')}</p>
         <div className="mt-1">{body}</div>
+        {after.map((m, i) => (
+          <figure key={m.fileId} className="mt-3">
+            <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 2) })} mime={m.mime} className="mx-auto aspect-[4/3] w-full" />
+            {m.altText && <figcaption className="mt-1 text-center text-xs text-muted-foreground">{m.altText}</figcaption>}
+          </figure>
+        ))}
       </div>
     );
   }

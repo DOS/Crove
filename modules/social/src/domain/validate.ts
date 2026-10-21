@@ -121,7 +121,9 @@ export type IssueCode =
   | 'YT_AUDIENCE_INVALID'
   | 'YT_CATEGORY_INVALID'
   | 'YT_TAG_INVALID'
-  | 'YT_TAGS_TOO_LONG';
+  | 'YT_TAGS_TOO_LONG'
+  // Zalo OA (#943): settings.comments is set and is not true or false.
+  | 'ZALO_COMMENTS_INVALID';
 
 export interface Issue {
   code: IssueCode;
@@ -327,6 +329,10 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   }
   if (variant.provider === 'instagram') checkInstagramPeople(issues, variant);
   if (variant.provider === 'youtube') checkYouTube(issues, variant);
+  // Zalo OA (#943): comments on the article, on when absent.
+  if (variant.provider === 'zalo_oa' && variant.settings?.comments !== undefined && typeof variant.settings.comments !== 'boolean') {
+    issues.push({ code: 'ZALO_COMMENTS_INVALID', field: 'settings.comments', limit: null, actual: null });
+  }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkPollAndTag(issues, variant, caps);
   checkGbp(issues, variant);
