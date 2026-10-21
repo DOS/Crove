@@ -41,6 +41,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.calendar_feed',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -536,6 +537,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_social.bio_page': { make: (o) => ({ row: socialBioPageRow(o) }) },
   // The org's brand voice for AI drafts, or one channel's (#741).
   'crove_social.brand_voice': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), description: 'RLS matrix voice', updated_by: o.owner } }) },
+  // A private calendar feed of the org's posts (#862): the SHA-256 of its token, who made it, its revocation.
+  'crove_social.calendar_feed': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), token_sha256: hex64(), created_by: o.owner } }) },
   // A team's note on calendar dates (#794): a title over one day or a range, with a colour from the app's palette.
   'crove_social.calendar_note': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), starts_on: '2026-10-20', ends_on: '2026-10-22', title: 'RLS matrix note', created_by: o.owner, updated_by: o.owner } }) },
   // The review policy of a channel (S9, issue #394): how many people approve a variant, and whether its reviewers
