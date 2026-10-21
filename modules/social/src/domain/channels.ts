@@ -373,6 +373,35 @@ export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 
 // their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of it.
 export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x']);
 
+// A post that comes down by itself (#861): `settings.removeAt`, a full ISO 8601 time with Z or an offset, on a channel
+// in REMOVE_READY. It must be at least REMOVE_AT_MIN_GAP_MS after the time the post goes out, which the commands check
+// where that time becomes known (a time, a queue slot, a retry now); the worker's sweep asks for the removal when it
+// comes, and never for a post that went out after it. The same pattern guards the database's crove_social.remove_at_of.
+export const REMOVE_AT_MIN_GAP_MS = 5 * 60_000;
+const REMOVE_AT = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,3})?)?(?:Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/;
+
+// The planned takedown in a variant's settings, as an ISO instant in UTC; null when there is none, 'invalid' when it is
+// not a real calendar time in that form.
+export function removeAtOf(settings: Readonly<Record<string, unknown>> | undefined): string | 'invalid' | null {
+  const value = settings?.removeAt;
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') return 'invalid';
+  const m = REMOVE_AT.exec(value);
+  if (!m) return 'invalid';
+  const [year, month, day] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  // Date.parse rolls 31 February over into March; the database refuses it.
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return 'invalid';
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : 'invalid';
+}
+
+// Whether a variant's planned takedown is too close to (or before) the time it goes out.
+export function removeAtTooSoon(settings: Readonly<Record<string, unknown>> | undefined, publishAt: Date): boolean {
+  const at = removeAtOf(settings);
+  return typeof at === 'string' && at !== 'invalid' && Date.parse(at) < publishAt.getTime() + REMOVE_AT_MIN_GAP_MS;
+}
+
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
   sandbox: {
