@@ -26,6 +26,7 @@ const RULES: Readonly<Record<string, PreviewRule>> = {
   telegram: { layout: 'feed', cut: null, linkCard: true, gridMax: 4 },
   mastodon: { layout: 'short', cut: null, linkCard: true, gridMax: 4 },
   pinterest: { layout: 'short', cut: null, linkCard: false, gridMax: 1 },
+  discord: { layout: 'feed', cut: null, linkCard: true, gridMax: 4 },
   // A blog post: its title over the text, as an article.
   wordpress: { layout: 'article', cut: 300, linkCard: false, gridMax: 1 },
 };

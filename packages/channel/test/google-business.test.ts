@@ -98,6 +98,12 @@ describe('GoogleBusinessPublisher', () => {
     });
   });
 
+  it('sends the language the post is written in (#730)', async () => {
+    const { fetchImpl, calls } = google({ [route]: [{ body: POSTED }] });
+    await new GoogleBusinessPublisher(APP, fetchImpl).publish(input({ content: { ...input().content, body: 'Fresh bread is in, drop by!' }, settings: { gbp: { language: 'en' } } }));
+    expect(calls[0]?.body).toMatchObject({ languageCode: 'en', summary: 'Fresh bread is in, drop by!' });
+  });
+
   it('posts an event and an offer with their schedule, and a call without a link', async () => {
     const { fetchImpl, calls } = google({ [route]: [{ body: POSTED }, { body: POSTED }] });
     const publisher = new GoogleBusinessPublisher(APP, fetchImpl);
@@ -117,6 +123,7 @@ describe('GoogleBusinessPublisher', () => {
     const publisher = new GoogleBusinessPublisher(APP, none.fetchImpl);
     expect(await publisher.publish(input({ settings: { gbp: { topic: 'EVENT', event: { title: '', startDate: '2026-09-25', endDate: '2026-09-25' } } } }))).toMatchObject({ code: 'GBP_SETTINGS_INVALID' });
     expect(await publisher.publish(input({ settings: { gbp: { topic: 'PRODUCT' } } }))).toMatchObject({ code: 'GBP_SETTINGS_INVALID' });
+    expect(await publisher.publish(input({ settings: { gbp: { language: 'xx' } } }))).toMatchObject({ code: 'GBP_SETTINGS_INVALID' });
     expect(await publisher.publish(input({ content: { ...input().content, linkUrl: null }, settings: { gbp: { cta: 'SHOP' } } }))).toMatchObject({ code: 'CTA_NEEDS_LINK' });
     expect(await publisher.publish(input({ content: { ...input().content, body: 'x'.repeat(1501) } }))).toMatchObject({ code: 'TEXT_TOO_LONG' });
     expect(await publisher.publish(input({ content: { ...input().content, media: [{ fileId: 'v', mime: 'video/mp4', sizeBytes: 1, altText: null }] } }))).toMatchObject({ code: 'ONE_PHOTO_AT_MOST' });
@@ -138,7 +145,7 @@ describe('GoogleBusinessPublisher', () => {
   });
 
   it('reads its settings as the module writes them', () => {
-    expect(gbpSettingsOf({})).toEqual({ topic: 'STANDARD', cta: null, event: null, offer: null });
+    expect(gbpSettingsOf({})).toEqual({ topic: 'STANDARD', language: 'vi', cta: null, event: null, offer: null });
     expect(gbpSettingsOf({ gbp: { topic: 'EVENT', event: { title: 'x', startDate: '2026-01-02', endDate: '2026-01-01' } } })).toBeNull();
     expect(gbpSettingsOf({ gbp: 'yes' })).toBeNull();
   });

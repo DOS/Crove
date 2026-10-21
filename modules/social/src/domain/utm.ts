@@ -26,6 +26,7 @@ export const UTM_SOURCE: Readonly<Record<Provider, string>> = {
   telegram: 'telegram',
   mastodon: 'mastodon',
   pinterest: 'pinterest',
+  discord: 'discord',
   wordpress: 'wordpress',
 };
 

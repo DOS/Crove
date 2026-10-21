@@ -253,6 +253,9 @@ describe('validateVariant', () => {
     expect(codes('google_business', { topic: 'OFFER', event: { startDate: '2026-09-26', endDate: '2026-09-25' } })).toEqual(['GBP_INVALID']);
     expect(codes('google_business', { topic: 'EVENT', event: { title: 'x', ...day, startTime: '25:00' } })).toEqual(['GBP_INVALID']);
     expect(codes('google_business', { topic: 'PRODUCT' })).toEqual(['GBP_INVALID']);
+    // The post's language (#730): one Google takes, Vietnamese when unsaid.
+    expect(codes('google_business', { language: 'en' })).toEqual([]);
+    expect(codes('google_business', { language: 'english' })).toEqual(['GBP_INVALID']);
     expect(codes('google_business', { cta: 'SHOP' }, null)).toEqual(['GBP_CTA_NEEDS_LINK']);
     expect(codes('google_business', { cta: 'CALL' }, null)).toEqual([]);
     expect(codes('facebook_page', { topic: 'STANDARD' })).toEqual(['GBP_NOT_SUPPORTED']);
@@ -317,6 +320,16 @@ describe('validateVariant', () => {
     expect(tg([jpeg()], 1025)).toEqual(['TEXT_TOO_LONG']);
     expect(tg([jpeg(), { kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 10 }], 10)).toEqual([]);
     expect(tg(Array.from({ length: 11 }, () => jpeg()), 10)).toEqual(['TOO_MANY_MEDIA']);
+  });
+
+  it('checks a Discord post: 2,000 characters, up to 10 images and videos of 10 MB each (#832)', () => {
+    const dc = (media: MediaItem[], n: number) => validateVariant({ provider: 'discord', body: 'x'.repeat(n), title: null, media, settings: {} }).map((i) => i.code);
+    expect(dc([], 2000)).toEqual([]);
+    expect(dc([], 2001)).toEqual(['TEXT_TOO_LONG']);
+    expect(dc([jpeg(), mp4(30, 5_000_000)], 2000)).toEqual([]);
+    expect(dc(Array.from({ length: 11 }, () => jpeg()), 10)).toEqual(['TOO_MANY_MEDIA']);
+    expect(dc([jpeg(10 * 1024 * 1024 + 1)], 10)).toEqual(['IMAGE_TOO_LARGE']);
+    expect(dc([mp4(30, 10 * 1024 * 1024 + 1)], 10)).toEqual(['VIDEO_TOO_LARGE']);
   });
 
   it('posts video on every channel that takes it', () => {

@@ -192,6 +192,11 @@ export const contract = {
     connectTelegram: oc
       .input(z.object({ botToken: z.string().trim().min(1).max(100), channel: z.string().trim().min(1).max(100) }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    // A Discord channel (#832): the URL of a webhook a server admin made in the channel's settings. The server checks the
+    // webhook with Discord, then seals its token; the format is checked by the server, in words.
+    connectDiscord: oc
+      .input(z.object({ webhookUrl: z.string().trim().min(1).max(300) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     // Connecting through a provider's OAuth dialog (Social plan S6). Start returns where to send the browser; the
     // provider sends it back to /channels/oauth/:provider/callback, and that screen finishes the attempt with the code
     // and state. Finish connects every account the grant covers (for Facebook, the Pages picked in Meta's dialog).
