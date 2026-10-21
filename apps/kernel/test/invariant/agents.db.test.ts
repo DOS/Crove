@@ -55,6 +55,18 @@ const whoami = defineCommand({
     return { actor: ctx.actor, orgId: ctx.orgId, positionId: ctx.agent?.positionId ?? null };
   },
 }) as CommandDef<unknown, unknown>;
+// #333 item 4: a command that puts another run in its audit detail; the row keeps the actor's run.
+const forgeRun333 = defineCommand({
+  name: 't333.forge_run',
+  input: z.object({}),
+  risk: 'R0',
+  access: [],
+  agent: { roles: 'any' },
+  handler: async (ctx) => {
+    ctx.audit({ agentRun: '00000000-0000-4000-8000-000000000000', note: 1 });
+    return { ok: true };
+  },
+}) as CommandDef<unknown, unknown>;
 // #260: a preparer agents may run (it writes nothing) and proposal commands of each risk, two of which agents with the
 // chief accountant role key may approve.
 const prepare260 = defineCommand({
@@ -125,6 +137,7 @@ const PROBES = [
   probe('t18.r3', 'R3', 'propagate'),
   probe('t18.r0', 'R0'),
   whoami,
+  forgeRun333,
 ];
 // Every table no agent context may write (refuse_agent_write), issue #79 and #244.
 const AGENT_READ_ONLY_TABLES = [
@@ -866,7 +879,7 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
                             AND t.tgfoid = 'crove_kernel.agent_write_guard()'::regprocedure
                             AND (t.tgtype & 1) = 1 AND (t.tgtype & 2) = 2 AND (t.tgtype & 28) = 28) AS guarded
            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-           WHERE n.nspname LIKE 'crove\\_%' AND n.nspname NOT IN ('crove_meta', 'crove_jobs')
+           WHERE n.nspname LIKE 'crove\\_%' AND n.nspname <> 'crove_meta'
              AND c.relkind IN ('r', 'p') AND NOT c.relispartition
            ORDER BY 1`,
         )
@@ -926,6 +939,48 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     for (const [text, values] of statements) {
       await expect(inAgentContext(orgA, actor, (c) => c.query(text, values)), text).rejects.toMatchObject({ code: '42501', message: 'AGENT_FORBIDDEN' });
     }
+  });
+
+  // Issue #333 item 4: the actor's run always wins over a run a command puts in its own audit detail.
+  it('keeps the agent run of the actor on an audit row, whatever run the command names in its detail', async () => {
+    const { actor } = await liveAgent(orgA, owner);
+    await worker.execute('t333.forge_run', {}, { actor, orgId: orgA });
+    const rows = await withAdmin(async (c) =>
+      (await c.query(`SELECT actor_type, actor_id, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 't333.forge_run' AND actor_id = $2`, [orgA, actor.agentId])).rows,
+    );
+    expect(rows).toEqual([{ actor_type: 'agent', actor_id: actor.agentId, detail: expect.objectContaining({ agentRun: actor.runId, note: 1 }) }]);
+  });
+
+  // Issue #333: pg-boss's tables carry the guard too, and a queue created after the migration inherits it.
+  it('refuses an agent every write to the job queue, through its real login role, in queues old and new', async () => {
+    const { actor } = await liveAgent(orgA, owner);
+    const queue = `test-agent-guard-${randomUUID().slice(0, 8)}`;
+    const seeded = await withAdmin(async (c) => {
+      await c.query(`SELECT crove_jobs.create_queue($1, '{"policy":"standard","partition":true}'::jsonb)`, [queue]);
+      // Outside an agent context the worker's own traffic passes, in the new partition too: one row in each queue, so
+      // the updates and deletes below have a row to refuse.
+      const ids: string[] = [];
+      for (const name of ['kernel-agent-wake', queue]) {
+        ids.push((await c.query<{ id: string }>(`INSERT INTO crove_jobs.job (name, data) VALUES ($1, '{}') RETURNING id`, [name])).rows[0]?.id as string);
+      }
+      return ids;
+    });
+    const forbidden = { code: '42501', message: 'AGENT_FORBIDDEN' };
+    for (const name of ['kernel-agent-wake', queue]) {
+      const statements = [
+        `INSERT INTO crove_jobs.job (name, data) VALUES ('${name}', '{}')`,
+        `UPDATE crove_jobs.job SET state = 'completed' WHERE name = '${name}' AND id = ANY('{${seeded.join(',')}}'::uuid[])`,
+        `DELETE FROM crove_jobs.job WHERE name = '${name}' AND id = ANY('{${seeded.join(',')}}'::uuid[])`,
+      ];
+      for (const text of statements) {
+        await expect(inAgentContext(orgA, actor, (c) => c.query(text)), text).rejects.toMatchObject(forbidden);
+      }
+    }
+    await expect(inAgentContext(orgA, actor, (c) => c.query(`SELECT crove_jobs.create_queue('agent-made-queue', '{"policy":"standard"}'::jsonb)`))).rejects.toMatchObject({ code: '42501' });
+    // The rows written outside the context are still there and unchanged: the refusals changed nothing.
+    const left = await withAdmin(async (c) => (await c.query(`SELECT count(*)::int AS n FROM crove_jobs.job WHERE id = ANY($1::uuid[]) AND state = 'created'`, [seeded])).rows[0]?.n);
+    expect(left).toBe(2);
+    await withAdmin((c) => c.query(`DELETE FROM crove_jobs.job WHERE id = ANY($1::uuid[])`, [seeded]));
   });
 
   it('lets an agent write audit rows, idempotency keys and wake-ups only for itself and only forward', async () => {
