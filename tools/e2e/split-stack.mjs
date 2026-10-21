@@ -7,7 +7,9 @@
 //   2. sign up, create an org, upload the synthetic e-invoice; the worker extracts it into a proposal;
 //   3. post an inbound email with a second invoice to the org's address; the worker files it and extracts it;
 //   4. both files are objects in MinIO with the right bytes, the raw message was deleted from the bucket, and
-//      nothing was written under /data/files in either container.
+//      nothing was written under /data/files in either container;
+//   5. the worker anchors the audit events and journal entries in the Object Lock bucket (WORM fact stream, #891):
+//      the first batch is a locked object that cannot be deleted without bypassing the lock.
 // No AI endpoint is configured: e-invoice XML is read without AI. Plain Node (26+), no dependencies.
 //
 // Environment: SPLIT_PROJECT (compose project, default crove-split), SPLIT_PORT (default 18080).
@@ -23,6 +25,8 @@ const COMPOSE = ['compose', '-p', PROJECT, '-f', `${ROOT}docker-compose.yml`, '-
 // The throwaway values in docker-compose.split.yml.
 const INBOUND_SECRET = 'split-stack-inbound-secret-0123456789abcdef';
 const BUCKET = 'crove-files';
+const ARCHIVE_BUCKET = 'crove-archive';
+const FIRST_BATCH = 'chain/v1/000000000001.json';
 const INVOICE = readFileSync(`${ROOT}apps/extract/test/fixtures/einvoice-basic.xml`);
 const SELLER = 'CÔNG TY TNHH DỊCH VỤ MẪU';
 const TOTAL = /^1980000(?:\.0+)?$/;
@@ -259,6 +263,29 @@ async function main() {
     assert(listing === '', `${service}: /data/files is empty (found ${listing})`);
   }
   log('no blob on local disk in api or worker');
+
+  // The WORM fact stream (#891): the worker refuses a bucket without Object Lock, so its log line says it has one.
+  assert(
+    compose(['logs', '--no-color', 'worker']).includes(`[archive] s3 bucket ${ARCHIVE_BUCKET}, Object Lock GOVERNANCE for 3650 days`),
+    'the worker archives to the Object Lock bucket',
+  );
+  // Rows are archived ARCHIVE_LAG_SECONDS (60 here) after they are written, by a job that runs every minute.
+  const batch = await waitFor('the first archive batch', 240_000, async () => {
+    const out = compose(['exec', '-T', 'minio', 'mc', 'cat', `local/${ARCHIVE_BUCKET}/${FIRST_BATCH}`]);
+    return JSON.parse(out);
+  });
+  assert(batch.format === 'crove-archive' && batch.seq === 1 && batch.rows.length > 0, `the first batch holds ${batch.rows.length} row hash(es)`);
+  assert(batch.rows.every(([ref, hash]) => /^(audit|journal):/.test(ref) && /^[0-9a-f]{64}$/.test(hash)), 'the batch holds references and hashes only');
+  const retention = JSON.parse(compose(['exec', '-T', 'minio', 'mc', 'retention', 'info', '--json', `local/${ARCHIVE_BUCKET}/${FIRST_BATCH}`]));
+  assert(String(retention.mode).toUpperCase() === 'GOVERNANCE', `the batch is locked in GOVERNANCE mode (found ${JSON.stringify(retention)})`);
+  let removed = true;
+  try {
+    compose(['exec', '-T', 'minio', 'mc', 'rm', '--versions', '--force', `local/${ARCHIVE_BUCKET}/${FIRST_BATCH}`]);
+  } catch {
+    removed = false;
+  }
+  assert(!removed, 'a locked batch cannot be deleted without bypassing its retention');
+  log(`the worker anchored ${batch.rows.length} row(s) in ${ARCHIVE_BUCKET}, locked`);
   log('passed');
 }
 
