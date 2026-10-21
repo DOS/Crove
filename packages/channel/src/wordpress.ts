@@ -7,11 +7,14 @@
 // (public addresses only, the connection pinned to the checked address, no redirects). This module never calls fetch
 // itself, and only over https; a redirect is a failure, since Basic auth must not follow it anywhere.
 //
-// Publish: each image is uploaded to the media library (POST /wp/v2/media, the raw bytes), its alt text set
-// (POST /wp/v2/media/:id), then the post is published (POST /wp/v2/posts) with the text as HTML paragraphs, the images
-// as figures after it and the first one as the featured image. Every character of the text is escaped. The post call
-// takes no idempotency key, so an unclear answer is checked by listing the user's latest posts, matched by title and
-// time.
+// Publish: the variant's category and tag names (#981, settings.wordpress) are first turned into term ids
+// (GET /wp/v2/categories and /wp/v2/tags with search, an exact match on the name), a missing tag created
+// (POST /wp/v2/tags); then each image is uploaded to the media library (POST /wp/v2/media, the raw bytes), its alt text
+// set (POST /wp/v2/media/:id), then the post is made (POST /wp/v2/posts) with the text as HTML paragraphs, the images as
+// figures after it, the first one as the featured image, the terms, the excerpt and the status (published, a draft or
+// pending review). Every character of the text is escaped. Nothing before the post call is visible on the site. The post
+// call takes no idempotency key, so an unclear answer is checked by listing the user's latest posts, drafts included,
+// matched by title and time.
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
 import { holdsLink } from './text.ts';
 import { ConnectorError, type Fetch } from './oauth.ts';
@@ -33,6 +36,59 @@ const ALT_TEXT_MAX = 1000;
 const RECONCILE_PAGE = 20;
 // The post call and some slack fit between the upload budget and callTimeoutMs.
 const POST_CALL_MARGIN_MS = 150_000;
+
+// A post's categories, tags, excerpt and status (#981), in `settings.wordpress`; the composer checks the same shapes
+// (modules/social validate.ts). Categories and tags are names as the site shows them; a category must exist on the
+// site, a missing tag is created when the user may create one. Absent, the post goes out as it always did: published,
+// in the site's default category, with no tags and WordPress's own excerpt.
+export const WORDPRESS_STATUSES = ['publish', 'draft', 'pending'] as const;
+export type WordPressStatus = (typeof WORDPRESS_STATUSES)[number];
+export const WORDPRESS_CATEGORIES_MAX = 10;
+export const WORDPRESS_TAGS_MAX = 20;
+export const WORDPRESS_EXCERPT_MAX = 500;
+// WordPress keeps a term's name in a 200-character column.
+export const WORDPRESS_TERM_MAX = 200;
+// Terms one lookup reads (the REST API caps per_page at 100).
+const TERM_PAGE = 100;
+
+export interface WordPressOptions {
+  categories: string[];
+  tags: string[];
+  excerpt: string;
+  status: WordPressStatus;
+}
+
+// A term's name as compared: entities read back (WordPress stores & as &amp;), spaces collapsed, case ignored.
+const termKey = (name: string) => decodeEntities(name).normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+
+// The names of a list, trimmed, each once (case ignored); null when the list is not one of names WordPress would keep.
+function termNames(value: unknown, max: number): string[] | null {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value) || value.length > max) return null;
+  const out: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') return null;
+    const name = raw.normalize('NFC').replace(/\s+/g, ' ').trim();
+    if (!name || [...name].length > WORDPRESS_TERM_MAX || /[<>]/.test(name)) return null;
+    if (!out.some((n) => termKey(n) === termKey(name))) out.push(name);
+  }
+  return out;
+}
+
+// The variant's WordPress options; null when settings.wordpress is set but not in the shape the composer saves.
+export function wordpressOptionsOf(settings: Readonly<Record<string, unknown>> | undefined): WordPressOptions | null {
+  const raw = settings?.wordpress;
+  if (raw === undefined || raw === null) return { categories: [], tags: [], excerpt: '', status: 'publish' };
+  if (typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const w = raw as Record<string, unknown>;
+  const categories = termNames(w.categories, WORDPRESS_CATEGORIES_MAX);
+  const tags = termNames(w.tags, WORDPRESS_TAGS_MAX);
+  const excerpt = w.excerpt === undefined || w.excerpt === null ? '' : w.excerpt;
+  const status = w.status === undefined || w.status === null ? 'publish' : w.status;
+  if (!categories || !tags || typeof excerpt !== 'string' || [...excerpt.trim()].length > WORDPRESS_EXCERPT_MAX) return null;
+  if (!(WORDPRESS_STATUSES as readonly unknown[]).includes(status)) return null;
+  return { categories, tags, excerpt: excerpt.trim(), status: status as WordPressStatus };
+}
 
 export interface WordPressSecret {
   // https://host, with the path WordPress lives under when it has one; no trailing slash.
@@ -82,12 +138,15 @@ export class WordPressError extends Error {
   readonly code: string | undefined;
   // A 2xx answer that is not JSON: no REST API answered at this address.
   readonly unreadable: boolean;
-  constructor(status: number, message: string, options: { code?: string; unreadable?: boolean } = {}) {
+  // The error's term_id, where WordPress names the term that already exists (term_exists).
+  readonly termId: number | null;
+  constructor(status: number, message: string, options: { code?: string; unreadable?: boolean; termId?: number | null } = {}) {
     super(message.slice(0, 500));
     this.name = 'WordPressError';
     this.status = status;
     this.code = options.code;
     this.unreadable = options.unreadable ?? false;
+    this.termId = options.termId ?? null;
   }
 }
 
@@ -114,10 +173,11 @@ class WordPressClient {
     }
     const response = await this.fetch(`${s.site}/wp-json${path}`, { method, headers, redirect: 'manual', ...(payload !== undefined ? { body: payload } : {}) });
     if (response.status >= 300 && response.status < 400) throw new WordPressError(response.status, 'the site redirects; use its final https address');
-    const json = (await response.json().catch(() => null)) as (T & { code?: unknown; message?: unknown }) | null;
+    const json = (await response.json().catch(() => null)) as (T & { code?: unknown; message?: unknown; data?: { term_id?: unknown } }) | null;
     if (response.status >= 400) {
       const code = typeof json?.code === 'string' ? json.code : undefined;
-      throw new WordPressError(response.status, typeof json?.message === 'string' ? json.message : `WordPress answered ${response.status}`, code ? { code } : {});
+      const termId = postId(json?.data?.term_id);
+      throw new WordPressError(response.status, typeof json?.message === 'string' ? json.message : `WordPress answered ${response.status}`, { ...(code ? { code } : {}), termId });
     }
     if (json === null || typeof json !== 'object') throw new WordPressError(response.status, 'WordPress answered without a readable body', { unreadable: true });
     return json;
@@ -254,7 +314,27 @@ interface PostRow {
   id?: unknown;
   link?: unknown;
   date_gmt?: unknown;
+  status?: unknown;
   title?: { raw?: unknown };
+}
+
+// A post the site keeps unpublished: a draft, or one pending an editor's review.
+const unpublished = (status: unknown): 'draft' | 'pending' | null => (status === 'draft' || status === 'pending' ? status : null);
+
+// A refusal before the post call: nothing is visible on the site yet, so an unclear answer is a retry, not an unknown.
+function beforePost(error: unknown, fallback: string): PublishResult {
+  const result = wordpressResult(error);
+  return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', code: (result.kind === 'unknown' && result.code) || fallback };
+}
+
+// How many term lookups run at once against one site (#981).
+const TERM_LOOKUPS_AT_ONCE = 4;
+
+// Runs fn over items, at most size at a time, and returns the results in the items' order.
+async function inBatches<T, R>(items: readonly T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += size) out.push(...(await Promise.all(items.slice(i, i + size).map(fn))));
+  return out;
 }
 
 export class WordPressPublisher implements Publisher {
@@ -281,6 +361,8 @@ export class WordPressPublisher implements Publisher {
     if (media.some((m) => m.sizeBytes > IMAGE_MAX_BYTES)) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_TOO_LARGE' };
     const title = titleOf(input.content);
     if (!title) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    const options = wordpressOptionsOf(input.settings);
+    if (!options) return { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_SETTINGS_INVALID' };
     // Every image is read before the first upload, so a read failure sends nothing.
     const files: Uint8Array[] = [];
     for (const m of media) {
@@ -294,6 +376,10 @@ export class WordPressPublisher implements Publisher {
       if (bytes.byteLength > IMAGE_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_TOO_LARGE' };
       files.push(bytes);
     }
+    // The terms before the uploads, so an unknown category uploads nothing either. The lookups only read, and a tag
+    // created for a post that then fails is just an unused tag, found by the retry's lookup: safe to repeat.
+    const terms = await this.terms(s, options);
+    if ('refused' in terms) return terms.refused;
     // Uploads make nothing visible: a failure here publishes nothing. Images already uploaded stay in the site's media
     // library (WordPress keeps unattached media), and a retry uploads them again.
     const images: { id: number; url: string; alt: string }[] = [];
@@ -309,22 +395,96 @@ export class WordPressPublisher implements Publisher {
         if (alt) await this.client.call(s, 'POST', `/wp/v2/media/${id}`, { json: { alt_text: alt } });
         images.push({ id, url, alt });
       } catch (error) {
-        const result = wordpressResult(error);
-        return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', code: (result.kind === 'unknown' && result.code) || 'MEDIA_UPLOAD' };
+        return beforePost(error, 'MEDIA_UPLOAD');
       }
     }
     // Past the budget, a post could land after the job gave up on the call: retry instead, nothing is visible yet.
     if (Date.now() - started > this.callTimeoutMs - POST_CALL_MARGIN_MS) return { kind: 'rejected', error: 'transient', code: 'UPLOAD_BUDGET_SPENT' };
     const first = images[0];
-    const post = { status: 'publish', title: escapeTitle(title), content: wordpressHtml(input.content, images), ...(first ? { featured_media: first.id } : {}) };
+    // Only what the variant sets: without options the post is the one Crove always sent.
+    const post = {
+      status: options.status,
+      title: escapeTitle(title),
+      content: wordpressHtml(input.content, images),
+      ...(first ? { featured_media: first.id } : {}),
+      ...(terms.categories.length > 0 ? { categories: terms.categories } : {}),
+      ...(terms.tags.length > 0 ? { tags: terms.tags } : {}),
+      ...(options.excerpt ? { excerpt: escapeTitle(options.excerpt) } : {}),
+    };
     try {
-      const answer = await this.client.call<{ id?: unknown; link?: unknown }>(s, 'POST', '/wp/v2/posts', { json: post });
+      const answer = await this.client.call<{ id?: unknown; link?: unknown; status?: unknown }>(s, 'POST', '/wp/v2/posts', { json: post });
       const id = postId(answer.id);
       if (id === null) return { kind: 'unknown', code: 'NO_POST_ID' };
+      // A draft or a post pending review is on the site but not public: published for Crove, with no address and a
+      // note (as TikTok's inbox draft, #903). The site's own answer decides, since a review plugin may hold a post back.
+      const held = unpublished(typeof answer.status === 'string' ? answer.status : options.status);
+      if (held) return { kind: 'accepted', externalId: String(id), url: null, draft: held };
       return { kind: 'accepted', externalId: String(id), url: linkOn(s.site, answer.link) };
     } catch (error) {
       return wordpressResult(error);
     }
+  }
+
+  // The ids of the variant's categories and tags. A category must exist: an unknown one (or a name two categories share,
+  // under different parents) fails the post with nothing sent, since a post filed in the wrong category is visible and
+  // Crove never makes categories (WordPress lets only editors and administrators do that). A missing tag is created;
+  // when the site refuses (rest_cannot_create: the user lacks assign_post_tags), the post fails with nothing sent rather
+  // than going out without a tag the person chose.
+  private async terms(s: WordPressSecret, options: WordPressOptions): Promise<{ categories: number[]; tags: number[] } | { refused: PublishResult }> {
+    const categories: number[] = [];
+    const tags: number[] = [];
+    const missingTags: string[] = [];
+    try {
+      // The lookups only read, so they run a few at a time (TERM_LOOKUPS_AT_ONCE): up to 30 names without a long serial
+      // wait, and without a burst a small shared host may refuse. Categories come first, so an unknown one stops the post
+      // before any tag is looked up. Results keep the order of the names.
+      const foundCategories = await inBatches(options.categories, TERM_LOOKUPS_AT_ONCE, (name) => this.findTerms(s, 'categories', name));
+      for (const [i, name] of options.categories.entries()) {
+        const ids = foundCategories[i] ?? [];
+        if (ids.length === 0) return { refused: { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_CATEGORY_NOT_FOUND', message: name } };
+        if (ids.length > 1) return { refused: { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_CATEGORY_AMBIGUOUS', message: name } };
+        categories.push(ids[0] as number);
+      }
+      const foundTags = await inBatches(options.tags, TERM_LOOKUPS_AT_ONCE, (name) => this.findTerms(s, 'tags', name));
+      for (const [i, name] of options.tags.entries()) {
+        const id = foundTags[i]?.[0];
+        if (id !== undefined) tags.push(id);
+        else missingTags.push(name);
+      }
+    } catch (error) {
+      return { refused: beforePost(error, 'TERM_LOOKUP') };
+    }
+    for (const name of missingTags) {
+      try {
+        const made = await this.client.call<{ id?: unknown }>(s, 'POST', '/wp/v2/tags', { json: { name: escapeTitle(name) } });
+        const id = postId(made.id);
+        if (id === null) return { refused: { kind: 'rejected', error: 'transient', code: 'NO_TAG_ID' } };
+        tags.push(id);
+      } catch (error) {
+        // Made meanwhile (another post, a person): WordPress names the tag that exists.
+        if (error instanceof WordPressError && error.code === 'term_exists' && error.termId !== null) {
+          tags.push(error.termId);
+          continue;
+        }
+        if (error instanceof WordPressError && (error.status === 401 || error.status === 403) && error.code === 'rest_cannot_create') {
+          return { refused: { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_TAG_NOT_ALLOWED', message: name, httpStatus: error.status } };
+        }
+        return { refused: beforePost(error, 'TAG_CREATE') };
+      }
+    }
+    return { categories, tags: [...new Set(tags)] };
+  }
+
+  // The ids of a taxonomy's terms named exactly `name`. WordPress searches names and slugs for the text, so the matches
+  // are kept only when the whole name is the same, case and entities aside. The search is the name as WordPress stores
+  // it (& as &amp;). A site with more than 100 terms holding the text may leave the exact one off the page: it then
+  // counts as missing, which fails a category with nothing posted, and for a tag ends in term_exists, which names it.
+  private async findTerms(s: WordPressSecret, taxonomy: 'categories' | 'tags', name: string): Promise<number[]> {
+    const rows = await this.client.call<{ id?: unknown; name?: unknown }[]>(s, 'GET', `/wp/v2/${taxonomy}?search=${encodeURIComponent(escapeTitle(name))}&per_page=${TERM_PAGE}&_fields=id,name`);
+    if (!Array.isArray(rows)) throw new WordPressError(200, 'WordPress answered without a term list', { unreadable: true });
+    const key = termKey(name);
+    const ids = rows.filter((r) => typeof r.name === 'string' && termKey(r.name) === key).map((r) => postId(r.id));
+    return [...new Set(ids.filter((id): id is number => id !== null))];
   }
 
   // The user's latest posts since a day before the window (WordPress compares `after` with the site's local time),
@@ -341,7 +501,9 @@ export class WordPressPublisher implements Publisher {
       const author = postId(me.id);
       if (author === null) return { found: 'unknown' };
       const after = new Date(input.after.getTime() - 24 * 3_600_000).toISOString();
-      const rows = await this.client.call<PostRow[]>(s, 'GET', `/wp/v2/posts?context=edit&status=publish,future,pending&per_page=${RECONCILE_PAGE}&after=${encodeURIComponent(after)}&author=${author}&_fields=id,link,date_gmt,title`);
+      // Drafts too (#981): a variant saved as a draft or sent for review is found as such. WordPress shows the user's own
+      // drafts in the edit context, with a date_gmt worked out from the draft's local date.
+      const rows = await this.client.call<PostRow[]>(s, 'GET', `/wp/v2/posts?context=edit&status=publish,future,draft,pending&per_page=${RECONCILE_PAGE}&after=${encodeURIComponent(after)}&author=${author}&_fields=id,link,date_gmt,status,title`);
       if (!Array.isArray(rows)) return { found: 'unknown' };
       const from = input.after.getTime() - 10 * 60_000;
       const to = input.before.getTime() + 10 * 60_000;
@@ -350,7 +512,10 @@ export class WordPressPublisher implements Publisher {
         return postId(p.id) !== null && at >= from && at <= to;
       });
       const match = inWindow.find((p) => typeof p.title?.raw === 'string' && decodeEntities(p.title.raw).trim() === title);
-      if (match) return { found: true, externalId: String(match.id), url: linkOn(s.site, match.link) };
+      if (match) {
+        const held = unpublished(match.status);
+        return held ? { found: true, externalId: String(match.id), url: null, draft: held } : { found: true, externalId: String(match.id), url: linkOn(s.site, match.link) };
+      }
       // Not among the latest: missing only when the page held every post since then and none falls in the window.
       return rows.length < RECONCILE_PAGE && inWindow.length === 0 ? { found: false } : { found: 'unknown' };
     } catch {

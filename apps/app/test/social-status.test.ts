@@ -22,3 +22,23 @@ describe('A TikTok draft sent to the app (#903)', () => {
     expect(codes({ tiktokMode: 'inbox' })).toEqual([]);
   });
 });
+
+describe('A WordPress draft or post pending review (#981)', () => {
+  it('reads as a draft or pending on WordPress, never as published', () => {
+    for (const [code, key] of [['WORDPRESS_DRAFT', 'wordpress_draft'], ['WORDPRESS_PENDING', 'wordpress_pending']] as const) {
+      const held = { status: 'published' as const, error: { code } };
+      expect(variantStatusKey(held)).toBe(key);
+      expect(variantTone(held)).toBe('warning');
+      expect(variantStatusKey({ status: 'failed', error: { code } })).toBe('failed');
+      expect(en.social.status[key]).toBeTruthy();
+    }
+    expect(vi.social.status.wordpress_draft).toBe('Nháp trên WordPress');
+    expect(vi.social.outcome.wordpressDraft).toMatch(/^Đã lưu nháp trên WordPress, hãy mở trang quản trị để đăng/);
+  });
+
+  it('flags category, tag and excerpt limits in the composer', () => {
+    const codes = (wordpress: Record<string, unknown>) => draftIssues('wordpress', { body: 'Khai trương', title: 'Thực đơn', media: [], settings: { wordpress } }).map((i) => i.code);
+    expect(codes({ categories: ['Tin tức'], tags: ['bánh mì'], excerpt: 'Món mới', status: 'pending' })).toEqual([]);
+    expect(codes({ excerpt: 'x'.repeat(501) })).toEqual(['WORDPRESS_EXCERPT_TOO_LONG']);
+  });
+});
