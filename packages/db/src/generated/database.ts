@@ -77,6 +77,7 @@ export interface CroveSocialSchema {
   'crove_social.idea_label': SocialIdeaLabelTable;
   'crove_social.label': SocialLabelTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
+  'crove_social.media_tag': SocialMediaTagTable;
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mail_off': SocialNotificationMailOffTable;
@@ -961,6 +962,16 @@ export interface SocialLinkPreviewTable {
   fetched_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   text: string | null;
+}
+
+/** crove_social.media_tag */
+export interface SocialMediaTagTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  file_id: ColumnType<string, string, NotGranted>;
+  tag: ColumnType<string, string, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.metric_snapshot */
