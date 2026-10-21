@@ -407,14 +407,19 @@ export async function extractAndPropose(
   try {
     read = await readInvoice(deps, file, bytes, used);
   } finally {
-    // What the read used counts against the org's limits even when the job fails after it and is retried.
+    // What the read used counts against the org's limits even when the job fails after it and is retried. Best
+    // effort: a failure to record is logged and never hides the read's own error or result.
     const cost = aiCost(used.ai, deps.aiPrice);
     if (used.pages > 0 || /[1-9]/.test(cost)) {
-      await deps.runtime.execute(
-        'kernel.usage.record',
-        { entries: [{ metric: 'extraction_pages', amount: String(used.pages) }, { metric: 'ai_cost', amount: cost }] },
-        { actor, orgId },
-      );
+      try {
+        await deps.runtime.execute(
+          'kernel.usage.record',
+          { entries: [{ metric: 'extraction_pages', amount: String(used.pages) }, { metric: 'ai_cost', amount: cost }] },
+          { actor, orgId },
+        );
+      } catch (recordError) {
+        console.error(`[extract] file ${fileId}: could not record its usage`, recordError instanceof Error ? recordError.message : recordError);
+      }
     }
   }
   const { method, invoice, error } = read;
