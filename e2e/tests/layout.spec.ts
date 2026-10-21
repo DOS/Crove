@@ -33,6 +33,8 @@ test('the sidebar keeps sign-out in view on a short window, and its menu scrolls
     expect(await violations(), path).toEqual([]);
   }
 
+  // Back to the home screen: some linked screens have their own layout without this sidebar.
+  await page.goto('/');
   await signOut.click();
   await expect(page).toHaveURL(/\/login$/);
 });
