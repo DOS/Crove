@@ -8,6 +8,7 @@
 > Update 2026-10-14 (later): ADR-0028 accepted with the hybrid revocation design C (Decision 16); §7.5, the External-tenant gate (T1) and §11 (DOS-28) describe it.
 > Update 2026-10-15: ADR-0028 amended by the owner: Crove Cloud uses Supabase Auth's default session behavior (`AUTH_SESSION_CHECK=jwt`), keeps Crove's own revocation, per-request membership and a live Auth check for R3; DOS-28 becomes an optional later refinement (§7.5, T1, §11).
 > Update 2026-10-19: the owner added an Email module for transactional email and email marketing (Decision 18); plan: [email.md](email.md), architecture: ADR-0034 (proposed).
+> Update 2026-10-21: the owner added an AI Meeting Notes module to the roadmap (Decision 19, §13 "Meeting Notes", epic #932); not started.
 > Vietnamese decision page (concise, not a full translation): [crove-os-kernel.vi.html](crove-os-kernel.vi.html). This English file is the full source of record.
 
 ## Tracking
@@ -34,6 +35,7 @@
 | 6 Sign | 8 weeks | Waits for wedge-customer demand (Decision 2) |
 | 7 HRM | 10 weeks | Waits for wedge-customer demand (Decision 2) |
 | Email (transactional and marketing) | 8 weeks (estimate) | Added 2026-10-19 by owner decision (Decision 18); steps E1-E2 in M2, the rest after M3 (backlog review D11); plan: [email.md](email.md) |
+| Meeting Notes (AI) | 6 weeks (estimate) | Added to the roadmap 2026-10-21 by owner decision (Decision 19); not started; proposed after M3 unless the owner or a pilot customer pulls it forward |
 
 Setup checklist: §12. Exit criteria per phase: §13; the MVP below replaces Phase 0.
 
@@ -70,6 +72,7 @@ The body of this plan was rewritten on 2026-10-14 to describe these decisions; i
 16. **Identity and revocation per ADR-0028 (design C), 2026-10-14.** Chosen by the owner after two blind reviews (Codex, Claude) independently converged on it. Every request verifies the Supabase JWT locally and, in the same transaction, checks membership and a Crove-owned session status record (`auth_session`). Status source, one interface with two adapters: self-host reads `auth.sessions` and the user's ban or deletion in the shared database (next request); Crove Cloud (amended 2026-10-15) keeps Supabase Auth's default behavior: a sign-out elsewhere destroys the refresh tokens at once and access ends when the access token expires (SLA: the project's JWT expiry), with no per-request Auth call and no DOS-side change; DOS ID lifecycle events (DOS-28) are an optional later refinement. A revoke in Crove (self or owner) is immediate. R3 checks Supabase Auth live and needs `aal2` with MFA in the last 5 minutes. Rejected: a Supabase Auth call on every request with a 30 s cache (Auth load and outage coupling on Cloud), short-lived tokens only, pure push, Crove-issued sessions through token exchange. The ADR's acceptance tests are the evidence for gate T1.
 17. **Social starts now, in parallel with Accounting (owner decision, 2026-10-16).** An exception to Decision 2 for Social only: CRM, Service, Sign and HRM still wait for wedge-customer demand. Social runs as its own stream and does not take kernel work Finance waits on. It builds the kernel pieces it needs and nobody else is building: the `crove-local` credential broker, the `channel` layer (ADR-0025, moved ahead of Phase 4) and the `external_call` ledger. Detailed plan: [social.md](social.md).
 18. **Email module: transactional email and email marketing (owner decision, 2026-10-19).** Replaces the earlier "bulk email marketing only on real customer demand" (§13, §15). The sending pipeline and the rules no sender may skip (suppression, a log row per mail, one send per mail through `external_call`) are a kernel service every module uses; the optional `email` module adds sender domains, templates, contacts with consent, campaigns and analytics. Marketing goes only to contacts with recorded consent, from a verified org domain, with one-click unsubscribe and the Vietnamese `[QC]` label, after a human approval (R2). It keeps the milestone order of the backlog review: transactional steps E1-E2 in M2, marketing after M3 (backlog review D11). Detailed plan: [email.md](email.md); architecture: [ADR-0034](../adr/0034-outbound-email.md) (proposed).
+19. **AI Meeting Notes module on the roadmap (owner decision, 2026-10-21).** An optional `meetings` module: a meeting's recording or uploaded audio becomes a Vietnamese and English transcript, a summary, decisions and action items, linked to the org's parties, deals and tasks. Every action item and every follow-up mail is a proposal a human approves, and transcripts are tainted input. It is on the roadmap, not started: the default is after M3, the same reason as Email marketing (D11), unless the owner or a pilot customer pulls it forward. Scope and exit criteria: §13 "Meeting Notes".
 
 ### MVP
 
@@ -1916,6 +1919,26 @@ Detailed plan, steps and open decisions: [email.md](email.md); architecture: [AD
 - Every marketing mail has a working one-click unsubscribe, the `[QC]` label while the setting is on, and goes only to contacts with recorded consent, from a verified domain.
 - A complaint rate above 0.3% or a hard bounce rate above 5% pauses the org's marketing.
 - With `CROVE_MODULES` excluding `email`, invites still go out with the built-in templates.
+
+### Meeting Notes (6 weeks estimated, added to the roadmap 2026-10-21 per Decision 19; reference: Otter, Fireflies, tl;dv, Google Meet notes)
+
+Not started. A detailed plan and an ADR come before the first PR; until then this section is the scope.
+
+**Kernel additions:** none required to start. Audio is a `file` (a new upload purpose); transcription and summaries go through the provider-agnostic AI layer with its budgets and kill switches (§4.12); action items become `kernel.task` rows through proposals; follow-up mail uses the Email pipeline (Decision 18).
+
+**Scope:**
+- Record in the browser or upload a recording (audio or video, size and length capped). The recording is parsed and transcoded in the sandbox (T12), never in the API.
+- A transcript with speakers and timestamps, Vietnamese first; a summary, the decisions taken and action items with an owner and a due date.
+- Link a meeting to parties, a deal (Phase 3) or a calendar event (Phase 3, Meet, Zoom and Teams links); search across an org's meetings.
+- Action items are proposals that create tasks; a follow-up email draft is a proposal sent through the Email module (R2).
+- Later, on demand: a bot that joins Meet, Zoom or Teams calls through a connector, and live notes.
+- Consent: the recorder confirms that participants were told (PDPL, T16); the org sets retention for recordings separately from transcripts, and deletion is crypto-shredding like other personal data.
+
+**Exit criteria:**
+- A one-hour Vietnamese meeting is transcribed and summarized within the agreed time; word error rate measured on a fixed eval set of synthetic meetings.
+- No task, email or record change happens without a human approval; prompt injection in a recording cannot raise a proposal's risk or skip approval (red-team cases in CI, as #893 does for documents).
+- A recording past its retention is gone from storage and backups within the documented window; the transcript keeps no audio.
+- With `CROVE_MODULES` excluding `meetings`, nothing of it loads.
 
 ### After the core modules
 
