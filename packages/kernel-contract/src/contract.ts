@@ -81,6 +81,7 @@ import {
   zParty,
   zProposalStatus,
   zPurchaseDocument,
+  zDocumentExport,
   zSearchResult,
   zRole,
   zSession,
@@ -676,6 +677,8 @@ export const contract = {
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),
+    // Every role (issue #878): the exports a recorded document went out in, for its history.
+    exports: oc.input(z.object({ documentId: zId })).output(z.array(zDocumentExport)),
   },
   // Every role (#673): parties by name or tax code, documents by series, number or party, journal entries by
   // description or amount. Vietnamese marks and case are ignored, and each word matches the start of a word.
