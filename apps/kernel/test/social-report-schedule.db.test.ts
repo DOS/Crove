@@ -145,6 +145,24 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     }
   });
 
+  it('moves a schedule whose run fails down the due scan, so it never starves the others (#736)', async () => {
+    const o = await org();
+    const { scheduleId } = await exec<{ scheduleId: string }>(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients: ['a@example.vn'] });
+    await admin((c) => c.query("UPDATE crove_social.report_schedule SET next_run_at = now() - interval '1 hour' WHERE id = $1", [scheduleId]));
+    const due = () => admin(async (c) => (await c.query<{ schedule_id: string }>('SELECT schedule_id FROM crove_social.report_schedules_due(1000)')).rows.map((r) => r.schedule_id));
+    expect(await due()).toContain(scheduleId);
+    // Every run of this schedule fails; the sweep records nothing and defers it.
+    const failing = {
+      execute: (name: string, input: unknown, options: Parameters<typeof worker.execute>[2]) => (name === 'social.report_schedule.run' ? Promise.reject(new Error('boom')) : worker.execute(name, input, options)),
+    } as unknown as typeof worker;
+    expect(await sweepReportSchedules({ runtime: failing, workerDb })).toBe(0);
+    expect(await due()).not.toContain(scheduleId);
+    const next = await admin(async (c) => (await c.query<{ at: Date }>('SELECT next_run_at AS at FROM crove_social.report_schedule WHERE id = $1', [scheduleId])).rows[0]?.at);
+    expect((next?.getTime() ?? 0) - Date.now()).toBeGreaterThan(25 * 60_000);
+    // A schedule not due is left alone.
+    expect(await worker.execute('social.report_schedule.defer', { scheduleId }, { actor: { type: 'system', component: 'test' }, orgId: o.orgId })).toEqual({ deferred: false });
+  });
+
   it('runs a due schedule: one mail per recipient with the numbers and a link of its own to the report of the period', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);
