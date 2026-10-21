@@ -122,8 +122,9 @@ export interface WindowTotals extends MetricsTotals {
 
 // The window's totals (#397), summed in SQL over every published channel, not only the rows the summary lists: the
 // last real answer of each, and the clicks on its short links (null when no channel sent links through them); also
-// per channel, most posts first. previous (#947): the same for the window of the same length just before, so a
-// screen can show the change.
+// per channel. previous (#947): the same for the window of the same length just before, so a screen can show the
+// change. Both list every channel with posts in either window (0 posts and no counts in the one it did not post in),
+// in the same order (most posts now, then most before), so the channels add up to both windows' totals.
 export const metricsTotals = defineQuery({
   name: 'social.metrics.totals',
   input: z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() }),
@@ -132,7 +133,14 @@ export const metricsTotals = defineQuery({
     const days = input.days ?? 30;
     const current = await windowTotals(ctx.trx, ctx.orgId, days, 0, input.labelId);
     const previous = await windowTotals(ctx.trx, ctx.orgId, days, days, input.labelId);
-    return { ...current, previous };
+    const now = new Map(current.channels.map((c) => [c.connectionId, c] as const));
+    const before = new Map(previous.channels.map((c) => [c.connectionId, c] as const));
+    const none = (c: ChannelTotals): ChannelTotals => ({ connectionId: c.connectionId, provider: c.provider, posts: 0, metrics: {}, clicks: null });
+    const ids = [...new Set([...now.keys(), ...before.keys()])].sort(
+      (a, b) => (now.get(b)?.posts ?? 0) - (now.get(a)?.posts ?? 0) || (before.get(b)?.posts ?? 0) - (before.get(a)?.posts ?? 0) || (a < b ? -1 : a > b ? 1 : 0),
+    );
+    const union = (own: Map<string, ChannelTotals>, other: Map<string, ChannelTotals>) => ids.map((id) => own.get(id) ?? none(other.get(id) as ChannelTotals));
+    return { ...current, channels: union(now, before), previous: { ...previous, channels: union(before, now) } };
   },
 });
 
@@ -141,7 +149,12 @@ async function windowTotals(trx: Trx, orgId: string, days: number, before: numbe
   const labelled = labelId
     ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${labelId}::uuid)`
     : sql``;
-  const ends = before === 0 ? sql`` : sql`AND v.published_at <= pg_catalog.now() - pg_catalog.make_interval(days => ${before}::int)`;
+  const end = sql`pg_catalog.now() - pg_catalog.make_interval(days => ${before}::int)`;
+  const ends = before === 0 ? sql`` : sql`AND v.published_at <= ${end}`;
+  // A window before now counts its posts' short link clicks up to its end only, on the days (UTC) whose midday is in
+  // it, as the client report does; the later clicks belong to the windows after it. A post's clicks all come after it
+  // went out, so the start needs no bound.
+  const clickedBy = before === 0 ? sql`` : sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' <= ${end}`;
   const { rows } = await sql<{ conn: string; provider: string; posts: string; metrics: Record<string, number>; clicks: string | null }>`
     WITH v AS (
       SELECT v.org_id, v.id, v.channel_connection_id AS conn, v.provider FROM crove_social.post_variant v
@@ -159,7 +172,7 @@ async function windowTotals(trx: Trx, orgId: string, days: number, before: numbe
     ), clicks AS (
       SELECT v.conn, coalesce(sum(c.clicks), 0) AS clicks FROM v
       JOIN crove_social.short_link l ON l.org_id = v.org_id AND l.variant_id = v.id
-      LEFT JOIN crove_social.short_link_click c ON c.org_id = l.org_id AND c.short_link_id = l.id
+      LEFT JOIN crove_social.short_link_click c ON c.org_id = l.org_id AND c.short_link_id = l.id ${clickedBy}
       GROUP BY v.conn
     )
     SELECT v.conn, min(v.provider) AS provider, count(*) AS posts,

@@ -58,9 +58,9 @@ suite('social metrics against the window before (#947)', () => {
 
   const exec = <O>(o: { orgId: string; owner: string }, name: string, input: unknown) => rt.execute<O>(name, input, { actor: asUser(o.owner), orgId: o.orgId });
 
-  // A post published on a channel some days ago, with its latest counts (and an older, smaller capture), and short
-  // link clicks when given.
-  async function published(o: { orgId: string; owner: string }, conn: string, daysAgo: number, metrics: Record<string, unknown>, clicks?: number) {
+  // A post published on a channel some days ago, with its latest counts (and an older, smaller capture), and a short
+  // link with clicks by day when given (days ago: clicks).
+  async function published(o: { orgId: string; owner: string }, conn: string, daysAgo: number, metrics: Record<string, unknown>, clicks?: Record<number, number>) {
     const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: `Bài ${daysAgo} ngày trước`, channels: [{ connectionId: conn }] });
     await admin(async (c) => {
       const { rows } = await c.query<{ id: string }>("UPDATE crove_social.post_variant SET status = 'published', published_at = now() - make_interval(days => $2) WHERE post_id = $1 RETURNING id", [postId, daysAgo]);
@@ -72,7 +72,9 @@ suite('social metrics against the window before (#947)', () => {
           "INSERT INTO crove_social.short_link (org_id, code, variant_id, revision, post_id, target_url) VALUES ($1, $2, $3, 1, $4, 'https://shop.example/') RETURNING id",
           [o.orgId, randomUUID().replace(/-/g, '').slice(0, 12), id, postId],
         );
-        await c.query("INSERT INTO crove_social.short_link_click (org_id, short_link_id, day, clicks) VALUES ($1, $2, current_date - 1, $3)", [o.orgId, link.rows[0]?.id, clicks]);
+        for (const [ago, n] of Object.entries(clicks)) {
+          await c.query('INSERT INTO crove_social.short_link_click (org_id, short_link_id, day, clicks) VALUES ($1, $2, current_date - $3::int, $4)', [o.orgId, link.rows[0]?.id, Number(ago), n]);
+        }
       }
     });
     return postId;
@@ -113,31 +115,41 @@ suite('social metrics against the window before (#947)', () => {
     const stranger = await org();
     const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
     const zalo = await connection(o.orgId, o.owner, 'Zalo OA');
+    const quiet = await connection(o.orgId, o.owner, 'Kênh cũ');
     // The last 30 days.
-    await published(o, fb, 2, { reach: 600, reactions: 30, secret_internal: 'x' }, 5);
+    await published(o, fb, 2, { reach: 600, reactions: 30, secret_internal: 'x' }, { 1: 5 });
     await published(o, fb, 20, { reach: 400, reactions: 10 });
     await published(o, zalo, 10, { reach: 100, views: 50 });
     // The 30 days before them.
-    await published(o, fb, 35, { reach: 800, reactions: 50 }, 7);
+    // Its clicks of 3 days ago are in the last 30 days: they count in neither window, not in the one before.
+    await published(o, fb, 35, { reach: 800, reactions: 50 }, { 34: 7, 3: 100 });
     await published(o, fb, 59, { reach: 200 });
+    // A channel that posted only in the window before.
+    await published(o, quiet, 45, { reach: 30 });
     // Older than both windows.
     await published(o, fb, 61, { reach: 9999, reactions: 999 });
     // Another org's posts in both windows are never counted.
     const theirs = await connection(stranger.orgId, stranger.owner, 'Của họ');
-    await published(stranger, theirs, 3, { reach: 7000, reactions: 700 }, 70);
-    await published(stranger, theirs, 40, { reach: 8000, reactions: 800 }, 80);
+    await published(stranger, theirs, 3, { reach: 7000, reactions: 700 }, { 1: 70 });
+    await published(stranger, theirs, 40, { reach: 8000, reactions: 800 }, { 38: 80 });
 
     const t = await totals(o, { days: 30 });
     expect(t).toMatchObject({ posts: 3, metrics: { reach: 1100, reactions: 40, views: 50 }, clicks: 5 });
+    // Every channel that posted in either window, in both lists, so the channels add up to both totals.
     expect(t.channels).toEqual([
       { connectionId: fb, provider: 'sandbox', posts: 2, metrics: { reach: 1000, reactions: 40 }, clicks: 5 },
       { connectionId: zalo, provider: 'sandbox', posts: 1, metrics: { reach: 100, views: 50 }, clicks: null },
+      { connectionId: quiet, provider: 'sandbox', posts: 0, metrics: {}, clicks: null },
     ]);
     expect(t.previous).toEqual({
-      posts: 2,
-      metrics: { reach: 1000, reactions: 50 },
+      posts: 3,
+      metrics: { reach: 1030, reactions: 50 },
       clicks: 7,
-      channels: [{ connectionId: fb, provider: 'sandbox', posts: 2, metrics: { reach: 1000, reactions: 50 }, clicks: 7 }],
+      channels: [
+        { connectionId: fb, provider: 'sandbox', posts: 2, metrics: { reach: 1000, reactions: 50 }, clicks: 7 },
+        { connectionId: zalo, provider: 'sandbox', posts: 0, metrics: {}, clicks: null },
+        { connectionId: quiet, provider: 'sandbox', posts: 1, metrics: { reach: 30 }, clicks: null },
+      ],
     });
     // The default window is 30 days, the same answer.
     expect(await totals(o, {})).toEqual(t);
@@ -146,7 +158,8 @@ suite('social metrics against the window before (#947)', () => {
     expect(await totals(o, { days: 7 })).toMatchObject({
       posts: 1,
       metrics: { reach: 600, reactions: 30 },
-      previous: { posts: 1, metrics: { reach: 100, views: 50 }, clicks: null, channels: [{ connectionId: zalo, posts: 1 }] },
+      channels: [{ connectionId: fb, posts: 1 }, { connectionId: zalo, posts: 0 }],
+      previous: { posts: 1, metrics: { reach: 100, views: 50 }, clicks: null, channels: [{ connectionId: fb, posts: 0 }, { connectionId: zalo, posts: 1 }] },
     });
     // A 1-day window with nothing in the day before it: no previous counts at all.
     expect((await totals(o, { days: 1 })).previous).toEqual({ posts: 0, metrics: {}, clicks: null, channels: [] });

@@ -96,7 +96,8 @@ interface ChannelTotal {
   metrics: Record<string, number>;
 }
 
-// Each channel's posts, reach and engagement in the window (#947), with the change against the window just before.
+// Each channel's posts, reach and engagement in the window (#947), with the change against the window just before;
+// current lists every channel that posted in either window, so one that posted only before shows 0 now.
 export function ChannelTotals({ current, previous, days, names }: { current: readonly ChannelTotal[]; previous: readonly ChannelTotal[]; days: number; names: Map<string, string> }) {
   const t = useTranslations('social.growth');
   const f = useFormat();
@@ -104,7 +105,7 @@ export function ChannelTotals({ current, previous, days, names }: { current: rea
   const before = new Map(previous.map((c) => [c.connectionId, c] as const));
   const cell = (now: number | undefined, then: number | undefined) => (
     <td className="px-3 py-2 text-right tabular-nums">
-      <span className="block text-foreground">{now === undefined ? '-' : f.number(now)}</span>
+      <span className="block text-foreground">{now === undefined ? (then === undefined ? '-' : f.number(0)) : f.number(now)}</span>
       <ChangeChip current={now} previous={then} against={against} />
     </td>
   );

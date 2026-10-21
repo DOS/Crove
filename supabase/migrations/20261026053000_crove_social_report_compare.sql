@@ -3,10 +3,12 @@
 -- crove_social.report_link_view  as before (20261022040000), with the same signature, RETURNS and grants, and the same
 --                                counts also for the period of the same length that ends where the link's period
 --                                starts, on the same channels: a top-level previous (its periodStart, periodEnd,
---                                posts and totals) and, in each channel of the period, previous (its posts and totals
---                                then; 0 and {} when it had none). The same rules for both periods: what went out in
---                                it, the latest real counts of each, the short link clicks on the days (UTC) whose
---                                midday is in it, at most 5000 posts each. The best posts stay those of the period.
+--                                posts and totals) and, in each channel, previous (its posts and totals then; 0 and {}
+--                                when it had none). channels lists every channel with posts in either period (0 and {}
+--                                now for one that posted only before), so the channels add up to both totals. The same
+--                                rules for both periods: what went out in it, the latest real counts of each, the short
+--                                link clicks on the days (UTC) whose midday is in it, at most 5000 posts each. The best
+--                                posts stay those of the period.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_social.report_link_view(p_token text)
@@ -27,8 +29,9 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM crove_kernel.tenant t WHERE t.org_id = v_link.org_id AND t.status = 'active') THEN
     RETURN NULL;
   END IF;
-  -- The period of the same length just before the link's.
-  v_prev_start := v_link.period_start - (v_link.period_end - v_link.period_start);
+  -- The period of the same length just before the link's, by its exact length in seconds: an interval with days in
+  -- it would be taken in the session's time zone, so daylight saving could shift the start.
+  v_prev_start := v_link.period_start - pg_catalog.make_interval(secs => EXTRACT(epoch FROM v_link.period_end - v_link.period_start)::double precision);
   RETURN (
     WITH p AS (
       SELECT true AS cur, v_link.period_start AS ps, v_link.period_end AS pe
@@ -81,7 +84,8 @@ BEGIN
       GROUP BY v.id
     ),
     per_channel AS (
-      SELECT v.cur, v.conn, pg_catalog.count(*) AS posts FROM v GROUP BY v.cur, v.conn
+      -- Every channel with posts in either period, so the channels add up to both periods' totals.
+      SELECT v.conn, pg_catalog.count(*) FILTER (WHERE v.cur) AS posts, pg_catalog.count(*) FILTER (WHERE NOT v.cur) AS prev_posts FROM v GROUP BY v.conn
     )
     SELECT pg_catalog.jsonb_build_object(
       'org', (SELECT t.name FROM crove_kernel.tenant t WHERE t.org_id = v_link.org_id),
@@ -104,13 +108,12 @@ BEGIN
           'posts', pc.posts,
           'totals', coalesce((SELECT pg_catalog.jsonb_object_agg(t.key, t.total) FROM (SELECT n.key, pg_catalog.sum(n.value) AS total FROM n WHERE n.cur AND n.conn = pc.conn GROUP BY n.key) t), '{}'::jsonb),
           'previous', pg_catalog.jsonb_build_object(
-            'posts', coalesce((SELECT b.posts FROM per_channel b WHERE NOT b.cur AND b.conn = pc.conn), 0),
+            'posts', pc.prev_posts,
             'totals', coalesce((SELECT pg_catalog.jsonb_object_agg(t.key, t.total) FROM (SELECT n.key, pg_catalog.sum(n.value) AS total FROM n WHERE NOT n.cur AND n.conn = pc.conn GROUP BY n.key) t), '{}'::jsonb)
           )
-        ) ORDER BY pc.posts DESC, c.display_name)
+        ) ORDER BY pc.posts DESC, pc.prev_posts DESC, c.display_name)
         FROM per_channel pc
         JOIN crove_kernel.channel_connection c ON c.org_id = v_link.org_id AND c.id = pc.conn
-        WHERE pc.cur
       ), '[]'::jsonb),
       'top', coalesce((
         SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(

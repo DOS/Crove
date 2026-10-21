@@ -148,7 +148,8 @@ export function SocialReportPage() {
                             </td>
                             {metrics.map((m) => (
                               <td key={m} className="px-3 py-2 text-right tabular-nums">
-                                <span className="block">{c.totals[m] === undefined ? '-' : f.number(c.totals[m])}</span>
+                                {/* A channel that posted only in the period before (#947) shows 0 now where it had a count then. */}
+                                <span className="block">{c.totals[m] !== undefined ? f.number(c.totals[m]) : c.previous?.totals[m] !== undefined ? f.number(0) : '-'}</span>
                                 <ChangeChip current={c.totals[m]} previous={c.previous?.totals[m]} against={against} />
                               </td>
                             ))}

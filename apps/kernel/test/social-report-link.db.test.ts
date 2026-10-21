@@ -193,6 +193,9 @@ suite('social report links on PostgreSQL (#643)', () => {
     await published(o, zalo, 'Zalo mới', '2026-10-15T03:00:00Z', { reach: 100 });
     const old = await published(o, fb, 'Bài cũ', '2026-09-10T03:00:00Z', { reach: 1000, reactions: 40 });
     await published(o, fb, 'Bài cũ hai', '2026-09-30T16:00:00Z', { reach: 200 });
+    // A channel of the link that posted only in the period before.
+    const quiet = await connection(o.orgId, o.owner, 'Kênh tháng trước');
+    await published(o, quiet, 'Chỉ tháng trước', '2026-09-05T03:00:00Z', { reach: 50 });
     // Before the period before, and on a channel the link does not name.
     await published(o, fb, 'Bài rất cũ', '2026-08-30T16:00:00Z', { reach: 9999 });
     await published(o, other, 'Kênh khác', '2026-09-12T03:00:00Z', { reach: 3000 });
@@ -205,17 +208,19 @@ suite('social report links on PostgreSQL (#643)', () => {
     const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', {
       periodStart: '2026-10-01T00:00:00+07:00',
       periodEnd: '2026-11-01T00:00:00+07:00',
-      connectionIds: [fb, zalo],
+      connectionIds: [fb, zalo, quiet],
     });
     const page = (await view(token)) as ReportPage;
     expect(page).toMatchObject({ posts: 2, totals: { reach: 1300, reactions: 30 } });
-    expect(page.previous).toMatchObject({ posts: 2, totals: { reach: 1200, reactions: 40, linkClicks: 4 } });
+    expect(page.previous).toMatchObject({ posts: 3, totals: { reach: 1250, reactions: 40, linkClicks: 4 } });
     expect(Object.keys(page.previous.totals).sort()).toEqual(['linkClicks', 'reach', 'reactions']);
     expect(Date.parse(page.previous.periodStart)).toBe(Date.parse('2026-08-30T17:00:00Z'));
     expect(Date.parse(page.previous.periodEnd)).toBe(Date.parse(page.periodStart));
     expect(page.channels).toEqual([
       { channel: 'Trang Facebook', provider: 'sandbox', posts: 1, totals: { reach: 1200, reactions: 30 }, previous: { posts: 2, totals: { reach: 1200, reactions: 40, linkClicks: 4 } } },
       { channel: 'Zalo OA', provider: 'sandbox', posts: 1, totals: { reach: 100 }, previous: { posts: 0, totals: {} } },
+      // Every channel that posted in either period, so the channels add up to both totals.
+      { channel: 'Kênh tháng trước', provider: 'sandbox', posts: 0, totals: {}, previous: { posts: 1, totals: { reach: 50 } } },
     ]);
     // The best posts stay those of the period.
     expect(page.top.map((p) => p.excerpt)).toEqual(['Bài mới', 'Zalo mới']);
@@ -224,6 +229,21 @@ suite('social report links on PostgreSQL (#643)', () => {
     // A period with nothing before it compares with nothing.
     const { token: empty } = await exec<{ token: string }>(stranger, stranger.owner, 'social.report_link.create', { periodStart: '2026-10-01T00:00:00Z', periodEnd: '2026-10-08T00:00:00Z' });
     expect(await view(empty)).toMatchObject({ posts: 0, totals: {}, channels: [], previous: { posts: 0, totals: {} } });
+
+    // The period before has the period's exact length whatever the session's time zone: 30 days after the end of US
+    // daylight saving (1 November 2026) still start 30 times 24 hours earlier.
+    const { token: dst, linkId } = await exec<{ token: string; linkId: string }>(o, o.owner, 'social.report_link.create', { periodStart: '2026-10-01T00:00:00Z', periodEnd: '2026-10-31T00:00:00Z' });
+    await admin((c) => c.query("UPDATE crove_social.report_link SET period_start = '2026-11-10T00:00:00Z', period_end = '2026-12-10T00:00:00Z' WHERE id = $1", [linkId]));
+    const starts = await admin(async (c) => {
+      const out: number[] = [];
+      for (const zone of ['UTC', 'America/New_York', 'Asia/Ho_Chi_Minh']) {
+        await c.query(`SET TimeZone = '${zone}'`);
+        const { rows } = await c.query<{ start: string }>("SELECT crove_social.report_link_view($1) #>> '{previous,periodStart}' AS start", [dst]);
+        out.push(Date.parse(rows[0]?.start ?? ''));
+      }
+      return out;
+    });
+    expect(starts).toEqual([Date.parse('2026-10-11T00:00:00Z'), Date.parse('2026-10-11T00:00:00Z'), Date.parse('2026-10-11T00:00:00Z')]);
   });
 
   it('lets only owners and admins make and revoke links, within the limits, and lists them without tokens', async () => {
