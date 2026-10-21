@@ -298,6 +298,17 @@ describe('validateVariant', () => {
     expect(md('Khai trương', { contentWarning: 7 })).toEqual(['CONTENT_WARNING_TOO_LONG']);
   });
 
+  it('checks a WordPress post: text required, an optional title, up to 10 images and no video (#833)', () => {
+    const wp = (body: string, title: string | null, media: MediaItem[] = []) => validateVariant({ provider: 'wordpress', body, title, media, settings: {} }).map((i) => i.code);
+    expect(wp('x'.repeat(100_000), null)).toEqual([]);
+    expect(wp('x'.repeat(100_001), null)).toEqual(['TEXT_TOO_LONG']);
+    expect(wp('Khai trương', 'Thực đơn', Array.from({ length: 10 }, () => jpeg()))).toEqual([]);
+    expect(wp('Khai trương', 'x'.repeat(201))).toEqual(['TITLE_TOO_LONG']);
+    expect(wp('', 'Thực đơn', [jpeg()])).toEqual(['TEXT_REQUIRED']);
+    expect(wp('Khai trương', null, Array.from({ length: 11 }, () => jpeg()))).toEqual(['TOO_MANY_MEDIA']);
+    expect(wp('Khai trương', null, [mp4()])).toEqual(['MEDIA_KIND_NOT_ALLOWED']);
+  });
+
   it('gives a Telegram post with media the caption limit of 1,024, and text alone 4,096 (#747)', () => {
     const tg = (media: MediaItem[], n: number) => validateVariant({ provider: 'telegram', body: 'x'.repeat(n), title: null, media, settings: {} }).map((i) => i.code);
     expect(tg([], 4096)).toEqual([]);

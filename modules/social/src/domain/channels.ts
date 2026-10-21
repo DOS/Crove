@@ -18,6 +18,7 @@ export const PROVIDERS = [
   'telegram',
   'mastodon',
   'pinterest',
+  'wordpress',
 ] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -113,6 +114,8 @@ export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
   mastodon: 'text',
   // The pin leads to the link itself (#798).
   pinterest: 'apart',
+  // A paragraph of its own after the text (#833).
+  wordpress: 'text',
 };
 
 // The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
@@ -506,6 +509,19 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['media.max'],
+  },
+  // WordPress (#833): a blog post through the site's REST API. WordPress sets no length on a post; 100,000 characters is
+  // Crove's own cap. The title is the post's own or the text's first line; up to 10 images (JPEG, PNG, WebP or GIF, kept
+  // to 10 MB each, as many hosts cap uploads near there) go to the media library and after the text, the first as the
+  // featured image. No video.
+  wordpress: {
+    provider: 'wordpress',
+    body: { max: 100_000, count: 'codepoints', required: true },
+    title: { max: 200, count: 'codepoints', required: false },
+    media: { min: 0, max: 10, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], maxImageBytes: 10 * MB, maxVideoBytes: null, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: false,
+    unverified: [],
   },
 };
 

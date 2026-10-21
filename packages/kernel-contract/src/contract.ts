@@ -183,6 +183,12 @@ export const contract = {
     connectMastodon: oc
       .input(z.object({ instance: z.string().trim().min(1).max(260), accessToken: z.string().trim().min(1).max(300) }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    // A WordPress site (#833): its address (https, with the path WordPress lives under, if any), a user name and an
+    // application password from that user's profile. The server checks the user may publish, through the egress guard,
+    // then seals the password; the formats are checked by the server, in words.
+    connectWordPress: oc
+      .input(z.object({ site: z.string().trim().min(1).max(300), username: z.string().trim().min(1).max(100), appPassword: z.string().trim().min(1).max(100) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     connectTelegram: oc
       .input(z.object({ botToken: z.string().trim().min(1).max(100), channel: z.string().trim().min(1).max(100) }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),

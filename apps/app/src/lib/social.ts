@@ -54,6 +54,7 @@ export const PROVIDER_NAMES: Record<Provider, string> = {
   telegram: 'Telegram',
   mastodon: 'Mastodon',
   pinterest: 'Pinterest',
+  wordpress: 'WordPress',
 };
 
 export function providerName(provider: string): string {

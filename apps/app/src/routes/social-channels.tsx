@@ -301,6 +301,17 @@ export function SocialChannelsPage() {
       void queryClient.invalidateQueries();
     },
   });
+  // WordPress: the site, a user name and an application password, checked by the server and sealed; the form forgets
+  // the password.
+  const wordpressOn = getConfig().channels?.wordpress ?? false;
+  const [wp, setWp] = useState({ site: '', username: '', appPassword: '' });
+  const connectWordPress = useMutation({
+    mutationFn: () => client.channels.connectWordPress({ site: wp.site.trim(), username: wp.username.trim(), appPassword: wp.appPassword.trim() }),
+    onSuccess: () => {
+      setWp({ site: '', username: '', appPassword: '' });
+      void queryClient.invalidateQueries();
+    },
+  });
   // Telegram: a bot token and the channel, checked by the server and sealed; the form forgets the token.
   const telegramOn = getConfig().channels?.telegram ?? false;
   const [tg, setTg] = useState({ botToken: '', channel: '' });
@@ -324,6 +335,7 @@ export function SocialChannelsPage() {
   const blueskyForm = useRef<HTMLInputElement>(null);
   const telegramForm = useRef<HTMLInputElement>(null);
   const mastodonForm = useRef<HTMLInputElement>(null);
+  const wordpressForm = useRef<HTMLInputElement>(null);
   // Reconnecting connects the same account again: the provider's dialog, or the Bluesky form with its handle.
   const reconnect = (c: Channel) => {
     if (c.provider === 'bluesky') {
@@ -341,9 +353,15 @@ export function SocialChannelsPage() {
       mastodonForm.current?.focus();
       return;
     }
+    if (c.provider === 'wordpress') {
+      // The account id is the site's host and path.
+      setWp({ site: `https://${c.externalAccountId}`, username: '', appPassword: '' });
+      wordpressForm.current?.focus();
+      return;
+    }
     if (oauth.includes(c.provider as OAuthProvider)) start.mutate(c.provider as OAuthProvider);
   };
-  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : c.provider === 'telegram' ? telegramOn : c.provider === 'mastodon' ? mastodonOn : oauth.includes(c.provider as OAuthProvider));
+  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : c.provider === 'telegram' ? telegramOn : c.provider === 'mastodon' ? mastodonOn : c.provider === 'wordpress' ? wordpressOn : oauth.includes(c.provider as OAuthProvider));
   const disconnect = useMutation({
     mutationFn: (connectionId: string) => client.channels.disconnect({ connectionId, idempotencyKey: crypto.randomUUID() }),
     onSuccess: () => {
@@ -522,6 +540,28 @@ export function SocialChannelsPage() {
                 {t('connectWith', { provider: providerName('mastodon') })}
               </Button>
               {connectMastodon.error && <ErrorText>{errorMessage(connectMastodon.error)}</ErrorText>}
+            </form>
+          )}
+          {wordpressOn && isAdmin && (
+            <form
+              className="space-y-2 border-t pt-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (wp.site.trim() && wp.username.trim() && wp.appPassword.trim()) connectWordPress.mutate();
+              }}
+            >
+              <p className="text-sm font-medium text-foreground">{providerName('wordpress')}</p>
+              <Label htmlFor="wp-site">{t('wordpressSite')}</Label>
+              <Input id="wp-site" ref={wordpressForm} autoComplete="off" value={wp.site} placeholder="https://tiemcuaban.vn" onChange={(e) => setWp({ ...wp, site: e.target.value })} />
+              <Label htmlFor="wp-username">{t('wordpressUsername')}</Label>
+              <Input id="wp-username" autoComplete="off" value={wp.username} onChange={(e) => setWp({ ...wp, username: e.target.value })} />
+              <Label htmlFor="wp-password">{t('wordpressAppPassword')}</Label>
+              <Input id="wp-password" type="password" autoComplete="off" value={wp.appPassword} placeholder="xxxx xxxx xxxx xxxx xxxx xxxx" onChange={(e) => setWp({ ...wp, appPassword: e.target.value })} />
+              <p className="text-xs text-subtle-foreground">{t('wordpressHint')}</p>
+              <Button type="submit" variant="outline" size="sm" disabled={!wp.site.trim() || !wp.username.trim() || !wp.appPassword.trim() || connectWordPress.isPending}>
+                {t('connectWith', { provider: providerName('wordpress') })}
+              </Button>
+              {connectWordPress.error && <ErrorText>{errorMessage(connectWordPress.error)}</ErrorText>}
             </form>
           )}
           {telegramOn && isAdmin && (

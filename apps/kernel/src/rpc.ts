@@ -2,7 +2,7 @@
 import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
-import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectMastodon, connectTelegram, mastodonLogin, telegramLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
+import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectMastodon, connectTelegram, connectWordPress, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
 import type { SocialWriter, WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
 import { voiceNotes, type BrandVoice } from '@crove/mod-social';
@@ -104,6 +104,18 @@ function mastodonFailure(code: string | undefined): DomainError {
   return new DomainError('MASTODON_INSTANCE_UNREACHABLE', 422, 'Không kết nối được tới máy chủ Mastodon này; hãy kiểm tra địa chỉ rồi thử lại');
 }
 
+// Why a WordPress site did not connect, in words for the connect form; any other failure (the site did not answer, or
+// the egress guard refused its address) is a site Crove cannot reach.
+function wordpressFailure(code: string | undefined): DomainError {
+  if (code === 'WORDPRESS_SITE_INVALID') return new DomainError('WORDPRESS_SITE_INVALID', 422, 'Hãy nhập địa chỉ trang WordPress qua https, ví dụ https://tiemcuaban.vn');
+  if (code === 'WORDPRESS_LOGIN_INVALID') return new DomainError('WORDPRESS_LOGIN_INVALID', 422, 'Hãy nhập tên người dùng và mật khẩu ứng dụng (24 chữ cái và chữ số) mà WordPress tạo cho bạn');
+  if (code === 'WORDPRESS_LOGIN_REFUSED') return new DomainError('WORDPRESS_LOGIN_REFUSED', 422, 'WordPress không chấp nhận tên người dùng hoặc mật khẩu ứng dụng này');
+  if (code === 'WORDPRESS_CANNOT_PUBLISH') return new DomainError('WORDPRESS_CANNOT_PUBLISH', 422, 'Tài khoản này chưa có quyền đăng bài; hãy dùng tài khoản Tác giả, Biên tập viên hoặc Quản trị viên');
+  if (code === 'WORDPRESS_NO_REST_API') return new DomainError('WORDPRESS_NO_REST_API', 422, 'Trang này chưa bật REST API của WordPress, hoặc đường dẫn tĩnh đang tắt');
+  if (code === 'WORDPRESS_SITE_REDIRECTS') return new DomainError('WORDPRESS_SITE_REDIRECTS', 422, 'Địa chỉ này chuyển sang một địa chỉ khác; hãy nhập địa chỉ cuối cùng của trang, bắt đầu bằng https');
+  return new DomainError('WORDPRESS_SITE_UNREACHABLE', 422, 'Không kết nối được tới trang WordPress này; hãy kiểm tra địa chỉ rồi thử lại');
+}
+
 type LinkPreviewView = { status: 'pending' | 'ready' | 'failed'; title: string | null; description: string | null; siteName: string | null } | null;
 const SOURCE_WAIT_MS = 10_000;
 // The link preview of a page an AI draft is written from (#769): requested when there is none, then waited for. A page
@@ -136,7 +148,7 @@ function telegramFailure(code: string | undefined): DomainError | null {
   if (code === 'TELEGRAM_BOT_CANNOT_POST') return new DomainError('TELEGRAM_BOT_CANNOT_POST', 422, 'Bot chưa được đăng bài trong kênh; hãy đặt bot làm quản trị viên có quyền đăng bài');
   return null;
 }
-const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram', mastodon: 'Mastodon', pinterest: 'Pinterest' };
+const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram', mastodon: 'Mastodon', pinterest: 'Pinterest', wordpress: 'WordPress (blog post)' };
 
 export interface RpcChannels {
   // Seals tokens before kernel.channel.connect stores them; never opens one in the API.
@@ -149,6 +161,8 @@ export interface RpcChannels {
   telegram?: boolean;
   // Mastodon accounts may connect with an access token (CHANNEL_MASTODON).
   mastodon?: boolean;
+  // WordPress sites may connect with an application password (CHANNEL_WORDPRESS).
+  wordpress?: boolean;
   // Providers connected through an OAuth dialog that this deployment configured (Social plan S6), by provider id.
   connectors?: Readonly<Partial<Record<string, OAuthConnector>>>;
   // PUBLIC_URL: the provider sends the browser back to PUBLIC_URL/channels/oauth/:provider/callback.
@@ -736,6 +750,37 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
           })();
           const account = await connectMastodon(login, egressFetch({ timeoutMs: 15_000, maxBytes: 200_000, overLimit: 'fail' })).catch((error: unknown) => {
+            throw failure(error);
+          });
+          const sealed = channels.broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });
+          const command: ChannelConnectInput = {
+            provider: account.provider,
+            externalAccountId: account.externalAccountId,
+            displayName: account.displayName,
+            scopes: account.scopes,
+            expiresAt: null,
+            credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+          };
+          return runtime.execute<{ connectionId: string; reconnected: boolean }>('kernel.channel.connect', command, { actor: actorOf(context.user), orgId });
+        }),
+      ),
+      // An application password is checked once with the site, through the egress guard (public addresses only, no
+      // redirects), then sealed with the site's id and dropped; it never reaches a log, an audit row or an answer.
+      connectWordPress: os.channels.connectWordPress.handler(({ context, input }) =>
+        guard(async () => {
+          const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
+          if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới kết nối được kênh');
+          if (!channels?.wordpress) throw new DomainError('CHANNEL_PROVIDER_DISABLED', 404, 'Kênh này chưa được bật trên máy chủ');
+          if (channels.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
+          const failure = (error: unknown) => wordpressFailure(error instanceof ConnectorError ? error.code : undefined);
+          const login = (() => {
+            try {
+              return wordpressLogin(input);
+            } catch (error) {
+              throw failure(error);
+            }
+          })();
+          const account = await connectWordPress(login, egressFetch({ timeoutMs: 15_000, maxBytes: 200_000, overLimit: 'fail' })).catch((error: unknown) => {
             throw failure(error);
           });
           const sealed = channels.broker.seal(account.secret, { orgId, provider: account.provider, externalAccountId: account.externalAccountId });

@@ -74,6 +74,8 @@ const PROVIDER_WORDS: Readonly<Record<string, string>> = {
   mastodon: 'mastodon',
   fediverse: 'mastodon',
   pinterest: 'pinterest',
+  wordpress: 'wordpress',
+  wp: 'wordpress',
 };
 
 function columnsOf(rows: SheetRows): { header: number; at: Partial<Record<ImportColumn, number>> } | null {
