@@ -5,7 +5,9 @@
 -- - exchange_rate: VND per unit of it, the rate the amounts were converted at;
 -- - exchange_rate_source: 'invoice' (the e-invoice's own TGia) or 'entered' (the accountant's, on a revision);
 -- - foreign_subtotal, foreign_vat_amount, foreign_total: the invoice's totals in its currency.
--- A VND document has none of them; a document in any other currency has all of them. Idempotent.
+-- A VND document has none of them; a document in any other currency has all of them. Documents recorded before #918
+-- may spell VND in lower case (the table is append-only, so they stay as they are): the check compares it upper case,
+-- and Crove now writes it upper case. Idempotent.
 ALTER TABLE crove_finance.purchase_document
   ADD COLUMN IF NOT EXISTS exchange_rate numeric(24,10),
   ADD COLUMN IF NOT EXISTS exchange_rate_source text,
@@ -24,7 +26,7 @@ DO $$
 BEGIN
   ALTER TABLE crove_finance.purchase_document
     ADD CONSTRAINT purchase_document_foreign_amounts CHECK (
-      (currency = 'VND') = (exchange_rate IS NULL)
+      (pg_catalog.upper(pg_catalog.btrim(currency)) = 'VND') = (exchange_rate IS NULL)
       AND (exchange_rate IS NULL) = (exchange_rate_source IS NULL)
       AND (exchange_rate IS NULL) = (foreign_subtotal IS NULL)
       AND (exchange_rate IS NULL) = (foreign_vat_amount IS NULL)

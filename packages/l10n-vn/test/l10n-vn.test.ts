@@ -94,7 +94,9 @@ describe('invoice checks', () => {
       change(changed);
       return checkInvoice(changed, '2026-10-13').find((c) => c.id === 'currency');
     };
-    for (const rate of [null, '0', '-25000']) expect(currency((i) => (i.exchangeRate = rate)), String(rate)).toMatchObject({ status: 'fail', code: 'currency.unsupported' });
+    for (const rate of [null, '0', '-25000', '10000000000000', '0.00000000001']) expect(currency((i) => (i.exchangeRate = rate)), String(rate)).toMatchObject({ status: 'fail', code: 'currency.unsupported' });
+    // Kept as written, never rounded.
+    expect(currency((i) => (i.exchangeRate = '25450.1234567'))).toMatchObject({ params: { rate: '25450.1234567' } });
     // A rate read by AI from a PDF or a photo is never used.
     expect(currency((i) => ((i.exchangeRate = '25450'), (i.source = 'ai')))).toMatchObject({ status: 'fail', code: 'currency.unsupported' });
     // The e-invoice's own rate is: a warning that names it.

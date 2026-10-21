@@ -193,8 +193,10 @@ export function isCalendarDate(value: string): boolean {
 // it, so the accountant enters the rate instead (finance.purchase.revise).
 export function invoiceExchangeRate(invoice: Pick<ParsedInvoice, 'source' | 'currency' | 'exchangeRate'>): Money | null {
   if (invoice.source !== 'einvoice_xml' || !/^[A-Za-z]{3}$/.test(invoice.currency) || invoice.exchangeRate === null) return null;
+  // As written (never rounded), and only within what a proposal stores (zExchangeRate: at most 13 digits before the
+  // point and 10 after it); anything else is no rate, so the accountant enters one.
   const rate = money(invoice.exchangeRate);
-  return rate.greaterThan(0) ? toMoney(rate) : null;
+  return rate.greaterThan(0) && rate.decimalPlaces() <= 10 && rate.lessThan('1e13') ? rate.toFixed() : null;
 }
 
 // Deterministic checks. Confidence comes from these, never from a model's self-assessment.
