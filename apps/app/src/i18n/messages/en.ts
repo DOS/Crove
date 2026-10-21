@@ -2941,6 +2941,8 @@ export const en = {
       CONTACT_EMAIL_REQUIRED: 'The company has no contact email yet. An owner or admin can set it in Settings; then try again.',
       NOTHING_MISSING: 'No invoices are missing for this period, so there is nothing to ask for.',
       REQUEST_TOO_SOON: 'A request for this period went out less than an hour ago. Wait a little, then send it again.',
+      NOT_FLAGGED: 'This invoice does not need its non-cash payment checked',
+      VOUCHER_NOT_BANK: 'Only a bank payment voucher of the organization can be linked, and only to an invoice paid by bank',
       OPENING_BALANCE_AFTER_ENTRIES: 'There are journal entries on or before this date. The opening balances must come before every other entry.',
       OPENING_REVERSAL_DATE: 'An opening entry can only be reversed on its own date.',
       BEFORE_OPENING_BALANCE: 'This entry is dated on or before the opening balances, so it cannot be posted. Choose a date after the opening balance date.',

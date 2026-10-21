@@ -116,6 +116,9 @@ export const KERNEL_ERROR_CODES = [
   'CONTACT_EMAIL_REQUIRED',
   'NOTHING_MISSING',
   'REQUEST_TOO_SOON',
+  // Non-cash payment marks on input invoices (#917).
+  'NOT_FLAGGED',
+  'VOUCHER_NOT_BANK',
   // Period lock (#329).
   'PERIOD_LOCKED',
   'PERIOD_ALREADY_LOCKED',

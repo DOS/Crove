@@ -2941,6 +2941,8 @@ export const vi = {
       CONTACT_EMAIL_REQUIRED: 'Công ty chưa có email liên hệ. Chủ sở hữu hoặc quản trị viên nhập email này trong Cài đặt rồi thử lại.',
       NOTHING_MISSING: 'Kỳ này không còn hóa đơn nào thiếu nên không cần gửi đề nghị.',
       REQUEST_TOO_SOON: 'Vừa gửi đề nghị cho kỳ này trong vòng một giờ qua. Hãy đợi thêm rồi gửi lại.',
+      NOT_FLAGGED: 'Hóa đơn này không cần kiểm tra chứng từ thanh toán không dùng tiền mặt',
+      VOUCHER_NOT_BANK: 'Chỉ gắn được giấy báo Nợ của tổ chức, và chỉ khi hóa đơn đã thanh toán qua ngân hàng',
       OPENING_BALANCE_AFTER_ENTRIES: 'Đã có bút toán vào hoặc trước ngày số dư đầu kỳ; ngày số dư đầu kỳ phải trước mọi bút toán khác',
       OPENING_REVERSAL_DATE: 'Bút toán số dư đầu kỳ chỉ được đảo vào đúng ngày của nó',
       BEFORE_OPENING_BALANCE: 'Bút toán này có ngày trùng hoặc trước ngày số dư đầu kỳ nên không ghi được; hãy chọn một ngày sau ngày số dư đầu kỳ',
