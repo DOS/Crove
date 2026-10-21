@@ -12,7 +12,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { ChatAlertSender } from './chat-alerts.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
@@ -583,6 +583,25 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const socialTimer = publishing.size > 0 ? setInterval(() => void socialSweep(), SOCIAL_SWEEP_MS) : null;
   void socialSweep();
 
+  // Planned takedowns (#861): every minute, the published posts whose removal time has come are asked to come down, on
+  // the providers this deployment publishes to and whose adapter removes; the remove job above does the rest.
+  const removing = new Set([...publishing].filter((p) => isProvider(p) && REMOVE_READY.has(p) && Boolean(publishers[p]?.remove)));
+  let sweepingRemovals = false;
+  const removeSweep = async () => {
+    if (sweepingRemovals || removing.size === 0) return;
+    sweepingRemovals = true;
+    try {
+      const queued = await sweepRemovals({ runtime: deps.runtime, workerDb: deps.workerDb }, removing);
+      if (queued > 0) console.log(`[social-remove] sweep asked ${queued} planned removal(s)`);
+    } catch (error) {
+      console.error(`[social-remove] sweep: ${error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error'}`);
+    } finally {
+      sweepingRemovals = false;
+    }
+  };
+  const removeTimer = removing.size > 0 ? setInterval(() => void removeSweep(), REMOVE_SWEEP_MS) : null;
+  if (removeTimer) void removeSweep();
+
   // Evergreen posts (S9): every hour, a repost of each one that is due, sent to review.
   let reposting = false;
   const evergreenSweep = async () => {
@@ -980,6 +999,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     clearInterval(timer);
     clearInterval(heartbeatTimer);
     if (socialTimer) clearInterval(socialTimer);
+    if (removeTimer) clearInterval(removeTimer);
     if (mailTimer) clearInterval(mailTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (reminderTimer) clearInterval(reminderTimer);

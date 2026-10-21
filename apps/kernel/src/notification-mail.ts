@@ -13,15 +13,17 @@ const LEAD: Record<string, string> = {
   decided_changes_requested: 'Người duyệt đề nghị sửa bài của bạn.',
   decided_rejected: 'Bài của bạn bị từ chối.',
   failed: 'Một bài đăng không thành công.',
+  // A planned takedown (#861) that did not happen.
+  failed_removal: 'Crove chưa tự gỡ được một bài đã hẹn giờ gỡ; bài vẫn còn trên kênh. Hãy gỡ lại từ trang bài viết hoặc gỡ trực tiếp trên nền tảng.',
   needs_attention: 'Một bài đăng cần bạn xử lý trước khi đăng tiếp.',
   channel_expired: 'Một kênh đã hết hạn kết nối; bài lên lịch trên kênh này sẽ chờ đến khi bạn kết nối lại.',
   mention: 'Một thành viên đã nhắc đến bạn trong bình luận nội bộ của một bài.',
 };
 
 export async function renderNotificationMail(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string } | null> {
-  const { kind, org, post, channel, decision, path } = input.payload;
+  const { kind, org, post, channel, decision, removal, path } = input.payload;
   if (typeof kind !== 'string' || typeof org !== 'string' || typeof path !== 'string' || !PATH.test(path)) return null;
-  const lead = LEAD[kind === 'decided' ? `decided_${typeof decision === 'string' ? decision : ''}` : kind];
+  const lead = LEAD[kind === 'decided' ? `decided_${typeof decision === 'string' ? decision : ''}` : kind === 'failed' && removal === 'scheduled' ? 'failed_removal' : kind];
   if (!lead) return null;
   const url = `${input.publicUrl.replace(/\/+$/, '')}${path}`;
   const open = path.endsWith('/channels') ? 'Mở trang kênh' : 'Mở bài viết';
