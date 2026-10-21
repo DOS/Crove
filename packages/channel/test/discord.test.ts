@@ -1,6 +1,6 @@
 // Discord against recorded webhook answers (shapes from discord.com/developers/docs/resources/webhook); no live call.
 import { describe, expect, it } from 'vitest';
-import { connectDiscord, discordLogin, DiscordPublisher, discordSecretOf, DISCORD_FILE_MAX_BYTES, type Fetch, type PublishInput } from '../src/index.ts';
+import { connectDiscord, discordChatTargetOf, discordLogin, DiscordPublisher, discordSecretOf, DISCORD_FILE_MAX_BYTES, sendDiscordText, type Fetch, type PublishInput } from '../src/index.ts';
 
 const HOOK = '1234567890123456789';
 const TOKEN = `tok_${'A1b2C3d4'.repeat(8)}`;
@@ -202,6 +202,26 @@ describe('Discord publish', () => {
       return new Response(JSON.stringify(webhook().body));
     });
     expect(seen).toEqual(['discord.com', 'discord.com', 'discord.com']);
+  });
+});
+
+describe('Discord team alerts (#863)', () => {
+  it('sends one line with mentions off and no embeds, on the webhook', async () => {
+    const line = 'Bài «Khai trương» đã đăng lên Facebook: https://crove.example/o/shop/social/1';
+    const { fetchImpl, calls } = discord([{ body: { id: '1111111111111111111', channel_id: CHANNEL } }]);
+    await sendDiscordText({ webhookId: HOOK, token: TOKEN }, line, fetchImpl);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe('POST');
+    expect(calls[0]?.url.toString()).toBe(`https://discord.com/api/v10/webhooks/${HOOK}/${TOKEN}?wait=true`);
+    expect(calls[0]?.json).toEqual({ content: line, allowed_mentions: { parse: [] }, flags: 4 });
+  });
+
+  it('throws what Discord answered, and reads back only a well-formed target', async () => {
+    await expect(sendDiscordText({ webhookId: HOOK, token: TOKEN }, 'x', discord([fail(404, 10015, 'Unknown Webhook')]).fetchImpl)).rejects.toMatchObject({ status: 404 });
+    await expect(sendDiscordText({ webhookId: HOOK, token: TOKEN }, 'x'.repeat(2001), discord([]).fetchImpl)).rejects.toMatchObject({ status: 400 });
+    expect(discordChatTargetOf(JSON.stringify({ webhookId: HOOK, token: TOKEN }))).toEqual({ webhookId: HOOK, token: TOKEN });
+    expect(discordChatTargetOf(JSON.stringify({ webhookId: '1', token: TOKEN }))).toBeNull();
+    expect(discordChatTargetOf('{')).toBeNull();
   });
 });
 

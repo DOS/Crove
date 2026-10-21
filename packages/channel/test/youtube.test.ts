@@ -133,6 +133,32 @@ describe('YouTubePublisher', () => {
     expect(calls[1]?.headers.get('content-type')).toBe('video/mp4');
   });
 
+  it('sends the category, tags and audience the person chose (#905)', async () => {
+    const { fetchImpl, calls } = google({
+      'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
+      'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, body: { id: 'dQw4w9WgXcQ' } }],
+    });
+    const settings = { privacy: 'public', categoryId: '26', madeForKids: true, tags: ['bánh mì', ' Sài Gòn ', '', 'ẩm <thực>', 7] };
+    expect(await new YouTubePublisher(APP, fetchImpl).publish(input({ settings }))).toMatchObject({ kind: 'accepted', externalId: 'dQw4w9WgXcQ' });
+    // Tags keep their Vietnamese marks; each is trimmed, an empty one or one that is not text is dropped.
+    expect(calls[0]?.body).toEqual({
+      snippet: { title: 'Khai trương chi nhánh', description: 'Video khai trương mới\n\nhttps://example.com/a', categoryId: '26', tags: ['bánh mì', 'Sài Gòn', 'ẩm thực'] },
+      status: { privacyStatus: 'public', selfDeclaredMadeForKids: true, embeddable: true },
+    });
+  });
+
+  it('keeps the old defaults for a variant saved without the video details: category 22, not made for kids, no tags', async () => {
+    const { fetchImpl, calls } = google({
+      'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
+      'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, body: { id: 'dQw4w9WgXcQ' } }],
+    });
+    await new YouTubePublisher(APP, fetchImpl).publish(input({ settings: { categoryId: 'music', madeForKids: 'yes', tags: 'bánh mì' } }));
+    const sent = calls[0]?.body as { snippet: Record<string, unknown>; status: Record<string, unknown> };
+    expect(sent.snippet.categoryId).toBe('22');
+    expect(sent.snippet).not.toHaveProperty('tags');
+    expect(sent.status.selfDeclaredMadeForKids).toBe(false);
+  });
+
   it('sets an image cover as the thumbnail after the upload, read before anything is sent (#642)', async () => {
     const { fetchImpl, calls } = google({
       'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],

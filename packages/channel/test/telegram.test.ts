@@ -1,6 +1,6 @@
 // Telegram against recorded Bot API answers (shapes from core.telegram.org/bots/api); no live call.
 import { describe, expect, it } from 'vitest';
-import { connectTelegram, telegramLogin, TelegramPublisher, telegramSecretOf, type Fetch, type PublishInput } from '../src/index.ts';
+import { checkTelegramChat, connectTelegram, sendTelegramText, telegramChatLogin, telegramChatTargetOf, telegramLogin, TelegramPublisher, telegramSecretOf, type Fetch, type PublishInput } from '../src/index.ts';
 
 const TOKEN = '123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw1';
 const CHAT = '-1001234567890';
@@ -153,6 +153,59 @@ describe('Telegram publish', () => {
     };
     await new TelegramPublisher(fetchImpl).publish(input());
     expect(seen).toEqual(['api.telegram.org']);
+  });
+});
+
+describe('Telegram team alerts (#863)', () => {
+  it('reads a chat as @name, t.me link or numeric id, groups and private chats included, before any call', () => {
+    expect(telegramChatLogin({ botToken: ` ${TOKEN} `, chatId: 'https://t.me/nhomshop' })).toEqual({ botToken: TOKEN, chat: '@nhomshop' });
+    expect(telegramChatLogin({ botToken: TOKEN, chatId: '-4012345678' })).toEqual({ botToken: TOKEN, chat: '-4012345678' });
+    expect(telegramChatLogin({ botToken: TOKEN, chatId: ' 123456789 ' })).toEqual({ botToken: TOKEN, chat: '123456789' });
+    expect(() => telegramChatLogin({ botToken: 'x', chatId: '@nhomshop' })).toThrow(expect.objectContaining({ code: 'TELEGRAM_TOKEN_INVALID' }));
+    expect(() => telegramChatLogin({ botToken: TOKEN, chatId: 'nhóm shop' })).toThrow(expect.objectContaining({ code: 'TELEGRAM_CHAT_INVALID' }));
+  });
+
+  it('checks the bot, the chat and its right to write there, and names the chat by its title', async () => {
+    const { fetchImpl, calls } = bot({
+      getMe: [ok({ id: 987654321, is_bot: true })],
+      getChat: [ok({ id: -4012345678, type: 'group', title: 'Nhóm bán hàng' })],
+      getChatMember: [ok({ status: 'member' })],
+    });
+    const checked = await checkTelegramChat({ botToken: TOKEN, chat: '-4012345678' }, fetchImpl);
+    expect(checked).toEqual({ target: { botToken: TOKEN, chatId: '-4012345678' }, label: 'Nhóm bán hàng' });
+    expect(calls.map((c) => c.method)).toEqual(['getMe', 'getChat', 'getChatMember']);
+    expect(calls[2]?.json).toEqual({ chat_id: -4012345678, user_id: 987654321 });
+    // A private chat with the bot needs no member check; it is named after the person.
+    const dm = bot({ getMe: [ok({ id: 1, is_bot: true })], getChat: [ok({ id: 123456789, type: 'private', first_name: 'Lan' })] });
+    expect(await checkTelegramChat({ botToken: TOKEN, chat: '123456789' }, dm.fetchImpl)).toEqual({ target: { botToken: TOKEN, chatId: '123456789' }, label: 'Lan' });
+    expect(dm.calls.map((c) => c.method)).toEqual(['getMe', 'getChat']);
+  });
+
+  it('says why a chat cannot get alerts: a refused token, an unknown chat, a bot that may not write', async () => {
+    const check = (answers: Parameters<typeof bot>[0]) => checkTelegramChat({ botToken: TOKEN, chat: '@nhomshop' }, bot(answers).fetchImpl);
+    const me = () => [ok({ id: 1, is_bot: true })];
+    const group = () => [ok({ id: -1001, type: 'supergroup', title: 'Nhóm' })];
+    await expect(check({ getMe: [fail(401, 'Unauthorized')] })).rejects.toMatchObject({ code: 'TELEGRAM_TOKEN_REFUSED' });
+    await expect(check({ getMe: me(), getChat: [fail(400, 'Bad Request: chat not found')] })).rejects.toMatchObject({ code: 'TELEGRAM_CHAT_NOT_FOUND' });
+    await expect(check({ getMe: me(), getChat: group(), getChatMember: [ok({ status: 'left' })] })).rejects.toMatchObject({ code: 'TELEGRAM_BOT_CANNOT_SEND' });
+    await expect(check({ getMe: me(), getChat: group(), getChatMember: [ok({ status: 'restricted', can_send_messages: false })] })).rejects.toMatchObject({ code: 'TELEGRAM_BOT_CANNOT_SEND' });
+    await expect(check({ getMe: me(), getChat: [ok({ id: -1001, type: 'channel', title: 'Kênh' })], getChatMember: [ok({ status: 'member' })] })).rejects.toMatchObject({ code: 'TELEGRAM_BOT_CANNOT_SEND' });
+    await expect(check({ getMe: [fail(502, 'Bad Gateway')] })).rejects.toMatchObject({ kind: 'provider' });
+  });
+
+  it('sends one line of plain text without a link preview, and reads back only a well-formed target', async () => {
+    const line = 'Bài «Khai trương» đang chờ duyệt: https://crove.example/o/shop/social/1';
+    const { fetchImpl, calls } = bot({ sendMessage: [ok({ message_id: 7 })] });
+    await sendTelegramText({ botToken: TOKEN, chatId: '-4012345678' }, line, fetchImpl);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.token).toBe(TOKEN);
+    expect(calls[0]?.json).toEqual({ chat_id: '-4012345678', text: line, link_preview_options: { is_disabled: true } });
+    const refused = bot({ sendMessage: [fail(403, 'Forbidden: bot was kicked from the group chat')] });
+    await expect(sendTelegramText({ botToken: TOKEN, chatId: '-4012345678' }, 'x', refused.fetchImpl)).rejects.toMatchObject({ status: 403 });
+    await expect(sendTelegramText({ botToken: TOKEN, chatId: '-4012345678' }, '', refused.fetchImpl)).rejects.toMatchObject({ status: 400 });
+    expect(telegramChatTargetOf(JSON.stringify({ botToken: TOKEN, chatId: '-4012345678' }))).toEqual({ botToken: TOKEN, chatId: '-4012345678' });
+    expect(telegramChatTargetOf(JSON.stringify({ botToken: TOKEN, chatId: '@nhomshop' }))).toBeNull();
+    expect(telegramChatTargetOf('not json')).toBeNull();
   });
 });
 
