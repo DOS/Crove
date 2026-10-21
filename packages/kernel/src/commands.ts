@@ -28,6 +28,7 @@ import { agentCommands } from './agents.ts';
 import { channelCommands } from './channels.ts';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { archiveCommands } from './archives.ts';
+import { imageSizeCommands } from './image-sizes.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
@@ -819,6 +820,7 @@ const otherKernelCommands = [
   receiveInbound,
   ...extractionCommands,
   ...archiveCommands,
+  ...imageSizeCommands,
   requestProposal,
   editProposal,
   approveProposal,
