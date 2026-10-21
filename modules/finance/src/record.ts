@@ -399,7 +399,8 @@ export const recordPurchase = defineCommand({
         invoice_series: invoice.series,
         invoice_number: invoice.number,
         invoice_date: invoice.issueDate,
-        currency: invoice.currency,
+        // Upper case: a proposal read before #918 may carry 'vnd', which the CHECK constraint compares with 'VND'.
+        currency: invoice.currency.toUpperCase(),
         ...(foreign
           ? {
               exchange_rate: foreign.rate,

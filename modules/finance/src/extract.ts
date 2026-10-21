@@ -402,7 +402,8 @@ export async function extractAndPropose(
       series: invoice.series,
       number: invoice.number,
       issueDate: invoice.issueDate,
-      currency: invoice.currency,
+      // Upper case, as the document stores it (purchase_document_foreign_amounts compares it with 'VND').
+      currency: invoice.currency.toUpperCase(),
       paymentMethod: invoice.paymentMethod,
       taxAuthorityCode: invoice.taxAuthorityCode,
       subtotal: booked.subtotal,

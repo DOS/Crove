@@ -19,6 +19,7 @@ import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal
 import { nextDay, postingDateAllowed } from '../lib/period-lock.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { invoiceCheckMessage } from '../lib/invoice-checks.ts';
+import { parseExchangeRate } from '../lib/exchange-rate.ts';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { journalVoucherProblem } from '../lib/journal-voucher.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
@@ -303,6 +304,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   // The rate typed for a foreign-currency invoice read without one (#918).
   const [exchangeRate, setExchangeRate] = useState('');
+  const enteredRate = parseExchangeRate(exchangeRate);
   const [acceptFailed, setAcceptFailed] = useState(false);
   // An invoice whose digital signature is unverified (#674): the approver confirms they checked the original first.
   // The confirmation holds for the revision it was given on: a new reading of the file (a new revision) asks again.
@@ -780,18 +782,22 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                     className="flex flex-wrap items-end gap-2 sm:col-span-3"
                     onSubmit={(e) => {
                       e.preventDefault();
-                      const rate = exchangeRate.trim().replace(/\s/g, '').replace(',', '.');
-                      if (!item || !/^\d+(\.\d+)?$/.test(rate)) return;
-                      edit.mutate({ id, revision: item.revision, idempotencyKey: crypto.randomUUID(), exchangeRate: rate });
+                      if (!item || !enteredRate) return;
+                      edit.mutate({ id, revision: item.revision, idempotencyKey: crypto.randomUUID(), exchangeRate: enteredRate });
                     }}
                   >
                     <Label className="text-xs">
                       {t('exchangeRate', { currency: payload.invoice.currency })}
                       <Input className="mt-1 w-40" inputMode="decimal" value={exchangeRate} onChange={(e) => setExchangeRate(e.target.value)} placeholder="25450" />
                     </Label>
-                    <Button type="submit" variant="outline" size="sm" disabled={busy || exchangeRate.trim() === ''}>
+                    <Button type="submit" variant="outline" size="sm" disabled={busy || !enteredRate}>
                       {t('saveExchangeRate')}
                     </Button>
+                    {exchangeRate.trim() !== '' && (
+                      <p className={enteredRate ? 'w-full text-xs text-muted-foreground' : 'w-full text-xs text-destructive'} aria-live="polite">
+                        {enteredRate ? t('exchangeRateRead', { rate: f.number(enteredRate), currency: payload.invoice.currency }) : t('exchangeRateInvalid')}
+                      </p>
+                    )}
                     <p className="w-full text-xs text-subtle-foreground">{t('exchangeRateHint')}</p>
                   </form>
                 )}

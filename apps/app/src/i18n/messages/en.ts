@@ -1194,6 +1194,8 @@ export const en = {
     foreignEntered: 'Invoice in {currency}: total {total}, converted to VND at the rate of {rate} a user entered',
     exchangeRate: 'Exchange rate (VND per 1 {currency})',
     saveExchangeRate: 'Save the rate',
+    exchangeRateRead: 'Will save: 1 {currency} = {rate} VND',
+    exchangeRateInvalid: 'The rate cannot be read; type a number such as 25,450 or 25450.5',
     exchangeRateHint: 'The invoice states no exchange rate, so it cannot be posted yet. Enter the rate of the transaction date; Crove converts the lines, VAT and totals to VND and saves them as a new revision, which someone else approves.',
     checks: 'Automatic checks',
     lines: 'Goods and services',

@@ -519,6 +519,11 @@ suite('kernel on PostgreSQL', () => {
     expect(debit).toBe(credit);
     expect(entry.lines.find((l: { account_code: string }) => l.account_code === '331')).toMatchObject({ credit: '50391000000.0000' });
     expect(await documentOf(own.id)).toMatchObject({ currency: 'USD', exchange_rate_source: 'invoice', foreign_total: '1980000.0000' });
+    // A lower-case VND is VND: recorded, and stored upper case for the CHECK constraint.
+    const lower = await propose(variant('1239', (xml) => xml.replace('<DVTTe>VND</DVTTe>', '<DVTTe>vnd</DVTTe>')));
+    await expect(runtime.execute('kernel.proposal.approve', lower, asAdmin)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
+    expect(await documentOf(lower.id)).toMatchObject({ currency: 'VND', exchange_rate: null });
+
     // The database refuses a foreign-currency document without its rate, and a VND one with a rate.
     const party = (await withAdmin((c) => c.query(`SELECT party_id FROM crove_finance.purchase_document WHERE org_id = $1 AND proposal_id = $2`, [orgA, own.id]))).rows[0].party_id;
     for (const [currency, rate] of [['USD', null], ['VND', '25450']] as const) {

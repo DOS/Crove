@@ -1190,6 +1190,8 @@ export const vi = {
     foreignEntered: 'Hóa đơn bằng {currency}: tổng {total}, quy đổi sang VND theo tỷ giá {rate} do người dùng nhập',
     exchangeRate: 'Tỷ giá (VND cho 1 {currency})',
     saveExchangeRate: 'Lưu tỷ giá',
+    exchangeRateRead: 'Sẽ lưu: 1 {currency} = {rate} VND',
+    exchangeRateInvalid: 'Không đọc được tỷ giá; hãy nhập số như 25.450 hoặc 25450,5',
     exchangeRateHint: 'Hóa đơn không ghi tỷ giá nên chưa ghi sổ được. Nhập tỷ giá của ngày giao dịch; Crove quy đổi các dòng, thuế và tổng sang VND và lưu thành bản mới. Người khác duyệt bản này.',
     checks: 'Kiểm tra tự động',
     lines: 'Dòng hàng hóa, dịch vụ',
