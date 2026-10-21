@@ -12,7 +12,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
-import { runPublishJob, runRemoveJob, socialCommands, socialQueries, sweepRemovals, type PostView } from '@crove/mod-social';
+import { removeWindowMs, runPublishJob, runRemoveJob, socialCommands, socialQueries, sweepRemovals, type PostView, type Provider } from '@crove/mod-social';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -55,7 +55,7 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
   const get = (o: Org, postId: string) => api.query<PostView>('social.post.get', { postId }, { actor: asUser(o.owner), orgId: o.orgId });
   const variant = async (o: Org, postId: string) => (await get(o, postId)).variants[0] as PostView['variants'][number];
 
-  async function connect(o: Org, provider: 'sandbox' | 'bluesky', account: string, secret: string) {
+  async function connect(o: Org, provider: Provider, account: string, secret: string) {
     const sealed = vault.seal(secret, { orgId: o.orgId, provider, externalAccountId: account });
     return exec<{ connectionId: string }>(o, 'kernel.channel.connect', {
       provider,
@@ -68,7 +68,7 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
   }
 
   // A post with these settings, approved and scheduled an hour from now.
-  async function scheduledPost(o: Org, provider: 'sandbox' | 'bluesky', settings: Record<string, unknown>, account = `acct-${randomUUID().slice(0, 8)}`, secret = JSON.stringify({ accessToken: 'sbx_test' })) {
+  async function scheduledPost(o: Org, provider: Provider, settings: Record<string, unknown>, account = `acct-${randomUUID().slice(0, 8)}`, secret = JSON.stringify({ accessToken: 'sbx_test' })) {
     const { connectionId } = await connect(o, provider, account, secret);
     const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: `Bài ${randomUUID().slice(0, 6)}`, channels: [{ connectionId, settings }] });
     await exec(o, 'social.post.submit', { postId });
@@ -79,7 +79,7 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
 
   // Published now, through the publish job; then its takedown time moved to `removeAt` and the time it went out to
   // `publishedAgoMs` ago, as if the post had gone out earlier in the day.
-  async function publishedPost(o: Org, platform: Publisher, opts: { removeAt: string | null; publishedAgoMs: number; provider?: 'sandbox' | 'bluesky'; account?: string; secret?: string }) {
+  async function publishedPost(o: Org, platform: Publisher, opts: { removeAt: string | null; publishedAgoMs: number; provider?: Provider; account?: string; secret?: string }) {
     const provider = opts.provider ?? 'sandbox';
     const { postId, id, account } = await scheduledPost(o, provider, {}, opts.account, opts.secret);
     await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
@@ -98,7 +98,7 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
 
   const requested = (o: Org, id: string) =>
     admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.variant.remove_requested' AND payload->>'variant_id' = $2", [o.orgId, id])).rows.map((r) => r.payload));
-  const due = (providers: string[]) => admin(async (c) => (await c.query<{ variant_id: string }>('SELECT variant_id FROM crove_social.remove_due(1000, $1)', [providers])).rows.map((r) => r.variant_id));
+  const due = (providers: string[]) => admin(async (c) => (await c.query<{ variant_id: string }>('SELECT variant_id FROM crove_social.remove_due(1000, $1, $2)', [providers, providers.map((p) => Math.floor(removeWindowMs(p) / 1000))])).rows.map((r) => r.variant_id));
   const sweep = (providers: string[] = ['sandbox']) => sweepRemovals({ runtime: worker, workerDb }, new Set(providers));
 
   beforeAll(async () => {
@@ -212,17 +212,26 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     // A value the domain would refuse, written past it: skipped, and the scan does not fail.
     const broken = await publishedPost(o, sandbox, { removeAt: '2026-02-30T22:00:00+07:00', publishedAgoMs: 60_000 });
     const garbled = await publishedPost(o, sandbox, { removeAt: 'tối nay', publishedAgoMs: 60_000 });
+    // Went out late (a rate limit, a paused channel), 4 minutes 50 seconds before its takedown time: under the gap.
+    const close = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 60_000 + 290_000 });
+    // Planned more than a year after the post (written past the command), or on a post over a year old.
+    const far = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 366 * 86_400_000 });
+    // Telegram: past the 48 hours in which a bot may delete a channel post; and one within them, which is taken down.
+    const stale = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 49 * 3_600_000 });
+    const fresh = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 47 * 3_600_000 });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET provider = 'telegram' WHERE id = ANY($1::uuid[])", [[stale.id, fresh.id]]));
 
-    await sweep(['sandbox', 'facebook_page']);
-    for (const v of [other, late, later, broken, garbled]) {
+    await sweep(['sandbox', 'telegram', 'facebook_page']);
+    for (const v of [other, late, later, broken, garbled, close, far, stale]) {
       expect(await requested(o, v.id)).toEqual([]);
       expect((await variant(o, v.postId)).status).toBe('published');
     }
-    for (const v of [late, later, broken, garbled]) expect(await due(['sandbox'])).not.toContain(v.id);
+    expect(await requested(o, fresh.id)).toEqual([{ post_id: fresh.postId, variant_id: fresh.id, provider: 'telegram', after: null }]);
+    for (const v of [late, later, broken, garbled, close, far, stale]) expect(await due(['sandbox', 'telegram'])).not.toContain(v.id);
     // The command checks again on its own: a provider outside REMOVE_READY, a late publish.
     const schedule = (variantId: string) => worker.execute('social.remove.schedule', { variantId }, { actor: { type: 'system', component: 'social.remove' }, orgId: o.orgId });
     expect(await schedule(other.id)).toEqual({ queued: false, reason: 'not_supported' });
-    expect(await schedule(late.id)).toEqual({ queued: false, reason: 'not_due' });
+    for (const v of [late, close, far, stale]) expect(await schedule(v.id)).toEqual({ queued: false, reason: 'not_due' });
     // A person may not run it.
     await expect(api.execute('social.remove.schedule', { variantId: late.id }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
@@ -254,16 +263,79 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     // A failed post sent again now, with its takedown already past.
     await admin((c) => c.query("UPDATE crove_social.post_variant SET status = 'failed', settings = jsonb_set(settings, '{removeAt}', to_jsonb($2::text)) WHERE id = $1", [id, new Date(Date.now() - 60_000).toISOString()]));
     await expect(exec(o, 'social.variant.retry', { variantIds: [id] })).rejects.toMatchObject({ code: 'REMOVE_AT_BEFORE_PUBLISH' });
+    // More than a year after the post goes out.
+    const far = await scheduledPost(o, 'sandbox', { removeAt: new Date(Date.now() + 3_600_000 + 366 * 86_400_000).toISOString() });
+    await expect(exec(o, 'social.variant.schedule', { postId: far.postId, at: new Date(Date.now() + 3_600_000).toISOString() })).rejects.toMatchObject({ code: 'REMOVE_AT_TOO_LATE', details: { limit: 8760 } });
+    // Telegram: more than 48 hours after; within them it is taken.
+    const telegram = { secret: JSON.stringify({ botToken: '123:test', chatId: '@kenh' }) };
+    const tooLate = await scheduledPost(o, 'telegram', { removeAt: new Date(Date.now() + 3_600_000 + 49 * 3_600_000).toISOString() }, `@kenh-${randomUUID().slice(0, 6)}`, telegram.secret);
+    await expect(exec(o, 'social.variant.schedule', { postId: tooLate.postId, at: new Date(Date.now() + 3_600_000).toISOString() })).rejects.toMatchObject({ code: 'REMOVE_AT_TOO_LATE', details: { limit: 48 } });
+    const inTime = await scheduledPost(o, 'telegram', { removeAt: new Date(Date.now() + 3_600_000 + 47 * 3_600_000).toISOString() }, `@kenh-${randomUUID().slice(0, 6)}`, telegram.secret);
+    expect(await exec(o, 'social.variant.schedule', { postId: inTime.postId, at: new Date(Date.now() + 3_600_000).toISOString() })).toMatchObject({ scheduled: [{ variantId: inTime.id }] });
     // A malformed time is an issue of the variant itself, shown by the composer.
     const draft = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Nháp', channels: [{ connectionId, settings: { removeAt: 'tối nay' } }] });
     expect((await variant(o, draft.postId)).issues.map((i) => i.code)).toEqual(['REMOVE_AT_INVALID']);
+  });
+
+  it('tells the owners and admins when a planned takedown fails, and leaves the failed ask of a person as it was', async () => {
+    const o = await org();
+    const adminId = await upsertIdentity(appDb, { issuer: 'test', subject: randomUUID(), email: `admin-${randomUUID().slice(0, 8)}@remove-at.test`, name: null });
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'admin')", [o.orgId, adminId]));
+    const sandbox = new SandboxPublisher();
+    const refusing: Publisher = { provider: 'sandbox', publishSafety: sandbox.publishSafety, publish: (i) => sandbox.publish(i), remove: async () => ({ kind: 'rejected', error: 'permission', code: 'NO_RIGHTS' }) };
+    const deps = { runtime: worker, broker: vault, publishers: { sandbox: refusing }, callTimeoutMs: 2_000 };
+    const failures = () =>
+      admin(async (c) => (await c.query<{ id: string; payload: Record<string, unknown> }>("SELECT id, payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.variant.remove_failed' ORDER BY created_at", [o.orgId])).rows);
+    const dispatch = (eventId: string) => worker.execute<{ sent: number; mailed: number }>('social.notification.dispatch', { eventId }, { actor: { type: 'system', component: 'social.notify' }, orgId: o.orgId });
+    const notices = (postId: string) =>
+      admin(async (c) => (await c.query<{ user_id: string; kind: string; detail: Record<string, string> }>('SELECT user_id, kind, detail FROM crove_social.notification WHERE org_id = $1 AND post_id = $2 ORDER BY user_id', [o.orgId, postId])).rows);
+
+    // The planned takedown: nobody asked, so the owners and admins are told.
+    const planned = await publishedPost(o, refusing, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 3_600_000 });
+    await sweep();
+    expect(await runRemoveJob(deps, o.orgId, planned.id, 'sandbox', null)).toEqual({ action: 'call', state: 'failed' });
+    const [first] = await failures();
+    expect(first?.payload).toEqual({ post_id: planned.postId, variant_id: planned.id, provider: 'sandbox', code: 'NO_RIGHTS', scheduled: true });
+    expect(await dispatch(first?.id as string)).toMatchObject({ sent: 2 });
+    expect(await notices(planned.postId)).toEqual(
+      [o.owner, adminId].sort().map((user_id) => ({ user_id, kind: 'failed', detail: { provider: 'sandbox', removal: 'scheduled' } })),
+    );
+    // Still up: a person may ask again from the post page.
+    expect(await variant(o, planned.postId)).toMatchObject({ status: 'published', removal: { state: 'failed', code: 'NO_RIGHTS' } });
+
+    // A person's own ask that fails: shown on the post as before, no notification.
+    const asked = await publishedPost(o, refusing, { removeAt: null, publishedAgoMs: 3_600_000 });
+    await exec(o, 'social.variant.remove', { variantId: asked.id });
+    expect(await runRemoveJob(deps, o.orgId, asked.id, 'sandbox', null)).toEqual({ action: 'call', state: 'failed' });
+    const second = (await failures()).at(-1);
+    expect(second?.payload).toEqual({ post_id: asked.postId, variant_id: asked.id, provider: 'sandbox', code: 'NO_RIGHTS' });
+    expect(await dispatch(second?.id as string)).toEqual({ sent: 0, mailed: 0 });
+    expect(await notices(asked.postId)).toEqual([]);
+  });
+
+  it('never copies a planned takedown into a duplicate or an evergreen repost', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const later = inVietnam(Date.now() + 86_400_000);
+    const { postId } = await publishedPost(o, sandbox, { removeAt: later, publishedAgoMs: 3_600_000 });
+    expect((await variant(o, postId)).settings).toEqual({ removeAt: later });
+    const settingsOfPost = async (id: string) => (await variant(o, id)).settings;
+
+    const { postId: copy } = await exec<{ postId: string }>(o, 'social.post.duplicate', { postId });
+    expect(await settingsOfPost(copy)).toEqual({});
+    await exec(o, 'social.post.set_evergreen', { postId, days: 7 });
+    const { postId: repost } = await worker.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId }, { actor: { type: 'system', component: 'social.evergreen' }, orgId: o.orgId });
+    expect(repost).not.toBeNull();
+    expect(await settingsOfPost(repost as string)).toEqual({});
+    // The source keeps its own.
+    expect(await settingsOfPost(postId)).toEqual({ removeAt: later });
   });
 
   it('lets only the worker run the scan', async () => {
     const { rows } = await admin((c) =>
       c.query<{ role: string }>(
         `SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r
-         WHERE has_function_privilege(r, 'crove_social.remove_due(int, text[])', 'EXECUTE') ORDER BY 1`,
+         WHERE has_function_privilege(r, 'crove_social.remove_due(int, text[], int[])', 'EXECUTE') ORDER BY 1`,
       ),
     );
     expect(rows.map((r) => r.role)).toEqual(['crove_worker']);
@@ -271,7 +343,7 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     expect(helper).toEqual([]);
     const client = await appPool.connect();
     try {
-      await expect(client.query("SELECT * FROM crove_social.remove_due(10, ARRAY['sandbox'])")).rejects.toThrow(/permission denied/);
+      await expect(client.query("SELECT * FROM crove_social.remove_due(10, ARRAY['sandbox'], ARRAY[60])")).rejects.toThrow(/permission denied/);
     } finally {
       client.release();
     }

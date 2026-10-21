@@ -32,7 +32,7 @@ import {
   overrides,
   pick,
   refreshPostStatus,
-  refuseEarlyRemoval,
+  refuseRemoveAtMisfit,
   regateValues,
   setVariant,
   settingsOf,
@@ -557,7 +557,7 @@ export const variantRetry = defineCommand({
       // Approved under a bar its channel has raised since (#408), as social.variant.schedule refuses.
       if (await shortOfPolicy(ctx.trx, ctx.orgId, v)) throw new DomainError('APPROVALS_MISSING', 409, 'Kênh này cần thêm người duyệt trước khi đăng lại', { variantId: v.id });
       // It goes out now: a planned takedown (#861) must still be far enough ahead.
-      refuseEarlyRemoval(v, ctx.now);
+      refuseRemoveAtMisfit(v, ctx.now);
       await move(ctx, v, { type: 'retry' }, { ...NO_ERROR, scheduled_at: ctx.now, queue_slot_at: null, next_check_at: null });
     }
     await refreshPostStatus(ctx, postId);

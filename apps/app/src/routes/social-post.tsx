@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, removeAtOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, removeAtFit, removeAtOf, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -1409,8 +1409,15 @@ function sameOwn(a: Own, b: Own): boolean {
   );
 }
 
+// A channel's planned takedown time (#861), when it has a valid one.
+function plannedRemoval(v: Variant): string | null {
+  const at = removeAtOf(v.settings);
+  return at === null || at === 'invalid' ? null : at;
+}
+
 function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, string>; onDone: () => void }) {
   const t = useTranslations('social');
+  const f = useFormat();
   const me = useQuery(orpc.me.get.queryOptions());
   const self = me.data?.userId;
   const inReview = post.variants.filter((v) => v.status === 'in_review');
@@ -1459,6 +1466,8 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
               {v.review.required > 1 && (
                 <span className="text-xs text-subtle-foreground tabular-nums">{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</span>
               )}
+              {/* Approving approves the planned takedown too (#861). */}
+              {plannedRemoval(v) && <span className="text-xs text-warning">{t('remove.planned', { when: f.dateTime(plannedRemoval(v) as string) })}</span>}
             </label>
           ))}
         </div>
@@ -1691,7 +1700,8 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
   if (!v.removal) {
     // A takedown set for later (#861), on a channel that went out before it: the worker asks for it when it comes.
     const planned = v.status === 'published' && isProvider(v.provider) && REMOVE_READY.has(v.provider) ? removeAtOf(v.settings) : null;
-    if (planned === null || planned === 'invalid' || !v.publishedAt || Date.parse(planned) <= Date.parse(v.publishedAt)) return null;
+    // One that no longer fits the time the post went out stays up, as the worker's sweep decides.
+    if (planned === null || planned === 'invalid' || !v.publishedAt || removeAtFit(v.provider, v.settings, new Date(v.publishedAt)) !== null) return null;
     return <p>{t('remove.planned', { when: f.dateTime(planned) })}</p>;
   }
   const known = v.removal.code === 'TELEGRAM_CANNOT_DELETE' || v.removal.code === 'REMOVE_NOT_RUN' ? v.removal.code : null;

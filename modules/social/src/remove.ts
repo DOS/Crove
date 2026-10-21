@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { REMOVE_READY, isProvider, removeAtOf } from './domain/channels.ts';
+import { REMOVE_READY, isProvider, removeAtFit, removeAtOf, removeWindowMs } from './domain/channels.ts';
 import { publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, refreshPostStatus, setVariant, settingsOf, step, variantPost, type Trx, type VariantRow } from './variants.ts';
@@ -168,26 +168,28 @@ export const removeRecord = defineCommand({
       .where('key', '=', input.callKey)
       .where('state', '=', 'started')
       .execute();
+    const by = (await ctx.trx.selectFrom('crove_social.post_variant').select('removed_by').where('org_id', '=', ctx.orgId).where('id', '=', v.id).executeTakeFirstOrThrow()).removed_by;
     // Only a published variant moves; the call is recorded whatever the variant became meanwhile.
     if (r.kind === 'removed' && v.status === 'published') {
       await setVariant(ctx, v.id, { status: step(v, { type: 'removed' }), removed_at: ctx.now });
       await refreshPostStatus(ctx, v.post_id);
-      const by = await ctx.trx.selectFrom('crove_social.post_variant').select('removed_by').where('org_id', '=', ctx.orgId).where('id', '=', v.id).executeTakeFirstOrThrow();
-      await ctx.emit('social.variant.removed', { post_id: v.post_id, variant_id: v.id, provider: v.provider, by: by.removed_by });
+      await ctx.emit('social.variant.removed', { post_id: v.post_id, variant_id: v.id, provider: v.provider, by });
       return { recorded: true as const, state, status: 'removed' as const };
     }
-    if (r.kind !== 'removed') await ctx.emit('social.variant.remove_failed', { post_id: v.post_id, variant_id: v.id, provider: v.provider, code: errorCode });
+    // scheduled: the ask was the planned takedown's (#861), which nobody watches; the owners and admins are told.
+    if (r.kind !== 'removed') await ctx.emit('social.variant.remove_failed', { post_id: v.post_id, variant_id: v.id, provider: v.provider, code: errorCode, ...(by === null ? { scheduled: true } : {}) });
     return { recorded: true as const, state, status: v.status };
   },
 });
 
-// A post set to come down by itself (#861): its planned time (settings.removeAt) has come and is after the time it went
-// out (a post published late, after that time, is never taken down by it).
-export function removeDue(settings: Readonly<Record<string, unknown>>, publishedAt: Date | null, now: Date): boolean {
+// A post set to come down by itself (#861): its planned time (settings.removeAt) has come, and fits the time the post
+// really went out (at least REMOVE_AT_MIN_GAP_MS after it, within the channel's window). A post that went out late,
+// after a rate limit, a paused channel or a queue edit, so that the time no longer fits, stays up. The same rule as
+// crove_social.remove_due.
+export function removeDue(provider: string, settings: Readonly<Record<string, unknown>>, publishedAt: Date | null, now: Date): boolean {
   const at = removeAtOf(settings);
   if (at === null || at === 'invalid' || !publishedAt) return false;
-  const t = Date.parse(at);
-  return t <= now.getTime() && t > publishedAt.getTime();
+  return Date.parse(at) <= now.getTime() && removeAtFit(provider, settings, publishedAt) === null;
 }
 
 // The worker's sweep asks for the removal of a published variant whose planned time has come, as a person's ask would:
@@ -206,7 +208,7 @@ export const removeSchedule = defineCommand({
     if (!isProvider(v.provider) || !REMOVE_READY.has(v.provider)) return { queued: false, reason: 'not_supported' };
     if (v.remove_requested_at) return { queued: false, reason: 'asked' };
     const settings = settingsOf(v);
-    if (!removeDue(settings, v.published_at, ctx.now)) return { queued: false, reason: 'not_due' };
+    if (!removeDue(v.provider, settings, v.published_at, ctx.now)) return { queued: false, reason: 'not_due' };
     const calls = (await removeCallsOf(ctx.trx, ctx.orgId, [v])).get(v.id) ?? [];
     await setVariant(ctx, v.id, { removed_by: null, remove_reason: null, remove_requested_at: ctx.now });
     ctx.audit({ post_id: v.post_id, variant_id: v.id, provider: v.provider, scheduled: true, remove_at: removeAtOf(settings) });
@@ -226,8 +228,10 @@ export const REMOVE_SWEEP_LIMIT = 200;
 export async function sweepRemovals(deps: { runtime: Runtime; workerDb: Db }, providers: ReadonlySet<string>): Promise<number> {
   const removable = [...providers].filter((p) => isProvider(p) && REMOVE_READY.has(p));
   if (removable.length === 0) return 0;
+  // Each provider's window, in seconds, beside it: the scan reads the rule from here, so it stays data in one place.
+  const windows = removable.map((p) => Math.floor(removeWindowMs(p) / 1000));
   const { rows } = await sql<{ org_id: string; variant_id: string }>`
-    SELECT org_id, variant_id FROM crove_social.remove_due(${REMOVE_SWEEP_LIMIT}::int, ${removable}::text[])`.execute(deps.workerDb);
+    SELECT org_id, variant_id FROM crove_social.remove_due(${REMOVE_SWEEP_LIMIT}::int, ${removable}::text[], ${windows}::int[])`.execute(deps.workerDb);
   let queued = 0;
   for (const row of rows) {
     try {
