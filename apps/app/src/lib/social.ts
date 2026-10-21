@@ -1,6 +1,6 @@
 // Shared pieces of the Social screens: status tones, provider names, the effective text of a variant as the composer
 // shows it, and grouping by day for the agenda.
-import { CAPABILITIES, countText, isProvider, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { CAPABILITIES, SENT_TO_APP, countText, isProvider, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
 import { getConfig } from './auth.ts';
 
 export type VariantStatus =
@@ -37,6 +37,17 @@ export const VARIANT_TONE: Record<VariantStatus, Tone> = {
   paused: 'warning',
   cancelled: 'outline',
 };
+
+// The key of a variant's status label (social.status.*): a draft sent to the platform's app (#903, TikTok's inbox) is
+// published for Crove but not out yet, so it says so instead of "Published".
+export function variantStatusKey(v: { status: VariantStatus; error?: { code: string | null } | null }): VariantStatus | 'sent_to_app' {
+  return v.status === 'published' && v.error?.code === SENT_TO_APP ? 'sent_to_app' : v.status;
+}
+
+// Its tone: a draft waiting in the platform's app still needs a person, so it is not shown as done.
+export function variantTone(v: { status: VariantStatus; error?: { code: string | null } | null }): Tone {
+  return variantStatusKey(v) === 'sent_to_app' ? 'warning' : VARIANT_TONE[v.status];
+}
 
 // Short names of the providers, the same in every language.
 export const PROVIDER_NAMES: Record<Provider, string> = {

@@ -11,6 +11,7 @@ import { DomainError, defineCommand, defineQuery, type CommandContext } from '@c
 import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
 import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
 import { mentionsOf } from './domain/mentions.ts';
+import { SENT_TO_APP } from './domain/channels.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -137,7 +138,7 @@ export interface ActivityItem {
   editedAt: string | null;
   // The viewer may still change this comment.
   editable: boolean;
-  // A published channel's link, a failed channel's error code.
+  // A published channel's link, a failed channel's error code; SENT_TO_APP on a draft sent to the platform's app (#903).
   url: string | null;
   code: string | null;
 }
@@ -228,7 +229,8 @@ export const postActivity = defineQuery({
         variantId: a.target_type === 'social.post_variant' ? a.target_id : null,
       })),
       ...variants.flatMap((v): ActivityItem[] => {
-        if (v.status === 'published' && v.published_at) return [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id, url: v.external_url }];
+        // A draft sent to the platform's app (#903) carries its SENT_TO_APP note, so the timeline does not call it out.
+        if (v.status === 'published' && v.published_at) return [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id, url: v.external_url, code: v.error_code === SENT_TO_APP ? SENT_TO_APP : null }];
         if (v.status === 'failed' || v.status === 'needs_attention') return [{ ...none, id: `failed:${v.id}`, kind: 'failed', at: v.updated_at.toISOString(), variantId: v.id, code: v.error_code }];
         if (v.status === 'cancelled') return [{ ...none, id: `cancelled:${v.id}`, kind: 'cancelled', at: v.updated_at.toISOString(), variantId: v.id }];
         return [];

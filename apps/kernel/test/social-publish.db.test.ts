@@ -6,7 +6,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { FacebookPagePublisher, SandboxPublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
+import { FacebookPagePublisher, SandboxPublisher, TikTokPublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -732,6 +732,107 @@ suite('social publishing on PostgreSQL (S4)', () => {
     await checkNow();
     expect(await run(o, id, platform)).toEqual({ action: 'status', status: 'published' });
     expect(platform.posts).toHaveLength(1);
+  });
+
+  // TikTok's inbox upload (#903): a draft the creator finishes in the TikTok app. A TikTok channel, connected with the
+  // scopes given, and an approved inbox draft on it, due now.
+  async function dueTikTokInbox(o: { orgId: string; owner: string }, scopes: string[]) {
+    const account = `tt-${randomUUID().slice(0, 8)}`;
+    const connectTikTok = (granted: string[]) => {
+      const sealed = vault.seal(JSON.stringify({ accessToken: 'act.tiktok-db', refreshToken: 'rft.tiktok-db' }), { orgId: o.orgId, provider: 'tiktok', externalAccountId: account });
+      return exec<{ connectionId: string }>(o, 'kernel.channel.connect', { provider: 'tiktok', externalAccountId: account, displayName: 'Tiệm Bánh B', scopes: granted, expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } });
+    };
+    const { connectionId } = await connectTikTok(scopes);
+    const clip = randomUUID();
+    const sha = createHash('sha256').update(clip).digest('hex');
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source, duration_ms)
+         VALUES ($1, $2, $3, $4, $5, 'khai-truong.mp4', 'video/mp4', 2000000, 'social', 12000)`,
+        [o.orgId, clip, sha, `org/${o.orgId}/${sha}`, `content:${sha}`],
+      ),
+    );
+    // No privacy level: the creator picks it in TikTok.
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', media: [{ fileId: clip }], channels: [{ connectionId, settings: { tiktokMode: 'inbox' } }] });
+    expect((await get(o, postId)).variants[0]?.issues).toEqual([]);
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    return { postId, id: post.variants[0]?.id as string, connectionId, connectTikTok };
+  }
+  const runOn = (o: { orgId: string }, id: string, tiktok: Publisher) => runPublishJob({ runtime: worker, broker: vault, publishers: { tiktok }, callTimeoutMs: 2_000 }, o.orgId, id, 'tiktok');
+
+  it('holds a TikTok inbox draft until the channel is reconnected with video.upload, then records it as sent to the app', async () => {
+    const o = await org();
+    // A grant from before inbox mode was turned on, without video.upload.
+    const { postId, id, connectionId, connectTikTok } = await dueTikTokInbox(o, ['user.info.basic', 'video.publish']);
+    const sent: PublishInput[] = [];
+    const statuses: PublishResult[] = [];
+    const tiktok: Publisher = {
+      provider: 'tiktok',
+      publishSafety: 'never',
+      publish: async (i) => {
+        sent.push(i);
+        return { kind: 'pending', externalRef: 'v_inbox_file~v2.123456789', checkAfterSeconds: 30 };
+      },
+      status: async () => statuses.shift() ?? { kind: 'pending', externalRef: 'v_inbox_file~v2.123456789', checkAfterSeconds: 30 },
+    };
+    const runTikTok = () => runOn(o, id, tiktok);
+
+    // Nothing is sent on the old grant: the variant waits for a reconnect, and says why.
+    expect(await runTikTok()).toEqual({ action: 'call', status: 'paused' });
+    expect(sent).toHaveLength(0);
+    expect((await calls(id)).map((c) => c.state)).toEqual(['failed']);
+    const paused = await variant(o, postId);
+    expect([paused.status, paused.error?.kind, paused.error?.code]).toEqual(['paused', 'permission', 'CHANNEL_SCOPE_MISSING']);
+    // The channel itself stays active: its direct posts go on.
+    const channels = await api.query<Array<{ id: string; status: string }>>('kernel.channel.list', {}, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(channels.find((c) => c.id === connectionId)?.status).toBe('active');
+    expect(await runTikTok()).toEqual({ action: 'none', reason: 'paused' });
+
+    // Reconnected without the scope again: paused again, nothing sent.
+    await connectTikTok(['user.info.basic', 'video.publish']);
+    expect(await runTikTok()).toEqual({ action: 'none', reason: 'resumed' });
+    expect(await runTikTok()).toEqual({ action: 'call', status: 'paused' });
+    expect(sent).toHaveLength(0);
+    // Reconnected with it: the upload goes out once, without a privacy level, and TikTok processes it.
+    await connectTikTok(['user.info.basic', 'video.publish', 'video.upload']);
+    expect(await runTikTok()).toEqual({ action: 'none', reason: 'resumed' });
+    expect(await runTikTok()).toEqual({ action: 'call', status: 'processing' });
+    expect(sent.map((s) => s.settings)).toEqual([{ tiktokMode: 'inbox' }]);
+
+    // The status check ends at SEND_TO_USER_INBOX: published for Crove, but with no post id or address, and its note.
+    statuses.push({ kind: 'accepted', externalId: 'v_inbox_file~v2.123456789', url: null, sentToApp: true });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET next_check_at = now() - interval '1 second' WHERE id = $1", [id]));
+    expect(await runTikTok()).toEqual({ action: 'status', status: 'published' });
+    const done = await variant(o, postId);
+    expect([done.status, done.externalUrl, done.error]).toEqual(['published', null, { kind: null, code: 'SENT_TO_APP', action: null, message: null, retryAt: null }]);
+    const row = await admin(async (c) => (await c.query<{ external_post_id: string | null }>('SELECT external_post_id FROM crove_social.post_variant WHERE id = $1', [id])).rows[0]);
+    expect(row?.external_post_id).toBeNull();
+    // The publish_id stays on the call ledger; nothing reads the draft as a post (no counts, no comment).
+    const ledger = await admin(async (c) => (await c.query<{ external_ref: string }>("SELECT external_ref FROM crove_kernel.external_call WHERE key LIKE $1 AND state = 'succeeded'", [`social.publish:${id}:%`])).rows);
+    expect(ledger).toEqual([{ external_ref: 'v_inbox_file~v2.123456789' }]);
+    await expect(worker.query('social.metrics.target', { variantId: id }, { actor: system, orgId: o.orgId })).rejects.toMatchObject({ code: 'VARIANT_NOT_FOUND' });
+    const timeline = await api.query<{ items: Array<{ kind: string; code: string | null; url: string | null }> }>('social.post.activity', { postId }, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(timeline.items.find((i) => i.kind === 'published')).toMatchObject({ code: 'SENT_TO_APP', url: null });
+  });
+
+  it('fails a TikTok inbox draft with nothing sent where the deployment has not turned inbox mode on', async () => {
+    const o = await org();
+    // Even on a connection granted video.upload (inbox mode was on, then turned off): the adapter refuses it first.
+    const { postId, id } = await dueTikTokInbox(o, ['user.info.basic', 'video.publish', 'video.upload']);
+    const requests: string[] = [];
+    const tiktok = new TikTokPublisher({ clientKey: 'awtestclientkey01', clientSecret: 'test-tiktok-secret-not-real' }, async (url) => {
+      requests.push(String(url));
+      throw new Error('no TikTok call in this test');
+    });
+    expect(await runOn(o, id, tiktok)).toEqual({ action: 'call', status: 'failed' });
+    expect(requests).toEqual([]);
+    const v = await variant(o, postId);
+    expect([v.status, v.error?.kind, v.error?.code]).toEqual(['failed', 'bad_request', 'TIKTOK_INBOX_NOT_ENABLED']);
+    expect((await calls(id)).map((c) => c.state)).toEqual(['failed']);
   });
 
   it('reconciles a post still processing after a day, and records it published when the platform has it', async () => {
