@@ -4,6 +4,10 @@
 # set, /readyz answers 503. STUB_NO_BUNDLE (always) and STUB_NO_BUNDLE_DIGEST (while that image runs) serve a
 # sign-in page without its script.
 #
+# /version (#892) reports the first 12 hex digits of the running image's digest as its build ("dev" when nothing
+# runs), "stale" while $STUB_STALE_DIGEST runs (an old container still answers), and a missing migration with
+# STUB_MIGRATION_MISSING.
+#
 # The account step of the smoke test (#690): every command line goes to $STUB_LOG.argv, so a test can check that no
 # secret is on one; the sign-in body read from stdin goes to $STUB_LOG.signin, the uploaded file to
 # $STUB_LOG.upload, an RPC body to $STUB_LOG.rpc. STUB_SIGNIN_FAIL refuses the sign-in, STUB_FILE_STATUS sets the
@@ -52,6 +56,14 @@ case "$url" in
     else
       body='{"ready":true}'
     fi
+    ;;
+  */version)
+    build=dev
+    if [[ "$running" =~ /crove@sha256:([0-9a-f]{12}) ]]; then build="${BASH_REMATCH[1]}"; fi
+    if [ -n "${STUB_STALE_DIGEST:-}" ] && [[ "$running" == *"$STUB_STALE_DIGEST"* ]]; then build=stale; fi
+    missing='[]'
+    if [ -n "${STUB_MIGRATION_MISSING:-}" ]; then missing='["20990101000000_crove_kernel_next.sql"]'; fi
+    body="{\"build\":\"$build\",\"migrationsMissing\":$missing}"
     ;;
   */api/config) body='{"authUrl":"http://127.0.0.1:18080/auth/v1","modules":[]}' ;;
   */auth/v1/health) body='{"name":"GoTrue"}' ;;
