@@ -7,6 +7,7 @@ export * from './mail.ts';
 export * from './notifications.ts';
 export * from './extraction.ts';
 export * from './offboarding.ts';
+export * from './personal-data.ts';
 export * from './agents.ts';
 export * from './channels.ts';
 export * from './timeline.ts';

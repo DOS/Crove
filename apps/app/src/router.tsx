@@ -8,6 +8,7 @@ import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.t
 import { signOut } from './lib/session-actions.ts';
 import { AgentsPage } from './routes/agents.tsx';
 import { AuditPage } from './routes/audit.tsx';
+import { PersonalDataPage } from './routes/personal-data.tsx';
 import { AuthPage } from './routes/auth.tsx';
 import { ClientsPage } from './routes/clients.tsx';
 import { DocumentsPage } from './routes/documents.tsx';
@@ -265,6 +266,7 @@ const settingsRoute = createRoute({
 });
 // The audit log (#672): owners and admins only, which the page checks and the server enforces.
 const auditRoute = createRoute({ getParentRoute: () => orgRoute, path: 'audit', component: AuditPage });
+const personalDataRoute = createRoute({ getParentRoute: () => orgRoute, path: 'personal-data', component: PersonalDataPage });
 // AI agents and tasks (ADR-0029) belong to the kernel, so every deployment has them.
 // In-app notifications of the kernel and finance (#671).
 const notificationsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'notifications', component: NotificationsPage });
@@ -283,7 +285,7 @@ const routeTree = rootRoute.addChildren([
   onboardingRoute,
   clientsRoute,
   oauthCallbackRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, customersRoute, vendorsRoute, journalRoute, vouchersRoute, fixedAssetsRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), notificationsRoute, agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, auditRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, customersRoute, vendorsRoute, journalRoute, vouchersRoute, fixedAssetsRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), notificationsRoute, agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, auditRoute, personalDataRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

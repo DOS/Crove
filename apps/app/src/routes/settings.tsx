@@ -810,9 +810,14 @@ export function SettingsPage() {
         actions={
           canManage &&
           org.data && (
-            <Link to="/o/$slug/audit" params={{ slug: org.data.slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
-              {root('audit.open')}
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <Link to="/o/$slug/personal-data" params={{ slug: org.data.slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+                {root('personalData.open')}
+              </Link>
+              <Link to="/o/$slug/audit" params={{ slug: org.data.slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+                {root('audit.open')}
+              </Link>
+            </div>
           )
         }
       />

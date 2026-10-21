@@ -125,6 +125,7 @@ import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconci
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
+import { zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
 
 // Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
 export const zProposalPolicy = z.object({
@@ -167,6 +168,9 @@ export const contract = {
     audit: oc.input(zAuditFilter.extend({ before: zAuditCursor.optional() })).output(zAuditPage),
     auditCommands: oc.output(z.array(z.string())),
     auditExport: oc.input(zAuditFilter).output(zAuditExport),
+    // Owners and admins (issue #923, PDPL): every row of the org that holds a person's email, phone, or tax code or
+    // national ID, with what an erasure would do to each, for the person's request to see or export their data.
+    personalData: oc.input(zPersonalDataQuery).output(zPersonalDataResult),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
