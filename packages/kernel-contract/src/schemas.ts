@@ -803,6 +803,38 @@ export const zPeriodLockState = z.object({
 });
 export type PeriodLockState = z.infer<typeof zPeriodLockState>;
 
+// A fiscal year's archive package (issue #922, plan §7.9). The fiscal year is the calendar year. Owners ask for it once
+// every month of the year is locked; the worker builds it once, and it is kept for the legal retention period.
+export const zArchiveYear = z.number().int().min(2000).max(2100);
+export const ARCHIVE_PART_KINDS = ['journal', 'ledger', 'statements', 'vat_working', 'vat_xml', 'manifest'] as const;
+const zArchiveSha256 = z.string().regex(/^[0-9a-f]{64}$/);
+export const zYearArchive = z.object({
+  year: zArchiveYear,
+  // requested: asked for, the worker has not recorded it yet; built: recorded, with its manifest.
+  state: z.enum(['requested', 'built']),
+  requestedAt: z.string().nullable(),
+  builtAt: z.string().nullable(),
+  manifestSha256: zArchiveSha256.nullable(),
+  parts: z.number().int().nullable(),
+  documents: z.number().int().nullable(),
+});
+export type YearArchive = z.infer<typeof zYearArchive>;
+export const zYearArchives = z.object({
+  // Every month up to this date is locked: years up to its year (when it is the 31st of December) can be archived.
+  lockedThrough: zLocalDate.nullable(),
+  archives: z.array(zYearArchive),
+});
+export type YearArchives = z.infer<typeof zYearArchives>;
+// What a verification found. A part or document that is missing or whose bytes no longer match the manifest is a
+// problem; `name` is the part's name or the document's file name.
+export const zYearArchiveVerification = z.object({
+  year: zArchiveYear,
+  ok: z.boolean(),
+  checked: z.number().int(),
+  problems: z.array(z.object({ code: z.enum(['manifest_changed', 'missing', 'changed']), name: z.string() })),
+});
+export type YearArchiveVerification = z.infer<typeof zYearArchiveVerification>;
+
 // Financial statements for a period (issue #154): B01-DNN at its last day and B02-DNN for the period, with the DRAFT
 // TT133 line codes and mapping an accountant has not verified. `unmapped` lists balances no line reads (the statement
 // is then incomplete); `balanced` is whether B01's total assets equal its total sources.

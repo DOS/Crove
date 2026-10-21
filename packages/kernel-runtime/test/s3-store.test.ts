@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, PutObjectRetentionCommand } from '@aws-sdk/client-s3';
 import { describe, expect, it } from 'vitest';
 import {
   BlobConflictError,
@@ -11,6 +11,7 @@ import {
   DOWNLOAD_TTL_SECONDS,
   S3BlobStore,
   UPLOAD_TTL_SECONDS,
+  archiveKey,
   createS3Client,
   fileKey,
   inboundKey,
@@ -22,7 +23,7 @@ import {
   type S3Sender,
 } from '../src/index.ts';
 
-type Command = PutObjectCommand | GetObjectCommand | DeleteObjectCommand | ListObjectsV2Command;
+type Command = PutObjectCommand | GetObjectCommand | DeleteObjectCommand | ListObjectsV2Command | PutObjectRetentionCommand;
 
 // An S3 failure the way the SDK reports it: a named error with the HTTP status in $metadata.
 function s3Error(name: string, status: number): Error {
@@ -84,6 +85,52 @@ describe('S3BlobStore with a mocked client', () => {
     await expect(store.put(fileKey(orgId, sha256Hex('other')), bytes, 'application/xml')).rejects.toThrow(/does not match/);
     await expect(store.get('org/x/y')).rejects.toThrow(/invalid storage key/);
     await expect(store.delete('../x')).rejects.toThrow(/invalid storage key/);
+    expect(sent).toEqual([]);
+  });
+
+  it('locks the parts of a year archive package until their retention ends, and nothing else (#922)', async () => {
+    const now = new Date('2026-10-21T00:00:00Z');
+    const { store, sent } = fakeStore(() => ({ ChecksumSHA256: checksum, VersionId: 'v1' }), {
+      archiveLock: { mode: 'COMPLIANCE', retentionDays: 3653 },
+      now: () => now,
+    });
+    await store.put(archiveKey(orgId, 2025, sha256), bytes, 'application/xml');
+    expect(sent[0]?.input).toMatchObject({ ObjectLockMode: 'COMPLIANCE', ObjectLockRetainUntilDate: new Date('2036-10-21T00:00:00Z') });
+    await store.put(key, bytes, 'application/xml');
+    expect(sent[1]?.input).not.toHaveProperty('ObjectLockMode');
+    expect(sent[1]?.input).not.toHaveProperty('ObjectLockRetainUntilDate');
+    // Without archiveLock the bucket's default retention applies: no lock header.
+    const plain = fakeStore(() => ({ ChecksumSHA256: checksum, VersionId: 'v1' }));
+    await plain.store.put(archiveKey(orgId, 2025, sha256), bytes, 'application/xml');
+    expect(plain.sent[0]?.input).not.toHaveProperty('ObjectLockMode');
+  });
+
+  it('locks an existing archive part that has a shorter retention, or none, and keeps a longer one', async () => {
+    const now = new Date('2026-10-21T00:00:00Z');
+    const until = new Date('2036-10-21T00:00:00Z');
+    const existing = (retainUntil?: Date) =>
+      fakeStore(
+        (c) => {
+          if (c instanceof PutObjectCommand) throw s3Error('PreconditionFailed', 412);
+          if (c instanceof GetObjectCommand) return { Body: body(bytes), VersionId: 'v-old', ObjectLockRetainUntilDate: retainUntil };
+          return {};
+        },
+        { archiveLock: { mode: 'COMPLIANCE', retentionDays: 3653 }, now: () => now },
+      );
+    const unlocked = existing();
+    await expect(unlocked.store.put(archiveKey(orgId, 2025, sha256), bytes, 'application/xml')).resolves.toBe('s3:v-old');
+    expect(unlocked.sent.map((c) => c.constructor.name)).toEqual(['PutObjectCommand', 'GetObjectCommand', 'PutObjectRetentionCommand']);
+    expect(unlocked.sent[2]?.input).toMatchObject({ Key: archiveKey(orgId, 2025, sha256), VersionId: 'v-old', Retention: { Mode: 'COMPLIANCE', RetainUntilDate: until } });
+    const longer = existing(new Date('2040-01-01T00:00:00Z'));
+    await longer.store.put(archiveKey(orgId, 2025, sha256), bytes, 'application/xml');
+    expect(longer.sent.map((c) => c.constructor.name)).toEqual(['PutObjectCommand', 'GetObjectCommand']);
+  });
+
+  it('accepts archive keys only for a year and the sha256 of their bytes', async () => {
+    const { store, sent } = fakeStore(() => ({ ChecksumSHA256: checksum, VersionId: 'v1' }));
+    await expect(store.put(archiveKey(orgId, 2025, sha256Hex('other')), bytes, 'application/xml')).rejects.toThrow(/does not match/);
+    await expect(store.put(`archive/${orgId}/25/${sha256}`, bytes, 'application/xml')).rejects.toThrow(/invalid storage key/);
+    await expect(store.put(`archive/${orgId}/${sha256}`, bytes, 'application/xml')).rejects.toThrow(/invalid storage key/);
     expect(sent).toEqual([]);
   });
 

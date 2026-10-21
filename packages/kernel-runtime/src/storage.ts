@@ -160,6 +160,12 @@ export function exportKey(orgId: string, sha256: string): string {
   return `export/${orgId}/${sha256}`;
 }
 
+// A part of a fiscal year's archive package (issue #922, plan §7.9): content addressed like a file, under its own
+// prefix per org and year. Never listed and never deleted by Crove: the package is kept for the legal retention period.
+export function archiveKey(orgId: string, year: number, sha256: string): string {
+  return `archive/${orgId}/${year}/${sha256}`;
+}
+
 // Raw inbound email, stored by the API before any org is known, under a random id per delivery so the
 // worker can delete it once handled without counting references. Only the worker reads it.
 export function inboundKey(blobId: string): string {
@@ -184,15 +190,15 @@ export function isStagingKey(key: string): boolean {
   return /^staging\/[0-9a-f]{64}$/.test(key);
 }
 
-const KEY_PATTERN = /^(?:(?:org|export)\/[0-9a-f-]{36}|inbound|staging)\/[0-9a-f]{64}$/;
+const KEY_PATTERN = /^(?:(?:org|export)\/[0-9a-f-]{36}|archive\/[0-9a-f-]{36}\/\d{4}|inbound|staging)\/[0-9a-f]{64}$/;
 // The keys a listing of each sweepable prefix returns.
 const LISTED_KEY: Record<ListPrefix, RegExp> = {
   'inbound/': /^inbound\/[0-9a-f]{64}$/,
   'export/': /^export\/[0-9a-f-]{36}\/[0-9a-f]{64}$/,
 };
 
-// Every store accepts the same keys: org/<org_id>/<sha256> (plan §7.6), export/<org_id>/<sha256>, inbound/<random id>
-// and staging/<random id>.
+// Every store accepts the same keys: org/<org_id>/<sha256> (plan §7.6), export/<org_id>/<sha256>,
+// archive/<org_id>/<year>/<sha256>, inbound/<random id> and staging/<random id>.
 export function assertStorageKey(key: string): void {
   if (!KEY_PATTERN.test(key)) throw new Error('invalid storage key');
 }
@@ -209,9 +215,10 @@ export function assertListArgs(prefix: ListPrefix, after: string | null, limit: 
   if (!Number.isInteger(limit) || limit < 1) throw new Error('invalid list limit');
 }
 
-// Org and export keys are content addresses: their last segment must be the sha256 of the bytes stored under them.
+// Org, export and archive keys are content addresses: their last segment must be the sha256 of the bytes stored under
+// them.
 export function assertContentAddress(key: string, sha256: string): void {
-  if ((key.startsWith('org/') || key.startsWith('export/')) && !key.endsWith(`/${sha256}`)) {
+  if ((key.startsWith('org/') || key.startsWith('export/') || key.startsWith('archive/')) && !key.endsWith(`/${sha256}`)) {
     throw new Error('storage key does not match the content sha256');
   }
 }

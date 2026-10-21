@@ -17,6 +17,7 @@ export function createBlobStore(config: Config): BlobStore {
     versioning: config.S3_VERSIONING,
     presign: config.S3_PRESIGNED_URLS === 'true',
     publicEndpoint: config.S3_PUBLIC_ENDPOINT,
+    archiveLock: config.S3_ARCHIVE_LOCK_DAYS > 0 ? { mode: config.ARCHIVE_LOCK_MODE, retentionDays: config.S3_ARCHIVE_LOCK_DAYS } : undefined,
   });
 }
 

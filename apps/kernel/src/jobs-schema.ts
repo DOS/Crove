@@ -40,6 +40,8 @@ export const QUEUES = {
   archiveVerify: 'kernel-archive-verify',
   // Created by the kernel notifications migration (20261025030000).
   notify: 'kernel-notify',
+  // Created by the fiscal year archive migration (20261025230000).
+  yearArchive: 'finance-year-archive',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
