@@ -46,6 +46,7 @@ import { attentionInboxQueries } from './attention-inbox.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
+import { planExportCommands } from './plan-export.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
 import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
@@ -1466,6 +1467,7 @@ export const socialCommands = [
   queueSet,
   ...publishingCommands,
   ...metricsCommands,
+  ...planExportCommands,
   ...evergreenCommands,
   ...commentCommands,
   ...threadCommands,

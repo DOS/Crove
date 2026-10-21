@@ -36,6 +36,8 @@ import { SocialFeedsPage } from './routes/social-feeds.tsx';
 import { OCCASION_IDS } from './lib/social-occasions.ts';
 import { SocialReviewPage } from './routes/social-review.tsx';
 import { SocialReportPage } from './routes/social-report.tsx';
+import { SocialPlanPrintPage } from './routes/social-plan-print.tsx';
+import { parsePlanSearch } from './lib/social-plan-export.ts';
 import { parseSocialSearch } from './lib/social.ts';
 import { parseJournalSearch, parseTextSearch } from './lib/search.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
@@ -157,17 +159,20 @@ const onboardingRoute = createRoute({
   component: OnboardingPage,
 });
 
+// Signed in, and the org in the address is the one API calls name.
+async function enterOrg(slug: string) {
+  await requireAuth();
+  if (getCurrentOrg() !== slug) {
+    // Cached data belongs to one org; never show it under another.
+    queryClient.clear();
+    setCurrentOrg(slug);
+  }
+}
+
 export const orgRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/o/$slug',
-  beforeLoad: async ({ params }) => {
-    await requireAuth();
-    if (getCurrentOrg() !== params.slug) {
-      // Cached data belongs to one org; never show it under another.
-      queryClient.clear();
-      setCurrentOrg(params.slug);
-    }
-  },
+  beforeLoad: ({ params }) => enterOrg(params.slug),
   component: OrgLayout,
 });
 
@@ -256,6 +261,17 @@ const socialIdeasRoute = createRoute({ getParentRoute: () => socialRoute, path: 
 const socialBioRoute = createRoute({ getParentRoute: () => socialRoute, path: 'bio', component: SocialBioPage });
 const socialFeedsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'feeds', component: SocialFeedsPage });
 const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '$id', component: SocialPostPage });
+// The content plan to print (#978), outside the org's frame so only the plan reaches the paper.
+const socialPlanPrintRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/o/$slug/print/social-plan',
+  beforeLoad: async ({ params }) => {
+    await enterOrg(params.slug);
+    requireSocial({ params });
+  },
+  validateSearch: parsePlanSearch,
+  component: SocialPlanPrintPage,
+});
 // ?invite=<email> fills the invite form: onboarding sends a firm here to invite the new client's contact (issue #324).
 const settingsRoute = createRoute({
   getParentRoute: () => orgRoute,
@@ -277,6 +293,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   reviewRoute,
   reportRoute,
+  socialPlanPrintRoute,
   inviteRoute,
   mfaRoute,
   resetPasswordRoute,

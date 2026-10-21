@@ -133,6 +133,10 @@ function channelsOf(text: string, channels: readonly ImportChannel[], problems: 
   return ids;
 }
 
+// A cell as Crove's CSV exports wrote it (#978): the quote they put before a leading =, +, -, @, tab or carriage return,
+// so a spreadsheet keeps it as text, is dropped, and a plan exported and edited comes back with the text it had.
+export const unguard = (value: string) => (/^'[=+\-@\t\r]/.test(value) ? value.slice(1) : value);
+
 // The sheet's rows as posts to create, each with its problems; null when no header names a text column.
 export function importRows(rows: SheetRows, channels: readonly ImportChannel[], now = Date.now()): ImportRow[] | null {
   const found = columnsOf(rows);
@@ -142,7 +146,7 @@ export function importRows(rows: SheetRows, channels: readonly ImportChannel[], 
     if (rowNo <= found.header) continue;
     const get = (c: ImportColumn) => {
       const col = found.at[c];
-      return col === undefined ? '' : (cells.get(col)?.value ?? '').trim();
+      return col === undefined ? '' : unguard((cells.get(col)?.value ?? '').trim());
     };
     const body = get('text');
     const [title, link, channelText, timeText] = [get('title'), get('link'), get('channels'), get('time')];

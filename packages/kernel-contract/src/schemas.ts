@@ -1435,6 +1435,22 @@ export const zSocialMetricsRow = z.object({
   clicks: z.number().int().nullable(),
 });
 
+// One channel post of a content plan export (#978), for the print layout.
+export const zSocialPlanRow = z.object({
+  postId: zId,
+  variantId: zId,
+  connectionId: zId,
+  channel: z.string(),
+  provider: z.string(),
+  status: z.string(),
+  at: z.string(),
+  title: z.string().nullable(),
+  body: z.string(),
+  linkUrl: z.string().nullable(),
+  labels: z.array(z.string()),
+  assignee: z.string().nullable(),
+});
+
 export const zSocialQueue = z.object({
   connectionId: zId,
   queueId: zId.nullable(),
