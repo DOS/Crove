@@ -42,6 +42,14 @@ const PUBLIC: Record<string, string> = {
   '/*': 'the SPA shell (index.html) and the security headers on every response; no data',
 };
 
+// Public routes an open PR adds. CI runs the base branch's copy of this suite on a PR, so a new public route is listed
+// here first, in a PR of its own; the PR that adds the route moves it into PUBLIC. A route here may be public and may
+// not exist yet; the stale-list check below skips it, and nothing else does.
+const PENDING: Record<string, string> = {
+  '/version': 'the build id and the migrations missing from the ledger, for the deploy smoke test (#892); no tenant data',
+};
+const isPublic = (path: string) => Object.hasOwn(PUBLIC, path) || Object.hasOwn(PENDING, path);
+
 const WEB_DIST = mkdtempSync(join(tmpdir(), 'crove-route-coverage-'));
 writeFileSync(join(WEB_DIST, 'index.html'), '<!doctype html><title>Crove</title>');
 
@@ -87,7 +95,7 @@ const concrete = (path: string) => path.replace(/:[A-Za-z]+/g, 'x').replace(/\*$
 async function unprotected(target: App, calls: { count: number }): Promise<string[]> {
   const open: string[] = [];
   for (const { method, path } of routesOf(target)) {
-    if (Object.hasOwn(PUBLIC, path)) continue;
+    if (isPublic(path)) continue;
     calls.count = 0;
     const verb = method === 'ALL' ? (path.startsWith('/api/rpc') ? 'POST' : 'GET') : method;
     const init: RequestInit = verb === 'GET' ? { method: verb } : { method: verb, headers: { 'content-type': 'application/json' }, body: '{}' };
@@ -114,13 +122,15 @@ describe('route enumeration (ADR-0028, gate T1)', () => {
       expect(paths, path).toContain(path);
     }
     // Most of the table is behind the check: a probe that reached none of it would prove nothing.
-    expect(routesOf(target).filter((r) => !Object.hasOwn(PUBLIC, r.path)).length).toBeGreaterThan(15);
+    expect(routesOf(target).filter((r) => !isPublic(r.path)).length).toBeGreaterThan(15);
     expect(await unprotected(target, calls)).toEqual([]);
   });
 
   it('lists only routes that exist, so the public list cannot grow stale', () => {
     const paths = new Set(routesOf(app(refusingAuthenticate({ count: 0 }))).map((r) => r.path));
     expect(Object.keys(PUBLIC).filter((path) => !paths.has(path))).toEqual([]);
+    // A pending route leaves PENDING when it moves into PUBLIC.
+    expect(Object.keys(PENDING).filter((path) => Object.hasOwn(PUBLIC, path))).toEqual([]);
   });
 
   it('catches a download route registered ahead of the check', async () => {

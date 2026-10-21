@@ -20,9 +20,9 @@ const ALLOWED: string[] = [];
 
 // Control-plane tables (plan §3.6): identity, a user's sessions across orgs, inbound routing, the per-client
 // email budget in front of Supabase Auth and the invalidation stream's one-time tickets (#69, #281), which only the
-// stream_ticket_issue and stream_ticket_redeem definers touch. staff and kill_switch join this list when they are
-// built (§4.12).
-const CONTROL_PLANE = ['user_account', 'auth_session', 'inbound_address', 'inbound_pending', 'auth_email_send', 'stream_ticket'];
+// stream_ticket_issue and stream_ticket_redeem definers touch, and the deployment-wide kill switch (#886), reached
+// through global_kill_switch_on and global_kill_switch_set. staff joins this list when it is built (§4.12).
+const CONTROL_PLANE = ['user_account', 'auth_session', 'inbound_address', 'inbound_pending', 'auth_email_send', 'stream_ticket', 'global_kill_switch'];
 const NAMES = CONTROL_PLANE.join('|');
 // Schema-qualified anywhere (Kysely table names, raw SQL, sql.table), optionally quoted, in any case (PostgreSQL
 // folds unquoted names) and across line breaks; or the bare name as a whole string literal, optionally aliased

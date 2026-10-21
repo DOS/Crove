@@ -983,7 +983,8 @@ export const startAgentRun = defineCommand({
     const { rows: gates } = await sql<{ killed: boolean; spent: boolean; today: number }>`
       SELECT
         EXISTS (SELECT 1 FROM crove_kernel.kill_switch k WHERE k.org_id = ${ctx.orgId}::uuid AND k.released_at IS NULL
-                AND (k.scope = 'org' OR (k.scope = 'module' AND k.target = ${position.module}) OR (k.scope = 'agent' AND k.target = ${agent.id}))) AS killed,
+                AND (k.scope = 'org' OR (k.scope = 'module' AND k.target = ${position.module}) OR (k.scope = 'agent' AND k.target = ${agent.id})))
+          OR crove_kernel.global_kill_switch_on('ai') AS killed,
         EXISTS (SELECT 1 FROM crove_kernel.budget_policy b
                 WHERE b.org_id = ${ctx.orgId}::uuid AND b.hard_stop
                   AND (b.scope = 'org' OR (b.scope = 'module' AND b.target = ${position.module}) OR (b.scope = 'agent' AND b.target = ${agent.id}))
