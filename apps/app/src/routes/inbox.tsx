@@ -38,7 +38,7 @@ type Tab = 'pending' | 'executed' | 'rejected';
 
 const TABS: Tab[] = ['pending', 'executed', 'rejected'];
 
-const FILE_STATUS = { processing: 'brand', proposed: 'success', duplicate: 'warning', failed: 'destructive', expanded: 'success' } as const;
+const FILE_STATUS = { processing: 'brand', waiting: 'warning', proposed: 'success', duplicate: 'warning', failed: 'destructive', expanded: 'success' } as const;
 type FileStatus = keyof typeof FILE_STATUS;
 
 function isFileStatus(status: string): status is FileStatus {
