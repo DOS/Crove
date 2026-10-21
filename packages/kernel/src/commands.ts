@@ -494,10 +494,16 @@ export const editProposal = defineCommand({
   },
 });
 
-// The signature status stored on an invoice proposal (#674), or null for a proposal without one.
-function signatureStatusOf(payload: unknown): string | null {
-  const parsed = zProposalSignature.safeParse((payload as { signature?: unknown } | null)?.signature);
-  return parsed.success ? parsed.data.status : null;
+// The signature verification stored on an invoice proposal (#674), and whether approving it needs the approver's
+// confirmation: an invoice read from e-invoice XML whose signature is not verified, including one read before #674
+// (no verification stored) and an unsigned cash register invoice (unverified, cash_register).
+function signatureOf(payload: unknown): { status: string | null; reason: string | null; needsConfirmation: boolean } {
+  const body = payload as { signature?: unknown; extractionMethod?: unknown } | null;
+  const parsed = zProposalSignature.safeParse(body?.signature);
+  const status = parsed.success ? parsed.data.status : null;
+  const reason = parsed.success ? parsed.data.reason : null;
+  const xml = body?.extractionMethod === 'einvoice_xml';
+  return { status, reason, needsConfirmation: status === 'unverified' || (xml && status !== 'verified') };
 }
 
 export const approveProposal = defineCommand({
@@ -544,7 +550,8 @@ export const approveProposal = defineCommand({
     }
     // An invoice whose digital signature could not be verified (#674) is approved only with the approver's explicit
     // confirmation of this revision. It never blocks the invoice otherwise: confirmed, it is approved as any other.
-    if (proposal.command === PURCHASE_COMMAND && signatureStatusOf(proposal.payload) === 'unverified' && input.acceptUnverifiedSignature !== true) {
+    const signature = proposal.command === PURCHASE_COMMAND ? signatureOf(proposal.payload) : null;
+    if (signature?.needsConfirmation && input.acceptUnverifiedSignature !== true) {
       throw new DomainError('SIGNATURE_UNVERIFIED', 422, 'Chưa xác minh được chữ ký số của hóa đơn này; hãy kiểm tra hóa đơn gốc rồi xác nhận khi duyệt');
     }
     ctx.audit({
@@ -554,6 +561,10 @@ export const approveProposal = defineCommand({
       eligible_approvers: decision.eligibleCount,
       self_approved: decision.selfApproved,
       accept_failed_checks: input.acceptFailedChecks ?? false,
+      // An invoice's signature verification and whether the approver confirmed it (#674).
+      ...(signature
+        ? { accept_unverified_signature: input.acceptUnverifiedSignature === true, signature_status: signature.status, signature_reason: signature.reason }
+        : {}),
       ...(input.postingDate !== undefined ? { posting_date: input.postingDate } : {}),
     });
     // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
@@ -714,7 +725,14 @@ export const approveProposals = defineCommand({
     ctx.audit({
       approved: results.filter((r) => r.outcome === 'approved').length,
       refused: results.filter((r) => r.outcome === 'refused').length,
-      items: results.map((r) => (r.outcome === 'approved' ? { id: r.id, outcome: r.outcome } : { id: r.id, outcome: r.outcome, code: r.code, rule: r.rule })),
+      // Each item's confirmation of an unverified signature as the batch sent it (#674); the item's own approval row
+      // records the signature it confirmed.
+      items: results.map((r, i) => {
+        const accept_unverified_signature = input.items[i]?.acceptUnverifiedSignature === true;
+        return r.outcome === 'approved'
+          ? { id: r.id, outcome: r.outcome, accept_unverified_signature }
+          : { id: r.id, outcome: r.outcome, code: r.code, rule: r.rule, accept_unverified_signature };
+      }),
     });
     return { results };
   },

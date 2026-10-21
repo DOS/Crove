@@ -891,7 +891,17 @@ suite('kernel invariants on PostgreSQL', () => {
     await expect(approveAs(orgId, owner, id, asOwner.revision)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED', status: 403 });
     await expect(approveAs(orgId, admin, id, asOwner.revision)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
 
-    expect(await approvalAudit(id)).toEqual([
+    // #674 records the invoice's signature verification and the approver's confirmation on the approval row; a row
+    // written before it has none of the three keys. Both are accepted here, and the keys are checked when present.
+    const audits = await approvalAudit(id);
+    const signatureKeys = ['accept_unverified_signature', 'signature_status', 'signature_reason'];
+    const approvedDetail: Record<string, unknown> = { ...audits[1]?.detail };
+    const signature = Object.fromEntries(signatureKeys.filter((k) => k in approvedDetail).map((k) => [k, approvedDetail[k]]));
+    for (const key of signatureKeys) delete approvedDetail[key];
+    expect(signature).toEqual(
+      Object.keys(signature).length === 0 ? {} : { accept_unverified_signature: true, signature_status: 'unverified', signature_reason: 'malformed' },
+    );
+    expect([audits[0], { ...audits[1], detail: approvedDetail }]).toEqual([
       {
         actor_id: owner,
         outcome: 'denied',

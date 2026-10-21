@@ -87,16 +87,25 @@ describe('e-invoice signature verification', () => {
       notAfter: new Date('2025-01-01T00:00:00Z'),
     });
     expect(verify(signInvoice(unsigned, lapsed, { slot: 'NBan' }))).toMatchObject({ status: 'unverified', reason: 'certificate_expired' });
-    expect(verify(signInvoice(unsigned, lapsed, { slot: 'NBan', signingTime: '2024-06-01T09:00:00+07:00' })).reason).toBe('tax_authority_missing');
+    // A SigningTime moved back into the certificate's life does not help: it must be valid on the invoice date too.
+    expect(verify(signInvoice(unsigned, lapsed, { slot: 'NBan', signingTime: '2024-06-01T09:00:00+07:00' }))).toMatchObject({
+      status: 'unverified',
+      reason: 'certificate_expired',
+    });
+    // Valid on the invoice date and at a signing time later that day, it verifies.
+    const sameDay = issue({ subject: { commonName: 'TEST ONLY seller', uid: `MST:${TEST_SELLER_TAX_CODE}` }, issuer: pki.intermediate, ca: false, notAfter: new Date('2026-09-15T12:00:00Z') });
+    expect(verify(signInvoice(unsigned, sameDay, { slot: 'NBan', signingTime: '2026-09-15T15:00:00+07:00' })).reason).toBe('tax_authority_missing');
   });
 
-  it('reports a missing or unreadable signature, and lets an unsigned cash register invoice through', () => {
+  it('reports a missing or unreadable signature, an unsigned cash register invoice included', () => {
     expect(verify(unsigned)).toMatchObject({ status: 'unverified', reason: 'missing', signer: null });
     expect(verify(unsigned.replace(/<DSCKS>[\s\S]*<\/DSCKS>/, ''))).toMatchObject({ status: 'unverified', reason: 'missing' });
     // The old fixture's placeholder is not an XML-DSig signature.
     expect(verify(fixture)).toMatchObject({ status: 'unverified', reason: 'malformed' });
     const cashRegister = unsigned.replace('<KHHDon>C26TAB</KHHDon>', '<KHHDon>C26MAB</KHHDon>');
-    expect(verify(cashRegister)).toEqual({ status: 'not_applicable', reason: 'cash_register', signer: null, issuer: null, signedAt: null });
+    // The law lets a genuine one go unsigned, but its series is what the file says: unverified, so approving it asks.
+    expect(verify(cashRegister)).toEqual({ status: 'unverified', reason: 'cash_register', signer: null, issuer: null, signedAt: null });
+    expect(verify(unsigned.replace('<KHHDon>C26TAB</KHHDon>', '<KHHDon>K26MAB</KHHDon>')).reason).toBe('cash_register');
   });
 
   it('checks the tax authority signature on an invoice with a tax authority code', () => {
@@ -177,6 +186,20 @@ describe('e-invoice signature verification', () => {
       expect(invoice.signature?.status).toBe('verified');
       // An HTML entity is not XML: the parser reads it, the signature check refuses the file.
       expect(verify(fullySigned.replace('<SHDon>1234</SHDon>', '<SHDon>12&nbsp;34</SHDon>')).reason).toBe('malformed');
+    });
+
+    it('accepts a whole-document reference only for an element without an id', () => {
+      // DLHDon has an id, so URI="" does not stand for it (and would make every element of the file part of the digest).
+      expect(verify(sellerSigned.replace('URI="#data"', 'URI=""')).reason).toBe('not_covering');
+    });
+
+    it('does not verify a file too large to verify within the time limit, and says so fast', () => {
+      const flat = fullySigned.replace(/<CCKSKhac\s*\/>|<CCKSKhac><\/CCKSKhac>/, `<CCKSKhac>${'<X/>'.repeat(40_000)}</CCKSKhac>`);
+      const started = performance.now();
+      const invoice = parseEInvoiceXml(bytes(flat), { trust: pki.trust });
+      expect(performance.now() - started).toBeLessThan(3000);
+      expect(invoice.total).toBe('1980000');
+      expect(invoice.signature).toMatchObject({ status: 'unverified', reason: 'too_large' });
     });
 
     it('refuses a SignedInfo with too many references before digesting them', () => {

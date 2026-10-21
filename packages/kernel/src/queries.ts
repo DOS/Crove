@@ -156,7 +156,12 @@ function toInboxItem(row: {
     issueDate: payload?.invoice.issueDate ?? voucher?.date ?? null,
     failedChecks: countChecks(payload, 'fail'),
     warnChecks: countChecks(payload, 'warn'),
-    signatureStatus: payload?.signature?.status ?? null,
+    // As the approval decides: an invoice read from XML whose signature is not verified is unverified (#674).
+    signatureStatus: payload
+      ? payload.extractionMethod === 'einvoice_xml' && payload.signature?.status !== 'verified'
+        ? 'unverified'
+        : (payload.signature?.status ?? null)
+      : null,
     duplicateOf: row.duplicate_of,
     createdAt: row.created_at.toISOString(),
     ...agentFields(row, agentName),
@@ -193,7 +198,9 @@ export const inboxList = defineQuery({
         sql<string | null>`(SELECT a.display_name FROM crove_kernel.agent a WHERE a.org_id = crove_kernel.proposal.org_id AND a.id = crove_kernel.proposal.requested_by_agent)`.as('agent_name'),
         countChecksSql('fail').as('failed_checks'),
         countChecksSql('warn').as('warn_checks'),
-        sql<string | null>`left(payload #>> '{signature,status}', 20)`.as('signature_status'),
+        // As the approval decides (kernel.proposal.approve): an invoice read from XML whose signature is not verified is
+        // unverified, one read before #674 (no verification stored) included.
+        sql<string | null>`left(CASE WHEN payload ->> 'extractionMethod' = 'einvoice_xml' AND coalesce(payload #>> '{signature,status}', '') <> 'verified' THEN 'unverified' ELSE payload #>> '{signature,status}' END, 20)`.as('signature_status'),
       ])
       .where('org_id', '=', ctx.orgId)
       .orderBy('created_at', 'desc')

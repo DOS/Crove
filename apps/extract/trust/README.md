@@ -16,6 +16,9 @@ Left out on purpose: the timestamping root and the timestamping CAs (they sign t
 
 - **No revocation check.** Nothing is fetched from the sandbox, so neither CRLs nor OCSP are consulted: a certificate revoked after it was issued still verifies. The signing time is the signed `SigningTime` (or the invoice date), which the signer writes; there is no trusted timestamp.
 - **The tax authority's certificate.** Invoices with a tax authority code also carry the tax authority's signature, which counts only from a certificate pinned in `tax-authority.crt` (a chain to a root is not enough: licensed CAs issue certificates to any company, tax agents included). That file is empty until the tax authority's signing certificate is taken from an official source or a genuine invoice, so for now every invoice with a tax authority code shows as unverified with the reason `tax_authority_untrusted`, and its approval asks for a confirmation.
+- **SHA-1 is accepted.** The MIC National Root CA (2008) and the CAs it issued sign with SHA-1, and older invoices are signed with RSA-SHA1, so both are verified like SHA-256 ones; their certificates expired years ago, so only invoices signed while they were valid can pass.
+- **Certificate profile.** The signer's key usage and extended key usage, and the path length and name constraints of the CAs on the way, are not checked yet (#952); a CA would have to misissue first.
+- **Size.** A file beyond 30,000 elements or 2.5 million characters is not verified (`too_large`), so that verification never runs into the parser's time limit.
 
 ## Updating
 

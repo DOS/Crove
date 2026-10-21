@@ -129,6 +129,7 @@ export const SIGNATURE_REASONS = [
   'tax_authority_invalid',
   'tax_authority_untrusted',
   'cash_register',
+  'too_large',
 ] as const;
 export const zInvoiceSignature = z
   .strictObject({

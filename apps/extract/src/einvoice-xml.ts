@@ -184,7 +184,7 @@ export function parseEInvoiceXml(bytes: Uint8Array, options: EInvoiceParseOption
   const series = normalizeSeries(text(general, 'KHHDon') ?? '');
   const seller = party(content.NBan);
   const taxAuthorityCode = typeof hdon.MCCQT === 'string' ? hdon.MCCQT : text(hdon, 'MCCQT');
-  const signature = verifyEInvoiceSignatures(xml, { sellerTaxCode: seller.taxCode, issueDate, series, taxAuthorityCode }, options.trust ?? shippedTrustStore());
+  const signature = verifyEInvoiceSignatures(xml, { sellerTaxCode: seller.taxCode, issueDate: issueDate.slice(0, 10), series, taxAuthorityCode }, options.trust ?? shippedTrustStore());
 
   return {
     source: 'einvoice_xml',

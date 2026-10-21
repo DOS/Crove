@@ -63,6 +63,7 @@ export const INVOICE_CHECK_CODES = [
   'signature.tax_authority_invalid',
   'signature.tax_authority_untrusted',
   'signature.cash_register',
+  'signature.too_large',
   'source.ai',
   'duplicate.found',
   // A replacement or an adjustment invoice (#916): its original in the books, or not found.

@@ -325,5 +325,52 @@ suite('bulk approval through the API (#315)', () => {
     ]);
     // Confirmed, it is approved as any other invoice.
     expect(await approve({ acceptUnverifiedSignature: true })).toMatchObject({ status: 200, body: { journalEntryId: expect.any(String) } });
+
+    // The audit: each approval row names the signature and the confirmation; the batch lists each item's confirmation.
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      const approvals = (
+        await admin.query<{ target_id: string; detail: Record<string, unknown> }>(
+          `SELECT target_id, detail FROM crove_kernel.audit_event
+            WHERE org_id = $1 AND command = 'kernel.proposal.approve' AND outcome = 'ok' AND target_id = ANY($2::uuid[])`,
+          [orgId, [id, other]],
+        )
+      ).rows;
+      expect(approvals).toHaveLength(2);
+      for (const row of approvals) {
+        expect(row.detail).toMatchObject({ accept_unverified_signature: true, signature_status: 'unverified', signature_reason: 'malformed' });
+      }
+      const batch = (
+        await admin.query<{ detail: { items: unknown[] } }>(
+          `SELECT detail FROM crove_kernel.audit_event
+            WHERE org_id = $1 AND command = 'kernel.proposal.approve_many' AND outcome = 'ok'
+              AND detail -> 'items' @> pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('id', $2::text))`,
+          [orgId, other],
+        )
+      ).rows;
+      expect(batch[0]?.detail.items).toEqual([
+        { id, outcome: 'refused', code: 'SIGNATURE_UNVERIFIED', rule: null, accept_unverified_signature: false },
+        { id: other, outcome: 'approved', accept_unverified_signature: true },
+      ]);
+    } finally {
+      await admin.end();
+    }
+  });
+
+  it('asks the confirmation for an e-invoice proposal read before signatures were verified (#674)', async () => {
+    // A proposal stored before #674 has no verification: it is treated as unverified, in the list and when approving.
+    const id = await propose('owner');
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      await admin.query(`UPDATE crove_kernel.proposal SET payload = payload - 'signature' WHERE org_id = $1 AND id = $2`, [orgId, id]);
+    } finally {
+      await admin.end();
+    }
+    expect((await rpc('inbox/get', 'admin', { id })).body).toMatchObject({ signatureStatus: 'unverified' });
+    const approve = (extra: Record<string, unknown>) => rpc('inbox/approve', 'admin', { id, revision: 1, idempotencyKey: randomUUID(), ...extra }, { mfaAge: 60 });
+    expect(await approve({})).toMatchObject({ status: 422, body: { code: 'SIGNATURE_UNVERIFIED' } });
+    expect(await approve({ acceptUnverifiedSignature: true })).toMatchObject({ status: 200 });
   });
 });

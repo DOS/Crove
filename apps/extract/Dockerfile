@@ -1,7 +1,7 @@
 # crove-extract: the file parsing sandbox (plan §7.6, External-tenant gate T12). Build from the repository root:
 #   docker build -f apps/extract/Dockerfile -t crove-extract .
-# Parsing libraries only (fast-xml-parser, unpdf, postal-mime): no database client, no AI or storage SDK, no
-# credentials. Bytes in, JSON out; only the worker calls it. docker-compose.yml runs it on an internal network
+# Parsing libraries only (fast-xml-parser, unpdf, postal-mime, and xml-crypto with @xmldom/xmldom to verify e-invoice
+# signatures, #674): no database client, no AI or storage SDK, no credentials. Bytes in, JSON out; only the worker calls it. docker-compose.yml runs it on an internal network
 # with no egress, a read-only root file system, no capabilities, 1 vCPU and 1 GiB.
 # Base images are pinned by digest (Node 26.11.1 here); see "Updating pinned images" in AGENTS.md.
 FROM node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0 AS build

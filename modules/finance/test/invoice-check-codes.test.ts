@@ -43,7 +43,7 @@ const VARIANTS: ParsedInvoice[] = [
   }),
   ...SIGNATURE_REASONS.map((reason) =>
     invoice((i) => {
-      i.signature = { status: reason === 'cash_register' ? 'not_applicable' : 'unverified', reason, signer: null, issuer: null, signedAt: null };
+      i.signature = { status: 'unverified', reason, signer: null, issuer: null, signedAt: null };
     }),
   ),
   invoice((i) => {

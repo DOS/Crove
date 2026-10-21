@@ -377,7 +377,9 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const plain = reversal !== null || voucher !== null || journalVoucher !== null;
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
-  const unverified = payload?.signature?.status === 'unverified';
+  // As the kernel decides (kernel.proposal.approve): an XML invoice whose signature is not verified, including one read
+  // before #674, which has no verification stored.
+  const unverified = item?.signatureStatus === 'unverified';
   const acceptUnverified = item !== undefined && acceptUnverifiedRevision === item.revision;
   const signatureCheck = payload?.checks.find((c) => c.id === 'signature');
   // The approve buttons are enabled exactly when this holds, and the A shortcut uses the same value.

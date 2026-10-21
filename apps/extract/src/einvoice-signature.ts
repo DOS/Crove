@@ -23,6 +23,18 @@
 // refuses them). A SignedInfo with more than a few references or transforms is refused before any digest is computed:
 // xml-crypto validates references in quadratic time.
 //
+// Cost: xml-crypto's canonicalization grows faster than the document, and the parser process is killed at its time
+// limit, which would fail the whole extraction. So a document beyond MAX_VERIFY_ELEMENTS elements or MAX_VERIFY_CHARS
+// characters is not verified at all (too_large, a warning like any unverified signature), and a reference may name
+// the whole document (URI="") only when the element it must cover has no id: an element with an id is referenced by it.
+//
+// Validity: the signer's certificate must be valid at the signing time (the signed SigningTime, else the invoice date)
+// and on the invoice date itself, so a SigningTime moved back into a lapsed certificate's life does not verify.
+//
+// Threat model of the unsigned cash register invoice: its series (type M) is what the file says, so an unsigned
+// forgery can claim it. It is reported unverified (cash_register) like any unsigned invoice, so approving it needs the
+// approver's confirmation, even though the law lets a genuine one go unsigned.
+//
 // Who signed: the seller's certificate must name the seller's tax code (or, for a person, their 12-digit number) in
 // its UID attribute; a certificate of anyone else, or of no one, is signer_mismatch. The tax authority's signature
 // counts only from a certificate pinned in trust/tax-authority.crt. An invoice series with a tax authority code (C,
@@ -41,6 +53,10 @@ const MAX_CHAIN = 6;
 // What one SignedInfo may hold. An e-invoice signature references the invoice data, the code and a SigningTime object.
 const MAX_REFERENCES = 8;
 const MAX_TRANSFORMS = 4;
+// The largest document verified (see Cost above): far above a real e-invoice (a 1,000-line invoice has about 15,000
+// elements), and verified in a few seconds at the limit, well inside the parser process's time limit.
+const MAX_VERIFY_ELEMENTS = 30_000;
+const MAX_VERIFY_CHARS = 2_500_000;
 // Vietnam's offset, for a SigningTime or invoice date written without one.
 const VN_OFFSET = '+07:00';
 
@@ -199,7 +215,16 @@ function referenceUris(signature: Element): string[] {
 
 function covers(uris: readonly string[], element: Element): boolean {
   const id = idOf(element);
-  return uris.some((uri) => uri === '' || (id !== null && id !== '' && uri === `#${id}`));
+  const named = id !== null && id !== '';
+  // URI="" (the whole document) counts only for an element without an id; with one, the reference must name it.
+  return uris.some((uri) => (uri === '' ? !named : named && uri === `#${id}`));
+}
+
+// Whether the certificate was valid at some moment of the invoice's day (Vietnam time).
+function validOnDay(cert: X509Certificate, issueDate: string): boolean {
+  const start = new Date(`${issueDate}T00:00:00${VN_OFFSET}`);
+  if (Number.isNaN(start.getTime())) return false;
+  return cert.validFromDate.getTime() < start.getTime() + 24 * 60 * 60 * 1000 && cert.validToDate.getTime() >= start.getTime();
 }
 
 // The signed SigningTime of the signature, if a reference covers the Object or property that holds it.
@@ -218,7 +243,16 @@ function signedSigningTime(signature: Element, uris: readonly string[]): Date | 
 }
 
 // pinned: the only certificates the signature may come from (the tax authority's); without it, a chain to a root.
-function verifyOne(xml: string, signature: Element, mustCover: readonly Element[], trust: TrustStore, fallbackTime: Date, pinned?: readonly X509Certificate[]): Outcome {
+// issueDate: the invoice date (YYYY-MM-DD), on which the signer's certificate must be valid too.
+function verifyOne(
+  xml: string,
+  signature: Element,
+  mustCover: readonly Element[],
+  trust: TrustStore,
+  fallbackTime: Date,
+  issueDate: string,
+  pinned?: readonly X509Certificate[],
+): Outcome {
   let uris: string[];
   try {
     uris = referenceUris(signature);
@@ -245,6 +279,7 @@ function verifyOne(xml: string, signature: Element, mustCover: readonly Element[
     if (/algorithm/i.test(message)) return { ok: false, reason: 'unsupported_algorithm', leaf, signedAt };
     return { ok: false, reason: 'malformed', leaf, signedAt };
   }
+  if (!validOnDay(leaf, issueDate)) return { ok: false, reason: 'certificate_expired', leaf, signedAt };
   if (pinned) {
     if (!pinned.some((c) => c.fingerprint256 === leaf.fingerprint256)) return { ok: false, reason: 'untrusted_certificate', leaf, signedAt };
     if (!validAt(leaf, signedAt)) return { ok: false, reason: 'certificate_expired', leaf, signedAt };
@@ -293,6 +328,7 @@ function verify(xml: string, facts: SignatureFacts, trust: TrustStore): InvoiceS
     return unverified('ambiguous');
   }
   if (hasProcessingInstruction(hdon)) return unverified('ambiguous');
+  if (xml.length > MAX_VERIFY_CHARS || doc.getElementsByTagName('*').length > MAX_VERIFY_ELEMENTS) return unverified('too_large');
 
   const dscks = childrenNamed(hdon, 'DSCKS');
   if (dscks.length > 1) return unverified('ambiguous');
@@ -305,13 +341,14 @@ function verify(xml: string, facts: SignatureFacts, trust: TrustStore): InvoiceS
 
   const fallbackTime = xmlDateTime(facts.issueDate) ?? new Date(0);
   if (!sellerSignature) {
-    // A cash register invoice (series type M, the 4th character of KHHDon) need not carry a digital signature.
-    if (facts.series.charAt(3).toUpperCase() === 'M') return result('not_applicable', 'cash_register', null, null);
+    // A cash register invoice (series type M, the 4th character of KHHDon) need not carry a digital signature, but an
+    // unsigned file could be anything claiming that series: unverified, with its own reason (see the threat model).
+    if (facts.series.charAt(3).toUpperCase() === 'M') return unverified('cash_register');
     // Something sits where the seller signs but is not an XML-DSig Signature.
     return unverified(sellerSlots[0] && elementChildren(sellerSlots[0]).length > 0 ? 'malformed' : 'missing');
   }
 
-  const seller = verifyOne(xml, sellerSignature, [dlhdon], trust, fallbackTime);
+  const seller = verifyOne(xml, sellerSignature, [dlhdon], trust, fallbackTime, facts.issueDate);
   if (!seller.ok) return unverified(seller.reason, seller.leaf, seller.signedAt);
   if (!signerMatches(seller.leaf, facts.sellerTaxCode)) return unverified('signer_mismatch', seller.leaf, seller.signedAt);
 
@@ -329,7 +366,7 @@ function verify(xml: string, facts: SignatureFacts, trust: TrustStore): InvoiceS
     if (authoritySlots.length > 1 || authoritySignatures.length > 1) return unverified('ambiguous', seller.leaf, seller.signedAt);
     const authoritySignature = authoritySignatures[0];
     if (!authoritySignature) return unverified('tax_authority_missing', seller.leaf, seller.signedAt);
-    const authority = verifyOne(xml, authoritySignature, [dlhdon, code], trust, seller.signedAt, trust.taxAuthorities);
+    const authority = verifyOne(xml, authoritySignature, [dlhdon, code], trust, seller.signedAt, facts.issueDate, trust.taxAuthorities);
     if (!authority.ok) {
       const reason = authority.reason === 'untrusted_certificate' ? 'tax_authority_untrusted' : 'tax_authority_invalid';
       return unverified(reason, seller.leaf, seller.signedAt);

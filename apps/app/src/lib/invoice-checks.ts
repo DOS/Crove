@@ -59,6 +59,7 @@ export function invoiceCheckMessage(check: Check, t: Translate, money: (amount: 
     case 'signature.tax_authority_invalid':
     case 'signature.tax_authority_untrusted':
     case 'signature.cash_register':
+    case 'signature.too_large':
     case 'source.ai':
     case 'duplicate.found':
       return t(`invoiceChecks.${code}`);

@@ -38,7 +38,8 @@ export interface TaxBreakdown {
 //                   certificate chains to a Vietnamese national root CA shipped with Crove (no revocation check)
 //   unverified      a signature is missing, broken, does not cover the data, or its certificate is not trusted;
 //                   reason says which. A warning: the invoice is still read, and approving it asks for a confirmation
-//   not_applicable  nothing to verify: a cash register invoice the law lets go unsigned, or an invoice read by AI
+//   not_applicable  nothing to verify: an invoice read by AI (an unsigned cash register invoice is unverified, with
+//                   the reason cash_register: its series is what the file says)
 export const SIGNATURE_STATUSES = ['verified', 'unverified', 'not_applicable'] as const;
 export type SignatureStatus = (typeof SIGNATURE_STATUSES)[number];
 export const SIGNATURE_REASONS = [
@@ -58,8 +59,10 @@ export const SIGNATURE_REASONS = [
   'tax_authority_missing',
   'tax_authority_invalid',
   'tax_authority_untrusted',
-  // not_applicable: a cash register invoice (series type M) with no signature.
+  // A cash register invoice (series type M) with no signature: allowed by law, but nothing proves who issued it.
   'cash_register',
+  // A document too large to verify within the parser's time limit.
+  'too_large',
 ] as const;
 export type SignatureReason = (typeof SIGNATURE_REASONS)[number];
 
@@ -89,7 +92,8 @@ const SIGNATURE_MESSAGES: Record<SignatureReason, string> = {
   tax_authority_missing: 'Có mã của cơ quan thuế nhưng thiếu chữ ký số của cơ quan thuế',
   tax_authority_invalid: 'Chữ ký số của cơ quan thuế không hợp lệ hoặc không bao phủ mã và dữ liệu hóa đơn',
   tax_authority_untrusted: 'Chưa xác minh được tổ chức cấp chứng thư số của cơ quan thuế',
-  cash_register: 'Hóa đơn khởi tạo từ máy tính tiền, không bắt buộc chữ ký số',
+  cash_register: 'Hóa đơn máy tính tiền không có chữ ký số nên không xác minh được người bán',
+  too_large: 'Tệp quá lớn để xác minh chữ ký số',
 };
 
 // The check code of a signature verification (INVOICE_CHECK_CODES in @crove/kernel-contract, #677): signature.verified,
