@@ -48,7 +48,7 @@ export async function pinCallsOf(trx: Trx, orgId: string, variants: readonly Pin
 // went quiet past COMMENT_STALE_MS is unclear or failed, as for a first comment.
 export type PinStatus = 'pending' | 'pinned' | 'failed' | 'not_allowed' | 'unknown';
 export function pinStatus(call: CommentCall | undefined, now: Date, publishedAt: Date | null): PinStatus {
-  if (!call) return publishedAt && now.getTime() - publishedAt.getTime() > COMMENT_STALE_MS ? 'failed' : 'pending';
+  if (!call) return publishedAt !== null && now.getTime() - publishedAt.getTime() > COMMENT_STALE_MS ? 'failed' : 'pending';
   if (call.state === 'succeeded') return 'pinned';
   if (call.state === 'failed') return call.error_code === PIN_NOT_ALLOWED ? 'not_allowed' : 'failed';
   if (call.state === 'ambiguous') return 'unknown';
