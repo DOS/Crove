@@ -42,6 +42,7 @@ import {
   type VariantRow,
 } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
+import { publishingHeld } from './publish-hold.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const PUBLISH_STEP = 'publish';
@@ -288,6 +289,8 @@ export const publishBegin = defineCommand({
   access: 'system',
   handler: async (ctx, input): Promise<BeginResult> => {
     requireSystem(ctx);
+    // The org's publishing hold (#946), read under its lock before the post's: while it is on, nothing is sent.
+    const held = await publishingHeld(ctx);
     const locked = await lockVariant(ctx, input.variantId);
     if (!locked) return none('not_found');
     const { post, v } = locked;
@@ -300,6 +303,8 @@ export const publishBegin = defineCommand({
       case 'scheduled': {
         const due = v.error_retry_at ?? v.scheduled_at ?? v.queue_slot_at;
         if (!due || due.getTime() > now) return none('not_due');
+        // Held: it stays scheduled, and goes out after the release (or waits for a person if held too long).
+        if (held) return none('held');
         const decision = await latestDecision(ctx.trx, ctx.orgId, v.id);
         if (decision?.decision !== 'approved' || !approvalCovers({ revision: decision.revision, contentHash: decision.content_hash }, { revision: v.revision, contentHash: v.content_hash })) {
           // Cannot happen through the commands (an edit sends a variant back to draft); never publish it if it does.
@@ -351,6 +356,8 @@ export const publishBegin = defineCommand({
       }
       case 'publishing': {
         if (now - v.updated_at.getTime() < (input.staleSeconds ?? PUBLISH_STALE_SECONDS) * 1000) return none('in_flight');
+        // Its resume may call again: not while held. Picked up after the release.
+        if (held) return none('held');
         const existing = await callRow(ctx, key);
         result = await resume(ctx, post, v, key, input.safety, existing, await connectionOf(ctx, v.channel_connection_id));
         if (result.action === 'call') await setVariant(ctx, v.id, {});

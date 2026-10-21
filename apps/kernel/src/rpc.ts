@@ -645,6 +645,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         save: os.social.watermark.save.handler(socialCommand('social.watermark.save')),
         remove: os.social.watermark.remove.handler(socialCommand('social.watermark.remove')),
       },
+      publishing: {
+        get: os.social.publishing.get.handler(socialQuery('social.publishing.hold_get')),
+        hold: os.social.publishing.hold.handler(socialCommand('social.publishing.hold')),
+        release: os.social.publishing.release.handler(socialCommand('social.publishing.release')),
+      },
       chatAlert: {
         get: os.social.chatAlert.get.handler(socialQuery('social.chat_alert.get')),
         save: os.social.chatAlert.save.handler(({ context, input }) =>

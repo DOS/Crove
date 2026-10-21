@@ -1766,6 +1766,8 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
     case 'failed':
       // A draft for the TikTok app on a deployment that has not turned inbox mode on (#903).
       if (v.error?.code === 'TIKTOK_INBOX_NOT_ENABLED') return <p className="text-destructive">{t('outcome.inboxNotEnabled')}</p>;
+      // Kept by the org's publishing hold until more than an hour past its time (#946): nothing was sent.
+      if (v.error?.code === 'HELD_TOO_LONG') return <p className="text-warning">{t('outcome.heldTooLong')}</p>;
       // TikTok refused an inbox upload for the missing video.upload grant (#903): a reconnect fixes it.
       if (v.error?.code === 'CHANNEL_SCOPE_MISSING') {
         return (

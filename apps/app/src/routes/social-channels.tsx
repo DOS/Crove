@@ -15,6 +15,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { VoiceEditor } from '../components/social-brand-voice.tsx';
 import { WatermarkCard } from '../components/social-watermark.tsx';
 import { ChatAlertCard } from '../components/social-chat-alert.tsx';
+import { PublishHoldCard } from '../components/social-publish-hold.tsx';
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -413,6 +414,9 @@ export function SocialChannelsPage() {
               <p className="text-xs text-subtle-foreground">{t('watermark.hint')}</p>
             </div>
             <WatermarkCard canEdit={isAdmin} />
+          </Card>
+          <Card className="block p-4">
+            <PublishHoldCard />
           </Card>
           <Card className="block space-y-2 p-4">
             <div>

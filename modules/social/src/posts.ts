@@ -35,6 +35,7 @@ import { feedCommands, feedQueries } from './feeds.ts';
 import { reportScheduleCommands, reportScheduleQueries } from './report-schedules.ts';
 import { brandVoiceCommands, brandVoiceQueries } from './brand-voice.ts';
 import { watermarkCommands, watermarkQueries } from './watermark.ts';
+import { publishHoldCommands, publishHoldQueries } from './publish-hold.ts';
 import { chatAlertCommands, chatAlertQueries } from './chat-alerts.ts';
 import { channelSetCommands, channelSetQueries } from './channel-sets.ts';
 import { calendarNoteCommands, calendarNoteQueries } from './calendar-notes.ts';
@@ -1360,6 +1361,7 @@ export const socialCommands = [
   variantCancel,
   queueSet,
   ...publishingCommands,
+  ...publishHoldCommands,
   ...metricsCommands,
   ...evergreenCommands,
   ...commentCommands,
@@ -1432,4 +1434,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
+export const socialQueries = [postGet, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...publishHoldQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];
