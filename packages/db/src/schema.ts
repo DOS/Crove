@@ -369,6 +369,8 @@ export const SOCIAL_ACTOR_ORIGINS = ['ui', 'api', 'mcp', 'agent', 'system'] as c
 export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
 // What a client said through a review link (#589): a signal for the team, never an approval.
 export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment'] as const;
+// A review link of one post (#589), or of a content plan's posts (#902).
+export const SOCIAL_REVIEW_LINK_KINDS = ['post', 'plan'] as const;
 // What an in-app notification is about (#637); a member may turn each kind off.
 export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention'] as const;
 // Why a channel's daily account snapshot has no counts (#645).
@@ -394,6 +396,7 @@ export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
 export type SocialDecision = (typeof SOCIAL_DECISIONS)[number];
 export type SocialReviewVerdict = (typeof SOCIAL_REVIEW_VERDICTS)[number];
+export type SocialReviewLinkKind = (typeof SOCIAL_REVIEW_LINK_KINDS)[number];
 export type SocialAccountSnapshotError = (typeof SOCIAL_ACCOUNT_SNAPSHOT_ERRORS)[number];
 export type SocialNotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
 export type SocialLabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
@@ -419,6 +422,7 @@ export type SocialPostVariantTable = Refine<
   }
 >;
 export type SocialReviewFeedbackTable = Refine<G.SocialReviewFeedbackTable, { verdict: ColumnType<SocialReviewVerdict, never, never> }>;
+export type SocialReviewLinkTable = Refine<G.SocialReviewLinkTable, { kind: ColumnType<SocialReviewLinkKind, SocialReviewLinkKind | undefined, never> }>;
 export type SocialAccountSnapshotTable = Refine<G.SocialAccountSnapshotTable, { error: ColumnType<SocialAccountSnapshotError | null, SocialAccountSnapshotError | null | undefined, never> }>;
 export type SocialLinkPreviewTable = Refine<
   G.SocialLinkPreviewTable,
@@ -477,6 +481,7 @@ type Refined = Tables<{
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_approval': SocialPostApprovalTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
+  'crove_social.review_link': SocialReviewLinkTable;
   'crove_social.account_snapshot': SocialAccountSnapshotTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
   'crove_social.notification': SocialNotificationTable;

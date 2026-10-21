@@ -2,7 +2,8 @@
 // without an account; the client sees each channel's preview and says "Approved", "Needs changes" or comments, with
 // the name they type. That answer is a signal for the team, never one of a channel's approvals. The token is shown
 // once, to the person who made the link; the database keeps only its SHA-256. The public side is the two definers of
-// the migration (review_link_view, review_feedback_add), which the HTTP edge calls with the token.
+// the migration (review_link_view, review_feedback_add), which the HTTP edge calls with the token. A plan link (#902)
+// covers several posts, answered one by one (review_plan_feedback_add).
 import { createHash, randomBytes } from 'node:crypto';
 import { sql } from 'kysely';
 import { z } from 'zod';
@@ -75,7 +76,128 @@ export const reviewLinkRevoke = defineCommand({
     if (link.revoked_at === null) {
       await ctx.trx.updateTable('crove_social.review_link').set({ revoked_at: ctx.now, revoked_by: userId }).where('org_id', '=', ctx.orgId).where('id', '=', link.id).execute();
     }
+    // A plan link (#902) names no single post.
     return { linkId: link.id, postId: link.post_id };
+  },
+});
+
+// A plan link (#902): one link for a content plan, the posts an owner or admin picked or those going out in a date
+// range on the chosen channels. The set is frozen when the link is made, so a post added later never joins it; the
+// client answers each post, and each answer settles that post exactly as a single-post link's answer would (the
+// public definer review_plan_feedback_add writes the same row and event).
+export const REVIEW_PLAN_POSTS_MAX = 50;
+// Live plan links an org keeps at most.
+export const REVIEW_PLAN_LINKS_MAX = 50;
+export const REVIEW_PLAN_RANGE_MAX_DAYS = 92;
+// The answers a plan link takes per post (review_plan_feedback_add refuses more).
+export const REVIEW_PLAN_ANSWERS_PER_POST = 20;
+// Days picked in a zone with daylight saving can be an hour longer than 24 h; the table's CHECK allows a day more.
+const DST_SLACK_MS = 2 * 3_600_000;
+// The channels a plan from a range takes: not yet out, and not cancelled.
+const PLAN_STATUSES = ['draft', 'in_review', 'changes_requested', 'approved', 'scheduled', 'paused'] as const;
+const zInstant = z.iso.datetime({ offset: true });
+
+// The order a plan shows its posts in: by the time each goes out, posts without one last, then as they were given.
+export function planOrder(posts: readonly { id: string; at: Date | null }[]): string[] {
+  return posts
+    .map((p, i) => ({ id: p.id, at: p.at?.getTime() ?? null, i }))
+    .sort((a, b) => (a.at === b.at ? a.i - b.i : a.at === null ? 1 : b.at === null ? -1 : a.at - b.at || a.i - b.i))
+    .map((p) => p.id);
+}
+
+export const reviewPlanCreate = defineCommand({
+  name: 'social.review_link.create_plan',
+  input: z.strictObject({
+    // The posts picked in the posts list, or a date range [from, to) with the channels to take (none: all).
+    postIds: z.array(zId).min(1).max(REVIEW_PLAN_POSTS_MAX).optional(),
+    range: z.strictObject({ from: zInstant, to: zInstant, connectionIds: z.array(zId).min(1).max(50).optional() }).optional(),
+    days: z.number().int().min(1).max(REVIEW_LINK_MAX_DAYS).optional(),
+  }),
+  risk: 'R2',
+  access: ADMINS,
+  handler: async (ctx, input) => {
+    const userId = requireUser(ctx);
+    if ((input.postIds === undefined) === (input.range === undefined)) throw new DomainError('REVIEW_PLAN_INVALID', 422, 'Hãy chọn các bài hoặc một khoảng ngày cho kế hoạch');
+    const live = await ctx.trx
+      .selectFrom('crove_social.review_link')
+      .select((eb) => eb.fn.countAll<string>().as('n'))
+      .where('org_id', '=', ctx.orgId)
+      .where('kind', '=', 'plan')
+      .where('revoked_at', 'is', null)
+      .where('expires_at', '>', ctx.now)
+      .executeTakeFirstOrThrow();
+    if (Number(live.n) >= REVIEW_PLAN_LINKS_MAX) throw new DomainError('REVIEW_PLAN_LIMIT', 409, `Đã có ${REVIEW_PLAN_LINKS_MAX} liên kết duyệt kế hoạch còn hạn; hãy thu hồi bớt`);
+    let postIds: string[];
+    let range: { from: Date; to: Date } | null = null;
+    if (input.postIds) {
+      const ids = [...new Set(input.postIds)];
+      const { rows } = await sql<{ id: string; status: string; at: Date | null }>`
+        SELECT p.id, p.status,
+          coalesce((SELECT pg_catalog.min(coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at)) FROM crove_social.post_variant v
+                    WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status <> 'cancelled'), p.scheduled_at) AS at
+        FROM crove_social.post p
+        WHERE p.org_id = ${ctx.orgId}::uuid AND p.id = ANY(${ids}::uuid[])`.execute(ctx.trx);
+      if (rows.length !== ids.length) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
+      if (rows.some((r) => r.status === 'cancelled')) throw new DomainError('REVIEW_PLAN_POST_CANCELLED', 409, 'Có bài đã hủy trong các bài đã chọn; bài đã hủy không gửi khách duyệt được');
+      const byId = new Map(rows.map((r) => [r.id, r.at]));
+      postIds = planOrder(ids.map((id) => ({ id, at: byId.get(id) ?? null })));
+    } else {
+      const r = input.range as { from: string; to: string; connectionIds?: string[] };
+      const from = new Date(r.from);
+      const to = new Date(r.to);
+      if (to.getTime() <= from.getTime() || to.getTime() - from.getTime() > REVIEW_PLAN_RANGE_MAX_DAYS * DAY_MS + DST_SLACK_MS) {
+        throw new DomainError('REVIEW_PLAN_RANGE_INVALID', 422, `Khoảng ngày phải kết thúc sau ngày bắt đầu và dài tối đa ${REVIEW_PLAN_RANGE_MAX_DAYS} ngày`);
+      }
+      const connections = [...new Set(r.connectionIds ?? [])];
+      if (connections.length > 0) {
+        const found = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', connections).execute();
+        if (found.length !== connections.length) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
+      }
+      const at = sql`coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at)`;
+      const { rows } = await sql<{ id: string }>`
+        SELECT p.id FROM crove_social.post p
+        JOIN crove_social.post_variant v ON v.org_id = p.org_id AND v.post_id = p.id
+        WHERE p.org_id = ${ctx.orgId}::uuid AND p.status <> 'cancelled'
+          AND v.status = ANY(${[...PLAN_STATUSES]}::text[])
+          ${connections.length > 0 ? sql`AND v.channel_connection_id = ANY(${connections}::uuid[])` : sql``}
+          AND ${at} >= ${from} AND ${at} < ${to}
+        GROUP BY p.id
+        ORDER BY pg_catalog.min(${at}), p.id
+        LIMIT ${REVIEW_PLAN_POSTS_MAX + 1}`.execute(ctx.trx);
+      if (rows.length === 0) throw new DomainError('REVIEW_PLAN_EMPTY', 422, 'Không có bài nào sắp đăng trong khoảng ngày này');
+      if (rows.length > REVIEW_PLAN_POSTS_MAX) {
+        throw new DomainError('REVIEW_PLAN_TOO_MANY', 422, `Khoảng ngày này có hơn ${REVIEW_PLAN_POSTS_MAX} bài; hãy chọn khoảng ngắn hơn hoặc ít kênh hơn`);
+      }
+      postIds = rows.map((p) => p.id);
+      range = { from, to };
+    }
+    const { rows: keys } = await sql<{ id: string; key: string }>`
+      SELECT x.id, crove_social.review_content_key(${ctx.orgId}::uuid, x.id) AS key FROM pg_catalog.unnest(${postIds}::uuid[]) AS x(id)`.execute(ctx.trx);
+    const keyOf = new Map(keys.map((k) => [k.id, k.key]));
+    const token = newReviewToken();
+    const expiresAt = new Date(ctx.now.getTime() + (input.days ?? 7) * DAY_MS);
+    const link = await ctx.trx
+      .insertInto('crove_social.review_link')
+      .values({
+        org_id: ctx.orgId,
+        kind: 'plan',
+        post_id: null,
+        plan_from: range?.from ?? null,
+        plan_to: range?.to ?? null,
+        token_sha256: reviewTokenHash(token),
+        created_by: userId,
+        created_at: ctx.now,
+        expires_at: expiresAt,
+      })
+      .returning('id')
+      .executeTakeFirstOrThrow();
+    await ctx.trx
+      .insertInto('crove_social.review_link_post')
+      .values(postIds.map((postId, position) => ({ org_id: ctx.orgId, link_id: link.id, post_id: postId, position, content_key: keyOf.get(postId) ?? '' })))
+      .execute();
+    ctx.audit({ link_id: link.id, posts: postIds });
+    // The token leaves only in this answer: the audit keeps the input and the posts, never the output.
+    return { linkId: link.id, token, expiresAt: expiresAt.toISOString(), posts: postIds.length };
   },
 });
 
@@ -135,8 +257,14 @@ export const REVIEW_LINK_ANSWERS_MAX = 100;
 
 export interface ReviewLinkView {
   id: string;
-  // Client answers given through it, of REVIEW_LINK_ANSWERS_MAX.
+  // A link of this post alone, or of a plan this post is in (#902).
+  kind: 'post' | 'plan';
+  // The posts it covers: 1, or the plan's.
+  posts: number;
+  // Client answers on this post given through it, of answersMax (REVIEW_LINK_ANSWERS_MAX for the link, or
+  // REVIEW_PLAN_ANSWERS_PER_POST for this post of a plan).
   answers: number;
+  answersMax: number;
   createdBy: string;
   createdAt: string;
   expiresAt: string;
@@ -160,12 +288,29 @@ export const reviewLinkList = defineQuery({
   access: ALL,
   handler: async (ctx, input): Promise<{ links: ReviewLinkView[]; feedback: ReviewFeedbackView[] }> => {
     const [links, feedback, key, counts] = await Promise.all([
+      // The post's own links and the plan links it is in (#902), with the content key each was made for.
       ctx.trx
-        .selectFrom('crove_social.review_link')
-        .select(['id', 'created_by', 'created_at', 'expires_at', 'revoked_at', 'content_key'])
-        .where('org_id', '=', ctx.orgId)
-        .where('post_id', '=', input.postId)
-        .orderBy('created_at', 'desc')
+        .selectFrom('crove_social.review_link as l')
+        .leftJoin('crove_social.review_link_post as lp', (j) => j.onRef('lp.org_id', '=', 'l.org_id').onRef('lp.link_id', '=', 'l.id').on('lp.post_id', '=', input.postId))
+        .select((eb) => [
+          'l.id',
+          'l.kind',
+          'l.created_by',
+          'l.created_at',
+          'l.expires_at',
+          'l.revoked_at',
+          'l.content_key',
+          'lp.content_key as plan_key',
+          eb
+            .selectFrom('crove_social.review_link_post as n')
+            .select((e) => e.fn.countAll<string>().as('n'))
+            .whereRef('n.org_id', '=', 'l.org_id')
+            .whereRef('n.link_id', '=', 'l.id')
+            .as('plan_posts'),
+        ])
+        .where('l.org_id', '=', ctx.orgId)
+        .where((eb) => eb.or([eb('l.post_id', '=', input.postId), eb('lp.id', 'is not', null)]))
+        .orderBy('l.created_at', 'desc')
         .limit(50)
         .execute(),
       ctx.trx
@@ -191,12 +336,15 @@ export const reviewLinkList = defineQuery({
     return {
       links: links.map((l) => ({
         id: l.id,
+        kind: l.kind,
+        posts: l.kind === 'plan' ? Number(l.plan_posts ?? 0) : 1,
         answers: answers.get(l.id) ?? 0,
+        answersMax: l.kind === 'plan' ? REVIEW_PLAN_ANSWERS_PER_POST : REVIEW_LINK_ANSWERS_MAX,
         createdBy: l.created_by,
         createdAt: l.created_at.toISOString(),
         expiresAt: l.expires_at.toISOString(),
         revokedAt: l.revoked_at?.toISOString() ?? null,
-        changed: l.content_key !== current,
+        changed: (l.kind === 'plan' ? (l.plan_key ?? '') : l.content_key) !== current,
       })),
       feedback: feedback.map((f) => ({
         id: f.id,
@@ -211,5 +359,66 @@ export const reviewLinkList = defineQuery({
   },
 });
 
-export const reviewLinkCommands = [reviewLinkCreate, reviewLinkRevoke, linksRevokeForMember];
-export const reviewLinkQueries = [reviewLinkList];
+export interface ReviewPlanLinkView {
+  id: string;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  // The range it was made from; null for posts picked one by one.
+  from: string | null;
+  to: string | null;
+  posts: number;
+  // Posts the client said "Approved" or "Needs changes" to through it.
+  answered: number;
+  // Posts cancelled since the link was made, which the page shows as no longer in the plan.
+  gone: number;
+}
+
+// The org's plan links (#902), newest first, never their tokens: how many posts each covers and how many the client
+// answered.
+export const reviewPlanList = defineQuery({
+  name: 'social.review_link.list_plans',
+  input: z.object({}),
+  access: ALL,
+  handler: async (ctx): Promise<ReviewPlanLinkView[]> => {
+    const { rows } = await sql<{
+      id: string;
+      created_by: string;
+      created_at: Date;
+      expires_at: Date;
+      revoked_at: Date | null;
+      plan_from: Date | null;
+      plan_to: Date | null;
+      posts: number;
+      answered: number;
+      gone: number;
+    }>`
+      SELECT l.id, l.created_by, l.created_at, l.expires_at, l.revoked_at, l.plan_from, l.plan_to,
+        (SELECT pg_catalog.count(*)::int FROM crove_social.review_link_post lp WHERE lp.org_id = l.org_id AND lp.link_id = l.id) AS posts,
+        (SELECT pg_catalog.count(DISTINCT f.post_id)::int FROM crove_social.review_feedback f
+          WHERE f.org_id = l.org_id AND f.link_id = l.id AND f.verdict IN ('approved', 'changes_requested')) AS answered,
+        (SELECT pg_catalog.count(*)::int FROM crove_social.review_link_post lp
+          JOIN crove_social.post p ON p.org_id = lp.org_id AND p.id = lp.post_id
+          WHERE lp.org_id = l.org_id AND lp.link_id = l.id AND p.status = 'cancelled') AS gone
+      FROM crove_social.review_link l
+      WHERE l.org_id = ${ctx.orgId}::uuid AND l.kind = 'plan'
+      ORDER BY l.created_at DESC, l.id DESC
+      LIMIT 100`.execute(ctx.trx);
+    return rows.map((r) => ({
+      id: r.id,
+      createdBy: r.created_by,
+      createdAt: r.created_at.toISOString(),
+      expiresAt: r.expires_at.toISOString(),
+      revokedAt: r.revoked_at?.toISOString() ?? null,
+      from: r.plan_from?.toISOString() ?? null,
+      to: r.plan_to?.toISOString() ?? null,
+      posts: r.posts,
+      answered: r.answered,
+      gone: r.gone,
+    }));
+  },
+});
+
+export const reviewLinkCommands = [reviewLinkCreate, reviewPlanCreate, reviewLinkRevoke, linksRevokeForMember];
+export const reviewLinkQueries = [reviewLinkList, reviewPlanList];

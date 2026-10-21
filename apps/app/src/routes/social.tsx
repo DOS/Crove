@@ -19,6 +19,7 @@ import { InstagramGrid } from '../components/social-instagram-grid.tsx';
 import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
+import { PlanFromPosts, PlanReviewCard } from '../components/social-plan-review.tsx';
 import { ReportLinks } from '../components/social-report-links.tsx';
 import { ReportSchedules } from '../components/social-report-schedules.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
@@ -596,6 +597,7 @@ export function SocialPage() {
             <div className="space-y-4">
               <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} canWrite={canWrite} labelId={search.label} />
               <InstagramGrid slug={slug} channels={(channels.data ?? []).filter((c) => c.provider === 'instagram' && c.status !== 'revoked')} canDecide={role === 'owner' || role === 'admin'} />
+              <PlanReviewCard channels={channels.data ?? []} canManage={canDecide} />
               <CalendarFeedCard canManage={role === 'owner' || role === 'admin'} />
             </div>
           )}
@@ -621,6 +623,8 @@ export function SocialPage() {
                       excerptOf={(postId) => excerpt(rows.find((p) => p.id === postId)?.body ?? '', 60) || t('emptyText')}
                       onClear={() => setPicked(new Set())}
                     />
+                    {/* One client review link for the posts selected (#902). */}
+                    {canDecide && (id === 'review' || id === 'drafts') && <PlanFromPosts postIds={rows.filter((p) => picked.has(p.id)).map((p) => p.id)} />}
                   </div>
                 )}
                 {list.isLoading ? (
