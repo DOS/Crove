@@ -104,6 +104,12 @@ import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance
 import { zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 
+// Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
+export const zProposalPolicy = z.object({
+  remindAfterDays: z.number().int().min(1).max(30).nullable(),
+  escalateAfterDays: z.number().int().min(1).max(60).nullable(),
+});
+
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
   me: {
@@ -127,6 +133,10 @@ export const contract = {
     // Owners and admins (issue #324): the org's address, or null to clear it. Stored on one line, at most 500
     // characters; a value with control characters is refused.
     setAddress: oc.input(z.object({ address: z.string().max(2000).nullable() })).output(z.object({ address: z.string().nullable() })),
+    // Everyone reads, owners and admins set (issue #676): after how many days a pending proposal reminds the people who
+    // may approve it, and after how many its owners are told; null turns either off. Escalation must come later.
+    proposalPolicy: oc.output(zProposalPolicy),
+    setProposalPolicy: oc.input(zProposalPolicy).output(zProposalPolicy),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),

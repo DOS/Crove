@@ -38,6 +38,7 @@ import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { setAddress } from './org-address.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
+import { proposalReminderCommands } from './proposal-reminders.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // The command that records an invoice proposal (a purchase or a sale).
@@ -834,6 +835,7 @@ const otherKernelCommands = [
   setVatFilingPeriod,
   setAddress,
   ...mailCommands,
+  ...proposalReminderCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

@@ -1,0 +1,15 @@
+{
+  "description": "Synthetic photo (PNG) of a one-line 8% service invoice",
+  "expected": {
+    "series": "C26TBB",
+    "number": "77",
+    "issueDate": "2026-09-12",
+    "currency": "VND",
+    "seller": { "name": "CÔNG TY TNHH SỬA CHỮA THIẾT BỊ MẪU", "taxCode": "0101234564" },
+    "buyer": { "name": "CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU", "taxCode": "0309876546" },
+    "lines": [{ "description": "Dịch vụ sửa máy in", "quantity": "1", "unitPrice": "500000", "amount": "500000", "vatRate": "8%" }],
+    "subtotal": "500000",
+    "vatTotal": "40000",
+    "total": "540000"
+  }
+}

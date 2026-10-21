@@ -34,6 +34,7 @@ const MACHINERY = new Set([
   'crove_kernel.inbound_drop',
   'crove_kernel.outbox_pending',
   'crove_kernel.refusal_tally',
+  'crove_social.chat_alert_target',
 ]);
 // Tables whose row factory (and MACHINERY entry, for definer-only tables) lands on main before the table itself. CI
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
@@ -41,6 +42,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.chat_alert',
+  'crove_social.chat_alert_target',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -103,6 +106,14 @@ const channelConnectionRow = (o: { id: string; owner: string }) => ({
   external_account_id: `rls-${tag()}`,
   display_name: 'RLS matrix channel',
   connected_by: o.owner,
+});
+// The org's team chat alert (#863): its kind and alert kinds; the sealed target is in chat_alert_target.
+const chatAlertRow = (o: { id: string; owner: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  kind: 'discord',
+  events: '{needs_approval}',
+  updated_by: o.owner,
 });
 // An outbound mail (Email plan §3.2, #538), with its id so a delivery event can name it.
 const mailMessageRow = (o: { id: string }) => ({
@@ -490,6 +501,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.proposal': {
     make: (o) => ({ row: { org_id: o.id, kind: 'rls.matrix', command: 'rls.matrix', status: 'rejected', title: 'RLS matrix', payload: '{}' } }),
   },
+  // #676: per-org reminder and escalation settings for pending proposals (one row per org).
+  'crove_kernel.proposal_policy': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), remind_after_days: 3, escalate_after_days: 7, updated_by: o.owner } }) },
   // Refusals counted per org, window, actor and (command, code) (issue #162). Definer-only machinery: no role but
   // the owner holds a privilege on it. A random code keeps every row its own key.
   'crove_kernel.refusal_tally': {
@@ -553,6 +566,19 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // A saved set of channels for the composer (#774): a name and the connections it picks.
   'crove_social.channel_set': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: `RLS matrix set ${randomUUID().slice(0, 6)}`, updated_by: o.owner } }) },
+  // The org's team chat for Social alerts (#863): a Telegram or Discord target, sealed, and the kinds it gets.
+  'crove_social.chat_alert': { make: (o) => ({ row: chatAlertRow(o) }) },
+  // Definer-only machinery: the sealed target of the org's team chat alert (#863), one row per alert. The envelope is
+  // opaque bytes here; only the vault in the worker opens a real one.
+  'crove_social.chat_alert_target': {
+    make: (o) => {
+      const alert = chatAlertRow(o);
+      return {
+        setup: [{ table: 'crove_social.chat_alert', values: alert }],
+        row: { org_id: o.id, alert_id: alert.id, key_id: 'rls-matrix', envelope: '\\x00' },
+      };
+    },
+  },
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
   // An org's label for posts (#639): a name and a colour from the app's palette.
   // A blog feed an org drafts posts from (#708).
