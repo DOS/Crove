@@ -16,6 +16,7 @@ import { statementsExport, statementsPeriodQuery } from './statements.ts';
 import { missingInvoicesReminderSet, missingInvoicesRemind, missingInvoicesRequest, missingInvoicesStatus } from './missing-invoices.ts';
 import { searchQuery } from './search.ts';
 import { documentExports } from './document-exports.ts';
+import { customersList } from './parties.ts';
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
 export {
@@ -99,6 +100,7 @@ export const financeQueries = [
   fileForExtraction,
   purchaseLookup,
   vendorsList,
+  customersList,
   documentsList,
   documentExports,
   journalList,

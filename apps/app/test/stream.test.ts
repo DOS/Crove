@@ -40,6 +40,7 @@ function seeded() {
     entry: orpc.journal.get.queryKey({ input: { id: ENTRY } }),
     documents: orpc.documents.list.queryKey({ input: {} }),
     parties: orpc.parties.list.queryKey({ input: {} }),
+    customers: orpc.parties.customers.infiniteKey({ input: () => ({}), initialPageParam: undefined }),
     ledger: orpc.ledger.period.queryKey({ input: { period: '2026-09' } }),
     ledgerAccount: orpc.ledger.account.queryKey({ input: { period: '2026-09', accountCode: '331' } }),
     me: orpc.me.get.queryKey(),
@@ -78,16 +79,16 @@ describe('invalidateHint', () => {
     }
   });
 
-  it('journal_entry: the journal, that entry, the documents, the ledger reports and the proposal that posted it', async () => {
+  it('journal_entry: the journal, that entry, the documents, the ledger reports, the customers and the proposal that posted it', async () => {
     const { qc, stale } = seeded();
     await invalidateHint(qc, { type: 'journal_entry', id: ENTRY });
-    expect(stale()).toEqual(['detail1', 'documents', 'entry', 'journal', 'ledger', 'ledgerAccount']);
+    expect(stale()).toEqual(['customers', 'detail1', 'documents', 'entry', 'journal', 'ledger', 'ledgerAccount']);
   });
 
-  it('document: the documents, the vendors and the proposal that recorded it', async () => {
+  it('document: the documents, the vendors, the customers and the proposal that recorded it', async () => {
     const { qc, stale } = seeded();
     await invalidateHint(qc, { type: 'document', id: DOC });
-    expect(stale()).toEqual(['detail1', 'documents', 'parties']);
+    expect(stale()).toEqual(['customers', 'detail1', 'documents', 'parties']);
   });
 
   it('social_post: the calendar, that post and the queues', async () => {

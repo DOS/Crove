@@ -690,6 +690,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       reviewLinks: {
         list: os.social.reviewLinks.list.handler(socialQuery('social.review_link.list')),
         create: os.social.reviewLinks.create.handler(socialCommand('social.review_link.create')),
+        createPlan: os.social.reviewLinks.createPlan.handler(socialCommand('social.review_link.create_plan')),
+        plans: os.social.reviewLinks.plans.handler(socialQuery('social.review_link.list_plans')),
         revoke: os.social.reviewLinks.revoke.handler(socialCommand('social.review_link.revoke')),
       },
       media: {
@@ -1092,6 +1094,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       setDefaultAccount: os.parties.setDefaultAccount.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.vendor.set_default_account', input, { actor, orgId })),
+      ),
+      customers: os.parties.customers.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.customers.list', input, { actor, orgId })),
       ),
       update: os.parties.update.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.party.update', input, { actor, orgId }))),
       markDuplicate: os.parties.markDuplicate.handler(({ context, input }) =>

@@ -18,6 +18,7 @@ import {
   type InvoiceParty,
   type LineNature,
   type ParsedInvoice,
+  type RelatedInvoice,
   type TaxBreakdown,
 } from '@crove/l10n-vn';
 
@@ -93,6 +94,27 @@ function nature(code: string | null): LineNature {
   }
 }
 
+// TTHDLQuan in TTChung (#916): TCHDon 1 is a replacement (thay thế), 2 an adjustment (điều chỉnh); the original is
+// KHMSHDCLQuan, KHHDCLQuan, SHDCLQuan and NLHDCLQuan. A block of another kind, or one that names no series and number,
+// is left out: the invoice is then read as a standalone one, as before.
+function related(general: Node): RelatedInvoice | null {
+  const block = general.TTHDLQuan;
+  if (!isNode(block)) return null;
+  const code = text(block, 'TCHDon');
+  const kind = code === '1' ? 'replacement' : code === '2' ? 'adjustment' : null;
+  const series = text(block, 'KHHDCLQuan');
+  const number = text(block, 'SHDCLQuan');
+  if (!kind || !series || !number) return null;
+  return {
+    kind,
+    template: text(block, 'KHMSHDCLQuan'),
+    series: normalizeSeries(series),
+    number: normalizeNumber(number),
+    issueDate: text(block, 'NLHDCLQuan')?.slice(0, 10) ?? null,
+    note: text(block, 'GChu'),
+  };
+}
+
 export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {
   if (bytes.byteLength > MAX_XML_BYTES) throw new EInvoiceParseError('Tệp XML quá lớn');
   const xml = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
@@ -143,6 +165,7 @@ export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {
     amount(totals, 'TgTCThue') ??
     toMoney(taxBreakdown.length > 0 ? sum(taxBreakdown.map((t) => t.taxableAmount)) : sum(lines.map(lineContribution)));
   const total = amount(totals, 'TgTTTBSo') ?? toMoney(money(subtotal).plus(money(vatTotal)));
+  const original = related(general);
 
   return {
     source: 'einvoice_xml',
@@ -164,5 +187,6 @@ export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {
     totalInWords: text(totals, 'TgTTTBChu'),
     taxAuthorityCode: typeof hdon.MCCQT === 'string' ? hdon.MCCQT : text(hdon, 'MCCQT'),
     hasSignature: hdon.DSCKS !== undefined,
+    ...(original ? { related: original } : {}),
   };
 }

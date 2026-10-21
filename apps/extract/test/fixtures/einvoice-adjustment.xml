@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<HDon>
+  <DLHDon Id="data">
+    <TTChung>
+      <PBan>2.1.0</PBan>
+      <THDon>HÓA ĐƠN GIÁ TRỊ GIA TĂNG</THDon>
+      <KHMSHDon>1</KHMSHDon>
+      <KHHDon>C26TAB</KHHDon>
+      <SHDon>1251</SHDon>
+      <NLap>2026-10-05</NLap>
+      <DVTTe>VND</DVTTe>
+      <TGia>1</TGia>
+      <HTTToan>TM/CK</HTTToan>
+      <TTHDLQuan>
+        <TCHDon>2</TCHDon>
+        <LHDCLQuan>1</LHDCLQuan>
+        <KHMSHDCLQuan>1</KHMSHDCLQuan>
+        <KHHDCLQuan>C26TAB</KHHDCLQuan>
+        <SHDCLQuan>00001234</SHDCLQuan>
+        <NLHDCLQuan>2026-09-15</NLHDCLQuan>
+        <GChu>Điều chỉnh giảm đơn giá phí quảng cáo của hóa đơn số 1234</GChu>
+      </TTHDLQuan>
+    </TTChung>
+    <NDHDon>
+      <NBan>
+        <Ten>CÔNG TY TNHH DỊCH VỤ MẪU</Ten>
+        <MST>0101234564</MST>
+        <DChi>1 Đường Mẫu, Quận Mẫu, Hà Nội</DChi>
+        <DCTDTu>hoadon@example.com</DCTDTu>
+      </NBan>
+      <NMua>
+        <Ten>CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU</Ten>
+        <MST>0309876546</MST>
+        <DChi>2 Đường Thử, TP Hồ Chí Minh</DChi>
+      </NMua>
+      <DSHHDVu>
+        <HHDVu>
+          <TChat>1</TChat><STT>1</STT><THHDVu>Điều chỉnh giảm phí quảng cáo Facebook</THHDVu>
+          <DVTinh>Gói</DVTinh><SLuong>2</SLuong><DGia>-100000</DGia><ThTien>-200000</ThTien><TSuat>10%</TSuat>
+        </HHDVu>
+      </DSHHDVu>
+      <TToan>
+        <THTTLTSuat>
+          <LTSuat><TSuat>10%</TSuat><ThTien>-200000</ThTien><TThue>-20000</TThue></LTSuat>
+        </THTTLTSuat>
+        <TgTCThue>-200000</TgTCThue>
+        <TgTThue>-20000</TgTThue>
+        <TgTTTBSo>-220000</TgTTTBSo>
+        <TgTTTBChu>Âm hai trăm hai mươi nghìn đồng</TgTTTBChu>
+      </TToan>
+    </NDHDon>
+  </DLHDon>
+  <MCCQT Id="tax">M2-26-ABCDE-00001234567</MCCQT>
+  <DSCKS><NBan><Signature>stub</Signature></NBan></DSCKS>
+</HDon>

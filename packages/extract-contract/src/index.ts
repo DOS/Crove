@@ -100,6 +100,16 @@ const zLine = z.strictObject({
   vatRate: zText.nullable(),
 });
 
+// The invoice a replacement or an adjustment corrects (RelatedInvoice in @crove/l10n-vn, #916).
+const zRelatedInvoice = z.strictObject({
+  kind: z.enum(['replacement', 'adjustment']),
+  template: zText.nullable(),
+  series: zText,
+  number: zText,
+  issueDate: zText.nullable(),
+  note: zText.nullable(),
+});
+
 // The shape of ParsedInvoice in @crove/l10n-vn for an e-invoice XML.
 export const zExtractedInvoice = z.strictObject({
   source: z.literal('einvoice_xml'),
@@ -123,6 +133,7 @@ export const zExtractedInvoice = z.strictObject({
   totalInWords: zText.nullable(),
   taxAuthorityCode: zText.nullable(),
   hasSignature: z.boolean(),
+  related: zRelatedInvoice.optional(),
 });
 export type ExtractedInvoice = z.infer<typeof zExtractedInvoice>;
 

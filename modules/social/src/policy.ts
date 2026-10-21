@@ -50,13 +50,14 @@ export async function clientApprovalOn(trx: Trx, orgId: string, connectionIds: r
 
 // The client's standing answer on a post (#770): the latest "Approved" or "Needs changes" given on a review link for the
 // content as it is now (the link made for it and the answer given before any change), else null. Comments say nothing,
-// and a revoked link takes its answers back.
+// and a revoked link takes its answers back. A plan link (#902) was made for each of its posts' content then.
 export async function clientVerdict(trx: Trx, orgId: string, postId: string): Promise<'approved' | 'changes_requested' | null> {
   const { rows } = await sql<{ verdict: 'approved' | 'changes_requested' }>`
     SELECT f.verdict FROM crove_social.review_feedback f
     JOIN crove_social.review_link l ON l.org_id = f.org_id AND l.id = f.link_id
+    LEFT JOIN crove_social.review_link_post lp ON lp.org_id = f.org_id AND lp.link_id = f.link_id AND lp.post_id = f.post_id
     WHERE f.org_id = ${orgId}::uuid AND f.post_id = ${postId}::uuid AND f.verdict IN ('approved', 'changes_requested') AND NOT f.changed AND l.revoked_at IS NULL
-      AND l.content_key = crove_social.review_content_key(${orgId}::uuid, ${postId}::uuid)
+      AND CASE WHEN l.kind = 'plan' THEN lp.content_key ELSE l.content_key END = crove_social.review_content_key(${orgId}::uuid, ${postId}::uuid)
     ORDER BY f.created_at DESC, f.id DESC LIMIT 1`.execute(trx);
   return rows[0]?.verdict ?? null;
 }

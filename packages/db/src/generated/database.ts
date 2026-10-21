@@ -95,6 +95,7 @@ export interface CroveSocialSchema {
   'crove_social.report_schedule_run': SocialReportScheduleRunTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.review_link': SocialReviewLinkTable;
+  'crove_social.review_link_post': SocialReviewLinkPostTable;
   'crove_social.short_link': SocialShortLinkTable;
   'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
@@ -1221,11 +1222,21 @@ export interface SocialReviewFeedbackTable {
   created_at: ColumnType<Date, NotGranted, NotGranted>;
 }
 
+/** crove_social.review_link_post */
+export interface SocialReviewLinkPostTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  link_id: ColumnType<string, string, NotGranted>;
+  post_id: ColumnType<string, string, NotGranted>;
+  position: ColumnType<number, number, NotGranted>;
+  content_key: ColumnType<string, string | undefined, NotGranted>;
+}
+
 /** crove_social.review_link */
 export interface SocialReviewLinkTable {
   org_id: ColumnType<string, string, NotGranted>;
   id: ColumnType<string, string | undefined, NotGranted>;
-  post_id: ColumnType<string, string, NotGranted>;
+  post_id: ColumnType<string | null, string | null, NotGranted>;
   token_sha256: ColumnType<string, string, NotGranted>;
   content_key: ColumnType<string, string | undefined, NotGranted>;
   created_by: ColumnType<string, string, NotGranted>;
@@ -1233,6 +1244,9 @@ export interface SocialReviewLinkTable {
   expires_at: ColumnType<Date, Date | string, NotGranted>;
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
+  kind: ColumnType<string, string | undefined, NotGranted>;
+  plan_from: ColumnType<Date | null, Date | string | null, NotGranted>;
+  plan_to: ColumnType<Date | null, Date | string | null, NotGranted>;
 }
 
 /** crove_social.short_link_click */
