@@ -222,6 +222,18 @@ Each question has the recommended answer; per the plan's working rule, a recomme
 | D10 | Work alongside the firm's current software instead of replacing it? | Yes for the MVP: Crove is the AI intake and review layer, and exports vouchers to the firm's system of record (M2-5) | Switching a firm's ledger is a year-end decision with retraining; feeding their software removes the switching cost and still saves the data-entry time |
 | D11 | When does the Email module (Decision 18) start? | Transactional first: E1 and E2 in M2 at P2; marketing (E3 to E9) after M3 unless a pilot customer asks for it | Invites already depend on mail, and the kernel pipeline adds the log, bounces and suppression a pilot needs; marketing has no pilot user yet and agent capacity is scarce (the same reason as D5). Details: [email.md §6](email.md#6-open-decisions-for-the-owner), decision E-1 |
 
+**Answers recorded (#303).** All eleven questions are now answered:
+
+- **D5, 2026-10-17:** no for Social (see above).
+- **D9, 2026-10-20:** the DOS.AI gateway (`https://api.dos.ai/v1`). The owner set the budget on 2026-10-21: any model the owner's DOS.AI account has credits for, about 500 USD a month, with no separate hard cap at the provider (#312).
+- **D1, D2, D3, D4, D6, D7, D8, D10 and D11, 2026-10-21:** the owner adopted the recommendations as written in the table. The issues that follow from them:
+  - D3 is the spend approval of #52. Its budget alert is set when the server is created (#306), and #122 closes once the pilot's location is fixed.
+  - D4 moves #54 to the Icebox.
+  - D6 sets 2026-10-31 for #57 and #304.
+  - D7 gives #323 its starting price.
+  - D8 closes #80.
+  - D11 is already reflected: E1 and E2 are done in M2, and E3 to E9 stay in the Icebox.
+
 ## 7. Rules that keep the backlog healthy
 
 1. **Every issue has a milestone with a user outcome, or it is in the Icebox.** Milestones run in order (M0 to M3, then the GA gate); an agent picks only from the earliest milestone that has an open, unclaimed P0 or P1 issue. Nothing is picked from the Icebox, Social (paused) or the GA gate without an owner decision.
