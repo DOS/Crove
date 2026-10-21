@@ -775,6 +775,8 @@ export interface KernelTenantTable {
   tax_code: string | null;
   vat_filing_period: string | null;
   address: string | null;
+  contact_email: string | null;
+  missing_invoice_reminder_day: number | null;
 }
 
 /** crove_social.account_snapshot */

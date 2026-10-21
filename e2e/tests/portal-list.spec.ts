@@ -1,7 +1,8 @@
 // The tax portal's purchase list (issue #465), end to end: set the org's tax code -> upload a purchase e-invoice (it
 // waits in the Inbox) -> on "Đối chiếu cổng thuế", upload the portal's list for September 2026 -> the list is read in
 // the parsing sandbox and compared: one invoice waiting in the Inbox, one the tax authority has that Crove lacks. A
-// file that is not the portal's list is kept with the reason it cannot be used, and a list can be removed.
+// file that is not the portal's list is kept with the reason it cannot be used, and a list can be removed. The company
+// is asked for the missing invoice by email (#669), once the owner has set its contact email.
 // The list is written with ExcelJS (shared strings, styled header), another writer than the portal's own (inline
 // strings), so the reader is exercised on both.
 import { fileURLToPath } from 'node:url';
@@ -75,8 +76,8 @@ const row = (n: number, number: string, sellerTaxCode: string, sellerName: strin
 ];
 
 async function choosePeriod(page: Page) {
-  await page.getByRole('combobox', { name: 'Tháng' }).selectOption('9');
-  await page.getByRole('combobox', { name: 'Năm' }).selectOption('2026');
+  await page.getByRole('combobox', { name: 'Tháng', exact: true }).selectOption('9');
+  await page.getByRole('combobox', { name: 'Năm', exact: true }).selectOption('2026');
 }
 
 test('import the tax portal purchase list and see which invoices Crove lacks', async ({ page }) => {
@@ -128,6 +129,29 @@ test('import the tax portal purchase list and see which invoices Crove lacks', a
     await expect(waiting.getByRole('link', { name: 'Mở đề xuất' })).toBeVisible();
   });
 
+  await test.step('ask the company for the missing invoice by email, with a monthly reminder (#669)', async () => {
+    const card = page.getByRole('region', { name: 'Đề nghị công ty bổ sung hóa đơn' });
+    await expect(card.getByText('Công ty chưa có email liên hệ.')).toBeVisible();
+    await card.getByRole('link', { name: 'Nhập email liên hệ trong Cài đặt' }).click();
+    await page.getByRole('button', { name: 'Nhập email', exact: true }).click();
+    const form = page.getByRole('form', { name: 'Email liên hệ của công ty' });
+    await form.getByLabel('Email liên hệ của công ty').fill('ketoan@nguoimua.example');
+    await form.getByRole('button', { name: 'Lưu email' }).click();
+    await expect(page.getByText('ketoan@nguoimua.example', { exact: true })).toBeVisible();
+    await nav.getByRole('link', { name: 'Đối chiếu cổng thuế' }).click();
+    await choosePeriod(page);
+    await expect(card.getByText('Gửi email tới ketoan@nguoimua.example liệt kê 1 hóa đơn', { exact: false })).toBeVisible();
+    await card.getByRole('button', { name: 'Gửi email đề nghị' }).click();
+    await expect(card.getByText('Đã xếp email vào hàng gửi.')).toBeVisible();
+    await expect(card.getByRole('listitem').filter({ hasText: 'Đề nghị' })).toContainText('09/2026');
+    await card.getByRole('combobox', { name: 'Nhắc hằng tháng' }).selectOption('5');
+    await expect(card.getByText('Đang nhắc vào ngày 5 hằng tháng.')).toBeVisible();
+    // A second request for the period within the hour is refused.
+    await card.getByRole('button', { name: 'Gửi email đề nghị' }).click();
+    // In Vietnamese the SPA shows the kernel's own message (KERNEL_LOCALE), which names the period.
+    await expect(card.getByRole('alert')).toContainText('Đã gửi đề nghị cho tháng 9/2026 trong vòng một giờ qua');
+  });
+
   await test.step('a file that is not the portal list is kept with the reason', async () => {
     const workbook = new ExcelJS.Workbook();
     workbook.addWorksheet('Số dư').addRows([
@@ -144,7 +168,7 @@ test('import the tax portal purchase list and see which invoices Crove lacks', a
   });
 
   await test.step('another period has its own lists', async () => {
-    await page.getByRole('combobox', { name: 'Tháng' }).selectOption('10');
+    await page.getByRole('combobox', { name: 'Tháng', exact: true }).selectOption('10');
     await expect(page.getByText('Kỳ này chưa có danh sách nào')).toBeVisible();
   });
 });
