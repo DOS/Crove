@@ -416,7 +416,7 @@ export function SocialChannelsPage() {
             <WatermarkCard canEdit={isAdmin} />
           </Card>
           <Card className="block p-4">
-            <PublishHoldCard />
+            <PublishHoldCard key={slug} />
           </Card>
           <Card className="block space-y-2 p-4">
             <div>
