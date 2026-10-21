@@ -13,6 +13,7 @@ import { DomainError, readVerified, type BlobStore, type CredentialBroker, type 
 import { COVER_RULES, THREAD_PARTS_MAX, VIDEO_READY, coverKind, coverOf, isProvider, scopeNeeded, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 import type { CommentWork } from './comments.ts';
+import type { PinWork } from './pin.ts';
 import type { RemoveRecord, RemoveWork } from './remove.ts';
 import type { ThreadWork } from './thread.ts';import { shortened, shortUrl } from './short-links.ts';
 
@@ -229,6 +230,8 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
     await runCommentJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-comment] variant ${variantId.slice(0, 8)}`, (error as Error).message));
     // And its thread (#742), part after part.
     await runThreadJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-thread] variant ${variantId.slice(0, 8)}`, (error as Error).message));
+    // And its pin (#982), after the rest so it pins the post itself. A refused pin never touches the post either.
+    await runPinJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-pin] variant ${variantId.slice(0, 8)}`, (error as Error).message));
   }
   return { action: begun.action, status: recorded.status ?? recorded.reason ?? 'not_recorded' };
 }
@@ -251,6 +254,29 @@ export async function runCommentJob(deps: PublishDeps, orgId: string, variantId:
     }
   }
   const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.comment.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
+  return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
+}
+
+/** The pin of a published variant (#982): begin, one call, record, once per publish. */
+export async function runPinJob(deps: PublishDeps, orgId: string, variantId: string, provider: string): Promise<{ action: string; reason?: string; state?: string }> {
+  const publisher = deps.publishers[provider];
+  if (!publisher?.pin) return { action: 'none', reason: 'provider_not_configured' };
+  const begun = await deps.runtime.execute<PinWork>('social.pin.begin', { variantId, provider }, { actor: ACTOR, orgId });
+  if (begun.action === 'none') return { action: 'none', reason: begun.reason };
+  const credential = await openCredential(deps, orgId, begun.connectionId);
+  let result: Awaited<ReturnType<NonNullable<Publisher['pin']>>> | { kind: 'blocked'; code: string };
+  if ('blocked' in credential) result = { kind: 'blocked', code: credential.blocked };
+  else {
+    const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    try {
+      const r = await withTimeout(timeout, () => publisher.pin!({ ...credential, externalId: begun.externalId, silent: begun.silent, callKey: begun.callKey }));
+      // What the record takes: an adapter's long code or message is cut, so the answer is always recorded.
+      result = r.kind === 'accepted' ? { kind: 'accepted', externalId: r.externalId.slice(0, 500) } : { ...r, ...(r.code !== undefined ? { code: r.code.slice(0, 200) } : {}), ...(r.message !== undefined ? { message: r.message.slice(0, 2000) } : {}) };
+    } catch (error) {
+      result = { kind: 'unknown', code: error instanceof Timeout ? 'TIMEOUT' : 'ADAPTER_ERROR' };
+    }
+  }
+  const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.pin.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
   return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
 }
 

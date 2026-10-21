@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, X_REPLY_SETTINGS, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, X_REPLY_SETTINGS, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -289,9 +289,50 @@ function WordPressSettings({ settings, onChange, disabled }: { settings: Record<
 
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
 // inboxOffered: the channel's connection was granted video.upload, which Crove asks for only where the deployment turns
-// TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903).
-function ProviderSettings({ provider, settings, onChange, disabled, inboxOffered = false }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean; inboxOffered?: boolean }) {
+// TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903). pinAllowed: the Telegram bot may pin in the channel, as read at
+// connect (#982).
+function ProviderSettings({
+  provider,
+  settings,
+  onChange,
+  disabled,
+  inboxOffered = false,
+  pinAllowed = false,
+}: {
+  provider: string;
+  settings: Record<string, unknown>;
+  onChange: (settings: Record<string, unknown>) => void;
+  disabled: boolean;
+  inboxOffered?: boolean;
+  pinAllowed?: boolean;
+}) {
   const t = useTranslations('social');
+  // Telegram (#982): a silent post, and a pin to the top of the channel once it is out. Only what is on is stored, so a
+  // variant left as it was keeps its content hash.
+  if (provider === 'telegram') {
+    const options = telegramOptionsOf(settings);
+    const current = options && options !== 'invalid' ? options : { silent: false, pin: false };
+    const set = (key: 'silent' | 'pin', on: boolean) => {
+      const next = { ...current, [key]: on };
+      const { telegram: _old, ...rest } = settings;
+      const kept = { ...(next.silent ? { silent: true } : {}), ...(next.pin ? { pin: true } : {}) };
+      onChange(Object.keys(kept).length > 0 ? { ...rest, telegram: kept } : rest);
+    };
+    return (
+      <div className="space-y-1.5">
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox checked={current.silent} disabled={disabled} onCheckedChange={(on) => set('silent', on === true)} />
+          {t('telegramSilent')}
+        </label>
+        {/* Greyed out where the bot may not pin; a pin already on can still be turned off. */}
+        <label className={cn('flex items-center gap-2 text-sm text-muted-foreground', !pinAllowed && !current.pin && 'opacity-60')}>
+          <Checkbox checked={current.pin} disabled={disabled || (!pinAllowed && !current.pin)} onCheckedChange={(on) => set('pin', on === true)} />
+          {t('telegramPin')}
+        </label>
+        {!pinAllowed && <p className="text-xs text-subtle-foreground">{t('telegramPinHint')}</p>}
+      </div>
+    );
+  }
   // Mastodon (#748): who sees the post, and an optional content warning shown before it.
   if (provider === 'mastodon') {
     const without = (key: string) => {
@@ -1230,7 +1271,7 @@ function ChannelEditor({
           />
         </div>
       )}
-      <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} inboxOffered={scopes?.includes('video.upload') ?? false} onChange={(settings) => onChange({ ...own, settings })} />
+      <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} inboxOffered={scopes?.includes('video.upload') ?? false} pinAllowed={scopes?.includes(TELEGRAM_PIN_SCOPE) ?? false} onChange={(settings) => onChange({ ...own, settings })} />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       <PlatformPreview channel={channel} provider={provider} content={content} readLink />
@@ -2483,6 +2524,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                         )}
                       </div>
                     )}
+                    {v.pinStatus && <p className={v.pinStatus === 'failed' || v.pinStatus === 'not_allowed' || v.pinStatus === 'unknown' ? 'text-warning' : ''}>{t(`pinStatus.${v.pinStatus}`)}</p>}
                     {v.threadStatus && (
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown' ? 'text-warning' : ''}>

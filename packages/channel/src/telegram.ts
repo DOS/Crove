@@ -8,8 +8,12 @@
 // for an album of 2 to 10 photos and videos, the caption on the first. Files are uploaded with the call (photos up to
 // 10 MB, videos up to 50 MB), so a deployment storing files on local disk posts them too. The Bot API has no
 // idempotency key and cannot read a channel's history, so an unclear answer is left to a person (publishSafety 'never').
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
-import { removeResult } from './comment.ts';
+// Silent and pinned posts (#982): settings.telegram.silent sends every call of the post with disable_notification
+// (members get it without a sound); settings.telegram.pin pins the post afterwards with pinChatMessage, a second step of
+// its own (pin), so a refused pin never touches the post. In a channel a bot may pin when it may edit others' messages
+// (can_edit_messages; can_pin_messages is the right of groups), which connect reads into the connection's scopes.
+import type { CommentResult, ConnectedAccount, PinInput, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type Fetch } from './oauth.ts';
 
@@ -24,6 +28,15 @@ const USERNAME = /^@?([A-Za-z][A-Za-z0-9_]{4,31})$/;
 const CHAT_ID = /^-100\d{5,20}$/;
 // A post's id as publish returns it: the channel and the message.
 const POST_ID = /^(-100\d{5,20}):(\d{1,20})$/;
+// The scope a connection carries when its bot may pin messages in the channel (#982). modules/social names the same
+// string TELEGRAM_PIN_SCOPE, for the editor.
+export const TELEGRAM_PIN_SCOPE = 'can_pin_messages';
+
+// settings.telegram.silent (#982): true sends the post without a sound; anything else is a post as usual.
+function silentOf(settings: Readonly<Record<string, unknown>> | undefined): boolean {
+  const raw = settings?.telegram;
+  return Boolean(raw && typeof raw === 'object' && !Array.isArray(raw) && (raw as { silent?: unknown }).silent === true);
+}
 
 export interface TelegramSecret {
   botToken: string;
@@ -101,13 +114,15 @@ export async function connectTelegram(login: { botToken: string; channel: string
   if (typeof me.id !== 'number' || me.is_bot !== true) throw new ConnectorError('denied', 'not a bot token', 'TELEGRAM_TOKEN_REFUSED');
   const chat = await client.call<{ id?: unknown; type?: unknown; title?: unknown; username?: unknown }>(login.botToken, 'getChat', { chat_id: login.channel }).catch(failed);
   if (typeof chat.id !== 'number' || chat.type !== 'channel') throw new ConnectorError('denied', 'not a Telegram channel', 'TELEGRAM_NOT_A_CHANNEL');
-  const member = await client.call<{ status?: unknown; can_post_messages?: unknown }>(login.botToken, 'getChatMember', { chat_id: chat.id, user_id: me.id }).catch(failed);
+  const member = await client.call<{ status?: unknown; can_post_messages?: unknown; can_edit_messages?: unknown }>(login.botToken, 'getChatMember', { chat_id: chat.id, user_id: me.id }).catch(failed);
   const canPost = member.status === 'creator' || (member.status === 'administrator' && member.can_post_messages === true);
   if (!canPost) throw new ConnectorError('denied', 'the bot may not post in this channel', 'TELEGRAM_BOT_CANNOT_POST');
+  // The right to pin (#982): in a channel it comes with editing others' messages; the owner has every right.
+  const canPin = member.status === 'creator' || (member.status === 'administrator' && member.can_edit_messages === true);
   const username = typeof chat.username === 'string' && USERNAME.test(chat.username) ? chat.username : null;
   const title = typeof chat.title === 'string' && chat.title.trim() ? chat.title.trim() : username ? `@${username}` : 'Telegram';
   const secret: TelegramSecret = { botToken: login.botToken, username };
-  return { provider: 'telegram', externalAccountId: String(chat.id), displayName: title.slice(0, 200), scopes: [], expiresAt: null, secret: JSON.stringify(secret) };
+  return { provider: 'telegram', externalAccountId: String(chat.id), displayName: title.slice(0, 200), scopes: canPin ? [TELEGRAM_PIN_SCOPE] : [], expiresAt: null, secret: JSON.stringify(secret) };
 }
 
 // Team alerts (#863): the org's own chat for Social alerts, not a channel posts go to. A group or supergroup the bot
@@ -224,17 +239,19 @@ export class TelegramPublisher implements Publisher {
     // slow upload is not cut off after Telegram took the post (which would leave it unclear).
     const megabytes = media.reduce((sum, m) => sum + m.sizeBytes, 0) / 1_000_000;
     const client = new TelegramClient(this.fetchImpl, Math.min(30_000 + Math.ceil(megabytes) * 10_000, 600_000));
+    // A silent post (#982): every call of it goes out without a sound; a post as usual sends nothing more.
+    const quiet = silentOf(input.settings) ? { disable_notification: true } : {};
     let messageId: unknown;
     try {
       if (media.length === 0) {
-        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, 'sendMessage', { chat_id: chat, text })).message_id;
+        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, 'sendMessage', { chat_id: chat, text, ...quiet })).message_id;
       } else if (media.length === 1) {
         const one = media[0] as { mime: string };
         const method = isVideo(one) ? 'sendVideo' : 'sendPhoto';
-        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, method, { chat_id: String(chat), [isVideo(one) ? 'video' : 'photo']: 'attach://file0', ...(text ? { caption: text } : {}) }, files)).message_id;
+        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, method, { chat_id: String(chat), [isVideo(one) ? 'video' : 'photo']: 'attach://file0', ...(text ? { caption: text } : {}), ...quiet }, files)).message_id;
       } else {
         const group = media.map((m, i) => ({ type: isVideo(m) ? 'video' : 'photo', media: `attach://file${i}`, ...(i === 0 && text ? { caption: text } : {}) }));
-        const sent = await client.call<{ message_id?: unknown }[]>(s.botToken, 'sendMediaGroup', { chat_id: String(chat), media: group }, files);
+        const sent = await client.call<{ message_id?: unknown }[]>(s.botToken, 'sendMediaGroup', { chat_id: String(chat), media: group, ...quiet }, files);
         messageId = sent[0]?.message_id;
       }
     } catch (error) {
@@ -242,6 +259,27 @@ export class TelegramPublisher implements Publisher {
     }
     if (typeof messageId !== 'number') return { kind: 'unknown', code: 'NO_MESSAGE_ID' };
     return { kind: 'accepted', externalId: `${chat}:${messageId}`, url: s.username ? `https://t.me/${s.username}/${messageId}` : null };
+  }
+
+  // Pins the channel's message (#982) with pinChatMessage; an album is named by its first message, which is pinned.
+  // disable_notification follows the post's silence (Telegram never announces a pin in a channel, so it only matters
+  // elsewhere). A bot without the right to pin is told "not enough rights": TELEGRAM_CANNOT_PIN, for a person to fix in
+  // Telegram. Nothing here touches the post.
+  async pin(input: PinInput): Promise<CommentResult> {
+    const s = telegramSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_BOT_TOKEN' };
+    const parts = POST_ID.exec(input.externalId);
+    if (!parts || parts[1] !== input.externalAccountId) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const client = new TelegramClient(this.fetchImpl);
+    try {
+      await client.call<boolean>(s.botToken, 'pinChatMessage', { chat_id: parts[1], message_id: Number(parts[2]), ...(input.silent ? { disable_notification: true } : {}) });
+      return { kind: 'accepted', externalId: input.externalId };
+    } catch (error) {
+      if (error instanceof TelegramError && (error.status === 400 || error.status === 403) && /not enough rights|CHAT_ADMIN_REQUIRED/i.test(error.message)) {
+        return { kind: 'rejected', error: 'permission', code: 'TELEGRAM_CANNOT_PIN', message: error.message };
+      }
+      return commentResult(telegramResult(error));
+    }
   }
 
   // Deletes the channel's message (#860) with deleteMessage. An album is named by its first message, the one with the

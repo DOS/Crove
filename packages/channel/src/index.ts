@@ -219,6 +219,18 @@ export interface RepostInput {
   callKey: string;
 }
 
+// Pinning the account's own published post to the top of its chat (#982, Telegram). It answers like a comment: the
+// pinned message's id when accepted. silent: the post went out without a sound, and so does the pin.
+export interface PinInput {
+  externalAccountId: string;
+  secret: string;
+  // The published post's id, as publish returned it (an album's first message).
+  externalId: string;
+  silent: boolean;
+  // The external_call key of this pin.
+  callKey: string;
+}
+
 export type CommentResult =
   | { kind: 'accepted'; externalId: string }
   | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string }
@@ -264,6 +276,8 @@ export interface Publisher {
   comment?(input: CommentInput): Promise<CommentResult>;
   // Providers that repost the account's own post (#773). Never retried by itself, like a comment.
   repost?(input: RepostInput): Promise<CommentResult>;
+  // Providers that pin a published post (#982). Never retried by itself, like a comment.
+  pin?(input: PinInput): Promise<CommentResult>;
   // Providers that take a published post down (#860), when a person asks.
   remove?(input: RemoveInput): Promise<RemoveResult>;
 }
