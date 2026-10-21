@@ -187,6 +187,11 @@ export const contract = {
     connectTelegram: oc
       .input(z.object({ botToken: z.string().trim().min(1).max(100), channel: z.string().trim().min(1).max(100) }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    // A Discord channel (#832): the URL of a webhook a server admin made in the channel's settings. The server checks the
+    // webhook with Discord, then seals its token; the format is checked by the server, in words.
+    connectDiscord: oc
+      .input(z.object({ webhookUrl: z.string().trim().min(1).max(300) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     // Connecting through a provider's OAuth dialog (Social plan S6). Start returns where to send the browser; the
     // provider sends it back to /channels/oauth/:provider/callback, and that screen finishes the attempt with the code
     // and state. Finish connects every account the grant covers (for Facebook, the Pages picked in Meta's dialog).
@@ -324,6 +329,10 @@ export const contract = {
       // postId: that post's published channels, whenever they went out.
       // labelId: only posts with that label (#639).
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional(), labelId: zId.optional() })).output(z.array(zSocialMetricsRow)),
+      // The window's totals over every published channel (#397), summed by the server.
+      totals: oc
+        .input(z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() }))
+        .output(z.object({ posts: z.number().int(), metrics: z.record(z.string(), z.number()), clicks: z.number().nullable() })),
       // What works (#705): each channel's posts against its own median, by label, format, weekday, hour and hashtag.
       insights: oc
         .input(z.object({ days: z.number().int().min(1).max(365), labelId: zId.optional(), timeZone: z.string().min(1).max(64) }))

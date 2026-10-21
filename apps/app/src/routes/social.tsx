@@ -94,6 +94,8 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
   const [days, setDays] = useState(30);
   const label = labelId ? { labelId } : {};
   const rows = useQuery(orpc.social.metrics.summary.queryOptions({ input: { days, ...label } }));
+  // The totals over every published channel of the window, summed by the server (#397); the list below stops at 500.
+  const totals = useQuery(orpc.social.metrics.totals.queryOptions({ input: { days, ...label } }));
   // The window as a CSV file, built and audited by the server, saved by the browser.
   const exportCsv = useMutation({
     mutationFn: () => client.social.metrics.export({ days, ...label }),
@@ -110,10 +112,10 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
   if (rows.isLoading) return <Spinner />;
   if (rows.error) return <ErrorText>{errorMessage(rows.error)}</ErrorText>;
   const data = rows.data ?? [];
-  const total = (name: string) => data.reduce((sum, r) => sum + (r.metrics[name] ?? 0), 0);
+  const total = (name: string) => totals.data?.metrics[name] ?? data.reduce((sum, r) => sum + (r.metrics[name] ?? 0), 0);
   // Clicks on Crove's short links (#706), where a channel sends its links through them.
-  const hasClicks = data.some((r) => r.clicks !== null);
-  const clicks = data.reduce((sum, r) => sum + (r.clicks ?? 0), 0);
+  const clicks = totals.data ? totals.data.clicks : data.some((r) => r.clicks !== null) ? data.reduce((sum, r) => sum + (r.clicks ?? 0), 0) : null;
+  const hasClicks = clicks !== null;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -129,6 +131,8 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
         )}
       </div>
       {exportCsv.error && <ErrorText>{errorMessage(exportCsv.error)}</ErrorText>}
+      {/* Without the server's totals the cards sum the listed rows only. */}
+      {totals.error && <ErrorText>{errorMessage(totals.error)}</ErrorText>}
       {exportCsv.data?.truncated && <p className="text-xs text-warning">{t('metricsExportCut')}</p>}
       <AccountGrowth days={days} names={names} />
       {data.length === 0 ? (
@@ -139,17 +143,17 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
             {METRIC_COLUMNS.map((m) => (
               <Card key={m} className="block p-4">
                 <p className="text-xs text-subtle-foreground">{t(`metric.${m}`)}</p>
-                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{f.number(total(m))}</p>
+                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{totals.isLoading ? '…' : f.number(total(m))}</p>
               </Card>
             ))}
             {hasClicks && (
               <Card className="block p-4">
                 <p className="text-xs text-subtle-foreground">{t('metricsClicks')}</p>
-                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{f.number(clicks)}</p>
+                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{totals.isLoading ? '…' : f.number(clicks ?? 0)}</p>
               </Card>
             )}
           </div>
-          {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t('metricsCapped')}</p>}
+          {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t(totals.data ? 'metricsCapped' : 'metricsCappedPartial')}</p>}
           <BestTimes rows={data} names={names} />
       <WhatWorks slug={slug} days={days} labelId={labelId} names={names} />
           <TopPosts rows={data} names={names} slug={slug} />

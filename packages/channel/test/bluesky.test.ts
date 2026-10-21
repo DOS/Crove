@@ -1,6 +1,6 @@
 // Bluesky against recorded XRPC answers (shapes from the AT Protocol lexicons); no live call.
 import { describe, expect, it } from 'vitest';
-import { BlueskyPublisher, connectBluesky, isBlueskyHost, linkFacets, type Fetch, type PublishInput } from '../src/index.ts';
+import { BlueskyPublisher, connectBluesky, isBlueskyHost, linkFacets, pdsOrigin, type Fetch, type PublishInput } from '../src/index.ts';
 
 const DID = 'did:plc:abc123def456ghi789jkl012';
 const PDS = 'https://morel.us-east.host.bsky.network';
@@ -17,7 +17,9 @@ function xrpc(routes: Record<string, { status?: number; body: unknown }[]>) {
     const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
     const headers = new Headers(init?.headers);
     calls.push({ route, auth: headers.get('authorization'), json: typeof init?.body === 'string' ? JSON.parse(init.body) : null, type: headers.get('content-type') });
-    const answer = routes[route]?.shift() ?? { status: 500, body: { error: 'InternalServerError', message: `no answer for ${route}` } };
+    // A Bluesky-hosted DID document unless a test says otherwise: a publish reads it before signing in (#804).
+    const hosted: { status?: number; body: unknown } | null = route === `GET plc.directory/${DID}` ? { body: { id: DID, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: PDS }] } } : null;
+    const answer = routes[route]?.shift() ?? hosted ?? { status: 500, body: { error: 'InternalServerError', message: `no answer for ${route}` } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
   };
   return { calls, fetchImpl };
@@ -100,8 +102,8 @@ describe('Bluesky on its own PDS (#792)', () => {
     const publisher = new BlueskyPublisher(bluesky.fetchImpl, egress.fetchImpl);
     expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kown` });
     expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kown2` });
-    // The DID needs no handle lookup; the second publish skips bsky.social and the directory.
-    expect(bluesky.calls.map((c) => c.route)).toEqual(['POST bsky.social/xrpc/com.atproto.server.createSession', `GET plc.directory/${DID}`]);
+    // The DID is looked up first, so bsky.social never sees the password (#804); the second publish reuses the lookup.
+    expect(bluesky.calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`]);
     expect(egress.calls.map((c) => c.route)).toEqual([
       'POST pds.example.org/xrpc/com.atproto.server.createSession',
       'POST pds.example.org/xrpc/com.atproto.repo.createRecord',
@@ -136,6 +138,36 @@ describe('Bluesky on its own PDS (#792)', () => {
     await expect(connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl)).rejects.toMatchObject({ code: 'BadSession' });
   });
 
+  it('reads a Bluesky-hosted DID once while it is fresh, so a revoked password costs no directory read', async () => {
+    const revoked = xrpc({
+      [`GET plc.directory/${DID}`]: [doc(PDS)],
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [refused, refused],
+    });
+    const publisher = new BlueskyPublisher(revoked.fetchImpl);
+    for (let i = 0; i < 2; i += 1) expect(await publisher.publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    expect(revoked.calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`, 'POST bsky.social/xrpc/com.atproto.server.createSession', 'POST bsky.social/xrpc/com.atproto.server.createSession']);
+  });
+
+  it('sends the password nowhere when the DID document cannot be read or names no PDS Crove calls', async () => {
+    for (const answer of [{ status: 503, body: {} }, doc('https://10.0.0.5'), { body: { id: DID, service: [] } }]) {
+      const down = xrpc({ [`GET plc.directory/${DID}`]: [answer], 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+      const egress = xrpc({});
+      expect(await new BlueskyPublisher(down.fetchImpl, egress.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'transient' });
+      expect(down.calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`]);
+      expect(egress.calls).toHaveLength(0);
+    }
+    // A did:web account without an egress fetch: its document host is not reachable, so nothing is sent either.
+    const web = 'did:web:pds.example.org';
+    const plain = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+    expect(await new BlueskyPublisher(plain.fetchImpl).publish(input({ externalAccountId: web, secret: JSON.stringify({ identifier: web, appPassword: APP_PASSWORD }) }))).toMatchObject({ kind: 'rejected', error: 'transient' });
+    expect(plain.calls).toHaveLength(0);
+  });
+
+  it('takes a PDS on an IDN top-level domain in its xn-- form (#804)', () => {
+    expect(pdsOrigin('https://pds.example.xn--p1ai')).toBe('https://pds.example.xn--p1ai');
+    expect(pdsOrigin('https://pds.example.xn--')).toBeNull();
+  });
+
   it('looks the account up again when its PDS refuses the login, as after a move', async () => {
     const moved = 'https://pds2.example.org';
     const bluesky = xrpc({
@@ -163,11 +195,12 @@ describe('BlueskyPublisher', () => {
     });
     const result = await new BlueskyPublisher(fetchImpl).publish(input());
     expect(result).toEqual({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kabc`, url: 'https://bsky.app/profile/quan-a.bsky.social/post/3kabc' });
-    const record = (calls[1]?.json as { record: { text: string; facets: unknown[] } } | undefined)?.record;
+    const post = calls.find((c) => c.route.endsWith('/com.atproto.repo.createRecord'));
+    const record = (post?.json as { record: { text: string; facets: unknown[] } } | undefined)?.record;
     if (!record) throw new Error('no record');
     expect(record.text).toBe('Khai trương! Xem https://example.com/a');
     expect(record.facets).toEqual(linkFacets(record.text));
-    expect(calls[1]?.auth).toBe('Bearer access-jwt-1');
+    expect(post?.auth).toBe('Bearer access-jwt-1');
   });
 
   it('counts facet offsets in UTF-8 bytes', () => {
@@ -184,8 +217,8 @@ describe('BlueskyPublisher', () => {
     });
     const content = { body: 'Ảnh mới', title: null, linkUrl: null, media: [{ fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 3, altText: 'Mặt tiền' }] };
     expect((await new BlueskyPublisher(fetchImpl).publish(input({ content }))).kind).toBe('accepted');
-    expect(calls[1]?.type).toBe('image/jpeg');
-    expect((calls[2]?.json as { record: { embed: unknown } } | undefined)?.record.embed).toEqual({ $type: 'app.bsky.embed.images', images: [{ alt: 'Mặt tiền', image: { $type: 'blob', ref: { $link: 'bafyimg' }, mimeType: 'image/jpeg', size: 3 } }] });
+    expect(calls.find((c) => c.route.endsWith('/com.atproto.repo.uploadBlob'))?.type).toBe('image/jpeg');
+    expect((calls.find((c) => c.route.endsWith('/com.atproto.repo.createRecord'))?.json as { record: { embed: unknown } } | undefined)?.record.embed).toEqual({ $type: 'app.bsky.embed.images', images: [{ alt: 'Mặt tiền', image: { $type: 'blob', ref: { $link: 'bafyimg' }, mimeType: 'image/jpeg', size: 3 } }] });
   });
 
   it('maps a revoked app password to token_expired and an outage after the post to unknown', async () => {
@@ -220,6 +253,7 @@ describe('Bluesky edge answers', () => {
     const fetchImpl: Fetch = async (input) => {
       const url = new URL(input);
       calls.push(url.pathname);
+      if (url.host === 'plc.directory') return new Response(JSON.stringify({ id: DID, service: [{ id: '#atproto_pds', serviceEndpoint: PDS }] }), { status: 200 });
       if (url.pathname.endsWith('createSession')) return new Response(JSON.stringify(session().body), { status: 200 });
       return new Response('', { status: 200 });
     };

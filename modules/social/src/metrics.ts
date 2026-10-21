@@ -22,6 +22,10 @@ const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 export const METRICS_INTERVAL_SECONDS = 6 * 3600;
 export const METRICS_SWEEP_MS = 15 * 60_000;
 const METRICS_LIMIT = 200;
+// A pass asks a few platforms at once (#397): at most METRICS_CONCURRENCY variants in flight, METRICS_PER_PROVIDER on
+// one platform, so a slow platform cannot hold the pass and none is asked many things at once.
+const METRICS_CONCURRENCY = 6;
+const METRICS_PER_PROVIDER = 2;
 const ACTOR: SystemActor = { type: 'system', component: 'social.metrics' };
 
 const zCount = z.number().int().min(0).max(1e12);
@@ -100,6 +104,43 @@ export const metricsSummary = defineQuery({
 
 // What the screens show at most, and what one export holds at most (it says when it was cut).
 const SUMMARY_LIMIT = 500;
+
+// The window's totals (#397), summed in SQL over every published channel, not only the rows the summary lists: the
+// last real answer of each, and the clicks on its short links (null when no channel sent links through them).
+export const metricsTotals = defineQuery({
+  name: 'social.metrics.totals',
+  input: z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() }),
+  access: ALL,
+  handler: async (ctx, input): Promise<{ posts: number; metrics: Record<string, number>; clicks: number | null }> => {
+    const labelled = input.labelId
+      ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${input.labelId}::uuid)`
+      : sql``;
+    const { rows } = await sql<{ posts: string; metrics: Record<string, number>; clicks: string | null }>`
+      WITH v AS (
+        SELECT v.org_id, v.id FROM crove_social.post_variant v
+        WHERE v.org_id = ${ctx.orgId} AND v.status = 'published'
+          AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${input.days ?? 30}::int) ${labelled}
+      ), latest AS (
+        SELECT s.metrics FROM v CROSS JOIN LATERAL (
+          SELECT m.metrics FROM crove_social.metric_snapshot m
+          WHERE m.org_id = v.org_id AND m.variant_id = v.id
+          ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
+        ) s
+      )
+      SELECT (SELECT count(*) FROM v) AS posts,
+             (SELECT coalesce(jsonb_object_agg(t.key, t.total), '{}'::jsonb) FROM (
+                SELECT e.key, sum((e.value #>> '{}')::numeric) AS total FROM latest, jsonb_each(latest.metrics) e
+                WHERE jsonb_typeof(e.value) = 'number' GROUP BY e.key
+              ) t) AS metrics,
+             (SELECT CASE WHEN count(l.id) = 0 THEN NULL ELSE coalesce(sum(c.clicks), 0) END FROM v
+              JOIN crove_social.short_link l ON l.org_id = v.org_id AND l.variant_id = v.id
+              LEFT JOIN crove_social.short_link_click c ON c.org_id = l.org_id AND c.short_link_id = l.id) AS clicks`.execute(ctx.trx);
+    const row = rows[0];
+    const metrics: Record<string, number> = {};
+    for (const [name, value] of Object.entries(row?.metrics ?? {})) metrics[name] = Number(value);
+    return { posts: Number(row?.posts ?? 0), metrics, clicks: row?.clicks === null || row?.clicks === undefined ? null : Number(row.clicks) };
+  },
+});
 export const EXPORT_LIMIT = 10_000;
 
 interface MetricsFilter {
@@ -293,7 +334,7 @@ export const metricsInsights = defineQuery({
 });
 
 export const metricsCommands = [metricsRecord, metricsExport];
-export const metricsQueries = [metricsTarget, metricsSummary, metricsInsights];
+export const metricsQueries = [metricsTarget, metricsSummary, metricsTotals, metricsInsights];
 
 interface SealedChannelCredential {
   provider: string;
@@ -320,7 +361,7 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
   const { rows } = await sql<{ org_id: string; variant_id: string; provider: string }>`
     SELECT org_id, variant_id, provider FROM crove_social.metrics_due(${METRICS_LIMIT}::int, ${providers}::text[], ${METRICS_INTERVAL_SECONDS}::int)`.execute(deps.workerDb);
   const key = captureKey(deps.now?.() ?? new Date());
-  for (const row of rows) {
+  await eachBounded(rows, async (row) => {
     const publisher = deps.publishers[row.provider];
     try {
       const options = { actor: ACTOR, orgId: row.org_id };
@@ -356,6 +397,28 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
       if (!(error instanceof DomainError)) console.warn(`[social-metrics] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error);
       out.skipped += 1;
     }
-  }
+  });
   return out;
+}
+
+// Runs each row, METRICS_CONCURRENCY at a time and METRICS_PER_PROVIDER at a time per platform, in the scan's order
+// otherwise. run never throws: each row catches its own failure.
+async function eachBounded<T extends { provider: string }>(rows: readonly T[], run: (row: T) => Promise<void>): Promise<void> {
+  const waiting = [...rows];
+  const busy = new Map<string, number>();
+  const running = new Set<Promise<void>>();
+  while (waiting.length > 0 || running.size > 0) {
+    const next = running.size < METRICS_CONCURRENCY ? waiting.findIndex((r) => (busy.get(r.provider) ?? 0) < METRICS_PER_PROVIDER) : -1;
+    if (next === -1) {
+      await Promise.race(running);
+      continue;
+    }
+    const row = waiting.splice(next, 1)[0] as T;
+    busy.set(row.provider, (busy.get(row.provider) ?? 0) + 1);
+    const task: Promise<void> = run(row).finally(() => {
+      busy.set(row.provider, (busy.get(row.provider) ?? 1) - 1);
+      running.delete(task);
+    });
+    running.add(task);
+  }
 }

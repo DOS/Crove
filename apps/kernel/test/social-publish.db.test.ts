@@ -970,6 +970,28 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(read).toEqual({ [video.fileId]: 'read', [cover.fileId]: 'read', [stray.fileId]: 'refused' });
   });
 
+  it('asks one platform about two variants at a time at most, and totals every published channel in SQL (#397)', async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    const { variants } = await duePost(o, 4);
+    for (const id of variants) expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, id as string, 'sandbox')).toMatchObject({ status: 'published' });
+    let inFlight = 0;
+    let most = 0;
+    const metrics = platform.metrics.bind(platform);
+    platform.metrics = async (input) => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      inFlight -= 1;
+      return metrics(input);
+    };
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    expect(most).toBe(2);
+    const totals = await api.query<{ posts: number; metrics: Record<string, number>; clicks: number | null }>('social.metrics.totals', {}, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(totals).toEqual({ posts: 4, metrics: expect.objectContaining({ impressions: 160, reach: 120, reactions: 12 }), clicks: null });
+    expect(await api.query('social.metrics.totals', { days: 1, labelId: randomUUID() }, { actor: asUser(o.owner), orgId: o.orgId })).toEqual({ posts: 0, metrics: {}, clicks: null });
+  });
+
   // S8 (#238): the metrics sweep asks the platform about published variants and keeps a snapshot per 6-hour capture.
   it('captures metrics of published variants once per capture and shows the latest in the summary', async () => {
     const o = await org();

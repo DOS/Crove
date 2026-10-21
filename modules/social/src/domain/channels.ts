@@ -18,6 +18,7 @@ export const PROVIDERS = [
   'telegram',
   'mastodon',
   'pinterest',
+  'discord',
 ] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -113,6 +114,7 @@ export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
   mastodon: 'text',
   // The pin leads to the link itself (#798).
   pinterest: 'apart',
+  discord: 'text',
 };
 
 // The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
@@ -256,14 +258,18 @@ export function topicTagOf(settings: Readonly<Record<string, unknown>> | undefin
 
 // Google Business Profile posts (#709), in the variant's settings (`settings.gbp`): a topic (a standard post, an event
 // or an offer), an optional call to action (its URL is the post's link; CALL needs none), an event's title and dates
-// (YYYY-MM-DD, times HH:MM optional) for events and offers, and an offer's coupon code and terms. The adapter's
+// (YYYY-MM-DD, times HH:MM optional) for events and offers, an offer's coupon code and terms, and the post's language. The adapter's
 // gbpSettingsOf in @crove/channel reads the same shape.
 export const GBP_TOPICS = ['STANDARD', 'EVENT', 'OFFER'] as const;
 export const GBP_CTAS = ['BOOK', 'ORDER', 'SHOP', 'LEARN_MORE', 'SIGN_UP', 'CALL'] as const;
 export type GbpTopic = (typeof GBP_TOPICS)[number];
 export type GbpCta = (typeof GBP_CTAS)[number];
+// The post's language (#730), Vietnamese when unsaid.
+export const GBP_LANGUAGES = ['vi', 'en', 'zh', 'ja', 'ko'] as const;
+export type GbpLanguage = (typeof GBP_LANGUAGES)[number];
 export interface Gbp {
   topic: GbpTopic;
+  language: GbpLanguage;
   cta: GbpCta | null;
   event: { title: string; startDate: string; startTime: string; endDate: string; endTime: string };
   offer: { couponCode: string; terms: string };
@@ -278,6 +284,7 @@ export function gbpOf(settings: Readonly<Record<string, unknown>> | undefined): 
   const o = (g.offer && typeof g.offer === 'object' ? g.offer : {}) as Record<string, unknown>;
   return {
     topic: (GBP_TOPICS as readonly unknown[]).includes(g.topic) ? (g.topic as GbpTopic) : 'STANDARD',
+    language: (GBP_LANGUAGES as readonly unknown[]).includes(g.language) ? (g.language as GbpLanguage) : 'vi',
     cta: (GBP_CTAS as readonly unknown[]).includes(g.cta) ? (g.cta as GbpCta) : null,
     event: { title: asText(e.title), startDate: asText(e.startDate), startTime: asText(e.startTime), endDate: asText(e.endDate), endTime: asText(e.endTime) },
     offer: { couponCode: asText(o.couponCode), terms: asText(o.terms) },
@@ -357,7 +364,7 @@ export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> 
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon', 'bluesky', 'pinterest']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -506,6 +513,18 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['media.max'],
+  },
+  // Discord channels (#832), posted to through a webhook: a message of 2,000 characters (counted in UTF-16, never under
+  // Discord's own count) and up to 10 images and videos uploaded with the call, 10 MB each and 25 MB for the whole
+  // message (the adapter checks the sum). Discord shows the link's preview itself.
+  discord: {
+    provider: 'discord',
+    body: { max: 2000, count: 'utf16', required: false },
+    title: null,
+    media: { min: 0, max: 10, kinds: ['image', 'video'], mixed: true, maxVideos: 10, imageTypes: ['image/jpeg', 'image/png', 'image/webp'], maxImageBytes: 10 * MB, maxVideoBytes: 10 * MB, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: true,
+    unverified: [],
   },
 };
 

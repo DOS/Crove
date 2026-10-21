@@ -41,6 +41,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.watermark',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -740,6 +741,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     noInsertControl: 'only the redirect definer counts clicks, for a visitor following the link; tenant roles may only read them',
   },
   'crove_social.snippet': { make: (o) => ({ row: { org_id: o.id, name: `rls-${tag()}`, body: '#rls', created_by: o.owner } }) },
+  // The org's logo watermark for post images (#834): the logo file, a corner, a size and an opacity.
+  'crove_social.watermark': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), file_id: o.file, corner: 'bottom_right', scale_percent: 20, opacity_percent: 80, updated_by: o.owner } }) },
 };
 
 function insertSql(row: Row): { text: string; values: Array<string | number> } {
