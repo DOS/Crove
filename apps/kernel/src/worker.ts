@@ -671,6 +671,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     }
   };
   const sizeTimer = deps.runtime.installed('social') ? setInterval(() => void sizeSweep(), IMAGE_SIZE_SWEEP_MS) : null;
+  if (sizeTimer) void sizeSweep();
 
   // Metrics of published posts (S8): every 15 minutes, the variants whose last capture is older than 6 hours.
   let measuring = false;

@@ -4,7 +4,7 @@
 // that cannot be read is tried again only on the next round, a day later, never holding the others.
 import { sql } from 'kysely';
 import type { Db } from '@crove/db';
-import { readVerified, type BlobStore, type Runtime, type SystemActor } from '@crove/kernel-runtime';
+import { BlobIntegrityError, BlobNotFoundError, BlobTooLargeError, readVerified, type BlobStore, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { imageSize } from './media-probe.ts';
 
 export const IMAGE_SIZE_SWEEP_MS = 10 * 60_000;
@@ -28,6 +28,9 @@ export async function backfillImageSizes(deps: { runtime: Runtime; workerDb: Db;
   const { rows } = await sql<{ org_id: string; file_id: string; storage_key: string; generation: string | null; sha256: string; content_type: string }>`
     SELECT org_id, file_id, storage_key, generation, sha256, content_type FROM crove_kernel.image_size_due(${state.after}::uuid, ${BATCH}::int)`.execute(deps.workerDb);
   const out = { recorded: 0, unreadable: 0 };
+  // A failure that is not a header Crove cannot read (storage or the database away): the round does not end on it,
+  // so those files are tried again on the next pass rather than a day later.
+  let failed = false;
   for (const row of rows) {
     try {
       const bytes = await readVerified(deps.store, { key: row.storage_key, generation: row.generation, sha256: row.sha256 });
@@ -40,9 +43,12 @@ export async function backfillImageSizes(deps: { runtime: Runtime; workerDb: Db;
       if (done.recorded) out.recorded += 1;
     } catch (error) {
       out.unreadable += 1;
+      // A file that is gone, changed or too large stays unreadable; anything else may pass on the next try.
+      if (!(error instanceof BlobNotFoundError || error instanceof BlobIntegrityError || error instanceof BlobTooLargeError)) failed = true;
       console.warn(`[image-size] file ${row.file_id.slice(0, 8)}`, error instanceof Error ? error.message : error);
     }
   }
+  if (failed) return out;
   if (rows.length < BATCH) {
     state.after = null;
     state.pausedUntil = now + ROUND_PAUSE_MS;
