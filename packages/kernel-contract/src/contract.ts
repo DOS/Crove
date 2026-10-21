@@ -81,6 +81,7 @@ import {
   zParty,
   zProposalStatus,
   zPurchaseDocument,
+  zSearchResult,
   zRole,
   zSession,
   zSessionRevoke,
@@ -656,6 +657,11 @@ export const contract = {
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),
+  },
+  // Every role (#673): parties by name or tax code, documents by series, number or party, journal entries by
+  // description or amount. Vietnamese marks and case are ignored, and each word matches the start of a word.
+  search: {
+    query: oc.input(z.object({ q: z.string().trim().min(2).max(100) })).output(zSearchResult),
   },
   journal: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zJournalEntry)),

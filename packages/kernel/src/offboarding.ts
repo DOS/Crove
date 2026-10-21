@@ -15,13 +15,14 @@ const OWNERS: readonly MemberRole[] = ['owner'];
 
 // The tables an export contains, with the columns left out. Machinery (idempotency keys, outbox, session records,
 // inbound address tokens and drop counts) is not tenant data and stays out; so do secrets: the inbound token (the
-// owner sees the address in the app) and invite token hashes. The snapshot reads as the system actor, so only tables
-// an owner may read in full belong here.
+// owner sees the address in the app) and invite token hashes. The search columns (#673) are left out too: the folded
+// words of the row's own columns. The snapshot reads as the system actor, so only tables an owner may read in full
+// belong here.
 export const EXPORT_TABLES = {
   'kernel.tenant': { from: 'crove_kernel.tenant', omit: ['inbound_token'] },
   'kernel.tenant_member': { from: 'crove_kernel.tenant_member', omit: [] },
   'kernel.member_invite': { from: 'crove_kernel.member_invite', omit: ['token_sha256'] },
-  'kernel.party': { from: 'crove_kernel.party', omit: [] },
+  'kernel.party': { from: 'crove_kernel.party', omit: ['search'] },
   'kernel.file': { from: 'crove_kernel.file', omit: [] },
   'kernel.inbound_message': { from: 'crove_kernel.inbound_message', omit: [] },
   'kernel.extraction': { from: 'crove_kernel.extraction', omit: [] },
@@ -40,11 +41,11 @@ export const EXPORT_TABLES = {
   'kernel.mail_message': { from: 'crove_kernel.mail_message', omit: [] },
   'kernel.mail_suppression': { from: 'crove_kernel.mail_suppression', omit: [] },
   'kernel.mail_event': { from: 'crove_kernel.mail_event', omit: [] },
-  'finance.purchase_document': { from: 'crove_finance.purchase_document', omit: [] },
+  'finance.purchase_document': { from: 'crove_finance.purchase_document', omit: ['search'] },
   'finance.purchase_line': { from: 'crove_finance.purchase_line', omit: [] },
   // The invoice's own VAT table by rate (#685).
   'finance.purchase_tax_rate': { from: 'crove_finance.purchase_tax_rate', omit: [] },
-  'finance.journal_entry': { from: 'crove_finance.journal_entry', omit: [] },
+  'finance.journal_entry': { from: 'crove_finance.journal_entry', omit: ['search'] },
   'finance.journal_line': { from: 'crove_finance.journal_line', omit: [] },
   'finance.vendor_account_rule': { from: 'crove_finance.vendor_account_rule', omit: [] },
   // The org's sub-accounts (#319): journal lines name them by code.

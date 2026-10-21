@@ -154,6 +154,7 @@ export interface FinanceJournalEntryTable {
   created_xact_id: ColumnType<string | null, NotGranted, NotGranted>;
   created_xact_start: ColumnType<Date | null, NotGranted, NotGranted>;
   reverses_entry_id: ColumnType<string | null, NotGranted, NotGranted>;
+  search: ColumnType<string | null, NotGranted, NotGranted>;
 }
 
 /** crove_finance.journal_line */
@@ -257,6 +258,7 @@ export interface FinancePurchaseDocumentTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   replaces_document_id: ColumnType<string | null, string | null, NotGranted>;
   direction: ColumnType<string, string | undefined, NotGranted>;
+  search: ColumnType<string | null, never, NotGranted>;
 }
 
 /** crove_finance.purchase_document_void */
@@ -625,6 +627,7 @@ export interface KernelPartyTable {
   version: Generated<number>;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  search: ColumnType<string | null, never, never>;
 }
 
 /** crove_kernel.position */

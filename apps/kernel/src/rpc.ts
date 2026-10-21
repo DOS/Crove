@@ -1056,6 +1056,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inFinance(context, (orgId, actor) => runtime.query('finance.documents.list', input, { actor, orgId })),
       ),
     },
+    search: {
+      query: os.search.query.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.search', input, { actor, orgId })),
+      ),
+    },
     journal: {
       list: os.journal.list.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.journal.list', input, { actor, orgId })),
