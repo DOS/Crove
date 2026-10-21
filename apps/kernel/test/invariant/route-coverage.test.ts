@@ -20,6 +20,7 @@ import { createHttpApp, type HttpDeps } from '../../src/http.ts';
 const PUBLIC: Record<string, string> = {
   '/healthz': 'liveness probe: says only that the process serves',
   '/readyz': 'readiness probe: schema and Supabase Auth grants, no tenant data',
+  '/version': 'the build id and the migrations missing from the ledger (#892); no tenant data',
   '/api/config': 'what the SPA needs before sign-in (auth URL, public links); no tenant data',
   '/status': 'the public status page (#678): one line per service, nothing about an org',
   '/auth/v1/*': 'the proxy to Supabase Auth, where sign-up and sign-in happen; it applies its own per-client limits',

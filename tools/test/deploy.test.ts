@@ -109,6 +109,64 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(existsSync(`${dir}/.deploy/lock`)).toBe(false);
   });
 
+  // #892: with --build, /version must report the build being deployed, so an old container that still answers fails.
+  describe('build check', () => {
+    const build = (c: string) => digest(c).slice(0, 12);
+    const withBuild = (release: string, c: string, env: Record<string, string> = {}) =>
+      run(['deploy', '--release', release, '--image', image(c), '--extract-image', extract(c), '--compose', compose, '--build', build(c)], env);
+    const versionCalls = () => readFileSync(log, 'utf8').split('\n').filter((l) => l.startsWith('curl ') && l.endsWith('/version'));
+
+    it('checks /version and records the build of the release', () => {
+      const res = withBuild('v1.0.0', 'a');
+      expect(res.status, res.out).toBe(0);
+      expect(res.out).toContain(`smoke ok: /version answers build ${build('a')} with every migration applied`);
+      expect(readFileSync(`${dir}/releases/${releaseDir('v1.0.0', 'a')}/release.env`, 'utf8')).toContain(`BUILD=${build('a')}\n`);
+    });
+
+    it('skips /version without --build (a release from before it)', () => {
+      expect(deploy('v1.0.0', 'a').status).toBe(0);
+      expect(versionCalls()).toEqual([]);
+      expect(readFileSync(`${dir}/releases/${releaseDir('v1.0.0', 'a')}/release.env`, 'utf8')).toContain('BUILD=\n');
+    });
+
+    it('rolls back when an old container answers instead of the new build', () => {
+      expect(deploy('v1.0.0', 'a').status).toBe(0);
+      const res = withBuild('v1.1.0', 'b', { STUB_STALE_DIGEST: digest('b') });
+      expect(res.status, res.out).toBe(1);
+      expect(res.out).toContain(`smoke: expected build ${build('b')} with no missing migration; /version answered: {"build":"stale","migrationsMissing":[]}`);
+      expect(res.out).toContain(`rolled back to ${releaseDir('v1.0.0', 'a')}, which serves again`);
+      expect(running()).toContain(image('a'));
+    });
+
+    it('rolls back when a committed migration is missing from the ledger', () => {
+      expect(deploy('v1.0.0', 'a').status).toBe(0);
+      rmSync(log);
+      const res = withBuild('v1.1.0', 'b', { STUB_MIGRATION_MISSING: '1' });
+      expect(res.status, res.out).toBe(1);
+      expect(res.out).toContain(`smoke failed: /version answers build ${build('b')} with every migration applied`);
+      // The release rolled back to was deployed without a build id: its smoke test does not ask /version.
+      expect(versionCalls()).toHaveLength(1);
+    });
+
+    it('checks the build of the release it rolls back to, when that release has one', () => {
+      expect(withBuild('v1.0.0', 'a').status).toBe(0);
+      const failed = withBuild('v1.1.0', 'b', { STUB_NO_BUNDLE_DIGEST: digest('b') });
+      expect(failed.status, failed.out).toBe(1);
+      expect(failed.out).toContain(`smoke ok: /version answers build ${build('a')} with every migration applied`);
+      expect(withBuild('v1.1.0', 'b').status).toBe(0);
+      rmSync(log);
+      const back = run(['rollback']);
+      expect(back.status, back.out).toBe(0);
+      expect(back.out).toContain(`smoke ok: /version answers build ${build('a')} with every migration applied`);
+    });
+
+    it('refuses a build id with other characters', () => {
+      const res = run(['deploy', '--release', 'v1.0.0', '--image', image('a'), '--extract-image', extract('a'), '--compose', compose, '--build', "a'b"]);
+      expect(res.status).toBe(2);
+      expect(res.out).toContain('--build must match');
+    });
+  });
+
   it('rolls the worker before the API when they run as separate services', () => {
     const res = deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract api worker' });
     expect(res.status, res.out).toBe(0);
@@ -325,6 +383,20 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
       for (const path of ['/healthz', '/readyz', '/api/config', '/auth/v1/health', '/login', '/assets/index-abc123.js']) {
         expect(urls).toContain(`curl https://crove.example.test${path}\n`);
       }
+    });
+
+    it('checks /version when given the build being deployed (#892)', () => {
+      const ok = run(['smoke', 'https://crove.example.test', 'dev']);
+      expect(ok.status, ok.out).toBe(0);
+      expect(ok.out).toContain('smoke ok: /version answers build dev with every migration applied');
+      const other = run(['smoke', 'https://crove.example.test', '0123456789ab']);
+      expect(other.status).toBe(1);
+      expect(other.out).toContain('smoke failed: /version answers build 0123456789ab with every migration applied');
+      const behind = run(['smoke', 'https://crove.example.test', 'dev'], { STUB_MIGRATION_MISSING: '1' });
+      expect(behind.status).toBe(1);
+      expect(behind.out).toContain('"migrationsMissing":["20990101000000_crove_kernel_next.sql"]');
+      expect(run(['smoke', 'https://crove.example.test']).out).not.toContain('/version');
+      expect(run(['smoke', 'https://crove.example.test', 'a b']).status).toBe(2);
     });
 
     it('fails, naming the check, when one does not answer', () => {

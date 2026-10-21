@@ -24,7 +24,7 @@ Until an environment has its secrets, a run still builds and pushes the release 
 
 ## What a deploy does
 
-The workflow builds `ghcr.io/<owner>/<repo>` (the kernel image, `Dockerfile`) and `ghcr.io/<owner>/<repo>-extract` (`apps/extract/Dockerfile`) from the release commit, tags them with the release name and passes them on **by digest**, so the host runs exactly what was built. It uploads `deploy.sh` and the release's `docker-compose.yml` to the host and runs, in this order:
+The workflow builds `ghcr.io/<owner>/<repo>` (the kernel image, `Dockerfile`, with the release commit as its `CROVE_BUILD`) and `ghcr.io/<owner>/<repo>-extract` (`apps/extract/Dockerfile`) from the release commit, tags them with the release name and passes them on **by digest**, so the host runs exactly what was built. It uploads `deploy.sh` and the release's `docker-compose.yml` to the host and runs, in this order:
 
 1. Pull both images by digest. The registry login uses the run's read-only token, sent over stdin into a throwaway Docker config that is deleted right after the pull: no credential stays on the host.
 2. Check that the compose files load with the env file (`docker compose config`). Nothing has changed yet.
@@ -42,15 +42,18 @@ Exit codes of `deploy.sh`: 0 done; 1 the deploy failed and the previous release 
 
 ## What the smoke test checks
 
-`deploy.sh smoke <base url>` (it needs only bash and curl, so you can run it from any machine):
+`deploy.sh smoke <base url> [build id]` (it needs only bash and curl, so you can run it from any machine):
 
 | Check | Why |
 |---|---|
 | `/healthz` answers `{"ok":true}` | the process serves |
 | `/readyz` answers `{"ready":true}` | the schema is complete and Supabase Auth's grants are in place |
+| with a build id: `/version` answers that `build` and `"migrationsMissing":[]` | the new image answers, not an old container that is still running, and its migrations are all in the ledger |
 | `/api/config` answers with `authUrl` | the API and its configuration load |
 | `/auth/v1/health` answers | Supabase Auth is reachable through the kernel's proxy, the path every sign-in takes |
 | `/login` serves the app shell and its first script bundle loads | the sign-in page loads in a browser |
+
+The workflow passes the release commit as the build id, to `deploy.sh deploy --build` (the smoke test on the host, recorded in the release's `release.env`) and to the smoke test through the public URL. A rollback checks the build of the release it returns to when that release was deployed with one; a release from before `/version` has none and skips the check.
 
 With the smoke account set up (below), the workflow's smoke test through the public URL adds one more check:
 

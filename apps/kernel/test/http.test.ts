@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -184,6 +184,59 @@ describe('configuration guards', () => {
       termsUrl: 'https://crove.example.com/terms',
       privacyUrl: 'https://crove.example.com/privacy',
     });
+  });
+});
+
+// #892: the deploy's smoke test reads the build and the migrations missing from the ledger.
+describe('GET /version', () => {
+  const base = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: 'crove-auth', WEB_DIST: '/nonexistent' };
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'crove-version-'));
+    for (const name of ['20260101000000_crove_kernel_first.sql', '20260102000000_crove_kernel_second.sql']) writeFileSync(join(dir, name), 'SELECT 1;\n');
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  const app = (env: Record<string, string>, pool: Partial<pg.Pool>) =>
+    createHttpApp({
+      config: loadConfig({ ...base, MIGRATIONS_DIR: dir, ...env }),
+      runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+      store: {} as BlobStore,
+      authenticate: async () => {
+        throw new Error('not used');
+      },
+      pool: pool as pg.Pool,
+      aiEnabled: false,
+    });
+  const ledger = (versions: string[]) => {
+    const released = { count: 0 };
+    const pool = {
+      connect: async () => ({ query: async () => ({ rows: versions.map((version) => ({ version })) }), release: () => void (released.count += 1) }),
+    } as unknown as Partial<pg.Pool>;
+    return { pool, released };
+  };
+
+  it('answers the build and the committed migrations the ledger lacks, without a token', async () => {
+    const full = ledger(['20260101000000', '20260102000000']);
+    const answer = await app({ CROVE_BUILD: '0123456789abcdef0123456789abcdef01234567' }, full.pool).request('/version');
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ build: '0123456789abcdef0123456789abcdef01234567', migrationsMissing: [] });
+    expect(full.released.count).toBe(1);
+
+    const behind = await app({}, ledger(['20260101000000']).pool).request('/version');
+    expect(await behind.json()).toEqual({ build: 'dev', migrationsMissing: ['20260102000000_crove_kernel_second.sql'] });
+  });
+
+  it('answers 503 with the build when the database cannot be reached', async () => {
+    const down = await app({ CROVE_BUILD: 'v1.2.3' }, { connect: async () => Promise.reject(new Error('refused')) } as unknown as Partial<pg.Pool>).request('/version');
+    expect(down.status).toBe(503);
+    expect(await down.json()).toEqual({ build: 'v1.2.3', migrationsMissing: null });
+  });
+
+  it('takes a build id of letters, digits, dot, dash and underscore only', () => {
+    expect(loadConfig({ ...base, CROVE_BUILD: ' ' }).CROVE_BUILD).toBeUndefined();
+    for (const bad of ['a b', '<script>', 'x'.repeat(65)]) expect(() => loadConfig({ ...base, CROVE_BUILD: bad }), bad).toThrow(/CROVE_BUILD/);
   });
 });
 

@@ -366,6 +366,21 @@ export function createHttpApp(deps: HttpDeps) {
     }
   });
 
+  // The build and the committed migrations missing from the ledger (#892, plan §4.11), for the deploy's smoke test.
+  // Public like /readyz: migration names are in the source; nothing about an org.
+  app.get('/version', async (c) => {
+    const build = config.CROVE_BUILD ?? 'dev';
+    const client = await deps.pool.connect().catch(() => null);
+    if (!client) return c.json({ build, migrationsMissing: null }, 503);
+    try {
+      return c.json({ build, migrationsMissing: await schemaMissing(client, config.MIGRATIONS_DIR) });
+    } catch {
+      return c.json({ build, migrationsMissing: null }, 503);
+    } finally {
+      client.release();
+    }
+  });
+
   app.get('/api/config', (c) =>
     c.json({
       authUrl: publicAuthUrl(config),
