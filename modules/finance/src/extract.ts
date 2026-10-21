@@ -4,7 +4,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { ExtractClient, ExtractFailure } from '@crove/extract-contract';
-import { zId, zPurchaseProposal, type DocumentDirection, type PurchaseProposal } from '@crove/kernel-contract';
+import { zId, zLocalDate, zPurchaseProposal, zRelatedInvoiceRef, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
 import { defineQuery, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type InvoiceReader } from '@crove/agent';
 import { journalMemo } from './memo.ts';
@@ -64,12 +64,22 @@ export interface InvoiceLookup {
   vendorDefault: string | null;
   duplicateDocumentId: string | null;
   duplicateProposalId: string | null;
+  // The document in force of the invoice a replacement or an adjustment corrects (#916), or null.
+  relatedDocumentId: string | null;
 }
 
 export const purchaseLookup = defineQuery({
   name: 'finance.extraction.lookup',
   // fileId: the file being read. Its own proposals are not duplicates of it (a re-extraction revises them).
-  input: z.object({ fileId: zId, sellerTaxCode: z.string().nullable(), sellerName: z.string(), series: z.string(), number: z.string() }),
+  input: z.object({
+    fileId: zId,
+    sellerTaxCode: z.string().nullable(),
+    sellerName: z.string(),
+    series: z.string(),
+    number: z.string(),
+    // The invoice a replacement or an adjustment names (#916).
+    related: z.object({ series: z.string(), number: z.string() }).nullable().default(null),
+  }),
   access: 'system',
   handler: async (ctx, input): Promise<InvoiceLookup> => {
     const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
@@ -95,18 +105,22 @@ export const purchaseLookup = defineQuery({
       : undefined;
     // A document voided by a reversal (#165) is no longer in the books, so it is not a duplicate. A purchase from a
     // supplier not yet in the books has no document.
-    let documents = ctx.trx
-      .selectFrom('crove_finance.purchase_document as d')
-      .select('d.id')
-      .where('d.org_id', '=', ctx.orgId)
-      .where('d.direction', '=', sale ? 'sale' : 'purchase')
-      .where('d.invoice_series', '=', input.series)
-      .where('d.invoice_number', '=', input.number)
-      .where(({ not, exists, selectFrom }) =>
-        not(exists(selectFrom('crove_finance.purchase_document_void as v').select('v.document_id').whereRef('v.org_id', '=', 'd.org_id').whereRef('v.document_id', '=', 'd.id'))),
-      );
-    if (party) documents = documents.where('d.party_id', '=', party.id);
-    const document = sale || party ? await documents.executeTakeFirst() : undefined;
+    const inForce = (series: string, number: string) => {
+      let documents = ctx.trx
+        .selectFrom('crove_finance.purchase_document as d')
+        .select('d.id')
+        .where('d.org_id', '=', ctx.orgId)
+        .where('d.direction', '=', sale ? 'sale' : 'purchase')
+        .where('d.invoice_series', '=', series)
+        .where('d.invoice_number', '=', number)
+        .where(({ not, exists, selectFrom }) =>
+          not(exists(selectFrom('crove_finance.purchase_document_void as v').select('v.document_id').whereRef('v.org_id', '=', 'd.org_id').whereRef('v.document_id', '=', 'd.id'))),
+        );
+      if (party) documents = documents.where('d.party_id', '=', party.id);
+      return sale || party ? documents.executeTakeFirst() : Promise.resolve(undefined);
+    };
+    const document = await inForce(input.series, input.number);
+    const original = input.related ? await inForce(input.related.series, input.related.number) : undefined;
     const duplicate = await ctx.trx
       .selectFrom('crove_kernel.proposal')
       .select('id')
@@ -140,9 +154,59 @@ export const purchaseLookup = defineQuery({
       vendorDefault: rule?.debit_account ?? null,
       duplicateDocumentId: document?.id ?? null,
       duplicateProposalId: duplicate?.id ?? null,
+      relatedDocumentId: original?.id ?? null,
     };
   },
 });
+
+// The invoice a replacement or an adjustment corrects (#916), as the proposal keeps it: the date only when it is a
+// calendar date, the original's document when it is in force.
+function relatedRef(invoice: ParsedInvoice, documentId: string | null): RelatedInvoiceRef | null {
+  const related = invoice.related;
+  if (!related) return null;
+  const ref = {
+    kind: related.kind,
+    template: related.template?.slice(0, 50) ?? null,
+    series: related.series.slice(0, 50),
+    number: related.number.slice(0, 50),
+    issueDate: related.issueDate !== null && zLocalDate.safeParse(related.issueDate).success ? related.issueDate : null,
+    documentId,
+  };
+  return zRelatedInvoiceRef.safeParse(ref).success ? ref : null;
+}
+
+const RELATED_KIND_LABELS = { replacement: 'thay thế', adjustment: 'điều chỉnh' } as const;
+
+// Exported for the check-code test.
+export // Whether the original is in the books: a warning when it is not, so the approver looks before a replacement is
+// recorded next to an original it should have taken the place of.
+function relatedCheck(related: RelatedInvoiceRef): InvoiceCheck {
+  const invoice = `${related.series}/${related.number}`;
+  if (related.documentId === null) {
+    return {
+      id: 'related',
+      status: 'warn',
+      code: related.kind === 'replacement' ? 'related.replaces_missing' : 'related.adjusts_missing',
+      params: { invoice },
+      message: `Hóa đơn ${RELATED_KIND_LABELS[related.kind]} cho hóa đơn ${invoice}, nhưng chưa thấy hóa đơn gốc trong sổ; kiểm tra trước khi duyệt`,
+    };
+  }
+  return related.kind === 'replacement'
+    ? {
+        id: 'related',
+        status: 'pass',
+        code: 'related.replaces',
+        params: { invoice },
+        message: `Hóa đơn thay thế cho hóa đơn ${invoice}: khi duyệt, Crove đảo bút toán và hủy chứng từ của hóa đơn gốc`,
+      }
+    : {
+        id: 'related',
+        status: 'pass',
+        code: 'related.adjusts',
+        params: { invoice },
+        message: `Hóa đơn điều chỉnh cho hóa đơn ${invoice}: ghi sổ phần chênh lệch, liên kết với hóa đơn gốc`,
+      };
+}
 
 export interface ExtractDeps {
   runtime: Runtime;
@@ -280,7 +344,14 @@ export async function extractAndPropose(
   const sellerTaxCode = parseTaxCode(invoice.seller.taxCode)?.normalized ?? null;
   const lookup = await deps.runtime.query<InvoiceLookup>(
     'finance.extraction.lookup',
-    { fileId, sellerTaxCode, sellerName: invoice.seller.name, series: invoice.series, number: invoice.number },
+    {
+      fileId,
+      sellerTaxCode,
+      sellerName: invoice.seller.name,
+      series: invoice.series,
+      number: invoice.number,
+      related: invoice.related ? { series: invoice.related.series, number: invoice.related.number } : null,
+    },
     { actor, orgId },
   );
 
@@ -288,6 +359,8 @@ export async function extractAndPropose(
   if (lookup.duplicateDocumentId || lookup.duplicateProposalId) {
     checks.unshift({ id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
   }
+  const related = relatedRef(invoice, lookup.relatedDocumentId);
+  if (related) checks.push(relatedCheck(related));
   // A sale (issue #313) books every line to revenue; a purchase proposes an expense or asset account per line.
   const sale = lookup.direction === 'sale';
   const lines = sale ? bookableSaleLines(invoice) : bookableLines(invoice, lookup.vendorDefault);
@@ -313,6 +386,7 @@ export async function extractAndPropose(
       vatTotal: invoice.vatTotal,
       total: invoice.total,
       ...invoiceTaxTable(method, invoice),
+      ...(related ? { related } : {}),
     },
     lines,
     journal: sale ? buildSalesJournal(lines, invoice.vatTotal, memo) : buildPurchaseJournal(lines, invoice.vatTotal, memo),
