@@ -20,6 +20,9 @@ suite('load test on PostgreSQL (#998)', () => {
     expect(result.queries.map((q) => q.count)).toEqual([2, 2, 2, 2]);
     expect(result.outbox).toMatchObject({ produced: 20, relayed: 20, backlog: 1000 });
     expect(result.outbox.lagP95).not.toBeNull();
+    // pg_locks was sampled while the commands ran (T10); the sampler's own query holds at least one lock.
+    expect(result.locks.samples).toBeGreaterThan(0);
+    expect(result.locks.max).toBeGreaterThanOrEqual(1);
     // Every target but back-pressure (#894) gets a verdict from a measurement. Whether it passes depends on the
     // machine (a shared CI runner is not the pilot server), so the targets are checked by the full run in the runbook.
     expect(judge(result).map((v) => v.ok === null)).toEqual([false, false, false, false, true]);

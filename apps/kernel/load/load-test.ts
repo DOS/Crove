@@ -108,7 +108,16 @@ export interface LoadResult {
     drainSeconds: number;
     eventsPerSecond: number;
   };
+  // Locks held server-wide (pg_locks), sampled while the commands run: the context guard reads pg_locks on every
+  // context entry (plan §4.5 item 1, gate row T10).
+  locks: { samples: number; p50: number | null; p95: number | null; max: number | null };
 }
+
+// The guard's cost per context entry measured in #105: about 13 us with an idle lock table plus about 0.27 us per lock
+// held server-wide.
+export const GUARD_BASE_US = 13;
+export const GUARD_PER_LOCK_US = 0.27;
+export const guardCostUs = (locks: number) => GUARD_BASE_US + GUARD_PER_LOCK_US * locks;
 
 export interface LoadVerdict {
   check: string;
@@ -155,12 +164,44 @@ export function formatReport(result: LoadResult, verdicts: readonly LoadVerdict[
   const o = result.outbox;
   lines.push(`Outbox at ${o.rate}/s: ${o.produced} events produced, ${o.relayed} relayed, lag p95=${ms(o.lagP95)} max=${ms(o.lagMax)}`);
   lines.push(`Outbox backlog: ${o.backlog} events drained by one relay in ${o.drainSeconds.toFixed(2)} s (${o.eventsPerSecond.toFixed(1)}/s)`);
+  const l = result.locks;
+  if (l.samples > 0 && l.p95 !== null && l.max !== null) {
+    lines.push(`Locks held server-wide during the commands: n=${l.samples} p50=${l.p50} p95=${l.p95} max=${l.max}`);
+    lines.push(`  context guard cost per entry (#105: ${GUARD_BASE_US} us + ${GUARD_PER_LOCK_US} us per lock): ${guardCostUs(l.p95).toFixed(1)} us at p95, ${guardCostUs(l.max).toFixed(1)} us at max`);
+  } else {
+    lines.push('Locks held server-wide during the commands: no sample');
+  }
   lines.push('', 'Targets (plan §13 Phase 1, exit criterion 7):');
   for (const v of verdicts) lines.push(`  ${v.ok === null ? 'N/A ' : v.ok ? 'PASS' : 'FAIL'}  ${v.check}: ${v.measured} (target ${v.target})`);
   return lines.join('\n');
 }
 
 const sleep = (msec: number) => new Promise((resolve) => setTimeout(resolve, msec));
+
+// Counts pg_locks every intervalMs on its own connection until stop() is called, and returns the counts.
+function sampleLocks(adminUrl: string, intervalMs: number): { stop: () => Promise<number[]> } {
+  const counts: number[] = [];
+  let running = true;
+  const loop = (async () => {
+    const client = new pg.Client({ connectionString: adminUrl });
+    await client.connect();
+    try {
+      while (running) {
+        counts.push((await client.query<{ n: number }>('SELECT count(*)::int AS n FROM pg_catalog.pg_locks')).rows[0]?.n ?? 0);
+        await sleep(intervalMs);
+      }
+    } finally {
+      await client.end();
+    }
+  })();
+  return {
+    stop: async () => {
+      running = false;
+      await loop;
+      return counts;
+    },
+  };
+}
 
 async function timed(fn: () => Promise<unknown>): Promise<number> {
   const started = performance.now();
@@ -250,6 +291,7 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
     });
 
     log(`running ${args.commands} kernel.party.update and ${args.commands} kernel.file.ingest, ${args.concurrency} at a time`);
+    const lockSampler = sampleLocks(adminUrl, 100);
     const update = await pool(ids.length, args.concurrency, (i) =>
       runtime.execute(
         'kernel.party.update',
@@ -267,6 +309,7 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
       );
     };
     const ingestRun = await pool(args.commands, args.concurrency, ingest);
+    const lockCounts = await lockSampler.stop();
 
     log(`running the party queries ${args.queries} times each`);
     const queries: LoadResult['queries'] = [];
@@ -347,6 +390,12 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
         backlog: drained,
         drainSeconds,
         eventsPerSecond: drainSeconds > 0 ? drained / drainSeconds : 0,
+      },
+      locks: {
+        samples: lockCounts.length,
+        p50: percentile(lockCounts, 50),
+        p95: percentile(lockCounts, 95),
+        max: lockCounts.length ? Math.max(...lockCounts) : null,
       },
     };
   } finally {
