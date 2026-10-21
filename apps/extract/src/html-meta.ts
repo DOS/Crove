@@ -151,6 +151,8 @@ function mainText(html: string): string | null {
     .replace(BREAK, '\n')
     .replace(INLINE, '')
     .replace(TAG, ' ')
+    // What is left of a broken tag: no < or > reaches the text, so nothing in it can read as markup.
+    .replace(/[<>]/g, ' ')
     .split('\n')
     .map((line) => clean(line, EXTRACT_LIMITS.maxPageTextChars))
     .filter((line): line is string => line !== null);
