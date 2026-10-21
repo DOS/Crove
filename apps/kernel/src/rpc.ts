@@ -650,6 +650,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         save: os.social.chatAlert.save.handler(({ context, input }) =>
           guard(async () => {
             const scope = await chatAlertScope(context);
+            // The role first, as oauthConnector does: a member learns nothing about how the deployment is set up.
+            if (scope.role !== 'owner' && scope.role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới đổi được nhóm nhận báo');
             if (!channels) throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
             return saveChatAlert({ runtime, broker: channels.broker, saves: chatAlertSaves }, scope, input);
           }),

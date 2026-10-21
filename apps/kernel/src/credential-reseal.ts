@@ -72,7 +72,12 @@ export async function resealCredentials(deps: ResealDeps): Promise<ResealOutcome
         after = { sealed: last.sealed_at, id: last.connection_id };
       }
       const social = deps.runtime.installed('social');
-      if (social) await resealChatAlerts(deps, db, current, outcome);
+      // A failing chat alert pass (its scan, say) leaves the channel pass's outcome and the counts standing.
+      if (social) {
+        await resealChatAlerts(deps, db, current, outcome).catch((error: unknown) => {
+          console.error('[credential-reseal] chat alert pass', error instanceof Error ? error.name : typeof error);
+        });
+      }
       const { rows: counts } = await sql<{ key_id: string; active: string; inactive: string }>`SELECT key_id, active, inactive FROM crove_kernel.credential_key_counts()`.execute(db);
       const { rows: chatCounts } = social
         ? await sql<{ key_id: string; active: string; inactive: string }>`SELECT key_id, active, inactive FROM crove_social.chat_alert_target_key_counts()`.execute(db)

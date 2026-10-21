@@ -86,6 +86,20 @@ export function ChatAlertCard({ canEdit }: { canEdit: boolean }) {
       refresh();
     },
   });
+  // Only the error of what the person did last is shown: editing a field or starting another action clears the others.
+  const clearErrors = () => {
+    save.reset();
+    test.reset();
+    remove.reset();
+  };
+  const edit = (set: (value: string) => void) => (e: { target: { value: string } }) => {
+    clearErrors();
+    set(e.target.value);
+  };
+  const run = (action: { mutate: () => void }) => () => {
+    clearErrors();
+    action.mutate();
+  };
   const code = saved?.lastTestCode ?? null;
   const testLine =
     testing || test.isPending
@@ -129,13 +143,13 @@ export function ChatAlertCard({ canEdit }: { canEdit: boolean }) {
                 <Label htmlFor="chat-alert-token" className="text-xs">
                   {t('botToken')}
                 </Label>
-                <Input id="chat-alert-token" type="password" autoComplete="off" value={botToken} placeholder="123456789:AA..." onChange={(e) => setBotToken(e.target.value)} />
+                <Input id="chat-alert-token" type="password" autoComplete="off" value={botToken} placeholder="123456789:AA..." onChange={edit(setBotToken)} />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="chat-alert-chat" className="text-xs">
                   {t('chatId')}
                 </Label>
-                <Input id="chat-alert-chat" autoComplete="off" value={chatId} placeholder="-4012345678" onChange={(e) => setChatId(e.target.value)} />
+                <Input id="chat-alert-chat" autoComplete="off" value={chatId} placeholder="-4012345678" onChange={edit(setChatId)} />
               </div>
               <p className="text-xs text-subtle-foreground sm:col-span-2">{t('telegramHint')}</p>
             </div>
@@ -144,7 +158,7 @@ export function ChatAlertCard({ canEdit }: { canEdit: boolean }) {
               <Label htmlFor="chat-alert-webhook" className="text-xs">
                 {t('webhookUrl')}
               </Label>
-              <Input id="chat-alert-webhook" type="password" autoComplete="off" value={webhookUrl} placeholder="https://discord.com/api/webhooks/..." onChange={(e) => setWebhookUrl(e.target.value)} />
+              <Input id="chat-alert-webhook" type="password" autoComplete="off" value={webhookUrl} placeholder="https://discord.com/api/webhooks/..." onChange={edit(setWebhookUrl)} />
               <p className="text-xs text-subtle-foreground">{t('discordHint')}</p>
             </div>
           )}
@@ -159,12 +173,15 @@ export function ChatAlertCard({ canEdit }: { canEdit: boolean }) {
           </fieldset>
           {saved && <p className="text-xs text-subtle-foreground">{t('reenter')}</p>}
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={save.isPending || !filled || shown.kinds.length === 0} onClick={() => save.mutate()}>
+            <Button size="sm" disabled={save.isPending || !filled || shown.kinds.length === 0} onClick={run(save)}>
               {save.isPending ? <Spinner className="text-current" /> : null}
               {t('save')}
             </Button>
             {saved && (
-              <Button size="sm" variant="ghost" onClick={reset}>
+              <Button size="sm" variant="ghost" onClick={() => {
+                  clearErrors();
+                  reset();
+                }}>
                 {t('cancel')}
               </Button>
             )}
@@ -173,14 +190,17 @@ export function ChatAlertCard({ canEdit }: { canEdit: boolean }) {
       )}
       {canEdit && saved && !formOpen && (
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" disabled={test.isPending || testing !== null} onClick={() => test.mutate()}>
+          <Button size="sm" variant="outline" disabled={test.isPending || testing !== null} onClick={run(test)}>
             {test.isPending || testing ? <Spinner className="text-current" /> : null}
             {t('test')}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+          <Button size="sm" variant="ghost" onClick={() => {
+                  clearErrors();
+                  setEditing(true);
+                }}>
             {t('change')}
           </Button>
-          <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate()}>
+          <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={run(remove)}>
             {t('remove')}
           </Button>
         </div>
