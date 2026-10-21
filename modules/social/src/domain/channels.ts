@@ -495,14 +495,17 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     scrapesLinkPreview: false,
     unverified: ['body.max'],
   },
+  // Zalo OA values: the article/create reference (developers.zalo.me, OA content API). The cover is required, so one
+  // image at least; the docs set no image count, and 10 is Crove's cap (#943): the first image is the cover, the others
+  // follow the text as image blocks. Every image file is 1 MB at most. Video articles are not built yet.
   zalo_oa: {
     provider: 'zalo_oa',
     body: { max: null, count: 'codepoints', required: true },
     title: { max: 150, count: 'codepoints', required: true },
-    media: { min: 1, max: 1, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ANY_IMAGE, maxImageBytes: 1 * MB, maxVideoBytes: null, maxVideoSeconds: null },
+    media: { min: 1, max: 10, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ANY_IMAGE, maxImageBytes: 1 * MB, maxVideoBytes: null, maxVideoSeconds: null },
     maxLinks: null,
     scrapesLinkPreview: false,
-    unverified: ['media.min', 'media.max'],
+    unverified: [],
   },
   // TikTok values: Content Posting API reference, media transfer guide and photo post reference (research §4).
   tiktok: {
@@ -787,7 +790,7 @@ export function limitWait(starts: readonly Date[], limit: PublishLimit, now: Dat
 // Media a channel fetches by URL (#772): on a deployment whose storage hands out no public file URLs (local disk), these
 // cannot go out, so the composer says so before the post is submitted. Instagram takes a Reel or a video Story without
 // one (Crove uploads the bytes), but not images, carousels or a cover image; Threads, Google Business, Zalo OA (its
-// cover) and TikTok photos are fetched by URL always.
+// images) and TikTok photos are fetched by URL always.
 export function needsPublicUrls(provider: Provider, media: readonly { kind: 'image' | 'video' }[], settings?: Readonly<Record<string, unknown>>): boolean {
   if (media.length === 0) return false;
   switch (provider) {

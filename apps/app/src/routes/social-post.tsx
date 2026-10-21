@@ -273,6 +273,20 @@ function ProviderSettings({ provider, settings, onChange, disabled, inboxOffered
     );
   }
   if (provider === 'youtube') return <YouTubeSettings settings={settings} onChange={onChange} disabled={disabled} />;
+  // Zalo OA (#943): whether the article takes comments. On is the default and is not stored, so a variant saved before
+  // keeps its content hash.
+  if (provider === 'zalo_oa') {
+    const { comments: _comments, ...rest } = settings;
+    return (
+      <div className="space-y-1.5">
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox checked={settings.comments !== false} disabled={disabled} onCheckedChange={(on) => onChange(on === true ? rest : { ...rest, comments: false })} />
+          {t('zaloComments')}
+        </label>
+        <p className="text-xs text-subtle-foreground">{t('zaloCommentsHint')}</p>
+      </div>
+    );
+  }
   if (provider !== 'tiktok') return null;
   const toggle = (key: 'allowComments' | 'allowDuet' | 'allowStitch') => (
     <label className="flex items-center gap-2 text-sm text-muted-foreground">
