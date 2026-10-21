@@ -1,6 +1,6 @@
 // Bluesky against recorded XRPC answers (shapes from the AT Protocol lexicons); no live call.
 import { describe, expect, it } from 'vitest';
-import { BlueskyPublisher, connectBluesky, isBlueskyHost, linkFacets, pdsOrigin, type Fetch, type PublishInput } from '../src/index.ts';
+import { BlueskyPublisher, blueskyFacets, blueskyLangs, connectBluesky, isBlueskyHost, linkFacets, pdsOrigin, tagFacets, type BlueskyFacet, type Fetch, type PublishInput } from '../src/index.ts';
 
 const DID = 'did:plc:abc123def456ghi789jkl012';
 const PDS = 'https://morel.us-east.host.bsky.network';
@@ -332,6 +332,110 @@ describe('Bluesky video (#455)', () => {
     expect(await new BlueskyPublisher(slow.fetchImpl, undefined, { pollMs: 5, videoWaitMs: 20 }).publish(videoInput())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_PROCESSING_SLOW' });
     const mixed = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
     expect(await new BlueskyPublisher(mixed.fetchImpl, undefined, fast).publish(videoInput({ media: [clip, { fileId: 'i', mime: 'image/jpeg', sizeBytes: 3, altText: null }] }))).toMatchObject({ code: 'ONE_VIDEO_ALONE' });
+  });
+});
+
+describe('Bluesky rich text (#906)', () => {
+  // The recorded XRPC answers of a post, plus resolveHandle answered per handle: a DID, 'hang' (no answer until the
+  // lookup is aborted), or absent (Bluesky's 400 for a handle that does not resolve).
+  function withHandles(handles: Record<string, string>) {
+    const base = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [session()],
+      'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3krich`, cid: 'bafy' } }],
+    });
+    const looked: string[] = [];
+    const fetchImpl: Fetch = async (input, init) => {
+      const url = new URL(input);
+      if (url.pathname !== '/xrpc/com.atproto.identity.resolveHandle') return base.fetchImpl(input, init);
+      const handle = url.searchParams.get('handle') ?? '';
+      looked.push(`${url.host} ${handle}`);
+      const did = handles[handle];
+      if (did === 'hang') return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))));
+      if (!did) return new Response(JSON.stringify({ error: 'InvalidRequest', message: 'Unable to resolve handle' }), { status: 400 });
+      return new Response(JSON.stringify({ did }), { status: 200 });
+    };
+    return { fetchImpl, calls: base.calls, looked };
+  }
+  const sent = (calls: { route: string; json: unknown }[]) => {
+    const record = (calls.find((c) => c.route.endsWith('/com.atproto.repo.createRecord'))?.json as { record?: { text: string; facets?: BlueskyFacet[]; langs?: string[] } } | undefined)?.record;
+    if (!record) throw new Error('no record');
+    return record;
+  };
+  const post = (body: string) => input({ content: { body, title: null, linkUrl: null, media: [] } });
+  // What a facet covers, read back from the UTF-8 bytes of the text, as Bluesky reads it.
+  const covered = (text: string, f: BlueskyFacet) => new TextDecoder().decode(new TextEncoder().encode(text).slice(f.index.byteStart, f.index.byteEnd));
+  const tagOf = (f: BlueskyFacet) => (f.features[0] as { tag?: string }).tag;
+  const alice = 'did:plc:alice0000000000000000000';
+
+  it('counts tag offsets in UTF-8 bytes past Vietnamese diacritics and emoji', () => {
+    const text = 'Khai trương 🎉 quán mới #CàPhêSữa và ☕️ #KhaiTrương2026';
+    const facets = tagFacets(text);
+    expect(facets.map((f) => f.features[0])).toEqual([
+      { $type: 'app.bsky.richtext.facet#tag', tag: 'CàPhêSữa' },
+      { $type: 'app.bsky.richtext.facet#tag', tag: 'KhaiTrương2026' },
+    ]);
+    expect(facets.map((f) => covered(text, f))).toEqual(['#CàPhêSữa', '#KhaiTrương2026']);
+    // 'Khai trương 🎉 quán mới ' is 31 bytes for 23 code points: ư, ơ and á take two bytes, ớ three and the emoji four.
+    expect(facets[0]?.index).toEqual({ byteStart: 31, byteEnd: 31 + Buffer.byteLength('#CàPhêSữa') });
+  });
+
+  it('drops trailing punctuation and skips what is not a tag', () => {
+    const text = 'Mừng #COVID-19 qua, a#b, #2026, ＃全角 và (#ngoặc) #QuánMới.';
+    const facets = tagFacets(text);
+    expect(facets.map(tagOf)).toEqual(['COVID-19', '全角', 'QuánMới']);
+    expect(covered(text, facets.at(-1) as BlueskyFacet)).toBe('#QuánMới');
+    expect(tagFacets(`#${'a'.repeat(64)} #${'b'.repeat(65)}`).map(tagOf)).toEqual(['a'.repeat(64)]);
+    expect(tagFacets('#️⃣ keycap')).toEqual([]);
+  });
+
+  it('leaves a # inside a URL to the link facet', async () => {
+    const text = 'Thực đơn https://example.com/menu#mon-moi và #MónMới';
+    const facets = await blueskyFacets(text, async () => null);
+    expect(facets.map((f) => [f.features[0]?.$type, covered(text, f)])).toEqual([
+      ['app.bsky.richtext.facet#link', 'https://example.com/menu#mon-moi'],
+      ['app.bsky.richtext.facet#tag', '#MónMới'],
+    ]);
+  });
+
+  it('posts tags and resolved mentions, leaves an unresolvable handle and an email address plain, and sets langs', async () => {
+    const { fetchImpl, calls, looked } = withHandles({ 'alice.bsky.social': alice });
+    const body = 'Cảm ơn @Alice.bsky.social và @ghost.bsky.social! Liên hệ joy@example.com #KhaiTrương https://example.com/a';
+    expect(await new BlueskyPublisher(fetchImpl).publish(post(body))).toMatchObject({ kind: 'accepted' });
+    const record = sent(calls);
+    expect(record.langs).toEqual(['vi']);
+    expect(looked).toEqual(['public.api.bsky.app alice.bsky.social', 'public.api.bsky.app ghost.bsky.social']);
+    expect((record.facets ?? []).map((f) => [f.features[0], covered(record.text, f)])).toEqual([
+      [{ $type: 'app.bsky.richtext.facet#mention', did: alice }, '@Alice.bsky.social'],
+      [{ $type: 'app.bsky.richtext.facet#tag', tag: 'KhaiTrương' }, '#KhaiTrương'],
+      [{ $type: 'app.bsky.richtext.facet#link', uri: 'https://example.com/a' }, 'https://example.com/a'],
+    ]);
+  });
+
+  it('posts with the mention as plain text when the lookup runs late', async () => {
+    const { fetchImpl, calls } = withHandles({ 'slow.bsky.social': 'hang' });
+    expect(await new BlueskyPublisher(fetchImpl, undefined, { mentionMs: 20 }).publish(post('Chào @slow.bsky.social'))).toMatchObject({ kind: 'accepted' });
+    expect(sent(calls).facets).toBeUndefined();
+  });
+
+  it('looks up at most ten distinct handles per post, each once', async () => {
+    const handles = Array.from({ length: 12 }, (_, i) => `u${i}.bsky.social`);
+    const { fetchImpl, calls, looked } = withHandles(Object.fromEntries(handles.map((h, i) => [h, `did:plc:user${String(i).padStart(20, '0')}`])));
+    expect(await new BlueskyPublisher(fetchImpl).publish(post(`${handles.map((h) => `@${h}`).join(' ')} @u0.bsky.social`))).toMatchObject({ kind: 'accepted' });
+    expect(looked).toEqual(handles.slice(0, 10).map((h) => `public.api.bsky.app ${h}`));
+    const record = sent(calls);
+    // The ten looked up and the repeat of the first; the last two stay plain text.
+    expect((record.facets ?? []).map((f) => covered(record.text, f))).toEqual([...handles.slice(0, 10).map((h) => `@${h}`), '@u0.bsky.social']);
+  });
+
+  it('takes the post languages from the variant setting, else Vietnamese', async () => {
+    expect(blueskyLangs({})).toEqual(['vi']);
+    expect(blueskyLangs(undefined)).toEqual(['vi']);
+    expect(blueskyLangs({ langs: 'en' })).toEqual(['en']);
+    expect(blueskyLangs({ langs: ['vi', 'en-US', 'vi', 'ja', 'fr'] })).toEqual(['vi', 'en-US', 'ja']);
+    expect(blueskyLangs({ langs: ['not a language', 42] })).toEqual(['vi']);
+    const { fetchImpl, calls } = withHandles({});
+    await new BlueskyPublisher(fetchImpl).publish({ ...post('Hello'), settings: { langs: ['en'] } });
+    expect(sent(calls).langs).toEqual(['en']);
   });
 });
 
