@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, tiktokModeOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -110,7 +110,14 @@ export type IssueCode =
   // action, an event without its title or dates, an offer without dates); a call to action with no link to open.
   | 'GBP_NOT_SUPPORTED'
   | 'GBP_INVALID'
-  | 'GBP_CTA_NEEDS_LINK';
+  | 'GBP_CTA_NEEDS_LINK'
+  // YouTube video details (#905): an audience that is not yes or no; a category outside YouTube's assignable list;
+  // tags that are not a list of strings, or one empty or with an angle bracket (field settings.tags.<index>); tags
+  // over YouTube's 500 characters as it counts them (limit, actual).
+  | 'YT_AUDIENCE_INVALID'
+  | 'YT_CATEGORY_INVALID'
+  | 'YT_TAG_INVALID'
+  | 'YT_TAGS_TOO_LONG';
 
 export interface Issue {
   code: IssueCode;
@@ -135,6 +142,25 @@ function checkText(issues: Issue[], field: 'body' | 'title', text: string, rule:
     const bytes = countText(text, 'bytes');
     if (bytes > rule.maxBytes) issues.push({ code: 'TEXT_TOO_MANY_BYTES', field, limit: rule.maxBytes, actual: bytes });
   }
+}
+
+// The audience, category and tags of a YouTube video (#905). Each is optional: absent, the adapter sends what it always
+// did (not made for kids, category 22, no tags).
+function checkYouTube(issues: Issue[], variant: VariantDraft): void {
+  const s = variant.settings;
+  if (s?.madeForKids !== undefined && typeof s.madeForKids !== 'boolean') issues.push({ code: 'YT_AUDIENCE_INVALID', field: 'settings.madeForKids', limit: null, actual: null });
+  if (s?.categoryId !== undefined && !(YOUTUBE_CATEGORIES as readonly unknown[]).includes(s.categoryId)) issues.push({ code: 'YT_CATEGORY_INVALID', field: 'settings.categoryId', limit: null, actual: null });
+  const tags = youtubeTagsOf(s);
+  if (tags === 'invalid') {
+    issues.push({ code: 'YT_TAG_INVALID', field: 'settings.tags', limit: null, actual: null });
+    return;
+  }
+  if (tags === null) return;
+  tags.forEach((tag, i) => {
+    if (tag.trim() === '' || /[<>]/.test(tag)) issues.push({ code: 'YT_TAG_INVALID', field: `settings.tags.${i}`, limit: null, actual: null });
+  });
+  const n = youtubeTagsLength(tags);
+  if (n > YOUTUBE_TAGS_MAX) issues.push({ code: 'YT_TAGS_TOO_LONG', field: 'settings.tags', limit: YOUTUBE_TAGS_MAX, actual: n });
 }
 
 // Collaborators go on feed posts and Reels, people tags on image posts (on the first image); a Story takes neither.
@@ -291,6 +317,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     if (cw !== undefined && (typeof cw !== 'string' || countText(cw, 'codepoints') > CONTENT_WARNING_MAX)) issues.push({ code: 'CONTENT_WARNING_TOO_LONG', field: 'settings.contentWarning', limit: CONTENT_WARNING_MAX, actual: typeof cw === 'string' ? countText(cw, 'codepoints') : null });
   }
   if (variant.provider === 'instagram') checkInstagramPeople(issues, variant);
+  if (variant.provider === 'youtube') checkYouTube(issues, variant);
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkPollAndTag(issues, variant, caps);
   checkGbp(issues, variant);

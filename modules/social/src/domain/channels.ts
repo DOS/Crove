@@ -646,6 +646,34 @@ export function countLinks(text: string): number {
 export const MASTODON_VISIBILITY = ['public', 'unlisted'] as const;
 export const CONTENT_WARNING_MAX = 500;
 
+// YouTube video details (#905), read by the adapter in the same shapes: the audience (`settings.madeForKids`, a
+// boolean; absent is not made for kids, as for every variant saved before it could be chosen), the category
+// (`settings.categoryId`, one of YouTube's assignable video categories, absent is 22, People & Blogs) and the tags
+// (`settings.tags`, a list of strings). The categories are the ones videoCategories.list marks assignable; YouTube
+// has kept them unchanged for years, so they are a fixed list rather than a call.
+export const YOUTUBE_CATEGORIES = ['1', '2', '10', '15', '17', '19', '20', '22', '23', '24', '25', '26', '27', '28', '29'] as const;
+export type YouTubeCategory = (typeof YOUTUBE_CATEGORIES)[number];
+export const YOUTUBE_DEFAULT_CATEGORY: YouTubeCategory = '22';
+export const YOUTUBE_TAGS_MAX = 500;
+
+// The tags as YouTube counts them against its 500 characters: each tag's characters, a comma between tags, and the
+// quotes YouTube puts around a tag that holds a space ("Foo Baz" is nine characters, Foo-Baz seven). Each tag is
+// counted trimmed, as the adapter sends it; a Vietnamese letter with its marks is one character.
+export function youtubeTagsLength(tags: readonly string[]): number {
+  return tags.reduce((n, tag, i) => {
+    const t = tag.trim();
+    return n + countText(t, 'codepoints') + (/\s/.test(t) ? 2 : 0) + (i > 0 ? 1 : 0);
+  }, 0);
+}
+
+// The tags in a variant's settings: null when there are none, 'invalid' when the value is not a list of strings.
+export function youtubeTagsOf(settings: Readonly<Record<string, unknown>> | undefined): string[] | 'invalid' | null {
+  const value = settings?.tags;
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || !value.every((v) => typeof v === 'string')) return 'invalid';
+  return value.length > 0 ? (value as string[]) : null;
+}
+
 // Instagram people (#796): up to 3 collaborators (`settings.collaborators`, on feed posts and Reels; each must accept
 // the invitation in Instagram) and up to 20 people tagged on the first image (`settings.userTags`, image posts only).
 // Usernames as Instagram writes them, without the @. The adapter reads the same shapes.

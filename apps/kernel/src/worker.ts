@@ -12,8 +12,9 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
+import { ChatAlertSender } from './chat-alerts.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
@@ -39,6 +40,13 @@ const AGENT_PROPOSAL_COMMANDS: Readonly<Record<string, string>> = {
 const AGENT_RETRY_LIMIT = 3;
 const SOCIAL_NOTIFY_RETRY_LIMIT = 3;
 const NOTIFYING: ReadonlySet<string> = new Set(NOTIFYING_EVENTS);
+// Team chat alerts (#863): one job per alerting event, never retried. pg-boss refuses a second job with the same
+// singleton key in the same slot of this many seconds, even once the first is done, so a relay batch sent again after a
+// failed claim does not queue the event twice.
+const CHAT_ALERTING: ReadonlySet<string> = new Set(CHAT_ALERTING_EVENTS);
+const CHAT_ALERT_SINGLETON_SECONDS = 3600;
+// An owner's test line: one job per org in a slot this short, on top of the API's few a minute.
+const CHAT_ALERT_TEST_SINGLETON_SECONDS = 10;
 // Every 10 minutes the worker wakes agents whose wake-up is still pending and that can run now
 // (crove_kernel.agent_wakeups_due): a run refused earlier by the daily cap, a kill switch or a budget that has since
 // lifted, or blocked by a run left live by a crashed worker. Agents still capped, switched off, out of budget or of a
@@ -493,6 +501,17 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     });
   }
 
+  // Team chat alerts (#863): one short line in the org's Telegram or Discord chat, sent apart from the notices and
+  // their mail; the sender logs a failure and never throws, so the job is never retried.
+  const chatAlerts = social && deps.channels ? new ChatAlertSender({ runtime: deps.runtime, broker: deps.channels.broker, publicUrl: deps.publicUrl ?? '' }) : null;
+  if (chatAlerts) {
+    await boss.work<AgentDispatchJob & { test?: true }>(QUEUES.socialChatAlert, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      if (job.data.test) await chatAlerts.test(job.data.orgId, job.data.eventId);
+      else await chatAlerts.handle(job.data.orgId, job.data.eventId);
+    });
+  }
+
   // Agent proposals and approvals: the worker acts on what an agent recorded, after checking it again.
   await boss.work<AgentDispatchJob & { type: string }>(QUEUES.agentProposal, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
@@ -837,6 +856,19 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                     })
                   : null;
               if (triage) await triage;
+              // A team chat alert (#863), besides the notices. Queued best effort: a failure here is logged and never
+              // rolls the claim back, so it holds up neither the relay nor the notices.
+              if (chatAlerts && (CHAT_ALERTING.has(row.type) || row.type === CHAT_ALERT_TEST_EVENT)) {
+                const test = row.type === CHAT_ALERT_TEST_EVENT;
+                await boss
+                  .send(QUEUES.socialChatAlert, { orgId: row.org_id, eventId: row.event_id, ...(test ? { test: true as const } : {}) } satisfies AgentDispatchJob & { test?: true }, {
+                    singletonKey: test ? `${row.org_id}:test` : `${row.org_id}:${row.event_id}`,
+                    singletonSeconds: test ? CHAT_ALERT_TEST_SINGLETON_SECONDS : CHAT_ALERT_SINGLETON_SECONDS,
+                    retryLimit: 0,
+                  })
+                  .catch((error: unknown) => console.error(`[social-chat-alert] event ${row.event_id.slice(0, 8)}: not queued (${error instanceof Error ? error.name : typeof error})`));
+                if (test) return null;
+              }
               if (social && NOTIFYING.has(row.type)) {
                 return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
                   singletonKey: `${row.org_id}:${row.event_id}`,

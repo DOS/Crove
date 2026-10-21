@@ -27,6 +27,8 @@ import {
   transitionVariant,
   validateVariant,
   VARIANT_STATUSES,
+  YOUTUBE_CATEGORIES,
+  youtubeTagsLength,
   type CallState,
   type HashedVariant,
   type MediaItem,
@@ -327,6 +329,40 @@ describe('validateVariant', () => {
     expect(md('Khai trương', { visibility: 'direct' })).toEqual(['VISIBILITY_INVALID']);
     expect(md('Khai trương', { contentWarning: 'x'.repeat(501) })).toEqual(['CONTENT_WARNING_TOO_LONG']);
     expect(md('Khai trương', { contentWarning: 7 })).toEqual(['CONTENT_WARNING_TOO_LONG']);
+  });
+
+  it('checks a YouTube video: its audience, a category from the assignable list and tags as YouTube counts them (#905)', () => {
+    const yt = (settings: Record<string, unknown>) => validateVariant({ provider: 'youtube', body: '', title: 'Khai trương', media: [mp4()], settings });
+    const codes = (settings: Record<string, unknown>) => yt(settings).map((i) => i.code);
+    // A variant saved before these settings existed is fine as it is.
+    expect(codes({})).toEqual([]);
+    expect(codes({ madeForKids: true, categoryId: '27', tags: ['bánh mì', 'Sài Gòn', 'ẩm-thực'] })).toEqual([]);
+    expect(codes({ madeForKids: false, categoryId: '22' })).toEqual([]);
+    expect(codes({ madeForKids: 'yes' })).toEqual(['YT_AUDIENCE_INVALID']);
+    // 18 (Short Movies) is listed by YouTube but not assignable; a number is not a category id.
+    expect(codes({ categoryId: '18' })).toEqual(['YT_CATEGORY_INVALID']);
+    expect(codes({ categoryId: 22 })).toEqual(['YT_CATEGORY_INVALID']);
+    expect(yt({ tags: 'bánh mì' })).toEqual([{ code: 'YT_TAG_INVALID', field: 'settings.tags', limit: null, actual: null }]);
+    expect(yt({ tags: ['phở', ' ', 'a<b>'] }).map((i) => i.field)).toEqual(['settings.tags.1', 'settings.tags.2']);
+    // 500 characters in all: a Vietnamese letter with its marks is one, composed or not.
+    expect(codes({ tags: ['ệ'.repeat(500)] })).toEqual([]);
+    expect(codes({ tags: ['ệ'.normalize('NFD').repeat(500)] })).toEqual([]);
+    expect(yt({ tags: ['ệ'.repeat(501)] })).toEqual([{ code: 'YT_TAGS_TOO_LONG', field: 'settings.tags', limit: 500, actual: 501 }]);
+    // A tag with a space counts its two quotes, and every comma between tags counts.
+    expect(codes({ tags: [`${'ệ'.repeat(248)} ${'ệ'.repeat(249)}`] })).toEqual([]);
+    expect(yt({ tags: [`${'ệ'.repeat(249)} ${'ệ'.repeat(249)}`] })[0]).toMatchObject({ code: 'YT_TAGS_TOO_LONG', actual: 501 });
+    expect(yt({ tags: Array.from({ length: 100 }, () => 'ẩmthực') })[0]).toMatchObject({ code: 'YT_TAGS_TOO_LONG', actual: 100 * 6 + 99 });
+  });
+
+  it('counts YouTube tags as YouTube does: quotes around a tag with a space, commas between tags (#905)', () => {
+    expect(youtubeTagsLength([])).toBe(0);
+    expect(youtubeTagsLength(['Foo-Baz'])).toBe(7);
+    expect(youtubeTagsLength(['Foo Baz'])).toBe(9);
+    expect(youtubeTagsLength(['bánh mì', 'cà-phê'])).toBe(9 + 1 + 6);
+    // Counted trimmed, as the adapter sends it.
+    expect(youtubeTagsLength(['  phở  '])).toBe(3);
+    expect(YOUTUBE_CATEGORIES).toContain('22');
+    expect(YOUTUBE_CATEGORIES).not.toContain('18');
   });
 
   it('checks a WordPress post: text required, an optional title, up to 10 images and no video (#833)', () => {
