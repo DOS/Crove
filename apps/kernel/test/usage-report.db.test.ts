@@ -150,6 +150,10 @@ suite('weekly usage report (#311)', () => {
       await audit(orgA, at(lastStart, 57), 'kernel.proposal.approve', { actor: users.u1, target: p3 });
       await audit(orgA, at(lastStart, 40), 'kernel.proposal.reject', { actor: users.u2, target: p4 });
       await audit(orgA, at(lastStart, 41), 'finance.journal.export', { actor: users.u2, detail: { entries: 3 } });
+      // Two model calls of the Social writer (#852), and a refused one that does not count.
+      await audit(orgA, at(lastStart, 43), 'social.ai.use', { actor: users.u1, detail: { kind: 'draft' } });
+      await audit(orgA, at(lastStart, 44), 'social.ai.use', { actor: users.u1, detail: { kind: 'hashtags' } });
+      await audit(orgA, at(lastStart, 45), 'social.ai.use', { actor: users.u1, outcome: 'denied', detail: { kind: 'draft' } });
       await audit(orgA, at(lastStart, 42), 'kernel.proposal.approve', { actor: users.u3, outcome: 'denied', target: p4 });
       // An edit row of another org with the same target id does not mark org A's proposal as edited.
       await audit(orgB, at(lastStart, 33), 'kernel.proposal.edit', { actor: users.u4, target: p1, detail: { revision: 2 } });
@@ -192,6 +196,7 @@ suite('weekly usage report (#311)', () => {
     median_upload_to_approval_seconds: null,
     journal_exports: 0,
     org_exports: 0,
+    ai_calls: 0,
   };
   const iso = (date: string) => {
     const d = new Date(`${date}T00:00:00Z`);
@@ -234,6 +239,7 @@ suite('weekly usage report (#311)', () => {
         median_upload_to_approval_seconds: 10_800,
         journal_exports: 1,
         org_exports: 1,
+        ai_calls: 2,
       },
       {
         ...zero,
@@ -266,6 +272,7 @@ suite('weekly usage report (#311)', () => {
       median_upload_to_approval_seconds: 14_400,
       journal_exports: 1,
       org_exports: 0,
+      ai_calls: 2,
     });
     // Org B's only user activity is its approval; its org export is a system row.
     const b = last.find((r) => r.org_id === orgB) as UsageRow;
@@ -306,9 +313,9 @@ suite('weekly usage report (#311)', () => {
     expect({ code, err }).toEqual({ code: 0, err: [] });
     const lines = (out[0] ?? '').split('\n');
     expect(lines[0]).toBe(
-      'week,from,org_id,org,active_orgs,active_users,uploaded,emailed,approved,approved_unedited,unedited_pct,rejected,median_upload_to_approval_h,journal_exports,org_exports',
+      'week,from,org_id,org,active_orgs,active_users,uploaded,emailed,approved,approved_unedited,unedited_pct,rejected,median_upload_to_approval_h,journal_exports,org_exports,ai_calls',
     );
-    expect(lines).toContain(`${iso(weeks.last)},${weeks.last},ALL,ALL,2,3,3,1,4,3,75,1,3.0,1,1`);
+    expect(lines).toContain(`${iso(weeks.last)},${weeks.last},ALL,ALL,2,3,3,1,4,3,75,1,3.0,1,1,2`);
     expect(formatUsage([], { byOrg: false, csv: false })).toContain('active_users');
 
     const refused: string[] = [];

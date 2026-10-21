@@ -20,6 +20,7 @@ const total: UsageRow = {
   median_upload_to_approval_seconds: 5400,
   journal_exports: 2,
   org_exports: 0,
+  ai_calls: 7,
 };
 const org: UsageRow = { ...total, org_id: '0190a1b2-0000-7000-8000-000000000001', org_name: '=HYPERLINK("x"), "Co"', active_orgs: 1, proposals_approved: 0, approved_without_edits: 0, median_upload_to_approval_seconds: null };
 
@@ -42,15 +43,15 @@ describe('usage report output', () => {
   it('prints an aligned table, with org columns only for --by-org', () => {
     const table = formatUsage([total], { byOrg: false, csv: false }).split('\n');
     expect(table[0]).toMatch(/^week\s+from\s+active_orgs\s+active_users\s+uploaded/);
-    expect(table[1]).toMatch(/^2026-W42\s+2026-10-12\s+2\s+3\s+10\s+4\s+8\s+6\s+75\s+1\s+1\.5\s+2\s+0$/);
+    expect(table[1]).toMatch(/^2026-W42\s+2026-10-12\s+2\s+3\s+10\s+4\s+8\s+6\s+75\s+1\s+1\.5\s+2\s+0\s+7$/);
     expect(formatUsage([total], { byOrg: true, csv: false })).toMatch(/org_id\s+org\s+/);
   });
 
   it('writes CSV with quoting and an inert org name', () => {
     const csv = formatUsage([total, org], { byOrg: true, csv: true }).split('\n');
-    expect(csv[1]).toBe('2026-W42,2026-10-12,ALL,ALL,2,3,10,4,8,6,75,1,1.5,2,0');
+    expect(csv[1]).toBe('2026-W42,2026-10-12,ALL,ALL,2,3,10,4,8,6,75,1,1.5,2,0,7');
     // A name starting with = would be a formula in a spreadsheet: it is prefixed, and quoted for the comma and quotes.
-    expect(csv[2]).toBe(`2026-W42,2026-10-12,${org.org_id},"'=HYPERLINK(""x""), ""Co""",1,3,10,4,0,0,,1,,2,0`);
+    expect(csv[2]).toBe(`2026-W42,2026-10-12,${org.org_id},"'=HYPERLINK(""x""), ""Co""",1,3,10,4,0,0,,1,,2,0,7`);
   });
 
   it('keeps control characters of an org name out of the table', () => {
@@ -89,7 +90,7 @@ describe('usage report exit codes', () => {
     expect(a.err).toEqual(['[usage-report] could not read crove_kernel.usage_weekly(): permission denied for function usage_weekly']);
     const out: string[] = [];
     expect(await runUsageReport(['--csv'], { REPORTER_DATABASE_URL: 'postgres://r@db/p' }, { log: (t) => out.push(t), error: () => {}, readUsage: async () => [total] })).toBe(USAGE_EXIT.ok);
-    expect(out[0]?.split('\n')[1]).toBe('2026-W42,2026-10-12,2,3,10,4,8,6,75,1,1.5,2,0');
+    expect(out[0]?.split('\n')[1]).toBe('2026-W42,2026-10-12,2,3,10,4,8,6,75,1,1.5,2,0,7');
   });
 });
 

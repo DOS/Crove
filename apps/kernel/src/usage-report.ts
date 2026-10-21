@@ -39,6 +39,8 @@ export interface UsageRow {
   median_upload_to_approval_seconds: number | null;
   journal_exports: number;
   org_exports: number;
+  // Model calls of the Social writer (#852).
+  ai_calls: number;
 }
 
 export const DEFAULT_USAGE_ARGS: UsageArgs = { weeks: 8, byOrg: false, csv: false, timeZone: 'Asia/Ho_Chi_Minh', post: false };
@@ -94,7 +96,7 @@ export async function readUsage(databaseUrl: string, args: Omit<UsageArgs, 'post
     const { rows } = await client.query<UsageRow>(
       `SELECT week_start::text AS week_start, iso_week, org_id, org_name, active_orgs, active_users, documents_uploaded,
               documents_emailed, proposals_approved, approved_without_edits, proposals_rejected,
-              median_upload_to_approval_seconds, journal_exports, org_exports
+              median_upload_to_approval_seconds, journal_exports, org_exports, ai_calls
        FROM crove_kernel.usage_weekly($1::int, $2::boolean, $3::text)`,
       [args.weeks, args.byOrg, args.timeZone],
     );
@@ -120,6 +122,7 @@ const COLUMNS: ReadonlyArray<{ key: keyof UsageRow | 'approved_without_edits_per
   { key: 'median_upload_to_approval_seconds', title: 'median_upload_to_approval_h' },
   { key: 'journal_exports', title: 'journal_exports' },
   { key: 'org_exports', title: 'org_exports' },
+  { key: 'ai_calls', title: 'ai_calls' },
 ];
 
 const uneditedPercent = (row: UsageRow) => (row.proposals_approved === 0 ? '' : `${Math.round((row.approved_without_edits / row.proposals_approved) * 100)}`);

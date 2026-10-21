@@ -438,6 +438,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
             } finally {
               ticket.release();
+              // Counted for the usage report (#852): a model call whatever it answered; a failure to count never fails the call.
+              await runtime.execute('social.ai.use', { kind: 'draft' }, { actor, orgId }).catch(() => undefined);
             }
             if (!draft) throw new DomainError('AI_DRAFT_EMPTY', 422, 'AI không soạn được bài từ mô tả này, hãy viết rõ hơn');
             const own = new Map(draft.variants.map((v) => [v.key, v]));
@@ -487,6 +489,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
             } finally {
               ticket.release();
+              // Counted for the usage report (#852): a model call whatever it answered; a failure to count never fails the call.
+              await runtime.execute('social.ai.use', { kind: 'rewrite' }, { actor, orgId }).catch(() => undefined);
             }
             if (!result) throw new DomainError('AI_REWRITE_EMPTY', 422, 'AI không viết lại được đoạn này, hãy thử cách khác');
             return result;
@@ -515,6 +519,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
             } finally {
               ticket.release();
+              // Counted for the usage report (#852): a model call whatever it answered; a failure to count never fails the call.
+              await runtime.execute('social.ai.use', { kind: 'alt_text' }, { actor, orgId }).catch(() => undefined);
             }
             if (!altText) throw new DomainError('AI_REWRITE_EMPTY', 422, 'AI không viết lại được đoạn này, hãy thử cách khác');
             return { altText };
@@ -546,6 +552,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
             } finally {
               ticket.release();
+              // Counted for the usage report (#852): a model call whatever it answered; a failure to count never fails the call.
+              await runtime.execute('social.ai.use', { kind: 'hashtags' }, { actor, orgId }).catch(() => undefined);
             }
           }),
         ),

@@ -143,6 +143,7 @@ suite('usage report privileges', () => {
       'median_upload_to_approval_seconds',
       'journal_exports',
       'org_exports',
+      'ai_calls',
     ]);
     const refused = [
       'SELECT 1 FROM crove_kernel.audit_event LIMIT 1',

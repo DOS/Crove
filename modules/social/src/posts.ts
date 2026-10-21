@@ -35,6 +35,7 @@ import { feedCommands, feedQueries } from './feeds.ts';
 import { reportScheduleCommands, reportScheduleQueries } from './report-schedules.ts';
 import { brandVoiceCommands, brandVoiceQueries } from './brand-voice.ts';
 import { watermarkCommands, watermarkQueries } from './watermark.ts';
+import { aiUsageCommands } from './ai-usage.ts';
 import { channelSetCommands, channelSetQueries } from './channel-sets.ts';
 import { calendarNoteCommands, calendarNoteQueries } from './calendar-notes.ts';
 import { CONTENT_MANAGER_TEMPLATE, preReviewTask, type PreReview } from './agent.ts';
@@ -1349,6 +1350,7 @@ export const socialCommands = [
   ...reportScheduleCommands,
   ...brandVoiceCommands,
   ...watermarkCommands,
+  ...aiUsageCommands,
   ...channelSetCommands,
   ...calendarNoteCommands,
   ...reviewLinkCommands,
