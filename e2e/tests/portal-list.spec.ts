@@ -148,7 +148,8 @@ test('import the tax portal purchase list and see which invoices Crove lacks', a
     await expect(card.getByText('Đang nhắc vào ngày 5 hằng tháng.')).toBeVisible();
     // A second request for the period within the hour is refused.
     await card.getByRole('button', { name: 'Gửi email đề nghị' }).click();
-    await expect(card.getByText('Vừa gửi đề nghị cho kỳ này trong vòng một giờ qua', { exact: false })).toBeVisible();
+    // In Vietnamese the SPA shows the kernel's own message (KERNEL_LOCALE), which names the period.
+    await expect(card.getByRole('alert')).toContainText('Đã gửi đề nghị cho tháng 9/2026 trong vòng một giờ qua');
   });
 
   await test.step('a file that is not the portal list is kept with the reason', async () => {

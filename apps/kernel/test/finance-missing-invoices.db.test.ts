@@ -280,6 +280,8 @@ suite('missing invoice requests (#669)', () => {
     expect(outbox[0]?.text).toContain('hóa đơn số 9007');
     expect(outbox[0]?.text).toContain('tổng tiền 2.200.000 đồng');
     expect(outbox[0]?.text).not.toContain('9009');
+    // Still refused once the mail went out.
+    expect((await rpc('missingInvoices/request', member, { period: '2026-09' })).body.code).toBe('REQUEST_TOO_SOON');
     const status = await rpc('missingInvoices/status', viewer, undefined);
     expect(status.body.mails).toEqual([expect.objectContaining({ id: sent.body.messageId, kind: 'request', status: 'sent', periods: ['2026-09'], count: 2 })]);
     // The other org sees none of it.
