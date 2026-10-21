@@ -20,7 +20,7 @@ export const vendorsList = defineQuery({
   handler: async (ctx, input) => {
     let query = ctx.trx
       .selectFrom('crove_kernel.party as p')
-      .select(['p.id', 'p.name', 'p.tax_code', 'p.address'])
+      .select(['p.id', 'p.name', 'p.tax_code', 'p.address', 'p.email', 'p.phone', 'p.version'])
       .select((eb) =>
         eb
           .selectFrom('crove_finance.vendor_account_rule as r')
@@ -65,6 +65,9 @@ export const vendorsList = defineQuery({
       name: r.name,
       taxCode: r.tax_code,
       address: r.address,
+      email: r.email,
+      phone: r.phone,
+      version: r.version,
       documentCount: Number(r.document_count ?? 0),
       defaultAccount: r.default_account ?? null,
     }));

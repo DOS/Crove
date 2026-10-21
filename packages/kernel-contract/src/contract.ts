@@ -674,6 +674,21 @@ export const contract = {
     setDefaultAccount: oc
       .input(z.object({ partyId: zId, accountCode: zAccountCode.nullable() }))
       .output(z.object({ partyId: zId, accountCode: zAccountCode.nullable() })),
+    // Owners, admins and members (R1, #887): the party's name and contact details, from the version the editor read.
+    // A tax code can be added, never changed or removed.
+    update: oc
+      .input(
+        z.object({
+          partyId: zId,
+          version: z.number().int().min(1),
+          name: z.string().max(1000),
+          taxCode: z.string().max(40).nullable(),
+          address: z.string().max(2000).nullable(),
+          email: z.string().max(1000).nullable(),
+          phone: z.string().max(100).nullable(),
+        }),
+      )
+      .output(z.object({ partyId: zId, version: z.number().int() })),
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),
