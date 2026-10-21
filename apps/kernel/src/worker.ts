@@ -5,7 +5,7 @@ import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
 import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
-import { runAgentWake } from '@crove/kernel';
+import { PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
@@ -580,6 +580,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const reminderTimer = deps.runtime.installed('social') ? setInterval(() => void reminderSweep(), REMINDER_SWEEP_MS) : null;
   if (reminderTimer) void reminderSweep();
 
+  // Proposal reminders and escalation (#676): every half hour, the pending proposals past the days their org set.
+  let nudging = false;
+  const proposalNudgeSweep = async () => {
+    if (nudging) return;
+    nudging = true;
+    try {
+      const done = await sweepProposalNudges({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (done > 0) console.log(`[proposal-reminders] nudged ${done}`);
+    } catch (error) {
+      console.error('[proposal-reminders] sweep', error);
+    } finally {
+      nudging = false;
+    }
+  };
+  const proposalNudgeTimer = setInterval(() => void proposalNudgeSweep(), PROPOSAL_NUDGE_SWEEP_MS);
+  void proposalNudgeSweep();
+
   // Scheduled client report mail (#704): every 5 minutes, the schedules due queue their mails (sent by the mail queue).
   let reporting = false;
   const reportSweep = async () => {
@@ -906,6 +923,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (mailTimer) clearInterval(mailTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (reminderTimer) clearInterval(reminderTimer);
+    clearInterval(proposalNudgeTimer);
     if (reportTimer) clearInterval(reportTimer);
     if (feedTimer) clearInterval(feedTimer);
     if (refreshTimer) clearInterval(refreshTimer);

@@ -612,6 +612,66 @@ function VatFilingPeriodField({ period, canManage }: { period: 'month' | 'quarte
   );
 }
 
+// Approval reminders (issue #676): after how many days a pending proposal reminds the people who may approve it, and
+// after how many its owners are told. Owners and admins choose; everyone else sees the setting.
+const REMIND_DAYS = [1, 2, 3, 5, 7] as const;
+const ESCALATE_DAYS = [2, 3, 5, 7, 14] as const;
+
+function ProposalRemindersField({ canManage }: { canManage: boolean }) {
+  const t = useTranslations('settings');
+  const remindId = useId();
+  const escalateId = useId();
+  const policy = useQuery(orpc.org.proposalPolicy.queryOptions());
+  const save = useMutation(
+    orpc.org.setProposalPolicy.mutationOptions({
+      onSuccess: async () => {
+        await queryClient.invalidateQueries({ queryKey: orpc.org.proposalPolicy.key() });
+      },
+    }),
+  );
+  const current = save.isPending && save.variables ? save.variables : (policy.data ?? { remindAfterDays: null, escalateAfterDays: null });
+  const label = (days: number | null) => (days === null ? t('reminderOff') : t('reminderDays', { days: String(days) }));
+  const choose = (field: 'remindAfterDays' | 'escalateAfterDays', raw: string) => save.mutate({ ...current, [field]: raw === '' ? null : Number(raw) });
+  const select = (id: string, field: 'remindAfterDays' | 'escalateAfterDays', options: readonly number[]) =>
+    canManage ? (
+      <NativeSelect id={id} size="sm" value={current[field] === null ? '' : String(current[field])} disabled={save.isPending || policy.isLoading} onChange={(e) => choose(field, e.target.value)}>
+        <NativeSelectOption value="">{t('reminderOff')}</NativeSelectOption>
+        {options.map((d) => (
+          <NativeSelectOption key={d} value={String(d)}>
+            {t('reminderDays', { days: String(d) })}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+    ) : (
+      <span id={id} className={current[field] === null ? 'text-subtle-foreground' : 'text-foreground'}>
+        {label(current[field])}
+      </span>
+    );
+  return (
+    <div>
+      <dt className="text-subtle-foreground">{t('proposalReminders')}</dt>
+      <dd className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <span className="flex items-center gap-2">
+          <label htmlFor={remindId} className="text-muted-foreground">
+            {t('remindAfter')}
+          </label>
+          {select(remindId, 'remindAfterDays', REMIND_DAYS)}
+        </span>
+        <span className="flex items-center gap-2">
+          <label htmlFor={escalateId} className="text-muted-foreground">
+            {t('escalateAfter')}
+          </label>
+          {select(escalateId, 'escalateAfterDays', ESCALATE_DAYS)}
+        </span>
+        {save.isPending && <Spinner />}
+      </dd>
+      <dd className="mt-1 text-xs text-subtle-foreground">{t('proposalRemindersHint')}</dd>
+      {policy.error && <ErrorText>{errorMessage(policy.error)}</ErrorText>}
+      {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
+    </div>
+  );
+}
+
 // The org's address as the tax registry records it (issue #324). Owners and admins edit it; everyone else sees it.
 function AddressField({ address, canManage }: { address: string | null; canManage: boolean }) {
   const t = useTranslations('settings');
@@ -704,6 +764,7 @@ export function SettingsPage() {
             )}
             {getConfig().modules.includes('finance') && <VatFilingPeriodField period={org.data?.vatFilingPeriod ?? null} canManage={canManage} />}
             <AddressField key={`${org.data?.slug}:${org.data?.address ?? ''}`} address={org.data?.address ?? null} canManage={canManage} />
+            {getConfig().modules.includes('finance') && <ProposalRemindersField key={org.data?.slug} canManage={canManage} />}
             <div>
               <dt className="text-subtle-foreground">{t('inboundAddress')}</dt>
               <dd className="break-all font-mono text-foreground">{org.data?.inboundAddress ?? t('inboundOff')}</dd>
