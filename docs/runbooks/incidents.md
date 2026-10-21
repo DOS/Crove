@@ -228,13 +228,29 @@ A rate limit (HTTP 429) or a server error is retried (3 attempts with backoff); 
 
 ## 7. Kill switches
 
-**What exists today.** Per org: the kill switch on the Agents page stops that org's AI agents (all of them, one module's, or one agent). Engaging it is open to the org's owners and admins (`kernel.agent.kill_switch.engage`, R1); releasing it needs an owner with a fresh second factor (`kernel.agent.kill_switch.release`, R3). A command refused by an engaged switch answers `KILL_SWITCH_ON`. There is no deployment-wide switch yet (plan section 4.12 plans one for Crove Cloud).
+**What exists today.**
+- **Per org:** the kill switch on the Agents page stops that org's AI agents (all of them, one module's, or one agent). For the whole org or the finance module, it also stops the AI reading of new PDFs and photos; XML e-invoices are still read, and "Đọc lại" reads the held files once it is released (#886). Engaging it is open to the org's owners and admins (`kernel.agent.kill_switch.engage`, R1); releasing it needs an owner with a fresh second factor (`kernel.agent.kill_switch.release`, R3). A command refused by an engaged switch answers `KILL_SWITCH_ON`.
+- **Deployment-wide (#886):** `pnpm ops:kill-switch`, for the operator, with the admin URL the migrations use.
+  - `ai` stops AI document reading and every agent of every org, in the database too: an agent context is refused with `KILL_SWITCH_ON`.
+  - `mail` holds the mail queue. Mail stays queued and goes out once released. Invite mail, which a person sends directly, is not held.
+  - Every change keeps its time, who and why, and no Crove login can flip it.
 
 **When to use it.** An agent posts, sends or proposes things it should not, or spends more than expected.
 
 **How.** In the app, as an owner or admin of the org: Agents, then the kill switch, with a reason. Never by SQL: the switch is a command so that it is audited.
 
-**Deployment-wide levers**, for the operator, applied with `docker compose up -d` after editing `.env`:
+**The deployment-wide switch**, from the server (or anywhere with the admin URL):
+
+```sh
+ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch status
+ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch ai on --reason "AI endpoint compromised" --by "<your name>"
+ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch ai off --by "<your name>"
+ADMIN_DATABASE_URL=postgres://... pnpm ops:kill-switch mail on --reason "mail provider compromised" --by "<your name>"
+```
+
+It takes effect at once, with no restart. To rehearse it (Phase 1 exit criterion 8), engage `ai` on a staging deployment and check two things: an agent wake-up is refused, and a new PDF in the Inbox shows "AI đang tạm dừng". Then release it.
+
+**Other deployment-wide levers**, applied with `docker compose up -d` after editing `.env`:
 
 | To stop | Setting |
 |---|---|

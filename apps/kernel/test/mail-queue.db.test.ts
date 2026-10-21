@@ -149,6 +149,26 @@ suite('queued mail (#548)', () => {
     await root.end();
   });
 
+  // #886: the operator's mail switch holds every org's mail; it stays queued and goes out once released.
+  it('holds queued mail while the deployment-wide mail switch is engaged, and sends it once released', async () => {
+    const id = await queue('giu@example.vn', 'transactional');
+    const { mailer, sent } = scripted([{ status: 'accepted', providerMessageId: 'em_held' }]);
+    const set = (engaged: boolean) => admin((c) => c.query(`SELECT crove_kernel.global_kill_switch_set('mail', $1, 'diễn tập', 'ops')`, [engaged]));
+    await set(true);
+    try {
+      expect(await sweep(mailer)).toEqual([]);
+      // A job queued before the switch went on leaves the mail untouched.
+      expect(await runMailJob({ ...deps(mailer), workerDb }, { orgId, messageId: id })).toEqual({ action: 'none', reason: 'held' });
+      expect(sent).toHaveLength(0);
+      expect(await row(id)).toMatchObject({ status: 'queued', attempts: 0 });
+    } finally {
+      await set(false);
+    }
+    expect((await sweep(mailer)).map((j) => j.data.messageId)).toContain(id);
+    expect(await runMailJob({ ...deps(mailer), workerDb }, { orgId, messageId: id })).toEqual({ action: 'recorded', outcome: 'sent', code: null });
+    expect(sent).toHaveLength(1);
+  });
+
   it('queues due mail by stream and sends each once, rendered, through one external call', async () => {
     const invoice = await queue('Khach@Example.vn ', 'transactional');
     const campaign = await queue('ban@example.vn', 'marketing');

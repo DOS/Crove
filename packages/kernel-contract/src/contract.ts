@@ -82,6 +82,7 @@ import {
   zParty,
   zProposalStatus,
   zPurchaseDocument,
+  zDocumentExport,
   zSearchResult,
   zRole,
   zSession,
@@ -103,6 +104,8 @@ import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-vo
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
+import { zTimeline } from './timeline.ts';
+import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
 
 // Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
 export const zProposalPolicy = z.object({
@@ -137,6 +140,11 @@ export const contract = {
     // may approve it, and after how many its owners are told; null turns either off. Escalation must come later.
     proposalPolicy: oc.output(zProposalPolicy),
     setProposalPolicy: oc.input(zProposalPolicy).output(zProposalPolicy),
+    // Owners and admins (issue #672): the org's audit log, newest first, filtered and paged; the commands it holds, for
+    // the filter; and the filtered list as a CSV file (the export leaves its own audit row).
+    audit: oc.input(zAuditFilter.extend({ before: zAuditCursor.optional() })).output(zAuditPage),
+    auditCommands: oc.output(z.array(z.string())),
+    auditExport: oc.input(zAuditFilter).output(zAuditExport),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
@@ -568,6 +576,8 @@ export const contract = {
   inbox: {
     list: oc.input(z.object({ status: zProposalStatus.optional() })).output(z.array(zInboxItem)),
     get: oc.input(z.object({ id: zId })).output(zInboxDetail),
+    // Every member who can open the proposal (issue #672): what happened to it, its file and the records it touched.
+    timeline: oc.input(z.object({ id: zId })).output(zTimeline),
     approve: oc
       .input(
         z.object({
@@ -673,6 +683,8 @@ export const contract = {
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),
+    // Every role (issue #878): the exports a recorded document went out in, for its history.
+    exports: oc.input(z.object({ documentId: zId })).output(z.array(zDocumentExport)),
   },
   // Every role (#673): parties by name or tax code, documents by series, number or party, journal entries by
   // description or amount. Vietnamese marks and case are ignored, and each word matches the start of a word.

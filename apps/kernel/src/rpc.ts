@@ -293,6 +293,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       setProposalPolicy: os.org.setProposalPolicy.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal_policy.save', input, { actor, orgId })),
       ),
+      audit: os.org.audit.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.audit.list', input, { actor, orgId }))),
+      auditCommands: os.org.auditCommands.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.audit.commands', {}, { actor, orgId }))),
+      auditExport: os.org.auditExport.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.audit.export', input, { actor, orgId }))),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
       // goes out after the command has committed (invite-mail.ts says why), unless the org stopped mail to the
       // address (#538); its outcome is recorded on the invite's mail_message row and never changes the answer, which
@@ -990,6 +993,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       get: os.inbox.get.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.query('kernel.inbox.get', input, { actor, orgId })),
       ),
+      timeline: os.inbox.timeline.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.proposal.timeline', input, { actor, orgId }))),
       approve: os.inbox.approve.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;
@@ -1060,6 +1064,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       list: os.documents.list.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.documents.list', input, { actor, orgId })),
       ),
+      exports: os.documents.exports.handler(({ context, input }) => inFinance(context, (orgId, actor) => runtime.query('finance.document.exports', input, { actor, orgId }))),
     },
     search: {
       query: os.search.query.handler(({ context, input }) =>
