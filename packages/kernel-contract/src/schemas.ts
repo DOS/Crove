@@ -477,10 +477,22 @@ export const zParty = z.object({
   name: z.string(),
   taxCode: z.string().nullable(),
   address: z.string().nullable(),
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  // The version an edit sends back (kernel.party.update, #887): a save made meanwhile by someone else refuses it.
+  version: z.number().int(),
   documentCount: z.number().int(),
   // The debit account proposed first for this vendor's invoices (set by approving one, or by hand), or null.
   defaultAccount: z.string().nullable(),
+  // The parties marked as duplicates of this one (#887): hidden from lists and search, their documents counted here.
+  duplicates: z.array(z.object({ id: zId, name: z.string(), taxCode: z.string().nullable() })),
 });
+export type Party = z.infer<typeof zParty>;
+
+const zPartyName = z.object({ id: zId, name: z.string(), taxCode: z.string().nullable() });
+// Two parties that look like one (#887), and why: one enterprise's tax codes, the same phone, or names alike. keep is
+// the one to keep (the one with a tax code, else the older).
+export const zDuplicateHint = z.object({ keep: zPartyName, duplicate: zPartyName, reasons: z.array(z.enum(['tax_code', 'phone', 'name'])) });
 
 // An export a recorded document went out in (issue #878): the journal, or the MISA file of its direction, whose date
 // range took in the document's entry date; from and to are null for an open end.
