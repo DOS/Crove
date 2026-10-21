@@ -305,10 +305,14 @@ const MAX_FILES_PER_UPLOAD = 5;
 const UPLOAD_BODY_LIMIT = MAX_SOCIAL_VIDEO_BYTES + 2 * 1024 * 1024;
 // What a completion refused for lack of a slot tells the client to wait; the grant stays unused for 5 minutes.
 export const UPLOAD_BUSY_RETRY_SECONDS = 3;
-function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): string {
+export function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): string {
   // Hosted Supabase Auth lives on another origin; the bundled one is proxied under /auth/v1. With presigned
   // transfers the app also posts uploads to, and fetches downloads from, the bucket's origin.
   const authOrigin = new URL(authUrl, 'http://localhost').origin;
+  // Trusted Types (#681, plan Decision 6): the DOM's HTML and script sinks (innerHTML, document.write, a script's src,
+  // eval) refuse plain strings, and no policy may be created that would turn one into trusted HTML. The SPA needs
+  // none: it renders through React and never sets raw HTML (apps/app/test/trusted-types.test.ts). A sink reached
+  // with a string throws instead of running markup an attacker smuggled into the page.
   return [
     "default-src 'self'",
     "script-src 'self'",
@@ -319,6 +323,8 @@ function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): s
     "base-uri 'none'",
     "form-action 'self'",
     "frame-ancestors 'none'",
+    "require-trusted-types-for 'script'",
+    "trusted-types 'none'",
   ].join('; ');
 }
 
