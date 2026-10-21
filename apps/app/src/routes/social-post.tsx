@@ -279,7 +279,7 @@ function WordPressSettings({ settings, onChange, disabled }: { settings: Record<
             {excerptUsed}/{WORDPRESS_EXCERPT_MAX}
           </span>
         </div>
-        <Textarea id={`${id}-excerpt`} rows={3} value={excerpt} disabled={disabled} onChange={(e) => set('excerpt', e.target.value.trim() ? e.target.value : null)} />
+        <Textarea id={`${id}-excerpt`} rows={3} value={excerpt} disabled={disabled} onChange={(e) => set('excerpt', e.target.value === '' ? null : e.target.value)} />
         <p className="text-xs text-subtle-foreground">{t('wpExcerptHint')}</p>
       </div>
     </div>

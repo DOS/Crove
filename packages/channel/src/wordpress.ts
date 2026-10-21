@@ -327,6 +327,16 @@ function beforePost(error: unknown, fallback: string): PublishResult {
   return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', code: (result.kind === 'unknown' && result.code) || fallback };
 }
 
+// How many term lookups run at once against one site (#981).
+const TERM_LOOKUPS_AT_ONCE = 4;
+
+// Runs fn over items, at most size at a time, and returns the results in the items' order.
+async function inBatches<T, R>(items: readonly T[], size: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += size) out.push(...(await Promise.all(items.slice(i, i + size).map(fn))));
+  return out;
+}
+
 export class WordPressPublisher implements Publisher {
   readonly provider = 'wordpress' as const;
   // The post call takes no idempotency key; the user's latest posts are listed to find an unclear one.
@@ -425,15 +435,20 @@ export class WordPressPublisher implements Publisher {
     const tags: number[] = [];
     const missingTags: string[] = [];
     try {
-      for (const name of options.categories) {
-        const ids = await this.findTerms(s, 'categories', name);
+      // The lookups only read, so they run a few at a time (TERM_LOOKUPS_AT_ONCE): up to 30 names without a long serial
+      // wait, and without a burst a small shared host may refuse. Categories come first, so an unknown one stops the post
+      // before any tag is looked up. Results keep the order of the names.
+      const foundCategories = await inBatches(options.categories, TERM_LOOKUPS_AT_ONCE, (name) => this.findTerms(s, 'categories', name));
+      for (const [i, name] of options.categories.entries()) {
+        const ids = foundCategories[i] ?? [];
         if (ids.length === 0) return { refused: { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_CATEGORY_NOT_FOUND', message: name } };
         if (ids.length > 1) return { refused: { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_CATEGORY_AMBIGUOUS', message: name } };
         categories.push(ids[0] as number);
       }
-      for (const name of options.tags) {
-        const ids = await this.findTerms(s, 'tags', name);
-        if (ids[0] !== undefined) tags.push(ids[0]);
+      const foundTags = await inBatches(options.tags, TERM_LOOKUPS_AT_ONCE, (name) => this.findTerms(s, 'tags', name));
+      for (const [i, name] of options.tags.entries()) {
+        const id = foundTags[i]?.[0];
+        if (id !== undefined) tags.push(id);
         else missingTags.push(name);
       }
     } catch (error) {
