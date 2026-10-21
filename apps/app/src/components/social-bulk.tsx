@@ -67,7 +67,8 @@ export function BulkBar({
   const [unit, setUnit] = useState<MoveUnit>('days');
   const [earlier, setEarlier] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const move: BulkMove = { amount: (earlier ? -1 : 1) * Number(amount), unit };
+  // The direction comes from the select alone: a typed minus sign never flips it.
+  const move: BulkMove = { amount: (earlier ? -1 : 1) * Math.abs(Number(amount)), unit };
   const run = useMutation({
     mutationFn: async (job: { action: PostAction } | { action: 'move'; move: BulkMove }): Promise<Outcome> =>
       job.action === 'move'
