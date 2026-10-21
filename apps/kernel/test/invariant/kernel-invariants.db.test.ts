@@ -894,6 +894,7 @@ suite('kernel invariants on PostgreSQL', () => {
     // #674 records the invoice's signature verification and the approver's confirmation on the approval row; a row
     // written before it has none of the three keys. Both are accepted here, and the keys are checked when present.
     const audits = await approvalAudit(id);
+    expect(audits).toHaveLength(2);
     const signatureKeys = ['accept_unverified_signature', 'signature_status', 'signature_reason'];
     const approvedDetail: Record<string, unknown> = { ...audits[1]?.detail };
     const signature = Object.fromEntries(signatureKeys.filter((k) => k in approvedDetail).map((k) => [k, approvedDetail[k]]));

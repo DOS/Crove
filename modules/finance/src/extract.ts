@@ -393,6 +393,13 @@ export async function extractAndPropose(
     checks,
     sourceFileId: fileId,
     extractionMethod: method === 'unsupported' ? 'einvoice_xml' : method,
+    // The signature verification from the sandbox (#674). An invoice read by AI has no signature to verify; an XML
+    // answer from a sandbox older than #674 has no verification, which leaves it out.
+    ...(invoice.signature
+      ? { signature: { status: invoice.signature.status, reason: invoice.signature.reason } }
+      : method === 'einvoice_xml'
+        ? {}
+        : { signature: { status: 'not_applicable' as const, reason: null } }),
   };
   // AI output can carry values the schema refuses (for example an impossible date); never store those as a proposal.
   if (!zPurchaseProposal.safeParse(payload).success) {

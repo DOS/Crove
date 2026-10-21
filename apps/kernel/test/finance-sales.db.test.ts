@@ -138,7 +138,7 @@ suite('sales e-invoices (#313)', () => {
   const approve = (id: string, extra: Record<string, unknown> = {}) =>
     runtime.execute<{ documentId: string; journalEntryId: string }>(
       'kernel.proposal.approve',
-      { id, revision: 1, ...extra },
+      { acceptUnverifiedSignature: true, id, revision: 1, ...extra },
       { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() },
     );
 
@@ -386,7 +386,7 @@ suite('sales e-invoices (#313)', () => {
     try {
       const { results } = await runtime.execute<{ results: Array<{ id: string; outcome: string; code?: string }> }>(
         'kernel.proposal.approve_many',
-        { items: [{ id: sale, revision: 1 }, { id: purchase, revision: 1 }] },
+        { items: [{ id: sale, revision: 1, acceptUnverifiedSignature: true }, { id: purchase, revision: 1, acceptUnverifiedSignature: true }] },
         { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() },
       );
       expect(results).toEqual([

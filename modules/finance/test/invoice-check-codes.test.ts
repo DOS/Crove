@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { INVOICE_CHECK_CODES, zCheck } from '@crove/kernel-contract';
-import { checkInvoice, enterpriseCheckDigit, type InvoiceCheck, type ParsedInvoice } from '@crove/l10n-vn';
+import { checkInvoice, enterpriseCheckDigit, SIGNATURE_REASONS, type InvoiceCheck, type ParsedInvoice } from '@crove/l10n-vn';
 import { relatedCheck } from '../src/extract.ts';
 
 const parsed = JSON.parse(readFileSync(new URL('../../../packages/l10n-vn/test/fixtures/einvoice-basic.parsed.json', import.meta.url), 'utf8')) as ParsedInvoice;
@@ -36,6 +36,22 @@ const VARIANTS: ParsedInvoice[] = [
   invoice((i) => {
     i.seller.taxCode = VALID_CODE;
     i.source = 'ai';
+  }),
+  // The signature verification (#674): verified, each reason, and an answer from a sandbox without it.
+  invoice((i) => {
+    i.signature = { status: 'verified', reason: null, signer: 'CÔNG TY TNHH DỊCH VỤ MẪU', issuer: 'CA', signedAt: '2026-09-15T03:00:00.000Z' };
+  }),
+  ...SIGNATURE_REASONS.map((reason) =>
+    invoice((i) => {
+      i.signature = { status: 'unverified', reason, signer: null, issuer: null, signedAt: null };
+    }),
+  ),
+  invoice((i) => {
+    delete i.signature;
+  }),
+  invoice((i) => {
+    delete i.signature;
+    i.hasSignature = false;
   }),
 ];
 // The extraction job adds this one (modules/finance/src/extract.ts).

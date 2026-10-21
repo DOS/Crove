@@ -132,7 +132,7 @@ suite('bank statement lines to bank vouchers (#326)', () => {
   };
   const ask = async (who: Account, input: Record<string, unknown>) =>
     rpc('inbox/request', await tokenFor(who), { command: 'finance.voucher.record', input, idempotencyKey: randomUUID() });
-  const approve = async (who: Account, id: string) => rpc('inbox/approve', await tokenFor(who, { mfa: true }), { id, revision: 1, idempotencyKey: randomUUID() });
+  const approve = async (who: Account, id: string) => rpc('inbox/approve', await tokenFor(who, { mfa: true }), { acceptUnverifiedSignature: true, id, revision: 1, idempotencyKey: randomUUID() });
   // The báo Có of the customer's transfer, as the form sends it from the line's suggestion.
   const receipt = (extra: Record<string, unknown> = {}) => ({
     type: 'bank_credit',
@@ -370,7 +370,7 @@ suite('bank statement lines to bank vouchers (#326)', () => {
     );
     expect((await approve(owner, first)).status).toBe(200);
     expect(await approve(owner, String(copy?.id))).toMatchObject({ status: 409, body: { code: 'BANK_LINE_MATCHED' } });
-    const bulk = await rpc('inbox/approveMany', await tokenFor(owner, { mfa: true }), { items: [{ id: String(copy?.id), revision: 1 }], idempotencyKey: randomUUID() });
+    const bulk = await rpc('inbox/approveMany', await tokenFor(owner, { mfa: true }), { items: [{ id: String(copy?.id), revision: 1, acceptUnverifiedSignature: true }], idempotencyKey: randomUUID() });
     expect(bulk.body).toEqual({ results: [{ id: copy?.id, outcome: 'refused', code: 'BANK_LINE_MATCHED', rule: null }] });
     expect((await states()).FT102).toMatchObject({ status: 'matched', code: 'BN00001' });
   });

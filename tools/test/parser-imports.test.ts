@@ -177,6 +177,7 @@ describe('parsers stay in crove-extract', () => {
 
   it('crove-extract does hold the parsers, so the walk would find them', () => {
     const { parsers } = productionTree(join(ROOT, 'apps/extract'));
-    expect(parsers.map((chain) => chain.split(' > ').pop()).sort()).toEqual(['fast-xml-parser', 'postal-mime', 'unpdf']);
+    // xml-crypto and @xmldom/xmldom verify e-invoice signatures (#674).
+    expect(parsers.map((chain) => chain.split(' > ').pop()).sort()).toEqual(['@xmldom/xmldom', 'fast-xml-parser', 'postal-mime', 'unpdf', 'xml-crypto']);
   });
 });

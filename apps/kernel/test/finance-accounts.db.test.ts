@@ -160,7 +160,7 @@ suite('chart of accounts: TT133 plus the org sub-accounts (#319)', () => {
   const detail = async (id: string) => (await rpc('inbox/get', owner, { id })).body as { revision: number; payload: { lines: Array<{ lineNo: number; debitAccount: string }> } };
 
   const approve = (id: string, revision: number) =>
-    runtime.execute<{ documentId?: string; journalEntryId: string }>('kernel.proposal.approve', { id, revision }, { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() });
+    runtime.execute<{ documentId?: string; journalEntryId: string }>('kernel.proposal.approve', { acceptUnverifiedSignature: true, id, revision }, { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() });
 
   // Sets every line of a pending proposal to `account` (a new revision), then approves it.
   async function recordOn(id: string, account: string) {

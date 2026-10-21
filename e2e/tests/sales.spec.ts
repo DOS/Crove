@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import ExcelJS from 'exceljs';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
 const INVOICE = fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url));
@@ -49,6 +50,7 @@ test('set the tax code, upload a sales e-invoice, approve it, then find it in th
   });
 
   await test.step('approve it with a second factor', async () => {
+    await confirmUnverifiedSignature(page);
     await page.getByRole('button', { name: 'Duyệt và ghi sổ' }).click();
     await expect(page.getByText('Việc này cần xác thực hai lớp.')).toBeVisible();
     await page.getByRole('button', { name: 'Bật xác thực hai lớp' }).click();

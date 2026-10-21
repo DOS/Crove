@@ -70,6 +70,18 @@ function check(name, condition, detail) {
 const invoice = await extract('einvoice_xml', xml);
 check('e-invoice XML is parsed', invoice.status === 200 && invoice.json.ok && invoice.json.invoice.number === '1234' && invoice.json.invoice.total === '1980000', invoice);
 
+// #674: a TEST ONLY signed invoice. untrusted_certificate comes only after xml-crypto checked its references and
+// signature value and the chain was built from the shipped trust files, inside the image's parser process.
+const signedXml = readFileSync(join(fixtures, 'einvoice-signed-test-only.xml'), 'utf8').replaceAll('\r\n', '\n');
+const signed = await extract('einvoice_xml', encode(signedXml));
+check(
+  'e-invoice signature is verified in the container',
+  signed.status === 200 && signed.json.ok && signed.json.invoice.signature?.status === 'unverified' && signed.json.invoice.signature?.reason === 'untrusted_certificate',
+  signed,
+);
+const tampered = await extract('einvoice_xml', encode(signedXml.replace('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>1980001</TgTTTBSo>')));
+check('an edited signed e-invoice is reported as not matching its signature', tampered.json.ok && tampered.json.invoice.signature?.reason === 'digest_mismatch', tampered);
+
 const text = await extract('pdf_text', pdf('Hoa don GTGT so 1234'));
 check('PDF text layer is extracted', text.status === 200 && text.json.ok && text.json.text === 'Hoa don GTGT so 1234' && text.json.pages === 1, text);
 

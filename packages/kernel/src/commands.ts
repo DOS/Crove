@@ -11,6 +11,7 @@ import {
   zBulkApproveItems,
   zId,
   zLocalDate,
+  zProposalSignature,
   zPurchaseProposal,
   zRole,
   zSessionRevoke,
@@ -493,6 +494,18 @@ export const editProposal = defineCommand({
   },
 });
 
+// The signature verification stored on an invoice proposal (#674), and whether approving it needs the approver's
+// confirmation: an invoice read from e-invoice XML whose signature is not verified, including one read before #674
+// (no verification stored) and an unsigned cash register invoice (unverified, cash_register).
+function signatureOf(payload: unknown): { status: string | null; reason: string | null; needsConfirmation: boolean } {
+  const body = payload as { signature?: unknown; extractionMethod?: unknown } | null;
+  const parsed = zProposalSignature.safeParse(body?.signature);
+  const status = parsed.success ? parsed.data.status : null;
+  const reason = parsed.success ? parsed.data.reason : null;
+  const xml = body?.extractionMethod === 'einvoice_xml';
+  return { status, reason, needsConfirmation: status === 'unverified' || (xml && status !== 'verified') };
+}
+
 export const approveProposal = defineCommand({
   name: 'kernel.proposal.approve',
   input: z.object({
@@ -502,6 +515,11 @@ export const approveProposal = defineCommand({
     lineAccounts: zLineAccounts.optional(),
     note: z.string().max(500).optional(),
     acceptFailedChecks: z.boolean().optional(),
+    // The approver confirmed this revision of an invoice whose digital signature is unverified (#674). Required for
+    // such an invoice (SIGNATURE_UNVERIFIED otherwise); the revision above binds it to what the approver saw. An
+    // approval of such an invoice that went through was therefore confirmed: its audit row and the revision's payload
+    // (signature.status) say so.
+    acceptUnverifiedSignature: z.boolean().optional(),
     // A purchase invoice dated in a locked month (#478): the approver posts its entry on this date, in an open month.
     // An approval-time choice like acceptFailedChecks, never part of the revision: finance.purchase.record checks it
     // and the audit row records it. Only a user's single approval sets it; a bulk approval and an agent never do.
@@ -530,6 +548,12 @@ export const approveProposal = defineCommand({
     if (decision.reason !== 'ok') {
       throw new DomainError('NOT_ELIGIBLE', 403, 'Bạn không có quyền duyệt đề xuất này', { rule: 'P12' });
     }
+    // An invoice whose digital signature could not be verified (#674) is approved only with the approver's explicit
+    // confirmation of this revision. It never blocks the invoice otherwise: confirmed, it is approved as any other.
+    const signature = proposal.command === PURCHASE_COMMAND ? signatureOf(proposal.payload) : null;
+    if (signature?.needsConfirmation && input.acceptUnverifiedSignature !== true) {
+      throw new DomainError('SIGNATURE_UNVERIFIED', 422, 'Chưa xác minh được chữ ký số của hóa đơn này; hãy kiểm tra hóa đơn gốc rồi xác nhận khi duyệt');
+    }
     ctx.audit({
       revision: proposal.revision,
       aal: ctx.actor.aal,
@@ -537,6 +561,10 @@ export const approveProposal = defineCommand({
       eligible_approvers: decision.eligibleCount,
       self_approved: decision.selfApproved,
       accept_failed_checks: input.acceptFailedChecks ?? false,
+      // An invoice's signature verification and whether the approver confirmed it (#674).
+      ...(signature
+        ? { accept_unverified_signature: input.acceptUnverifiedSignature === true, signature_status: signature.status, signature_reason: signature.reason }
+        : {}),
       ...(input.postingDate !== undefined ? { posting_date: input.postingDate } : {}),
     });
     // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
@@ -585,6 +613,8 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // The approval policy (decideApproval): P10 and P12.
   'FOUR_EYES_REQUIRED',
   'NOT_ELIGIBLE',
+  // An invoice whose digital signature is unverified, sent without its confirmation (#674).
+  'SIGNATURE_UNVERIFIED',
   // Recording a purchase (finance.purchase.record and its account check).
   'CHECKS_BLOCKING',
   'CHECKS_FAILED',
@@ -680,7 +710,9 @@ export const approveProposals = defineCommand({
     const voucherTypes = new Map(vouchers.map((v) => [v.id, v.voucher_type ?? '']));
     const outcomes = new Map<string, BulkApproveResult>();
     for (const item of bulkApproveOrder(input.items, voucherTypes)) {
-      const attempt = await ctx.tryRun<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision }, { recover: isBulkItemRefusal });
+      // An item's confirmation of an unverified signature (#674) is passed on with its own id and revision.
+      const confirm = item.acceptUnverifiedSignature === true ? { acceptUnverifiedSignature: true } : {};
+      const attempt = await ctx.tryRun<Record<string, unknown>>('kernel.proposal.approve', { id: item.id, revision: item.revision, ...confirm }, { recover: isBulkItemRefusal });
       if (attempt.status === 'ok') {
         outcomes.set(item.id, { id: item.id, outcome: 'approved', result: attempt.value });
       } else {
@@ -693,7 +725,14 @@ export const approveProposals = defineCommand({
     ctx.audit({
       approved: results.filter((r) => r.outcome === 'approved').length,
       refused: results.filter((r) => r.outcome === 'refused').length,
-      items: results.map((r) => (r.outcome === 'approved' ? { id: r.id, outcome: r.outcome } : { id: r.id, outcome: r.outcome, code: r.code, rule: r.rule })),
+      // Each item's confirmation of an unverified signature as the batch sent it (#674); the item's own approval row
+      // records the signature it confirmed.
+      items: results.map((r, i) => {
+        const accept_unverified_signature = input.items[i]?.acceptUnverifiedSignature === true;
+        return r.outcome === 'approved'
+          ? { id: r.id, outcome: r.outcome, accept_unverified_signature }
+          : { id: r.id, outcome: r.outcome, code: r.code, rule: r.rule, accept_unverified_signature };
+      }),
     });
     return { results };
   },

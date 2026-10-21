@@ -302,6 +302,9 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const [lineAccounts, setLineAccounts] = useState<Record<number, string>>({});
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const [acceptFailed, setAcceptFailed] = useState(false);
+  // An invoice whose digital signature is unverified (#674): the approver confirms they checked the original first.
+  // The confirmation holds for the revision it was given on: a new reading of the file (a new revision) asks again.
+  const [acceptUnverifiedRevision, setAcceptUnverifiedRevision] = useState<number | null>(null);
   // A purchase invoice dated in a locked month (#478), or on or before the opening balances (#366): the approver may
   // post it on a later date, by choice only (unticked, the approval posts on the invoice date and the kernel refuses
   // it, as before). The date starts at the first day after both.
@@ -374,13 +377,18 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const plain = reversal !== null || voucher !== null || journalVoucher !== null;
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
+  // As the kernel decides (kernel.proposal.approve): an XML invoice whose signature is not verified, including one read
+  // before #674, which has no verification stored.
+  const unverified = item?.signatureStatus === 'unverified';
+  const acceptUnverified = item !== undefined && acceptUnverifiedRevision === item.revision;
+  const signatureCheck = payload?.checks.find((c) => c.id === 'signature');
   // The approve buttons are enabled exactly when this holds, and the A shortcut uses the same value.
   const approveReady =
     item !== undefined &&
     pending &&
     item.canApprove &&
     !busy &&
-    (plain ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed) && latePostingValid);
+    (plain ? true : !dirty && !!payload && !blocked && (failed === 0 || acceptFailed) && (!unverified || acceptUnverified) && latePostingValid);
   const submitApproval = () => {
     if (!item) return;
     if (plain) {
@@ -393,6 +401,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
       idempotencyKey,
       lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
       ...(failed > 0 ? { acceptFailedChecks: acceptFailed } : {}),
+      ...(unverified ? { acceptUnverifiedSignature: acceptUnverified } : {}),
       ...(latePosting ? { postingDate: latePosting } : {}),
     });
   };
@@ -647,6 +656,19 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
             {payload?.extractionMethod === 'einvoice_xml' ? t('blockedXml') : t('blockedAi')}
           </ErrorText>
         </div>
+      )}
+      {!plain && unverified && (
+        <Card className="mb-4 block space-y-2 border border-destructive/60 p-4 ring-0" data-testid="signature-unverified">
+          <p className="text-sm font-medium text-foreground">{t('signatureUnverifiedTitle')}</p>
+          <p className="text-sm text-muted-foreground">{signatureCheck ? invoiceCheckMessage(signatureCheck, root, money) : t('signatureUnverifiedTitle')}</p>
+          <p className="text-sm text-muted-foreground">{t('signatureUnverifiedHint')}</p>
+          {pending && item.canApprove && (
+            <Label className="font-normal text-muted-foreground">
+              <Checkbox checked={acceptUnverified} onCheckedChange={(checked) => setAcceptUnverifiedRevision(checked ? item.revision : null)} />
+              {t('acceptUnverified')}
+            </Label>
+          )}
+        </Card>
       )}
       {pending && !blocked && failed > 0 && (
         <div className="mb-4 space-y-2">

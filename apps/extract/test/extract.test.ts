@@ -11,6 +11,7 @@ import { EXTRACT_CLIENT_TIMEOUT_MS, EXTRACT_LIMITS, EXTRACT_TIMING, worstCaseCal
 import { IMAGE_MARKER, credentialVariables, enforcesAllowlist, loadExtractConfig, unexpectedVariables } from '../src/main.ts';
 import { DEFAULT_SANDBOX, PARSER_ENV, classifyExit, parserFlags, runSandboxed } from '../src/sandbox.ts';
 import { createExtractApp, createLimiter, type Runner } from '../src/server.ts';
+import { signInvoice, testPki } from './einvoice-signing-fixture.ts';
 
 const FIXTURE = readFileSync(new URL('./fixtures/einvoice-basic.xml', import.meta.url));
 const encode = (text: string) => new TextEncoder().encode(text);
@@ -242,6 +243,19 @@ describe('crove-extract parser process', () => {
     );
     // 100 nested multiparts, over the parser's nesting limit of 32.
     expect(await runSandboxed('mime', mime)).toEqual({ ok: false, code: 'invalid', message: 'Không đọc được thư điện tử' });
+  });
+
+  it('verifies an e-invoice signature inside the parser process (#674)', async () => {
+    // Signed by the TEST ONLY PKI, which the shipped national roots do not trust. untrusted_certificate is decided only
+    // after xml-crypto checked the references and the signature value, and after the chain was built from the
+    // shipped trust files: all of it ran under the parser's permission model, with no network or code generation.
+    const pki = testPki();
+    const unsigned = FIXTURE.toString('utf8').replace(/<DSCKS>[\s\S]*<\/DSCKS>/, '<DSCKS><NBan></NBan></DSCKS>');
+    const signed = signInvoice(unsigned.replace(/<MCCQT[^>]*>[^<]*<\/MCCQT>/, ''), pki.seller, { slot: 'NBan' });
+    const result = await runSandboxed('einvoice_xml', encode(signed));
+    expect(result).toMatchObject({ ok: true, invoice: { total: '1980000', signature: { status: 'unverified', reason: 'untrusted_certificate', signer: 'TEST ONLY CÔNG TY TNHH DỊCH VỤ MẪU' } } });
+    const tampered = await runSandboxed('einvoice_xml', encode(signed.replace('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>1980001</TgTTTBSo>')));
+    expect(tampered).toMatchObject({ ok: true, invoice: { signature: { status: 'unverified', reason: 'digest_mismatch' } } });
   });
 
   it('gives a typed error for malformed input and leaks no parser internals', async () => {

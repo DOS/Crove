@@ -86,7 +86,7 @@ suite('replacement and adjustment invoices (#916)', () => {
   const approve = (id: string) =>
     runtime.execute<{ documentId: string; journalEntryId: string; correctsDocumentId?: string; voidedDocumentId?: string }>(
       'kernel.proposal.approve',
-      { id, revision: 1 },
+      { acceptUnverifiedSignature: true, id, revision: 1 },
       { actor: asMfa(owner), orgId, idempotencyKey: randomUUID() },
     );
 

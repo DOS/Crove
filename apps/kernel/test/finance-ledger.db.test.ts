@@ -141,7 +141,7 @@ suite('ledger reports per month, quarter or year (#321)', () => {
     const { proposalId } = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-17' }, target.orgId, fileId);
     return runtime.execute<{ documentId: string; journalEntryId: string }>(
       'kernel.proposal.approve',
-      { id: proposalId, revision: 1 },
+      { acceptUnverifiedSignature: true, id: proposalId, revision: 1 },
       { actor: asMfa(who), orgId: target.orgId, idempotencyKey: randomUUID() },
     );
   }
@@ -224,7 +224,7 @@ suite('ledger reports per month, quarter or year (#321)', () => {
       idempotencyKey: randomUUID(),
     });
     expect(asked.status).toBe(200);
-    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
+    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { acceptUnverifiedSignature: true, id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
     expect(approved.status).toBe(200);
   });
 
@@ -484,7 +484,7 @@ suite('ledger reports per month, quarter or year (#321)', () => {
         fresh.slug,
       );
       expect(asked.status).toBe(200);
-      const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() }, fresh.slug);
+      const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { acceptUnverifiedSignature: true, id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() }, fresh.slug);
       expect(approved.status).toBe(200);
     };
 

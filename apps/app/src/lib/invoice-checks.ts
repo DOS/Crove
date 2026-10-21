@@ -41,8 +41,25 @@ export function invoiceCheckMessage(check: Check, t: Translate, money: (amount: 
     case 'issue_date.future':
     case 'tax_authority_code.present':
     case 'tax_authority_code.missing':
+    case 'signature.verified':
+      return has('signer') ? t('invoiceChecks.signature.verifiedBy', { signer: p.signer ?? '' }) : t('invoiceChecks.signature.verified');
     case 'signature.unverified':
     case 'signature.missing':
+    case 'signature.malformed':
+    case 'signature.ambiguous':
+    case 'signature.not_covering':
+    case 'signature.digest_mismatch':
+    case 'signature.bad_signature':
+    case 'signature.unsupported_algorithm':
+    case 'signature.no_certificate':
+    case 'signature.untrusted_certificate':
+    case 'signature.certificate_expired':
+    case 'signature.signer_mismatch':
+    case 'signature.tax_authority_missing':
+    case 'signature.tax_authority_invalid':
+    case 'signature.tax_authority_untrusted':
+    case 'signature.cash_register':
+    case 'signature.too_large':
     case 'source.ai':
     case 'duplicate.found':
       return t(`invoiceChecks.${code}`);
