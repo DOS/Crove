@@ -132,7 +132,9 @@ export interface PublishInput {
 // that went through is `unknown`. An adapter returns these and never throws for a platform answer; a throw is
 // treated as `unknown`.
 export type PublishResult =
-  | { kind: 'accepted'; externalId: string; url: string | null }
+  // sentToApp: the platform took the post as a draft that the account finishes and posts in the platform's own app
+  // (TikTok's inbox upload, #903). It is not public yet and has no post id: externalId is the platform's tracking id.
+  | { kind: 'accepted'; externalId: string; url: string | null; sentToApp?: true }
   // Accepted, still processing on the platform (an Instagram container, a Zalo article): check again later.
   | { kind: 'pending'; externalRef: string; checkAfterSeconds: number }
   | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string; httpStatus?: number; retryAt?: Date }
@@ -242,6 +244,10 @@ export interface Publisher {
   // adapter's own fetch timeout, so the adapter classifies its own abort, and under PUBLISH_STALE_SECONDS.
   readonly callTimeoutMs?: number;
   publish(input: PublishInput): Promise<PublishResult>;
+  // A code for variant settings this deployment's adapter cannot send (#903: TikTok's inbox mode without
+  // CHANNEL_TIKTOK_INBOX), or null. The job asks before anything else, so such a variant fails with nothing sent
+  // instead of waiting on a permission its connection could never get.
+  refusal?(settings: Readonly<Record<string, unknown>>): string | null;
   // Two-phase providers: where a pending post stands.
   status?(input: StatusInput): Promise<PublishResult>;
   // Providers that can be asked whether an earlier call went through.

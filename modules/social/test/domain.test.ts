@@ -22,6 +22,7 @@ import {
   VIDEO_READY,
   publishCallKey,
   publishJobKey,
+  scopeNeeded,
   startsNewAttempt,
   transitionVariant,
   validateVariant,
@@ -301,6 +302,23 @@ describe('validateVariant', () => {
     expect(long([jpeg()], 4000)).toEqual([]);
     expect(long([jpeg()], 4001)).toEqual(['TEXT_TOO_LONG']);
     expect(long([{ kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 10 }], 2201)).toEqual(['TEXT_TOO_LONG']);
+  });
+
+  it('asks no privacy level of a TikTok draft sent to the inbox, and no cover (#903)', () => {
+    const tt = (settings: Record<string, unknown>, media: MediaItem[] = [mp4(30)]) => validateVariant({ provider: 'tiktok', body: 'Khai trương', title: null, media, settings }).map((i) => i.code);
+    expect(tt({ tiktokMode: 'inbox' })).toEqual([]);
+    expect(tt({ tiktokMode: 'inbox' }, [jpeg(), jpeg()])).toEqual([]);
+    // Direct, stored or by default, still needs it, as variants saved before #903 did.
+    expect(tt({})).toEqual(['PRIVACY_REQUIRED']);
+    expect(tt({ tiktokMode: 'direct' })).toEqual(['PRIVACY_REQUIRED']);
+    expect(tt({ tiktokMode: 'direct', privacyLevel: 'SELF_ONLY' })).toEqual([]);
+    expect(tt({ tiktokMode: 'draft', privacyLevel: 'SELF_ONLY' })).toEqual(['TIKTOK_MODE_INVALID']);
+    expect(tt({ tiktokMode: 'inbox', cover: { atMs: 1000 } })).toEqual(['COVER_NOT_SUPPORTED']);
+    expect(tt({ privacyLevel: 'SELF_ONLY', cover: { atMs: 1000 } })).toEqual([]);
+    // Only an inbox draft needs video.upload on its connection.
+    expect(scopeNeeded('tiktok', { tiktokMode: 'inbox' })).toBe('video.upload');
+    expect(scopeNeeded('tiktok', {})).toBeNull();
+    expect(scopeNeeded('youtube', { tiktokMode: 'inbox' })).toBeNull();
   });
 
   it('checks a Mastodon post: 500 characters by default, its visibility and content warning (#748)', () => {

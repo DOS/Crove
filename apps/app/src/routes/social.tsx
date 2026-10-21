@@ -28,7 +28,7 @@ import { AccountGrowth, TopPosts } from '../components/social-growth.tsx';
 import { WhatWorks } from '../components/social-insights.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
-import { dayKey, dayRange, providerName, SOCIAL_TABS, VARIANT_TONE, type SocialSearch, type SocialTab } from '../lib/social.ts';
+import { dayKey, dayRange, providerName, SOCIAL_TABS, variantStatusKey, variantTone, type SocialSearch, type SocialTab } from '../lib/social.ts';
 import { pollEvery, SAFETY_POLL_MS, useStreamLive } from '../lib/stream-hook.ts';
 
 type Tab = SocialTab;
@@ -58,8 +58,8 @@ function ChannelChips({ post, names }: { post: Post; names: Map<string, string> 
       {post.variants
         .filter((v) => v.status !== 'cancelled')
         .map((v) => (
-          <Badge key={v.id} variant={VARIANT_TONE[v.status]} title={names.get(v.connectionId)}>
-            {providerName(v.provider)} · {t(`status.${v.status}`)}
+          <Badge key={v.id} variant={variantTone(v)} title={names.get(v.connectionId)}>
+            {providerName(v.provider)} · {t(`status.${variantStatusKey(v)}`)}
           </Badge>
         ))}
     </div>
@@ -378,7 +378,7 @@ function Agenda({ posts, slug, names, labels }: { posts: Post[]; slug: string; n
                     <Badge variant="outline">{providerName(v.provider)}</Badge>
                     <span className="truncate">{names.get(v.connectionId)}</span>
                     {v.queueSlotAt && <span>· {t('fromQueue')}</span>}
-                    {v.status !== 'scheduled' && <Badge variant={VARIANT_TONE[v.status]}>{t(`status.${v.status}`)}</Badge>}
+                    {v.status !== 'scheduled' && <Badge variant={variantTone(v)}>{t(`status.${variantStatusKey(v)}`)}</Badge>}
                   </div>
                   <PostLabels ids={post.labelIds} labels={labels} />
                 </div>
