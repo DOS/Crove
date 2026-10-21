@@ -138,7 +138,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
   const approve = (id: string, revision = 1, extra: Record<string, unknown> = {}) =>
     runtime.execute<{ documentId?: string; journalEntryId: string; voidedDocumentId?: string }>(
       'kernel.proposal.approve',
-      { id, revision, ...extra },
+      { acceptUnverifiedSignature: true, id, revision, ...extra },
       { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() },
     );
 
@@ -312,10 +312,10 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     });
 
     // Approving posts the mirror entry and voids the purchase document; it needs fresh MFA (R3).
-    expect((await rpc('inbox/approve', await tokenFor(owner), { id: proposalId, revision: 1, idempotencyKey: randomUUID() })).body).toMatchObject({
+    expect((await rpc('inbox/approve', await tokenFor(owner), { acceptUnverifiedSignature: true, id: proposalId, revision: 1, idempotencyKey: randomUUID() })).body).toMatchObject({
       code: 'STEP_UP_REQUIRED',
     });
-    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: proposalId, revision: 1, idempotencyKey: randomUUID() });
+    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { acceptUnverifiedSignature: true, id: proposalId, revision: 1, idempotencyKey: randomUUID() });
     expect(approved).toMatchObject({ status: 200, body: { journalEntryId: expect.any(String), reversedEntryId: firstEntry, voidedDocumentId: firstDocument } });
     reversalEntry = String(approved.body.journalEntryId);
     expect((await rpc('inbox/get', await tokenFor(owner), { id: proposalId })).body).toMatchObject({
@@ -640,7 +640,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
         idempotencyKey: randomUUID(),
       });
       expect(asked.status).toBe(200);
-      const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
+      const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { acceptUnverifiedSignature: true, id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
       expect(approved).toMatchObject({
         status: 422,
         body: { code: 'INVALID', data: { reason: 'partial_mirror' }, message: expect.stringContaining('không được xem tất cả các dòng') },

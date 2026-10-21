@@ -152,15 +152,21 @@ export const statementsPeriodQuery = defineQuery({
   handler: (ctx, input): Promise<FinancialStatements> => financialStatements(ctx, input.period),
 });
 
-// Records one Excel export of a period's financial statements after the workbook is built. It changes nothing: its
-// audit row (the period) is the record of who took the statements out, and a failure stops the download.
+// Records one export of a period's financial statements after the file is built. It changes nothing: its audit row
+// (the period) is the record of who took the statements out, and a failure stops the download. The HTKK XML of a
+// year's statements (#920) also records its format and the warnings the file was made with; the Excel workbook
+// records no format, as before.
+export const STATEMENTS_EXPORT_FORMATS = ['htkk_bctc_xml'] as const;
 export const statementsExport = defineCommand({
   name: 'finance.statements.export',
-  input: zStatementsInput,
+  input: zStatementsInput.extend({
+    format: z.enum(STATEMENTS_EXPORT_FORMATS).optional(),
+    warnings: z.array(z.string().max(40)).max(10).optional(),
+  }),
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
-    ctx.audit({ period: input.period });
+    ctx.audit({ period: input.period, ...(input.format ? { format: input.format } : {}), ...(input.warnings ? { warnings: input.warnings } : {}) });
     return { ok: true as const };
   },
 });

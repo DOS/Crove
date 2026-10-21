@@ -4,6 +4,7 @@ export * from './queries.ts';
 export * from './overview.ts';
 export * from './invites.ts';
 export * from './mail.ts';
+export * from './notifications.ts';
 export * from './extraction.ts';
 export * from './offboarding.ts';
 export * from './agents.ts';

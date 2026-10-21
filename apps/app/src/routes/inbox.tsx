@@ -185,6 +185,15 @@ export function InboxPage() {
   const selectable = bulkEnabled ? (items.data ?? []).filter((item) => bulkSelectable(item, REVERSAL_KIND)) : [];
   const chosen = selectable.filter((item) => selected.has(item.id));
   const sending = bulk?.sending ?? false;
+  // Invoices whose digital signature is unverified (#674): approving them, in bulk as one by one, asks the approver to
+  // confirm they checked the original invoice.
+  // The confirmation names each unverified invoice and the revision it was given for, so a proposal selected (or read
+  // again) after the box was ticked is not covered by it; only the confirmed ones are sent with the confirmation.
+  const confirmKey = (item: { id: string; revision: number }) => `${item.id}:${item.revision}`;
+  const unverifiedItems = chosen.filter((item) => item.signatureStatus === 'unverified');
+  const unverifiedChosen = unverifiedItems.length;
+  const [confirmedUnverified, setConfirmedUnverified] = useState<ReadonlySet<string>>(() => new Set());
+  const confirmUnverified = unverifiedItems.every((item) => confirmedUnverified.has(confirmKey(item)));
 
   async function sendBulk(run: BulkRun) {
     setBulk({ ...run, sending: true, stopped: false, progress: { ...run.progress, error: null } });
@@ -200,9 +209,17 @@ export function InboxPage() {
   }
 
   function startBulk() {
-    if (chosen.length === 0 || sending) return;
+    if (chosen.length === 0 || sending || !confirmUnverified) return;
+    const confirmed = confirmedUnverified;
+    setConfirmedUnverified(new Set());
     void sendBulk({
-      batches: planBatches(chosen.map((item) => ({ id: item.id, revision: item.revision }))),
+      batches: planBatches(
+        chosen.map((item) => ({
+          id: item.id,
+          revision: item.revision,
+          ...(item.signatureStatus === 'unverified' && confirmed.has(confirmKey(item)) ? { acceptUnverifiedSignature: true } : {}),
+        })),
+      ),
       progress: { results: [], next: 0, error: null },
       names: Object.fromEntries(chosen.map((item) => [item.id, proposalName(item)])),
       total: chosen.length,
@@ -404,13 +421,19 @@ export function InboxPage() {
                   {t('bulk.clear')}
                 </Button>
               )}
-              <Button size="lg" disabled={chosen.length === 0 || sending} onClick={startBulk}>
+              <Button size="lg" disabled={chosen.length === 0 || sending || !confirmUnverified} onClick={startBulk}>
                 {sending ? <Spinner className="text-current" /> : null}
                 {sending && bulk
                   ? t('bulk.sending', { done: Math.min(bulk.progress.next + 1, bulk.batches.length), total: bulk.batches.length })
                   : t('bulk.approve', { count: chosen.length })}
               </Button>
             </div>
+            {unverifiedChosen > 0 && (
+              <Label className="w-full font-normal text-warning">
+                <Checkbox checked={confirmUnverified} disabled={sending} onCheckedChange={(checked) => setConfirmedUnverified(checked === true ? new Set(unverifiedItems.map(confirmKey)) : new Set())} />
+                {t('bulk.confirmUnverified', { count: unverifiedChosen })}
+              </Label>
+            )}
             <p className="w-full text-xs text-subtle-foreground">{t('bulk.hint')}</p>
           </div>
         )}
@@ -479,6 +502,7 @@ export function InboxPage() {
                     {item.kind === JOURNAL_VOUCHER_KIND && <Badge variant="secondary">{t('journalVoucherKind')}</Badge>}
                     {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
                     {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
+                    {item.signatureStatus === 'unverified' && <Badge variant="destructive">{t('signatureUnverified')}</Badge>}
                     {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
                     {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
                     {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}

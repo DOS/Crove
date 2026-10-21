@@ -16,6 +16,7 @@ import { OPENING_BALANCE_SOURCE, canImportOpeningBalance } from '../lib/opening-
 import { MAX_REASON_LENGTH, canAskReversal, defaultReversalDate, reversalErrorMessage, reversalFormError } from '../lib/reversal.ts';
 import { canEnterVoucher } from '../lib/vouchers.ts';
 import { JournalVoucherFormCard } from './journal-voucher.tsx';
+import { YearClosingFormCard } from './year-closing.tsx';
 
 interface Entry {
   id: string;
@@ -144,6 +145,7 @@ export function JournalPage() {
   const [reversing, setReversing] = useState<string | null>(null);
   // The general journal voucher form (NVK, #888), for owners, admins and members.
   const [entering, setEntering] = useState(false);
+  const [closing, setClosing] = useState(false);
   const range = { ...(from ? { from } : {}), ...(to ? { to } : {}) };
   const journal = useQuery(orpc.journal.list.queryOptions({ input: range }));
   const org = useQuery(orpc.org.get.queryOptions());
@@ -188,6 +190,11 @@ export function JournalPage() {
                 {t('newJournalVoucher')}
               </Button>
             )}
+            {canEnterVoucher(org.data?.role) && !closing && (
+              <Button size="lg" variant="outline" onClick={() => setClosing(true)}>
+                {t('yearClosing')}
+              </Button>
+            )}
             {canImportOpeningBalance(org.data?.role) && (
               <Link to="/o/$slug/journal/opening-balances" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
                 {ob('open')}
@@ -209,6 +216,7 @@ export function JournalPage() {
         }
       />
       {entering && <JournalVoucherFormCard slug={slug} onClose={() => setEntering(false)} />}
+      {closing && <YearClosingFormCard slug={slug} onClose={() => setClosing(false)} />}
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="text-xs">
           <span className="text-subtle-foreground">{t('from')}</span>

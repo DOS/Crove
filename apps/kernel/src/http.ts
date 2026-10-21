@@ -18,6 +18,7 @@ import {
   ORG_HEADER,
   SOCIAL_IMAGE_TYPES,
   XLSX_CONTENT_TYPE,
+  type FixedAsset,
   type UploadPurpose,
 } from '@crove/kernel-contract';
 import {
@@ -26,6 +27,7 @@ import {
   BlobNotFoundError,
   BlobTooLargeError,
   DomainError,
+  archiveKey,
   fileKey,
   putFile,
   readVerified,
@@ -43,6 +45,8 @@ import {
   buildJournalWorkbook,
   buildLedgerWorkbook,
   buildStatementsWorkbook,
+  buildStatementsHtkkXml,
+  buildFixedAssetsWorkbook,
   buildMisaWorkbook,
   buildVat01Xml,
   buildVatWorkbook,
@@ -52,12 +56,15 @@ import {
   type CashVoucher,
   type JournalEntryView,
   type FinancialStatements,
+  type StatementsFiling,
   type LedgerBook,
   type PurchaseVoucher,
+  type RecordedArchive,
   type SalesVoucher,
   type VatDeclaration,
   type VatReport,
 } from '@crove/mod-finance';
+import { readYearArchiveManifest, verifyYearArchive } from './year-archive.ts';
 import { clientBucket, createDbEmailLimiter, emailSendRequest, type EmailLimiter } from './auth-email-limit.ts';
 import {
   createDbInviteChecks,
@@ -1356,15 +1363,23 @@ export function createHttpApp(deps: HttpDeps) {
         const orgSlug = c.req.header(ORG_HEADER) ?? null;
         const orgId = await resolveOrg(runtime, user, orgSlug);
         const period = c.req.query('period') ?? '';
-        // ?deductInput=1 puts [24] in [25] (#692); anything else keeps [25] at 0, the default.
-        const deductInput = c.req.query('deductInput') === '1';
+        // ?deductInput=1 puts [24] in [25] (#692); ?deduct=suggested puts the working's suggestion, [24] minus the VAT
+        // marked not deductible for want of a non-cash payment (#917); anything else keeps [25] at 0, the default.
+        const deductSuggested = c.req.query('deduct') === 'suggested';
+        const deductInput = !deductSuggested && c.req.query('deductInput') === '1';
         const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period }, { actor: actorOf(user), orgId });
-        const xml = buildVat01Xml(declaration, undefined, { deductInput });
+        const xml = buildVat01Xml(declaration, undefined, deductSuggested ? { deductible: declaration.report.paymentChecks.suggested25 } : { deductInput });
         // The export's audit row (period, invoice count, format and the [25] choice only). No row, no download.
         const documents = declaration.report.input.documents.length + declaration.report.output.documents.length;
         await runtime.execute(
           'finance.vat.export',
-          { period: declaration.report.period.period, documents, format: 'htkk_01gtgt_xml', ...(deductInput ? { deductInput } : {}) },
+          {
+            period: declaration.report.period.period,
+            documents,
+            format: 'htkk_01gtgt_xml',
+            ...(deductInput ? { deductInput } : {}),
+            ...(deductSuggested ? { deductSuggested } : {}),
+          },
           { actor: actorOf(user), orgId },
         );
         return new Response(body(new TextEncoder().encode(xml)), {
@@ -1419,6 +1434,106 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': `attachment; filename="crove-bao-cao-tai-chinh-${statements.period.period}-${orgSlug}.xlsx"`,
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // The register of fixed assets and prepaid costs (#919), every entry with what it posted and what is left.
+    app.get('/api/export/fixed-assets.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const assets = await runtime.query<FixedAsset[]>('finance.fixed_assets.list', {}, { actor: actorOf(user), orgId });
+        const bytes = await buildFixedAssetsWorkbook(assets, orgSlug ?? '');
+        // The export's audit row (the number of entries). No row, no download.
+        await runtime.execute('finance.fixed_asset.export', { assets: assets.length }, { actor: actorOf(user), orgId });
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'so-tai-san', ORG_SLUG], 'xlsx'),
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // The year-end financial statements as HTKK XML (issue #920), ?year=2026: B01a-DNN, B02-DNN and F01-DNN, form 683.
+    // The query checks the year (422 otherwise), the roles and the tax code, so the file name only holds a valid year.
+    app.get('/api/export/statements-htkk.xml', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const yearText = c.req.query('year') ?? '';
+        const year = /^\d{4}$/.test(yearText) ? Number(yearText) : Number.NaN;
+        const filing = await runtime.query<StatementsFiling>('finance.statements.htkk', { year }, { actor: actorOf(user), orgId });
+        const xml = buildStatementsHtkkXml(filing);
+        // The export's audit row (the year, the format and the warnings only). No row, no download.
+        await runtime.execute(
+          'finance.statements.export',
+          { period: String(filing.input.year), format: 'htkk_bctc_xml', ...(filing.warnings.length > 0 ? { warnings: filing.warnings } : {}) },
+          { actor: actorOf(user), orgId },
+        );
+        return new Response(body(new TextEncoder().encode(xml)), {
+          headers: {
+            'content-type': 'application/xml; charset=utf-8',
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'bctc', String(filing.input.year), ORG_SLUG], 'xml'),
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // A fiscal year's archive package (issue #922), owners only (finance.archive.get): /verify reads every part and
+    // original at its recorded version and reports what is missing or changed; /manifest is the manifest (JSON), and
+    // /<sha256> one part of it. The manifest's key, version and sha256 come from the build's audit row, and a part is
+    // served only when the manifest lists it under the package's own prefix, so the request names nothing but a year.
+    const recordedArchive = async (c: Context<{ Variables: { user: AuthUser } }>) => {
+      const user = c.get('user');
+      const orgSlug = c.req.header(ORG_HEADER) ?? null;
+      const orgId = await resolveOrg(runtime, user, orgSlug);
+      const year = Number(c.req.param('year'));
+      if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new DomainError('NOT_FOUND', 404, 'Không có gói lưu trữ của năm này');
+      const archive = await runtime.query<RecordedArchive | null>('finance.archive.get', { year }, { actor: actorOf(user), orgId });
+      if (!archive) throw new DomainError('NOT_FOUND', 404, 'Năm này chưa được đóng gói lưu trữ');
+      return { orgId, orgSlug, archive };
+    };
+    app.get('/api/finance-archive/:year/verify', async (c) => {
+      try {
+        const { orgId, archive } = await recordedArchive(c);
+        return c.json(await verifyYearArchive(store, orgId, archive), 200, { 'cache-control': 'private, no-store' });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.get('/api/finance-archive/:year/:part', async (c) => {
+      try {
+        const { orgId, orgSlug, archive } = await recordedArchive(c);
+        const manifest = await readYearArchiveManifest(store, archive);
+        const part = c.req.param('part');
+        if (part === 'manifest') {
+          return c.json(manifest, 200, {
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'luu-tru', String(archive.year), ORG_SLUG, 'manifest'], 'json'),
+            'cache-control': 'private, no-store',
+          });
+        }
+        const ref = manifest.parts.find((p) => p.sha256 === part && p.key === archiveKey(orgId, archive.year, p.sha256));
+        if (!ref) throw new DomainError('NOT_FOUND', 404, 'Gói lưu trữ không có phần này');
+        const bytes = await readVerified(store, { key: ref.key, generation: ref.generation, sha256: ref.sha256 });
+        const xml = ref.kind === 'vat_xml';
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': xml ? 'application/xml; charset=utf-8' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': `attachment; filename="${ref.name.replace(/[^A-Za-z0-9._-]/g, '-')}"`,
             'cache-control': 'private, no-store',
           },
         });

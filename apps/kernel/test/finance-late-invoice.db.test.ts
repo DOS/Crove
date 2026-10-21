@@ -161,7 +161,7 @@ suite('late purchase invoice in an open month (#478)', () => {
 
   // The admin approves what the owner uploaded (four-eyes, P10).
   const approve = async (proposalId: string, extra: Record<string, unknown> = {}) =>
-    rpc('inbox/approve', await tokenFor(adminUser, { mfa: true }), { id: proposalId, revision: 1, idempotencyKey: randomUUID(), ...extra });
+    rpc('inbox/approve', await tokenFor(adminUser, { mfa: true }), { acceptUnverifiedSignature: true, id: proposalId, revision: 1, idempotencyKey: randomUUID(), ...extra });
 
   const auditsOf = (command: string) =>
     admin(
@@ -273,7 +273,7 @@ suite('late purchase invoice in an open month (#478)', () => {
     expect(await statusOf(late)).toBe('pending');
 
     // A bulk approval never chooses a date: the item is refused on its own.
-    const bulk = await rpc('inbox/approveMany', await tokenFor(adminUser, { mfa: true }), { items: [{ id: late, revision: 1 }], idempotencyKey: randomUUID() });
+    const bulk = await rpc('inbox/approveMany', await tokenFor(adminUser, { mfa: true }), { items: [{ id: late, revision: 1, acceptUnverifiedSignature: true }], idempotencyKey: randomUUID() });
     expect(bulk.body.results).toEqual([expect.objectContaining({ id: late, outcome: 'refused', code: 'PERIOD_LOCKED' })]);
 
     const approved = await approve(late, { postingDate: day(OPEN, 1) });

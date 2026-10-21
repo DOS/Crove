@@ -186,6 +186,63 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
   };
 }
 
+// The trial balance of a calendar year, for the HTKK statements (#920). A year can hold more lines than the reports
+// load (LEDGER_LINE_LIMIT), and a filing cannot choose a shorter period, so the year's lines are summed per account
+// and party in SQL instead: trialBalance only adds debits and credits up and nets them per party, so one summed row
+// per (account, party) gives the same balance as every line. The chart, the opening balance and the sums are read in
+// ONE statement, as in loadLedgerData (#365).
+export async function yearTrialBalance(ctx: QueryContext, year: number): Promise<TrialBalance> {
+  const period = ledgerPeriod(String(year));
+  const tt133 = ctx.trx.selectFrom('crove_finance.account').select(['code', 'name', 'parent_code']);
+  const own = ctx.trx.selectFrom('crove_finance.org_account').select(['code', 'name', 'parent_code', 'root_code', 'active']).where('org_id', '=', ctx.orgId);
+  const kept = sql<string | null>`COALESCE(dp.duplicate_of, l.party_id)`;
+  const sums = (from: string | null, to: string) => {
+    let q = ctx.trx
+      .selectFrom('crove_finance.journal_line as l')
+      .innerJoin('crove_finance.journal_entry as j', (join) => join.onRef('j.org_id', '=', 'l.org_id').onRef('j.id', '=', 'l.entry_id'))
+      .leftJoin('crove_kernel.party as dp', (join) => join.onRef('dp.org_id', '=', 'l.org_id').onRef('dp.id', '=', 'l.party_id'))
+      .select('l.account_code')
+      .select(kept.as('party_id'))
+      .select((eb) => [eb.fn.sum<string>('l.debit').as('debit'), eb.fn.sum<string>('l.credit').as('credit')])
+      .where('l.org_id', '=', ctx.orgId);
+    q = from === null ? q.where('j.entry_date', '<', to) : q.where('j.entry_date', '>=', from).where('j.entry_date', '<=', to);
+    return q.groupBy(['l.account_code', kept]);
+  };
+  const json = (alias: string) =>
+    sql.raw(
+      `coalesce(json_agg(json_build_object('account_code', ${alias}.account_code, 'party_id', ${alias}.party_id, 'debit', ${alias}.debit::text, 'credit', ${alias}.credit::text) ORDER BY ${alias}.account_code), '[]')`,
+    );
+  type Sum = { account_code: string; party_id: string | null; debit: string | null; credit: string | null };
+  const { rows } = await sql<{ tt133: Tt133AccountRow[]; own: OrgAccountRow[]; opening: Sum[]; year: Sum[] }>`
+    SELECT
+      (SELECT coalesce(json_agg(json_build_object('code', a.code, 'name', a.name, 'parent_code', a.parent_code)), '[]') FROM ${tt133} AS a) AS tt133,
+      (SELECT coalesce(json_agg(json_build_object('code', a.code, 'name', a.name, 'parent_code', a.parent_code, 'root_code', a.root_code, 'active', a.active)), '[]')
+         FROM ${own} AS a) AS own,
+      (SELECT ${json('o')} FROM ${sums(null, period.from)} AS o) AS opening,
+      (SELECT ${json('y')} FROM ${sums(period.from, period.to)} AS y) AS year
+  `.execute(ctx.trx);
+  const data = rows[0];
+  if (!data) throw new Error('the trial balance statement returned no row');
+  const chart = [...mergeChart(data.tt133, data.own).values()]
+    .map((a) => ({ code: a.code, name: a.name, parentCode: a.parentCode }))
+    .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0));
+  const opening = data.opening.map((o) => ({ accountCode: o.account_code, partyId: o.party_id, debit: o.debit ?? '0', credit: o.credit ?? '0' }));
+  // Each (account, party) sum as one line of the year; only its account, party and amounts are read.
+  const lines: PeriodLine[] = data.year.map((y, i) => ({
+    entryId: `sum-${i}`,
+    entryDate: period.to,
+    reference: null,
+    description: '',
+    reversal: false,
+    lineNo: i,
+    accountCode: y.account_code,
+    partyId: y.party_id,
+    debit: y.debit ?? '0',
+    credit: y.credit ?? '0',
+  }));
+  return trialBalance(chart, opening, lines);
+}
+
 function report(data: LedgerData): LedgerReport {
   return {
     period: data.period,

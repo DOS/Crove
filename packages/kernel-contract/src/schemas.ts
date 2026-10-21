@@ -7,6 +7,11 @@ import { VAT_FILING_PERIODS } from './vat-deadline.ts';
 export const zId = z.uuid();
 // At most 16 integer digits, the size of the numeric(20,4) money columns.
 export const zMoney = z.string().regex(/^-?\d{1,16}(\.\d{1,8})?$/, 'decimal string');
+// VND per unit of a foreign currency (#918): positive, up to 10 decimals (FX_RATE_SCALE in @crove/mod-finance).
+export const zExchangeRate = z
+  .string()
+  .regex(/^\d{1,13}(\.\d{1,10})?$/, 'decimal string')
+  .refine((v) => /[1-9]/.test(v), 'positive');
 // YYYY-MM-DD that names a real day, year 0001 or later (PostgreSQL rejects year 0000 in date input).
 // Never throws (toISOString() does on an Invalid Date).
 export function isCalendarDate(value: string): boolean {
@@ -30,6 +35,8 @@ export const zSlug = z.string().regex(/^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/);
 // code it does not know.
 export const INVOICE_CHECK_CODES = [
   'currency.unsupported',
+  'currency.converted',
+  'currency.rate_entered',
   'lines_sum.ok',
   'lines_sum.mismatch',
   'total.ok',
@@ -46,8 +53,31 @@ export const INVOICE_CHECK_CODES = [
   'tax_authority_code.missing',
   'signature.unverified',
   'signature.missing',
+  // The signature verification in crove-extract (#674): verified (params.signer when a certificate names one), or the
+  // reason it is unverified or not applicable (SIGNATURE_REASONS in @crove/l10n-vn; missing is signature.missing).
+  'signature.verified',
+  'signature.malformed',
+  'signature.ambiguous',
+  'signature.not_covering',
+  'signature.digest_mismatch',
+  'signature.bad_signature',
+  'signature.unsupported_algorithm',
+  'signature.no_certificate',
+  'signature.untrusted_certificate',
+  'signature.certificate_expired',
+  'signature.signer_mismatch',
+  'signature.tax_authority_missing',
+  'signature.tax_authority_invalid',
+  'signature.tax_authority_untrusted',
+  'signature.cash_register',
+  'signature.too_large',
   'source.ai',
   'duplicate.found',
+  // A replacement or an adjustment invoice (#916): its original in the books, or not found.
+  'related.replaces',
+  'related.adjusts',
+  'related.replaces_missing',
+  'related.adjusts_missing',
 ] as const;
 export type InvoiceCheckCode = (typeof INVOICE_CHECK_CODES)[number];
 
@@ -96,6 +126,25 @@ export const zJournalLineDraft = z.object({
   memo: z.string().max(1000),
 });
 
+// The digital signature verification of an e-invoice XML (#674), as crove-extract reported it: verified, unverified
+// (a reason says why) or not applicable (an invoice read by AI, an unsigned cash register invoice). An unverified
+// signature is a warning; the Inbox asks the approver to confirm it.
+export const SIGNATURE_STATUSES = ['verified', 'unverified', 'not_applicable'] as const;
+export const zSignatureStatus = z.enum(SIGNATURE_STATUSES);
+export type SignatureStatus = z.infer<typeof zSignatureStatus>;
+export const zProposalSignature = z.object({ status: zSignatureStatus, reason: z.string().max(50).nullable() });
+
+export const CORRECTION_KINDS = ['replacement', 'adjustment'] as const;
+export const zRelatedInvoiceRef = z.object({
+  kind: z.enum(CORRECTION_KINDS),
+  template: z.string().max(50).nullable(),
+  series: z.string().min(1).max(50),
+  number: z.string().min(1).max(50),
+  issueDate: zLocalDate.nullable(),
+  documentId: zId.nullable(),
+});
+export type RelatedInvoiceRef = z.infer<typeof zRelatedInvoiceRef>;
+
 // Payload stored on a finance.purchase proposal and executed by finance.purchase.record. direction 'sale' (issue #313):
 // the seller is the org itself (its tax code), the buyer is the customer, and the journal is Dr 131, Cr revenue, Cr
 // 3331. Absent on purchases, including every proposal raised before sales existed.
@@ -120,12 +169,33 @@ export const zPurchaseProposal = z.object({
       .array(z.object({ rate: z.string().max(20), taxableAmount: zMoney, vatAmount: zMoney }))
       .max(100)
       .optional(),
+    // The invoice this one corrects (#916), from the e-invoice's TTHDLQuan: a replacement (thay thế) or an adjustment
+    // (điều chỉnh). documentId is the original's document when extraction found it in force; recording looks it up
+    // again. Absent on every other invoice.
+    related: zRelatedInvoiceRef.optional(),
+    // A foreign-currency invoice booked in VND (#918): currency stays the invoice's, every amount above, the lines and
+    // the journal are in VND at this rate, and these are the invoice's own totals. rate comes from the e-invoice XML
+    // (source 'invoice') or from the accountant's revision (source 'entered'). Absent on VND invoices, and on a
+    // foreign-currency proposal still waiting for its rate (its amounts are then the invoice's, and it cannot be
+    // recorded).
+    foreign: z
+      .object({
+        currency: z.string().regex(/^[A-Z]{3}$/),
+        rate: zExchangeRate,
+        source: z.enum(['invoice', 'entered']),
+        subtotal: zMoney,
+        vatTotal: zMoney,
+        total: zMoney,
+      })
+      .optional(),
   }),
   lines: z.array(zProposedLine).min(1).max(1000),
   journal: z.array(zJournalLineDraft).min(2).max(1010),
   checks: z.array(zCheck).max(50),
   sourceFileId: zId,
   extractionMethod: z.enum(['einvoice_xml', 'pdf_text_ai', 'image_ai']),
+  // Absent on proposals read before #674.
+  signature: zProposalSignature.optional(),
 });
 export type PurchaseProposal = z.infer<typeof zPurchaseProposal>;
 
@@ -152,6 +222,9 @@ export const zOrgDetail = z.object({
   vatFilingPeriod: zVatFilingPeriod.nullable(),
   // The org's address as the tax registry records it (issue #324); null until an owner or admin sets it.
   address: z.string().nullable(),
+  // Where the org's own mail goes, such as a request for missing invoices (issue #669); null until an owner or admin
+  // sets it.
+  contactEmail: z.string().nullable(),
   inboundAddress: z.string().nullable(),
   // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
   inboundDroppedCount: z.number().int().nonnegative().nullable(),
@@ -297,7 +370,8 @@ export const MAX_BULK_APPROVE = 50;
 // The proposals of one bulk approval, each named once with the revision the caller saw. Shared by the RPC contract
 // and kernel.proposal.approve_many, so the route and the command accept the same input.
 export const zBulkApproveItems = z
-  .array(z.object({ id: zId, revision: z.number().int().positive() }))
+  // acceptUnverifiedSignature: the approver confirmed this revision of an invoice whose signature is unverified (#674).
+  .array(z.object({ id: zId, revision: z.number().int().positive(), acceptUnverifiedSignature: z.boolean().optional() }))
   .min(1)
   .max(MAX_BULK_APPROVE)
   .refine((items) => new Set(items.map((i) => i.id)).size === items.length, 'each proposal once');
@@ -317,6 +391,8 @@ export const zInboxItem = z.object({
   issueDate: zLocalDate.nullable(),
   failedChecks: z.number().int(),
   warnChecks: z.number().int(),
+  // The invoice's signature verification (#674); null for other kinds and for invoices read before it.
+  signatureStatus: zSignatureStatus.nullable(),
   duplicateOf: zId.nullable(),
   createdAt: z.string(),
   // The AI agent that asked for the proposal (#435); null for a proposal a person or an upload made.
@@ -570,6 +646,8 @@ export const zPurchaseDocument = z.object({
   voided: z.object({ reversalEntryId: zId, reason: z.string(), voidedAt: z.string() }).nullable(),
   // The voided document of the same invoice that this one replaces, when the invoice was recorded again.
   replacesDocumentId: zId.nullable(),
+  // An invoice in a foreign currency (#918): the amounts above are in VND at this rate; total is the invoice's own.
+  foreign: z.object({ currency: z.string(), rate: z.string(), source: z.enum(['invoice', 'entered']), total: zMoney }).nullable(),
 });
 
 const zEntryRef = z.object({ id: zId, entryDate: zLocalDate });
@@ -595,6 +673,27 @@ export const zJournalEntry = z.object({
   // The cash or bank voucher this entry posts, when it does (#327; absent otherwise).
   voucher: z.object({ id: zId, type: zVoucherType, code: z.string(), partyName: z.string().nullable() }).optional(),
 });
+
+// The viewer's in-app notifications (#671), newest first, of every module but Social (which has its own, #637). kind is
+// '<module>.<kind>'; subjectType and subjectId name what it is about, detail the few words the line shows. unread is
+// capped at 100 (the app shows 99+).
+export const zNotificationKind = z.string().max(64).regex(/^[a-z]+\.[a-z0-9_]+$/);
+export const zNotifications = z.object({
+  items: z.array(
+    z.object({
+      id: zId,
+      kind: zNotificationKind,
+      subjectType: z.string().nullable(),
+      subjectId: zId.nullable(),
+      detail: z.record(z.string(), z.string()),
+      createdAt: z.string(),
+      read: z.boolean(),
+    }),
+  ),
+  unread: z.number().int().nonnegative(),
+  muted: z.array(zNotificationKind),
+});
+export type Notifications = z.infer<typeof zNotifications>;
 
 // What the command palette's search found (#673): at most 8 rows per group. A party that is customerOnly (a customer of
 // sales that never sold to the org) is not among the vendors. A document's proposalId opens it in the Inbox.
@@ -635,8 +734,9 @@ export const zVatPeriod = z.string().regex(VAT_PERIOD_PATTERN, 'YYYY-MM or YYYY-
 export const VAT_RATES = ['0', '5', '8', '10', 'KCT', 'KKKNT', 'other'] as const;
 export const zVatRate = z.enum(VAT_RATES);
 // declared_late (#478): a purchase invoice of an earlier period, recorded late (its own month was locked), so it is
-// declared in the period of its posting date.
-export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch', 'vat_mismatch', 'declared_late'] as const;
+// declared in the period of its posting date. check_payment (#917): a purchase at or above the non-cash payment
+// threshold of its date, not shown as paid by bank and not marked by the accountant yet.
+export const VAT_WARNINGS = ['rate_unknown', 'rate_split', 'reduced_rate_outside_period', 'lines_mismatch', 'vat_mismatch', 'declared_late', 'check_payment'] as const;
 export const zVatWarning = z.enum(VAT_WARNINGS);
 const zRateAmounts = z.object({ rate: zVatRate, taxable: zMoney, vat: zMoney });
 export const zVatInvoice = z.object({
@@ -661,11 +761,43 @@ const zVatSide = z.object({
   documents: z.array(zVatInvoice),
   totals: z.object({ byRate: z.array(zRateAmounts), taxable: zMoney, vat: zMoney, documents: z.number().int().nonnegative() }),
 });
+// Input invoices that need proof of non-cash payment before their VAT is deducted (#917): at or above the threshold of
+// their invoice date (5 million VND from 2025-07-01, 20 million before), VAT included, and not shown as paid by bank.
+// The accountant marks each one paid_by_bank (optionally with its bank voucher) or not_deductible; cleared takes a mark
+// back. suggested25 is [24] minus the VAT marked not deductible.
+export const INPUT_VAT_CHECK_OUTCOMES = ['paid_by_bank', 'not_deductible', 'cleared'] as const;
+export const zInputVatCheckOutcome = z.enum(INPUT_VAT_CHECK_OUTCOMES);
+export const PAYMENT_METHOD_KINDS = ['bank', 'cash', 'unknown'] as const;
+export const zVatPaymentCheck = z.object({
+  documentId: zId,
+  paymentMethod: z.string().nullable(),
+  methodKind: z.enum(PAYMENT_METHOD_KINDS),
+  threshold: zMoney,
+  total: zMoney,
+  vatAmount: zMoney,
+  mark: z
+    .object({
+      outcome: z.enum(['paid_by_bank', 'not_deductible']),
+      voucherId: zId.nullable(),
+      note: z.string().nullable(),
+      markedAt: z.string(),
+    })
+    .nullable(),
+});
+export const zVatPaymentChecks = z.object({
+  items: z.array(zVatPaymentCheck),
+  // VAT of the invoices not marked paid by bank: unchecked or not deductible.
+  vatAtRisk: zMoney,
+  notDeductibleVat: zMoney,
+  unchecked: z.number().int().nonnegative(),
+  suggested25: zMoney,
+});
 export const zVatReport = z.object({
   period: z.object({ period: zVatPeriod, kind: z.enum(['month', 'quarter']), from: zLocalDate, to: zLocalDate }),
   input: zVatSide,
   output: zVatSide,
   indicators: z.array(z.object({ code: z.string(), label: z.string(), amount: zMoney })),
+  paymentChecks: zVatPaymentChecks,
 });
 
 // Ledger reports for a month ("2026-09"), a quarter ("2026-Q3") or a year ("2026") (issue #321): the trial balance,
@@ -727,6 +859,38 @@ export const zPeriodLockState = z.object({
   openingDate: zLocalDate.nullable(),
 });
 export type PeriodLockState = z.infer<typeof zPeriodLockState>;
+
+// A fiscal year's archive package (issue #922, plan §7.9). The fiscal year is the calendar year. Owners ask for it once
+// every month of the year is locked; the worker builds it once, and it is kept for the legal retention period.
+export const zArchiveYear = z.number().int().min(2000).max(2100);
+export const ARCHIVE_PART_KINDS = ['journal', 'ledger', 'statements', 'vat_working', 'vat_xml', 'manifest'] as const;
+const zArchiveSha256 = z.string().regex(/^[0-9a-f]{64}$/);
+export const zYearArchive = z.object({
+  year: zArchiveYear,
+  // requested: asked for, the worker has not recorded it yet; built: recorded, with its manifest.
+  state: z.enum(['requested', 'built']),
+  requestedAt: z.string().nullable(),
+  builtAt: z.string().nullable(),
+  manifestSha256: zArchiveSha256.nullable(),
+  parts: z.number().int().nullable(),
+  documents: z.number().int().nullable(),
+});
+export type YearArchive = z.infer<typeof zYearArchive>;
+export const zYearArchives = z.object({
+  // Every month up to this date is locked: years up to its year (when it is the 31st of December) can be archived.
+  lockedThrough: zLocalDate.nullable(),
+  archives: z.array(zYearArchive),
+});
+export type YearArchives = z.infer<typeof zYearArchives>;
+// What a verification found. A part or document that is missing or whose bytes no longer match the manifest is a
+// problem; `name` is the part's name or the document's file name.
+export const zYearArchiveVerification = z.object({
+  year: zArchiveYear,
+  ok: z.boolean(),
+  checked: z.number().int(),
+  problems: z.array(z.object({ code: z.enum(['manifest_changed', 'missing', 'changed']), name: z.string() })),
+});
+export type YearArchiveVerification = z.infer<typeof zYearArchiveVerification>;
 
 // Financial statements for a period (issue #154): B01-DNN at its last day and B02-DNN for the period, with the DRAFT
 // TT133 line codes and mapping an accountant has not verified. `unmapped` lists balances no line reads (the statement
@@ -1050,6 +1214,30 @@ export const zSocialPost = z.object({
   labelIds: z.array(zId),
   // The idea it was made from (#701); on a single post's read only.
   idea: z.object({ id: zId, title: z.string() }).nullable().optional(),
+});
+
+// What a variant says, as the review diff compares it (#944); a media file's mime is null when the org no longer has it.
+const zSocialReviewContent = z.object({
+  body: z.string(),
+  title: z.string().nullable(),
+  linkUrl: z.string().nullable(),
+  media: z.array(z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string().nullable() })),
+  settings: z.record(z.string(), z.unknown()),
+});
+
+// Per variant, the content of its last decision next to its content now (#944); lastDecision is null before the first.
+// changed: the content is no longer the one decided on.
+export const zSocialReviewDiff = z.object({
+  postId: zId,
+  variants: z.array(
+    z.object({
+      variantId: zId,
+      current: zSocialReviewContent,
+      lastDecision: z
+        .object({ decision: z.enum(SOCIAL_DECISIONS), at: z.string(), decidedBy: zId, decidedByName: z.string().nullable(), revision: z.number().int(), changed: z.boolean(), content: zSocialReviewContent })
+        .nullable(),
+    }),
+  ),
 });
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.

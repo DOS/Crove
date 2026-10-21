@@ -11,11 +11,13 @@ import {
   zMoney,
   zProposalStatus,
   zPurchaseProposal,
+  zSignatureStatus,
   zVoucherCode,
   type CashVoucherProposal,
   type JournalReversal,
   type JournalVoucherProposal,
   type PurchaseProposal,
+  type SignatureStatus,
 } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
@@ -29,6 +31,7 @@ import { inviteQueries } from './invites.ts';
 import { mailQueries } from './mail.ts';
 import { timelineQueries } from './timeline.ts';
 import { auditLogQueries } from './audit-log.ts';
+import { notificationQueries } from './notifications.ts';
 import { offboardingQueries } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { orgOverview, RECENT_FILES } from './overview.ts';
@@ -49,7 +52,7 @@ export function orgDetailQuery(options: OrgDetailOptions) {
     handler: async (ctx) => {
       const tenant = await ctx.trx
         .selectFrom('crove_kernel.tenant')
-        .select(['org_id', 'slug', 'name', 'inbound_token', 'tax_code', 'vat_filing_period', 'address'])
+        .select(['org_id', 'slug', 'name', 'inbound_token', 'tax_code', 'vat_filing_period', 'address', 'contact_email'])
         .where('org_id', '=', ctx.orgId)
         .executeTakeFirstOrThrow();
       const memberRows = await ctx.trx
@@ -80,6 +83,7 @@ export function orgDetailQuery(options: OrgDetailOptions) {
         taxCode: tenant.tax_code,
         vatFilingPeriod: tenant.vat_filing_period,
         address: tenant.address,
+        contactEmail: tenant.contact_email,
         inboundAddress: seesInbound ? `${tenant.inbound_token}@${options.inboundDomain}` : null,
         inboundDroppedCount,
         members: members.map((m) => ({ userId: m.user_id, email: m.email, displayName: m.display_name, role: m.role })),
@@ -115,6 +119,12 @@ function parseVoucher(kind: string, raw: unknown): CashVoucherProposal | null {
   return result.success ? result.data : null;
 }
 
+// The stored signature status of an invoice proposal (#674), or null when it has none or holds anything else.
+function signatureStatusOf(value: string | null): SignatureStatus | null {
+  const parsed = zSignatureStatus.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
 // A general journal voucher entered by hand (#888).
 function parseJournalVoucher(kind: string, raw: unknown): JournalVoucherProposal | null {
   if (kind !== JOURNAL_VOUCHER_KIND) return null;
@@ -148,6 +158,12 @@ function toInboxItem(row: {
     issueDate: payload?.invoice.issueDate ?? voucher?.date ?? null,
     failedChecks: countChecks(payload, 'fail'),
     warnChecks: countChecks(payload, 'warn'),
+    // As the approval decides: an invoice read from XML whose signature is not verified is unverified (#674).
+    signatureStatus: payload
+      ? payload.extractionMethod === 'einvoice_xml' && payload.signature?.status !== 'verified'
+        ? 'unverified'
+        : (payload.signature?.status ?? null)
+      : null,
     duplicateOf: row.duplicate_of,
     createdAt: row.created_at.toISOString(),
     ...agentFields(row, agentName),
@@ -184,6 +200,9 @@ export const inboxList = defineQuery({
         sql<string | null>`(SELECT a.display_name FROM crove_kernel.agent a WHERE a.org_id = crove_kernel.proposal.org_id AND a.id = crove_kernel.proposal.requested_by_agent)`.as('agent_name'),
         countChecksSql('fail').as('failed_checks'),
         countChecksSql('warn').as('warn_checks'),
+        // As the approval decides (kernel.proposal.approve): an invoice read from XML whose signature is not verified is
+        // unverified, one read before #674 (no verification stored) included.
+        sql<string | null>`left(CASE WHEN payload ->> 'extractionMethod' = 'einvoice_xml' AND coalesce(payload #>> '{signature,status}', '') <> 'verified' THEN 'unverified' ELSE payload #>> '{signature,status}' END, 20)`.as('signature_status'),
       ])
       .where('org_id', '=', ctx.orgId)
       .orderBy('created_at', 'desc')
@@ -203,6 +222,7 @@ export const inboxList = defineQuery({
       issueDate: row.issue_date && zLocalDate.safeParse(row.issue_date).success ? row.issue_date : null,
       failedChecks: Number(row.failed_checks),
       warnChecks: Number(row.warn_checks),
+      signatureStatus: row.kind === PURCHASE_KIND ? signatureStatusOf(row.signature_status) : null,
       duplicateOf: row.duplicate_of,
       createdAt: row.created_at.toISOString(),
       ...agentFields(row, row.agent_name),
@@ -379,5 +399,5 @@ export const streamCheck = defineQuery({
 });
 
 export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), orgOverview, streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...timelineQueries, ...auditLogQueries, ...partyQueries];
+  return [orgDetailQuery(options), orgOverview, streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...timelineQueries, ...auditLogQueries, ...partyQueries, ...notificationQueries];
 }

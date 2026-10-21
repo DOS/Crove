@@ -145,7 +145,18 @@ describe('validateVariant', () => {
 
   it('reports a disallowed media kind once, not also as a mix', () => {
     const codes = validateVariant({ provider: 'zalo_oa', body: 'x', title: 'T', media: [jpeg(), mp4()] }).map((i) => i.code);
-    expect(codes).toEqual(['TOO_MANY_MEDIA', 'MEDIA_KIND_NOT_ALLOWED']);
+    expect(codes).toEqual(['MEDIA_KIND_NOT_ALLOWED']);
+  });
+
+  it('takes up to 10 images of 1 MB each on a Zalo OA article, and comments on or off (#943)', () => {
+    const zalo = (media: MediaItem[], settings: Record<string, unknown> = {}) => validateVariant({ provider: 'zalo_oa', body: 'x', title: 'T', media, settings });
+    expect(zalo(Array.from({ length: 4 }, () => jpeg()))).toEqual([]);
+    expect(zalo(Array.from({ length: 10 }, () => jpeg()))).toEqual([]);
+    expect(zalo(Array.from({ length: 11 }, () => jpeg()))).toEqual([{ code: 'TOO_MANY_MEDIA', field: 'media', limit: 10, actual: 11 }]);
+    expect(zalo([jpeg(), jpeg(1024 * 1024 + 1)])).toEqual([{ code: 'IMAGE_TOO_LARGE', field: 'media.1', limit: 1024 * 1024, actual: 1024 * 1024 + 1 }]);
+    expect(zalo([jpeg()], { comments: false })).toEqual([]);
+    expect(zalo([jpeg()], { comments: true })).toEqual([]);
+    expect(zalo([jpeg()], { comments: 'hide' })).toEqual([{ code: 'ZALO_COMMENTS_INVALID', field: 'settings.comments', limit: null, actual: null }]);
   });
 
   it('requires media on Instagram and accepts only JPEG images', () => {
@@ -253,6 +264,27 @@ describe('validateVariant', () => {
     // Any word is a tag, this one too.
     expect(codes('threads', { topicTag: 'invalid' })).toEqual([]);
     expect(codes('facebook_page', { poll: { options: ['a', 'b'] }, topicTag: 'Ăn uống' })).toEqual(['POLL_NOT_SUPPORTED', 'TOPIC_TAG_NOT_SUPPORTED']);
+  });
+
+  it('checks X polls with their length and who may reply (#948)', () => {
+    const check = (settings: Record<string, unknown>, media: MediaItem[] = []) => validateVariant({ provider: 'x', body: 'Bạn thích bánh nào?', title: null, media, settings });
+    const codes = (settings: Record<string, unknown>, media: MediaItem[] = []) => check(settings, media).map((i) => i.code);
+    const img: MediaItem = { kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null };
+    expect(codes({ poll: { options: ['Bánh mì', 'Bánh bao'] } })).toEqual([]);
+    expect(codes({ poll: { options: ['Bánh mì', 'Bánh bao', 'Bánh cuốn', 'Bánh xèo'], durationMinutes: 10_080 }, replySettings: 'following' })).toEqual([]);
+    expect(codes({ poll: { options: ['a', 'b'], durationMinutes: 5 }, replySettings: 'mentionedUsers' })).toEqual([]);
+    expect(codes({ replySettings: 'everyone' })).toEqual([]);
+    // 25 Vietnamese letters with tone marks fit: an option counts characters, not X's weighted text count.
+    expect(codes({ poll: { options: ['ệ'.repeat(25), 'b'] } })).toEqual([]);
+    expect(codes({ poll: { options: ['a', 'b', 'c', 'd', 'e'] } })).toEqual(['POLL_OPTIONS']);
+    expect(check({ poll: { options: ['a', 'x'.repeat(26)] } })).toEqual([{ code: 'POLL_OPTION_LENGTH', field: 'settings.poll.1', limit: 25, actual: 26 }]);
+    expect(check({ poll: { options: ['a', 'b'], durationMinutes: 4 } })).toEqual([{ code: 'POLL_DURATION', field: 'settings.poll.durationMinutes', limit: 10_080, actual: 4 }]);
+    expect(codes({ poll: { options: ['a', 'b'], durationMinutes: 10_081 } })).toEqual(['POLL_DURATION']);
+    expect(check({ poll: { options: ['a', 'b'], durationMinutes: '60' } })).toEqual([{ code: 'POLL_DURATION', field: 'settings.poll.durationMinutes', limit: 10_080, actual: null }]);
+    expect(codes({ poll: { options: ['a', 'b'] } }, [img])).toEqual(['POLL_WITH_MEDIA']);
+    expect(codes({ replySettings: 'verified' })).toEqual(['REPLY_SETTINGS_INVALID']);
+    // A Threads poll has no length of its own, so none is checked there.
+    expect(validateVariant({ provider: 'threads', body: 'x', title: null, media: [], settings: { poll: { options: ['a', 'b'], durationMinutes: 1 } } })).toEqual([]);
   });
 
   it('checks Google Business Profile posts, and refuses their settings elsewhere (#709)', () => {

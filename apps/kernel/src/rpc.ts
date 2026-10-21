@@ -299,6 +299,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       setAddress: os.org.setAddress.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_address', input, { actor, orgId })),
       ),
+      setContactEmail: os.org.setContactEmail.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_contact_email', input, { actor, orgId })),
+      ),
       proposalPolicy: os.org.proposalPolicy.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.proposal_policy.get', {}, { actor, orgId }))),
       setProposalPolicy: os.org.setProposalPolicy.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal_policy.save', input, { actor, orgId })),
@@ -391,6 +394,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       posts: {
         list: os.social.posts.list.handler(socialQuery('social.post.list')),
         get: os.social.posts.get.handler(socialQuery('social.post.get')),
+        reviewDiff: os.social.posts.reviewDiff.handler(socialQuery('social.post.review_diff')),
         assign: os.social.posts.assign.handler(socialCommand('social.post.assign')),
         create: os.social.posts.create.handler(({ context, input }) =>
           inSocial(context, (orgId, actor) => {
@@ -1115,6 +1119,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       exports: os.documents.exports.handler(({ context, input }) => inFinance(context, (orgId, actor) => runtime.query('finance.document.exports', input, { actor, orgId }))),
     },
+    notifications: {
+      list: os.notifications.list.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.notification.list', {}, { actor, orgId }))),
+      read: os.notifications.read.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.notification.read', input, { actor, orgId }))),
+      mute: os.notifications.mute.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.notification.mute', input, { actor, orgId }))),
+    },
     search: {
       query: os.search.query.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.search', input, { actor, orgId })),
@@ -1159,6 +1168,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       period: os.vat.period.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.vat.period', input, { actor, orgId })),
       ),
+      markPayment: os.vat.markPayment.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.vat.payment_mark', input, { actor, orgId })),
+      ),
     },
     portalList: {
       reconcile: os.portalList.reconcile.handler(({ context, input }) =>
@@ -1171,6 +1183,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inFinance(context, (orgId, actor) => runtime.execute('finance.portal_list.remove', input, { actor, orgId })),
       ),
     },
+    missingInvoices: {
+      status: os.missingInvoices.status.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.missing_invoices.status', {}, { actor, orgId })),
+      ),
+      request: os.missingInvoices.request.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.missing_invoices.request', input, { actor, orgId })),
+      ),
+      setReminder: os.missingInvoices.setReminder.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.missing_invoices.reminder.set', input, { actor, orgId })),
+      ),
+    },
     ledger: {
       period: os.ledger.period.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.ledger.period', input, { actor, orgId })),
@@ -1180,6 +1203,37 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       statements: os.ledger.statements.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.statements.period', input, { actor, orgId })),
+      ),
+      statementsHtkkCheck: os.ledger.statementsHtkkCheck.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.statements.htkk_check', input, { actor, orgId })),
+      ),
+    },
+    yearArchive: {
+      list: os.yearArchive.list.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.archive.list', {}, { actor, orgId })),
+      ),
+      build: os.yearArchive.build.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.archive.build', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+    },
+    fixedAssets: {
+      list: os.fixedAssets.list.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.fixed_assets.list', {}, { actor, orgId })),
+      ),
+      create: os.fixedAssets.create.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.fixed_asset.create', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      end: os.fixedAssets.end.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('finance.fixed_asset.end', rest, { actor, orgId, idempotencyKey });
+        }),
       ),
     },
     periodLock: {

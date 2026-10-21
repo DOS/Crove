@@ -231,15 +231,37 @@ export function autoReplyOf(settings: Readonly<Record<string, unknown>> | undefi
   return { text: text.trim(), likes };
 }
 
-// Polls and topic tags (#711), in the variant's settings, on the channels that take them (Threads): `settings.poll`
-// is { options: 2 to 4 strings of 1 to 25 characters } on a post without media; `settings.topicTag` is one tag of 1 to 50
-// characters with no period or ampersand (a leading # is dropped). The Threads adapter reads the same shapes.
+// Polls and topic tags (#711), in the variant's settings, on the channels that take them (Threads, and X for polls since
+// #948): `settings.poll` is { options: 2 to 4 strings of 1 to 25 characters } on a post without media; on X it also has
+// a length (`durationMinutes`, 5 minutes to 7 days, a day when unsaid; POST /2/tweets poll.duration_minutes), where a
+// Threads poll always runs a day. `settings.topicTag` is one tag of 1 to 50 characters with no period or ampersand (a
+// leading # is dropped). The Threads and X adapters read the same shapes. Options count in code points (X's schema
+// maxLength, Threads' text count).
 export interface PollRule {
   minOptions: number;
   maxOptions: number;
   maxChars: number;
+  // The poll's length in whole minutes, on channels that take one; absent where the platform sets it.
+  duration?: { min: number; max: number; default: number };
 }
-export const POLL_RULES: Readonly<Partial<Record<Provider, PollRule>>> = { threads: { minOptions: 2, maxOptions: 4, maxChars: 25 } };
+export const POLL_RULES: Readonly<Partial<Record<Provider, PollRule>>> = {
+  threads: { minOptions: 2, maxOptions: 4, maxChars: 25 },
+  x: { minOptions: 2, maxOptions: 4, maxChars: 25, duration: { min: 5, max: 10_080, default: 1440 } },
+};
+
+// The poll's length in a variant's settings: null when unsaid, 'invalid' when it is not a whole number of minutes.
+export function pollDurationOf(settings: Readonly<Record<string, unknown>> | undefined): number | null | 'invalid' {
+  const poll = settings?.poll;
+  if (!poll || typeof poll !== 'object') return null;
+  const value = (poll as { durationMinutes?: unknown }).durationMinutes;
+  if (value === undefined || value === null) return null;
+  return typeof value === 'number' && Number.isInteger(value) ? value : 'invalid';
+}
+
+// Who may reply to an X post (#948), in `settings.replySettings`: everyone (the default, sent as nothing), the accounts
+// the poster follows, or the people the post mentions (POST /2/tweets reply_settings). The adapter reads the same value.
+export const X_REPLY_SETTINGS = ['everyone', 'following', 'mentionedUsers'] as const;
+export type XReplySetting = (typeof X_REPLY_SETTINGS)[number];
 export const TOPIC_TAG_RULES: Readonly<Partial<Record<Provider, { maxChars: number }>>> = { threads: { maxChars: 50 } };
 
 // The poll's options, trimmed; null when there is none, 'invalid' when it is not { options: string[] }.
@@ -473,14 +495,17 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     scrapesLinkPreview: false,
     unverified: ['body.max'],
   },
+  // Zalo OA values: the article/create reference (developers.zalo.me, OA content API). The cover is required, so one
+  // image at least; the docs set no image count, and 10 is Crove's cap (#943): the first image is the cover, the others
+  // follow the text as image blocks. Every image file is 1 MB at most. Video articles are not built yet.
   zalo_oa: {
     provider: 'zalo_oa',
     body: { max: null, count: 'codepoints', required: true },
     title: { max: 150, count: 'codepoints', required: true },
-    media: { min: 1, max: 1, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ANY_IMAGE, maxImageBytes: 1 * MB, maxVideoBytes: null, maxVideoSeconds: null },
+    media: { min: 1, max: 10, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ANY_IMAGE, maxImageBytes: 1 * MB, maxVideoBytes: null, maxVideoSeconds: null },
     maxLinks: null,
     scrapesLinkPreview: false,
-    unverified: ['media.min', 'media.max'],
+    unverified: [],
   },
   // TikTok values: Content Posting API reference, media transfer guide and photo post reference (research §4).
   tiktok: {
@@ -765,7 +790,7 @@ export function limitWait(starts: readonly Date[], limit: PublishLimit, now: Dat
 // Media a channel fetches by URL (#772): on a deployment whose storage hands out no public file URLs (local disk), these
 // cannot go out, so the composer says so before the post is submitted. Instagram takes a Reel or a video Story without
 // one (Crove uploads the bytes), but not images, carousels or a cover image; Threads, Google Business, Zalo OA (its
-// cover) and TikTok photos are fetched by URL always.
+// images) and TikTok photos are fetched by URL always.
 export function needsPublicUrls(provider: Provider, media: readonly { kind: 'image' | 'video' }[], settings?: Readonly<Record<string, unknown>>): boolean {
   if (media.length === 0) return false;
   switch (provider) {

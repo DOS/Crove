@@ -110,6 +110,37 @@ const zRelatedInvoice = z.strictObject({
   note: zText.nullable(),
 });
 
+// The signature verification of an e-invoice XML (#674). The same lists as SIGNATURE_STATUSES and SIGNATURE_REASONS
+// in @crove/l10n-vn (apps/extract tests compare them); this package does not depend on it.
+export const SIGNATURE_STATUSES = ['verified', 'unverified', 'not_applicable'] as const;
+export const SIGNATURE_REASONS = [
+  'missing',
+  'malformed',
+  'ambiguous',
+  'not_covering',
+  'digest_mismatch',
+  'bad_signature',
+  'unsupported_algorithm',
+  'no_certificate',
+  'untrusted_certificate',
+  'certificate_expired',
+  'signer_mismatch',
+  'tax_authority_missing',
+  'tax_authority_invalid',
+  'tax_authority_untrusted',
+  'cash_register',
+  'too_large',
+] as const;
+export const zInvoiceSignature = z
+  .strictObject({
+    status: z.enum(SIGNATURE_STATUSES),
+    reason: z.enum(SIGNATURE_REASONS).nullable(),
+    signer: zText.nullable(),
+    issuer: zText.nullable(),
+    signedAt: z.iso.datetime({ offset: true }).nullable(),
+  })
+  .refine((s) => (s.status === 'verified') === (s.reason === null), 'reason is null exactly when the signature is verified');
+
 // The shape of ParsedInvoice in @crove/l10n-vn for an e-invoice XML.
 export const zExtractedInvoice = z.strictObject({
   source: z.literal('einvoice_xml'),
@@ -133,6 +164,8 @@ export const zExtractedInvoice = z.strictObject({
   totalInWords: zText.nullable(),
   taxAuthorityCode: zText.nullable(),
   hasSignature: z.boolean(),
+  // Always set by a sandbox with #674; optional so a worker accepts an older sandbox's answer during a rolling deploy.
+  signature: zInvoiceSignature.optional(),
   related: zRelatedInvoice.optional(),
 });
 export type ExtractedInvoice = z.infer<typeof zExtractedInvoice>;

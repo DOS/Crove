@@ -24,6 +24,7 @@ import {
   zOAuthState,
   zSocialDecide,
   zSocialPost,
+  zSocialReviewDiff,
   zSocialPostCreate,
   zSocialPostUpdate,
   zSocialQueue,
@@ -92,26 +93,35 @@ import {
   zPurchaseDocument,
   zDocumentExport,
   zSearchResult,
+  zNotificationKind,
+  zNotifications,
   zRole,
   zSession,
   zSessionRevoke,
   zVatPeriod,
   zVatFilingPeriod,
   zVatReport,
+  zExchangeRate,
+  zInputVatCheckOutcome,
   zAccountLedger,
   zFinancialStatements,
   zLedgerPeriod,
   zLedgerReport,
   zPeriodLockInput,
   zPeriodLockState,
+  zArchiveYear,
+  zYearArchive,
+  zYearArchives,
   zPeriodUnlockInput,
   zTaxRegistryEntry,
   zVoucherType,
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
-import { zJournalVoucherRequest } from './journal-voucher.ts';
+import { zDepreciationRequest, zJournalVoucherRequest, zYearClosingRequest } from './journal-voucher.ts';
+import { zFixedAsset, zFixedAssetCreate, zFixedAssetEnd } from './fixed-asset.ts';
+import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
-import { zPortalReconciliation } from './portal-list.ts';
+import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
@@ -145,6 +155,9 @@ export const contract = {
     // Owners and admins (issue #324): the org's address, or null to clear it. Stored on one line, at most 500
     // characters; a value with control characters is refused.
     setAddress: oc.input(z.object({ address: z.string().max(2000).nullable() })).output(z.object({ address: z.string().nullable() })),
+    // Owners and admins (issue #669): the org's contact email, where its own mail goes (a request for missing invoices),
+    // or null to clear it.
+    setContactEmail: oc.input(z.object({ email: z.email().max(320).nullable() })).output(z.object({ contactEmail: z.string().nullable() })),
     // Everyone reads, owners and admins set (issue #676): after how many days a pending proposal reminds the people who
     // may approve it, and after how many its owners are told; null turns either off. Escalation must come later.
     proposalPolicy: oc.output(zProposalPolicy),
@@ -269,6 +282,8 @@ export const contract = {
         )
         .output(z.array(zSocialPost)),
       get: oc.input(z.object({ postId: zId })).output(zSocialPost),
+      // Per channel, the content of its last review decision next to its content now (#944), for the review panel's diff.
+      reviewDiff: oc.input(z.strictObject({ postId: zId })).output(zSocialReviewDiff),
       // Who should move the post along and by when (#640): owners, admins and the author; null clears.
       assign: oc
         .input(z.strictObject({ postId: zId, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable() }))
@@ -649,6 +664,8 @@ export const contract = {
           lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).optional(),
           note: z.string().max(500).optional(),
           acceptFailedChecks: z.boolean().optional(),
+          // The approver confirmed this revision of an invoice whose digital signature is unverified (#674); required for one.
+          acceptUnverifiedSignature: z.boolean().optional(),
           // A purchase invoice dated in a locked month (#478): the date its journal entry is posted on, in an open month,
           // chosen by the approver. Omitted, the entry is dated on the invoice date.
           postingDate: zLocalDate.optional(),
@@ -698,13 +715,16 @@ export const contract = {
           ),
         }),
       ),
-    // Saves changed line accounts as a new revision authored by the caller; it never approves.
+    // Saves changed line accounts, or the exchange rate of a foreign-currency invoice read without one (#918), as a new
+    // revision authored by the caller (who then cannot approve it, P10); it never approves. RATE_NOT_EDITABLE (422):
+    // the invoice is in VND or already has its rate.
     edit: oc
       .input(
         z.object({
           id: zId,
           revision: z.number().int().positive(),
-          lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).min(1).max(1000),
+          lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).min(1).max(1000).optional(),
+          exchangeRate: zExchangeRate.optional(),
           idempotencyKey: zId,
         }),
       )
@@ -722,6 +742,10 @@ export const contract = {
           z.object({ command: z.literal('finance.voucher.record'), input: zCashVoucherRequest, idempotencyKey: zId }),
           // A general journal voucher (NVK, #888) entered by hand.
           z.object({ command: z.literal('finance.journal_voucher.record'), input: zJournalVoucherRequest, idempotencyKey: zId }),
+          // The year-end closing (#889): the server builds the lines from the ledger.
+          z.object({ command: z.literal('finance.closing.record'), input: zYearClosingRequest, idempotencyKey: zId }),
+          // A month's depreciation and allocation (#919): the server builds the lines from the register.
+          z.object({ command: z.literal('finance.depreciation.record'), input: zDepreciationRequest, idempotencyKey: zId }),
         ]),
       )
       .output(z.object({ proposalId: zId })),
@@ -775,6 +799,12 @@ export const contract = {
     // Every role (issue #878): the exports a recorded document went out in, for its history.
     exports: oc.input(z.object({ documentId: zId })).output(z.array(zDocumentExport)),
   },
+  // In-app notifications of the kernel and finance (#671): each member reads, marks and turns off only their own.
+  notifications: {
+    list: oc.input(z.object({})).output(zNotifications),
+    read: oc.input(z.union([z.strictObject({ ids: z.array(zId).min(1).max(100) }), z.strictObject({ all: z.literal(true) })])).output(z.object({ read: z.number().int() })),
+    mute: oc.input(z.strictObject({ kind: zNotificationKind, muted: z.boolean() })).output(z.object({ kind: zNotificationKind, muted: z.boolean() })),
+  },
   // Every role (#673): parties by name or tax code, documents by series, number or party, journal entries by
   // description or amount. Vietnamese marks and case are ignored, and each word matches the start of a word.
   search: {
@@ -816,8 +846,22 @@ export const contract = {
       .output(z.object({ code: zAccountCode, name: z.string(), active: z.boolean() })),
   },
   // VAT working for one month or quarter (issue #316); the Excel file is GET /api/export/vat.xlsx?period=<period>.
+  // markPayment (owners, admins, members; R1, audited; #917): the accountant's mark on an input invoice of the period
+  // that needs proof of non-cash payment: paid_by_bank (optionally with the bank voucher, báo Nợ, that paid it),
+  // not_deductible, or cleared. NOT_FLAGGED (409) when the invoice does not need the check; VOUCHER_NOT_BANK (422)
+  // when the voucher is not a báo Nợ of the org.
   vat: {
     period: oc.input(z.object({ period: zVatPeriod })).output(zVatReport),
+    markPayment: oc
+      .input(
+        z.object({
+          documentId: zId,
+          outcome: zInputVatCheckOutcome,
+          voucherId: zId.nullable().optional(),
+          note: z.string().trim().min(1).max(500).nullable().optional(),
+        }),
+      )
+      .output(z.object({ documentId: zId, outcome: zInputVatCheckOutcome })),
   },
   // The tax portal's purchase-invoice list (issue #465) for one VAT period. reconcile: every role; the lists of the
   // period and how their invoices compare with Crove's purchases. import (owners, admins, members; R1): files an .xlsx
@@ -828,6 +872,20 @@ export const contract = {
     import: oc.input(z.object({ period: zVatPeriod, fileId: zId })).output(z.object({ listId: zId })),
     remove: oc.input(z.object({ listId: zId })).output(z.object({ listId: zId })),
   },
+  // Asking the client company for the purchase invoices the portal lists and Crove lacks (issue #669). status: every
+  // role. request (owners, admins, members; R1): one mail listing a period's missing invoices to the org's contact email,
+  // queued and sent by the worker; CONTACT_EMAIL_REQUIRED (409) without a contact email, NOTHING_MISSING (409),
+  // REQUEST_TOO_SOON (409) within an hour of the last request for the period; status 'suppressed' when the org stopped
+  // mail to the address. setReminder (owners, admins, members; R1): the day of the month of the reminder, or null.
+  missingInvoices: {
+    status: oc.output(zMissingInvoiceStatus),
+    request: oc
+      .input(z.object({ period: zVatPeriod }))
+      .output(z.object({ messageId: zId, status: z.enum(['queued', 'suppressed']), count: z.number().int().positive() })),
+    setReminder: oc
+      .input(z.object({ day: z.number().int().min(1).max(MISSING_INVOICE_REMINDER_DAY_MAX).nullable() }))
+      .output(z.object({ day: z.number().int().min(1).max(MISSING_INVOICE_REMINDER_DAY_MAX).nullable() })),
+  },
   // Ledger reports of a month, quarter or year (issue #321): the trial balance and the receivables and payables per
   // party, and the general ledger of one account. The Excel workbook is GET /api/export/ledger.xlsx?period=<period>.
   ledger: {
@@ -836,6 +894,9 @@ export const contract = {
     // Issue #154: the DRAFT B01-DNN at the period's last day and B02-DNN for the period. The Excel workbook is
     // GET /api/export/statements.xlsx?period=<period>.
     statements: oc.input(z.object({ period: zLedgerPeriod })).output(zFinancialStatements),
+    // Issue #920: what the HTKK XML of a year's statements (GET /api/export/statements-htkk.xml?year=<year>) would get
+    // wrong or leave out, for the screen to say before the download.
+    statementsHtkkCheck: oc.input(z.object({ year: zStatementsHtkkYear })).output(zStatementsHtkkCheck),
   },
   // Period lock (#329): every member reads it; owners and admins lock the next month once it has ended; only owners
   // unlock the last locked month (R3: fresh MFA), with a reason. A retry with the same idempotencyKey returns the first
@@ -844,6 +905,22 @@ export const contract = {
     state: oc.output(zPeriodLockState),
     lock: oc.input(zPeriodLockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
     unlock: oc.input(zPeriodUnlockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
+  },
+  // The register of fixed assets and prepaid costs (#919): every member reads it with what each asset has posted and
+  // what is left; owners, admins and members add an entry (from an approved purchase line or by hand) and stop one
+  // early. A month's depreciation is asked for with inbox.request (finance.depreciation.record). The Excel workbook is
+  // GET /api/export/fixed-assets.xlsx. A retry with the same idempotencyKey returns the first result.
+  fixedAssets: {
+    list: oc.output(z.array(zFixedAsset)),
+    create: oc.input(zFixedAssetCreate.extend({ idempotencyKey: zId })).output(z.object({ assetId: zId })),
+    end: oc.input(zFixedAssetEnd.extend({ idempotencyKey: zId })).output(z.object({ assetId: zId })),
+  },
+  // Fiscal year archive packages (#922), owners only: list them, and ask for one (R3: fresh MFA) for a year whose
+  // months are all locked. The package is GET /api/finance-archive/<year>/manifest and /api/finance-archive/<year>/<sha256>
+  // (a part), and GET /api/finance-archive/<year>/verify checks it (zYearArchiveVerification).
+  yearArchive: {
+    list: oc.output(zYearArchives),
+    build: oc.input(z.object({ year: zArchiveYear, idempotencyKey: zId })).output(zYearArchive),
   },
   // Bank statements (#326): owners, admins and members import a bank's export into an account's statement lines
   // (preview writes nothing; import stores the new and ambiguous lines); every member reads them, each with its state

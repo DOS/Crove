@@ -13,6 +13,7 @@ describe('bulk approval item refusals', () => {
       ['FOUR_EYES_REQUIRED', 403],
       ['NOT_ELIGIBLE', 403],
       ['CHECKS_FAILED', 422],
+      ['SIGNATURE_UNVERIFIED', 422],
       ['DUPLICATE_INVOICE', 409],
       ['NOT_OWN_SALE', 422],
       ['OWN_INVOICE', 422],

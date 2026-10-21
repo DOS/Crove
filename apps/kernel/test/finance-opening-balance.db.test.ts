@@ -275,7 +275,7 @@ suite('opening balances from Excel (#320)', () => {
       input: { entryId: firstEntry, entryDate: '2025-12-31', reason: 'Nhập sai số dư tiền gửi' },
       idempotencyKey: randomUUID(),
     });
-    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
+    const approved = await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { acceptUnverifiedSignature: true, id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() });
     expect(approved).toMatchObject({ status: 200, body: { reversedEntryId: firstEntry } });
 
     // The old entry and its reversal are not "other entries": the same date is still before everything else.
@@ -376,7 +376,7 @@ suite('opening balances from Excel (#320)', () => {
       slug,
     );
     expect(asked.status, JSON.stringify(asked.body)).toBe(200);
-    return rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() }, slug);
+    return rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { acceptUnverifiedSignature: true, id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() }, slug);
   };
 
   it('refuses any other entry dated on or before the opening entry, for every writer (#366)', async () => {
@@ -434,7 +434,7 @@ suite('opening balances from Excel (#320)', () => {
       slug,
     );
     // The reversal is dated on the opening date, which the rule exempts: it goes with the entry it cancels.
-    expect((await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() }, slug)).status).toBe(200);
+    expect((await rpc('inbox/approve', await tokenFor(owner, { mfa: true }), { acceptUnverifiedSignature: true, id: asked.body.proposalId, revision: 1, idempotencyKey: randomUUID() }, slug)).status).toBe(200);
     // Nothing in force any more: an entry on that date posts, and the new opening entry must come before it.
     expect(await rawEntry(orgId, '2025-12-31')).toBeNull();
     expect(await post(owner, balanced('2025-12-31'), slug)).toMatchObject({ status: 422, body: { code: 'OPENING_BALANCE_AFTER_ENTRIES' } });

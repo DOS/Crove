@@ -4,14 +4,15 @@ import { sql } from 'kysely';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
+import { vietnamToday } from '@crove/kernel-contract';
 import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
-import { PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges } from '@crove/kernel';
+import { KERNEL_NOTIFYING_EVENTS, PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
-import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
+import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
 import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { ChatAlertSender } from './chat-alerts.ts';
@@ -20,11 +21,13 @@ import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.t
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
 import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, mailErrorCode, purgeMail, runMailJob, sweepMail, type MailJob, type MailQueueDeps } from './mail-queue.ts';
+import { MISSING_INVOICE_SWEEP_MS, sweepMissingInvoiceReminders } from './missing-invoice-mail.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { runLinkPreviewJob } from './link-preview.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
+import { runYearArchive } from './year-archive.ts';
 import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
@@ -40,6 +43,12 @@ const AGENT_PROPOSAL_COMMANDS: Readonly<Record<string, string>> = {
 };
 const AGENT_RETRY_LIMIT = 3;
 const SOCIAL_NOTIFY_RETRY_LIMIT = 3;
+// In-app notifications of the kernel and finance (#671): the dispatch command of the module whose event it is.
+const NOTIFY_COMMANDS: ReadonlyMap<string, { module: string; command: string }> = new Map<string, { module: string; command: string }>([
+  ...KERNEL_NOTIFYING_EVENTS.map((type): [string, { module: string; command: string }] => [type, { module: 'kernel', command: 'kernel.notification.dispatch' }]),
+  ...FINANCE_NOTIFYING_EVENTS.map((type): [string, { module: string; command: string }] => [type, { module: 'finance', command: 'finance.notification.dispatch' }]),
+]);
+const NOTIFY_RETRY_LIMIT = 3;
 const NOTIFYING: ReadonlySet<string> = new Set(NOTIFYING_EVENTS);
 // Team chat alerts (#863): one job per alerting event, never retried. pg-boss refuses a second job with the same
 // singleton key in the same slot of this many seconds, even once the first is done, so a relay batch sent again after a
@@ -108,6 +117,14 @@ interface ExtractJob {
 interface OrgExportJob {
   orgId: string;
 }
+
+// A fiscal year's archive package (#922): the year and the command that asked for it.
+interface YearArchiveJob {
+  orgId: string;
+  year: number;
+  requestCommandId: string | null;
+}
+const YEAR_ARCHIVE_RETRY_LIMIT = 3;
 
 interface PortalListJob {
   orgId: string;
@@ -355,6 +372,20 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     }
   });
 
+  // Fiscal year archive packages (#922). A build that keeps failing is logged after its last attempt, as for the org
+  // export; the owner sees the request as still in progress until it is recorded, and may ask again an hour later.
+  if (finance) await boss.work<YearArchiveJob>(QUEUES.yearArchive, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const { orgId, year, requestCommandId } = job.data;
+    try {
+      const done = await runYearArchive({ runtime: deps.runtime, store: deps.store }, orgId, year, { requestCommandId });
+      console.log(`[year-archive] org ${orgId} year ${year}: ${done.recorded ? 'built' : 'already built'}`);
+    } catch (error) {
+      if (job.retryCount < YEAR_ARCHIVE_RETRY_LIMIT) throw error;
+      console.error(`[year-archive] ALERT archive of org ${orgId} year ${year} failed after ${job.retryCount + 1} attempts`, error);
+    }
+  });
+
   // The raw message is deleted once it is filed or dropped; after the last failed attempt it is kept for
   // investigation (each delivery owns its blob, so no other job can still need it), and the daily retention job
   // deletes it INBOUND_BLOB_MAX_AGE_DAYS later (issue #212).
@@ -512,6 +543,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (done !== 'none') console.log(`[social-link-preview] ${job.data.previewId.slice(0, 8)}: ${done}`);
     });
   }
+
+  // In-app notifications of the kernel and finance (#671): the module's dispatch reads the event from the outbox.
+  await boss.work<AgentDispatchJob & { type: string }>(QUEUES.notify, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const notify = NOTIFY_COMMANDS.get(job.data.type);
+    if (!notify || !deps.runtime.installed(notify.module)) return;
+    await deps.runtime.execute(notify.command, { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.notify' }, orgId: job.data.orgId });
+  });
 
   // In-app notifications (#637): the command reads the event from the outbox and writes one row per person; the job
   // carries only its id.
@@ -683,6 +722,40 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const proposalNudgeTimer = setInterval(() => void proposalNudgeSweep(), PROPOSAL_NUDGE_SWEEP_MS);
   void proposalNudgeSweep();
 
+  // Missing-invoice reminders (#669): every 15 minutes, the orgs whose monthly reminder is due.
+  let remindingInvoices = false;
+  const missingInvoiceSweep = async () => {
+    if (remindingInvoices) return;
+    remindingInvoices = true;
+    try {
+      const sent = await sweepMissingInvoiceReminders({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (sent > 0) console.log(`[missing-invoices] reminded ${sent} org(s)`);
+    } catch (error) {
+      console.error('[missing-invoices] sweep', error);
+    } finally {
+      remindingInvoices = false;
+    }
+  };
+  const missingInvoiceTimer = finance ? setInterval(() => void missingInvoiceSweep(), MISSING_INVOICE_SWEEP_MS) : null;
+  if (missingInvoiceTimer) void missingInvoiceSweep();
+  // Periods closing (#671): every hour, owners and admins of an org whose VAT return is due within days and whose
+  // period is not locked yet are told, once per period.
+  let closing = false;
+  const closingSweep = async () => {
+    if (closing) return;
+    closing = true;
+    try {
+      const sent = await sweepPeriodClosing({ runtime: deps.runtime, workerDb: deps.workerDb, today: vietnamToday(new Date()) });
+      if (sent > 0) console.log(`[period-closing] told ${sent}`);
+    } catch (error) {
+      console.error('[period-closing] sweep', error);
+    } finally {
+      closing = false;
+    }
+  };
+  const closingTimer = deps.runtime.installed('finance') ? setInterval(() => void closingSweep(), PERIOD_CLOSING_SWEEP_MS) : null;
+  if (closingTimer) void closingSweep();
+
   // Scheduled client report mail (#704): every 5 minutes, the schedules due queue their mails (sent by the mail queue).
   let reporting = false;
   const reportSweep = async () => {
@@ -822,7 +895,13 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           // A failed send rolls back the claim; singletonKey makes the retry idempotent.
           await Promise.all(
             rows.map(async (row) => {
-              if (!finance && (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested' || row.type === 'finance.portal_list.import_requested')) {
+              if (
+                !finance &&
+                (row.type === 'kernel.file.ingested' ||
+                  row.type === 'kernel.file.reextract_requested' ||
+                  row.type === 'finance.portal_list.import_requested' ||
+                  row.type === 'finance.archive_requested')
+              ) {
                 return null;
               }
               if (row.type === 'finance.portal_list.import_requested') {
@@ -831,6 +910,17 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   singletonKey: `${row.org_id}:${listId}`,
                   retryLimit: PORTAL_LIST_RETRY_LIMIT,
                   retryDelay: 20,
+                  retryBackoff: true,
+                });
+              }
+              if (row.type === 'finance.archive_requested') {
+                const year = Number(row.payload.year);
+                const requestCommandId = typeof row.payload.requestCommandId === 'string' ? row.payload.requestCommandId : null;
+                return boss.send(QUEUES.yearArchive, { orgId: row.org_id, year, requestCommandId } satisfies YearArchiveJob, {
+                  // One build per org and year queued or running at a time.
+                  singletonKey: `${row.org_id}:${year}`,
+                  retryLimit: YEAR_ARCHIVE_RETRY_LIMIT,
+                  retryDelay: 60,
                   retryBackoff: true,
                 });
               }
@@ -917,6 +1007,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   })
                   .catch((error: unknown) => console.error(`[social-chat-alert] event ${row.event_id.slice(0, 8)}: not queued (${error instanceof Error ? error.name : typeof error})`));
                 if (test) return null;
+              }
+              // An in-app notification (#671), besides whatever else the event starts (an agent's review task).
+              const notify = NOTIFY_COMMANDS.get(row.type);
+              if (notify && deps.runtime.installed(notify.module)) {
+                await boss.send(QUEUES.notify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
+                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  retryLimit: NOTIFY_RETRY_LIMIT,
+                  retryDelay: 20,
+                  retryBackoff: true,
+                });
               }
               if (social && NOTIFYING.has(row.type)) {
                 return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
@@ -1033,7 +1133,9 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (mailTimer) clearInterval(mailTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (reminderTimer) clearInterval(reminderTimer);
+    if (missingInvoiceTimer) clearInterval(missingInvoiceTimer);
     clearInterval(proposalNudgeTimer);
+    if (closingTimer) clearInterval(closingTimer);
     if (reportTimer) clearInterval(reportTimer);
     if (feedTimer) clearInterval(feedTimer);
     if (refreshTimer) clearInterval(refreshTimer);

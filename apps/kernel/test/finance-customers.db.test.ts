@@ -151,7 +151,7 @@ suite('customers (#670)', () => {
   }
 
   const approve = (id: string) =>
-    runtime.execute<{ documentId: string; journalEntryId: string }>('kernel.proposal.approve', { id, revision: 1 }, { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() });
+    runtime.execute<{ documentId: string; journalEntryId: string }>('kernel.proposal.approve', { acceptUnverifiedSignature: true, id, revision: 1 }, { actor: asMfa(owner.userId), orgId: org.orgId, idempotencyKey: randomUUID() });
 
   const byName = (rows: CustomerRow[], name: string) => rows.find((r) => r.name === name);
 

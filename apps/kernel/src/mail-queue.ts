@@ -38,10 +38,13 @@ export interface MailTemplateInput {
   subject: string | null;
   payload: Readonly<Record<string, unknown>>;
   publicUrl: string;
+  // The org's inbound address when this deployment receives mail (#669), else null. A template whose replies should
+  // reach the org's Inbox returns it as replyTo.
+  inboundAddress: string | null;
   execute<T>(command: string, input: unknown): Promise<T>;
 }
 export interface MailTemplate {
-  render(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string } | null>;
+  render(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string; replyTo?: string } | null>;
 }
 export type MailTemplates = Readonly<Record<string, MailTemplate>>;
 
@@ -50,7 +53,8 @@ export interface MailQueueDeps {
   mailer: MailProvider;
   templates: MailTemplates;
   publicUrl: string;
-  // INBOUND_DOMAIN when bounce reports reach this deployment (INBOUND_SECRET set): the Return-Path of each mail.
+  // INBOUND_DOMAIN when mail reaches this deployment (INBOUND_SECRET set): the Return-Path of each mail, and the domain
+  // of the org's inbound address a template may name as the Reply-To.
   bounceDomain: string | null;
   sleep?: (ms: number) => Promise<void>;
   sendTimeoutMs?: number;
@@ -131,6 +135,7 @@ async function sendOne(deps: MailQueueDeps, job: MailJob, mail: Extract<QueuedMa
       subject: mail.subject,
       payload: mail.payload,
       publicUrl: deps.publicUrl,
+      inboundAddress: deps.bounceDomain ? `${mail.inboundToken}@${deps.bounceDomain.toLowerCase()}` : null,
       execute: <T>(command: string, input: unknown) => deps.runtime.execute<T>(command, input, { actor: ACTOR, orgId: job.orgId }),
     });
   } catch {
@@ -138,7 +143,7 @@ async function sendOne(deps: MailQueueDeps, job: MailJob, mail: Extract<QueuedMa
   }
   if (!content) return { outcome: 'failed', code: 'TEMPLATE_DATA' };
   const returnPath = mail.bounceToken ? bounceAddress(mail.bounceToken, deps.bounceDomain) : undefined;
-  const outbound: OutboundMail = { to: mail.to, subject: content.subject, text: content.text, html: content.html, messageId: mail.messageIdHeader, ...(returnPath ? { returnPath } : {}) };
+  const outbound: OutboundMail = { to: mail.to, subject: content.subject, text: content.text, html: content.html, messageId: mail.messageIdHeader, ...(returnPath ? { returnPath } : {}), ...(content.replyTo ? { replyTo: content.replyTo } : {}) };
   if (!deps.mailer.enabled) {
     // The log provider shows the mail in the logs; nothing leaves the deployment.
     await Promise.resolve()

@@ -67,11 +67,15 @@ export const KERNEL_ERROR_CODES = [
   // Recording purchases and journal reversals (finance module).
   'CHECKS_BLOCKING',
   'CHECKS_FAILED',
+  'SIGNATURE_UNVERIFIED',
   'DUPLICATE_INVOICE',
   'UNBALANCED',
   'UNKNOWN_ACCOUNT',
   'UNKNOWN_LINE',
   'UNSUPPORTED_CURRENCY',
+  // Foreign-currency invoices booked in VND (#918).
+  'FOREIGN_MISMATCH',
+  'RATE_NOT_EDITABLE',
   'TOTAL_MISMATCH',
   // Sales invoices and the org's tax code (#313).
   'NOT_OWN_SALE',
@@ -111,6 +115,13 @@ export const KERNEL_ERROR_CODES = [
   // The tax portal's purchase list (#465).
   'PORTAL_LIST_EXISTS',
   'PORTAL_LIST_LIMIT',
+  // Asking the client company for its missing invoices (#669).
+  'CONTACT_EMAIL_REQUIRED',
+  'NOTHING_MISSING',
+  'REQUEST_TOO_SOON',
+  // Non-cash payment marks on input invoices (#917).
+  'NOT_FLAGGED',
+  'VOUCHER_NOT_BANK',
   // Period lock (#329).
   'PERIOD_LOCKED',
   'PERIOD_ALREADY_LOCKED',
@@ -118,6 +129,10 @@ export const KERNEL_ERROR_CODES = [
   'PERIOD_NOT_LOCKED',
   'LATER_PERIOD_LOCKED',
   'PERIOD_NOT_ENDED',
+  // Fiscal year archive packages (#922).
+  'ARCHIVE_YEAR_OPEN',
+  'ARCHIVE_EXISTS',
+  'ARCHIVE_PENDING',
   // A late purchase invoice posted in an open month (#478).
   'POSTING_DATE_NOT_ALLOWED',
   'POSTING_DATE_IN_FUTURE',
@@ -141,6 +156,25 @@ export const KERNEL_ERROR_CODES = [
   // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
   'JOURNAL_VOUCHER_INVALID',
+  // Year-end closing (#889).
+  'YEAR_NOT_ENDED',
+  'YEAR_CLOSED',
+  'CLOSING_EMPTY',
+  'CLOSING_UNSUPPORTED',
+  'CLOSING_STALE',
+  // Fixed assets, prepaid costs and their monthly depreciation (#919).
+  'ASSET_ACCOUNTS',
+  'SOURCE_MISMATCH',
+  'ASSET_EXISTS',
+  'ASSET_ENDED',
+  'ASSET_END_BEFORE_START',
+  'ASSET_END_BEFORE_POSTED',
+  'DEPRECIATION_EMPTY',
+  'DEPRECIATION_DONE',
+  'DEPRECIATION_UNSUPPORTED',
+  'DEPRECIATION_STALE',
+  // A replacement invoice posted before its original (#916).
+  'REPLACEMENT_BEFORE_ORIGINAL',
   'BANK_LINE_NOT_FOUND',
   'BANK_LINE_MISMATCH',
   'BANK_LINE_PROPOSED',

@@ -69,6 +69,9 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
     // banner (#946), since a hold's start and end come with one.
     case 'social_notification':
       return path === 'social.notifications.list' || path === 'social.publishing.get';
+    // The kernel's own (#671): the bell in the org shell reads them again.
+    case 'notification':
+      return path === 'notifications.list';
   }
 }
 

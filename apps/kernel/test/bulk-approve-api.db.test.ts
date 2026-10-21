@@ -184,9 +184,9 @@ suite('bulk approval through the API (#315)', () => {
     const second = await propose('member');
     const input = {
       items: [
-        { id: mine, revision: 1 },
-        { id: theirs, revision: 1 },
-        { id: second, revision: 1 },
+        { id: mine, revision: 1, acceptUnverifiedSignature: true },
+        { id: theirs, revision: 1, acceptUnverifiedSignature: true },
+        { id: second, revision: 1, acceptUnverifiedSignature: true },
       ],
       idempotencyKey: randomUUID(),
     };
@@ -208,7 +208,7 @@ suite('bulk approval through the API (#315)', () => {
       body: { code: 'IDEMPOTENCY_MISMATCH' },
     });
     // The owner can approve what four-eyes kept from the admin.
-    const owner = await rpc('inbox/approveMany', 'owner', { items: [{ id: mine, revision: 1 }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
+    const owner = await rpc('inbox/approveMany', 'owner', { items: [{ id: mine, revision: 1, acceptUnverifiedSignature: true }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
     expect(owner.body.results).toEqual([expect.objectContaining({ id: mine, outcome: 'approved' })]);
   });
 
@@ -224,9 +224,9 @@ suite('bulk approval through the API (#315)', () => {
       'owner',
       {
         items: [
-          { id: own, revision: 1 },
-          { id: byAdmin, revision: 1 },
-          { id: foreign, revision: 1 },
+          { id: own, revision: 1, acceptUnverifiedSignature: true },
+          { id: byAdmin, revision: 1, acceptUnverifiedSignature: true },
+          { id: foreign, revision: 1, acceptUnverifiedSignature: true },
         ],
         idempotencyKey: randomUUID(),
       },
@@ -248,9 +248,9 @@ suite('bulk approval through the API (#315)', () => {
     const id = await propose('owner');
     // The owner uploaded it and the admin may approve it too, so four-eyes refuses the owner's batch; the admin's
     // batch then approves it.
-    const refused = await rpc('inbox/approveMany', 'owner', { items: [{ id, revision: 1 }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
+    const refused = await rpc('inbox/approveMany', 'owner', { items: [{ id, revision: 1, acceptUnverifiedSignature: true }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
     expect(refused.body.results).toEqual([{ id, outcome: 'refused', code: 'FOUR_EYES_REQUIRED', rule: 'P10' }]);
-    const approved = await rpc('inbox/approveMany', 'admin', { items: [{ id, revision: 1 }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
+    const approved = await rpc('inbox/approveMany', 'admin', { items: [{ id, revision: 1, acceptUnverifiedSignature: true }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
     expect(approved.body.results).toEqual([expect.objectContaining({ id, outcome: 'approved' })]);
 
     const admin = new pg.Client({ connectionString: adminUrl });
@@ -293,7 +293,84 @@ suite('bulk approval through the API (#315)', () => {
     expect((await rpc('inbox/approveMany', 'owner', { items: [], idempotencyKey: randomUUID() }, { mfaAge: 0 })).status).toBe(400);
     expect((await rpc('inbox/approveMany', 'owner', { items: many, idempotencyKey: randomUUID() }, { mfaAge: 0 })).status).toBe(400);
     // The contract refuses a repeated proposal before the command runs (the command's own schema refuses it too).
-    const twice = await rpc('inbox/approveMany', 'owner', { items: [{ id, revision: 1 }, { id, revision: 1 }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
+    const twice = await rpc('inbox/approveMany', 'owner', { items: [{ id, revision: 1, acceptUnverifiedSignature: true }, { id, revision: 1, acceptUnverifiedSignature: true }], idempotencyKey: randomUUID() }, { mfaAge: 0 });
     expect(twice.status).toBe(400);
+  });
+
+  it('approves an invoice whose signature is unverified only with a confirmation of that revision (#674)', async () => {
+    // The fixture's signature is a placeholder, so the sandbox reports it unverified.
+    const id = await propose('owner');
+    const detail = await rpc('inbox/get', 'admin', { id });
+    expect(detail.body).toMatchObject({ signatureStatus: 'unverified', payload: { signature: { status: 'unverified', reason: 'malformed' } } });
+    const listed = await rpc('inbox/list', 'admin', { status: 'pending' });
+    expect(listed.body).toContainEqual(expect.objectContaining({ id, signatureStatus: 'unverified' }));
+
+    // One by one: refused without the confirmation, or with it set to false; a confirmation of another revision is not one.
+    const approve = (input: Record<string, unknown>) => rpc('inbox/approve', 'admin', { id, revision: 1, idempotencyKey: randomUUID(), ...input }, { mfaAge: 60 });
+    expect(await approve({})).toMatchObject({ status: 422, body: { code: 'SIGNATURE_UNVERIFIED' } });
+    expect(await approve({ acceptUnverifiedSignature: false })).toMatchObject({ status: 422, body: { code: 'SIGNATURE_UNVERIFIED' } });
+    expect(await approve({ revision: 2, acceptUnverifiedSignature: true })).toMatchObject({ status: 409, body: { code: 'STALE_REVISION' } });
+
+    // In bulk: each item needs its own confirmation; the item without one is refused alone.
+    const other = await propose('owner');
+    const done = await rpc(
+      'inbox/approveMany',
+      'admin',
+      { items: [{ id, revision: 1 }, { id: other, revision: 1, acceptUnverifiedSignature: true }], idempotencyKey: randomUUID() },
+      { mfaAge: 60 },
+    );
+    expect(done.body.results).toEqual([
+      { id, outcome: 'refused', code: 'SIGNATURE_UNVERIFIED', rule: null },
+      expect.objectContaining({ id: other, outcome: 'approved' }),
+    ]);
+    // Confirmed, it is approved as any other invoice.
+    expect(await approve({ acceptUnverifiedSignature: true })).toMatchObject({ status: 200, body: { journalEntryId: expect.any(String) } });
+
+    // The audit: each approval row names the signature and the confirmation; the batch lists each item's confirmation.
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      const approvals = (
+        await admin.query<{ target_id: string; detail: Record<string, unknown> }>(
+          `SELECT target_id, detail FROM crove_kernel.audit_event
+            WHERE org_id = $1 AND command = 'kernel.proposal.approve' AND outcome = 'ok' AND target_id = ANY($2::uuid[])`,
+          [orgId, [id, other]],
+        )
+      ).rows;
+      expect(approvals).toHaveLength(2);
+      for (const row of approvals) {
+        expect(row.detail).toMatchObject({ accept_unverified_signature: true, signature_status: 'unverified', signature_reason: 'malformed' });
+      }
+      const batch = (
+        await admin.query<{ detail: { items: unknown[] } }>(
+          `SELECT detail FROM crove_kernel.audit_event
+            WHERE org_id = $1 AND command = 'kernel.proposal.approve_many' AND outcome = 'ok'
+              AND detail -> 'items' @> pg_catalog.jsonb_build_array(pg_catalog.jsonb_build_object('id', $2::text))`,
+          [orgId, other],
+        )
+      ).rows;
+      expect(batch[0]?.detail.items).toEqual([
+        { id, outcome: 'refused', code: 'SIGNATURE_UNVERIFIED', rule: null, accept_unverified_signature: false },
+        { id: other, outcome: 'approved', accept_unverified_signature: true },
+      ]);
+    } finally {
+      await admin.end();
+    }
+  });
+
+  it('asks the confirmation for an e-invoice proposal read before signatures were verified (#674)', async () => {
+    // A proposal stored before #674 has no verification: it is treated as unverified, in the list and when approving.
+    const id = await propose('owner');
+    const admin = new pg.Client({ connectionString: adminUrl });
+    await admin.connect();
+    try {
+      await admin.query(`UPDATE crove_kernel.proposal SET payload = payload - 'signature' WHERE org_id = $1 AND id = $2`, [orgId, id]);
+    } finally {
+      await admin.end();
+    }
+    expect((await rpc('inbox/get', 'admin', { id })).body).toMatchObject({ signatureStatus: 'unverified' });
+    const approve = (extra: Record<string, unknown>) => rpc('inbox/approve', 'admin', { id, revision: 1, idempotencyKey: randomUUID(), ...extra }, { mfaAge: 60 });
+    expect(await approve({})).toMatchObject({ status: 422, body: { code: 'SIGNATURE_UNVERIFIED' } });
+    expect(await approve({ acceptUnverifiedSignature: true })).toMatchObject({ status: 200 });
   });
 });
