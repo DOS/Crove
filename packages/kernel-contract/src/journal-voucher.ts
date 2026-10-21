@@ -4,7 +4,7 @@
 // any posting (R3, four-eyes, fresh MFA), and approving it numbers the voucher (NVK00001 ...) and posts its journal
 // entry. The finance module decides every rule; the shapes here are shared with the SPA.
 import { z } from 'zod';
-import { JOURNAL_VOUCHER_MAX_LINES, zAccountCode, zId, zJournalAmount, zLocalDate } from './schemas.ts';
+import { JOURNAL_VOUCHER_MAX_LINES, zAccountCode, zId, zJournalAmount, zJournalVoucherProposal, zLocalDate } from './schemas.ts';
 
 // The proposal kind and the command its approval runs.
 export const JOURNAL_VOUCHER_KIND = 'finance.journal_voucher';
@@ -36,3 +36,12 @@ export type JournalVoucherRequest = z.infer<typeof zJournalVoucherRequest>;
 export function journalVoucherCode(number: number): string {
   return `NVK${String(number).padStart(5, '0')}`;
 }
+
+// Year-end closing (issue #889), kết chuyển: classes 5 to 8 to 911, then the year's result to 4212, as a general
+// journal voucher dated the year's last day. A user names the year; the server builds every line from the ledger.
+export const YEAR_CLOSING_COMMAND = 'finance.closing.record';
+export const zYearClosingRequest = z.object({ year: z.number().int().min(2000).max(2100) });
+export type YearClosingRequest = z.infer<typeof zYearClosingRequest>;
+// The proposal (kind finance.journal_voucher, shown as one) with the year it closes.
+export const zYearClosingProposal = zJournalVoucherProposal.extend({ closingYear: zYearClosingRequest.shape.year });
+export type YearClosingProposal = z.infer<typeof zYearClosingProposal>;

@@ -109,7 +109,7 @@ import {
   zVoucherType,
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
-import { zJournalVoucherRequest } from './journal-voucher.ts';
+import { zJournalVoucherRequest, zYearClosingRequest } from './journal-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
@@ -713,6 +713,8 @@ export const contract = {
           z.object({ command: z.literal('finance.voucher.record'), input: zCashVoucherRequest, idempotencyKey: zId }),
           // A general journal voucher (NVK, #888) entered by hand.
           z.object({ command: z.literal('finance.journal_voucher.record'), input: zJournalVoucherRequest, idempotencyKey: zId }),
+          // The year-end closing (#889): the server builds the lines from the ledger.
+          z.object({ command: z.literal('finance.closing.record'), input: zYearClosingRequest, idempotencyKey: zId }),
         ]),
       )
       .output(z.object({ proposalId: zId })),
