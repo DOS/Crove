@@ -169,7 +169,11 @@ suite('kernel on PostgreSQL', () => {
     const seen = { transactions: 0 };
     const hooked = new Proxy(db, {
       get(target, prop) {
-        if (prop !== 'transaction') return Reflect.get(target, prop, target);
+        if (prop !== 'transaction') {
+          // Bound to the real Kysely, whose private fields a call through the proxy cannot reach (sql`...`.execute).
+          const value = Reflect.get(target, prop, target);
+          return typeof value === 'function' ? value.bind(target) : value;
+        }
         return () => {
           const builder = target.transaction();
           seen.transactions += 1;
@@ -190,6 +194,15 @@ suite('kernel on PostgreSQL', () => {
     });
     return { runtime: hookedRuntime, seen };
   }
+
+  const securityEvents = (userId: string) =>
+    withAdmin(async (admin) => {
+      const { rows } = await admin.query<{ command: string; code: string; target_org: string | null; refusals: number }>(
+        `SELECT command, code, target_org, refusals::int FROM crove_kernel.security_event WHERE caller = $1 ORDER BY command, code`,
+        [`user:${userId}`],
+      );
+      return rows;
+    });
 
   const auditRows = (orgId: string, command: string, outcome: string) =>
     withAdmin(async (admin) => {
@@ -285,6 +298,8 @@ suite('kernel on PostgreSQL', () => {
         sqlState: '42501',
       });
     });
+    // The org's audit no longer takes the row; security_event records the refusal instead (#1006).
+    expect(await securityEvents(member)).toEqual([{ command: 'kernel.member.invite.create', code: 'FORBIDDEN', target_org: orgId, refusals: 1 }]);
   });
 
   it('writes no refusal audit and logs nothing when a new org rolls back with its failed command (#102)', async () => {
@@ -304,10 +319,12 @@ suite('kernel on PostgreSQL', () => {
       await expect(
         hooked.runtime.executeOrgless('test.org.create_then_fail', { name: `Hoàn tác ${tag}` }, { actor: asUser(founder) }),
       ).rejects.toMatchObject({ code: 'INVALID', status: 422 });
-      // No refusal-audit transaction was opened: the org rolled back, there is nothing to audit in.
+      // No refusal-audit transaction was opened: the org rolled back, there is nothing to audit in. The refusal is
+      // noted in security_event instead, with no target org (#1006).
       expect(hooked.seen.transactions).toBe(1);
       expect(logged).not.toHaveBeenCalled();
     });
+    expect(await securityEvents(founder)).toEqual([{ command: 'test.org.create_then_fail', code: 'INVALID', target_org: null, refusals: 1 }]);
     const left = await withAdmin(async (admin) => (await admin.query('SELECT 1 FROM crove_kernel.tenant WHERE created_by = $1', [founder])).rows.length);
     expect(left).toBe(0);
   });
