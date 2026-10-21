@@ -8,9 +8,11 @@
 --                             commands take the same lock shared, so nothing of the org is begun once a hold commits.
 --                             No unique index: a released row and a live one of the same org are both normal.
 -- notification kind publishing_hold   the team is told when a hold starts and when it ends.
--- crove_social.publish_due    skips scheduled and stalled variants of a held org, so a held org's due posts never fill
---                             the scan's limit for every other org. Status checks and reconciles of posts already sent
---                             go on: they read the platform and post nothing. Same arguments and columns as before.
+-- crove_social.publish_due    skips a held org's scheduled variants, its variants whose worker died mid-call, and its
+--                             status checks, so a held org's due posts never fill the scan's limit for every other org
+--                             and nothing of it is posted: an Instagram or Threads status check posts the container it
+--                             finds processed. Reconciles go on: they only ask the platform. Same arguments and columns
+--                             as before.
 -- crove_social.evergreen_due  skips held orgs, so no evergreen reposts pile up for review during a hold.
 SET LOCAL lock_timeout = '2s';
 
@@ -24,6 +26,8 @@ CREATE TABLE IF NOT EXISTS crove_social.publish_hold (
   released_at timestamptz,
   PRIMARY KEY (org_id, id),
   CONSTRAINT publish_hold_released_check CHECK ((released_at IS NULL) = (released_by IS NULL)),
+  -- Both times come from the database clock (the commands leave held_at to its default and set released_at to now()),
+  -- never from the clocks of two app instances.
   CONSTRAINT publish_hold_order_check CHECK (released_at IS NULL OR released_at >= held_at)
 );
 -- The publish path and the banner look up the live hold of an org.
@@ -54,8 +58,11 @@ END $$;
 ALTER TABLE crove_social.notification VALIDATE CONSTRAINT notification_kind_check;
 ALTER TABLE crove_social.notification_mute VALIDATE CONSTRAINT notification_mute_kind_check;
 
--- The worker's publish scan (20261019040000), with held orgs left out of the two kinds of work that send something: a
--- due scheduled variant, and a variant whose worker died mid-call (its resume may call again).
+-- The worker's publish scan (20261019040000), with held orgs left out of the three kinds of work that may send
+-- something: a due scheduled variant, a status check (Instagram's and Threads' post the processed container; the
+-- channels are STATUS_PUBLISHES in modules/social/src/domain/channels.ts, but the scan skips every held status check
+-- rather than repeat that list here: the others only record a post already submitted, and run after the release), and
+-- a variant whose worker died mid-call (its resume may call again).
 CREATE OR REPLACE FUNCTION crove_social.publish_due(p_limit int, p_stale_seconds int, p_providers text[])
 RETURNS TABLE (org_id uuid, variant_id uuid, provider text, status text)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -83,6 +90,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   (SELECT v.org_id, v.id, v.provider, v.status
    FROM live v
    WHERE v.status = 'processing' AND v.next_check_at <= pg_catalog.now()
+     AND v.org_id NOT IN (SELECT org_id FROM held)
    ORDER BY v.next_check_at
    LIMIT (SELECT n FROM lim))
   UNION ALL

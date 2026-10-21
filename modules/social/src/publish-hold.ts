@@ -3,8 +3,9 @@
 // one. Owners and admins put it on with a reason (social.publishing.hold) and take it off (social.publishing.release),
 // both R2 and audited with the reason; every member reads it (social.publishing.hold_get) for the banner.
 //
-// While a hold is live nothing of the org goes out: the publish step and the post-publish actions (first comments,
-// thread parts, auto-replies, reposts) answer "held" and leave everything as it was, and the scans skip the org, so no
+// While a hold is live nothing of the org goes out: the publish step, the status check of a channel whose check posts
+// the processed upload (STATUS_PUBLISHES: Instagram, Threads) and the post-publish actions (first comments, thread
+// parts, auto-replies, reposts) answer "held" and leave everything as it was, and the scans skip the org, so no
 // evergreen repost piles up for review. A takedown still goes: removing a post is often what a crisis asks for.
 // On release, posts still due go out on the next sweep, once each (the variants never left scheduled). A variant whose
 // time passed more than an hour before the release does not go out by itself: it fails with HELD_TOO_LONG, where a
@@ -79,7 +80,9 @@ export const publishingHold = defineCommand({
     if (live) return { holdId: live.id, heldAt: live.held_at.toISOString(), created: false };
     const row = await ctx.trx
       .insertInto('crove_social.publish_hold')
-      .values({ org_id: ctx.orgId, reason: input.reason, held_by: userId, held_at: ctx.now })
+      // held_at and released_at from the database clock (its default, now()), so the row's order check never compares
+      // the clocks of two app instances.
+      .values({ org_id: ctx.orgId, reason: input.reason, held_by: userId })
       .returning(['id', 'held_at'])
       .executeTakeFirstOrThrow();
     ctx.audit({ hold_id: row.id, reason: input.reason });
@@ -131,7 +134,7 @@ export const publishingRelease = defineCommand({
     if (!live) return { released: false, heldTooLong: 0 };
     await ctx.trx
       .updateTable('crove_social.publish_hold')
-      .set({ released_by: userId, released_at: ctx.now })
+      .set({ released_by: userId, released_at: sql<Date>`pg_catalog.now()` })
       .where('org_id', '=', ctx.orgId)
       .where('released_at', 'is', null)
       .execute();

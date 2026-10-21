@@ -1,6 +1,7 @@
 // A hold on all of the org's publishing (#946): the banner every Social page shows while it is on, with "Tiếp tục đăng"
-// for owners and admins, and the card on the Channels page where they put it on with a reason. The banner reads the hold
-// again every minute, and when a notification arrives (a hold's start and end come with one).
+// for owners and admins, and the card on the Channels page ("Tạm dừng mọi bài đăng") where they put it on with a
+// reason. The banner reads the hold again every minute, and when a notification arrives (a hold's start and end come
+// with one).
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 import { useState } from 'react';

@@ -299,6 +299,94 @@ suite('social publishing hold on PostgreSQL (#946)', () => {
     expect(await worker.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId: commented.postId }, { actor: system, orgId: o.orgId })).toMatchObject({ postId: expect.any(String) });
   });
 
+  it('makes no status check that would post a processed upload while held, and posts it after the release', async () => {
+    const o = await org();
+    // Instagram takes the post as a container still processing; the status check that finds it processed posts it
+    // (media_publish). Recorded answers: the calls it got, and what it says.
+    const calls: string[] = [];
+    const instagram: Publisher = {
+      provider: 'instagram',
+      publishSafety: 'reconcile_only',
+      publish: async (input) => {
+        calls.push(`publish:${input.callKey}`);
+        return { kind: 'pending', externalRef: 'container-1', checkAfterSeconds: 5 };
+      },
+      status: async (input) => {
+        calls.push(`status:${input.externalRef}`);
+        return { kind: 'accepted', externalId: 'ig-media-1', url: 'https://instagram.example/p/1' };
+      },
+    };
+    const account = `ig-${randomUUID().slice(0, 8)}`;
+    const sealed = vault.seal(JSON.stringify({ accessToken: 'ig-token-db' }), { orgId: o.orgId, provider: 'instagram', externalAccountId: account });
+    const { connectionId } = await exec<{ connectionId: string }>(o, 'kernel.channel.connect', {
+      provider: 'instagram',
+      externalAccountId: account,
+      displayName: 'Tiệm Bánh IG',
+      scopes: ['instagram_content_publish'],
+      expiresAt: null,
+      credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+    });
+    const fileId = randomUUID();
+    const sha = fileId.replaceAll('-', '').padEnd(64, '0');
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source, image_width, image_height)
+         VALUES ($1, $2, $3, $4, $5, 'anh.jpg', 'image/jpeg', 200000, 'social', 1080, 1350)`,
+        [o.orgId, fileId, sha, `org/${o.orgId}/${sha}`, `content:${sha}`],
+      ),
+    );
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Bài có ảnh', media: [{ fileId }], channels: [{ connectionId }] });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    const id = post.variants[0]?.id as string;
+    const job = () => runPublishJob({ runtime: worker, broker: vault, publishers: { instagram }, callTimeoutMs: 2_000 }, o.orgId, id, 'instagram');
+    // Sent before the hold, still processing when it comes.
+    expect(await job()).toEqual({ action: 'call', status: 'processing' });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET next_check_at = now() - interval '1 second' WHERE id = $1", [id]));
+    const dueIg = () => admin(async (c) => (await c.query<{ variant_id: string }>("SELECT variant_id FROM crove_social.publish_due(1000, 600, ARRAY['instagram'])")).rows.map((r) => r.variant_id));
+    expect(await dueIg()).toContain(id);
+
+    await exec(o, 'social.publishing.hold', { reason: 'Ngày quốc tang' });
+    expect(await dueIg()).not.toContain(id);
+    expect(await job()).toEqual({ action: 'none', reason: 'held' });
+    expect(calls).toEqual([`publish:social.publish:${id}:1:1:publish`]);
+    expect(await status(o, postId)).toEqual({ status: 'processing', code: null });
+
+    // After the release the check runs and the post goes out, once.
+    expect(await exec(o, 'social.publishing.release', {})).toEqual({ released: true, heldTooLong: 0 });
+    expect(await dueIg()).toContain(id);
+    expect(await job()).toEqual({ action: 'status', status: 'published' });
+    expect(await job()).toEqual({ action: 'none', reason: 'published' });
+    expect(calls).toEqual([`publish:social.publish:${id}:1:1:publish`, 'status:container-1']);
+  });
+
+  it('lets a status check that only records a post already submitted run while held', async () => {
+    const o = await org();
+    let checks = 0;
+    const sandbox = new SandboxPublisher();
+    const pending: Publisher = {
+      provider: 'sandbox',
+      publishSafety: sandbox.publishSafety,
+      publish: async () => ({ kind: 'pending', externalRef: 'sbx-pending', checkAfterSeconds: 5 }),
+      status: async () => {
+        checks += 1;
+        return { kind: 'accepted', externalId: 'sbx-done', url: null };
+      },
+    };
+    const v = await duePost(o);
+    expect(await run(o, v.id, pending)).toEqual({ action: 'call', status: 'processing' });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET next_check_at = now() - interval '1 second' WHERE id = $1", [v.id]));
+    await exec(o, 'social.publishing.hold', { reason: 'Sự cố' });
+    // The scan leaves it for after the release; a job that runs anyway records the post that is already out.
+    expect(await due()).not.toContain(v.id);
+    expect(await run(o, v.id, pending)).toEqual({ action: 'status', status: 'published' });
+    expect(checks).toBe(1);
+    await exec(o, 'social.publishing.release', {});
+  });
+
   it('keeps holds apart by org: another org cannot see or release them', async () => {
     const o = await org();
     const other = await org();

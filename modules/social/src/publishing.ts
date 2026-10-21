@@ -17,7 +17,7 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { shortOfPolicy } from './policy.ts';
-import { PUBLISH_LIMITS, SENT_TO_APP, isProvider, limitWait } from './domain/channels.ts';
+import { PUBLISH_LIMITS, SENT_TO_APP, STATUS_PUBLISHES, isProvider, limitWait } from './domain/channels.ts';
 import { sentLink } from './domain/utm.ts';
 import { withShortLink } from './short-links.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
@@ -365,6 +365,9 @@ export const publishBegin = defineCommand({
       }
       case 'processing': {
         if (!v.next_check_at || v.next_check_at.getTime() > now) return none('not_due');
+        // A status check that would post the processed container (#946): not while held. Another channel's check only
+        // records a post already submitted, and goes on.
+        if (held && isProvider(v.provider) && STATUS_PUBLISHES.has(v.provider)) return none('held');
         const existing = await callRow(ctx, key);
         const startedAt = existing?.started_at ?? v.updated_at;
         const connection = await connectionOf(ctx, v.channel_connection_id);
