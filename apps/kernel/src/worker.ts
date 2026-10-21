@@ -15,6 +15,7 @@ import { extractAndPropose, importPortalList, recordExtractionFailure, recordPor
 import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
+import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
 import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, mailErrorCode, purgeMail, runMailJob, sweepMail, type MailJob, type MailQueueDeps } from './mail-queue.ts';
@@ -654,6 +655,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const refreshTimer = Object.keys(refreshers).length > 0 ? setInterval(() => void refreshSweep(), REFRESH_SWEEP_MS) : null;
   void refreshSweep();
 
+  // Sizes of Social images uploaded before sizes were read at upload (#668): a batch every 10 minutes, a round a day.
+  const sizes = { after: null as string | null, pausedUntil: 0 };
+  let sizing = false;
+  const sizeSweep = async () => {
+    if (sizing) return;
+    sizing = true;
+    try {
+      const done = await backfillImageSizes({ runtime: deps.runtime, workerDb: deps.workerDb, store: deps.store }, sizes);
+      if (done.recorded + done.unreadable > 0) console.log(`[image-size] recorded ${done.recorded}, unreadable ${done.unreadable}`);
+    } catch (error) {
+      console.error('[image-size] sweep', error);
+    } finally {
+      sizing = false;
+    }
+  };
+  const sizeTimer = deps.runtime.installed('social') ? setInterval(() => void sizeSweep(), IMAGE_SIZE_SWEEP_MS) : null;
+
   // Metrics of published posts (S8): every 15 minutes, the variants whose last capture is older than 6 hours.
   let measuring = false;
   const metricsSweep = async () => {
@@ -892,6 +910,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (refreshTimer) clearInterval(refreshTimer);
     if (resealTimer) clearInterval(resealTimer);
     if (metricsTimer) clearInterval(metricsTimer);
+    if (sizeTimer) clearInterval(sizeTimer);
     if (accountTimer) clearInterval(accountTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
