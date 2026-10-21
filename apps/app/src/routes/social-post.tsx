@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -101,6 +101,100 @@ function PeopleField({ id, label, hint, names, onChange, disabled }: { id: strin
   );
 }
 
+// YouTube tags typed as text (#905), separated by commas; a tag may hold spaces. The text is kept as typed while the
+// field has focus, so a comma can be typed, and the count is YouTube's own (commas, and quotes around a tag with a space).
+function TagsField({ tags, onChange, disabled }: { tags: readonly string[]; onChange: (tags: string[]) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const [text, setText] = useState<string | null>(null);
+  const used = youtubeTagsLength(tags);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={id} className="text-xs">
+          {t('ytTags')}
+        </Label>
+        <span className={cn('font-mono text-xs tabular-nums', used > YOUTUBE_TAGS_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+          {used}/{YOUTUBE_TAGS_MAX}
+        </span>
+      </div>
+      <Input
+        id={id}
+        value={text ?? tags.join(', ')}
+        disabled={disabled}
+        onFocus={() => setText(tags.join(', '))}
+        onBlur={() => setText(null)}
+        onChange={(e) => {
+          setText(e.target.value);
+          onChange([...new Set(e.target.value.split(',').map((tag) => tag.trim().replace(/\s+/g, ' ')).filter(Boolean))]);
+        }}
+      />
+      <p className="text-xs text-subtle-foreground">{t('ytTagsHint')}</p>
+    </div>
+  );
+}
+
+// YouTube (#905): who can watch, whether the video is made for kids (YouTube requires the answer; absent is no, as for
+// every video Crove posted before), its category from YouTube's fixed list, and its tags.
+function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const locale = useLocale();
+  const id = useId();
+  const without = (key: string) => {
+    const { [key]: _gone, ...rest } = settings;
+    return rest;
+  };
+  const category = typeof settings.categoryId === 'string' ? settings.categoryId : YOUTUBE_DEFAULT_CATEGORY;
+  // A category set through the API outside the list still shows, so it can be changed.
+  const known = (YOUTUBE_CATEGORIES as readonly string[]).includes(category);
+  const collator = new Intl.Collator(locale);
+  const categories = [...YOUTUBE_CATEGORIES].sort((a, b) => collator.compare(t(`ytCategoryOption.${a}`), t(`ytCategoryOption.${b}`)));
+  const tags = Array.isArray(settings.tags) ? (settings.tags as unknown[]).filter((v): v is string => typeof v === 'string') : [];
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-privacy`} className="text-xs">
+          {t('ytPrivacy')}
+        </Label>
+        <NativeSelect id={`${id}-privacy`} size="sm" className="w-full max-w-xs" value={typeof settings.privacy === 'string' ? settings.privacy : 'public'} disabled={disabled} onChange={(e) => onChange({ ...settings, privacy: e.target.value })}>
+          {(['public', 'unlisted', 'private'] as const).map((p) => (
+            <NativeSelectOption key={p} value={p}>
+              {t(`ytPrivacyOption.${p}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-kids`} className="text-xs">
+          {t('ytAudience')}
+        </Label>
+        <NativeSelect id={`${id}-kids`} size="sm" className="w-full max-w-xs" value={settings.madeForKids === true ? 'yes' : 'no'} disabled={disabled} onChange={(e) => onChange({ ...settings, madeForKids: e.target.value === 'yes' })}>
+          {(['no', 'yes'] as const).map((a) => (
+            <NativeSelectOption key={a} value={a}>
+              {t(`ytAudienceOption.${a}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <p className="text-xs text-subtle-foreground">{t('ytAudienceHint')}</p>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-category`} className="text-xs">
+          {t('ytCategory')}
+        </Label>
+        <NativeSelect id={`${id}-category`} size="sm" className="w-full max-w-xs" value={category} disabled={disabled} onChange={(e) => onChange({ ...settings, categoryId: e.target.value })}>
+          {!known && <NativeSelectOption value={category}>{category}</NativeSelectOption>}
+          {categories.map((c) => (
+            <NativeSelectOption key={c} value={c}>
+              {t(`ytCategoryOption.${c}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      <TagsField tags={tags} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, tags: next } : without('tags'))} />
+    </div>
+  );
+}
+
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
 function ProviderSettings({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social');
@@ -144,20 +238,7 @@ function ProviderSettings({ provider, settings, onChange, disabled }: { provider
       </div>
     );
   }
-  if (provider === 'youtube') {
-    return (
-      <div className="space-y-1.5">
-        <Label className="text-xs">{t('ytPrivacy')}</Label>
-        <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacy === 'string' ? settings.privacy : 'public'} disabled={disabled} onChange={(e) => onChange({ ...settings, privacy: e.target.value })}>
-          {(['public', 'unlisted', 'private'] as const).map((p) => (
-            <NativeSelectOption key={p} value={p}>
-              {t(`ytPrivacyOption.${p}`)}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </div>
-    );
-  }
+  if (provider === 'youtube') return <YouTubeSettings settings={settings} onChange={onChange} disabled={disabled} />;
   if (provider !== 'tiktok') return null;
   const toggle = (key: 'allowComments' | 'allowDuet' | 'allowStitch') => (
     <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -413,6 +494,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_MEDIA', { limit });
       case 'TOO_MANY_LINKS':
         return t('TOO_MANY_LINKS', { limit, actual });
+      case 'YT_TAGS_TOO_LONG':
+        return t('YT_TAGS_TOO_LONG', { limit, actual });
       case 'CONTENT_WARNING_TOO_LONG':
         return t('CONTENT_WARNING_TOO_LONG', { limit, actual });
       case 'IG_COLLABORATORS_INVALID':
