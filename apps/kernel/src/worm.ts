@@ -249,10 +249,16 @@ function parseBatch(bytes: Uint8Array): ArchiveBatch | null {
 export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSeconds: number }): Promise<number> {
   let written = 0;
   let restarts = 0;
+  let restartSeq = 0;
   // Two runs can work on the same sequence (a retried job beside the next minute's): the one that loses the store
-  // write or the record reads the head again and goes on from there, a few times at most.
-  const lostRace = (error: unknown) =>
-    (error instanceof ArchiveObjectExistsError || (error as { code?: string }).code === '40001') && restarts++ < MAX_RACE_RESTARTS;
+  // write or the record reads the head again and goes on from there. The cap counts losses on one sequence, so a run
+  // that keeps losing to another on batch after batch finishes, and one stuck on a sequence stops (#1004).
+  const restart = (seq: number) => {
+    if (seq !== restartSeq) [restartSeq, restarts] = [seq, 0];
+    return restarts++ < MAX_RACE_RESTARTS;
+  };
+  const lostRace = (error: unknown, seq: number) =>
+    (error instanceof ArchiveObjectExistsError || (error as { code?: string }).code === '40001') && restart(seq);
   while (written < MAX_BATCHES_PER_RUN) {
     const head = (await sql<{ seq: string; window_to: Date; chain_sha256: string }>`SELECT * FROM crove_kernel.archive_head()`.execute(db)).rows[0];
     const next = (
@@ -274,7 +280,7 @@ export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSe
       if (!found || found.seq !== seq || found.prevChainSha256 !== prev || found.window.from !== from) {
         // Another run may have recorded this sequence between the two reads above: then the head has moved on.
         const now = (await sql<{ seq: string }>`SELECT seq FROM crove_kernel.archive_head()`.execute(db)).rows[0];
-        if (Number(now?.seq ?? 0) >= seq && restarts++ < MAX_RACE_RESTARTS) continue;
+        if (Number(now?.seq ?? 0) >= seq && restart(seq)) continue;
         throw new Error(`archive object ${key} does not continue the chain recorded in the database; run the verifier and see docs/runbooks/worm-archive.md`);
       }
       batch = found;
@@ -300,7 +306,7 @@ export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSe
       try {
         await store.put(key, new TextEncoder().encode(JSON.stringify(batch)));
       } catch (error) {
-        if (lostRace(error)) continue;
+        if (lostRace(error, seq)) continue;
         throw error;
       }
     }
@@ -308,7 +314,7 @@ export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSe
       await sql`SELECT crove_kernel.archive_record(${seq}::bigint, ${batch.window.from}::timestamptz, ${batch.window.to}::timestamptz,
         ${batch.rows.length}::int, ${batch.batchSha256}, ${batch.chainSha256}, ${key})`.execute(db);
     } catch (error) {
-      if (lostRace(error)) continue;
+      if (lostRace(error, seq)) continue;
       throw error;
     }
     written++;
