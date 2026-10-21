@@ -48,6 +48,7 @@ const PENDING_TABLES = new Set<string>([
   'crove_social.chat_alert',
   'crove_social.chat_alert_target',
   'crove_social.media_tag',
+  'crove_social.review_link_post',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -779,6 +780,21 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => {
       const link = socialReviewLinkRow(o);
       return { setup: [{ table: 'crove_social.post', values: link.post }], row: link.row };
+    },
+  },
+  // A post of a plan review link (#902): a plan link names no post, its posts are these rows, one per post of a link,
+  // so every row gets its own link and post. Members read them; the create command adds them once.
+  'crove_social.review_link_post': {
+    make: (o) => {
+      const post = socialPostRow(o);
+      const link = { org_id: o.id, id: randomUUID(), kind: 'plan', token_sha256: hex64(), created_by: o.owner, expires_at: new Date(Date.now() + 86_400_000).toISOString() };
+      return {
+        setup: [
+          { table: 'crove_social.post', values: post },
+          { table: 'crove_social.review_link', values: link },
+        ],
+        row: { org_id: o.id, id: randomUUID(), link_id: link.id, post_id: post.id, position: 0 },
+      };
     },
   },
   // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
