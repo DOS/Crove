@@ -45,6 +45,7 @@ import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
 import { usageCommands } from './usage-limits.ts';
+import { userStatusCommands } from './user-status.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // The command that records an invoice proposal (a purchase or a sale).
@@ -909,6 +910,7 @@ const otherKernelCommands = [
   ...proposalReminderCommands,
   ...auditLogCommands,
   ...usageCommands,
+  ...userStatusCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),
