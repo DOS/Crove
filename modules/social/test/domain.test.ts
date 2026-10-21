@@ -486,6 +486,7 @@ describe('variant lifecycle', () => {
     { type: 'rate_limited' },
     { type: 'unknown' },
     { type: 'needs_human' },
+    { type: 'held_too_long' },
     { type: 'reconciled', found: true },
     { type: 'reconciled', found: false },
     { type: 'retry' },
@@ -541,6 +542,12 @@ describe('variant lifecycle', () => {
         }
       }),
     );
+  });
+
+  it('fails only a scheduled variant a publishing hold kept too long, which a person may then retry or edit (#946)', () => {
+    for (const s of VARIANT_STATUSES) expect(transitionVariant(s, { type: 'held_too_long' }).ok).toBe(s === 'scheduled');
+    expect(run('scheduled', [{ type: 'held_too_long' }, { type: 'retry' }])).toBe('scheduled');
+    expect(run('scheduled', [{ type: 'held_too_long' }, { type: 'edit' }])).toBe('draft');
   });
 
   it('resolves an unknown outcome by reconciliation or a human, never by a direct restart', () => {

@@ -202,6 +202,10 @@ export const AUTO_REPLY_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
 // (Threads, Bluesky, Mastodon; X reports no counts to Crove yet), a variant may carry one repost rule
 // (`settings.repost`: { likes?, afterHours? }), at a like count, after some hours, or whichever comes first.
 export const REPOST_PROVIDERS: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'threads', 'bluesky', 'mastodon']);
+// The channels whose status check can itself publish (#946): Instagram and Threads upload a container first and post it
+// (media_publish, threads_publish) in the status check that finds it processed. Every other adapter's status check only
+// reads (TikTok and Zalo OA publish on their own), so a publishing hold stops only these.
+export const STATUS_PUBLISHES: ReadonlySet<Provider> = new Set<Provider>(['instagram', 'threads']);
 export const REPOST_LIKES_MAX = 1_000_000;
 // Metrics are read for 30 days after a post goes out.
 export const REPOST_HOURS_MAX = 720;

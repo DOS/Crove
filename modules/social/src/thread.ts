@@ -12,6 +12,7 @@ import { THREAD_RULES, isProvider, threadPartsOf } from './domain/channels.ts';
 import { publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
+import { publishingHeld } from './publish-hold.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const THREAD_STEP = 'part';
@@ -106,6 +107,8 @@ export const threadBegin = defineCommand({
   access: 'system',
   handler: async (ctx, input): Promise<ThreadWork> => {
     requireSystem(ctx);
+    // Nothing goes out while the org's publishing is held (#946); a person asks again after the release.
+    if (await publishingHeld(ctx)) return { action: 'none', reason: 'held' };
     const v = await lockVariant(ctx, input.variantId);
     if (v.provider !== input.provider) return { action: 'none', reason: 'provider_mismatch' };
     const parts = threadPartsOf(settingsOf(v));

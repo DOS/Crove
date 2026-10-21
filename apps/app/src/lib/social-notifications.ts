@@ -5,12 +5,14 @@ import { SOCIAL_NOTIFICATION_KINDS } from '@crove/kernel-contract';
 export type NotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
 export const NOTIFICATION_KINDS: readonly NotificationKind[] = SOCIAL_NOTIFICATION_KINDS;
 
-// What an item opens: its post, or the channels page for a channel that needs connecting again.
+// What an item opens: its post, or the channels page for a channel that needs connecting again or a publishing hold.
 export function notificationTarget(item: { kind: NotificationKind; postId: string | null }): { to: 'post'; postId: string } | { to: 'channels' } | { to: 'feeds' } | null {
   if (item.postId) return { to: 'post', postId: item.postId };
   if (item.kind === 'channel_expired') return { to: 'channels' };
   // A feed that stopped being read (#708).
   if (item.kind === 'feed_paused') return { to: 'feeds' };
+  // The org's publishing held or released (#946): the channels page, where it is put on and taken off.
+  if (item.kind === 'publishing_hold') return { to: 'channels' };
   return null;
 }
 

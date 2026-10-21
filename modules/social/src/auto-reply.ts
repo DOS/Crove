@@ -13,6 +13,7 @@ import { AUTO_REPLY_RULES, autoReplyOf, isProvider } from './domain/channels.ts'
 import { publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
+import { publishingHeld } from './publish-hold.ts';
 
 export const AUTO_REPLY_STEP = 'autoreply';
 const ACTOR: SystemActor = { type: 'system', component: 'social.auto_reply' };
@@ -60,6 +61,8 @@ export const autoReplyBegin = defineCommand({
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<AutoReplyWork> => {
     requireSystem(ctx);
+    // Nothing goes out while the org's publishing is held (#946): no call is recorded, so a later count may still reply.
+    if (await publishingHeld(ctx)) return { action: 'none', reason: 'held' };
     const v = await lockVariant(ctx, input.variantId);
     const reply = autoReplyOf(settingsOf(v));
     if (!reply || reply === 'invalid') return { action: 'none', reason: 'no_reply' };
