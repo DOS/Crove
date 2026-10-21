@@ -41,6 +41,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.proposal_policy',
   'crove_social.chat_alert',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -491,6 +492,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.proposal': {
     make: (o) => ({ row: { org_id: o.id, kind: 'rls.matrix', command: 'rls.matrix', status: 'rejected', title: 'RLS matrix', payload: '{}' } }),
   },
+  // #676: per-org reminder and escalation settings for pending proposals (one row per org).
+  'crove_kernel.proposal_policy': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), remind_after_days: 3, escalate_after_days: 7, updated_by: o.owner } }) },
   // Refusals counted per org, window, actor and (command, code) (issue #162). Definer-only machinery: no role but
   // the owner holds a privilege on it. A random code keeps every row its own key.
   'crove_kernel.refusal_tally': {
