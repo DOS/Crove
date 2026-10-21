@@ -14,6 +14,7 @@
 // the alert path is broken.
 import pg from 'pg';
 import { z } from 'zod';
+import { probeStatus, writeStatusFile } from './status-page.ts';
 import { effectiveRepeatSeconds, memoryAlertGate, pgAlertGate, problemKey, type AlertGate, type GateResult } from './alert-gate.ts';
 import {
   WEBHOOK_ENV,
@@ -49,6 +50,9 @@ const schema = z.object({
   // The same kind of monitor for backups (issue #351): pinged by `--backup-ok` after each good backup run, so a backup
   // that never runs (the timer disabled, the server off) pages when the pings stop.
   BACKUP_HEARTBEAT_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
+  // Where each probe's result goes for the public status page (#678, status-page.ts): an absolute path on a volume the
+  // API reads as STATUS_FILE. Unset: no file.
+  PROBER_STATUS_FILE: optional.pipe(z.string().startsWith('/').optional()),
   PROBER_MAX_OUTBOX_AGE_SECONDS: seconds(300),
   PROBER_MAX_JOB_AGE_SECONDS: seconds(900),
   PROBER_MAX_HEARTBEAT_AGE_SECONDS: seconds(120),
@@ -77,6 +81,8 @@ export interface ProberConfig {
   heartbeatUrl?: string | undefined;
   // The backup heartbeat monitor's ping URL; unset: --backup-ok pings nothing.
   backupHeartbeatUrl?: string | undefined;
+  // The status page's file; unset: none is written.
+  statusFile?: string | undefined;
 }
 
 export interface Thresholds {
@@ -113,6 +119,7 @@ export function loadProberConfig(env: NodeJS.ProcessEnv = process.env, everySeco
     deadLetterWindowSeconds: raw.PROBER_DEAD_LETTER_WINDOW_SECONDS ?? (everySeconds === null ? 3600 : Math.min(everySeconds + 60, 604_800)),
     heartbeatUrl: raw.PROBER_HEARTBEAT_URL,
     backupHeartbeatUrl: raw.BACKUP_HEARTBEAT_URL,
+    statusFile: raw.PROBER_STATUS_FILE,
   };
 }
 
@@ -242,6 +249,8 @@ export interface ProbeDeps {
   gate?: AlertGate;
   // The state for "the database cannot be read". runProber keeps one across --every probes; default: a fresh one.
   outageGate?: AlertGate;
+  // Replaces writing the status page's file (tests).
+  writeStatus?: typeof writeStatusFile;
 }
 
 function alertSink(config: ProberConfig, deps: ProbeDeps): AlertSink {
@@ -308,9 +317,21 @@ async function safeDeliver(sink: AlertSink, alert: Alert): Promise<Delivery> {
  * failed ping is logged and leaves it as it is (the outside monitor notices the missing ping by itself).
  */
 export async function probeOnce(config: ProberConfig, deps: ProbeDeps = {}): Promise<number> {
-  const code = await probe(config, deps);
+  const { code, failing, at } = await probe(config, deps);
+  // Written whether or not an alert went out: the page shows what the probe saw. Not when the probe could not run
+  // at all (no PROBER_DATABASE_URL), which says nothing about the deployment.
+  if (config.statusFile && at) await writeStatus(config.statusFile, at, failing, deps);
   if (config.heartbeatUrl && (code === EXIT.ok || code === EXIT.unhealthy)) await pingHeartbeat(config.heartbeatUrl, deps);
   return code;
+}
+
+// A failed write is logged, never thrown: the page then turns "unknown" once the file is stale.
+async function writeStatus(path: string, at: Date, failing: string[] | null, deps: ProbeDeps): Promise<void> {
+  try {
+    await (deps.writeStatus ?? writeStatusFile)(path, probeStatus(at, failing));
+  } catch (e) {
+    (deps.error ?? ((line: string) => console.error(line)))(`[prober] status file ${path}: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 const HEARTBEAT_TIMEOUT_MS = 10_000;
@@ -337,7 +358,9 @@ async function pingHeartbeat(url: string, deps: ProbeDeps, label = 'heartbeat'):
   }
 }
 
-async function probe(config: ProberConfig, deps: ProbeDeps): Promise<number> {
+// The exit code, the failing checks (null when the database could not be read) and when the probe ran (null when
+// it could not run at all).
+async function probe(config: ProberConfig, deps: ProbeDeps): Promise<{ code: number; failing: string[] | null; at: Date | null }> {
   const log = deps.log ?? ((line: string) => console.log(line));
   const error = deps.error ?? ((line: string) => console.error(line));
   const now = (deps.now ?? (() => new Date()))();
@@ -364,7 +387,7 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<number> {
 
   if (!config.databaseUrl) {
     error('[prober] PROBER_DATABASE_URL is not set; connect it as crove_prober');
-    return EXIT.probeFailed;
+    return { code: EXIT.probeFailed, failing: null, at: null };
   }
   let health: HealthSnapshot;
   try {
@@ -378,7 +401,7 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<number> {
     const findings: Finding[] = [{ check: 'probe', value: null, threshold: null, message: `the prober could not read crove_kernel.health(): ${reason}` }];
     const result = await outage.decide('probe', now);
     const sent = await notify(outage, result, notification(result, { instance: config.instance, at }, findings));
-    return sent ? EXIT.probeFailed : EXIT.deliveryFailed;
+    return { code: sent ? EXIT.probeFailed : EXIT.deliveryFailed, failing: null, at: now };
   }
 
   // The database answers again after an outage this process alerted about.
@@ -411,8 +434,9 @@ async function probe(config: ProberConfig, deps: ProbeDeps): Promise<number> {
   }
   const alert = notification(result, { instance: config.instance, at, health: { ...health } }, findings);
   delivered = (await notify(gate, result, alert)) && delivered;
-  if (!delivered) return EXIT.deliveryFailed;
-  return findings.length === 0 ? EXIT.ok : EXIT.unhealthy;
+  const failing = findings.map((f) => f.check);
+  if (!delivered) return { code: EXIT.deliveryFailed, failing, at: now };
+  return { code: findings.length === 0 ? EXIT.ok : EXIT.unhealthy, failing, at: now };
 }
 
 export async function sendTestAlert(config: ProberConfig, deps: ProbeDeps = {}): Promise<number> {

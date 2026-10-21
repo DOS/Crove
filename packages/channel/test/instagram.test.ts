@@ -11,14 +11,17 @@ const REDIRECT = 'https://crove.example/channels/oauth/instagram/callback';
 // Answers per "METHOD /path" in order; records every call with its form.
 function graph(routes: Record<string, { status?: number; body: unknown }[]>) {
   const calls: { route: string; form: Record<string, string>; query: URLSearchParams }[] = [];
+  const quota: string[] = [];
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const route = `${init?.method ?? 'GET'} ${url.pathname.replace('/v24.0', '')}`;
-    calls.push({ route, form: Object.fromEntries(new URLSearchParams(typeof init?.body === 'string' ? init.body : '')), query: url.searchParams });
+    // The quota read (#743) is kept apart, so the other calls keep their order.
+    if (route.endsWith('/content_publishing_limit')) quota.push(route);
+    else calls.push({ route, form: Object.fromEntries(new URLSearchParams(typeof init?.body === 'string' ? init.body : '')), query: url.searchParams });
     const answer = routes[route]?.shift() ?? { status: 500, body: { error: { message: `no answer for ${route}`, code: 1 } } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
   };
-  return { calls, fetchImpl };
+  return { calls, quota, fetchImpl };
 }
 
 const image = (fileId: string) => ({ fileId, mime: 'image/jpeg', sizeBytes: 1000, altText: null });
@@ -75,6 +78,25 @@ describe('InstagramConnector', () => {
 });
 
 describe('InstagramPublisher', () => {
+  it('waits hours with nothing created when the publishing quota is used up, and posts while some is left (#743)', async () => {
+    const full = graph({ [`GET /${IG}/content_publishing_limit`]: [{ body: { data: [{ quota_usage: 100, config: { quota_total: 100, quota_duration: 86400 } }] } }] });
+    const before = Date.now();
+    const result = await new InstagramPublisher(APP, full.fetchImpl, fast).publish(input());
+    expect(result).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED' });
+    const at = (result as { retryAt?: Date }).retryAt?.getTime() ?? 0;
+    expect(at - before).toBeGreaterThanOrEqual(2 * 60 * 60 * 1000 - 1000);
+    expect(full.quota).toEqual([`GET /${IG}/content_publishing_limit`]);
+    expect(full.calls).toEqual([]);
+    const left = graph({
+      [`GET /${IG}/content_publishing_limit`]: [{ body: { data: [{ quota_usage: 99, config: { quota_total: 100 } }] } }],
+      [`POST /${IG}/media`]: [{ body: { id: '9001' } }],
+      'GET /9001': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000001' } }],
+      'GET /18000000000000001': [{ body: { permalink: 'https://www.instagram.com/p/abc/' } }],
+    });
+    expect(await new InstagramPublisher(APP, left.fetchImpl, fast).publish(input())).toMatchObject({ kind: 'accepted' });
+  });
+
   it('creates a container, waits for it and publishes it once', async () => {
     const { fetchImpl, calls } = graph({
       [`POST /${IG}/media`]: [{ body: { id: '9001' } }],
@@ -105,6 +127,39 @@ describe('InstagramPublisher', () => {
     ]);
   });
 
+  it('sends collaborators on the post and people tags on the first image, never on a Story (#796)', async () => {
+    const { fetchImpl, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }, { body: { id: '9003' } }],
+      'GET /9003': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000002' } }],
+      'GET /18000000000000002': [{ body: {} }],
+    });
+    const settings = { collaborators: ['doi.tac', 'Bad Name'], userTags: ['lan_anh', 'minh'] };
+    await new InstagramPublisher(APP, fetchImpl, fast).publish(input({ settings, content: { body: 'Bộ ảnh', title: null, linkUrl: null, media: [image('f-1'), image('f-2')] } }));
+    expect(calls[0]?.form).toEqual({ image_url: 'https://bucket.example/f-1?sig=1', user_tags: JSON.stringify([{ username: 'lan_anh', x: 0.333, y: 0.9 }, { username: 'minh', x: 0.667, y: 0.9 }]), is_carousel_item: 'true' });
+    expect(calls[1]?.form).toEqual({ image_url: 'https://bucket.example/f-2?sig=1', is_carousel_item: 'true' });
+    expect(calls[2]?.form).toEqual({ media_type: 'CAROUSEL', children: '9001,9002', caption: 'Bộ ảnh', collaborators: JSON.stringify(['doi.tac']) });
+    const story = graph({ [`POST /${IG}/media`]: [{ body: { id: '9101' } }], 'GET /9101': [{ body: { status_code: 'FINISHED' } }], [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000101' } }] });
+    await new InstagramPublisher(APP, story.fetchImpl, fast).publish(input({ settings: { ...settings, postType: 'story' } }));
+    expect(story.calls[0]?.form).toEqual({ media_type: 'STORIES', image_url: 'https://bucket.example/f-1?sig=1' });
+  });
+
+  it('sends alt text on described images, alone or in a carousel, and never on a video (#790)', async () => {
+    const { fetchImpl, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }, { body: { id: '9003' } }],
+      'GET /9003': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000002' } }],
+      'GET /18000000000000002': [{ body: {} }],
+    });
+    const media = [{ ...image('f-1'), altText: 'Mặt tiền' }, { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 10, altText: 'Video' }];
+    await new InstagramPublisher(APP, fetchImpl, fast).publish(input({ content: { body: 'Bộ ảnh', title: null, linkUrl: null, media } }));
+    expect(calls[0]?.form).toEqual({ image_url: 'https://bucket.example/f-1?sig=1', alt_text: 'Mặt tiền', is_carousel_item: 'true' });
+    expect(calls[1]?.form).toEqual({ media_type: 'VIDEO', video_url: 'https://bucket.example/v-1?sig=1', is_carousel_item: 'true' });
+    const single = graph({ [`POST /${IG}/media`]: [{ body: { id: '9004' } }], 'GET /9004': [{ body: { status_code: 'FINISHED' } }], [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000003' } }], 'GET /18000000000000003': [{ body: {} }] });
+    await new InstagramPublisher(APP, single.fetchImpl, fast).publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [{ ...image('f-1'), altText: 'Mặt tiền' }] } }));
+    expect(single.calls[0]?.form).toEqual({ image_url: 'https://bucket.example/f-1?sig=1', alt_text: 'Mặt tiền', caption: 'Ảnh' });
+  });
+
   it('posts one video as a Reel shown in the feed, and finishes it on the status check while Meta processes it', async () => {
     const { fetchImpl, calls } = graph({
       [`POST /${IG}/media`]: [{ body: { id: '9101' } }],
@@ -118,6 +173,72 @@ describe('InstagramPublisher', () => {
     expect(await publisher.publish(input({ content }))).toEqual({ kind: 'pending', externalRef: ref('9101'), checkAfterSeconds: 30 });
     expect(calls[0]?.form).toEqual({ media_type: 'REELS', video_url: 'https://bucket.example/v-1?sig=1', share_to_feed: 'true', caption: 'Khai trương!' });
     expect(await publisher.status({ externalAccountId: IG, secret: SECRET, externalRef: ref('9101') })).toEqual({ kind: 'accepted', externalId: '18000000000000101', url: 'https://www.instagram.com/reel/xyz/' });
+  });
+
+  it('uploads a Reel to its container when the deployment has no public file URLs, and still refuses images then (#772)', async () => {
+    const { fetchImpl: base, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9201' } }],
+      'POST /ig-api-upload/9201': [{ body: { success: true, message: 'Upload successful.' } }],
+      'GET /9201': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000301' } }],
+      'GET /18000000000000301': [{ body: { permalink: 'https://www.instagram.com/reel/up/' } }],
+    });
+    const uploads: { host: string; headers: Headers; size: number }[] = [];
+    const fetchImpl: Fetch = async (url, init) => {
+      if (new URL(url).host === 'rupload.facebook.com') uploads.push({ host: new URL(url).host, headers: new Headers(init?.headers), size: init?.body instanceof Uint8Array ? init.body.byteLength : -1 });
+      return base(url, init);
+    };
+    const publisher = new InstagramPublisher(APP, fetchImpl, fast);
+    const noUrls = { mediaUrl: async () => null, readMedia: async () => new Uint8Array(2048) };
+    const content = { body: 'Khai trương!', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 2048, altText: null }] };
+    expect(await publisher.publish(input({ content, ...noUrls }))).toEqual({ kind: 'accepted', externalId: '18000000000000301', url: 'https://www.instagram.com/reel/up/' });
+    expect(calls[0]?.form).toEqual({ media_type: 'REELS', upload_type: 'resumable', share_to_feed: 'true', caption: 'Khai trương!' });
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]?.headers.get('authorization')).toBe('OAuth page-token-1');
+    expect(uploads[0]?.headers.get('file_size')).toBe('2048');
+    expect(uploads[0]?.size).toBe(2048);
+    expect(publisher.callTimeoutMs).toBeGreaterThanOrEqual(300_000);
+    // An image, or a Reel with a cover image, is still fetched by URL: refused before anything is created.
+    const none = graph({});
+    const strict = new InstagramPublisher(APP, none.fetchImpl, fast);
+    expect(await strict.publish(input({ ...noUrls }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_URL_UNAVAILABLE' });
+    expect(await strict.publish(input({ content, ...noUrls, settings: { cover: { fileId: 'c-1' } } }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_URL_UNAVAILABLE' });
+    // A file that cannot be read posts nothing either.
+    expect(await strict.publish(input({ content, mediaUrl: async () => null, readMedia: async () => Promise.reject(new Error('gone')) }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_UNREADABLE' });
+    expect(none.calls).toEqual([]);
+  });
+  it('posts a Story of one image or video with no caption, and never guesses which Story a container became (#644)', async () => {
+    const { fetchImpl, calls } = graph({
+      [`POST /${IG}/media`]: [{ body: { id: '9201' } }, { body: { id: '9202' } }],
+      'GET /9201': [{ body: { status_code: 'FINISHED' } }],
+      [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000201' } }],
+      'GET /18000000000000201': [{ body: { permalink: 'https://www.instagram.com/stories/quan.a/1/' } }],
+      'GET /9202': [{ body: { status_code: 'IN_PROGRESS' } }, { body: { status_code: 'PUBLISHED' } }],
+    });
+    const publisher = new InstagramPublisher(APP, fetchImpl, fast);
+    expect(await publisher.publish(input({ settings: { postType: 'story' } }))).toEqual({ kind: 'accepted', externalId: '18000000000000201', url: 'https://www.instagram.com/stories/quan.a/1/' });
+    expect(calls[0]?.form).toEqual({ media_type: 'STORIES', image_url: 'https://bucket.example/f-1?sig=1' });
+    // A video Story still processing: pending, and once Meta says it went out without the id, unknown rather than a guess.
+    const video = { body: 'Không gửi chữ', title: null, linkUrl: 'https://shop.example/', media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
+    const pending = await publisher.publish(input({ content: video, settings: { postType: 'story' } }));
+    expect(pending).toEqual({ kind: 'pending', externalRef: `9202.${'0'.repeat(16)}`, checkAfterSeconds: 30 });
+    expect(calls.find((c) => c.form.media_type === 'STORIES' && c.form.video_url)?.form).toEqual({ media_type: 'STORIES', video_url: 'https://bucket.example/v-1?sig=1' });
+    expect(await publisher.status({ externalAccountId: IG, secret: SECRET, externalRef: `9202.${'0'.repeat(16)}` })).toMatchObject({ kind: 'unknown', code: 'STORY_NOT_FOUND' });
+    expect(calls.some((c) => c.route === `GET /${IG}/media`)).toBe(false);
+    // Reconcile never matches a Story by text.
+    expect(await publisher.reconcile({ externalAccountId: IG, secret: SECRET, callKey: 'k', contentHash: 'h', content: video, settings: { postType: 'story' }, after: new Date(), before: new Date() })).toEqual({ found: 'unknown' });
+  });
+
+  it('refuses a Story of several images, a Reel without a video, a cover on a Story and an unknown post type, before calling Meta (#644)', async () => {
+    const { fetchImpl, calls } = graph({});
+    const publisher = new InstagramPublisher(APP, fetchImpl, fast);
+    const two = { body: 'x', title: null, linkUrl: null, media: [image('f-1'), image('f-2')] };
+    expect(await publisher.publish(input({ content: two, settings: { postType: 'story' } }))).toMatchObject({ kind: 'rejected', code: 'STORY_ONE_MEDIA' });
+    expect(await publisher.publish(input({ settings: { postType: 'reel' } }))).toMatchObject({ kind: 'rejected', code: 'REEL_ONE_VIDEO' });
+    const clip = { body: 'x', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
+    expect(await publisher.publish(input({ content: clip, settings: { postType: 'story', cover: { atMs: 1000 } } }))).toMatchObject({ kind: 'rejected', code: 'COVER_NOT_SUPPORTED' });
+    expect(await publisher.publish(input({ settings: { postType: 'carousel' } }))).toMatchObject({ kind: 'rejected', code: 'POST_TYPE_NOT_SUPPORTED' });
+    expect(calls).toEqual([]);
   });
 
   it('gives a Reel its cover: a frame as thumb_offset in milliseconds, or an image Meta fetches as cover_url (#642)', async () => {

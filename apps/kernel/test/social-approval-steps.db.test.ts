@@ -112,7 +112,7 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
 
     const first = await decide(o, o.owner, postId, 'approved');
     let v = (await get(o, postId)).variants[0];
-    expect([first.waiting, v?.status, v?.review]).toEqual([[v?.id], 'in_review', { required: 2, approvedBy: [o.owner] }]);
+    expect([first.waiting, v?.status, v?.review]).toEqual([[v?.id], 'in_review', { required: 2, approvedBy: [o.owner], fourEyes: false, client: false, clientVerdict: null }]);
     await expect(decide(o, o.owner, postId, 'approved')).rejects.toMatchObject({ code: 'ALREADY_APPROVED' });
     await expect(schedule(o, postId)).rejects.toBeDefined();
 
@@ -168,13 +168,15 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     expect((await get(o, scheduledPost)).variants[0]?.error).toMatchObject({ code: 'POLICY_RAISED', action: 'reschedule' });
     expect((await get(o, approvedPost)).variants[0]?.error).toMatchObject({ code: 'POLICY_RAISED', action: null });
     // The earlier approval still counts: one more person approves, and the scheduled one is back on its time.
-    expect((await get(o, scheduledPost)).variants[0]).toMatchObject({ review: { required: 2, approvedBy: [o.owner] }, effectiveAt: slotBefore });
+    expect((await get(o, scheduledPost)).variants[0]).toMatchObject({ review: { required: 2, approvedBy: [o.owner], fourEyes: false }, effectiveAt: slotBefore });
     await decide(o, o.admin, scheduledPost, 'approved');
     expect((await get(o, scheduledPost)).variants[0]).toMatchObject({ status: 'scheduled', effectiveAt: slotBefore, error: null });
     await decide(o, o.admin, approvedPost, 'approved');
     expect((await get(o, approvedPost)).variants[0]).toMatchObject({ status: 'approved', error: null });
     const events = await admin(async (c) => (await c.query<{ payload: { post_id: string } }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.post.submitted' AND payload->>'by_policy' = 'true'", [o.orgId])).rows);
     expect(events.map((e) => e.payload.post_id).sort()).toEqual([approvedPost, scheduledPost].sort());
+    // Re-submitted by the policy, each still goes to the content manager agent's pre-review (#816).
+    expect(events.every((e) => (e.payload as { agent_task?: { ref?: { id?: string } } }).agent_task?.ref?.id === e.payload.post_id)).toBe(true);
   });
 
   it('leaves a re-approved variant approved when its kept time has passed, and an edit ends the mark', async () => {
@@ -241,7 +243,7 @@ suite('social multi-step approval on PostgreSQL (S9)', () => {
     expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, decision: 'approved', variant_ids: lowered.approved, waiting_variant_ids: [], by_policy: true }]);
 
     const plain = await inReview(o, await connection(o));
-    expect((await get(o, plain)).variants[0]?.review).toEqual({ required: 1, approvedBy: [] });
+    expect((await get(o, plain)).variants[0]?.review).toEqual({ required: 1, approvedBy: [], fourEyes: false, client: false, clientVerdict: null });
     expect((await decide(o, o.admin, plain, 'approved')).waiting).toEqual([]);
     expect((await get(o, plain)).variants[0]?.status).toBe('approved');
   });

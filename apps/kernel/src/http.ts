@@ -87,12 +87,16 @@ import { createInviteMailSender } from './invite-mail.ts';
 import { pgBossSchemaVersion } from './jobs-schema.ts';
 import type { MailProvider } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
-import { reviewAnswer, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
+import { reviewAnswer, reviewFile, reviewMedia, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_FILES_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
+import { CALENDAR_FEED_HITS_PER_MINUTE, calendarFeed, renderIcs } from './calendar-feed.ts';
+import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
+import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
+import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
-import { hasVideoTrack, sniffVideo, videoDurationMs } from './media-probe.ts';
+import { hasVideoTrack, imageSize, sniffVideo, videoDurationMs, type ImageSize } from './media-probe.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
 import {
@@ -128,9 +132,15 @@ export interface HttpDeps {
   // Per-user request limit on /api (issue #162). Default: built from API_RATE_LIMIT_PER_MINUTE; null turns it off.
   rateLimiter?: RateLimiter | null;
   // Per-client budgets of the public review page (#589). Unset: REVIEW_VIEWS_PER_MINUTE and REVIEW_ANSWERS_PER_MINUTE.
-  reviewLimits?: { views: RateLimiter; answers: RateLimiter };
+  reviewLimits?: { views: RateLimiter; answers: RateLimiter; files?: RateLimiter };
   // The public report page's budget per client (#643). Unset: REPORT_VIEWS_PER_MINUTE.
   reportLimit?: RateLimiter;
+  // The posting calendar feed's budget per client (#862). Unset: CALENDAR_FEED_HITS_PER_MINUTE.
+  calendarFeedLimit?: RateLimiter;
+  // The per-client budget of link-in-bio pages, their links and images (#707), replaceable in tests.
+  bioLimit?: RateLimiter;
+  // The per-client budget of short link redirects (#706), replaceable in tests.
+  shortLinkLimit?: RateLimiter;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
   uploadCompletes?: ConcurrencyLimiter;
   // Uploads that may be larger than MAX_UPLOAD_BYTES (Social videos, #409) running at once. Default: 2 per process.
@@ -288,15 +298,21 @@ const PROXY_DROPPED = new Set([...SPOOFABLE, INVITE_TOKEN_HEADER]);
 // Public Supabase Auth endpoints the web app needs. Everything else (notably /admin) is not reachable.
 const AUTH_PUBLIC_PATHS =
   /^\/(?:token|signup|verify|recover|user|logout|otp|resend|settings|health|authorize|callback|reauthenticate|factors(?:\/[\w-]+(?:\/(?:challenge|verify))?)?|\.well-known\/jwks\.json)$/;
+// The status page re-reads the prober's file at most this often (#678).
+const STATUS_CACHE_MS = 5_000;
 const MAX_FILES_PER_UPLOAD = 5;
 // A Social video (#409) is one file of up to 100 MB; a batch of documents stays under 60 MB.
 const UPLOAD_BODY_LIMIT = MAX_SOCIAL_VIDEO_BYTES + 2 * 1024 * 1024;
 // What a completion refused for lack of a slot tells the client to wait; the grant stays unused for 5 minutes.
 export const UPLOAD_BUSY_RETRY_SECONDS = 3;
-function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): string {
+export function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): string {
   // Hosted Supabase Auth lives on another origin; the bundled one is proxied under /auth/v1. With presigned
   // transfers the app also posts uploads to, and fetches downloads from, the bucket's origin.
   const authOrigin = new URL(authUrl, 'http://localhost').origin;
+  // Trusted Types (#681, plan Decision 6): the DOM's HTML and script sinks (innerHTML, document.write, a script's src,
+  // eval) refuse plain strings, and no policy may be created that would turn one into trusted HTML. The SPA needs
+  // none: it renders through React and never sets raw HTML (apps/app/test/trusted-types.test.ts). A sink reached
+  // with a string throws instead of running markup an attacker smuggled into the page.
   return [
     "default-src 'self'",
     "script-src 'self'",
@@ -307,6 +323,8 @@ function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): s
     "base-uri 'none'",
     "form-action 'self'",
     "frame-ancestors 'none'",
+    "require-trusted-types-for 'script'",
+    "trusted-types 'none'",
   ].join('; ');
 }
 
@@ -354,6 +372,21 @@ export function createHttpApp(deps: HttpDeps) {
     }
   });
 
+  // The build and the committed migrations missing from the ledger (#892, plan §4.11), for the deploy's smoke test.
+  // Public like /readyz: migration names are in the source; nothing about an org.
+  app.get('/version', async (c) => {
+    const build = config.CROVE_BUILD ?? 'dev';
+    const client = await deps.pool.connect().catch(() => null);
+    if (!client) return c.json({ build, migrationsMissing: null }, 503);
+    try {
+      return c.json({ build, migrationsMissing: await schemaMissing(client, config.MIGRATIONS_DIR) });
+    } catch {
+      return c.json({ build, migrationsMissing: null }, 503);
+    } finally {
+      client.release();
+    }
+  });
+
   app.get('/api/config', (c) =>
     c.json({
       authUrl: publicAuthUrl(config),
@@ -365,6 +398,11 @@ export function createHttpApp(deps: HttpDeps) {
       mailEnabled: deps.mailer?.enabled ?? false,
       // The shell's feedback and support link (SUPPORT_URL, issue #310); null hides it.
       supportUrl: config.SUPPORT_URL ?? null,
+      // The terms and privacy notice linked at sign-up and invite acceptance (#688); null hides each link.
+      termsUrl: config.TERMS_URL ?? null,
+      privacyUrl: config.PRIVACY_URL ?? null,
+      // The shell links to /status only when the deployment serves it (STATUS_FILE, #678).
+      statusPage: Boolean(config.STATUS_FILE),
       // Onboarding offers "look up" next to the tax code only when the server has a registry to ask (issue #324).
       taxCodeLookup: Boolean(deps.taxLookup),
       // The SPA shows the menus of these modules only (plan Decision 12).
@@ -375,9 +413,22 @@ export function createHttpApp(deps: HttpDeps) {
       signupPolicy: config.AUTH_SIGNUP_POLICY,
       // Channels the app may offer to connect without a platform account (ADR-0025).
       // OAuth providers only with a credential key: their tokens could not be sealed otherwise.
-      channels: { sandbox: Boolean(deps.channels?.sandbox), bluesky: Boolean(deps.channels?.bluesky), oauth: deps.channels && deps.channels.broker.id !== 'none' ? Object.keys(deps.channels.connectors ?? {}).sort() : [] },
+      channels: { sandbox: Boolean(deps.channels?.sandbox), bluesky: Boolean(deps.channels?.bluesky), telegram: Boolean(deps.channels?.telegram), mastodon: Boolean(deps.channels?.mastodon), discord: Boolean(deps.channels?.discord), wordpress: Boolean(deps.channels?.wordpress), oauth: deps.channels && deps.channels.broker.id !== 'none' ? Object.keys(deps.channels.connectors ?? {}).sort() : [] },
     }),
   );
+
+  // The public status page (#678): drawn from the prober's last result, no account needed and nothing about an org on
+  // it. The file is read at most every few seconds, whatever the traffic.
+  if (config.STATUS_FILE) {
+    const statusFile = config.STATUS_FILE;
+    let cached: { readAt: number; status: ProbeStatus | null } | null = null;
+    app.get('/status', async (c) => {
+      const now = Date.now();
+      if (!cached || now - cached.readAt > STATUS_CACHE_MS) cached = { readAt: now, status: await readStatusFile(statusFile) };
+      const page = renderStatusPage(statusView(cached.status, new Date(now)));
+      return c.html(page, 200, { 'content-security-policy': STATUS_PAGE_CSP, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+    });
+  }
 
   // Self-hosted Supabase Auth behind the same origin.
   if (config.AUTH_UPSTREAM_URL) {
@@ -551,6 +602,131 @@ export function createHttpApp(deps: HttpDeps) {
       try {
         const view = await reportView(runtime, await c.req.json().catch(() => null));
         return view ? c.json(view) : c.json({ code: 'REPORT_LINK_INVALID', message: 'Liên kết báo cáo không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    // The posting calendar feed (#862) for Google Calendar or Outlook, which can only fetch a URL: the token is in the
+    // path. Nothing in the kernel logs request paths (and the deploy's Caddyfile keeps no access log), and a failed
+    // lookup logs the database error, never the request. An unknown, malformed or revoked token is a plain 404.
+    const calendarFeedLimit = deps.calendarFeedLimit ?? new RateLimiter({ perMinute: CALENDAR_FEED_HITS_PER_MINUTE });
+    app.get('/cal/:file', async (c) => {
+      const limited = reviewBudget(c, calendarFeedLimit);
+      if (limited) return limited;
+      const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
+      try {
+        const file = c.req.param('file');
+        const feed = file.endsWith('.ics') ? await calendarFeed(runtime, file.slice(0, -4)) : null;
+        if (!feed) return c.text('Không tìm thấy lịch này', 404, headers);
+        return c.body(renderIcs(feed, config.PUBLIC_URL, new Date()), 200, { ...headers, 'content-type': 'text/calendar; charset=utf-8' });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    // A Social short link (#706): a redirect to the link the post went out with, counted. The same per-client budget as
+    // the public pages; an unknown code is a plain 404.
+    const shortLinkLimit = deps.shortLinkLimit ?? new RateLimiter({ perMinute: SHORT_LINK_HITS_PER_MINUTE });
+    app.get('/l/:code', async (c) => {
+      const limited = reviewBudget(c, shortLinkLimit);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      c.header('referrer-policy', 'no-referrer');
+      try {
+        const target = await shortLinkTarget(runtime, c.req.param('code'), c.req.header('user-agent'));
+        return target ? c.redirect(target, 302) : c.text('Liên kết không tồn tại hoặc đã bị gỡ', 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    // An org's link-in-bio page (#707): the page, its counted links and its images, under one per-client budget. An
+    // unpublished or unknown page is a plain 404 for all three.
+    const bioLimit = deps.bioLimit ?? new RateLimiter({ perMinute: BIO_HITS_PER_MINUTE });
+    const notFound = (c: Context) => c.text('Không tìm thấy trang này', 404);
+    app.get('/b/:slug', async (c) => {
+      const limited = reviewBudget(c, bioLimit);
+      if (limited) return limited;
+      try {
+        const slug = c.req.param('slug');
+        const view = await bioView(runtime, slug);
+        if (!view) return notFound(c);
+        return c.html(renderBioPage(slug, view), 200, { 'content-security-policy': BIO_PAGE_CSP, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.get('/b/:slug/go/:target', async (c) => {
+      const limited = reviewBudget(c, bioLimit);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      c.header('referrer-policy', 'no-referrer');
+      try {
+        const url = await bioGo(runtime, c.req.param('slug'), c.req.param('target'), c.req.header('user-agent'));
+        return url ? c.redirect(url, 302) : notFound(c);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.get('/b/:slug/img/:file', async (c) => {
+      const limited = reviewBudget(c, bioLimit);
+      if (limited) return limited;
+      try {
+        const image = await bioImage(runtime, store, c.req.param('slug'), c.req.param('file'));
+        if (!image) return notFound(c);
+        return new Response(body(image.bytes), {
+          headers: { 'content-type': image.contentType, 'cache-control': 'public, max-age=300', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    // The post's images and video (#624): ids per channel, then each file by id, both for the link's token only.
+    const reviewFiles = deps.reviewLimits?.files ?? new RateLimiter({ perMinute: REVIEW_FILES_PER_MINUTE });
+    // Files read whole into memory (no download URL to hand out) at most this many at once, across every client: the
+    // route needs no account, so its memory is capped here, not only per request.
+    let reviewStreams = 0;
+    const REVIEW_STREAMS_MAX = 4;
+    app.post('/api/review/media', bodyLimit({ maxSize: 1024 }), async (c) => {
+      const limited = reviewBudget(c, reviewLimits.views);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      try {
+        const media = await reviewMedia(runtime, await c.req.json().catch(() => null));
+        return media ? c.json({ channels: media }) : c.json({ code: 'REVIEW_LINK_INVALID', message: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.post('/api/review/file', bodyLimit({ maxSize: 1024 }), async (c) => {
+      const limited = reviewBudget(c, reviewFiles);
+      if (limited) return limited;
+      try {
+        if (reviewStreams >= REVIEW_STREAMS_MAX) return c.json({ code: 'RATE_LIMITED', message: 'Máy chủ đang bận, hãy thử lại sau ít giây', retryAfterSeconds: 2 }, 429);
+        reviewStreams += 1;
+        let file: Awaited<ReturnType<typeof reviewFile>>;
+        try {
+          file = await reviewFile(runtime, deps.store, await c.req.json().catch(() => null));
+        } finally {
+          reviewStreams -= 1;
+        }
+        if (!file) {
+          c.header('cache-control', 'no-store');
+          return c.json({ code: 'REVIEW_LINK_INVALID', message: 'Liên kết duyệt không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+        }
+        // A presigned GET of the exact version: the page fetches it itself, without this request's headers.
+        if ('url' in file) {
+          c.header('cache-control', 'no-store');
+          return c.json({ url: file.url });
+        }
+        return new Response(body(file.bytes), {
+          headers: {
+            'content-type': file.type,
+            'content-disposition': `inline; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+            'content-security-policy': "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+            'x-content-type-options': 'nosniff',
+            'cache-control': 'no-store',
+            'referrer-policy': 'no-referrer',
+          },
+        });
       } catch (error) {
         return problem(c, error);
       }
@@ -773,6 +949,7 @@ export function createHttpApp(deps: HttpDeps) {
     const video = purpose === 'social' ? sniffVideo(bytes) : null;
     let type = video ?? sniffType(bytes);
     let durationMs: number | undefined;
+    let size: ImageSize | null = null;
     if (purpose === 'import') {
       if (type !== 'application/zip') throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận tệp Excel dạng .xlsx`);
       if (bytes.byteLength > MAX_IMPORT_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 10 MB`);
@@ -793,6 +970,8 @@ export function createHttpApp(deps: HttpDeps) {
         throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: chỉ nhận XML, PDF, JPG, PNG, WEBP hoặc ZIP`);
       }
       if (bytes.byteLength > MAX_UPLOAD_BYTES) throw new DomainError('TOO_LARGE', 413, `${name} vượt quá 25 MB`);
+      // An image for a post: its size as shown, from its header (#636); unreadable, it is stored without one.
+      if (purpose === 'social' && type) size = imageSize(bytes, type);
     }
     if (!type) throw new DomainError('UNSUPPORTED_TYPE', 415, `${name}: không nhận dạng được tệp`);
     const storageKey = fileKey(orgId, sha256);
@@ -808,6 +987,7 @@ export function createHttpApp(deps: HttpDeps) {
         generation,
         source: purpose === 'social' ? 'social' : purpose === 'import' ? 'import' : 'upload',
         ...(durationMs === undefined ? {} : { durationMs }),
+        ...(size ? { imageWidth: size.width, imageHeight: size.height } : {}),
       },
       { actor: actorOf(user), orgId },
     );
@@ -1176,13 +1356,15 @@ export function createHttpApp(deps: HttpDeps) {
         const orgSlug = c.req.header(ORG_HEADER) ?? null;
         const orgId = await resolveOrg(runtime, user, orgSlug);
         const period = c.req.query('period') ?? '';
+        // ?deductInput=1 puts [24] in [25] (#692); anything else keeps [25] at 0, the default.
+        const deductInput = c.req.query('deductInput') === '1';
         const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period }, { actor: actorOf(user), orgId });
-        const xml = buildVat01Xml(declaration);
-        // The export's audit row (period, invoice count and format only). No row, no download.
+        const xml = buildVat01Xml(declaration, undefined, { deductInput });
+        // The export's audit row (period, invoice count, format and the [25] choice only). No row, no download.
         const documents = declaration.report.input.documents.length + declaration.report.output.documents.length;
         await runtime.execute(
           'finance.vat.export',
-          { period: declaration.report.period.period, documents, format: 'htkk_01gtgt_xml' },
+          { period: declaration.report.period.period, documents, format: 'htkk_01gtgt_xml', ...(deductInput ? { deductInput } : {}) },
           { actor: actorOf(user), orgId },
         );
         return new Response(body(new TextEncoder().encode(xml)), {

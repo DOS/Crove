@@ -155,7 +155,14 @@ async function addressFor(url: URL, options: EgressOptions, deadline: number): P
 
 type Hop = { redirect: string } | { response: EgressResponse };
 
-function once(url: URL, target: { address: string; family: number }, options: EgressOptions, deadline: number): Promise<Hop> {
+// What one request sends: GET with no body by default; guardedRequest sends a method, headers and a body of its own.
+interface Sent {
+  method: string;
+  headers: Record<string, string>;
+  body: Buffer | null;
+}
+
+function once(url: URL, target: { address: string; family: number }, options: EgressOptions, deadline: number, sent: Sent = { method: 'GET', headers: {}, body: null }): Promise<Hop> {
   const client = url.protocol === 'https:' ? https : http;
   const host = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
   // Before the request exists: a deadline already past throws here, with nothing to clean up.
@@ -177,7 +184,7 @@ function once(url: URL, target: { address: string; family: number }, options: Eg
         hostname: host,
         port: url.port || DEFAULT_PORTS[url.protocol],
         path: `${url.pathname}${url.search}`,
-        method: 'GET',
+        method: sent.method,
         agent: false,
         // The checked address, whatever the resolver would say now; the TLS name stays the host's.
         lookup: (_name, opts, cb) => {
@@ -187,8 +194,11 @@ function once(url: URL, target: { address: string; family: number }, options: Eg
         ...(isIP(host) === 0 ? { servername: host } : {}),
         headers: {
           accept: options.accept ?? '*/*',
-          'accept-encoding': 'identity',
           'user-agent': options.userAgent ?? 'Crove/1.0 (+https://github.com/DOS/Crove)',
+          ...sent.headers,
+          // Never compressed, and the body's own length: neither is the caller's to change.
+          'accept-encoding': 'identity',
+          ...(sent.body ? { 'content-length': String(sent.body.length) } : {}),
         },
       },
       (res) => {
@@ -243,7 +253,7 @@ function once(url: URL, target: { address: string; family: number }, options: Eg
       finish(() => reject(new EgressError('timeout', 'took too long')));
     }, ms);
     req.on('error', () => finish(() => reject(new EgressError('network', 'the connection failed'))));
-    req.end();
+    req.end(sent.body ?? undefined);
   });
 }
 
@@ -265,4 +275,56 @@ export async function guardedFetch(raw: string, options: EgressOptions): Promise
     }
     url = egressTarget(next, options.anyPort);
   }
+}
+
+// A request with a method, headers and a body to a tenant-supplied URL (#748: a Mastodon instance), through the same
+// guard: public addresses only, the connection pinned to the checked address, one deadline and a byte limit for the
+// answer. A redirect is not followed: a POST with a token must not move to another host, so it comes back as the
+// answer (status 3xx) for the caller to refuse. Header names are lower-cased; content-length and accept-encoding are
+// the guard's.
+export interface GuardedRequest {
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  headers?: Readonly<Record<string, string>>;
+  body?: Buffer;
+}
+
+const HOP_HEADERS = new Set(['host', 'connection', 'upgrade', 'transfer-encoding', 'keep-alive', 'proxy-connection', 'te', 'trailer', 'content-length', 'accept-encoding']);
+// Statuses whose answer has no body (a Response refuses one).
+const NULL_BODY = new Set([101, 103, 204, 205, 304]);
+
+export async function guardedRequest(raw: string, request: GuardedRequest, options: EgressOptions): Promise<EgressResponse> {
+  const deadline = Date.now() + options.timeoutMs;
+  const url = egressTarget(raw, options.anyPort);
+  const target = await addressFor(url, options, deadline);
+  // Headers that would change where or how the request goes are the guard's, never the caller's.
+  const headers = Object.fromEntries(Object.entries(request.headers ?? {}).map(([k, v]) => [k.toLowerCase(), v]).filter(([k]) => !HOP_HEADERS.has(k as string)));
+  const result = await once(url, target, options, deadline, { method: request.method, headers, body: request.body ?? null });
+  if ('response' in result) return result.response;
+  return { url: url.toString(), status: 302, contentType: null, body: Buffer.alloc(0), truncated: false };
+}
+
+// A fetch through guardedRequest, for adapters that take a fetch: string, bytes and FormData bodies (encoded as the
+// platform's fetch would), a Response back. https only unless the options allow a test server.
+export function egressFetch(options: EgressOptions & { httpsOnly?: boolean }): (input: string, init?: RequestInit) => Promise<Response> {
+  return async (input, init) => {
+    const url = new URL(input);
+    if ((options.httpsOnly ?? true) && url.protocol !== 'https:') throw new EgressError('invalid_url', 'only https');
+    const method = (init?.method ?? 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'POST' && method !== 'PUT' && method !== 'DELETE') throw new EgressError('invalid_url', `method ${method} not allowed`);
+    const headers: Record<string, string> = {};
+    new Headers(init?.headers).forEach((value, key) => {
+      headers[key] = value;
+    });
+    let body: Buffer | undefined;
+    if (init?.body !== undefined && init.body !== null) {
+      // The platform's own encoding (a FormData boundary, a string's UTF-8), read back as bytes.
+      const encoded = new Request('https://encode.invalid/', { method: 'POST', body: init.body, headers: init.headers ?? {} });
+      // The type before the bytes: Bun drops a generated multipart type once the body has been read (#768).
+      const type = encoded.headers.get('content-type');
+      body = Buffer.from(await encoded.arrayBuffer());
+      if (type) headers['content-type'] = type;
+    }
+    const answer = await guardedRequest(input, { method, headers, ...(body ? { body } : {}) }, options);
+    return new Response(NULL_BODY.has(answer.status) ? null : new Uint8Array(answer.body), { status: answer.status, headers: answer.contentType ? { 'content-type': answer.contentType } : {} });
+  };
 }

@@ -100,17 +100,53 @@ suite('social video posts on PostgreSQL (S9)', () => {
     await root.end();
   });
 
+  // An image as the upload route records it with the size it read from the header (#636).
+  async function image(o: Org, width: number | null, height: number | null) {
+    const id = randomUUID();
+    const sha = createHash('sha256').update(id).digest('hex');
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source, image_width, image_height)
+         VALUES ($1, $2, $3, $4, $5, 'anh.jpg', 'image/jpeg', 200000, 'social', $6, $7)`,
+        [o.orgId, id, sha, `org/${o.orgId}/${sha}`, `content:${sha}`, width, height],
+      ),
+    );
+    return id;
+  }
+
+  it("checks an image's shape and width for Instagram and Threads, and swaps in a cropped one (#636)", async () => {
+    const o = await org();
+    const story = await image(o, 1080, 1920);
+    const instagram = await connection(o, 'instagram');
+    const threads = await connection(o, 'threads');
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Ảnh dọc', media: [{ fileId: story }], channels: [{ connectionId: instagram }, { connectionId: threads }] });
+    const view = await get(o, postId);
+    expect(view.media[0]).toMatchObject({ fileId: story, width: 1080, height: 1920 });
+    const issues = () => get(o, postId).then((p) => Object.fromEntries(p.variants.map((v) => [v.provider, v.issues])));
+    expect(await issues()).toEqual({ instagram: [{ code: 'IMAGE_RATIO_NOT_ALLOWED', field: 'media.0', limit: null, actual: 563 }], threads: [] });
+    // The crop, uploaded as a new file of 4:5: nothing to fix.
+    const cropped = await image(o, 1080, 1350);
+    const fresh = await get(o, postId);
+    await exec(o, 'social.post.update', { postId, revision: fresh.revision, media: [{ fileId: cropped }] });
+    expect(await issues()).toEqual({ instagram: [], threads: [] });
+    // An image whose size is unknown (uploaded before sizes were read) is not checked.
+    const old = await image(o, null, null);
+    const again = await get(o, postId);
+    await exec(o, 'social.post.update', { postId, revision: again.revision, media: [{ fileId: old }] });
+    expect(await issues()).toEqual({ instagram: [], threads: [] });
+  });
+
   it('puts a video on a post, checks it per channel with its duration, and submits only where it fits', async () => {
     const o = await org();
     const clip = await video(o, 12_500);
     const sandbox = await connection(o, 'sandbox');
-    // Bluesky takes video, and its Crove adapter does not post it yet.
-    const bluesky = await connection(o, 'bluesky');
-    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', media: [{ fileId: clip }], channels: [{ connectionId: sandbox }, { connectionId: bluesky }] });
+    // A Zalo OA post takes images only.
+    const zalo = await connection(o, 'zalo_oa');
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', media: [{ fileId: clip }], channels: [{ connectionId: sandbox }, { connectionId: zalo }] });
     const view = await get(o, postId);
-    expect(view.media).toEqual([{ fileId: clip, altText: null, mime: 'video/mp4', sizeBytes: 20_000_000, durationMs: 12_500 }]);
+    expect(view.media).toEqual([{ fileId: clip, altText: null, mime: 'video/mp4', sizeBytes: 20_000_000, durationMs: 12_500, width: null, height: null }]);
     const issues = Object.fromEntries(view.variants.map((v) => [v.provider, v.issues.map((i) => i.code)]));
-    expect(issues).toEqual({ sandbox: [], bluesky: ['VIDEO_NOT_SUPPORTED_YET'] });
+    expect(issues).toEqual({ sandbox: [], zalo_oa: ['TITLE_REQUIRED', 'MEDIA_KIND_NOT_ALLOWED'] });
     await expect(exec(o, 'social.post.submit', { postId })).rejects.toMatchObject({ code: 'VARIANT_INVALID' });
     await exec(o, 'social.post.submit', { postId, variantIds: [view.variants.find((v) => v.provider === 'sandbox')?.id] });
     expect((await get(o, postId)).variants.find((v) => v.provider === 'sandbox')?.status).toBe('in_review');

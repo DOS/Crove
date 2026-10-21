@@ -10,6 +10,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { Textarea } from '@crove/ui/components/textarea';
+import { FileSource } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -46,11 +47,26 @@ async function post<T>(path: string, body: unknown): Promise<T | null> {
   return (await res.json()) as T;
 }
 
+// A file a channel of the link's post shows (#624): a download URL the page then fetches, or the bytes themselves.
+async function reviewFile(token: string, fileId: string): Promise<Blob> {
+  const res = await fetch('/api/review/file', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token, fileId }), credentials: 'omit', referrerPolicy: 'no-referrer' });
+  if (!res.ok) throw await apiErrorFromResponse(res);
+  if (res.headers.get('content-type')?.includes('application/json')) {
+    const { url } = (await res.json()) as { url: string };
+    const file = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer' });
+    if (!file.ok) throw new Error(`file ${file.status}`);
+    return file.blob();
+  }
+  return res.blob();
+}
+
 export function SocialReviewPage() {
   const t = useTranslations('social.clientReview');
   const f = useFormat();
   const [token] = useState(tokenOf);
   const page = useQuery({ queryKey: ['client-review', token], queryFn: () => post<ReviewPage>('/api/review/view', { token }), enabled: token !== null, retry: false });
+  const media = useQuery({ queryKey: ['client-review-media', token], queryFn: () => post<{ channels: { id: string; type: string }[][] }>('/api/review/media', { token }), enabled: token !== null && page.isSuccess, retry: false });
+  const [files] = useState(() => ({ key: `client-review-file:${token ?? ''}`, fetch: (fileId: string) => reviewFile(token ?? '', fileId) }));
   const [name, setName] = useState(readName);
   const [body, setBody] = useState('');
   const [sent, setSent] = useState<Verdict | null>(null);
@@ -95,8 +111,14 @@ export function SocialReviewPage() {
             <div className="grid gap-4 md:grid-cols-2">
               {data.channels.map((c, i) => (
                 <div key={i} className="space-y-1">
-                  <PlatformPreview channel={c.channel} provider={c.provider} content={{ body: c.body, title: c.title ?? '', linkUrl: c.linkUrl ?? '', media: [] }} />
-                  {c.mediaCount > 0 && <p className="text-xs text-subtle-foreground">{t('media', { count: c.mediaCount })}</p>}
+                  <FileSource.Provider value={files}>
+                    <PlatformPreview
+                      channel={c.channel}
+                      provider={c.provider}
+                      content={{ body: c.body, title: c.title ?? '', linkUrl: c.linkUrl ?? '', media: (media.data?.channels[i] ?? []).map((m) => ({ fileId: m.id, altText: '', mime: m.type, sizeBytes: 0 })) }}
+                    />
+                  </FileSource.Provider>
+                  {c.mediaCount > 0 && !media.data && <p className="text-xs text-subtle-foreground">{t('media', { count: c.mediaCount })}</p>}
                 </div>
               ))}
             </div>

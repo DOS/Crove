@@ -130,6 +130,8 @@ describe('matched badge (#435)', () => {
     expect(showMatched({ ...row, duplicateOf: 'p0' }, REVERSAL, VOUCHER)).toBe(false);
     expect(showMatched({ ...row, kind: REVERSAL }, REVERSAL, VOUCHER)).toBe(false);
     expect(showMatched({ ...row, kind: VOUCHER }, REVERSAL, VOUCHER)).toBe(false);
+    // A general journal voucher (#888) is entered by hand and has no checks either.
+    expect(showMatched({ ...row, kind: 'finance.journal_voucher', extracted: false }, REVERSAL, VOUCHER, 'finance.journal_voucher')).toBe(false);
   });
   it('never shows matched for an agent proposal that no extraction read', () => {
     const agent = { id: 'a1', name: 'Kế toán AI' };

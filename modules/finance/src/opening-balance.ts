@@ -18,8 +18,9 @@ import { sql } from 'kysely';
 import { zOpeningBalanceImport, type OpeningBalanceImport } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { chartOfAccounts } from './accounts.ts';
-import { OPENING_BALANCE_SOURCE, checkOpeningBalance, type LedgerFacts, type OpeningCheck } from './domain/opening-balance.ts';
+import { OPENING_BALANCE_SOURCE, checkOpeningBalance, type LedgerFacts, type OpeningCheck, type OpeningParty } from './domain/opening-balance.ts';
 import { postJournalEntry } from './ledger.ts';
+import { upsertParty } from './record.ts';
 
 const POSTERS = ['owner', 'admin'] as const;
 
@@ -102,15 +103,36 @@ export const openingBalancePost = defineCommand({
         noBalances: preview.errors.includes('NO_BALANCES'),
       });
     }
+    // The customers and vendors of the 131 and 331 rows (#689), found or created like an invoice's party: a
+    // receivable's party as a customer, a payable's as a vendor. One lookup per distinct party.
+    const partyIds = new Map<string, string>();
+    const partyOf = async (accountCode: string, party: OpeningParty | null): Promise<string | null> => {
+      if (!party) return null;
+      const key = party.taxCode ? `t:${party.taxCode}` : `n:${party.name.toLocaleLowerCase('vi')}`;
+      let id = partyIds.get(key);
+      if (!id) {
+        id = await upsertParty(ctx, { ...party, address: null, email: null, phone: null }, accountCode.startsWith('131') ? 'sale' : 'purchase');
+        partyIds.set(key, id);
+      }
+      return id;
+    };
+    const posted = [];
+    for (const { party, ...line } of lines) posted.push({ ...line, partyId: await partyOf(line.accountCode, party), memo: null });
     const journalEntryId = await postJournalEntry(ctx, {
       entryDate: input.asOf,
       description: `Số dư đầu kỳ tại ngày ${input.asOf}`,
       sourceType: OPENING_BALANCE_SOURCE,
       // Unique per posting, so the (source_type, source_id) key never stops a later opening entry after a reversal.
       sourceId: ctx.commandId,
-      lines: lines.map((l) => ({ ...l, partyId: null, memo: null })),
+      lines: posted,
     });
-    ctx.audit({ as_of: input.asOf, lines: lines.length, total_debit: preview.totals.debit, total_credit: preview.totals.credit });
+    ctx.audit({
+      as_of: input.asOf,
+      lines: lines.length,
+      parties: partyIds.size,
+      total_debit: preview.totals.debit,
+      total_credit: preview.totals.credit,
+    });
     await ctx.activity('finance.journal_entry', journalEntryId, 'opening_balance.posted', `Ghi số dư đầu kỳ tại ngày ${input.asOf}`);
     await ctx.emit('finance.opening_balance.posted', { entryId: journalEntryId, asOf: input.asOf });
     return { journalEntryId, lines: lines.length };

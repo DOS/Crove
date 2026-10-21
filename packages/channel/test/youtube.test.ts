@@ -89,6 +89,31 @@ describe('YouTubeRefresher', () => {
   });
 });
 
+describe('YouTubePublisher first comment (#791)', () => {
+  const comment = { externalAccountId: CHANNEL, secret: SECRET, externalId: 'dQw4w9WgXcQ', text: 'Đặt bánh tại https://example.com/a', callKey: 'call-c1' };
+
+  it('asks for the comment scope without requiring it, and posts a top-level comment on the video', async () => {
+    const connector = new YouTubeConnector(APP, google({}).fetchImpl);
+    const url = new URL(connector.authorizeUrl({ state: 's', redirectUri: REDIRECT, codeChallenge: null }));
+    expect(url.searchParams.get('scope')?.split(' ')).toContain('https://www.googleapis.com/auth/youtube.force-ssl');
+    const { fetchImpl, calls } = google({ 'POST www.googleapis.com/youtube/v3/commentThreads': [{ body: { id: 'UgzComment1', snippet: {} } }] });
+    expect(await new YouTubePublisher(APP, fetchImpl).comment(comment)).toEqual({ kind: 'accepted', externalId: 'UgzComment1' });
+    expect(calls[0]?.url.searchParams.get('part')).toBe('snippet');
+    expect(calls[0]?.body).toEqual({ snippet: { channelId: CHANNEL, videoId: 'dQw4w9WgXcQ', topLevelComment: { snippet: { textOriginal: comment.text } } } });
+    expect(calls[0]?.headers.get('authorization')).toBe('Bearer ya29.token-1');
+  });
+
+  it('tells a grant without the comment scope, comments turned off and a lost answer apart', async () => {
+    const scope = google({ 'POST www.googleapis.com/youtube/v3/commentThreads': [{ status: 403, body: { error: { code: 403, message: 'Request had insufficient authentication scopes.', errors: [{ reason: 'insufficientPermissions' }] } } }] });
+    expect(await new YouTubePublisher(APP, scope.fetchImpl).comment(comment)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_COMMENTS' });
+    const off = google({ 'POST www.googleapis.com/youtube/v3/commentThreads': [{ status: 403, body: { error: { code: 403, message: 'Comments are disabled.', errors: [{ reason: 'commentsDisabled' }] } } }] });
+    expect(await new YouTubePublisher(APP, off.fetchImpl).comment(comment)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'COMMENTS_DISABLED' });
+    const lost = google({ 'POST www.googleapis.com/youtube/v3/commentThreads': [{ status: 503, body: { error: { message: 'Backend Error', errors: [{ reason: 'backendError' }] } } }] });
+    expect(await new YouTubePublisher(APP, lost.fetchImpl).comment(comment)).toMatchObject({ kind: 'unknown' });
+    expect(await new YouTubePublisher(APP, google({}).fetchImpl).comment({ ...comment, externalId: 'not a video' })).toMatchObject({ kind: 'rejected', code: 'BAD_POST_ID' });
+  });
+});
+
 describe('YouTubePublisher', () => {
   it('opens a resumable session with the metadata, then sends the bytes once', async () => {
     const { fetchImpl, calls } = google({
@@ -106,6 +131,32 @@ describe('YouTubePublisher', () => {
     });
     expect(calls[1]?.url.searchParams.get('upload_id')).toBe('xyz');
     expect(calls[1]?.headers.get('content-type')).toBe('video/mp4');
+  });
+
+  it('sends the category, tags and audience the person chose (#905)', async () => {
+    const { fetchImpl, calls } = google({
+      'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
+      'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, body: { id: 'dQw4w9WgXcQ' } }],
+    });
+    const settings = { privacy: 'public', categoryId: '26', madeForKids: true, tags: ['bánh mì', ' Sài Gòn ', '', 'ẩm <thực>', 7] };
+    expect(await new YouTubePublisher(APP, fetchImpl).publish(input({ settings }))).toMatchObject({ kind: 'accepted', externalId: 'dQw4w9WgXcQ' });
+    // Tags keep their Vietnamese marks; each is trimmed, an empty one or one that is not text is dropped.
+    expect(calls[0]?.body).toEqual({
+      snippet: { title: 'Khai trương chi nhánh', description: 'Video khai trương mới\n\nhttps://example.com/a', categoryId: '26', tags: ['bánh mì', 'Sài Gòn', 'ẩm thực'] },
+      status: { privacyStatus: 'public', selfDeclaredMadeForKids: true, embeddable: true },
+    });
+  });
+
+  it('keeps the old defaults for a variant saved without the video details: category 22, not made for kids, no tags', async () => {
+    const { fetchImpl, calls } = google({
+      'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
+      'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, body: { id: 'dQw4w9WgXcQ' } }],
+    });
+    await new YouTubePublisher(APP, fetchImpl).publish(input({ settings: { categoryId: 'music', madeForKids: 'yes', tags: 'bánh mì' } }));
+    const sent = calls[0]?.body as { snippet: Record<string, unknown>; status: Record<string, unknown> };
+    expect(sent.snippet.categoryId).toBe('22');
+    expect(sent.snippet).not.toHaveProperty('tags');
+    expect(sent.status.selfDeclaredMadeForKids).toBe(false);
   });
 
   it('sets an image cover as the thumbnail after the upload, read before anything is sent (#642)', async () => {

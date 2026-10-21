@@ -14,6 +14,12 @@ export const PROVIDERS = [
   'linkedin',
   'x',
   'bluesky',
+  'google_business',
+  'telegram',
+  'mastodon',
+  'pinterest',
+  'discord',
+  'wordpress',
 ] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -76,8 +82,16 @@ export interface ChannelCapabilities {
 const MB = 1024 * 1024;
 const ANY_IMAGE: readonly string[] = [];
 
-// The channels whose platform takes photos but whose Crove adapter posts only video (TikTok's photo mode is not built).
-export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>(['tiktok']);
+// The channels whose platform takes photos but whose Crove adapter posts only video. None since TikTok's photo posts
+// (#710).
+export const VIDEO_ONLY_ADAPTERS: ReadonlySet<Provider> = new Set<Provider>([]);
+
+// A longer text where a channel's photo posts take one (#710): TikTok sends a photo post's text as its description,
+// up to 4,000 characters, where a video's caption takes 2,200.
+export const PHOTO_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { tiktok: 4000 };
+// A shorter text where a channel's posts with media take one (#747): a Telegram caption is 1,024 characters, where a
+// message's text is 4,096.
+export const MEDIA_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { telegram: 1024 };
 
 // Where each adapter puts the post's link, so the checks count the text the platform receives:
 // - text: after a blank line at the end of the text, unless the text already holds it;
@@ -95,6 +109,15 @@ export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
   linkedin: 'text',
   x: 'text',
   bluesky: 'text',
+  // The link goes as the call to action's URL (or an offer's redeem link), never in the text.
+  google_business: 'apart',
+  telegram: 'text',
+  mastodon: 'text',
+  // The pin leads to the link itself (#798).
+  pinterest: 'apart',
+  discord: 'text',
+  // A paragraph of its own after the text (#833).
+  wordpress: 'text',
 };
 
 // The link as a whole: followed by the end, a space, or sentence punctuation and then the end or a space (the
@@ -130,12 +153,145 @@ export const COMMENT_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
   linkedin: { max: 1250, count: 'utf16', required: false },
   x: { max: 280, count: 'weighted', required: false },
   bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
+  mastodon: { max: 500, count: 'codepoints', required: false },
+  // A top-level comment on the video (#791), up to 10000 characters.
+  youtube: { max: 10000, count: 'codepoints', required: false },
 };
 
 // The first comment in a variant's settings, or null.
 export function firstCommentOf(settings: Readonly<Record<string, unknown>> | undefined): string | null {
   const value = settings?.firstComment;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+// Thread posts (#742): on Threads, X and Bluesky a variant may go on in up to 9 more parts after its text, posted as a
+// chain of replies to the account's own post (`settings.threadParts`, an array of strings). Each part is counted as a
+// post of that channel. A thread takes no first comment: its first reply would be the comment.
+export const THREAD_PARTS_MAX = 9;
+export const THREAD_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
+  sandbox: { max: 1000, count: 'graphemes', required: false },
+  threads: { max: 500, count: 'codepoints', required: false },
+  x: { max: 280, count: 'weighted', required: false },
+  bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
+  mastodon: { max: 500, count: 'codepoints', required: false },
+  // A top-level comment on the video (#791), up to 10000 characters.
+  youtube: { max: 10000, count: 'codepoints', required: false },
+};
+
+// The thread parts in a variant's settings, trimmed, or null when there are none. An entry that is not a string reads
+// as empty, so validation names it.
+export function threadPartsOf(settings: Readonly<Record<string, unknown>> | undefined): string[] | null {
+  const value = settings?.threadParts;
+  if (!Array.isArray(value) || value.length === 0) return null;
+  return value.map((part) => (typeof part === 'string' ? part.trim() : ''));
+}
+
+// Auto-replies on likes (#746): on the channels whose adapter both replies under its own post and reports likes
+// (Facebook Pages, Threads, Bluesky, Mastodon; X and LinkedIn report no counts yet), a variant may carry one reply posted once the post has that many likes (`settings.autoReply`: { text, likes }). The
+// reply is counted like a first comment there.
+export const AUTO_REPLY_LIKES_MAX = 1_000_000;
+export const AUTO_REPLY_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
+  sandbox: COMMENT_RULES.sandbox as TextRule,
+  facebook_page: COMMENT_RULES.facebook_page as TextRule,
+  threads: COMMENT_RULES.threads as TextRule,
+  bluesky: COMMENT_RULES.bluesky as TextRule,
+  mastodon: COMMENT_RULES.mastodon as TextRule,
+};
+
+// Reposts when a post takes off (#773): on the channels whose adapter reposts the account's own post and reports likes
+// (Threads, Bluesky, Mastodon; X reports no counts to Crove yet), a variant may carry one repost rule
+// (`settings.repost`: { likes?, afterHours? }), at a like count, after some hours, or whichever comes first.
+export const REPOST_PROVIDERS: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'threads', 'bluesky', 'mastodon']);
+export const REPOST_LIKES_MAX = 1_000_000;
+// Metrics are read for 30 days after a post goes out.
+export const REPOST_HOURS_MAX = 720;
+
+// The repost rule in a variant's settings: null when there is none, 'invalid' when it is not an object with a whole like
+// count from 1 to REPOST_LIKES_MAX and/or whole hours from 1 to REPOST_HOURS_MAX.
+export function repostRuleOf(settings: Readonly<Record<string, unknown>> | undefined): { likes: number | null; afterHours: number | null } | 'invalid' | null {
+  const value = settings?.repost;
+  if (value === undefined) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'invalid';
+  const { likes, afterHours } = value as { likes?: unknown; afterHours?: unknown };
+  const whole = (n: unknown, max: number) => (n === undefined || n === null ? null : typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= max ? n : 'invalid');
+  const l = whole(likes, REPOST_LIKES_MAX);
+  const h = whole(afterHours, REPOST_HOURS_MAX);
+  if (l === 'invalid' || h === 'invalid' || (l === null && h === null)) return 'invalid';
+  return { likes: l, afterHours: h };
+}
+
+// The auto-reply in a variant's settings: null when there is none, 'invalid' when it is not { text, likes } with a
+// text and a whole number of likes from 1 to AUTO_REPLY_LIKES_MAX.
+export function autoReplyOf(settings: Readonly<Record<string, unknown>> | undefined): { text: string; likes: number } | 'invalid' | null {
+  const value = settings?.autoReply;
+  if (value === undefined) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'invalid';
+  const { text, likes } = value as { text?: unknown; likes?: unknown };
+  if (typeof text !== 'string' || !text.trim() || typeof likes !== 'number' || !Number.isInteger(likes) || likes < 1 || likes > AUTO_REPLY_LIKES_MAX) return 'invalid';
+  return { text: text.trim(), likes };
+}
+
+// Polls and topic tags (#711), in the variant's settings, on the channels that take them (Threads): `settings.poll`
+// is { options: 2 to 4 strings of 1 to 25 characters } on a post without media; `settings.topicTag` is one tag of 1 to 50
+// characters with no period or ampersand (a leading # is dropped). The Threads adapter reads the same shapes.
+export interface PollRule {
+  minOptions: number;
+  maxOptions: number;
+  maxChars: number;
+}
+export const POLL_RULES: Readonly<Partial<Record<Provider, PollRule>>> = { threads: { minOptions: 2, maxOptions: 4, maxChars: 25 } };
+export const TOPIC_TAG_RULES: Readonly<Partial<Record<Provider, { maxChars: number }>>> = { threads: { maxChars: 50 } };
+
+// The poll's options, trimmed; null when there is none, 'invalid' when it is not { options: string[] }.
+export function pollOptionsOf(settings: Readonly<Record<string, unknown>> | undefined): string[] | null | 'invalid' {
+  const poll = settings?.poll;
+  if (poll === undefined || poll === null) return null;
+  const options = typeof poll === 'object' ? (poll as { options?: unknown }).options : undefined;
+  if (!Array.isArray(options) || !options.every((o) => typeof o === 'string')) return 'invalid';
+  return options.map((o: string) => o.trim());
+}
+
+// The topic tag as it is sent, without a leading #; null when there is none, false when it is not text (a tag may be
+// any word, so no string marks a bad one).
+export function topicTagOf(settings: Readonly<Record<string, unknown>> | undefined): string | null | false {
+  const tag = settings?.topicTag;
+  if (tag === undefined || tag === null) return null;
+  return typeof tag === 'string' ? tag.trim().replace(/^#/, '') : false;
+}
+
+// Google Business Profile posts (#709), in the variant's settings (`settings.gbp`): a topic (a standard post, an event
+// or an offer), an optional call to action (its URL is the post's link; CALL needs none), an event's title and dates
+// (YYYY-MM-DD, times HH:MM optional) for events and offers, an offer's coupon code and terms, and the post's language. The adapter's
+// gbpSettingsOf in @crove/channel reads the same shape.
+export const GBP_TOPICS = ['STANDARD', 'EVENT', 'OFFER'] as const;
+export const GBP_CTAS = ['BOOK', 'ORDER', 'SHOP', 'LEARN_MORE', 'SIGN_UP', 'CALL'] as const;
+export type GbpTopic = (typeof GBP_TOPICS)[number];
+export type GbpCta = (typeof GBP_CTAS)[number];
+// The post's language (#730), Vietnamese when unsaid.
+export const GBP_LANGUAGES = ['vi', 'en', 'zh', 'ja', 'ko'] as const;
+export type GbpLanguage = (typeof GBP_LANGUAGES)[number];
+export interface Gbp {
+  topic: GbpTopic;
+  language: GbpLanguage;
+  cta: GbpCta | null;
+  event: { title: string; startDate: string; startTime: string; endDate: string; endTime: string };
+  offer: { couponCode: string; terms: string };
+}
+const asText = (v: unknown) => (typeof v === 'string' ? v : '');
+// The settings as the composer edits them; null when they are not an object (an issue of their own).
+export function gbpOf(settings: Readonly<Record<string, unknown>> | undefined): Gbp | null {
+  const raw = settings?.gbp;
+  const g = raw === undefined || raw === null ? {} : typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  if (!g) return null;
+  const e = (g.event && typeof g.event === 'object' ? g.event : {}) as Record<string, unknown>;
+  const o = (g.offer && typeof g.offer === 'object' ? g.offer : {}) as Record<string, unknown>;
+  return {
+    topic: (GBP_TOPICS as readonly unknown[]).includes(g.topic) ? (g.topic as GbpTopic) : 'STANDARD',
+    language: (GBP_LANGUAGES as readonly unknown[]).includes(g.language) ? (g.language as GbpLanguage) : 'vi',
+    cta: (GBP_CTAS as readonly unknown[]).includes(g.cta) ? (g.cta as GbpCta) : null,
+    event: { title: asText(e.title), startDate: asText(e.startDate), startTime: asText(e.startTime), endDate: asText(e.endDate), endTime: asText(e.endTime) },
+    offer: { couponCode: asText(o.couponCode), terms: asText(o.terms) },
+  };
 }
 
 // A video's cover (#642), in the variant's settings (`settings.cover`): a frame of the video, at a time in
@@ -160,18 +316,86 @@ export const coverKind = (cover: Cover): CoverKind => ('atMs' in cover ? 'frame'
 // Reels take a frame (thumb_offset) or an image (cover_url); TikTok's direct post takes a frame
 // (video_cover_timestamp_ms) and no uploaded image; YouTube takes an image (thumbnails.set) and no frame, since the
 // Data API has no way to pick one. Facebook Page videos and the other channels take none from Crove yet.
+// A channel's post type (#644), in the variant's settings (`settings.postType`): a feed post (the default), a Story or
+// a Reel, on the channels whose adapter posts them. The adapters' postTypeOf in @crove/channel reads the same value.
+// A Story is one image or video shown for a day: its text and link are not sent, and a video lasts at most a minute.
+// A Reel is one video. A Story image is upright, about 9:16 (phone screens from 1:2.2 to 2:3 count).
+export const POST_TYPES = ['feed', 'story', 'reel'] as const;
+export type PostType = (typeof POST_TYPES)[number];
+export const POST_TYPE_RULES: Readonly<Partial<Record<Provider, readonly PostType[]>>> = {
+  // The offline test channel takes every type, so the composer can be tried end to end.
+  sandbox: ['feed', 'story', 'reel'],
+  instagram: ['feed', 'story', 'reel'],
+  facebook_page: ['feed', 'story', 'reel'],
+};
+export const STORY_IMAGE = { minRatio: 0.45, maxRatio: 2 / 3 } as const;
+export const STORY_MAX_VIDEO_SECONDS = 60;
+// The longest Reel each platform takes through its API.
+export const REEL_MAX_VIDEO_SECONDS: Readonly<Partial<Record<Provider, number>>> = { instagram: 900, facebook_page: 90 };
+
+// The post type in a variant's settings; null when it is not one of POST_TYPES.
+export function postTypeOf(settings: Readonly<Record<string, unknown>> | undefined): PostType | null {
+  const value = settings?.postType;
+  if (value === undefined || value === null) return 'feed';
+  return (POST_TYPES as readonly unknown[]).includes(value) ? (value as PostType) : null;
+}
+// What an image must be for a channel to take it (#636): its shape (width / height) and its width in pixels, as the
+// platforms' APIs refuse otherwise. Instagram's feed takes 4:5 to 1.91:1; Threads 1:10 to 10:1; both at least 320 wide.
+// A channel without a rule takes any shape. Checked only when the image's size is known (read at upload).
+export interface ImageRule {
+  minRatio: number;
+  maxRatio: number;
+  minWidth: number;
+}
+export const IMAGE_RULES: Readonly<Partial<Record<Provider, ImageRule>>> = {
+  instagram: { minRatio: 4 / 5, maxRatio: 1.91, minWidth: 320 },
+  threads: { minRatio: 1 / 10, maxRatio: 10, minWidth: 320 },
+};
+// A shape within 1% of a bound counts as on it (1080 x 1350 is 4:5, a resize may land a pixel off).
+export const RATIO_SLACK = 0.01;
+
 export const COVER_RULES: Readonly<Partial<Record<Provider, readonly CoverKind[]>>> = {
   sandbox: ['frame', 'image'],
   instagram: ['frame', 'image'],
   tiktok: ['frame'],
   youtube: ['image'],
+  // A video pin's cover is a frame of the video (#813).
+  pinterest: ['frame'],
 };
+// How a TikTok variant goes out (#903), in `settings.tiktokMode`: posted at once (direct, the default, so variants
+// saved before #903 behave as they did), or sent to the creator's TikTok inbox as a draft they finish and post in the
+// TikTok app (inbox). Inbox mode takes no privacy level, interaction settings or cover: the creator picks them in
+// TikTok. The adapter's tiktokModeOf in @crove/channel reads the same value.
+export const TIKTOK_MODES = ['direct', 'inbox'] as const;
+export type TikTokMode = (typeof TIKTOK_MODES)[number];
+// The mode in a variant's settings; null when it is set to something else.
+export function tiktokModeOf(settings: Readonly<Record<string, unknown>> | undefined): TikTokMode | null {
+  const value = settings?.tiktokMode;
+  if (value === undefined || value === null) return 'direct';
+  return (TIKTOK_MODES as readonly unknown[]).includes(value) ? (value as TikTokMode) : null;
+}
+
+// A permission the variant needs on its connection beyond what every post of its channel needs, by the scope the
+// platform names it with (#903): TikTok's inbox upload needs video.upload, which connections made before Crove asked
+// for it lack. The publisher checks it against the scopes stored with the connection before calling the platform.
+export function scopeNeeded(provider: Provider, settings: Readonly<Record<string, unknown>> | undefined): string | null {
+  return provider === 'tiktok' && tiktokModeOf(settings) === 'inbox' ? 'video.upload' : null;
+}
+
+// What social.publish.record stores as a published variant's note (error_code, with no error kind) when the platform
+// took the post as a draft in its own app (#903): not public yet and with no post id, so it is never read as out.
+export const SENT_TO_APP = 'SENT_TO_APP';
+
 // YouTube refuses a thumbnail over 2 MB (thumbnails.set).
 export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024 };
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord']);
+
+// The channels whose Crove adapter takes a published post down (#860); the others answer REMOVE_NOT_SUPPORTED until
+// their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of it.
+export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x']);
 
 export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   // No network: publishes into a local table so the whole flow runs offline and in tests (plan §3.5).
@@ -218,7 +442,8 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'tiktok',
     body: { max: 2200, count: 'utf16', required: false },
     title: null,
-    media: { min: 1, max: 35, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 4096 * MB, maxVideoSeconds: 600 },
+    // A video alone, or 1 to 35 photos (JPEG or WebP, 20 MB each, #710).
+    media: { min: 1, max: 35, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/webp'], maxImageBytes: 20 * MB, maxVideoBytes: 4096 * MB, maxVideoSeconds: 600 },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: [],
@@ -266,13 +491,84 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'bluesky',
     body: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
     title: null,
-    // Up to 4 images (1 MB each, Bluesky's blob limit) or one video of up to 3 minutes and 100 MB; the Crove adapter
-    // does not post video yet, so it stays out of VIDEO_READY.
+    // Up to 4 images (1 MB each, Bluesky's blob limit) or one MP4 of up to 3 minutes and 100 MB, through Bluesky's
+    // video service (#455).
     media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: 1_000_000, maxVideoBytes: 100 * MB, maxVideoSeconds: 180 },
     maxLinks: null,
     scrapesLinkPreview: false,
     // Bluesky also caps post text in bytes.
     unverified: ['body.max'],
+  },
+  // Google Business Profile (#709): localPosts' summary of 1,500 characters and one photo (JPEG or PNG, 10 KB to 5 MB);
+  // no video through the API. The link goes as the call to action, an offer's redeem link, or not at all.
+  google_business: {
+    provider: 'google_business',
+    body: { max: 1500, count: 'codepoints', required: false },
+    title: null,
+    media: { min: 0, max: 1, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ['image/jpeg', 'image/png'], maxImageBytes: 5 * MB, maxVideoBytes: null, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: false,
+    unverified: [],
+  },
+  // Telegram channels (#747): a message of 4,096 characters (UTF-16, as the Bot API counts), a caption of 1,024 with
+  // media (MEDIA_BODY_MAX); one photo or video, or an album of 2 to 10 mixing them. Files are uploaded with the call:
+  // photos up to 10 MB, videos up to 50 MB. Telegram shows the link's preview itself.
+  telegram: {
+    provider: 'telegram',
+    body: { max: 4096, count: 'utf16', required: false },
+    title: null,
+    media: { min: 0, max: 10, kinds: ['image', 'video'], mixed: true, maxVideos: 10, imageTypes: ['image/jpeg', 'image/png', 'image/webp'], maxImageBytes: 10 * MB, maxVideoBytes: 50 * MB, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: true,
+    unverified: [],
+  },
+  // Mastodon (#748): 500 characters on most instances (the adapter reads the instance's own limit before posting), up to
+  // 4 images or one video; mainline Mastodon takes images up to 16 MB and videos up to 99 MB. Instances show the link's
+  // preview card themselves. A content warning and the visibility are settings (MASTODON_SETTINGS).
+  mastodon: {
+    provider: 'mastodon',
+    body: { max: 500, count: 'codepoints', required: false },
+    title: null,
+    media: { min: 0, max: 4, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'], maxImageBytes: 16 * MB, maxVideoBytes: 99 * MB, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: true,
+    unverified: ['body.max'],
+  },
+  // Pinterest (#798): a pin's title of 100 characters and description of 800, saved to a board; one image or a
+  // carousel of 2 to 5, JPEG or PNG (kept to 10 MB each, sent in the request); or one MP4 or MOV video pin (#813).
+  pinterest: {
+    provider: 'pinterest',
+    body: { max: 800, count: 'codepoints', required: false },
+    title: { max: 100, count: 'codepoints', required: false },
+    media: { min: 1, max: 5, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ['image/jpeg', 'image/png'], maxImageBytes: 10 * MB, maxVideoBytes: 100 * MB, maxVideoSeconds: 900 },
+    maxLinks: null,
+    scrapesLinkPreview: false,
+    unverified: ['media.max'],
+  },
+  // Discord channels (#832), posted to through a webhook: a message of 2,000 characters (counted in UTF-16, never under
+  // Discord's own count) and up to 10 images and videos uploaded with the call, 10 MB each and 25 MB for the whole
+  // message (the adapter checks the sum). Discord shows the link's preview itself.
+  discord: {
+    provider: 'discord',
+    body: { max: 2000, count: 'utf16', required: false },
+    title: null,
+    media: { min: 0, max: 10, kinds: ['image', 'video'], mixed: true, maxVideos: 10, imageTypes: ['image/jpeg', 'image/png', 'image/webp'], maxImageBytes: 10 * MB, maxVideoBytes: 10 * MB, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: true,
+    unverified: [],
+  },
+  // WordPress (#833): a blog post through the site's REST API. WordPress sets no length on a post; 100,000 characters is
+  // Crove's own cap. The title is the post's own or the text's first line; up to 10 images (JPEG, PNG, WebP or GIF, kept
+  // to 10 MB each, as many hosts cap uploads near there) go to the media library and after the text, the first as the
+  // featured image. No video.
+  wordpress: {
+    provider: 'wordpress',
+    body: { max: 100_000, count: 'codepoints', required: true },
+    title: { max: 200, count: 'codepoints', required: false },
+    media: { min: 0, max: 10, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'], maxImageBytes: 10 * MB, maxVideoBytes: null, maxVideoSeconds: null },
+    maxLinks: null,
+    scrapesLinkPreview: false,
+    unverified: [],
   },
 };
 
@@ -343,4 +639,102 @@ const X_LINK = new RegExp(`\\bhttps?:\\/\\/[^\\s<>"']*[^\\s<>"'.,!?;:)\\]]|(?<![
 
 export function countLinks(text: string): number {
   return text.match(URL_PATTERN)?.length ?? 0;
+}
+
+// Mastodon settings (#748): a content warning shown before the post (`settings.contentWarning`, up to 500 characters)
+// and the visibility (`settings.visibility`: public, the default, or unlisted). The adapter reads the same shapes.
+export const MASTODON_VISIBILITY = ['public', 'unlisted'] as const;
+export const CONTENT_WARNING_MAX = 500;
+
+// YouTube video details (#905), read by the adapter in the same shapes: the audience (`settings.madeForKids`, a
+// boolean; absent is not made for kids, as for every variant saved before it could be chosen), the category
+// (`settings.categoryId`, one of YouTube's assignable video categories, absent is 22, People & Blogs) and the tags
+// (`settings.tags`, a list of strings). The categories are the ones videoCategories.list marks assignable; YouTube
+// has kept them unchanged for years, so they are a fixed list rather than a call.
+export const YOUTUBE_CATEGORIES = ['1', '2', '10', '15', '17', '19', '20', '22', '23', '24', '25', '26', '27', '28', '29'] as const;
+export type YouTubeCategory = (typeof YOUTUBE_CATEGORIES)[number];
+export const YOUTUBE_DEFAULT_CATEGORY: YouTubeCategory = '22';
+export const YOUTUBE_TAGS_MAX = 500;
+
+// The tags as YouTube counts them against its 500 characters: each tag's characters, a comma between tags, and the
+// quotes YouTube puts around a tag that holds a space ("Foo Baz" is nine characters, Foo-Baz seven). Each tag is
+// counted trimmed, as the adapter sends it; a Vietnamese letter with its marks is one character.
+export function youtubeTagsLength(tags: readonly string[]): number {
+  return tags.reduce((n, tag, i) => {
+    const t = tag.trim();
+    return n + countText(t, 'codepoints') + (/\s/.test(t) ? 2 : 0) + (i > 0 ? 1 : 0);
+  }, 0);
+}
+
+// The tags in a variant's settings: null when there are none, 'invalid' when the value is not a list of strings.
+export function youtubeTagsOf(settings: Readonly<Record<string, unknown>> | undefined): string[] | 'invalid' | null {
+  const value = settings?.tags;
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || !value.every((v) => typeof v === 'string')) return 'invalid';
+  return value.length > 0 ? (value as string[]) : null;
+}
+
+// Instagram people (#796): up to 3 collaborators (`settings.collaborators`, on feed posts and Reels; each must accept
+// the invitation in Instagram) and up to 20 people tagged on the first image (`settings.userTags`, image posts only).
+// Usernames as Instagram writes them, without the @. The adapter reads the same shapes.
+export const IG_COLLABORATORS_MAX = 3;
+export const IG_USER_TAGS_MAX = 20;
+export const IG_USERNAME = /^[a-z0-9._]{1,30}$/;
+
+// The usernames in settings[key]: null when there are none, 'invalid' when the value is not a list of usernames.
+export function instagramPeopleOf(settings: Readonly<Record<string, unknown>> | undefined, key: 'collaborators' | 'userTags'): string[] | 'invalid' | null {
+  const value = settings?.[key];
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value) || value.length > 50 || !value.every((v) => typeof v === 'string' && IG_USERNAME.test(v))) return 'invalid';
+  const names = [...new Set(value as string[])];
+  return names.length > 0 ? names : null;
+}
+
+// Publishing limits Crove counts itself (#775, plan §3.6: "Rate limits and quotas tracked per app and per account"),
+// for the channels whose API has no quota endpoint: how many posts one account may make in a window. Instagram and
+// Threads read their own quota from the platform (#743). The numbers are the platforms' documented per-account limits,
+// kept a little under where they are approximate: TikTok about 15 posts a day per creator, YouTube's 100 uploads a day,
+// X 100 posts per 15 minutes per user, LinkedIn 150 member posts a day.
+export interface PublishLimit {
+  count: number;
+  windowMs: number;
+}
+export const PUBLISH_LIMITS: Readonly<Partial<Record<Provider, PublishLimit>>> = {
+  tiktok: { count: 15, windowMs: 24 * 3_600_000 },
+  youtube: { count: 100, windowMs: 24 * 3_600_000 },
+  x: { count: 100, windowMs: 15 * 60_000 },
+  linkedin: { count: 150, windowMs: 24 * 3_600_000 },
+};
+
+// When the next post may go out under a limit, given when the account's earlier posts in the window started: null when
+// one may go now, else the time the oldest of the counted posts leaves the window.
+export function limitWait(starts: readonly Date[], limit: PublishLimit, now: Date): Date | null {
+  const since = now.getTime() - limit.windowMs;
+  const inWindow = starts.map((d) => d.getTime()).filter((t) => t > since).sort((a, b) => a - b);
+  if (inWindow.length < limit.count) return null;
+  // The post that has to leave the window for one more to fit.
+  const leaving = inWindow[inWindow.length - limit.count] as number;
+  return new Date(leaving + limit.windowMs + 1000);
+}
+
+// Media a channel fetches by URL (#772): on a deployment whose storage hands out no public file URLs (local disk), these
+// cannot go out, so the composer says so before the post is submitted. Instagram takes a Reel or a video Story without
+// one (Crove uploads the bytes), but not images, carousels or a cover image; Threads, Google Business, Zalo OA (its
+// cover) and TikTok photos are fetched by URL always.
+export function needsPublicUrls(provider: Provider, media: readonly { kind: 'image' | 'video' }[], settings?: Readonly<Record<string, unknown>>): boolean {
+  if (media.length === 0) return false;
+  switch (provider) {
+    case 'instagram': {
+      const cover = coverOf(settings);
+      return media.length > 1 || media[0]?.kind === 'image' || (cover !== null && 'fileId' in cover);
+    }
+    case 'threads':
+    case 'google_business':
+    case 'zalo_oa':
+      return true;
+    case 'tiktok':
+      return media.some((m) => m.kind === 'image');
+    default:
+      return false;
+  }
 }

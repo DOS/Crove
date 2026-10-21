@@ -25,12 +25,12 @@ function invoice(id: string, rates: VatInvoiceView['rates']): VatInvoiceView {
   return { id, issueDate: '2026-09-15', postingDate: '2026-09-15', series: 'C26TAB', number: id, partyName: 'Công ty TNHH ABC', partyTaxCode: '0101234564', subtotal: '0', vatAmount: '0', total: '0', rates, warnings: [] };
 }
 
-function declaration(period: string, input: VatInvoiceView[], output: VatInvoiceView[], name = 'Công ty TNHH Crove Demo'): VatDeclaration {
+function declaration(period: string, input: VatInvoiceView[], output: VatInvoiceView[], name = 'Công ty TNHH Crove Demo', address: string | null = null): VatDeclaration {
   const inputSide = { available: true, documents: input, totals: sideTotals(input) };
   const outputSide = { available: true, documents: output, totals: sideTotals(output) };
   return {
     report: { period: vatPeriod(period), input: inputSide, output: outputSide, indicators: form01Indicators(inputSide.totals, outputSide.totals) },
-    taxpayer: { taxCode: '0101234564', name },
+    taxpayer: { taxCode: '0101234564', name, address },
   };
 }
 
@@ -153,8 +153,8 @@ const EXPECTED_ORDER = [
 ];
 
 const samples: Record<string, string> = {};
-function build(name: string, d: VatDeclaration): string {
-  const xml = buildVat01Xml(d, '2026-10-19');
+function build(name: string, d: VatDeclaration, deductInput = false): string {
+  const xml = buildVat01Xml(d, '2026-10-19', { deductInput });
   samples[name] = xml;
   const out = process.env.HTKK_XML_OUT;
   if (out) {
@@ -290,6 +290,36 @@ describe('buildVat01Xml', () => {
     expect(paths(xml)).toEqual(EXPECTED_ORDER);
     expect(xml).toContain('<tenNNT>Công ty &lt;A&gt; &amp; &quot;B&quot; &apos;C&apos;]]&gt;</tenNNT>');
     expect(read(xml).text.get(`${NNT}/tenNNT`)).toBe(`Công ty <A> & "B" 'C']]>`);
+  });
+
+  it('writes the org address as one line when it has one, and an empty dchiNNT otherwise (#692)', () => {
+    const none = build('month', declaration('2026-09', purchases, sales));
+    expect(none).toContain('<dchiNNT/>');
+    const xml = build('address', declaration('2026-09', purchases, sales, 'Công ty TNHH Crove Demo', 'Số 1 Đường A,\n  Phường B & C, TP <Hà Nội>'));
+    expect(paths(xml)).toEqual(EXPECTED_ORDER);
+    expect(read(xml).text.get(`${NNT}/dchiNNT`)).toBe('Số 1 Đường A, Phường B & C, TP <Hà Nội>');
+    // The other address and contact parts stay empty: Crove holds the address as one line.
+    for (const tag of ['phuongXa', 'tenHuyenNNT', 'tenTinhNNT', 'dthoaiNNT', 'emailNNT']) expect(xml).toContain(`<${tag}/>`);
+  });
+
+  it('puts [24] in [25] only when asked, and works the payable VAT out from it (#692)', () => {
+    const d = declaration('2026-09', purchases, sales);
+    expect(valueOf(build('month', d), 'ct25')).toBe('0');
+    const xml = build('deduct', d, true);
+    expect(paths(xml)).toEqual(EXPECTED_ORDER);
+    expect(['ct24', 'ct25', 'ct35', 'ct36', 'ct40a', 'ct40', 'ct41'].map((tag) => valueOf(xml, tag))).toEqual(['220000', '220000', '1340000', '1120000', '1120000', '1120000', '0']);
+    // More input than output VAT: the rest is carried forward in [41] and [43], never a negative [40a].
+    const v = form01XmlValues(declaration('2026-09', purchases, []).report.indicators, { deductInput: true });
+    expect([v['25'], v['36'], v['40a'], v['40'], v['41'], v['43']]).toEqual(['220000', '-220000', '0', '0', '220000', '220000']);
+    // [25] takes [24] as rounded in the file, so [36] = [35] - [25] holds to the dong.
+    const rounded = form01XmlValues(
+      [
+        { code: '24', label: '', amount: '100.5' },
+        { code: '33', label: '', amount: '300' },
+      ],
+      { deductInput: true },
+    );
+    expect([rounded['24'], rounded['25'], rounded['36']]).toEqual(['101', '101', '199']);
   });
 
   it('refuses a taxpayer without a valid tax code and a malformed date', () => {

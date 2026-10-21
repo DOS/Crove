@@ -1,7 +1,8 @@
 // What a web page says about itself, for a link preview (#641): the title, description and site name from its head,
-// Open Graph first, then Twitter cards, then <title> and <meta name="description">. Only the head is read (up to
-// </head> or <body>), with plain scanning: no DOM, no scripts, no styles, no external resources. The text is decoded
-// from the page's charset, entities are resolved, whitespace collapsed and every field capped.
+// Open Graph first, then Twitter cards, then <title> and <meta name="description">; and its main text (#779), from the
+// <article>, else the <main>, else the body, without menus, headers, footers, forms or embeds. Plain scanning: no
+// DOM, no scripts, no styles, no external resources. The text is decoded from the page's charset, entities are
+// resolved, whitespace collapsed and every field capped.
 import { EXTRACT_LIMITS, type ExtractedPage } from '@crove/extract-contract';
 
 export class HtmlMetaError extends Error {}
@@ -38,6 +39,13 @@ function entities(s: string): string {
   });
 }
 
+// At most max UTF-16 units, as the contract's limits count them, never ending inside a surrogate pair.
+function cut(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const end = text.charCodeAt(max - 1);
+  return text.slice(0, end >= 0xd800 && end <= 0xdbff ? max - 1 : max);
+}
+
 function clean(raw: string | undefined, max: number): string | null {
   if (raw === undefined) return null;
   const text = entities(raw)
@@ -47,8 +55,7 @@ function clean(raw: string | undefined, max: number): string | null {
     .replace(/\s+/g, ' ')
     .trim();
   if (text === '') return null;
-  // Cut on a code point, never inside a surrogate pair.
-  return Array.from(text).slice(0, max).join('').trim() || null;
+  return cut(text, max).trim() || null;
 }
 
 // The attributes of one tag: name="value", name='value' or name=value.
@@ -62,10 +69,11 @@ function attributes(tag: string): Map<string, string> {
   return out;
 }
 
-// Comments, scripts, styles and templates removed, in one pass: each opening is matched with its own close, and one
-// that never closes ends the text there (nothing after it can be read as a tag).
-function stripHidden(html: string): string {
-  const open = /<!--|<(script|style|noscript|template)\b/gi;
+// Comments and the given elements removed with what they hold, in one pass: each opening is matched with its own
+// close, and one that never closes ends the text there (nothing after it can be read as a tag).
+const HIDDEN = ['script', 'style', 'noscript', 'template'];
+function stripHidden(html: string, names: readonly string[] = HIDDEN): string {
+  const open = new RegExp(`<!--|<(${names.join('|')})\\b`, 'gi');
   let out = '';
   let from = 0;
   for (let m = open.exec(html); m !== null; m = open.exec(html)) {
@@ -115,6 +123,66 @@ function titleOf(head: string): string | undefined {
   return end ? head.slice(start + 1, end.index) : undefined;
 }
 
+// Page furniture: menus, banners, footers, forms and embeds, dropped with what they hold.
+const FURNITURE = ['nav', 'header', 'footer', 'aside', 'form', 'button', 'select', 'svg', 'iframe', 'object', 'canvas'];
+// The ends of blocks (and <br>) are new lines; inline tags join their text to the words around it; every other tag
+// is a space.
+const BLOCKS = new Set(['p', 'div', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'tr', 'blockquote', 'section', 'pre', 'dd', 'dt', 'figcaption']);
+const INLINE = new Set(['a', 'b', 'i', 'u', 's', 'q', 'em', 'strong', 'span', 'small', 'mark', 'code', 'abbr', 'sub', 'sup', 'time']);
+const TAG_NAME = /^(\/?)([a-zA-Z][a-zA-Z0-9]{0,15})/;
+
+// The text of html without its tags, in one pass: a < with no > before the next < is a stray character, and no < or >
+// is left in the result, so nothing in it can read as markup. Linear: the next > is looked up only once it is behind.
+function plainText(html: string): string {
+  let out = '';
+  let at = 0;
+  let gt = html.indexOf('>');
+  while (at < html.length) {
+    const lt = html.indexOf('<', at);
+    if (lt < 0) {
+      out += html.slice(at);
+      break;
+    }
+    out += html.slice(at, lt);
+    if (gt >= 0 && gt < lt) gt = html.indexOf('>', lt);
+    const next = html.indexOf('<', lt + 1);
+    if (gt < 0 || (next >= 0 && next < gt)) {
+      out += ' ';
+      at = lt + 1;
+      continue;
+    }
+    const m = TAG_NAME.exec(html.slice(lt + 1, Math.min(gt, lt + 18)));
+    const name = m?.[2]?.toLowerCase() ?? '';
+    out += name === 'br' || (m?.[1] === '/' && BLOCKS.has(name)) ? '\n' : INLINE.has(name) ? '' : ' ';
+    at = gt + 1;
+  }
+  return out.replaceAll('>', ' ');
+}
+
+// The part of html inside the first <name ...> ... </name>; undefined when there is none.
+function inside(html: string, name: string): string | undefined {
+  const open = new RegExp(`<${name}\\b[^<>]*>`, 'i').exec(html);
+  if (!open) return undefined;
+  const start = open.index + open[0].length;
+  const close = new RegExp(`</${name}\\s*>`, 'gi');
+  close.lastIndex = start;
+  const end = close.exec(html);
+  return end ? html.slice(start, end.index) : html.slice(start);
+}
+
+// The page's main text: lines of plain text, at most maxPageTextChars; null when there is none.
+function mainText(html: string): string | null {
+  const bodyAt = html.search(/<body\b/i);
+  const body = bodyAt >= 0 ? html.slice(bodyAt) : html;
+  const scope = inside(body, 'article') ?? inside(body, 'main') ?? body;
+  const lines = plainText(stripHidden(scope, FURNITURE))
+    .split('\n')
+    .map((line) => clean(line, EXTRACT_LIMITS.maxPageTextChars))
+    .filter((line): line is string => line !== null);
+  if (lines.length === 0) return null;
+  return cut(lines.join('\n'), EXTRACT_LIMITS.maxPageTextChars).trim() || null;
+}
+
 export function readHtmlMeta(bytes: Uint8Array): ExtractedPage {
   const html = stripHidden(decode(bytes));
   const end = html.search(/<\/head\s*>|<body\b/i);
@@ -131,5 +199,6 @@ export function readHtmlMeta(bytes: Uint8Array): ExtractedPage {
     title: clean(meta.get('og:title') ?? meta.get('twitter:title') ?? titleOf(head), EXTRACT_LIMITS.maxPageTitleChars),
     description: clean(meta.get('og:description') ?? meta.get('twitter:description') ?? meta.get('description'), EXTRACT_LIMITS.maxPageDescriptionChars),
     siteName: clean(meta.get('og:site_name') ?? meta.get('application-name'), EXTRACT_LIMITS.maxPageSiteChars),
+    text: mainText(html),
   };
 }

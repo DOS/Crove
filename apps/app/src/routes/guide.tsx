@@ -1,6 +1,7 @@
 import { Link, useParams } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Card } from '@crove/ui/components/card';
+import { StatusLink } from '../components/status-link.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { PageHeader } from '../components/ui.tsx';
 import { getConfig } from '../lib/auth.ts';
@@ -56,6 +57,11 @@ export function GuidePage() {
       {hasSupport && (
         <p className="mt-6 text-sm text-muted-foreground">
           {t('supportHint')} <SupportLink className="text-link hover:underline" />.
+        </p>
+      )}
+      {getConfig().statusPage && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          {t('statusHint')} <StatusLink className="text-link hover:underline" />.
         </p>
       )}
     </>

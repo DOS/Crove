@@ -8,7 +8,8 @@ import { z } from 'zod';
 // files each one as a document of its own.
 // portal_invoice_list: the purchase-invoice list exported from the tax authority's e-invoice portal as .xlsx (#465);
 // the rows come back read and normalized, and the worker checks them again before they are stored.
-export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime', 'zip', 'portal_invoice_list', 'dsn', 'html_meta'] as const;
+// feed: a blog's RSS or Atom feed (#708); its newest items come back read and capped.
+export const EXTRACT_KINDS = ['einvoice_xml', 'pdf_text', 'mime', 'zip', 'portal_invoice_list', 'dsn', 'html_meta', 'feed'] as const;
 export type ExtractKind = (typeof EXTRACT_KINDS)[number];
 export const zExtractKind = z.enum(EXTRACT_KINDS);
 
@@ -45,6 +46,13 @@ export const EXTRACT_LIMITS = {
   maxPageTitleChars: 300,
   maxPageDescriptionChars: 1000,
   maxPageSiteChars: 200,
+  // The page's main text (#779), for an AI draft written from it.
+  maxPageTextChars: 4000,
+  // A blog's feed (#708): at most this many bytes, of which the newest items come back.
+  maxFeedBytes: 1024 * 1024,
+  maxFeedItems: 50,
+  maxFeedTitleChars: 300,
+  maxFeedSummaryChars: 1000,
   // Rows of the sheet that were not read as invoices (a totals row, a row without a number), reported by number.
   maxPortalListSkipped: 1000,
 } as const;
@@ -59,6 +67,7 @@ export function maxRequestBytes(kind: ExtractKind): number {
   if (kind === 'mime' || kind === 'dsn') return EXTRACT_LIMITS.maxEmailBytes;
   if (kind === 'portal_invoice_list') return EXTRACT_LIMITS.maxPortalListBytes;
   if (kind === 'html_meta') return EXTRACT_LIMITS.maxHtmlBytes;
+  if (kind === 'feed') return EXTRACT_LIMITS.maxFeedBytes;
   return EXTRACT_LIMITS.maxFileBytes;
 }
 
@@ -137,8 +146,28 @@ export const zExtractedPage = z.strictObject({
   title: z.string().min(1).max(EXTRACT_LIMITS.maxPageTitleChars).nullable(),
   description: z.string().min(1).max(EXTRACT_LIMITS.maxPageDescriptionChars).nullable(),
   siteName: z.string().min(1).max(EXTRACT_LIMITS.maxPageSiteChars).nullable(),
+  text: z.string().min(1).max(EXTRACT_LIMITS.maxPageTextChars).nullable(),
 });
 export type ExtractedPage = z.infer<typeof zExtractedPage>;
+
+const zFeedUrl = z.string().regex(/^https?:\/\/\S+$/i).max(2000);
+export const zExtractedFeed = z.strictObject({
+  title: z.string().min(1).max(EXTRACT_LIMITS.maxFeedTitleChars).nullable(),
+  items: z
+    .array(
+      z.strictObject({
+        // The item's guid or id, else its link or title: what tells it from the others.
+        key: z.string().min(1).max(EXTRACT_LIMITS.maxStringChars),
+        title: z.string().min(1).max(EXTRACT_LIMITS.maxFeedTitleChars).nullable(),
+        link: zFeedUrl.nullable(),
+        publishedAt: z.iso.datetime().nullable(),
+        summary: z.string().min(1).max(EXTRACT_LIMITS.maxFeedSummaryChars).nullable(),
+        image: zFeedUrl.nullable(),
+      }),
+    )
+    .max(EXTRACT_LIMITS.maxFeedItems),
+});
+export type ExtractedFeed = z.infer<typeof zExtractedFeed>;
 
 export const zExtractedDsn = z.strictObject({
   originalMessageId: z
@@ -263,6 +292,7 @@ export const zExtractSuccess = z.discriminatedUnion('kind', [
   z.strictObject({ ok: z.literal(true), kind: z.literal('portal_invoice_list'), list: zExtractedPortalList }),
   z.strictObject({ ok: z.literal(true), kind: z.literal('dsn'), report: zExtractedDsn }),
   z.strictObject({ ok: z.literal(true), kind: z.literal('html_meta'), page: zExtractedPage }),
+  z.strictObject({ ok: z.literal(true), kind: z.literal('feed'), feed: zExtractedFeed }),
 ]);
 export type ExtractSuccess = z.infer<typeof zExtractSuccess>;
 

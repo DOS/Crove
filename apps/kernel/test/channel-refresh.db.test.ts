@@ -123,6 +123,21 @@ suite('channel token refresh on PostgreSQL (S6.4)', () => {
     await root.end();
   });
 
+  it('connects an account of a provider with a one-character id, and starts its OAuth attempt (#784)', async () => {
+    const o = await org();
+    const id = await connect(o, 30 * 24 * HOUR, JSON.stringify({ accessToken: 'x-1', refreshToken: 'r-1' }), 'x');
+    expect((await row(id))?.status).toBe('active');
+    const begun = await api.execute<{ attemptId: string }>(
+      'kernel.channel.oauth_begin',
+      { provider: 'x', stateHash: `sha256:${'a'.repeat(64)}`, codeVerifier: 'v'.repeat(43) },
+      { actor: asUser(o.owner), orgId: o.orgId },
+    );
+    expect(begun.attemptId).toMatch(/^[0-9a-f-]{36}$/);
+    // Still refused: an id that starts with a digit, or is longer than 32.
+    await expect(connect(o, HOUR, '{}', '9x')).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(connect(o, HOUR, '{}', 'x'.repeat(33))).rejects.toMatchObject({ code: 'VALIDATION' });
+  });
+
   it('renews only connections expiring soon, sealing the new pair and moving the expiry', async () => {
     const o = await org();
     const soon = await connect(o, HOUR);

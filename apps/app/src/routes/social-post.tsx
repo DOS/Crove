@@ -13,8 +13,9 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { COMMENT_RULES, COVER_RULES, coverKind, coverOf, isProvider, sentLink, utmOf, type Cover, type CoverKind, type Issue } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
+import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
@@ -39,7 +40,8 @@ import {
   takeFlash,
   textBudget,
   toLocalInput,
-  VARIANT_TONE,
+  variantStatusKey,
+  variantTone,
   type VariantStatus,
 } from '../lib/social.ts';
 
@@ -75,14 +77,87 @@ const canonical = (value: unknown): string =>
   JSON.stringify(value, (_key, v: unknown) => (v !== null && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))) : v));
 const sameSettings = (a: Record<string, unknown> | null | undefined, b: Record<string, unknown> | null | undefined) => canonical(a ?? {}) === canonical(b ?? {});
 
-// The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
-function ProviderSettings({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+// Instagram usernames typed as text (#796): separated by commas or spaces, an @ in front is dropped. The text is
+// kept as typed while the field has focus, so a comma can be typed.
+function PeopleField({ id, label, hint, names, onChange, disabled }: { id: string; label: string; hint: string; names: readonly string[]; onChange: (names: string[]) => void; disabled: boolean }) {
+  const [text, setText] = useState<string | null>(null);
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={id} className="text-xs">
+        {label}
+      </Label>
+      <Input
+        id={id}
+        value={text ?? names.map((n) => `@${n}`).join(' ')}
+        disabled={disabled}
+        onFocus={() => setText(names.map((n) => `@${n}`).join(' '))}
+        onBlur={() => setText(null)}
+        onChange={(e) => {
+          setText(e.target.value);
+          onChange([...new Set(e.target.value.split(/[\s,]+/).map((n) => n.replace(/^@+/, '').toLowerCase()).filter(Boolean))]);
+        }}
+      />
+      <p className="text-xs text-subtle-foreground">{hint}</p>
+    </div>
+  );
+}
+
+// YouTube tags typed as text (#905), separated by commas; a tag may hold spaces. The text is kept as typed while the
+// field has focus, so a comma can be typed, and the count is YouTube's own (commas, and quotes around a tag with a space).
+function TagsField({ tags, onChange, disabled }: { tags: readonly string[]; onChange: (tags: string[]) => void; disabled: boolean }) {
   const t = useTranslations('social');
-  if (provider === 'youtube') {
-    return (
+  const id = useId();
+  const [text, setText] = useState<string | null>(null);
+  const used = youtubeTagsLength(tags);
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={id} className="text-xs">
+          {t('ytTags')}
+        </Label>
+        <span className={cn('font-mono text-xs tabular-nums', used > YOUTUBE_TAGS_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+          {used}/{YOUTUBE_TAGS_MAX}
+        </span>
+      </div>
+      <Input
+        id={id}
+        value={text ?? tags.join(', ')}
+        disabled={disabled}
+        onFocus={() => setText(tags.join(', '))}
+        onBlur={() => setText(null)}
+        onChange={(e) => {
+          setText(e.target.value);
+          onChange([...new Set(e.target.value.split(',').map((tag) => tag.trim().replace(/\s+/g, ' ')).filter(Boolean))]);
+        }}
+      />
+      <p className="text-xs text-subtle-foreground">{t('ytTagsHint')}</p>
+    </div>
+  );
+}
+
+// YouTube (#905): who can watch, whether the video is made for kids (YouTube requires the answer; absent is no, as for
+// every video Crove posted before), its category from YouTube's fixed list, and its tags.
+function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const locale = useLocale();
+  const id = useId();
+  const without = (key: string) => {
+    const { [key]: _gone, ...rest } = settings;
+    return rest;
+  };
+  const category = typeof settings.categoryId === 'string' ? settings.categoryId : YOUTUBE_DEFAULT_CATEGORY;
+  // A category set through the API outside the list still shows, so it can be changed.
+  const known = (YOUTUBE_CATEGORIES as readonly string[]).includes(category);
+  const collator = new Intl.Collator(locale);
+  const categories = [...YOUTUBE_CATEGORIES].sort((a, b) => collator.compare(t(`ytCategoryOption.${a}`), t(`ytCategoryOption.${b}`)));
+  const tags = Array.isArray(settings.tags) ? (settings.tags as unknown[]).filter((v): v is string => typeof v === 'string') : [];
+  return (
+    <div className="space-y-2">
       <div className="space-y-1.5">
-        <Label className="text-xs">{t('ytPrivacy')}</Label>
-        <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacy === 'string' ? settings.privacy : 'public'} disabled={disabled} onChange={(e) => onChange({ ...settings, privacy: e.target.value })}>
+        <Label htmlFor={`${id}-privacy`} className="text-xs">
+          {t('ytPrivacy')}
+        </Label>
+        <NativeSelect id={`${id}-privacy`} size="sm" className="w-full max-w-xs" value={typeof settings.privacy === 'string' ? settings.privacy : 'public'} disabled={disabled} onChange={(e) => onChange({ ...settings, privacy: e.target.value })}>
           {(['public', 'unlisted', 'private'] as const).map((p) => (
             <NativeSelectOption key={p} value={p}>
               {t(`ytPrivacyOption.${p}`)}
@@ -90,8 +165,83 @@ function ProviderSettings({ provider, settings, onChange, disabled }: { provider
           ))}
         </NativeSelect>
       </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-kids`} className="text-xs">
+          {t('ytAudience')}
+        </Label>
+        <NativeSelect id={`${id}-kids`} size="sm" className="w-full max-w-xs" value={settings.madeForKids === true ? 'yes' : 'no'} disabled={disabled} onChange={(e) => onChange({ ...settings, madeForKids: e.target.value === 'yes' })}>
+          {(['no', 'yes'] as const).map((a) => (
+            <NativeSelectOption key={a} value={a}>
+              {t(`ytAudienceOption.${a}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <p className="text-xs text-subtle-foreground">{t('ytAudienceHint')}</p>
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-category`} className="text-xs">
+          {t('ytCategory')}
+        </Label>
+        <NativeSelect id={`${id}-category`} size="sm" className="w-full max-w-xs" value={category} disabled={disabled} onChange={(e) => onChange({ ...settings, categoryId: e.target.value })}>
+          {!known && <NativeSelectOption value={category}>{category}</NativeSelectOption>}
+          {categories.map((c) => (
+            <NativeSelectOption key={c} value={c}>
+              {t(`ytCategoryOption.${c}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      <TagsField tags={tags} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, tags: next } : without('tags'))} />
+    </div>
+  );
+}
+
+// The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
+// inboxOffered: the channel's connection was granted video.upload, which Crove asks for only where the deployment turns
+// TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903).
+function ProviderSettings({ provider, settings, onChange, disabled, inboxOffered = false }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean; inboxOffered?: boolean }) {
+  const t = useTranslations('social');
+  // Mastodon (#748): who sees the post, and an optional content warning shown before it.
+  if (provider === 'mastodon') {
+    const without = (key: string) => {
+      const { [key]: _gone, ...rest } = settings;
+      return rest;
+    };
+    return (
+      <div className="space-y-1.5">
+        <Label htmlFor="mastodon-visibility" className="text-xs">
+          {t('mastodonVisibility')}
+        </Label>
+        <NativeSelect id="mastodon-visibility" size="sm" className="w-full max-w-xs" value={settings.visibility === 'unlisted' ? 'unlisted' : 'public'} disabled={disabled} onChange={(e) => onChange(e.target.value === 'public' ? without('visibility') : { ...settings, visibility: e.target.value })}>
+          {(['public', 'unlisted'] as const).map((v) => (
+            <NativeSelectOption key={v} value={v}>
+              {t(`mastodonVisibilityOption.${v}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <Label htmlFor="mastodon-cw" className="text-xs">
+          {t('mastodonContentWarning')}
+        </Label>
+        <Input id="mastodon-cw" value={typeof settings.contentWarning === 'string' ? settings.contentWarning : ''} disabled={disabled} onChange={(e) => onChange(e.target.value ? { ...settings, contentWarning: e.target.value } : without('contentWarning'))} />
+        <p className="text-xs text-subtle-foreground">{t('mastodonContentWarningHint')}</p>
+      </div>
     );
   }
+  // Instagram (#796): collaborators on feed posts and Reels, people tagged on the first image.
+  if (provider === 'instagram') {
+    const names = (key: string) => (Array.isArray(settings[key]) ? (settings[key] as unknown[]).filter((v): v is string => typeof v === 'string') : []);
+    const set = (key: string, value: string[]) => {
+      const { [key]: _gone, ...rest } = settings;
+      onChange(value.length > 0 ? { ...rest, [key]: value } : rest);
+    };
+    return (
+      <div className="space-y-2">
+        <PeopleField id="ig-collaborators" label={t('igCollaborators')} hint={t('igCollaboratorsHint')} names={names('collaborators')} disabled={disabled} onChange={(v) => set('collaborators', v)} />
+        <PeopleField id="ig-user-tags" label={t('igUserTags')} hint={t('igUserTagsHint')} names={names('userTags')} disabled={disabled} onChange={(v) => set('userTags', v)} />
+      </div>
+    );
+  }
+  if (provider === 'youtube') return <YouTubeSettings settings={settings} onChange={onChange} disabled={disabled} />;
   if (provider !== 'tiktok') return null;
   const toggle = (key: 'allowComments' | 'allowDuet' | 'allowStitch') => (
     <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -99,23 +249,54 @@ function ProviderSettings({ provider, settings, onChange, disabled }: { provider
       {t(`ttToggle.${key}`)}
     </label>
   );
+  // Posted now, or sent to the TikTok app as a draft (#903). The draft takes no privacy level, interactions or cover
+  // (the creator picks them in TikTok), so they are dropped on the switch; direct is the default and is not stored.
+  const inbox = tiktokModeOf(settings) === 'inbox';
+  // Offered where the connection can send drafts; a variant already in inbox mode keeps the choice, to switch back.
+  const offered = inboxOffered || inbox;
+  const setMode = (next: 'direct' | 'inbox') => {
+    if (next === 'inbox') {
+      const { privacyLevel: _privacy, allowComments: _comments, allowDuet: _duet, allowStitch: _stitch, autoAddMusic: _music, cover: _cover, ...rest } = settings;
+      onChange({ ...rest, tiktokMode: 'inbox' });
+    } else {
+      const { tiktokMode: _mode, ...rest } = settings;
+      onChange(rest);
+    }
+  };
   return (
     <div className="space-y-2 rounded-lg border p-3">
-      <div className="space-y-1.5">
-        <Label className="text-xs">{t('ttPrivacy')}</Label>
-        <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacyLevel === 'string' ? settings.privacyLevel : ''} disabled={disabled} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
-          <NativeSelectOption value="">{t('ttPrivacyChoose')}</NativeSelectOption>
-          {(['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const).map((p) => (
-            <NativeSelectOption key={p} value={p}>
-              {t(`ttPrivacyOption.${p}`)}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
-      </div>
-      {toggle('allowComments')}
-      {toggle('allowDuet')}
-      {toggle('allowStitch')}
-      <p className="text-xs text-subtle-foreground">{t('ttConsent')}</p>
+      {offered && (
+        <div className="space-y-1.5">
+          <Label htmlFor="tt-mode" className="text-xs">
+            {t('ttMode')}
+          </Label>
+          <NativeSelect id="tt-mode" size="sm" className="w-full max-w-md" value={inbox ? 'inbox' : 'direct'} disabled={disabled} onChange={(e) => setMode(e.target.value === 'inbox' ? 'inbox' : 'direct')}>
+            <NativeSelectOption value="direct">{t('ttModeOption.direct')}</NativeSelectOption>
+            <NativeSelectOption value="inbox">{t('ttModeOption.inbox')}</NativeSelectOption>
+          </NativeSelect>
+        </div>
+      )}
+      {inbox ? (
+        <p className="text-xs text-subtle-foreground">{t('ttInboxHint')}</p>
+      ) : (
+        <>
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t('ttPrivacy')}</Label>
+            <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacyLevel === 'string' ? settings.privacyLevel : ''} disabled={disabled} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
+              <NativeSelectOption value="">{t('ttPrivacyChoose')}</NativeSelectOption>
+              {(['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const).map((p) => (
+                <NativeSelectOption key={p} value={p}>
+                  {t(`ttPrivacyOption.${p}`)}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+          {toggle('allowComments')}
+          {toggle('allowDuet')}
+          {toggle('allowStitch')}
+          <p className="text-xs text-subtle-foreground">{t('ttConsent')}</p>
+        </>
+      )}
     </div>
   );
 }
@@ -163,7 +344,8 @@ function CoverField({ provider, media, settings, onChange, disabled }: { provide
   const cover = coverOf(settings);
   // An image chosen as the kind, before a file is: nothing is stored until there is one.
   const [pickingImage, setPickingImage] = useState(false);
-  const kinds = isProvider(provider) ? COVER_RULES[provider] : undefined;
+  // A draft sent to the TikTok app (#903) takes no cover: the creator picks it in TikTok.
+  const kinds = isProvider(provider) && !(provider === 'tiktok' && tiktokModeOf(settings) === 'inbox') ? COVER_RULES[provider] : undefined;
   const video = media.length === 1 && media[0]?.mime.startsWith('video/') ? media[0] : null;
   if (!kinds || (!video && settings.cover === undefined)) return null;
   const set = (next: Cover | null) => {
@@ -209,6 +391,119 @@ function CoverField({ provider, media, settings, onChange, disabled }: { provide
   );
 }
 
+// Thread parts (#742): the post's text is part 1; each part added here goes out as a reply to the one before.
+function ThreadField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const parts = Array.isArray(settings.threadParts) ? settings.threadParts.map((p) => (typeof p === 'string' ? p : '')) : [];
+  const set = (next: string[]) => {
+    const { threadParts: _old, ...rest } = settings;
+    onChange(next.length > 0 ? { ...rest, threadParts: next } : rest);
+  };
+  const move = (i: number, by: number) => {
+    const next = [...parts];
+    const [part] = next.splice(i, 1);
+    next.splice(i + by, 0, part as string);
+    set(next);
+  };
+  return (
+    <div className="space-y-2">
+      <Label className="text-xs">{t('threadParts')}</Label>
+      {parts.map((part, i) => (
+        <div key={i} className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>{t('threadPart', { n: i + 2 })}</span>
+            <Button variant="ghost" size="sm" disabled={disabled || i === 0} onClick={() => move(i, -1)}>
+              {t('threadMoveUp')}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={disabled || i === parts.length - 1} onClick={() => move(i, 1)}>
+              {t('threadMoveDown')}
+            </Button>
+            <Button variant="ghost" size="sm" disabled={disabled} onClick={() => set(parts.filter((_, j) => j !== i))}>
+              {t('threadRemove')}
+            </Button>
+          </div>
+          <Textarea rows={2} disabled={disabled} value={part} aria-label={t('threadPart', { n: i + 2 })} onChange={(e) => set(parts.map((p, j) => (j === i ? e.target.value : p)))} />
+        </div>
+      ))}
+      {parts.length < THREAD_PARTS_MAX && (
+        <Button variant="outline" size="sm" disabled={disabled} onClick={() => set([...parts, ''])}>
+          {t('threadAdd')}
+        </Button>
+      )}
+      <p className="text-xs text-subtle-foreground">{t('threadHint', { max: THREAD_PARTS_MAX + 1 })}</p>
+    </div>
+  );
+}
+
+// The repost when a post takes off (#773): at a like count, after some hours, or whichever comes first.
+function RepostField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const current = settings.repost && typeof settings.repost === 'object' ? (settings.repost as { likes?: unknown; afterHours?: unknown }) : null;
+  const likes = typeof current?.likes === 'number' ? current.likes : null;
+  const hours = typeof current?.afterHours === 'number' ? current.afterHours : null;
+  const set = (next: { likes: number | null; afterHours: number | null }) => {
+    const { repost: _old, ...rest } = settings;
+    onChange(next.likes !== null || next.afterHours !== null ? { ...rest, repost: { ...(next.likes !== null ? { likes: next.likes } : {}), ...(next.afterHours !== null ? { afterHours: next.afterHours } : {}) } } : rest);
+  };
+  const num = (v: string) => (v === '' ? null : Math.floor(Number(v)));
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-medium">{t('repostRule')}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={`${id}-likes`} className="text-xs text-muted-foreground">
+          {t('repostRuleLikes')}
+        </Label>
+        <Input id={`${id}-likes`} type="number" min={1} max={AUTO_REPLY_LIKES_MAX} className="w-28" disabled={disabled} value={likes ?? ''} placeholder="100" onChange={(e) => set({ likes: num(e.target.value), afterHours: hours })} />
+        <Label htmlFor={`${id}-hours`} className="text-xs text-muted-foreground">
+          {t('repostRuleHours')}
+        </Label>
+        <Input id={`${id}-hours`} type="number" min={1} max={REPOST_HOURS_MAX} className="w-24" disabled={disabled} value={hours ?? ''} placeholder="24" onChange={(e) => set({ likes, afterHours: num(e.target.value) })} />
+      </div>
+      <p className="text-xs text-subtle-foreground">{t('repostRuleHint')}</p>
+    </div>
+  );
+}
+
+// The auto-reply on likes (#746): a text and the like count that sets it off; both or neither.
+function AutoReplyField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const current = settings.autoReply && typeof settings.autoReply === 'object' ? (settings.autoReply as { text?: unknown; likes?: unknown }) : null;
+  const text = typeof current?.text === 'string' ? current.text : '';
+  const likes = typeof current?.likes === 'number' ? current.likes : null;
+  const set = (next: { text: string; likes: number | null }) => {
+    const { autoReply: _old, ...rest } = settings;
+    // An empty count is kept as null, which validation names, rather than shown as 0.
+    onChange(next.text || next.likes !== null ? { ...rest, autoReply: { text: next.text, likes: next.likes } } : rest);
+  };
+  return (
+    <div className="space-y-1">
+      <Label htmlFor={`${id}-text`} className="text-xs">
+        {t('autoReply')}
+      </Label>
+      <Textarea id={`${id}-text`} rows={2} disabled={disabled} value={text} placeholder={t('autoReplyPlaceholder')} onChange={(e) => set({ text: e.target.value, likes })} />
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={`${id}-likes`} className="text-xs text-muted-foreground">
+          {t('autoReplyLikes')}
+        </Label>
+        <Input
+          id={`${id}-likes`}
+          type="number"
+          min={1}
+          max={AUTO_REPLY_LIKES_MAX}
+          className="w-28"
+          disabled={disabled}
+          value={likes ?? ''}
+          placeholder="100"
+          onChange={(e) => set({ text, likes: e.target.value === '' ? null : Math.floor(Number(e.target.value)) })}
+        />
+      </div>
+      <p className="text-xs text-subtle-foreground">{t('autoReplyHint')}</p>
+    </div>
+  );
+}
+
 function useRole(slug: string) {
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
@@ -234,8 +529,42 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_MEDIA', { limit });
       case 'TOO_MANY_LINKS':
         return t('TOO_MANY_LINKS', { limit, actual });
+      case 'YT_TAGS_TOO_LONG':
+        return t('YT_TAGS_TOO_LONG', { limit, actual });
+      case 'CONTENT_WARNING_TOO_LONG':
+        return t('CONTENT_WARNING_TOO_LONG', { limit, actual });
+      case 'IG_COLLABORATORS_INVALID':
+        return t('IG_COLLABORATORS_INVALID', { limit });
+      case 'IG_USER_TAGS_INVALID':
+        return t('IG_USER_TAGS_INVALID', { limit });
       case 'COMMENT_TOO_LONG':
         return t('COMMENT_TOO_LONG', { limit, actual });
+      case 'THREAD_TOO_MANY_PARTS':
+        return t('THREAD_TOO_MANY_PARTS', { limit });
+      // Which part: threadParts.<index> on the issue; the post's own text is part 1.
+      case 'THREAD_PART_EMPTY':
+        return t('THREAD_PART_EMPTY', { n: Number(issue.field.split('.')[2] ?? 0) + 2 });
+      case 'THREAD_PART_TOO_LONG':
+        return t('THREAD_PART_TOO_LONG', { n: Number(issue.field.split('.')[2] ?? 0) + 2, limit, actual });
+      case 'REPOST_INVALID':
+        return t('REPOST_INVALID', { limit });
+      case 'AUTO_REPLY_INVALID':
+        return t('AUTO_REPLY_INVALID', { limit });
+      case 'AUTO_REPLY_TOO_LONG':
+        return t('AUTO_REPLY_TOO_LONG', { limit, actual });
+      case 'POLL_OPTIONS':
+        return t('POLL_OPTIONS', { limit });
+      case 'POLL_OPTION_LENGTH':
+        return t('POLL_OPTION_LENGTH', { limit });
+      case 'GBP_INVALID':
+        return t('GBP_INVALID', { limit: limit || 58 });
+      case 'TOPIC_TAG_INVALID':
+        return t('TOPIC_TAG_INVALID', { limit });
+      // Which image: media.<index> on the issue, counted from 1 for the person.
+      case 'IMAGE_RATIO_NOT_ALLOWED':
+        return t('IMAGE_RATIO_NOT_ALLOWED', { n: Number(issue.field.split('.')[1] ?? 0) + 1 });
+      case 'IMAGE_TOO_SMALL':
+        return t('IMAGE_TOO_SMALL', { n: Number(issue.field.split('.')[1] ?? 0) + 1, limit, actual });
       // In milliseconds on the issue, in seconds for the person.
       case 'COVER_OUT_OF_RANGE':
         return t('COVER_OUT_OF_RANGE', { limit: limit / 1000, actual: actual / 1000 });
@@ -350,6 +679,228 @@ function AiRewrite({ text, title, connectionId, onAccept }: { text: string; titl
   );
 }
 
+// A channel's post type (#644): a feed post, a Story or a Reel, where the channel posts them. A feed post keeps no
+// setting, so a post saved before this keeps its hash.
+function PostTypeField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social.postType');
+  const types = isProvider(provider) ? POST_TYPE_RULES[provider] : undefined;
+  if (!types) return null;
+  const current = postTypeOf(settings) ?? 'feed';
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={`post-type-${provider}`} className="text-xs">
+          {t('label')}
+        </Label>
+        <NativeSelect
+          id={`post-type-${provider}`}
+          size="sm"
+          className="w-auto"
+          value={current}
+          disabled={disabled}
+          onChange={(e) => {
+            const { postType: _old, ...rest } = settings;
+            // A Story takes no first comment, thread or cover, and their fields are hidden for it: dropped with the change.
+            if (e.target.value === 'story') {
+              delete rest.firstComment;
+              delete rest.threadParts;
+              delete rest.autoReply;
+              delete rest.repost;
+              delete rest.cover;
+            }
+            onChange(e.target.value === 'feed' ? rest : { ...rest, postType: e.target.value });
+          }}
+        >
+          {types.map((type) => (
+            <NativeSelectOption key={type} value={type}>
+              {t(`types.${type}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      {current !== 'feed' && <p className="text-xs text-subtle-foreground">{t(`hints.${current}`)}</p>}
+    </div>
+  );
+}
+
+// Threads polls and topic tags (#711): a poll of 2 to 4 short options on a post without media, and one topic tag. The
+// options are kept as typed; the server trims them.
+function PollAndTagField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social.threadsExtras');
+  if (!isProvider(provider)) return null;
+  const pollRule = POLL_RULES[provider];
+  const tagRule = TOPIC_TAG_RULES[provider];
+  if (!pollRule && !tagRule) return null;
+  const rawOptions = (settings.poll as { options?: unknown } | undefined)?.options;
+  const options = Array.isArray(rawOptions) ? rawOptions.map((o) => (typeof o === 'string' ? o : '')) : null;
+  const without = (key: string) => {
+    const { [key]: _gone, ...rest } = settings;
+    return rest;
+  };
+  const setOptions = (next: string[] | null) => onChange(next ? { ...settings, poll: { options: next } } : without('poll'));
+  const tag = typeof settings.topicTag === 'string' ? settings.topicTag : '';
+  return (
+    <div className="space-y-2">
+      {pollRule && (
+        <div className="space-y-1.5">
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Checkbox checked={options !== null} disabled={disabled} onCheckedChange={(checked) => setOptions(checked === true ? ['', ''] : null)} />
+            {t('poll')}
+          </label>
+          {options && (
+            <div className="space-y-1.5 pl-6">
+              {options.map((option, i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <Input
+                    value={option}
+                    disabled={disabled}
+                    maxLength={pollRule.maxChars + 10}
+                    aria-label={t('option', { n: String(i + 1) })}
+                    placeholder={t('option', { n: String(i + 1) })}
+                    className="h-8 max-w-xs"
+                    onChange={(e) => setOptions(options.map((o, j) => (j === i ? e.target.value : o)))}
+                  />
+                  {options.length > pollRule.minOptions && (
+                    <Button type="button" size="sm" variant="ghost" disabled={disabled} onClick={() => setOptions(options.filter((_, j) => j !== i))}>
+                      {t('remove')}
+                    </Button>
+                  )}
+                </div>
+              ))}
+              {options.length < pollRule.maxOptions && (
+                <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => setOptions([...options, ''])}>
+                  {t('addOption')}
+                </Button>
+              )}
+              <p className="text-xs text-subtle-foreground">{t('pollHint', { max: String(pollRule.maxChars) })}</p>
+            </div>
+          )}
+        </div>
+      )}
+      {tagRule && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Label htmlFor={`topic-tag-${provider}`} className="text-xs">
+            {t('topicTag')}
+          </Label>
+          <Input
+            id={`topic-tag-${provider}`}
+            value={tag}
+            disabled={disabled}
+            maxLength={tagRule.maxChars + 1}
+            placeholder={t('topicTagPlaceholder')}
+            className="h-8 max-w-56"
+            onChange={(e) => onChange(e.target.value ? { ...settings, topicTag: e.target.value } : without('topicTag'))}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Google Business Profile posts (#709): a standard post, an event or an offer, with an optional call to action whose
+// URL is the post's link (CALL dials the profile's number). Events and offers have dates; an offer has a coupon code
+// and terms. Kept as typed; the checks say what Google would refuse.
+function GbpField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social.gbp');
+  const uid = useId();
+  const g = provider === 'google_business' ? gbpOf(settings) : null;
+  if (!g) return null;
+  const set = (next: typeof g) =>
+    onChange({
+      ...settings,
+      gbp: {
+        topic: next.topic,
+        ...(next.language !== 'vi' ? { language: next.language } : {}),
+        ...(next.cta ? { cta: next.cta } : {}),
+        ...(next.topic !== 'STANDARD' ? { event: next.event } : {}),
+        ...(next.topic === 'OFFER' ? { offer: next.offer } : {}),
+      },
+    });
+  const id = (name: string) => `${uid}-gbp-${name}`;
+  return (
+    <div className="space-y-2 rounded-lg border p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={id('topic')} className="text-xs">
+          {t('topic')}
+        </Label>
+        <NativeSelect id={id('topic')} size="sm" className="w-auto" value={g.topic} disabled={disabled} onChange={(e) => set({ ...g, topic: e.target.value as typeof g.topic })}>
+          {GBP_TOPICS.map((x) => (
+            <NativeSelectOption key={x} value={x}>
+              {t(`topics.${x}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <Label htmlFor={id('cta')} className="text-xs">
+          {t('cta')}
+        </Label>
+        <NativeSelect id={id('cta')} size="sm" className="w-auto" value={g.cta ?? ''} disabled={disabled} onChange={(e) => set({ ...g, cta: (e.target.value || null) as typeof g.cta })}>
+          <NativeSelectOption value="">{t('noCta')}</NativeSelectOption>
+          {GBP_CTAS.map((x) => (
+            <NativeSelectOption key={x} value={x}>
+              {t(`ctas.${x}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <Label htmlFor={id('language')} className="text-xs">
+          {t('language')}
+        </Label>
+        <NativeSelect id={id('language')} size="sm" className="w-auto" value={g.language} disabled={disabled} onChange={(e) => set({ ...g, language: e.target.value as typeof g.language })}>
+          {GBP_LANGUAGES.map((x) => (
+            <NativeSelectOption key={x} value={x}>
+              {t(`languages.${x}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      {g.topic !== 'STANDARD' && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="space-y-1 sm:col-span-2">
+            <Label htmlFor={id('title')} className="text-xs">
+              {t(g.topic === 'EVENT' ? 'eventTitle' : 'offerTitle')}
+            </Label>
+            <Input id={id('title')} value={g.event.title} maxLength={58} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, event: { ...g.event, title: e.target.value } })} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={id('start')} className="text-xs">
+              {t('starts')}
+            </Label>
+            <div className="flex gap-1.5">
+              <Input id={id('start')} type="date" value={g.event.startDate} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, event: { ...g.event, startDate: e.target.value } })} />
+              <Input type="time" aria-label={t('startTime')} value={g.event.startTime} disabled={disabled} className="h-8 w-28" onChange={(e) => set({ ...g, event: { ...g.event, startTime: e.target.value } })} />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={id('end')} className="text-xs">
+              {t('ends')}
+            </Label>
+            <div className="flex gap-1.5">
+              <Input id={id('end')} type="date" value={g.event.endDate} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, event: { ...g.event, endDate: e.target.value } })} />
+              <Input type="time" aria-label={t('endTime')} value={g.event.endTime} disabled={disabled} className="h-8 w-28" onChange={(e) => set({ ...g, event: { ...g.event, endTime: e.target.value } })} />
+            </div>
+          </div>
+        </div>
+      )}
+      {g.topic === 'OFFER' && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div className="space-y-1">
+            <Label htmlFor={id('coupon')} className="text-xs">
+              {t('coupon')}
+            </Label>
+            <Input id={id('coupon')} value={g.offer.couponCode} maxLength={58} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, offer: { ...g.offer, couponCode: e.target.value } })} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor={id('terms')} className="text-xs">
+              {t('terms')}
+            </Label>
+            <Input id={id('terms')} value={g.offer.terms} maxLength={5000} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, offer: { ...g.offer, terms: e.target.value } })} />
+          </div>
+        </div>
+      )}
+      <p className="text-xs text-subtle-foreground">{t('hint')}</p>
+    </div>
+  );
+}
+
 function ChannelEditor({
   provider,
   channel,
@@ -358,8 +909,10 @@ function ChannelEditor({
   onChange,
   disabled,
   status,
+  statusError,
   footer,
   connectionId,
+  scopes,
   onAiUsed,
   slug,
 }: {
@@ -370,15 +923,31 @@ function ChannelEditor({
   onChange: (own: Own) => void;
   disabled: boolean;
   status?: VariantStatus;
+  // The variant's error or note (#903: SENT_TO_APP on a draft sent to the TikTok app), for its status label.
+  statusError?: { code: string | null } | null;
   footer?: ReactNode;
   connectionId?: string;
+  // What the platform granted the channel's connection (#903: video.upload offers TikTok's inbox mode).
+  scopes?: readonly string[];
   onAiUsed?: () => void;
   slug?: string;
 }) {
   const t = useTranslations('social');
   // The link as the channel sends it, with its UTM tags (#585).
   const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings, own.custom ? own.body : base.body) : base.linkUrl) ?? '';
-  const content = { body: own.custom ? own.body : base.body, title: own.custom ? own.title : base.title, linkUrl, media: mediaOfOwn(own, base), cover: coverOf(own.settings) };
+  const postType = postTypeOf(own.settings) ?? 'feed';
+  const poll = pollOptionsOf(own.settings);
+  const tag = topicTagOf(own.settings);
+  const content = {
+    body: own.custom ? own.body : base.body,
+    title: own.custom ? own.title : base.title,
+    linkUrl,
+    media: mediaOfOwn(own, base),
+    cover: coverOf(own.settings),
+    postType,
+    ...(Array.isArray(poll) ? { poll } : {}),
+    ...(typeof tag === 'string' && tag ? { topicTag: tag } : {}),
+  };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (
     <Card className="block space-y-3 p-4">
@@ -386,10 +955,13 @@ function ChannelEditor({
         <div className="flex min-w-0 items-center gap-2">
           <Badge variant="outline">{providerName(provider)}</Badge>
           <span className="truncate text-sm font-medium text-foreground">{channel}</span>
-          {status && <Badge variant={VARIANT_TONE[status]}>{t(`status.${status}`)}</Badge>}
+          {status && <Badge variant={variantTone({ status, error: statusError ?? null })}>{t(`status.${variantStatusKey({ status, error: statusError ?? null })}`)}</Badge>}
         </div>
         <Counter provider={provider} body={content.body} linkUrl={content.linkUrl} mediaCount={content.media.length} />
       </div>
+      <PostTypeField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
+      <PollAndTagField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
+      <GbpField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
         <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, custom: checked === true, body: own.body || base.body })} />
         {t('ownText')}
@@ -421,7 +993,10 @@ function ChannelEditor({
       </label>
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
-      {isProvider(provider) && COMMENT_RULES[provider] && (
+      {isProvider(provider) && REPOST_PROVIDERS.has(provider) && postType !== 'story' && <RepostField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
+      {isProvider(provider) && AUTO_REPLY_RULES[provider] && postType !== 'story' && <AutoReplyField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
+      {isProvider(provider) && THREAD_RULES[provider] && postType !== 'story' && <ThreadField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
+      {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && (!threadPartsOf(own.settings) || typeof own.settings.firstComment === 'string') && (
         <div className="space-y-1">
           <Label className="text-xs">{t('firstComment')}</Label>
           <Textarea
@@ -436,12 +1011,74 @@ function ChannelEditor({
           />
         </div>
       )}
-      <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
+      <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} inboxOffered={scopes?.includes('video.upload') ?? false} onChange={(settings) => onChange({ ...own, settings })} />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       <PlatformPreview channel={channel} provider={provider} content={content} readLink />
       {footer}
     </Card>
+  );
+}
+
+// A hashtag appended to the text, on its own line when the text ends with other words.
+const withHashtag = (text: string, tag: string) => {
+  const trimmed = text.replace(/\s+$/, '');
+  if (!trimmed) return `#${tag}`;
+  return /(^|\s)#[^\s#]+$/u.test(trimmed) ? `${trimmed} #${tag}` : `${trimmed}\n\n#${tag}`;
+};
+
+// The org's hashtags that did better than usual over the last 90 days (#818), the ones the text lacks; a click adds one.
+// onAiUsed: the post becomes AI-assisted (tainted) when a hashtag the writer suggested goes in (#824).
+function HashtagSuggestions({ text, connectionId, onPick, onAiUsed }: { text: string; connectionId: string | null; onPick: (tag: string) => void; onAiUsed?: (() => void) | undefined }) {
+  const t = useTranslations('social');
+  const locale = useLocale();
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const insights = useQuery({ ...orpc.social.metrics.insights.queryOptions({ input: { days: 90, timeZone } }), staleTime: 10 * 60_000 });
+  const tags = hashtagSuggestions(insights.data?.channels ?? [], text, { connectionId });
+  const ai = useMutation({
+    mutationFn: () =>
+      client.social.posts.suggestHashtags({ text: text.trim(), language: locale === 'en' ? 'en' : 'vi', exclude: [...hashtagsOf(text), ...tags].slice(0, 50), ...(connectionId ? { connectionId } : {}) }),
+  });
+  const aiTags = (ai.data?.hashtags ?? []).filter((tag) => !hashtagsOf(text).includes(tag));
+  const canAsk = getConfig().aiEnabled === true && onAiUsed !== undefined && text.trim() !== '';
+  if (tags.length === 0 && !canAsk) return null;
+  const chip = 'rounded-full border px-2 py-0.5 text-muted-foreground hover:border-ring/60 hover:text-foreground';
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+        {tags.length > 0 && <span className="text-subtle-foreground">{t('hashtagSuggestions')}</span>}
+        {tags.map((tag) => (
+          <button key={tag} type="button" className={chip} onClick={() => onPick(tag)}>
+            #{tag}
+          </button>
+        ))}
+        {canAsk && (
+          <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={ai.isPending} onClick={() => ai.mutate()}>
+            {ai.isPending ? <Spinner className="text-current" /> : null}
+            {t('hashtagsAi')}
+          </Button>
+        )}
+      </div>
+      {aiTags.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-subtle-foreground">{t('hashtagsAiLabel')}</span>
+          {aiTags.map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              className={cn(chip, 'border-dashed')}
+              onClick={() => {
+                onPick(tag);
+                onAiUsed?.();
+              }}
+            >
+              #{tag}
+            </button>
+          ))}
+        </div>
+      )}
+      {ai.error && <ErrorText>{errorMessage(ai.error)}</ErrorText>}
+    </div>
   );
 }
 
@@ -456,6 +1093,7 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false,
           <EmojiPicker targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />
           {slug && <SnippetPicker slug={slug} targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />}
         </div>
+        {!disabled && <HashtagSuggestions text={base.body} connectionId={null} onAiUsed={onAiUsed} onPick={(tag) => onChange({ ...base, body: withHashtag(base.body, tag) })} />}
         {!disabled && onAiUsed && (
           <AiRewrite
             text={base.body}
@@ -477,15 +1115,15 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false,
         <Label htmlFor="social-link">{t('link')}</Label>
         <Input id="social-link" type="url" inputMode="url" value={base.linkUrl} disabled={disabled} placeholder="https://" onChange={(e) => onChange({ ...base, linkUrl: e.target.value })} />
       </div>
-      <MediaField media={base.media} disabled={disabled} onChange={(media) => onChange({ ...base, media })} />
+      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} onChange={(media) => onChange({ ...base, media })} />
     </Card>
   );
 }
 
 const orNull = (value: string) => (value.trim() === '' ? null : value);
 const mediaInput = (media: readonly MediaItem[]) => media.map((m) => ({ fileId: m.fileId, altText: orNull(m.altText) }));
-const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number; durationMs: number | null }[]): MediaItem[] =>
-  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs }));
+const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number; durationMs: number | null; width: number | null; height: number | null }[]): MediaItem[] =>
+  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs, width: m.width, height: m.height }));
 
 // ---------------------------------------------------------------------------------------------------------------------
 // New post
@@ -522,8 +1160,27 @@ export function SocialComposePage() {
   const [aiUsed, setAiUsed] = useState(false);
   const live = (channels.data ?? []).filter((c) => c.status === 'active');
   // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
-  const search: { at?: string } = useSearch({ strict: false });
+  const search: { at?: string; idea?: string; occasion?: string; on?: string } = useSearch({ strict: false });
+  // A post for an occasion of the calendar (#702): named above the form, and the AI brief starts from it.
+  const tOcc = useTranslations('social.occasions');
+  const occasion = search.occasion && search.on ? { name: tOcc(`names.${search.occasion as 'tet'}`), date: f.date(search.on) } : null;
   const [plannedAt, setPlannedAt] = useState<string | null>(() => (search.at && Date.parse(search.at) > Date.now() ? search.at : null));
+  // A draft made from an idea (#701): its title and note become the text, its link and media the post's; the saved
+  // post names the idea, which then shows as drafted.
+  const idea = useQuery({ ...orpc.social.ideas.get.queryOptions({ input: { ideaId: search.idea ?? '' } }), enabled: Boolean(search.idea), staleTime: Infinity });
+  const ideaTaken = useRef(false);
+  useEffect(() => {
+    const i = idea.data;
+    if (!i || ideaTaken.current) return;
+    ideaTaken.current = true;
+    setBase({
+      body: i.note ? `${i.title}\n\n${i.note}` : i.title,
+      title: '',
+      linkUrl: i.linkUrl ?? '',
+      media: i.media.map((m) => ({ fileId: m.fileId, altText: '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs, width: m.width, height: m.height })),
+    });
+  }, [idea.data]);
+  const ideaId = idea.data && !idea.data.postId && idea.data.stage !== 'archived' ? idea.data.id : null;
   useEffect(() => {
     // The only channel is chosen for you.
     if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
@@ -563,6 +1220,7 @@ export function SocialComposePage() {
         // A planned time that went by while the page was open is dropped.
         ...(plannedAt && Date.parse(plannedAt) > Date.now() ? { scheduledAt: plannedAt } : {}),
         ...(aiUsed ? { aiAssisted: true as const } : {}),
+        ...(ideaId ? { ideaId } : {}),
         media: mediaInput(base.media),
         channels: chosen.map((connectionId) => {
           const mine = withUtm(own[connectionId] ?? EMPTY_OWN, utm);
@@ -596,11 +1254,15 @@ export function SocialComposePage() {
 
   // AI drafting (S7): the server asks the model for a draft of the brief for the chosen channels and saves it as a
   // new post marked as written by AI; every channel of it is reviewed before it can go out.
-  const [brief, setBrief] = useState('');
+  const [brief, setBrief] = useState(() => (occasion ? tOcc('brief', occasion) : ''));
+  // A page to write about (#769): the post links to it.
+  const [sourceUrl, setSourceUrl] = useState('');
+  // http(s), with no user name or password in it, as the server takes it.
+  const source = /^https?:\/\/[^\s@/?#]+(?:[/?#]\S*)?$/.test(sourceUrl.trim()) ? sourceUrl.trim() : null;
   const locale = useLocale();
   const aiEnabled = getConfig().aiEnabled === true;
   const aiDraft = useMutation({
-    mutationFn: () => client.social.posts.draftWithAi({ brief: brief.trim(), connectionIds: chosen, language: locale === 'en' ? 'en' : 'vi' }),
+    mutationFn: () => client.social.posts.draftWithAi({ brief: brief.trim(), connectionIds: chosen, language: locale === 'en' ? 'en' : 'vi', ...(source ? { sourceUrl: source } : {}) }),
     onSuccess: ({ postId }) => {
       leaving.current = true;
       void queryClient.invalidateQueries();
@@ -617,7 +1279,10 @@ export function SocialComposePage() {
   // Owners and admins may approve their own post: for one written by a person (no AI text), one action approves it and
   // schedules it (#638). A channel whose policy needs another reviewer still waits for them.
   const { canDecide } = useRole(slug);
-  const oneStep = canDecide && !aiUsed;
+  // Not where four-eyes (#740) asks for another reviewer: the author's approval would be refused.
+  const policies = useQuery({ ...orpc.social.policies.list.queryOptions({ input: {} }), enabled: canDecide });
+  const fourEyes = new Set((policies.data ?? []).filter((p) => p.fourEyes).map((p) => p.connectionId));
+  const oneStep = canDecide && !aiUsed && policies.isSuccess && !selected.some((c) => fourEyes.has(c.id));
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
       e.preventDefault();
@@ -669,6 +1334,16 @@ export function SocialComposePage() {
           </div>
         </Notice>
       )}
+      {occasion && (
+        <Notice>
+          <span>{tOcc('composing', occasion)}</span>
+        </Notice>
+      )}
+      {idea.data && (
+        <Notice>
+          <span>{t(ideaId ? 'ideas.fromIdea' : 'ideas.fromIdeaTaken', { title: idea.data.title })}</span>
+        </Notice>
+      )}
       {create.error && (
         <div className="mb-4">
           <ErrorText>{errorMessage(create.error)}</ErrorText>
@@ -692,6 +1367,7 @@ export function SocialComposePage() {
           )}
           <Card className="block p-4">
             <p className="mb-3 text-sm font-medium text-foreground">{t('pickChannels')}</p>
+            <ChannelSetPicker live={live} onPick={setChosen} />
             {live.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {t('noChannelsHint')}{' '}
@@ -730,8 +1406,15 @@ export function SocialComposePage() {
                   setBrief(e.target.value);
                   if (aiDraft.error) aiDraft.reset();
                 }} />
+                <Label htmlFor="social-ai-source" className="text-xs">
+                  {t('aiSource')}
+                </Label>
+                <Input id="social-ai-source" type="url" value={sourceUrl} placeholder="https://" disabled={aiDraft.isPending} onChange={(e) => {
+                  setSourceUrl(e.target.value);
+                  if (aiDraft.error) aiDraft.reset();
+                }} />
                 <p className="text-xs text-subtle-foreground">{t('aiDraftHint')}</p>
-                <Button variant="outline" size="sm" disabled={!brief.trim() || chosen.length === 0 || aiDraft.isPending} onClick={() => aiDraft.mutate()}>
+                <Button variant="outline" size="sm" disabled={(!brief.trim() && !source) || (sourceUrl.trim() !== '' && !source) || chosen.length === 0 || aiDraft.isPending} onClick={() => aiDraft.mutate()}>
                   {aiDraft.isPending ? <Spinner className="text-current" /> : null}
                   {t('aiDraft')}
                 </Button>
@@ -758,6 +1441,7 @@ export function SocialComposePage() {
                 disabled={create.isPending}
                 onChange={(next) => setOwn({ ...own, [c.id]: next })}
                 connectionId={c.id}
+                scopes={c.scopes}
                 onAiUsed={() => setAiUsed(true)}
               />
             ))
@@ -805,6 +1489,9 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
   // The reviewer may still ask for changes or reject such a channel, which ends the round; only approving it again is
   // refused.
   const mine = (v: Variant) => self !== undefined && v.review.approvedBy.includes(self);
+  // Four-eyes (#740): on these channels the author may not approve their own post.
+  const ownPost = self !== undefined && post.authorUserId === self;
+  const barred = (v: Variant) => ownPost && v.review.fourEyes;
   const waiting = inReview;
   const [unticked, setUnticked] = useState<string[]>([]);
   const picked = waiting.map((v) => v.id).filter((id) => !unticked.includes(id));
@@ -816,7 +1503,7 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
         decision,
         ...(comment.trim() ? { comment: comment.trim() } : {}),
         // What this reviewer sees: a newer revision is refused, never approved by mistake.
-        variants: waiting.filter((v) => picked.includes(v.id) && (decision !== 'approved' || !mine(v))).map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })),
+        variants: waiting.filter((v) => picked.includes(v.id) && (decision !== 'approved' || (!mine(v) && !barred(v)))).map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })),
       }),
     onSuccess: () => {
       setComment('');
@@ -826,11 +1513,13 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
   });
   if (inReview.length === 0) return null;
   const done = inReview.filter(mine);
-  const approvable = waiting.filter((v) => picked.includes(v.id) && !mine(v));
+  const approvable = waiting.filter((v) => picked.includes(v.id) && !mine(v) && !barred(v));
+  const others = inReview.filter(barred);
 
   return (
     <Card className="block space-y-3 border-warning/40 p-4">
       <p className="text-sm font-medium text-foreground">{t('reviewTitle')}</p>
+      {others.length > 0 && <p className="text-xs text-subtle-foreground">{t('reviewFourEyes', { channels: others.map((v) => names.get(v.connectionId) ?? providerName(v.provider)).join(', ') })}</p>}
       {done.length > 0 && <p className="text-xs text-subtle-foreground">{t('reviewYouApproved', { channels: done.map((v) => names.get(v.connectionId) ?? providerName(v.provider)).join(', ') })}</p>}
       {waiting.length > 0 && (
         <div className="space-y-1.5">
@@ -982,7 +1671,7 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
       ) : null;
     case 'scheduled':
       if (v.queuePaused) return <p className="text-warning">{t('outcome.queuePaused')}</p>;
-      return v.error?.retryAt ? <p className="text-warning">{t('outcome.retrying', { when: f.dateTime(v.error.retryAt) })}</p> : null;
+      return v.error?.retryAt ? <p className="text-warning">{t(v.error.code === 'QUOTA_EXHAUSTED' ? 'outcome.quotaExhausted' : 'outcome.retrying', { when: f.dateTime(v.error.retryAt) })}</p> : null;
     case 'publishing':
     case 'processing':
       return <p>{t(`outcome.${v.status}`)}</p>;
@@ -994,7 +1683,15 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
       return (
         <div className="space-y-1">
           <p className="text-warning">
-            {t(v.error?.code === 'CHANNEL_OWNER_LEFT' ? 'outcome.ownerLeft' : v.error?.code === 'CHANNEL_REVOKED' ? 'outcome.revoked' : 'outcome.paused')}
+            {t(
+              v.error?.code === 'CHANNEL_OWNER_LEFT'
+                ? 'outcome.ownerLeft'
+                : v.error?.code === 'CHANNEL_REVOKED'
+                  ? 'outcome.revoked'
+                  : v.error?.code === 'CHANNEL_SCOPE_MISSING'
+                    ? 'outcome.scopeMissing'
+                    : 'outcome.paused',
+            )}
           </p>
           {v.error?.code !== 'CHANNEL_REVOKED' && (
             <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
@@ -1004,15 +1701,96 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
         </div>
       );
     case 'failed':
+      // A draft for the TikTok app on a deployment that has not turned inbox mode on (#903).
+      if (v.error?.code === 'TIKTOK_INBOX_NOT_ENABLED') return <p className="text-destructive">{t('outcome.inboxNotEnabled')}</p>;
+      // TikTok refused an inbox upload for the missing video.upload grant (#903): a reconnect fixes it.
+      if (v.error?.code === 'CHANNEL_SCOPE_MISSING') {
+        return (
+          <div className="space-y-1">
+            <p className="text-destructive">{t('outcome.scopeMissingFailed')}</p>
+            <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
+              {t('reconnect')}
+            </Link>
+          </div>
+        );
+      }
       return (
         <div className="space-y-1">
           <p className="text-destructive">{t('outcome.failed')}</p>
           {said}
         </div>
       );
+    case 'published':
+      // A draft sent to the TikTok app (#903): not public until the account posts it there.
+      return v.error?.code === SENT_TO_APP ? <p className="text-warning">{t('outcome.sentToApp')}</p> : null;
     default:
       return null;
   }
+}
+
+// Takes a published channel down from its platform (#860), after a confirmation with an optional reason. again: an
+// earlier ask failed or its outcome is unclear.
+function RemoveFromChannel({ variantId, channel, again, onDone }: { variantId: string; channel: string; again: boolean; onDone: () => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const remove = useMutation({
+    mutationFn: () => client.social.variants.remove({ variantId, ...(reason.trim() ? { reason: reason.trim() } : {}) }),
+    onSuccess: () => {
+      setOpen(false);
+      setReason('');
+      onDone();
+    },
+  });
+  if (!open) {
+    return (
+      <Button variant="ghost" size="sm" onClick={() => setOpen(true)}>
+        {t(again ? 'remove.retry' : 'remove.action')}
+      </Button>
+    );
+  }
+  return (
+    <div className="w-full space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+      <p className="text-sm text-foreground">{t('remove.confirm', { channel })}</p>
+      <Label htmlFor={`${id}-reason`}>{t('remove.reason')}</Label>
+      <Textarea id={`${id}-reason`} rows={2} maxLength={500} value={reason} placeholder={t('remove.reasonHint')} onChange={(e) => setReason(e.target.value)} />
+      <div className="flex flex-wrap gap-2">
+        <Button variant="destructive" size="sm" disabled={remove.isPending} onClick={() => remove.mutate()}>
+          {t('remove.submit')}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+          {t('keep')}
+        </Button>
+      </div>
+      {remove.error && <ErrorText>{errorMessage(remove.error)}</ErrorText>}
+    </div>
+  );
+}
+
+// A channel removed from its platform (#860): when, by whom and why; or where a removal someone asked for stands.
+function RemovalNote({ variant: v }: { variant: Variant }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const org = useQuery(orpc.org.get.queryOptions());
+  if (v.status === 'removed' && v.removedAt) {
+    const member = v.removedBy ? org.data?.members.find((m) => m.userId === v.removedBy) : undefined;
+    const name = member ? (member.displayName ?? member.email) : null;
+    return (
+      <div className="space-y-1">
+        <p>{name ? t('remove.removedBy', { when: f.dateTime(v.removedAt), name }) : t('remove.removedAt', { when: f.dateTime(v.removedAt) })}</p>
+        {v.removeReason && <p className="text-subtle-foreground [overflow-wrap:anywhere]">{t('remove.reasonWas', { reason: v.removeReason })}</p>}
+      </div>
+    );
+  }
+  if (!v.removal) return null;
+  const known = v.removal.code === 'TELEGRAM_CANNOT_DELETE' || v.removal.code === 'REMOVE_NOT_RUN' ? v.removal.code : null;
+  return (
+    <div className="space-y-1">
+      <p className={v.removal.state === 'pending' ? '' : 'text-warning'}>{t(`remove.${v.removal.state}`)}</p>
+      {known ? <p className="text-subtle-foreground">{t(`remove.code.${known}`)}</p> : v.removal.state === 'failed' && v.removal.code ? <p className="font-mono text-subtle-foreground">{v.removal.code}</p> : null}
+    </div>
+  );
 }
 
 // Another time for a scheduled channel, its approvals kept (#580): the calendar's drag, from the keyboard.
@@ -1099,6 +1877,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const metrics = useQuery({ ...orpc.social.metrics.summary.queryOptions({ input: { postId } }), enabled: post.data?.variants.some((v) => v.status === 'published') ?? false });
   const channels = useQuery(orpc.channels.list.queryOptions({ input: { includeRevoked: true } }));
   const names = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.displayName])), [channels.data]);
+  const grants = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.scopes])), [channels.data]);
   const [base, setBase] = useState<Base | null>(null);
   const [own, setOwn] = useState<Record<string, Own>>({});
   // The post's UTM tags as the screen shows them; changing them changes every editable channel's settings (#585).
@@ -1223,6 +2002,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const unschedule = useMutation({ mutationFn: (variantId: string) => client.social.variants.unschedule({ variantIds: [variantId] }), onSuccess: refresh });
   // The first comment again (#587); the worker posts it in a moment.
   const retryComment = useMutation({ mutationFn: (variantId: string) => client.social.variants.retryComment({ variantId }), onSuccess: refresh });
+  const retryThread = useMutation({ mutationFn: (variantId: string) => client.social.variants.retryThread({ variantId }), onSuccess: refresh });
   const cancel = useMutation({ mutationFn: (variantId: string) => client.social.variants.cancel({ variantIds: [variantId] }), onSuccess: refresh });
   const retry = useMutation({ mutationFn: (variantId: string) => client.social.variants.retry({ variantIds: [variantId] }), onSuccess: refresh });
   const resolve = useMutation({
@@ -1253,7 +2033,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   };
   const published = p.variants.some((v) => v.status === 'published');
   const metricsOf = new Map((metrics.data ?? []).map((r) => [r.variantId, r]));
-  const error = save.error ?? submit.error ?? retryComment.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
+  const error = save.error ?? submit.error ?? retryComment.error ?? retryThread.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
   const reviewable = !dirty && !stale;
 
   return (
@@ -1330,6 +2110,14 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           <span>{t(p.origin === 'ai' ? 'aiBadgeHint' : 'aiAssistedHint')}</span>
         </div>
       )}
+      {p.idea && (
+        <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
+          {t('ideas.madeFrom')}{' '}
+          <Link to="/o/$slug/social/ideas" params={{ slug }} className="text-link hover:underline">
+            {p.idea.title}
+          </Link>
+        </div>
+      )}
       {p.repostOf && (
         <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
           {t('repostOf')}{' '}
@@ -1377,29 +2165,45 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 // A frozen channel keeps its settings (its cover, first comment, UTM) to show what went out.
                 own={frozen ? { ...EMPTY_OWN, settings: v.settings } : (own[v.id] ?? ownOf(v))}
                 connectionId={v.connectionId}
+                scopes={grants.get(v.connectionId) ?? []}
                 onAiUsed={() => setAiUsed(true)}
                 disabled={frozen || !canWrite || save.isPending}
                 status={v.status}
+                statusError={v.error}
                 onChange={(next) => setOwn({ ...own, [v.id]: next })}
                 footer={
                   <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
                     {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (
-                      <p>{t(v.status === 'published' ? 'publishedAt' : 'goesOutAt', { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
+                      <p>{t(variantStatusKey(v) === 'sent_to_app' ? 'sentToAppAt' : v.status === 'published' ? 'publishedAt' : 'goesOutAt', { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
                     )}
                     {decision && decision.comment && ['changes_requested', 'rejected'].includes(v.status) && <p className="text-warning">{t('reviewerSaid', { comment: decision.comment })}</p>}
                     {v.status === 'in_review' && v.review.required > 1 && <p>{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</p>}
+                    {v.status === 'in_review' && v.review.client && <p>{t(v.review.clientVerdict === 'approved' ? 'clientApproved' : 'clientWaiting')}</p>}
                     <Outcome variant={v} slug={slug} />
-                    {v.externalUrl && (
+                    <RemovalNote variant={v} />
+                    {v.externalUrl && v.status !== 'removed' && (
                       <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
                         {t('openPost')}
                       </a>
                     )}
                     {v.commentStatus && (
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className={v.commentStatus === 'failed' || v.commentStatus === 'unknown' ? 'text-warning' : ''}>{t(`commentStatus.${v.commentStatus}`)}</span>
-                        {canDecide && (v.commentStatus === 'failed' || v.commentStatus === 'unknown') && (
+                        <span className={v.commentStatus === 'failed' || v.commentStatus === 'reconnect' || v.commentStatus === 'unknown' ? 'text-warning' : ''}>{t(`commentStatus.${v.commentStatus}`)}</span>
+                        {canDecide && (v.commentStatus === 'failed' || v.commentStatus === 'reconnect' || v.commentStatus === 'unknown') && (
                           <Button variant="outline" size="sm" disabled={retryComment.isPending} onClick={() => retryComment.mutate(v.id)}>
                             {t('commentRetry')}
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {v.threadStatus && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown' ? 'text-warning' : ''}>
+                          {t(`threadStatus.${v.threadStatus.state}`, { posted: v.threadStatus.posted, total: v.threadStatus.total })}
+                        </span>
+                        {canDecide && (v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown') && (
+                          <Button variant="outline" size="sm" disabled={retryThread.isPending} onClick={() => retryThread.mutate(v.id)}>
+                            {t('threadRetry')}
                           </Button>
                         )}
                       </div>
@@ -1426,6 +2230,9 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                         <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
                           {t('unschedule')}
                         </Button>
+                      )}
+                      {canDecide && v.status === 'published' && isProvider(v.provider) && REMOVE_READY.has(v.provider) && v.removal?.state !== 'pending' && (
+                        <RemoveFromChannel variantId={v.id} channel={names.get(v.connectionId) ?? providerName(v.provider)} again={v.removal !== null} onDone={refresh} />
                       )}
                       {canWrite && CANCELLABLE.includes(v.status) && (canDecide || !['approved', 'scheduled', 'paused'].includes(v.status)) && (
                         <Button variant="ghost" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(v.id)}>

@@ -28,28 +28,33 @@ import { agentCommands } from './agents.ts';
 import { channelCommands } from './channels.ts';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { archiveCommands } from './archives.ts';
+import { imageSizeCommands } from './image-sizes.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
 import { acceptInvite, createInvite, inviteCreateCommand, revokeInvite, type InviteLimits } from './invites.ts';
 import { mailCommands } from './mail.ts';
+import { auditLogCommands } from './audit-log.ts';
 import { offboardingCommands } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { setAddress } from './org-address.ts';
+import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
+import { proposalReminderCommands } from './proposal-reminders.ts';
 
 const MEMBERS = ['owner', 'admin', 'member'] as const;
 // The command that records an invoice proposal (a purchase or a sale).
 const PURCHASE_COMMAND = 'finance.purchase.record';
 // Commands a proposal may execute when approved (they must also declare access: 'proposal', which the runtime checks
 // against the proposal row: state 'approved' for that command, approved by the running kernel.proposal.approve).
-const PROPOSAL_COMMANDS = new Set([PURCHASE_COMMAND, 'finance.journal.reverse', 'finance.voucher.record']);
+const PROPOSAL_COMMANDS = new Set([PURCHASE_COMMAND, 'finance.journal.reverse', 'finance.voucher.record', 'finance.journal_voucher.record']);
 // Proposals a user may ask for (kernel.proposal.request), and the module command that checks the request and builds
 // the proposal from the database; it writes nothing. The title and payload come from it, never from the requester.
-// A cash or bank voucher (#327) is entered by hand this way.
+// A cash or bank voucher (#327) and a general journal voucher (NVK, #888) are entered by hand this way.
 const PROPOSAL_PREPARERS = {
   'finance.journal.reverse': 'finance.journal.prepare_reversal',
   'finance.voucher.record': 'finance.voucher.prepare',
+  'finance.journal_voucher.record': 'finance.journal_voucher.prepare',
 } as const;
 type RequestableCommand = keyof typeof PROPOSAL_PREPARERS;
 const REQUESTABLE = Object.keys(PROPOSAL_PREPARERS) as [RequestableCommand, ...RequestableCommand[]];
@@ -819,6 +824,7 @@ const otherKernelCommands = [
   receiveInbound,
   ...extractionCommands,
   ...archiveCommands,
+  ...imageSizeCommands,
   requestProposal,
   editProposal,
   approveProposal,
@@ -831,7 +837,10 @@ const otherKernelCommands = [
   setTaxCode,
   setVatFilingPeriod,
   setAddress,
+  ...partyCommands,
   ...mailCommands,
+  ...proposalReminderCommands,
+  ...auditLogCommands,
 ];
 
 // The kernel's commands; options.orgCreateLimits sets the org creation limits (default DEFAULT_ORG_CREATE_LIMITS),

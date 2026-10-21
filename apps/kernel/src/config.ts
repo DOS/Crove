@@ -188,6 +188,18 @@ const schema = z.object({
   CHANNEL_SANDBOX: z.enum(['true', 'false']).default('true'),
   // Bluesky (S9): accounts connect with an app password, no app of the deployment's own is needed. On unless false.
   CHANNEL_BLUESKY: z.enum(['true', 'false']).default('true'),
+  // Telegram channels (#747): a bot the shop makes with @BotFather posts to its channel; no app of the deployment's own is
+  // needed. On unless false.
+  CHANNEL_TELEGRAM: z.enum(['true', 'false']).default('true'),
+  // Mastodon (#748): an account on any instance connects with an access token made in its settings; every call to an
+  // instance goes through the egress guard. On unless false.
+  CHANNEL_MASTODON: z.enum(['true', 'false']).default('true'),
+  // Discord channels (#832): a server admin makes a webhook in the channel's settings and pastes its URL; no app of the
+  // deployment's own is needed. On by default, like Telegram.
+  CHANNEL_DISCORD: z.enum(['true', 'false']).default('true'),
+  // WordPress sites (#833): a user of a self-hosted or WordPress.com Business site connects with an application password;
+  // every call to a site goes through the egress guard. On unless false.
+  CHANNEL_WORDPRESS: z.enum(['true', 'false']).default('true'),
   // The deployment's Meta app (Facebook Pages, Social plan S6). Set both to offer Facebook Pages; neither hides them.
   // The app's valid OAuth redirect URI is PUBLIC_URL/channels/oauth/facebook_page/callback.
   CHANNEL_META_APP_ID: optional,
@@ -205,18 +217,34 @@ const schema = z.object({
   // PUBLIC_URL/channels/oauth/linkedin/callback.
   CHANNEL_LINKEDIN_CLIENT_ID: optional,
   CHANNEL_LINKEDIN_CLIENT_SECRET: optional,
+  // LinkedIn post counts (#797): true once the LinkedIn app has member post analytics (r_member_postAnalytics).
+  CHANNEL_LINKEDIN_ANALYTICS: z.enum(['true', 'false']).default('false'),
   // The deployment's Google Cloud project for YouTube uploads (YouTube Data API v3, an OAuth web client), S9. Callback
   // URL: PUBLIC_URL/channels/oauth/youtube/callback.
   CHANNEL_GOOGLE_CLIENT_ID: optional,
   CHANNEL_GOOGLE_CLIENT_SECRET: optional,
+  // Google Business Profile posts (#709), with the same Google project once Google has approved it for the Business
+  // Profile APIs (Basic API Access). Off by default: an unapproved project gets no answer from them. Callback URL:
+  // PUBLIC_URL/channels/oauth/google_business/callback.
+  CHANNEL_GOOGLE_BUSINESS: z.enum(['true', 'false']).default('false'),
   // The deployment's TikTok app (Login Kit and Content Posting API, Direct Post), S9. Callback URL:
   // PUBLIC_URL/channels/oauth/tiktok/callback.
   CHANNEL_TIKTOK_CLIENT_KEY: optional,
   CHANNEL_TIKTOK_CLIENT_SECRET: optional,
+  // The TikTok app also has the Display API: connections ask for video.list, and posts' counts are read (#744).
+  CHANNEL_TIKTOK_VIDEO_LIST: z.enum(['true', 'false']).default('false'),
+  // The TikTok app is approved for video.upload (#903): connections ask for it, and the editor offers sending a video
+  // to the creator's TikTok inbox as a draft. Off by default: TikTok refuses a sign-in that asks for a scope the app lacks.
+  CHANNEL_TIKTOK_INBOX: z.enum(['true', 'false']).default('false'),
   // The deployment's X app (OAuth 2.0, a confidential client with PKCE), S9; X bills each post to its account.
   // Callback URL: PUBLIC_URL/channels/oauth/x/callback.
   CHANNEL_X_CLIENT_ID: optional,
   CHANNEL_X_CLIENT_SECRET: optional,
+  // X post counts (#797): every read is billed by X, so the metrics sweep reads X posts only when this is true.
+  CHANNEL_X_METRICS: z.enum(['true', 'false']).default('false'),
+  // Pinterest (#798): the deployment's Pinterest app.
+  CHANNEL_PINTEREST_APP_ID: optional,
+  CHANNEL_PINTEREST_APP_SECRET: optional,
   // Requests per minute per signed-in user on /api (429 RATE_LIMITED with Retry-After past it), per API process; see
   // rate-limit.ts. 0 turns it off, for a deployment whose edge (proxy, CDN or WAF) limits per user instead.
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(0).max(999_999).default(600),
@@ -237,6 +265,8 @@ const schema = z.object({
   AI_BASE_URL: optional,
   AI_API_KEY: optional,
   AI_MODEL: optional,
+  // The model takes images (#817): the composer may ask it for an image's alt text.
+  AI_VISION: z.enum(['true', 'false']).default('false'),
   AI_STRUCTURED_OUTPUTS: z.enum(['true', 'false']).default('true'),
   // crove-extract, the parsing sandbox (plan §7.6, External-tenant gate T12), e.g. http://crove-extract:8090.
   // Required for the worker role: the worker never parses PDF, XML or MIME itself. The API role does not use it.
@@ -256,6 +286,10 @@ const schema = z.object({
   MAIL_PROVIDER: z.preprocess((v) => (v === '' ? undefined : v), z.enum(['smtp', 'resend']).default('smtp')),
   RESEND_API_KEY: optional,
   RESEND_WEBHOOK_SECRET: optional.pipe(z.string().regex(/^whsec_[A-Za-z0-9+/=]{24,}$/, 'RESEND_WEBHOOK_SECRET is the whsec_... signing secret of the webhook').optional()),
+  // The build this image was made from (#892): the git SHA the release workflow passes as the image's CROVE_BUILD build
+  // argument. GET /version reports it, so the deploy's smoke test can tell the new image from the old one. Unset (a
+  // local build): "dev".
+  CROVE_BUILD: optional.pipe(z.string().regex(/^[A-Za-z0-9._-]{1,64}$/, 'CROVE_BUILD is a build id: letters, digits, dot, dash, underscore').optional()),
   // Where the app's "Góp ý / Hỗ trợ" (feedback and support) link goes: an https: page (a chat group, a help desk) or
   // a mailto: address. Unset hides the link. Browsers see it through /api/config, so it must hold nothing secret.
   SUPPORT_URL: optional.pipe(
@@ -266,6 +300,13 @@ const schema = z.object({
       })
       .optional(),
   ),
+  // The terms of service and the privacy notice that sign-up and invite acceptance link to (#688, plan M3-6): https:
+  // pages the deployment publishes. Unset hides the line. Browsers read them from /api/config.
+  TERMS_URL: optional.pipe(z.url({ protocol: /^https$/ }).optional()),
+  PRIVACY_URL: optional.pipe(z.url({ protocol: /^https$/ }).optional()),
+  // The prober's last result for the public status page PUBLIC_URL/status (#678, status-page.ts): the file the
+  // prober writes as PROBER_STATUS_FILE, on a volume both share. Unset: no /status page and no link to it in the app.
+  STATUS_FILE: optional.pipe(z.string().startsWith('/', 'STATUS_FILE is an absolute path').optional()),
   // The public tax registry lookup that prefills a new org from its tax code (issue #324): an https URL template with
   // {taxCode}, answering in the VietQR business shape (https://api.vietqr.io/v2/business/{taxCode}). Unset turns the
   // lookup off: it sends the tax codes your users type to that provider.
@@ -365,8 +406,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (Boolean(config.CHANNEL_TIKTOK_CLIENT_KEY) !== Boolean(config.CHANNEL_TIKTOK_CLIENT_SECRET)) throw new Error('set both CHANNEL_TIKTOK_CLIENT_KEY and CHANNEL_TIKTOK_CLIENT_SECRET, or neither');
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_TIKTOK_CLIENT_KEY)) throw new Error('CHANNEL_TIKTOK_CLIENT_KEY is the client key of the TikTok app');
   if (Boolean(config.CHANNEL_GOOGLE_CLIENT_ID) !== Boolean(config.CHANNEL_GOOGLE_CLIENT_SECRET)) throw new Error('set both CHANNEL_GOOGLE_CLIENT_ID and CHANNEL_GOOGLE_CLIENT_SECRET, or neither');
+  if (config.CHANNEL_GOOGLE_BUSINESS === 'true' && !config.CHANNEL_GOOGLE_CLIENT_ID) throw new Error('CHANNEL_GOOGLE_BUSINESS needs CHANNEL_GOOGLE_CLIENT_ID and CHANNEL_GOOGLE_CLIENT_SECRET');
   if (config.CHANNEL_GOOGLE_CLIENT_ID && !/^[0-9]{6,32}-[A-Za-z0-9_-]{8,64}\.apps\.googleusercontent\.com$/.test(config.CHANNEL_GOOGLE_CLIENT_ID)) throw new Error('CHANNEL_GOOGLE_CLIENT_ID is the client id of a Google OAuth web client');
   if (Boolean(config.CHANNEL_X_CLIENT_ID) !== Boolean(config.CHANNEL_X_CLIENT_SECRET)) throw new Error('set both CHANNEL_X_CLIENT_ID and CHANNEL_X_CLIENT_SECRET, or neither');
+  if (Boolean(config.CHANNEL_PINTEREST_APP_ID) !== Boolean(config.CHANNEL_PINTEREST_APP_SECRET)) throw new Error('set both CHANNEL_PINTEREST_APP_ID and CHANNEL_PINTEREST_APP_SECRET, or neither');
+  if (config.CHANNEL_PINTEREST_APP_ID && !/^\d{4,32}$/.test(config.CHANNEL_PINTEREST_APP_ID)) throw new Error('CHANNEL_PINTEREST_APP_ID is the numeric id of the Pinterest app');
   if (config.CHANNEL_X_CLIENT_ID && !/^[A-Za-z0-9_-]{16,64}$/.test(config.CHANNEL_X_CLIENT_ID)) throw new Error('CHANNEL_X_CLIENT_ID is the OAuth 2.0 client id of the X app');
   if (Boolean(config.CHANNEL_ZALO_APP_ID) !== Boolean(config.CHANNEL_ZALO_APP_SECRET)) throw new Error('set both CHANNEL_ZALO_APP_ID and CHANNEL_ZALO_APP_SECRET, or neither');
   if (config.CHANNEL_ZALO_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_ZALO_APP_ID)) throw new Error('CHANNEL_ZALO_APP_ID is the numeric id of the Zalo app');
@@ -387,7 +431,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error('AUTH_STEP_UP=off lets a stolen session approve and change roles without MFA; set it to required');
     }
     // A provider sends the authorization code to PUBLIC_URL/channels/oauth/<provider>/callback (#375).
-    const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID];
+    const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID, config.CHANNEL_PINTEREST_APP_ID];
     if (oauthApps.some(Boolean) && !config.PUBLIC_URL.startsWith('https://')) {
       throw new Error('channel OAuth sends authorization codes back to PUBLIC_URL; a public PUBLIC_URL must be https when a CHANNEL_* app is set');
     }

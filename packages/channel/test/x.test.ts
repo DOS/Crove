@@ -102,6 +102,24 @@ describe('XPublisher', () => {
     expect(calls[2]?.body).toEqual({ text: 'Khai trương chi nhánh mới & ưu đãi\n\nhttps://example.com/a', media: { media_ids: ['1146654567674912769', '1146654567674912770'] } });
   });
 
+  it('sets the alt text of each described image before the post, and posts nothing when that fails', async () => {
+    const described = { ...image, altText: `Mặt tiền tiệm bánh ${'a'.repeat(1200)}` };
+    const { fetchImpl, calls } = x({
+      'POST api.x.com/2/media/upload': [{ body: { data: { id: '1146654567674912769' } } }, { body: { data: { id: '1146654567674912770' } } }],
+      'POST api.x.com/2/media/metadata': [{ body: {} }],
+      'POST api.x.com/2/tweets': [{ status: 201, body: { data: { id: '1445880548472328192' } } }],
+    });
+    const result = await new XPublisher(APP, fetchImpl).publish(input({ content: { ...input().content, media: [described, { ...image, fileId: 'f-2' }] } }));
+    expect(result).toMatchObject({ kind: 'accepted', externalId: '1445880548472328192' });
+    expect(calls.map((c) => c.route)).toEqual(['POST api.x.com/2/media/upload', 'POST api.x.com/2/media/metadata', 'POST api.x.com/2/media/upload', 'POST api.x.com/2/tweets']);
+    const meta = calls[1]?.body as { id: string; metadata: { alt_text: { text: string } } };
+    expect(meta.id).toBe('1146654567674912769');
+    expect(meta.metadata.alt_text.text).toHaveLength(1000);
+    const failed = x({ 'POST api.x.com/2/media/upload': [{ body: { data: { id: '1146654567674912769' } } }], 'POST api.x.com/2/media/metadata': [{ status: 503, body: {} }] });
+    expect(await new XPublisher(APP, failed.fetchImpl).publish(input({ content: { ...input().content, media: [described] } }))).toMatchObject({ kind: 'rejected' });
+    expect(failed.calls.some((c) => c.route === 'POST api.x.com/2/tweets')).toBe(false);
+  });
+
   it('posts nothing for a video with images, an empty post or an unreadable image', async () => {
     const none = x({});
     const publisher = new XPublisher(APP, none.fetchImpl);
@@ -234,5 +252,72 @@ describe('XPublisher', () => {
     expect(comparableText('a &lt;b&gt; &amp; c https://t.co/x')).toBe('a <b> & c');
     expect(comparableText('&amp;lt;')).toBe('&lt;');
     expect(comparableText('Việt'.normalize('NFD'))).toBe('Việt');
+  });
+});
+
+describe('X post counts (#797)', () => {
+  const POST = '1445880548472328192';
+  const metricsInput = { externalAccountId: USER, secret: SECRET, externalId: POST };
+
+  it('reads nothing unless the deployment turns it on, since X bills every read', () => {
+    expect(new XPublisher(APP).metrics).toBeUndefined();
+    expect(new XPublisher(APP, undefined, {}, { metrics: true }).metrics).toBeTypeOf('function');
+  });
+
+  it('maps public_metrics, counting quotes with reposts', async () => {
+    const { fetchImpl, calls } = x({ 'GET api.x.com/2/tweets/1445880548472328192': [{ body: { data: { id: POST, public_metrics: { like_count: 12, reply_count: 3, retweet_count: 4, quote_count: 1, bookmark_count: 2, impression_count: 900 } } } }] });
+    expect(await new XPublisher(APP, fetchImpl, {}, { metrics: true }).metrics?.(metricsInput)).toEqual({ metrics: { reactions: 12, comments: 3, shares: 5, saves: 2, impressions: 900 } });
+    expect(calls[0]?.url.searchParams.get('tweet.fields')).toBe('public_metrics');
+  });
+
+  it('tells a deleted post, a dead token and an outage apart', async () => {
+    const ask = (answer: { status?: number; body?: unknown }) => new XPublisher(APP, x({ 'GET api.x.com/2/tweets/1445880548472328192': [answer] }).fetchImpl, {}, { metrics: true }).metrics?.(metricsInput);
+    expect(await ask({ body: { errors: [{ title: 'Not Found Error', type: 'https://api.x.com/2/problems/resource-not-found' }] } })).toEqual({ refused: 'gone' });
+    expect(await ask({ status: 401, body: { title: 'Unauthorized', type: 'about:blank', status: 401 } })).toEqual({ refused: 'token_expired' });
+    expect(await ask({ status: 503, body: {} })).toBeNull();
+  });
+});
+
+describe('X followers (#819)', () => {
+  it('reads followers only on the metrics switch, for the connected account', async () => {
+    expect(new XPublisher(APP).accountMetrics).toBeUndefined();
+    const { fetchImpl, calls } = x({ 'GET api.x.com/2/users/me': [{ body: { data: { id: USER, public_metrics: { followers_count: 321, following_count: 5 } } } }, { body: { data: { id: '999', public_metrics: { followers_count: 1 } } } }] });
+    const publisher = new XPublisher(APP, fetchImpl, {}, { metrics: true });
+    expect(await publisher.accountMetrics?.({ externalAccountId: USER, secret: SECRET })).toEqual({ followers: 321 });
+    expect(calls[0]?.url.searchParams.get('user.fields')).toBe('public_metrics');
+    // Another account answered (a token for someone else): nothing kept.
+    expect(await publisher.accountMetrics?.({ externalAccountId: USER, secret: SECRET })).toBeNull();
+  });
+});
+
+describe('X remove (#860)', () => {
+  const POST = '1445880548472328192';
+  const DELETE = `DELETE api.x.com/2/tweets/${POST}`;
+  const remove = (fetchImpl: Fetch, externalId = POST) => new XPublisher(APP, fetchImpl).remove({ externalAccountId: USER, secret: SECRET, externalId });
+
+  it('deletes the post with the account token', async () => {
+    const { fetchImpl, calls } = x({ [DELETE]: [{ body: { data: { deleted: true } } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.route, c.headers.get('authorization')])).toEqual([[DELETE, 'Bearer x-access-1']]);
+  });
+
+  it('counts a post X no longer has as removed, and an answer that deleted nothing as unclear', async () => {
+    const gone = x({ [DELETE]: [{ status: 404, body: { title: 'Not Found Error', detail: 'Could not find tweet', type: 'https://api.x.com/2/problems/resource-not-found' } }] });
+    expect(await remove(gone.fetchImpl)).toEqual({ kind: 'removed' });
+    const kept = x({ [DELETE]: [{ body: { data: { deleted: false } } }] });
+    expect(await remove(kept.fetchImpl)).toEqual({ kind: 'unknown', code: 'NOT_DELETED' });
+  });
+
+  it('maps an expired token, a rate limit and a server error, and calls nothing for a malformed id', async () => {
+    const expired = x({ [DELETE]: [{ status: 401, body: { title: 'Unauthorized', type: 'about:blank', status: 401, detail: 'Unauthorized' } }] });
+    expect(await remove(expired.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    const reset = Math.floor(Date.now() / 1000) + 900;
+    const limited = x({ [DELETE]: [{ status: 429, body: { title: 'Too Many Requests', type: 'about:blank', status: 429 }, headers: { 'x-rate-limit-reset': String(reset) } }] });
+    expect(await remove(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited', retryAt: new Date(reset * 1000) });
+    const down = x({ [DELETE]: [{ status: 503, body: { title: 'Service Unavailable', type: 'about:blank', status: 503 } }] });
+    expect(await remove(down.fetchImpl)).toMatchObject({ kind: 'unknown' });
+    const none = x({});
+    expect(await remove(none.fetchImpl, 'not-a-post')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(none.calls).toHaveLength(0);
   });
 });

@@ -8,9 +8,14 @@ import { OAUTH_CHANNEL_PROVIDERS } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { VoiceEditor } from '../components/social-brand-voice.tsx';
+import { WatermarkCard } from '../components/social-watermark.tsx';
+import { ChatAlertCard } from '../components/social-chat-alert.tsx';
+import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -21,9 +26,9 @@ import { minuteLabel, parseMinute, providerName } from '../lib/social.ts';
 type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
 type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
 // Platforms in the order Crove adds them (Social plan §6).
-const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x'] as const;
+const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x', 'google_business', 'pinterest'] as const;
 const OAUTH_PROVIDERS: readonly string[] = OAUTH_CHANNEL_PROVIDERS;
-type Slot = { weekday: number; minute: number; label?: string };
+type Slot = { weekday: number; minute: number; label?: string; labelId?: string | null };
 
 const CHANNEL_TONE = { active: 'success', expired: 'warning', error: 'destructive', revoked: 'outline' } as const;
 // Platforms whose tokens Crove cannot renew: the member reconnects before the date, and is warned two weeks ahead.
@@ -37,12 +42,36 @@ const dayKeyOf = (weekday: number) => DAY_KEYS[(weekday - 1) % 7] ?? 'mon';
 
 // How many different people approve a post for this channel before it may be scheduled (S9 review policy).
 // loading: the policies are still being read, so the select waits instead of showing the default.
-function ReviewPolicy({ channel, required, canEdit, loading }: { channel: Channel; required: number; canEdit: boolean; loading: boolean }) {
+function ReviewPolicy({ channel, required, reminders, shortLinks, fourEyes, clientApproval, canEdit, canOwn, loading }: { channel: Channel; required: number; reminders: boolean; shortLinks: boolean; fourEyes: boolean; clientApproval: boolean; canEdit: boolean; canOwn: boolean; loading: boolean }) {
   const t = useTranslations('social');
   const set = useMutation({
     mutationFn: (approvalsRequired: number) => client.social.policies.set({ connectionId: channel.id, approvalsRequired }),
     onSuccess: () => void queryClient.invalidateQueries(),
   });
+  // Reminders of posts waiting for review (#703), on unless turned off.
+  const remind = useMutation({
+    mutationFn: (reviewReminders: boolean) => client.social.policies.setReminders({ connectionId: channel.id, reviewReminders }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: orpc.social.policies.list.key() }),
+  });
+  const remindOn = remind.isPending && remind.variables !== undefined ? remind.variables : reminders;
+  // Crove's short links with click counts (#706), off unless turned on.
+  const shorten = useMutation({
+    mutationFn: (on: boolean) => client.social.policies.setShortLinks({ connectionId: channel.id, shortLinks: on }),
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: orpc.social.policies.list.key() }),
+  });
+  const shortOn = shorten.isPending && shorten.variables !== undefined ? shorten.variables : shortLinks;
+  // Four-eyes (#740): owners only, since turning it off weakens review.
+  const eyes = useMutation({
+    mutationFn: (on: boolean) => client.social.policies.setFourEyes({ connectionId: channel.id, fourEyes: on }),
+    onSettled: () => void queryClient.invalidateQueries(),
+  });
+  const eyesOn = eyes.isPending && eyes.variables !== undefined ? eyes.variables : fourEyes;
+  // The client's approval on a review link as a step (#770): owners only, like four-eyes.
+  const clientStep = useMutation({
+    mutationFn: (on: boolean) => client.social.policies.setClientApproval({ connectionId: channel.id, clientApproval: on }),
+    onSettled: () => void queryClient.invalidateQueries(),
+  });
+  const clientOn = clientStep.isPending && clientStep.variables !== undefined ? clientStep.variables : clientApproval;
   return (
     <div className="space-y-1.5">
       <Label htmlFor={`policy-${channel.id}`} className="text-sm font-medium text-muted-foreground">
@@ -64,6 +93,43 @@ function ReviewPolicy({ channel, required, canEdit, loading }: { channel: Channe
       </NativeSelect>
       <p className="text-xs text-subtle-foreground">{t(canEdit ? 'policyHint' : 'policyAdmins')}</p>
       {set.error && <ErrorText>{errorMessage(set.error)}</ErrorText>}
+      <label className="flex items-start gap-2 pt-1 text-sm text-muted-foreground">
+        <Checkbox
+          className="mt-0.5"
+          checked={remindOn}
+          disabled={loading || !canEdit || remind.isPending || channel.status === 'revoked'}
+          onCheckedChange={(checked) => remind.mutate(checked === true)}
+        />
+        <span>
+          {t('remindersLabel')}
+          <span className="block text-xs text-subtle-foreground">{t('remindersHint')}</span>
+        </span>
+      </label>
+      {remind.error && <ErrorText>{errorMessage(remind.error)}</ErrorText>}
+      <label className="flex items-start gap-2 pt-1 text-sm text-muted-foreground">
+        <Checkbox className="mt-0.5" checked={shortOn} disabled={loading || !canEdit || shorten.isPending || channel.status === 'revoked'} onCheckedChange={(checked) => shorten.mutate(checked === true)} />
+        <span>
+          {t('shortLinksLabel')}
+          <span className="block text-xs text-subtle-foreground">{t('shortLinksHint')}</span>
+        </span>
+      </label>
+      {shorten.error && <ErrorText>{errorMessage(shorten.error)}</ErrorText>}
+      <label className="flex items-start gap-2 pt-1 text-sm text-muted-foreground">
+        <Checkbox className="mt-0.5" checked={eyesOn} disabled={loading || !canOwn || eyes.isPending || channel.status === 'revoked'} onCheckedChange={(checked) => eyes.mutate(checked === true)} />
+        <span>
+          {t('fourEyesLabel')}
+          <span className="block text-xs text-subtle-foreground">{t(canOwn ? 'fourEyesHint' : 'fourEyesOwners')}</span>
+        </span>
+      </label>
+      {eyes.error && <ErrorText>{errorMessage(eyes.error)}</ErrorText>}
+      <label className="flex items-start gap-2 pt-1 text-sm text-muted-foreground">
+        <Checkbox className="mt-0.5" checked={clientOn} disabled={loading || !canOwn || clientStep.isPending || channel.status === 'revoked'} onCheckedChange={(checked) => clientStep.mutate(checked === true)} />
+        <span>
+          {t('clientApprovalLabel')}
+          <span className="block text-xs text-subtle-foreground">{t(canOwn ? 'clientApprovalHint' : 'fourEyesOwners')}</span>
+        </span>
+      </label>
+      {clientStep.error && <ErrorText>{errorMessage(clientStep.error)}</ErrorText>}
     </div>
   );
 }
@@ -75,7 +141,11 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
   const [draft, setDraft] = useState<{ timeZone: string; slots: Slot[] } | null>(null);
   const [weekday, setWeekday] = useState(1);
   const [time, setTime] = useState('09:00');
-  const current = draft ?? (queue.data ? { timeZone: queue.data.timeZone ?? 'Asia/Ho_Chi_Minh', slots: queue.data.slots.map((s) => ({ weekday: s.weekday, minute: s.minute, ...(s.label ? { label: s.label } : {}) })) } : null);
+  // A content category (#745): the label a new slot is kept for; '' is an open slot.
+  const [category, setCategory] = useState('');
+  const labels = useQuery(orpc.social.labels.list.queryOptions({ input: {} }));
+  const labelName = new Map((labels.data ?? []).map((l) => [l.id, l.name]));
+  const current = draft ?? (queue.data ? { timeZone: queue.data.timeZone ?? 'Asia/Ho_Chi_Minh', slots: queue.data.slots.map((s) => ({ weekday: s.weekday, minute: s.minute, ...(s.label ? { label: s.label } : {}), ...(s.labelId ? { labelId: s.labelId } : {}) })) } : null);
   const save = useMutation({
     mutationFn: (next: { timeZone: string; slots: Slot[]; paused?: boolean }) => client.social.queues.set({ connectionId: channel.id, ...next }),
     onSuccess: () => {
@@ -88,12 +158,12 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
   const add = () => {
     const minute = parseMinute(time);
     if (minute === null || current.slots.some((s) => s.weekday === weekday && s.minute === minute)) return;
-    setDraft({ ...current, slots: [...current.slots, { weekday, minute }] });
+    setDraft({ ...current, slots: [...current.slots, { weekday, minute, ...(category ? { labelId: category } : {}) }] });
   };
   const everyDay = () => {
     const minute = parseMinute(time);
     if (minute === null) return;
-    const missing = WEEKDAYS.filter((d) => !current.slots.some((s) => s.weekday === d && s.minute === minute)).map((d) => ({ weekday: d, minute }));
+    const missing = WEEKDAYS.filter((d) => !current.slots.some((s) => s.weekday === d && s.minute === minute)).map((d) => ({ weekday: d, minute, ...(category ? { labelId: category } : {}) }));
     setDraft({ ...current, slots: [...current.slots, ...missing] });
   };
   const paused = queue.data?.paused ?? false;
@@ -131,6 +201,7 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
           {sorted.map((s) => (
             <span key={`${s.weekday}:${s.minute}`} className="inline-flex items-center gap-1.5 rounded-lg border bg-background px-2 py-1 text-xs text-foreground">
               {t(`weekday.${dayKeyOf(s.weekday)}`)} <span className="font-mono tabular-nums">{minuteLabel(s.minute)}</span>
+              {s.labelId && <span className="text-subtle-foreground">· {labelName.get(s.labelId) ?? t('queueCategoryGone')}</span>}
               {canEdit && (
                 <button
                   type="button"
@@ -155,6 +226,16 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
             ))}
           </NativeSelect>
           <Input type="time" step={60} value={time} onChange={(e) => setTime(e.target.value)} className="h-7 w-28" aria-label={t('timeLabel')} />
+          {(labels.data?.length ?? 0) > 0 && (
+            <NativeSelect size="sm" value={category} onChange={(e) => setCategory(e.target.value)} aria-label={t('queueCategory')} title={t('queueCategoryHint')}>
+              <NativeSelectOption value="">{t('queueCategoryOpen')}</NativeSelectOption>
+              {(labels.data ?? []).map((l) => (
+                <NativeSelectOption key={l.id} value={l.id}>
+                  {t('queueCategoryFor', { label: l.name })}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          )}
           <Button variant="outline" size="sm" onClick={add}>
             {t('addSlot')}
           </Button>
@@ -181,9 +262,16 @@ export function SocialChannelsPage() {
   const me = useQuery(orpc.me.get.queryOptions());
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
   const isAdmin = role === 'owner' || role === 'admin';
+  const voices = useQuery(orpc.social.brandVoices.list.queryOptions({ input: {} }));
+  const orgVoice = voices.data?.find((v) => v.connectionId === null);
+  const channelVoice = new Map((voices.data ?? []).filter((v) => v.connectionId !== null).map((v) => [v.connectionId as string, v]));
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
   const policyRows = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
   const policies = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.approvalsRequired]));
+  const reminders = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.reviewReminders]));
+  const shortLinks = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.shortLinks]));
+  const fourEyes = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.fourEyes]));
+  const clientApproval = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.clientApproval]));
   const [name, setName] = useState('');
   const [confirming, setConfirming] = useState<string | null>(null);
   const sandbox = getConfig().channels?.sandbox ?? false;
@@ -205,6 +293,47 @@ export function SocialChannelsPage() {
       void queryClient.invalidateQueries();
     },
   });
+  // Mastodon: the instance and an access token, checked by the server and sealed; the form forgets the token.
+  const mastodonOn = getConfig().channels?.mastodon ?? false;
+  const [mdn, setMdn] = useState({ instance: '', accessToken: '' });
+  const connectMastodon = useMutation({
+    mutationFn: () => client.channels.connectMastodon({ instance: mdn.instance.trim(), accessToken: mdn.accessToken.trim() }),
+    onSuccess: () => {
+      setMdn({ instance: '', accessToken: '' });
+      void queryClient.invalidateQueries();
+    },
+  });
+  // WordPress: the site, a user name and an application password, checked by the server and sealed; the form forgets
+  // the password.
+  const wordpressOn = getConfig().channels?.wordpress ?? false;
+  const [wp, setWp] = useState({ site: '', username: '', appPassword: '' });
+  const connectWordPress = useMutation({
+    mutationFn: () => client.channels.connectWordPress({ site: wp.site.trim(), username: wp.username.trim(), appPassword: wp.appPassword.trim() }),
+    onSuccess: () => {
+      setWp({ site: '', username: '', appPassword: '' });
+      void queryClient.invalidateQueries();
+    },
+  });
+  // Telegram: a bot token and the channel, checked by the server and sealed; the form forgets the token.
+  const telegramOn = getConfig().channels?.telegram ?? false;
+  const [tg, setTg] = useState({ botToken: '', channel: '' });
+  const connectTelegram = useMutation({
+    mutationFn: () => client.channels.connectTelegram({ botToken: tg.botToken.trim(), channel: tg.channel.trim() }),
+    onSuccess: () => {
+      setTg({ botToken: '', channel: '' });
+      void queryClient.invalidateQueries();
+    },
+  });
+  // Discord: a channel's webhook URL, checked by the server and sealed; the form forgets it.
+  const discordOn = getConfig().channels?.discord ?? false;
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const connectDiscord = useMutation({
+    mutationFn: () => client.channels.connectDiscord({ webhookUrl: webhookUrl.trim() }),
+    onSuccess: () => {
+      setWebhookUrl('');
+      void queryClient.invalidateQueries();
+    },
+  });
   // The provider's dialog runs in this tab; it comes back to the callback screen, which finishes the attempt.
   const start = useMutation({
     mutationFn: (provider: OAuthProvider) => client.channels.oauthStart({ provider }),
@@ -216,6 +345,10 @@ export function SocialChannelsPage() {
   const waiting = useQuery(orpc.social.channels.waiting.queryOptions({ input: {} }));
   const pausedOn = new Map((waiting.data ?? []).map((w) => [w.connectionId, w.paused]));
   const blueskyForm = useRef<HTMLInputElement>(null);
+  const telegramForm = useRef<HTMLInputElement>(null);
+  const mastodonForm = useRef<HTMLInputElement>(null);
+  const discordForm = useRef<HTMLInputElement>(null);
+  const wordpressForm = useRef<HTMLInputElement>(null);
   // Reconnecting connects the same account again: the provider's dialog, or the Bluesky form with its handle.
   const reconnect = (c: Channel) => {
     if (c.provider === 'bluesky') {
@@ -223,9 +356,29 @@ export function SocialChannelsPage() {
       blueskyForm.current?.focus();
       return;
     }
+    if (c.provider === 'telegram') {
+      telegramForm.current?.focus();
+      return;
+    }
+    if (c.provider === 'discord') {
+      discordForm.current?.focus();
+      return;
+    }
+    if (c.provider === 'mastodon') {
+      // The account id ends with its instance's host.
+      setMdn({ instance: c.displayName.match(/@([^@\s)]+)\)$/)?.[1] ?? '', accessToken: '' });
+      mastodonForm.current?.focus();
+      return;
+    }
+    if (c.provider === 'wordpress') {
+      // The account id is the site's host and path.
+      setWp({ site: `https://${c.externalAccountId}`, username: '', appPassword: '' });
+      wordpressForm.current?.focus();
+      return;
+    }
     if (oauth.includes(c.provider as OAuthProvider)) start.mutate(c.provider as OAuthProvider);
   };
-  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : oauth.includes(c.provider as OAuthProvider));
+  const canReconnect = (c: Channel) => isAdmin && c.status !== 'revoked' && (c.provider === 'bluesky' ? blueskyOn : c.provider === 'telegram' ? telegramOn : c.provider === 'mastodon' ? mastodonOn : c.provider === 'discord' ? discordOn : c.provider === 'wordpress' ? wordpressOn : oauth.includes(c.provider as OAuthProvider));
   const disconnect = useMutation({
     mutationFn: (connectionId: string) => client.channels.disconnect({ connectionId, idempotencyKey: crypto.randomUUID() }),
     onSuccess: () => {
@@ -247,6 +400,29 @@ export function SocialChannelsPage() {
       />
       <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="space-y-3">
+          <Card className="block space-y-2 p-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t('voice.orgTitle')}</p>
+              <p className="text-xs text-subtle-foreground">{t('voice.orgHint')}</p>
+            </div>
+            {!voices.isLoading && <VoiceEditor key={orgVoice?.updatedAt ?? 'none'} connectionId={null} voice={orgVoice} canEdit={isAdmin} />}
+          </Card>
+          <Card className="block space-y-2 p-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t('watermark.title')}</p>
+              <p className="text-xs text-subtle-foreground">{t('watermark.hint')}</p>
+            </div>
+            <WatermarkCard canEdit={isAdmin} />
+          </Card>
+          <Card className="block space-y-2 p-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t('chatAlert.title')}</p>
+              <p className="text-xs text-subtle-foreground">{t('chatAlert.hint')}</p>
+            </div>
+            <ChatAlertCard canEdit={isAdmin} />
+          </Card>
+          {/* Once the channels are loaded: before, every set would read as having none left. */}
+          {channels.data && <ChannelSetsCard channels={channels.data.filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />}
           {channels.isLoading ? (
             <Spinner />
           ) : channels.error ? (
@@ -302,7 +478,11 @@ export function SocialChannelsPage() {
                 </div>
                 {confirming === c.id && <p className="text-xs text-muted-foreground">{t('disconnectHint')}</p>}
                 <div className="border-t pt-3">
-                  <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} canEdit={isAdmin} loading={policyRows.isLoading} />
+                  <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} reminders={reminders.get(c.id) ?? true} shortLinks={shortLinks.get(c.id) ?? false} fourEyes={fourEyes.get(c.id) ?? false} clientApproval={clientApproval.get(c.id) ?? false} canEdit={isAdmin} canOwn={role === 'owner'} loading={policyRows.isLoading} />
+                </div>
+                <div className="border-t pt-3">
+                  <p className="mb-2 text-sm font-medium text-muted-foreground">{t('voice.channelTitle')}</p>
+                  {!voices.isLoading && <VoiceEditor key={channelVoice.get(c.id)?.updatedAt ?? 'none'} connectionId={c.id} voice={channelVoice.get(c.id)} canEdit={isAdmin} inherited={orgVoice !== undefined} />}
                 </div>
                 <div className="border-t pt-3">
                   <p className="mb-2 text-sm font-medium text-muted-foreground">{t('queueTitle')}</p>
@@ -349,6 +529,7 @@ export function SocialChannelsPage() {
                 )}
               </div>
             ))}
+            {isAdmin && <p className="text-xs text-subtle-foreground">{t(oauth.includes('google_business') ? 'gbpConnectHint' : 'gbpSetupHint')}</p>}
             {isAdmin && oauth.length > 0 && <p className="text-xs text-subtle-foreground">{t('oauthHint')}</p>}
             {start.error && <ErrorText>{errorMessage(start.error)}</ErrorText>}
           </div>
@@ -370,6 +551,86 @@ export function SocialChannelsPage() {
                 {t('connectWith', { provider: providerName('bluesky') })}
               </Button>
               {connectBluesky.error && <ErrorText>{errorMessage(connectBluesky.error)}</ErrorText>}
+            </form>
+          )}
+          {mastodonOn && isAdmin && (
+            <form
+              className="space-y-2 border-t pt-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (mdn.instance.trim() && mdn.accessToken.trim()) connectMastodon.mutate();
+              }}
+            >
+              <p className="text-sm font-medium text-foreground">{providerName('mastodon')}</p>
+              <Label htmlFor="mdn-instance">{t('mastodonInstance')}</Label>
+              <Input id="mdn-instance" ref={mastodonForm} autoComplete="off" value={mdn.instance} placeholder="mastodon.social" onChange={(e) => setMdn({ ...mdn, instance: e.target.value })} />
+              <Label htmlFor="mdn-token">{t('mastodonToken')}</Label>
+              <Input id="mdn-token" type="password" autoComplete="off" value={mdn.accessToken} onChange={(e) => setMdn({ ...mdn, accessToken: e.target.value })} />
+              <p className="text-xs text-subtle-foreground">{t('mastodonHint')}</p>
+              <Button type="submit" variant="outline" size="sm" disabled={!mdn.instance.trim() || !mdn.accessToken.trim() || connectMastodon.isPending}>
+                {t('connectWith', { provider: providerName('mastodon') })}
+              </Button>
+              {connectMastodon.error && <ErrorText>{errorMessage(connectMastodon.error)}</ErrorText>}
+            </form>
+          )}
+          {wordpressOn && isAdmin && (
+            <form
+              className="space-y-2 border-t pt-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (wp.site.trim() && wp.username.trim() && wp.appPassword.trim()) connectWordPress.mutate();
+              }}
+            >
+              <p className="text-sm font-medium text-foreground">{providerName('wordpress')}</p>
+              <Label htmlFor="wp-site">{t('wordpressSite')}</Label>
+              <Input id="wp-site" ref={wordpressForm} autoComplete="off" value={wp.site} placeholder="https://tiemcuaban.vn" onChange={(e) => setWp({ ...wp, site: e.target.value })} />
+              <Label htmlFor="wp-username">{t('wordpressUsername')}</Label>
+              <Input id="wp-username" autoComplete="off" value={wp.username} onChange={(e) => setWp({ ...wp, username: e.target.value })} />
+              <Label htmlFor="wp-password">{t('wordpressAppPassword')}</Label>
+              <Input id="wp-password" type="password" autoComplete="off" value={wp.appPassword} placeholder="xxxx xxxx xxxx xxxx xxxx xxxx" onChange={(e) => setWp({ ...wp, appPassword: e.target.value })} />
+              <p className="text-xs text-subtle-foreground">{t('wordpressHint')}</p>
+              <Button type="submit" variant="outline" size="sm" disabled={!wp.site.trim() || !wp.username.trim() || !wp.appPassword.trim() || connectWordPress.isPending}>
+                {t('connectWith', { provider: providerName('wordpress') })}
+              </Button>
+              {connectWordPress.error && <ErrorText>{errorMessage(connectWordPress.error)}</ErrorText>}
+            </form>
+          )}
+          {telegramOn && isAdmin && (
+            <form
+              className="space-y-2 border-t pt-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (tg.botToken.trim() && tg.channel.trim()) connectTelegram.mutate();
+              }}
+            >
+              <p className="text-sm font-medium text-foreground">{providerName('telegram')}</p>
+              <Label htmlFor="tg-token">{t('telegramBotToken')}</Label>
+              <Input id="tg-token" ref={telegramForm} type="password" autoComplete="off" value={tg.botToken} placeholder="123456789:AA..." onChange={(e) => setTg({ ...tg, botToken: e.target.value })} />
+              <Label htmlFor="tg-channel">{t('telegramChannel')}</Label>
+              <Input id="tg-channel" autoComplete="off" value={tg.channel} placeholder="@tenkenh" onChange={(e) => setTg({ ...tg, channel: e.target.value })} />
+              <p className="text-xs text-subtle-foreground">{t('telegramHint')}</p>
+              <Button type="submit" variant="outline" size="sm" disabled={!tg.botToken.trim() || !tg.channel.trim() || connectTelegram.isPending}>
+                {t('connectWith', { provider: providerName('telegram') })}
+              </Button>
+              {connectTelegram.error && <ErrorText>{errorMessage(connectTelegram.error)}</ErrorText>}
+            </form>
+          )}
+          {discordOn && isAdmin && (
+            <form
+              className="space-y-2 border-t pt-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (webhookUrl.trim()) connectDiscord.mutate();
+              }}
+            >
+              <p className="text-sm font-medium text-foreground">{providerName('discord')}</p>
+              <Label htmlFor="dc-webhook">{t('discordWebhook')}</Label>
+              <Input id="dc-webhook" ref={discordForm} type="password" autoComplete="off" value={webhookUrl} placeholder="https://discord.com/api/webhooks/..." onChange={(e) => setWebhookUrl(e.target.value)} />
+              <p className="text-xs text-subtle-foreground">{t('discordHint')}</p>
+              <Button type="submit" variant="outline" size="sm" disabled={!webhookUrl.trim() || connectDiscord.isPending}>
+                {t('connectWith', { provider: providerName('discord') })}
+              </Button>
+              {connectDiscord.error && <ErrorText>{errorMessage(connectDiscord.error)}</ErrorText>}
             </form>
           )}
         </Card>

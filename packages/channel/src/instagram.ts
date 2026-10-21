@@ -6,12 +6,14 @@
 // a carousel container for several (images and videos mixed), a wait until
 // Meta has fetched and processed them (status_code FINISHED), then media_publish, the one visible step. A container
 // whose status_code is PUBLISHED went out already, so a check after a lost answer finds the post instead of posting
-// again. Meta fetches each image and video from a public URL: deployments whose storage hands out presigned URLs (S3) can post;
-// others get MEDIA_URL_UNAVAILABLE with nothing posted.
+// again. Meta fetches each image from a public URL: deployments whose storage hands out presigned URLs (S3) can post
+// images; others get MEDIA_URL_UNAVAILABLE with nothing posted. A Reel or a video Story goes up without one: its bytes
+// are uploaded to the container (upload_type=resumable, #772).
 import { createHash } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
 import { videoCoverOf } from './cover.ts';
+import { postTypeOf } from './post-type.ts';
 import { Graph, GraphError, graphPublishResult, MetaLogin, type MetaAppConfig } from './meta.ts';
 import type { AuthorizeInput, ExchangeInput, Fetch, OAuthConnector } from './oauth.ts';
 
@@ -26,6 +28,8 @@ const WAIT_MS = 15_000;
 const POLL_MS = 2_000;
 // When the pipeline checks a pending post again.
 const CHECK_AFTER_SECONDS = 30;
+// How long the upload of one video's bytes may take (#772): a 100 MB file on a slow link.
+const UPLOAD_MS = 300_000;
 const NUMERIC_ID = /^\d{1,32}$/;
 
 interface InstagramSecret {
@@ -91,18 +95,50 @@ interface MediaListAnswer {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const captionOf = (content: { body: string }) => content.body.trim();
 const isVideo = (m: { mime: string }) => m.mime.startsWith('video/');
+// An image's description for screen readers (#790): feed images and carousel images only, up to 1000 characters.
+// Collaborators (feed posts and Reels) and people tagged on the first image (#796), as the composer stores them.
+const USERNAME = /^[a-z0-9._]{1,30}$/;
+function peopleOf(settings: Readonly<Record<string, unknown>>, key: 'collaborators' | 'userTags', max: number): string[] {
+  const value = settings[key];
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((v): v is string => typeof v === 'string' && USERNAME.test(v)))].slice(0, max);
+}
+// Tags spread along the bottom of the image; Instagram shows them when the image is tapped.
+const userTagsForm = (names: readonly string[]) =>
+  names.length === 0 ? {} : { user_tags: JSON.stringify(names.map((username, i) => ({ username, x: Number(((i + 1) / (names.length + 1)).toFixed(3)), y: 0.9 }))) };
+const collaboratorsForm = (names: readonly string[]) => (names.length === 0 ? {} : { collaborators: JSON.stringify(names) });
+const altOf = (m: { mime: string; altText?: string | null }) => (m.altText && !isVideo(m) ? { alt_text: m.altText.slice(0, 1000) } : {});
 // A pending post's reference: the container and a short hash of its caption, so a later status check can recognise the
 // post the container became without the content.
 const captionKey = (caption: string) => createHash('sha256').update(caption).digest('hex').slice(0, 16);
-const refOf = (container: string, caption: string) => `${container}.${captionKey(caption)}`;
+// A Story has no caption and is not listed with the account's media, so its reference carries this key instead: a
+// published Story whose id was not answered cannot be found again, and is unknown.
+const STORY_KEY = '0'.repeat(16);
+const refOf = (container: string, caption: string, story = false) => `${container}.${story ? STORY_KEY : captionKey(caption)}`;
 function parseRef(ref: string): { container: string; key: string } | null {
   const m = /^(\d{1,32})\.([0-9a-f]{16})$/.exec(ref);
   return m ? { container: m[1] as string, key: m[2] as string } : null;
 }
 
+// The account's publishing quota (plan §3.6): Instagram takes a limited number of posts in a rolling 24 hours (100
+// today, Stories included). With none left the post waits and is tried again later, instead of failing in the middle
+// of a publish. The API does not say when the quota frees, so the post is tried again every 2 hours; the publisher
+// bounds these waits on their own (MAX_QUOTA_WAITS in modules/social), past the quota's rolling day.
+export const QUOTA_RETRY_MS = 2 * 60 * 60 * 1000;
+
+// Whether the quota answer says the account has nothing left; a quota that cannot be read says nothing.
+export function quotaExhausted(answer: { data?: { quota_usage?: unknown; config?: { quota_total?: unknown } }[] } | null): boolean {
+  const d = answer?.data?.[0];
+  const usage = d?.quota_usage;
+  const total = d?.config?.quota_total;
+  return typeof usage === 'number' && typeof total === 'number' && total > 0 && usage >= total;
+}
+
 export class InstagramPublisher implements Publisher {
   readonly provider = 'instagram' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
+  // A video uploaded by Crove (#772) takes minutes; the job waits as long as for the other video adapters.
+  readonly callTimeoutMs = 420_000;
   private readonly graph: Graph;
   private readonly waitMs: number;
   private readonly pollMs: number;
@@ -130,27 +166,52 @@ export class InstagramPublisher implements Publisher {
     // A cover (#642) belongs to a Reel: a frame (thumb_offset, in milliseconds) or an image Meta fetches (cover_url).
     const cover = videoCoverOf(input.settings);
     const reel = media.length === 1 && isVideo(media[0] as { mime: string });
-    if (cover && !reel) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
+    // The post type (#644): a Story is one image or video, with no caption, cover or link; a Reel is one video.
+    const type = postTypeOf(input.settings);
+    if (type === null) return { kind: 'rejected', error: 'bad_request', code: 'POST_TYPE_NOT_SUPPORTED' };
+    const story = type === 'story';
+    if (story && media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'STORY_ONE_MEDIA' };
+    if (type === 'reel' && !reel) return { kind: 'rejected', error: 'bad_request', code: 'REEL_ONE_VIDEO' };
+    if (cover && (!reel || story)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
+    // Read before anything is created; a read that fails does not hold the post.
+    const quota = await this.graph
+      .call<Parameters<typeof quotaExhausted>[0]>('GET', `${input.externalAccountId}/content_publishing_limit`, { token: s.accessToken, params: { fields: 'quota_usage,config' } })
+      .catch(() => null);
+    if (quotaExhausted(quota)) return { kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED', retryAt: new Date(Date.now() + QUOTA_RETRY_MS) };
     const first = await input.mediaUrl((media[0] as { fileId: string }).fileId).catch(() => null);
-    if (!first) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
-    const caption = captionOf(input.content);
+    // Without a URL, a Reel or a video Story still goes: its bytes are uploaded to the container (#772). A cover image
+    // is fetched by URL, so it still needs one.
+    const uploaded = !first && reel && !(cover && !('atMs' in cover));
+    if (!first && !uploaded) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    // Read before anything is created: a file that cannot be read posts nothing.
+    const bytes = uploaded ? await input.readMedia((media[0] as { fileId: string }).fileId).catch(() => null) : null;
+    if (uploaded && !bytes) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+    const source = (video: boolean) => (uploaded ? { upload_type: 'resumable' } : video ? { video_url: first as string } : { image_url: first as string });
+    const caption = story ? '' : captionOf(input.content);
+    const collaborators = story ? [] : peopleOf(input.settings, 'collaborators', 3);
+    const tagged = story ? [] : peopleOf(input.settings, 'userTags', 20);
     // Containers are invisible until published, so any failure while making them posted nothing.
     let container: string;
     try {
-      if (media.length === 1) {
+      if (story) {
+        // A Story: Meta fetches the image or video from the URL; it takes no caption.
+        container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'STORIES', ...source(reel) });
+      } else if (media.length === 1) {
         // One video is a Reel, shown in the feed too; Meta fetches it from the URL and processes it before publishing.
         const coverForm = !cover ? {} : 'atMs' in cover ? { thumb_offset: String(cover.atMs) } : { cover_url: await urlOf(cover.fileId) };
-        const single = reel ? { media_type: 'REELS', video_url: first, share_to_feed: 'true', ...coverForm } : { image_url: first };
-        container = await this.create(input.externalAccountId, s.accessToken, { ...single, caption });
+        const single = reel ? { media_type: 'REELS', ...source(true), share_to_feed: 'true', ...coverForm } : { ...source(false), ...altOf(media[0] as { mime: string; altText?: string | null }), ...userTagsForm(tagged) };
+        container = await this.create(input.externalAccountId, s.accessToken, { ...single, caption, ...collaboratorsForm(collaborators) });
       } else {
         // A carousel may mix images and videos.
         const children: string[] = [];
         for (const [i, m] of media.entries()) {
-          const url = i === 0 ? first : await urlOf(m.fileId);
-          children.push(await this.create(input.externalAccountId, s.accessToken, { ...(isVideo(m) ? { media_type: 'VIDEO', video_url: url } : { image_url: url }), is_carousel_item: 'true' }));
+          const url = i === 0 ? (first as string) : await urlOf(m.fileId);
+          children.push(await this.create(input.externalAccountId, s.accessToken, { ...(isVideo(m) ? { media_type: 'VIDEO', video_url: url } : { image_url: url, ...altOf(m), ...(i === 0 ? userTagsForm(tagged) : {}) }), is_carousel_item: 'true' }));
         }
-        container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'CAROUSEL', children: children.join(','), caption });
+        container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'CAROUSEL', children: children.join(','), caption, ...collaboratorsForm(collaborators) });
       }
+      // The bytes, to the container just made; still invisible, so a failed upload posted nothing.
+      if (uploaded && bytes) await this.graph.uploadInstagram(container, s.accessToken, bytes, UPLOAD_MS);
     } catch (error) {
       if (error instanceof NoUrl) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
       const result = graphPublishResult(error);
@@ -159,12 +220,13 @@ export class InstagramPublisher implements Publisher {
     const deadline = Date.now() + this.waitMs;
     for (;;) {
       const state = await this.containerStatus(container, s.accessToken);
-      if (state === 'FINISHED') return this.publishContainer(input.externalAccountId, s.accessToken, container, captionKey(caption));
+      const key = story ? STORY_KEY : captionKey(caption);
+      if (state === 'FINISHED') return this.publishContainer(input.externalAccountId, s.accessToken, container, key);
       if (state === 'ERROR' || state === 'EXPIRED') return { kind: 'rejected', error: 'bad_request', code: `CONTAINER_${state}` };
-      if (state === 'PUBLISHED') return this.findPublished(input.externalAccountId, s.accessToken, captionKey(caption), container);
+      if (state === 'PUBLISHED') return this.findPublished(input.externalAccountId, s.accessToken, key, container);
       // Nothing is published yet, so a refused token here posted nothing.
       if (state === 'TOKEN_EXPIRED') return { kind: 'rejected', error: 'token_expired', code: '190' };
-      if (Date.now() >= deadline) return { kind: 'pending', externalRef: refOf(container, caption), checkAfterSeconds: CHECK_AFTER_SECONDS };
+      if (Date.now() >= deadline) return { kind: 'pending', externalRef: refOf(container, caption, story), checkAfterSeconds: CHECK_AFTER_SECONDS };
       await sleep(this.pollMs);
     }
   }
@@ -202,7 +264,8 @@ export class InstagramPublisher implements Publisher {
     const s = secretOf(input.secret);
     if (!s || !NUMERIC_ID.test(input.externalAccountId)) return { found: 'unknown' };
     const caption = captionOf(input.content);
-    if (!caption) return { found: 'unknown' };
+    // A Story has no caption and is not listed with the account's media (#644).
+    if (!caption || postTypeOf(input.settings) === 'story') return { found: 'unknown' };
     try {
       const post = await this.recent(input.externalAccountId, s.accessToken, (p) => p.caption === caption && p.at >= input.after.getTime() - 60_000 && p.at <= input.before.getTime() + 60_000);
       return post ? { found: true, externalId: post.id, url: post.permalink } : { found: false };
@@ -233,6 +296,32 @@ export class InstagramPublisher implements Publisher {
   // Likes and comments are fields of the post; reach, saves, shares and views come from its insights, which need
   // instagram_manage_insights (an account connected before Crove asked for it has none) and exist only for posts made
   // after the account became professional. Without insights the plain counts are still reported.
+  // The account's followers and yesterday's reach (#645). The reach needs instagram_manage_insights; an account
+  // connected before Crove asked for it reports followers only.
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const s = secretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalAccountId)) return null;
+    let followers: number | null;
+    try {
+      const answer = await this.graph.call<{ followers_count?: unknown }>('GET', input.externalAccountId, { token: s.accessToken, params: { fields: 'followers_count' } });
+      followers = count(answer.followers_count) ?? null;
+    } catch (error) {
+      const result = graphPublishResult(error);
+      if (result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'permission')) return { refused: result.error };
+      return null;
+    }
+    let reach: number | null = null;
+    try {
+      const insights = await this.graph.call<InsightsAnswer>('GET', `${input.externalAccountId}/insights`, { token: s.accessToken, params: { metric: 'reach', period: 'day' } });
+      const values = insights.data?.find((row) => row.name === 'reach')?.values ?? [];
+      reach = count(values.at(-1)?.value) ?? null;
+    } catch {
+      // No insights permission, or none yet: followers only.
+    }
+    return { followers, reach };
+  }
+
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const s = secretOf(input.secret);
     if (!s) return { refused: 'token_expired' };
@@ -296,6 +385,8 @@ export class InstagramPublisher implements Publisher {
   // The post a published container became: the newest post with the same caption in the last day (Meta does not link
   // them back, and its listing may lag). Never a guess: no match is unknown. quiet: a miss is not worth reporting.
   private async findPublished(account: string, token: string, key: string, container: string, quiet = false): Promise<PublishResult> {
+    // A Story is not listed with the account's media: never matched by guess.
+    if (key === STORY_KEY) return { kind: 'unknown', code: quiet ? 'NOT_YET' : 'STORY_NOT_FOUND', message: `container ${container}` };
     const since = Date.now() - 86_400_000;
     try {
       const post = await this.recent(account, token, (p) => captionKey(p.caption) === key && !(p.at < since));

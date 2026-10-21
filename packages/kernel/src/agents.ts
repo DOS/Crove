@@ -10,7 +10,7 @@
 // - The worker starts and finishes runs as the system; an agent enters a context only through a live run.
 import { sql, type Transaction } from 'kysely';
 import { z } from 'zod';
-import { zCheck, zId } from '@crove/kernel-contract';
+import { zCheck, zId, type Check } from '@crove/kernel-contract';
 import type { AgentScope, Database, MemberRole, TaskStatus } from '@crove/db';
 import {
   DomainError,
@@ -838,7 +838,13 @@ const zChecksPayload = z.object({ checks: z.array(zCheck).max(50) });
 
 // Inbox triage: a subscribed event creates a task for every active agent position whose template subscribes to it,
 // and wakes the agent. The event is read from the outbox in the database, never taken from the job payload. Agents
-// of a module this deployment does not enable get no task.
+// of a module this deployment does not enable get no task. kernel.proposal.created makes a proposal_review task; any
+// other subscribed event (a module's, such as social.post.submitted, #799) makes a general task from the agent_task
+// its emitting command wrote into the payload: a title, what it is about and whether it is tainted (taint is the
+// default when the event does not say).
+const zAgentTask = z.object({
+  agent_task: z.object({ title: z.string().trim().min(1).max(300), ref: z.object({ type: z.string().regex(/^[a-z][a-z0-9_.]{1,99}$/), id: zId }), tainted: z.boolean().optional() }),
+});
 export const dispatchAgentEvent = defineCommand({
   name: 'kernel.agent.dispatch_event',
   input: z.object({ eventId: zId }),
@@ -851,7 +857,8 @@ export const dispatchAgentEvent = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.eventId)
       .executeTakeFirst();
-    if (!event || event.type !== 'kernel.proposal.created') return { tasks: 0 };
+    if (!event) return { tasks: 0 };
+    if (event.type !== 'kernel.proposal.created') return dispatchModuleEvent(ctx, event);
     const proposalId = z.object({ proposalId: zId }).safeParse(event.payload);
     if (!proposalId.success) return { tasks: 0 };
     const proposal = await ctx.trx
@@ -902,6 +909,49 @@ export const dispatchAgentEvent = defineCommand({
   },
 });
 
+async function dispatchModuleEvent(ctx: CommandContext, event: { id: string; type: string; payload: unknown }): Promise<{ tasks: number }> {
+  const parsed = zAgentTask.safeParse(event.payload);
+  if (!parsed.success) return { tasks: 0 };
+  const { title, ref } = parsed.data.agent_task;
+  const tainted = parsed.data.agent_task.tainted ?? true;
+  const seats = await ctx.trx
+    .selectFrom('crove_kernel.agent as a')
+    .innerJoin('crove_kernel.agent_template as t', 't.key', 'a.template_key')
+    .innerJoin('crove_kernel.position as p', (j) => j.onRef('p.org_id', '=', 'a.org_id').onRef('p.holder_agent_id', '=', 'a.id'))
+    .select(['p.id as position_id', 't.module'])
+    .where('a.org_id', '=', ctx.orgId)
+    .where('a.status', '=', 'active')
+    .where('p.status', '=', 'active')
+    .where(sql<boolean>`t.subscribes @> ARRAY[${event.type}]::text[]`)
+    .execute();
+  let created = 0;
+  // Only the agents of the module the event is about: a template cannot be fed another module's records.
+  // The event, too, must be the template's own module's: a template subscribed to another module's event gets nothing.
+  for (const seat of seats.filter((s) => ctx.installed(s.module) && ref.type.startsWith(`${s.module}.`) && event.type.startsWith(`${s.module}.`))) {
+    const task = await ctx.trx
+      .insertInto('crove_kernel.task')
+      .values({
+        org_id: ctx.orgId,
+        title,
+        kind: 'general',
+        assignee_position_id: seat.position_id,
+        source: 'event',
+        source_ref: JSON.stringify(ref),
+        source_event_id: event.id,
+        created_by_type: 'system',
+        tainted,
+      })
+      .onConflict((oc) => oc.columns(['org_id', 'source_event_id', 'assignee_position_id']).where('source_event_id', 'is not', null).doNothing())
+      .returning(['id', 'tainted', 'request_depth'])
+      .executeTakeFirst();
+    if (!task) continue;
+    created += 1;
+    await requestWakeup(ctx, seat.position_id, { taskId: task.id, why: 'event' }, task.tainted, task.request_depth);
+  }
+  ctx.audit({ event: event.id, type: event.type, tasks: created });
+  return { tasks: created };
+}
+
 export type RunStartResult =
   | { runId: string; templateKey: string; tainted: boolean }
   | { runId: null; reason: 'not_runnable' | 'module_disabled' | 'kill_switch' | 'budget' | 'daily_cap' | 'busy' | 'idle' };
@@ -933,7 +983,8 @@ export const startAgentRun = defineCommand({
     const { rows: gates } = await sql<{ killed: boolean; spent: boolean; today: number }>`
       SELECT
         EXISTS (SELECT 1 FROM crove_kernel.kill_switch k WHERE k.org_id = ${ctx.orgId}::uuid AND k.released_at IS NULL
-                AND (k.scope = 'org' OR (k.scope = 'module' AND k.target = ${position.module}) OR (k.scope = 'agent' AND k.target = ${agent.id}))) AS killed,
+                AND (k.scope = 'org' OR (k.scope = 'module' AND k.target = ${position.module}) OR (k.scope = 'agent' AND k.target = ${agent.id})))
+          OR crove_kernel.global_kill_switch_on('ai') AS killed,
         EXISTS (SELECT 1 FROM crove_kernel.budget_policy b
                 WHERE b.org_id = ${ctx.orgId}::uuid AND b.hard_stop
                   AND (b.scope = 'org' OR (b.scope = 'module' AND b.target = ${position.module}) OR (b.scope = 'agent' AND b.target = ${agent.id}))
@@ -1241,7 +1292,7 @@ export const taskGet = defineQuery({
       .limit(200)
       .execute();
     // checks: null when the payload carries no readable checks (never an empty list, which would read as "all clear").
-    let proposal: { id: string; title: string; status: string; checks: Array<{ id: string; status: string; message: string }> | null } | null = null;
+    let proposal: { id: string; title: string; status: string; checks: Check[] | null } | null = null;
     const ref = zProposalRef.safeParse(task.source_ref);
     if (ref.success) {
       const row = await ctx.trx

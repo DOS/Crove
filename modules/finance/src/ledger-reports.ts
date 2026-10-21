@@ -85,15 +85,20 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
   const tt133 = ctx.trx.selectFrom('crove_finance.account').select(['code', 'name', 'parent_code']);
   const own = ctx.trx.selectFrom('crove_finance.org_account').select(['code', 'name', 'parent_code', 'root_code', 'active']).where('org_id', '=', ctx.orgId);
 
+  // A line of a party marked as a duplicate (#887) counts under the party kept.
+  const kept = sql<string | null>`COALESCE(dp.duplicate_of, l.party_id)`;
+
   // The opening balance: the debits and credits of every entry dated before the period, per account and party.
   const opening = ctx.trx
     .selectFrom('crove_finance.journal_line as l')
     .innerJoin('crove_finance.journal_entry as j', (join) => join.onRef('j.org_id', '=', 'l.org_id').onRef('j.id', '=', 'l.entry_id'))
-    .select(['l.account_code', 'l.party_id'])
+    .leftJoin('crove_kernel.party as dp', (join) => join.onRef('dp.org_id', '=', 'l.org_id').onRef('dp.id', '=', 'l.party_id'))
+    .select('l.account_code')
+    .select(kept.as('party_id'))
     .select((eb) => [eb.fn.sum<string>('l.debit').as('debit'), eb.fn.sum<string>('l.credit').as('credit')])
     .where('l.org_id', '=', ctx.orgId)
     .where('j.entry_date', '<', period.from)
-    .groupBy(['l.account_code', 'l.party_id']);
+    .groupBy(['l.account_code', kept]);
 
   // The period's lines in posting order; the purchase invoice an entry records gives its reference. The aggregate
   // below orders them again, which is what guarantees the order; sorting here first keeps that second sort cheap.
@@ -103,6 +108,8 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
     .leftJoin('crove_finance.purchase_document as d', (join) =>
       join.onRef('d.org_id', '=', 'j.org_id').onRef('d.id', '=', 'j.source_id').on('j.source_type', '=', 'finance.purchase_document'),
     )
+    .leftJoin('crove_kernel.party as dp', (join) => join.onRef('dp.org_id', '=', 'l.org_id').onRef('dp.id', '=', 'l.party_id'))
+    .select(kept.as('party_id'))
     .select([
       'j.id',
       'j.entry_date',
@@ -113,7 +120,6 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
       'd.invoice_number',
       'l.line_no',
       'l.account_code',
-      'l.party_id',
       'l.debit',
       'l.credit',
     ])

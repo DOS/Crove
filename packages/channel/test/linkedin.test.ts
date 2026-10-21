@@ -193,3 +193,43 @@ describe('LinkedInPublisher video', () => {
     for (const run of [failed, refused]) expect(run.calls.some((c) => c.route === 'POST api.linkedin.com/rest/posts')).toBe(false);
   });
 });
+
+describe('LinkedIn post counts (#797)', () => {
+  const URN = 'urn:li:share:7123456789012345678';
+  const counts = [120, 80, 9, 3, 2];
+  const analytics = (answers: { status?: number; body?: unknown }[]) => {
+    const urls: URL[] = [];
+    const fetchImpl: Fetch = async (url, init) => {
+      urls.push(new URL(url));
+      expect(new Headers(init?.headers).get('linkedin-version')).toBe(LINKEDIN_VERSION);
+      const a = answers.shift() ?? { status: 500, body: {} };
+      return new Response(JSON.stringify(a.body ?? {}), { status: a.status ?? 200, headers: { 'content-type': 'application/json' } });
+    };
+    return { urls, fetchImpl };
+  };
+
+  it('reads nothing unless the app has member post analytics, and then asks for its scope too', () => {
+    expect(new LinkedInPublisher().metrics).toBeUndefined();
+    const url = new URL(new LinkedInConnector({ ...APP, analytics: true }).authorizeUrl({ state: 's', redirectUri: REDIRECT, codeChallenge: null }));
+    expect(url.searchParams.get('scope')).toBe('openid profile w_member_social r_member_postAnalytics');
+    expect(new URL(new LinkedInConnector(APP).authorizeUrl({ state: 's', redirectUri: REDIRECT, codeChallenge: null })).searchParams.get('scope')).toBe('openid profile w_member_social');
+  });
+
+  it('reads impressions, reach, reactions, comments and reshares, one call each', async () => {
+    const { urls, fetchImpl } = analytics(counts.map((count) => ({ body: { elements: [{ count, metricType: {} }] } })));
+    const read = await new LinkedInPublisher({ analytics: true }, fetchImpl).metrics?.({ externalAccountId: MEMBER, secret: SECRET, externalId: URN });
+    expect(read).toEqual({ metrics: { impressions: 120, reach: 80, reactions: 9, comments: 3, shares: 2 } });
+    expect(urls.map((u) => u.searchParams.get('queryType'))).toEqual(['IMPRESSION', 'MEMBERS_REACHED', 'REACTION', 'COMMENT', 'RESHARE']);
+    expect(urls[0]?.pathname).toBe('/rest/memberCreatorPostAnalytics');
+    expect(urls[0]?.search).toContain(`entity=(share:${encodeURIComponent(URN)})`);
+  });
+
+  it('keeps nothing without the permission, and tells a deleted post and a dead token apart', async () => {
+    const publisher = (answers: { status?: number; body?: unknown }[]) => new LinkedInPublisher({ analytics: true }, analytics(answers).fetchImpl);
+    const ask = (p: LinkedInPublisher, externalId = URN) => p.metrics?.({ externalAccountId: MEMBER, secret: SECRET, externalId });
+    expect(await ask(publisher([{ status: 403, body: { message: 'Not enough permissions' } }]))).toBeNull();
+    expect(await ask(publisher([{ status: 404, body: {} }]))).toEqual({ refused: 'gone' });
+    expect(await ask(publisher([{ status: 401, body: {} }]))).toEqual({ refused: 'token_expired' });
+    expect(await ask(publisher([]), 'not-a-urn')).toEqual({ refused: 'gone' });
+  });
+});

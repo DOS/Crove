@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { BLOCKING_CHECK_IDS, vietnamToday, type CashVoucherProposal } from '@crove/kernel-contract';
+import { BLOCKING_CHECK_IDS, vietnamToday, type CashVoucherProposal, type JournalVoucherProposal } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
@@ -18,7 +18,9 @@ import { getConfig } from '../lib/auth.ts';
 import { isZeroAmount, linesBalance, previewPurchaseJournal, previewSalesJournal } from '../lib/decimal.ts';
 import { nextDay, postingDateAllowed } from '../lib/period-lock.ts';
 import { useFormat } from '../i18n/provider.tsx';
+import { invoiceCheckMessage } from '../lib/invoice-checks.ts';
 import { reversalErrorMessage } from '../lib/reversal.ts';
+import { journalVoucherProblem } from '../lib/journal-voucher.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
 import { partySearch } from '../lib/parties.ts';
 import { nextPendingId, previousPendingId, reviewShortcut, type ReviewAction } from '../lib/review.ts';
@@ -216,6 +218,62 @@ function VoucherCard({ voucher, code, slug, accountName }: { voucher: CashVouche
   );
 }
 
+// A general journal voucher entered by hand (NVK, #888): its reason and the entry its approval posts, line by line with
+// each line's party. The number is given on approval; code is the one it was given, once approved.
+function JournalVoucherCard({ voucher, code, slug, accountName }: { voucher: JournalVoucherProposal; code: string | null; slug: string; accountName: (code: string) => string }) {
+  const t = useTranslations('inboxDetail');
+  const f = useFormat();
+  return (
+    <Card className="block space-y-4 p-4">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div className="sm:col-span-2">
+          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('voucherReason')}</p>
+          <p className="mt-1 text-sm whitespace-pre-wrap text-foreground">{voucher.description}</p>
+        </div>
+        <div>
+          <p className="text-xs tracking-wide uppercase text-subtle-foreground">{t('voucherTotal')}</p>
+          <p className="mt-1 text-base font-semibold text-foreground tabular-nums">{f.money(voucher.total)}</p>
+        </div>
+      </div>
+      <div>
+        <p className="text-xs font-medium tracking-wide uppercase text-subtle-foreground">{t('journal')}</p>
+        <table className="mt-3 w-full text-sm">
+          <thead className="text-left text-xs text-subtle-foreground">
+            <tr>
+              <th className="py-1.5 font-medium">{t('account')}</th>
+              <th className="py-1.5 text-right font-medium">{t('debit')}</th>
+              <th className="py-1.5 text-right font-medium">{t('credit')}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {voucher.lines.map((l, i) => (
+              <tr key={`${i}-${l.account}`}>
+                <td className="py-2 text-foreground">
+                  <span className="font-mono">{l.account}</span> <span className="text-subtle-foreground">{accountName(l.account)}</span>
+                  {l.party && <p className="text-xs text-muted-foreground">{l.party.taxCode ? `${l.party.name} (${l.party.taxCode})` : l.party.name}</p>}
+                  <p className="text-xs text-subtle-foreground">{l.memo ?? voucher.description}</p>
+                </td>
+                <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(l.debit) ? '' : f.money(l.debit)}</td>
+                <td className="py-2 text-right text-foreground tabular-nums">{isZeroAmount(l.credit) ? '' : f.money(l.credit)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {code ? (
+          <p className="mt-3 text-sm text-foreground">
+            {t('voucherNumberGiven')} <span className="font-mono font-medium">{code}</span>
+          </p>
+        ) : (
+          <p className="mt-3 text-xs text-subtle-foreground">{t('voucherNumberLater')}</p>
+        )}
+        <Link to="/o/$slug/journal" params={{ slug }} className="mt-2 inline-block text-sm text-link hover:underline">
+          {t('viewJournal')}
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
 // One page per proposal: moving to the next one (J or N) mounts a fresh page, so no unsaved account, confirmation or
 // approval idempotency key carries over from the previous proposal.
 export function InboxDetailPage() {
@@ -310,7 +368,10 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const voucher = item?.voucher ?? null;
   // The code the voucher was given when it was approved (PC00001 and the like).
   const voucherCode = (voucher && item?.status === 'executed' && item.result?.voucherCode) || null;
-  const plain = reversal !== null || voucher !== null;
+  // A general journal voucher (NVK, #888) is approved as shown too.
+  const journalVoucher = item?.journalVoucher ?? null;
+  const journalVoucherCode = (journalVoucher && item?.status === 'executed' && item.result?.voucherCode) || null;
+  const plain = reversal !== null || voucher !== null || journalVoucher !== null;
   const failed = payload?.checks.filter((c) => c.status === 'fail').length ?? 0;
   const blocked = payload?.checks.some((c) => c.status === 'fail' && BLOCKING_CHECK_IDS.includes(c.id)) ?? false;
   // The approve buttons are enabled exactly when this holds, and the A shortcut uses the same value.
@@ -396,6 +457,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   // saved a new revision meanwhile, the kernel answers STALE_REVISION instead of approving what this user never saw.
   // The same idempotency key keeps it one approval.
   const refusedVoucher = voucherProblem(approve.error);
+  const refusedJournalVoucher = journalVoucherProblem(approve.error);
   const retryApproval = () => {
     if (approve.variables) approve.mutate(approve.variables);
   };
@@ -419,7 +481,11 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                   ? voucherCode
                     ? t('voucherSubtitlePosted', { type: root(`vouchers.types.${voucher.type}`), code: voucherCode, date: f.date(voucher.date) })
                     : t('voucherSubtitle', { type: root(`vouchers.types.${voucher.type}`), date: f.date(voucher.date) })
-                  : undefined
+                  : journalVoucher
+                    ? journalVoucherCode
+                      ? t('journalVoucherSubtitlePosted', { code: journalVoucherCode, date: f.date(journalVoucher.date) })
+                      : t('journalVoucherSubtitle', { date: f.date(journalVoucher.date) })
+                    : undefined
           }
           actions={
             pending ? (
@@ -470,6 +536,12 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                     {t('approveVoucher')}
                   </Button>
                 )}
+                {item.canApprove && journalVoucher && (
+                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
+                    {approve.isPending ? <Spinner className="text-current" /> : null}
+                    {t('approveJournalVoucher')}
+                  </Button>
+                )}
                 {item.canApprove && !plain && (
                   <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
                     {approve.isPending ? <Spinner className="text-current" /> : null}
@@ -496,7 +568,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
       </div>
       {stepUp && (
         <div className="mb-4">
-          <StepUpPrompt action={reversal ? t('stepUpApproveReversal') : voucher ? t('stepUpApproveVoucher') : t('stepUpApprove')} onVerified={retryApproval} onCancel={() => approve.reset()} />
+          <StepUpPrompt action={reversal ? t('stepUpApproveReversal') : voucher ? t('stepUpApproveVoucher') : journalVoucher ? t('stepUpApproveJournalVoucher') : t('stepUpApprove')} onVerified={retryApproval} onCancel={() => approve.reset()} />
         </div>
       )}
       {((approve.error && !stepUp) || reject.error || edit.error || reextract.error) && (
@@ -506,6 +578,8 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
               ? reversalErrorMessage(approve.error, root, locale)
               : voucher && approve.error && !stepUp && refusedVoucher
                 ? root(`vouchers.problems.${refusedVoucher}`)
+              : journalVoucher && approve.error && !stepUp && refusedJournalVoucher
+                ? root(`journalVoucher.problems.${refusedJournalVoucher}`)
               : errorMessage((stepUp ? null : approve.error) ?? reject.error ?? edit.error ?? reextract.error)}
           </ErrorText>
         </div>
@@ -532,6 +606,15 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
             <p className="mb-4 text-sm text-subtle-foreground">{t('voucherNotEligible')}</p>
           )}
           <VoucherCard voucher={voucher} code={voucherCode} slug={slug} accountName={accountName} />
+        </div>
+      )}
+      {journalVoucher && (
+        <div className="mb-6">
+          {pending && !item.canApprove && item.approveReason === 'four_eyes' && <p className="mb-4 text-sm text-muted-foreground">{t('voucherFourEyes')}</p>}
+          {pending && !item.canApprove && item.approveReason === 'not_eligible' && (
+            <p className="mb-4 text-sm text-subtle-foreground">{t('voucherNotEligible')}</p>
+          )}
+          <JournalVoucherCard voucher={journalVoucher} code={journalVoucherCode} slug={slug} accountName={accountName} />
         </div>
       )}
       {reading && (
@@ -665,7 +748,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                 {payload.checks.map((c) => (
                   <li key={c.id} className="flex items-start gap-2 text-sm">
                     <Badge variant={CHECK_TONE[c.status]}>{CHECK_ICON[c.status]}</Badge>
-                    <span className="text-muted-foreground">{c.message}</span>
+                    <span className="text-muted-foreground">{invoiceCheckMessage(c, root, money)}</span>
                   </li>
                 ))}
               </ul>
@@ -754,6 +837,56 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           </div>
         )}
       </div>
+      <ProposalTimeline id={item.id} documentId={item.status === 'executed' ? (item.result?.documentId ?? null) : null} />
     </>
+  );
+}
+
+// What happened to the document (#672): received, read, proposed, edited, approved or rejected, recorded, reversed,
+// and the exports it went out in (#878), oldest first, with who did it. The stream's proposal hints refresh it with the
+// rest of the Inbox.
+function ProposalTimeline({ id, documentId }: { id: string; documentId: string | null }) {
+  const t = useTranslations('inboxDetail');
+  const f = useFormat();
+  const timeline = useQuery(orpc.inbox.timeline.queryOptions({ input: { id } }));
+  const exports = useQuery({ ...orpc.documents.exports.queryOptions({ input: { documentId: documentId ?? '' } }), enabled: documentId !== null && getConfig().modules.includes('finance') });
+  const range = (from: string | null, to: string | null) =>
+    from && to ? t('exportRange', { from: f.date(from), to: f.date(to) }) : from ? t('exportFrom', { from: f.date(from) }) : to ? t('exportTo', { to: f.date(to) }) : t('exportAll');
+  const items = [
+    ...(timeline.data?.items ?? []).map((e) => ({ id: e.id, at: e.at, summary: e.summary, actorType: e.actorType, actorName: e.actorName })),
+    ...(exports.data ?? []).map((e) => ({
+      id: `export:${e.id}`,
+      at: e.at,
+      summary: t('exported', { file: t(`exportFormats.${e.format}`), range: range(e.from, e.to) }),
+      actorType: 'user' as const,
+      actorName: e.actorName,
+    })),
+  ].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+  return (
+    <Card className="mt-6 block p-4" data-testid="timeline">
+      <p className="mb-3 text-sm font-medium text-muted-foreground">{t('timeline')}</p>
+      {timeline.isLoading ? (
+        <Spinner />
+      ) : timeline.error ? (
+        <ErrorText>{errorMessage(timeline.error)}</ErrorText>
+      ) : items.length === 0 ? (
+        <p className="text-sm text-subtle-foreground">{t('timelineEmpty')}</p>
+      ) : (
+        <>
+          {timeline.data?.more && <p className="mb-2 text-xs text-subtle-foreground">{t('timelineMore')}</p>}
+          <ol className="space-y-2 border-l pl-4">
+            {items.map((e) => (
+              <li key={e.id} className="text-sm">
+                <p className="text-foreground">{e.summary}</p>
+                <p className="text-xs text-subtle-foreground">
+                  {f.dateTime(e.at)} · {e.actorType === 'system' ? t('timelineSystem') : (e.actorName ?? t('timelineFormer'))}
+                  {e.actorType === 'agent' ? ` (${t('timelineAgent')})` : ''}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+    </Card>
   );
 }

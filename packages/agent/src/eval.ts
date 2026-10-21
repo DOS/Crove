@@ -227,3 +227,132 @@ export function formatEvalSummary(summary: EvalSummary): string {
   }
   return lines.join('\n');
 }
+
+// Document eval (#687): the same scoring over a set of real documents of three kinds, each read through its
+// production path (e-invoice XML through the parser, PDF through its text then fromText, photos through
+// fromImage). The report gives accuracy per kind and per field and the most frequent errors. The gate is the
+// plan's (M2-11): every amount of every XML document exact. PDF and photo accuracy is measured, not gated.
+export const DOCUMENT_KINDS = ['xml', 'pdf', 'image'] as const;
+export type DocumentKind = (typeof DOCUMENT_KINDS)[number];
+
+// The file extensions the eval reads, with the media type an image is sent as.
+const DOCUMENT_EXTENSIONS: Readonly<Record<string, { kind: DocumentKind; mediaType: string }>> = {
+  '.xml': { kind: 'xml', mediaType: 'application/xml' },
+  '.pdf': { kind: 'pdf', mediaType: 'application/pdf' },
+  '.jpg': { kind: 'image', mediaType: 'image/jpeg' },
+  '.jpeg': { kind: 'image', mediaType: 'image/jpeg' },
+  '.png': { kind: 'image', mediaType: 'image/png' },
+  '.webp': { kind: 'image', mediaType: 'image/webp' },
+};
+
+export function documentType(filename: string): { kind: DocumentKind; mediaType: string } | null {
+  const dot = filename.lastIndexOf('.');
+  return dot < 0 ? null : (DOCUMENT_EXTENSIONS[filename.slice(dot).toLowerCase()] ?? null);
+}
+
+export interface DocumentScore extends FixtureScore {
+  kind: DocumentKind;
+}
+
+// A field without its line index ("lines[3].amount" -> "lines[].amount"), so lines add up across documents.
+export const fieldKey = (field: string): string => field.replace(/^lines\[\d+\]/, 'lines[]');
+
+// The amounts that must be exact on every XML document.
+export const XML_AMOUNT_FIELDS: readonly string[] = ['subtotal', 'vatTotal', 'total', 'lines[].amount'];
+
+export interface Rate {
+  matched: number;
+  total: number;
+  accuracy: number;
+}
+
+export interface DocumentEvalSummary {
+  documents: number;
+  byKind: Array<Rate & { kind: DocumentKind; documents: number }>;
+  byField: Array<Rate & { field: string }>;
+  // The most frequent errors, by kind and field ("extraction" for a document the path failed to read).
+  topErrors: Array<{ kind: DocumentKind; field: string; count: number }>;
+  // XML amounts that were wrong ("<document>: <field>"); any one fails the gate.
+  xmlAmountMisses: string[];
+  passed: boolean;
+  scores: DocumentScore[];
+}
+
+const rateOf = (matched: number, total: number): Rate => ({ matched, total, accuracy: total === 0 ? 0 : matched / total });
+
+export function summarizeDocumentEval(scores: DocumentScore[], topN = 5): DocumentEvalSummary {
+  const byKind = DOCUMENT_KINDS.map((kind) => {
+    const of = scores.filter((s) => s.kind === kind);
+    return { kind, documents: of.length, ...rateOf(of.reduce((n, s) => n + s.matched, 0), of.reduce((n, s) => n + s.total, 0)) };
+  }).filter((k) => k.documents > 0);
+
+  // Fields in the order they are first scored, so the table reads like an invoice.
+  const fields = new Map<string, { matched: number; total: number }>();
+  const errors = new Map<string, { kind: DocumentKind; field: string; count: number }>();
+  const miss = (kind: DocumentKind, field: string) => {
+    const key = `${kind}\u0000${field}`;
+    const entry = errors.get(key) ?? { kind, field, count: 0 };
+    entry.count += 1;
+    errors.set(key, entry);
+  };
+  for (const score of scores) {
+    if (score.error !== null) miss(score.kind, 'extraction');
+    for (const f of score.fields) {
+      const key = fieldKey(f.field);
+      const entry = fields.get(key) ?? { matched: 0, total: 0 };
+      entry.total += 1;
+      if (f.match) entry.matched += 1;
+      fields.set(key, entry);
+      if (!f.match) miss(score.kind, key);
+    }
+  }
+  const topErrors = [...errors.values()]
+    .sort((a, b) => b.count - a.count || DOCUMENT_KINDS.indexOf(a.kind) - DOCUMENT_KINDS.indexOf(b.kind) || a.field.localeCompare(b.field))
+    .slice(0, topN);
+  const xmlAmountMisses = scores
+    .filter((s) => s.kind === 'xml')
+    .flatMap((s) => s.fields.filter((f) => !f.match && XML_AMOUNT_FIELDS.includes(fieldKey(f.field))).map((f) => `${s.id}: ${f.field}`));
+  return {
+    documents: scores.length,
+    byKind,
+    byField: [...fields.entries()].map(([field, r]) => ({ field, ...rateOf(r.matched, r.total) })),
+    topErrors,
+    xmlAmountMisses,
+    passed: scores.length > 0 && xmlAmountMisses.length === 0,
+    scores,
+  };
+}
+
+// The report as Markdown (for a terminal or a GitHub job summary). `showValues` prints what was expected and what
+// came back for each wrong field: only for documents that may be published (the committed synthetic set). For the
+// private set the report names documents and fields, never their content.
+export function formatDocumentEvalReport(summary: DocumentEvalSummary, options: { showValues: boolean }): string {
+  const pct = (r: Rate) => `${(r.accuracy * 100).toFixed(1)}% (${r.matched}/${r.total})`;
+  const out = [
+    `## Document eval: ${summary.passed ? 'PASS' : 'FAIL'}`,
+    '',
+    `${summary.documents} documents. Gate: every amount of every XML document exact${summary.xmlAmountMisses.length ? `; wrong: ${summary.xmlAmountMisses.join(', ')}` : ''}.`,
+    '',
+    '| Kind | Documents | Field accuracy |',
+    '| --- | --- | --- |',
+    ...summary.byKind.map((k) => `| ${k.kind} | ${k.documents} | ${pct(k)} |`),
+    '',
+    '| Field | Accuracy |',
+    '| --- | --- |',
+    ...summary.byField.map((f) => `| ${f.field} | ${pct(f)} |`),
+    '',
+    'Top errors:',
+    ...(summary.topErrors.length ? summary.topErrors.map((e) => `- ${e.kind} ${e.field}: ${e.count}`) : ['- none']),
+  ];
+  const wrong = summary.scores.filter((s) => s.error !== null || s.matched < s.total);
+  if (wrong.length) {
+    out.push('', 'Per document:');
+    for (const s of wrong) {
+      out.push(`- ${s.id} (${s.kind}): ${s.matched}/${s.total}${s.error !== null ? (options.showValues ? `, error: ${s.error}` : ', extraction failed') : ''}`);
+      for (const f of s.fields.filter((x) => !x.match)) {
+        out.push(options.showValues ? `  - ${f.field}: expected ${JSON.stringify(f.expected)}, got ${JSON.stringify(f.actual)}` : `  - ${f.field}`);
+      }
+    }
+  }
+  return out.join('\n');
+}

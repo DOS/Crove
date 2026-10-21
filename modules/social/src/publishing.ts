@@ -17,8 +17,9 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { shortOfPolicy } from './policy.ts';
-import { isProvider } from './domain/channels.ts';
+import { PUBLISH_LIMITS, SENT_TO_APP, isProvider, limitWait } from './domain/channels.ts';
 import { sentLink } from './domain/utm.ts';
+import { withShortLink } from './short-links.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
 import { startsNewAttempt, type VariantEvent } from './domain/state.ts';
 import {
@@ -39,6 +40,7 @@ import {
   type PostRow,
   type VariantRow,
 } from './variants.ts';
+import { agentTaskOf } from './agent.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const PUBLISH_STEP = 'publish';
@@ -47,6 +49,9 @@ export const PUBLISH_STEP = 'publish';
 export const PUBLISH_STALE_SECONDS = 600;
 // Automatic new attempts after a rate limit or a transient failure; then the variant fails and waits for a person.
 export const MAX_AUTO_ATTEMPTS = 5;
+// Waits on a used-up publishing quota (#743, QUOTA_EXHAUSTED) have their own bound: the quota frees within its
+// rolling day, so a post waits up to about two days of tries before a person is asked.
+export const MAX_QUOTA_WAITS = 24;
 const MAX_RETRY_DELAY_MS = 60 * 60_000;
 // A pending post whose status check cannot be answered is checked again after this long.
 const STATUS_RECHECK_MS = 60_000;
@@ -80,6 +85,11 @@ export interface PublishWork {
   // The connection's updated_at as begin saw it: an expired token marks the connection only if it has not changed
   // since (a reconnect in between brought a new token).
   connectionVersion: string | null;
+  // What the platform granted the connection (#903): the job checks a permission the variant needs against it
+  // (scopeNeeded) before calling, and pauses the variant for a reconnect when it is missing.
+  scopes: string[];
+  // The post's link as Crove shortened it (#706): its code, and the link it stands for (content.linkUrl).
+  shortLink?: { code: string; target: string };
 }
 
 export type BeginResult = { action: 'none'; reason: string } | PublishWork;
@@ -155,12 +165,13 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
     contentHash: v.content_hash,
     content: {
       ...withSentLink(v, effectiveContent(base(post), overrides(v), v.content_frozen)),
-      media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 })),
+      media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null })),
     },
     settings: settingsOf(v),
     externalRef: v.external_post_id,
     callStartedAt: startedAt.toISOString(),
     connectionVersion: connection ? connection.updatedAt.toISOString() : null,
+    scopes: connection ? [...connection.scopes] : [],
   };
 }
 
@@ -210,6 +221,8 @@ async function needsHuman(ctx: CommandContext, post: PostRow, v: VariantRow): Pr
 interface ConnectionState {
   status: string;
   updatedAt: Date;
+  // What the platform granted when the channel was connected (or last reconnected).
+  scopes: readonly string[];
 }
 
 // The variant's connection, read under a share lock (after the post and its variants), so a reconnect or a disconnect
@@ -217,9 +230,9 @@ interface ConnectionState {
 // lock 'update' where the same transaction may go on to update the connection (mark_expired): a share lock upgraded
 // later would deadlock two jobs of one channel.
 async function connectionOf(ctx: CommandContext, connectionId: string, lock: 'share' | 'update' = 'share'): Promise<ConnectionState | null> {
-  const q = ctx.trx.selectFrom('crove_kernel.channel_connection').select(['status', 'updated_at']).where('org_id', '=', ctx.orgId).where('id', '=', connectionId);
+  const q = ctx.trx.selectFrom('crove_kernel.channel_connection').select(['status', 'updated_at', 'scopes']).where('org_id', '=', ctx.orgId).where('id', '=', connectionId);
   const row = await (lock === 'update' ? q.forUpdate() : q.forShare()).executeTakeFirst();
-  return row ? { status: row.status, updatedAt: row.updated_at } : null;
+  return row ? { status: row.status, updatedAt: row.updated_at, scopes: row.scopes } : null;
 }
 
 // Pauses a variant on its channel and stamps the connection's version as stored now (in SQL, never through a
@@ -249,6 +262,22 @@ async function queuePaused(ctx: CommandContext, v: VariantRow): Promise<boolean>
     .where('channel_connection_id', '=', v.channel_connection_id)
     .executeTakeFirst();
   return q?.paused === true;
+}
+
+// When the variant's account may post again under its channel's counted limit (#775), or null when it may now. Counts
+// the account's publish calls in the window from the call ledger, whatever came of them except a refusal: a post that
+// went out, one still on its way, and an unclear one all used the account's allowance.
+async function limitedUntil(ctx: CommandContext, v: VariantRow): Promise<Date | null> {
+  const limit = isProvider(v.provider) ? PUBLISH_LIMITS[v.provider] : undefined;
+  if (!limit) return null;
+  const since = new Date(ctx.now.getTime() - limit.windowMs);
+  const { rows } = await sql<{ started_at: Date }>`
+    SELECT c.started_at FROM crove_kernel.external_call c
+    JOIN crove_social.post_variant pv ON pv.org_id = c.org_id AND pv.id::text = split_part(c.key, ':', 2)
+    WHERE c.org_id = ${ctx.orgId}::uuid AND c.module = 'social' AND c.step = ${PUBLISH_STEP} AND c.started_at > ${since}
+      AND c.state <> 'failed' AND pv.channel_connection_id = ${v.channel_connection_id}::uuid AND pv.id <> ${v.id}::uuid
+    ORDER BY c.started_at DESC LIMIT ${limit.count}`.execute(ctx.trx);
+  return limitWait(rows.map((r) => r.started_at), limit, ctx.now);
 }
 
 export const publishBegin = defineCommand({
@@ -281,7 +310,7 @@ export const publishBegin = defineCommand({
           // Its channel now asks for more approvals than it has (set_policy re-checks too; a retry or a resume can
           // bring one back to scheduled): back to review, never published short.
           await move(ctx, v, { type: 'regate' }, regateValues(v));
-          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: [v.id], by_policy: true });
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: [v.id], by_policy: true, agent_task: await agentTaskOf(ctx, post.id) });
           result = none('approval');
           break;
         }
@@ -295,6 +324,14 @@ export const publishBegin = defineCommand({
           await ctx.emit('social.variant.paused', { post_id: post.id, variant_id: v.id, reason: code });
           result = none('paused');
           break;
+        }
+        // A channel whose limit Crove counts itself (#775): with the account's posts in the window used up, the variant
+        // waits until one leaves it, with nothing sent.
+        const wait = await limitedUntil(ctx, v);
+        if (wait) {
+          await setVariant(ctx, v.id, { error_kind: 'rate_limited', error_code: 'QUOTA_EXHAUSTED', error_message: null, error_http_status: null, error_action: null, error_retry_at: wait });
+          await ctx.emit('social.variant.rate_limited', { post_id: post.id, variant_id: v.id, retry_at: wait.toISOString(), code: 'QUOTA_EXHAUSTED' });
+          return none('quota');
         }
         let callKey = key;
         let existing = await callRow(ctx, callKey);
@@ -323,7 +360,7 @@ export const publishBegin = defineCommand({
         const existing = await callRow(ctx, key);
         const startedAt = existing?.started_at ?? v.updated_at;
         const connection = await connectionOf(ctx, v.channel_connection_id);
-        if (now - startedAt.getTime() < MAX_PROCESSING_MS) return work('status', post, v, key, startedAt, connection);
+        if (now - startedAt.getTime() < MAX_PROCESSING_MS) return withShortLink(ctx, work('status', post, v, key, startedAt, connection), v.revision);
         // Processing for a day: ask whether it is on the platform; if not, a person decides.
         await move(ctx, v, { type: 'unknown' }, { error_kind: 'unknown', error_code: 'PROCESSING_TOO_LONG', next_check_at: null });
         result = work('reconcile', post, v, key, startedAt, connection);
@@ -334,7 +371,7 @@ export const publishBegin = defineCommand({
         // could miss it and send a person to publish it again.
         if (now - v.updated_at.getTime() < RECONCILE_WAIT_MS) return none('reconcile_wait');
         const existing = await callRow(ctx, key);
-        return work('reconcile', post, v, key, existing?.started_at ?? v.updated_at, await connectionOf(ctx, v.channel_connection_id));
+        return withShortLink(ctx, work('reconcile', post, v, key, existing?.started_at ?? v.updated_at, await connectionOf(ctx, v.channel_connection_id)), v.revision);
       }
       case 'paused': {
         // Paused on its channel: once the channel is active and has changed since the pause (reconnected), a new
@@ -352,13 +389,15 @@ export const publishBegin = defineCommand({
         return none(v.status);
     }
     await refreshPostStatus(ctx, post.id);
-    return result;
+    // The link the step sends (#706): the variant's short link, made on its first call where its channel asks for one.
+    return result.action === 'none' ? result : withShortLink(ctx, result, v.revision);
   },
 });
 
 const zText = (max: number) => z.string().max(max);
 const zResult = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('accepted'), externalId: z.string().min(1).max(500), url: z.url({ protocol: /^https?$/ }).max(2000).nullable() }),
+  // sentToApp: a draft the account finishes in the platform's own app (#903); externalId is the platform's tracking id.
+  z.strictObject({ kind: z.literal('accepted'), externalId: z.string().min(1).max(500), url: z.url({ protocol: /^https?$/ }).max(2000).nullable(), sentToApp: z.literal(true).optional() }),
   z.strictObject({ kind: z.literal('pending'), externalRef: z.string().min(1).max(500), checkAfterSeconds: z.number().int().min(5).max(86_400) }),
   z.strictObject({
     kind: z.literal('rejected'),
@@ -374,7 +413,8 @@ const zResult = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('missing') }),
   z.strictObject({ kind: z.literal('unknowable'), code: zText(200).optional() }),
   // Nothing was called: the channel's credential could not be used (disconnected, its connector left the org, no
-  // credential key configured).
+  // credential key configured), or the connection lacks a permission the variant needs (CHANNEL_SCOPE_MISSING, #903).
+  // The variant waits paused for a reconnect; other posts of the channel go on.
   z.strictObject({ kind: z.literal('blocked'), code: zText(200) }),
 ]);
 export type PublishRecord = z.infer<typeof zResult>;
@@ -426,6 +466,16 @@ export const publishRecord = defineCommand({
     switch (r.kind) {
       case 'accepted':
       case 'found': {
+        if (r.kind === 'accepted' && r.sentToApp) {
+          // A draft in the platform's app (#903, TikTok's inbox): the platform's part is done, so the variant is
+          // published, but with no post id or address and the SENT_TO_APP note. Nothing that reads a published post
+          // (counts, first comment, thread, auto-reply, repost) finds a post id to act on, and the screens say the
+          // account still has to post it in the app. The platform's tracking id stays on the call ledger row.
+          await move(ctx, v, { type: 'accepted' }, { ...published(r.externalId, null), external_post_id: null, error_code: SENT_TO_APP });
+          if (input.phase !== 'status') await setCall(ctx, key, { state: 'succeeded', external_ref: r.externalId, error_kind: null, error_code: null, ...done });
+          event = 'social.variant.sent_to_app';
+          break;
+        }
         await move(ctx, v, input.phase === 'reconcile' ? { type: 'reconciled', found: true } : { type: 'accepted' }, published(r.externalId, r.url));
         if (input.phase !== 'status') await setCall(ctx, key, { state: 'succeeded', external_ref: r.externalId, error_kind: null, error_code: null, ...done });
         event = 'social.variant.published';
@@ -461,7 +511,7 @@ export const publishRecord = defineCommand({
           await expire(r.code);
           await pauseOnChannel(ctx, v, values);
           event = 'social.variant.paused';
-        } else if (v.attempt >= MAX_AUTO_ATTEMPTS) {
+        } else if (v.attempt >= (r.code === 'QUOTA_EXHAUSTED' ? MAX_QUOTA_WAITS : MAX_AUTO_ATTEMPTS)) {
           await move(ctx, v, { type: 'failed' }, { ...values, error_code: r.code ?? 'TOO_MANY_ATTEMPTS' });
           event = 'social.variant.failed';
         } else {

@@ -8,7 +8,7 @@
 //
 // Publish: an article is created asynchronously (`article/create` answers a token), then `article/verify` turns the
 // token into the article id once Zalo has processed it. The cover is fetched by Zalo from a public URL (1 MB at most).
-import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, Refresher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+import type { ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, Refresher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const ZALO_HOSTS = ['oauth.zaloapp.com', 'openapi.zalo.me'] as const;
@@ -318,6 +318,22 @@ export class ZaloOaPublisher implements Publisher {
   }
 
   // Views and shares of an article, when Zalo reports them on its detail.
+  // The OA's followers (#645), from its profile.
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const s = zaloSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    try {
+      const oa = await this.client.api<OaAnswer & { num_follower?: unknown }>('GET', 'oa/getoa', s.accessToken);
+      const id = typeof oa?.oa_id === 'string' || typeof oa?.oa_id === 'number' ? String(oa.oa_id) : '';
+      if (id !== input.externalAccountId) return null;
+      return { followers: count(oa?.num_follower) ?? null };
+    } catch (error) {
+      const result = zaloPublishResult(error);
+      if (result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'permission')) return { refused: result.error };
+      return null;
+    }
+  }
+
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const s = zaloSecretOf(input.secret);
     if (!s) return { refused: 'token_expired' };

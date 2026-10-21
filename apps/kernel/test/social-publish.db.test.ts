@@ -6,12 +6,13 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { FacebookPagePublisher, SandboxPublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
+import { FacebookPagePublisher, SandboxPublisher, TikTokPublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
-import { captureKey, runCommentJob, runPublishJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
+import { captureKey, runCommentJob, runPublishJob, runThreadJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
+import { shortLinkTarget } from '../src/short-link.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -199,6 +200,54 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(platform.posts).toHaveLength(1);
   });
 
+  it('sends a post link as a Crove short link where the channel asks, and counts clicks without the visitor (#706)', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    const conn = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    const plain = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    await exec(o, 'social.channel.set_short_links', { connectionId: conn, shortLinks: true });
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', {
+      body: 'Ưu đãi tuần này: https://tiembanh.example/uu-dai',
+      linkUrl: 'https://tiembanh.example/uu-dai',
+      channels: [{ connectionId: conn }, { connectionId: plain }],
+    });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    const [short, other] = post.variants;
+    const deps = { runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000, publicUrl: 'https://crove.example/' };
+    expect(await runPublishJob(deps, o.orgId, short?.id as string, 'sandbox')).toEqual({ action: 'call', status: 'published' });
+    expect(await runPublishJob(deps, o.orgId, other?.id as string, 'sandbox')).toEqual({ action: 'call', status: 'published' });
+
+    const rows = await admin(async (c) => (await c.query<{ code: string; target_url: string }>('SELECT code, target_url FROM crove_social.short_link WHERE post_id = $1', [postId])).rows);
+    expect(rows).toHaveLength(1);
+    const code = rows[0]?.code as string;
+    expect(code).toMatch(/^[A-Za-z0-9]{12}$/);
+    // The target is the link as the channel sends it (with its UTM tags when the post has some).
+    expect(rows[0]?.target_url).toBe('https://tiembanh.example/uu-dai');
+    // The shortened channel's text and link name the short link; the other channel's are its own.
+    expect(platform.posts[0]?.content).toMatchObject({ linkUrl: `https://crove.example/l/${code}` });
+    expect(platform.posts[0]?.content.body).not.toContain('tiembanh.example');
+    expect(platform.posts[1]?.content.linkUrl).toMatch(/^https:\/\/tiembanh\.example\/uu-dai/);
+
+    // The redirect: a person counts, a link preview does not, an unknown or malformed code is nothing.
+    expect(await shortLinkTarget(api, code, 'Mozilla/5.0 (iPhone)')).toBe(rows[0]?.target_url);
+    expect(await shortLinkTarget(api, code, 'Mozilla/5.0 (iPhone)')).toBe(rows[0]?.target_url);
+    expect(await shortLinkTarget(api, code, 'facebookexternalhit/1.1')).toBe(rows[0]?.target_url);
+    expect(await shortLinkTarget(api, 'AAAAAAAAAAAA', 'Mozilla/5.0')).toBeNull();
+    expect(await shortLinkTarget(api, "x' OR 1=1", 'Mozilla/5.0')).toBeNull();
+    const summary = await api.query<{ variantId: string; clicks: number | null }[]>('social.metrics.summary', { postId }, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(Object.fromEntries(summary.map((r) => [r.variantId, r.clicks]))).toEqual({ [short?.id as string]: 2, [other?.id as string]: null });
+    // Only the redirect's definer counts: members read the counts, and the API role cannot write them.
+    await expect(appPool.query("INSERT INTO crove_social.short_link_click (org_id, short_link_id, day, clicks) SELECT org_id, id, current_date, 99 FROM crove_social.short_link")).rejects.toMatchObject({ code: '42501' });
+    await expect(workerPool.query('SELECT crove_social.short_link_hit($1, true)', [code])).rejects.toMatchObject({ code: '42501' });
+    // A member cannot switch a channel's links.
+    const member = await person('member');
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, member]));
+    await expect(api.execute('social.channel.set_short_links', { connectionId: plain, shortLinks: true }, { actor: asUser(member), orgId: o.orgId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
   it('never publishes a variant short of what its channel asks for now, and sends it back to review (#408)', async () => {
     const o = await org();
     const platform = new FakePlatform();
@@ -210,7 +259,8 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(platform.posts).toHaveLength(0);
     expect((await variant(o, postId)).status).toBe('in_review');
     const events = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.post.submitted' AND payload->>'by_policy' = 'true'", [o.orgId])).rows);
-    expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, variant_ids: [id], by_policy: true }]);
+    // It carries the content manager agent's task too (#816), like a person's submit.
+    expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, variant_ids: [id], by_policy: true, agent_task: expect.objectContaining({ ref: { type: 'social.post', id: postId }, tainted: false }) }]);
   });
   it('posts the first comment once after the post, and shows it on the post (#587)', async () => {
     const o = await org();
@@ -273,6 +323,106 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(sandbox.comments.map((c) => c.text)).toEqual(['#khaitruong']);
     expect(await calls(id)).toContainEqual(expect.objectContaining({ key: `${key}_2`, state: 'succeeded' }));
     expect((await variant(o, postId)).commentStatus).toBe('posted');
+  });
+
+  // A post with thread parts, approved and due.
+  async function dueThread(o: Awaited<ReturnType<typeof org>>, threadParts: string[]) {
+    const conn = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Phần một', channels: [{ connectionId: conn, settings: { threadParts } }] });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    return { postId, id: post.variants[0]?.id as string };
+  }
+  const partRefs = (variantId: string) =>
+    admin(async (c) => (await c.query<{ key: string; state: string; external_ref: string | null }>("SELECT key, state, external_ref, error_code FROM crove_kernel.external_call WHERE key LIKE $1 ORDER BY started_at, key", [`social.publish:${variantId}:%:part\\_%`])).rows);
+
+  it('posts thread parts as a chain of replies after the post, each once (#742)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const { postId, id } = await dueThread(o, ['Phần hai', 'Phần ba', 'Phần bốn']);
+    expect(await run(o, id, sandbox)).toMatchObject({ status: 'published' });
+    const v = await variant(o, postId);
+    expect(v.threadStatus).toEqual({ state: 'posted', posted: 4, total: 4 });
+    expect(v.commentStatus).toBeNull();
+    const refs = await partRefs(id);
+    expect(refs.map((r) => [r.key.split(':').at(-1), r.state])).toEqual([['part_2', 'succeeded'], ['part_3', 'succeeded'], ['part_4', 'succeeded']]);
+    // Part 2 answers the post, each later part the part before it.
+    expect(sandbox.comments.map((c) => c.text)).toEqual(['Phần hai', 'Phần ba', 'Phần bốn']);
+    const root = await admin(async (c) => (await c.query<{ external_post_id: string }>('SELECT external_post_id FROM crove_social.post_variant WHERE id = $1', [id])).rows[0]?.external_post_id);
+    expect(sandbox.comments.map((c) => c.postId)).toEqual([root, refs[0]?.external_ref, refs[1]?.external_ref]);
+    expect(sandbox.comments.map((c) => c.rootId)).toEqual([root, root, root]);
+    // A later run posts nothing again, and there is nothing to retry.
+    expect(await runThreadJob({ runtime: worker, broker: vault, publishers: { sandbox }, callTimeoutMs: 2_000 }, o.orgId, id, 'sandbox')).toMatchObject({ action: 'none', reason: 'posted' });
+    expect(sandbox.comments).toHaveLength(3);
+    await expect(exec(o, 'social.thread.retry', { variantId: id })).rejects.toMatchObject({ code: 'THREAD_NOT_RETRYABLE' });
+  });
+
+  it('stops at a part that fails, keeps the parts that went out, and goes on from there when a person asks (#742)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const { postId, id } = await dueThread(o, ['Phần hai', 'Phần ba', 'Phần bốn']);
+    // The platform refuses the second reply once, then answers an unclear one.
+    let n = 0;
+    const answers: ('ok' | 'refuse' | 'unclear')[] = ['ok', 'refuse', 'ok', 'unclear'];
+    const flaky: Publisher = {
+      provider: 'sandbox',
+      publishSafety: sandbox.publishSafety,
+      publish: (i) => sandbox.publish(i),
+      reconcile: (i) => sandbox.reconcile(i),
+      comment: async (i) => {
+        const answer = answers[n++] ?? 'ok';
+        if (answer === 'refuse') return { kind: 'rejected', error: 'bad_request', code: 'TOO_FAST' };
+        if (answer === 'unclear') return { kind: 'unknown', code: 'TIMEOUT' };
+        return sandbox.comment(i);
+      },
+    };
+    const deps = { runtime: worker, broker: vault, publishers: { sandbox: flaky }, callTimeoutMs: 2_000 };
+    expect(await run(o, id, flaky)).toMatchObject({ status: 'published' });
+    expect((await variant(o, postId)).threadStatus).toEqual({ state: 'failed', posted: 2, total: 4 });
+    // Only a person's ask goes on, once per ask: it names the last call it saw.
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox')).toMatchObject({ action: 'none', reason: 'failed' });
+    const failedKey = `social.publish:${id}:1:1:part_3`;
+    await exec(o, 'social.thread.retry', { variantId: id });
+    const asks = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.thread.retry_requested'", [o.orgId])).rows);
+    expect(asks.map((a) => a.payload)).toEqual([{ post_id: postId, variant_id: id, provider: 'sandbox', after: failedKey }]);
+    // The retry posts part 3 under a new key, then stops at an unclear part 4, which nothing posts again by itself.
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox', { after: failedKey })).toMatchObject({ action: 'call', state: 'ambiguous', parts: 2 });
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox', { after: failedKey })).toMatchObject({ action: 'none', reason: 'unknown' });
+    expect((await variant(o, postId)).threadStatus).toEqual({ state: 'unknown', posted: 3, total: 4 });
+    // The person checked part 4 is not there and asks again: it goes out, answering part 3.
+    const unclearKey = `social.publish:${id}:1:1:part_4`;
+    await exec(o, 'social.thread.retry', { variantId: id });
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox', { after: unclearKey })).toMatchObject({ action: 'call', state: 'succeeded', parts: 1 });
+    const refs = await partRefs(id);
+    expect(refs.map((r) => [r.key.split(':').at(-1), r.state])).toEqual([['part_2', 'succeeded'], ['part_3', 'failed'], ['part_3_2', 'succeeded'], ['part_4', 'ambiguous'], ['part_4_2', 'succeeded']]);
+    expect(sandbox.comments.map((c) => c.text)).toEqual(['Phần hai', 'Phần ba', 'Phần bốn']);
+    expect(sandbox.comments.at(-1)?.postId).toBe(refs[2]?.external_ref);
+    expect((await variant(o, postId)).threadStatus).toEqual({ state: 'posted', posted: 4, total: 4 });
+  });
+
+  it('resumes a chain whose worker died between parts, without posting a part twice (#742)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const { postId, id } = await dueThread(o, ['Phần hai', 'Phần ba']);
+    // Published by a publisher without replies, as if the worker died before the thread.
+    const quiet: Publisher = { provider: 'sandbox', publishSafety: sandbox.publishSafety, publish: (i) => sandbox.publish(i), reconcile: (i) => sandbox.reconcile(i) };
+    expect(await run(o, id, quiet)).toMatchObject({ status: 'published' });
+    const deps = { runtime: worker, broker: vault, publishers: { sandbox }, callTimeoutMs: 2_000 };
+    // Part 2 goes out; the worker dies before part 3.
+    const only: Publisher = { ...quiet, comment: (i) => sandbox.comment(i) };
+    let left = 1;
+    const dying: Publisher = { ...only, comment: async (i) => (left-- > 0 ? sandbox.comment(i) : Promise.reject(new Error('worker died'))) };
+    await runThreadJob({ ...deps, publishers: { sandbox: dying } }, o.orgId, id, 'sandbox');
+    expect((await variant(o, postId)).threadStatus).toEqual({ state: 'unknown', posted: 2, total: 3 });
+    // Its part-3 call never got an answer: once a person checked and asks, part 3 goes out once; part 2 is not posted again.
+    const key = `social.publish:${id}:1:1:part_3`;
+    await exec(o, 'social.thread.retry', { variantId: id });
+    expect(await runThreadJob(deps, o.orgId, id, 'sandbox', { after: key })).toMatchObject({ action: 'call', state: 'succeeded', parts: 1 });
+    expect((await partRefs(id)).map((r) => [r.key.split(':').at(-1), r.state])).toEqual([['part_2', 'succeeded'], ['part_3', 'ambiguous'], ['part_3_2', 'succeeded']]);
+    expect(sandbox.comments.map((c) => c.text)).toEqual(['Phần hai', 'Phần ba']);
   });
 
   it('does nothing before the time, and never for a variant of another provider', async () => {
@@ -393,6 +543,66 @@ suite('social publishing on PostgreSQL (S4)', () => {
     v = await variant(o, postId);
     expect([v.status, v.error]).toEqual(['published', null]);
     expect((await calls(id)).map((c) => c.state)).toEqual(['failed', 'succeeded']);
+  });
+
+  it('waits with nothing sent once an account used its counted limit, and goes out when a post leaves the window (#775)', async () => {
+    const o = await org();
+    const account = `acct-${randomUUID().slice(0, 8)}`;
+    const sealed = vault.seal(JSON.stringify({ accessToken: 'li-1' }), { orgId: o.orgId, provider: 'linkedin', externalAccountId: account });
+    const { connectionId } = await exec<{ connectionId: string }>(o, 'kernel.channel.connect', { provider: 'linkedin', externalAccountId: account, displayName: 'Quán A', scopes: ['w_member_social'], expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } });
+    const due = async () => {
+      const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: `Bài ${randomUUID().slice(0, 6)}`, channels: [{ connectionId }] });
+      await exec(o, 'social.post.submit', { postId });
+      const post = await get(o, postId);
+      await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+      await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+      await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+      return { postId, id: post.variants[0]?.id as string };
+    };
+    let sent = 0;
+    const linkedin: Publisher = { provider: 'linkedin', publishSafety: 'never', publish: async () => ({ kind: 'accepted', externalId: `urn:li:share:71000000000000${String(++sent).padStart(5, '0')}`, url: null }) };
+    const deps = { runtime: worker, broker: vault, publishers: { linkedin }, callTimeoutMs: 2_000 };
+    const earlier = await due();
+    // The account made 150 posts in the last day (as the call ledger holds them), the oldest 23 hours 50 minutes ago.
+    await admin((c) =>
+      c.query(
+        "INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, state, started_at) SELECT $1, 'social.publish:' || $2 || ':1:' || n || ':publish', 'social', 'linkedin', 'publish', 'never', NULL, 'started', now() - interval '23 hours 50 minutes' + make_interval(secs => n) FROM generate_series(1, 150) n",
+        [o.orgId, earlier.id],
+      ),
+    );
+    // All but the oldest went out; the oldest is still on its way, and counts too.
+    await admin((c) => c.query("UPDATE crove_kernel.external_call SET state = 'succeeded', finished_at = now() WHERE org_id = $1 AND key LIKE 'social.publish:' || $2 || ':1:%:publish' AND key <> 'social.publish:' || $2 || ':1:1:publish'", [o.orgId, earlier.id]));
+    const next = await due();
+    expect(await runPublishJob(deps, o.orgId, next.id, 'linkedin')).toMatchObject({ action: 'none' });
+    expect(sent).toBe(0);
+    const row = await admin(async (c) => (await c.query<{ status: string; error_code: string; error_retry_at: Date }>('SELECT status, error_code, error_retry_at FROM crove_social.post_variant WHERE id = $1', [next.id])).rows[0]);
+    expect(row).toMatchObject({ status: 'scheduled', error_code: 'QUOTA_EXHAUSTED' });
+    // About 10 minutes from now, when the oldest of the 150 leaves the day.
+    const retryIn = (row ? row.error_retry_at.getTime() : 0) - Date.now();
+    expect(retryIn).toBeGreaterThan(9 * 60_000);
+    expect(retryIn).toBeLessThan(11 * 60_000);
+    // A refused call used no allowance: with the oldest refused, the post goes out once due.
+    await admin((c) => c.query("UPDATE crove_kernel.external_call SET state = 'failed', finished_at = now() WHERE org_id = $1 AND key = 'social.publish:' || $2 || ':1:1:publish'", [o.orgId, earlier.id]));
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET error_retry_at = now() - interval '1 second' WHERE id = $1", [next.id]));
+    expect(await runPublishJob(deps, o.orgId, next.id, 'linkedin')).toMatchObject({ status: 'published' });
+    expect(sent).toBe(1);
+  });
+  it('keeps waiting on a used-up publishing quota past the usual attempt limit (#743)', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    const retryAt = new Date(Date.now() + 600_000);
+    const { postId, variants } = await duePost(o);
+    const id = variants[0] as string;
+    await admin((c) => c.query('UPDATE crove_social.post_variant SET attempt = 5 WHERE id = $1', [id]));
+    platform.answers.push({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED', retryAt });
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'scheduled' });
+    expect((await variant(o, postId)).error).toMatchObject({ code: 'QUOTA_EXHAUSTED', retryAt: retryAt.toISOString() });
+    // Any other rate limit at that count stops for a person.
+    const other = await duePost(o);
+    const second = other.variants[0] as string;
+    await admin((c) => c.query('UPDATE crove_social.post_variant SET attempt = 5 WHERE id = $1', [second]));
+    platform.answers.push({ kind: 'rejected', error: 'rate_limited', code: 'LIMIT', retryAt });
+    expect(await run(o, second, platform)).toEqual({ action: 'call', status: 'failed' });
   });
 
   it('fails a variant the platform refused for good, and lets an admin publish it again', async () => {
@@ -524,6 +734,107 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(platform.posts).toHaveLength(1);
   });
 
+  // TikTok's inbox upload (#903): a draft the creator finishes in the TikTok app. A TikTok channel, connected with the
+  // scopes given, and an approved inbox draft on it, due now.
+  async function dueTikTokInbox(o: { orgId: string; owner: string }, scopes: string[]) {
+    const account = `tt-${randomUUID().slice(0, 8)}`;
+    const connectTikTok = (granted: string[]) => {
+      const sealed = vault.seal(JSON.stringify({ accessToken: 'act.tiktok-db', refreshToken: 'rft.tiktok-db' }), { orgId: o.orgId, provider: 'tiktok', externalAccountId: account });
+      return exec<{ connectionId: string }>(o, 'kernel.channel.connect', { provider: 'tiktok', externalAccountId: account, displayName: 'Tiệm Bánh B', scopes: granted, expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } });
+    };
+    const { connectionId } = await connectTikTok(scopes);
+    const clip = randomUUID();
+    const sha = createHash('sha256').update(clip).digest('hex');
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source, duration_ms)
+         VALUES ($1, $2, $3, $4, $5, 'khai-truong.mp4', 'video/mp4', 2000000, 'social', 12000)`,
+        [o.orgId, clip, sha, `org/${o.orgId}/${sha}`, `content:${sha}`],
+      ),
+    );
+    // No privacy level: the creator picks it in TikTok.
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', media: [{ fileId: clip }], channels: [{ connectionId, settings: { tiktokMode: 'inbox' } }] });
+    expect((await get(o, postId)).variants[0]?.issues).toEqual([]);
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    return { postId, id: post.variants[0]?.id as string, connectionId, connectTikTok };
+  }
+  const runOn = (o: { orgId: string }, id: string, tiktok: Publisher) => runPublishJob({ runtime: worker, broker: vault, publishers: { tiktok }, callTimeoutMs: 2_000 }, o.orgId, id, 'tiktok');
+
+  it('holds a TikTok inbox draft until the channel is reconnected with video.upload, then records it as sent to the app', async () => {
+    const o = await org();
+    // A grant from before inbox mode was turned on, without video.upload.
+    const { postId, id, connectionId, connectTikTok } = await dueTikTokInbox(o, ['user.info.basic', 'video.publish']);
+    const sent: PublishInput[] = [];
+    const statuses: PublishResult[] = [];
+    const tiktok: Publisher = {
+      provider: 'tiktok',
+      publishSafety: 'never',
+      publish: async (i) => {
+        sent.push(i);
+        return { kind: 'pending', externalRef: 'v_inbox_file~v2.123456789', checkAfterSeconds: 30 };
+      },
+      status: async () => statuses.shift() ?? { kind: 'pending', externalRef: 'v_inbox_file~v2.123456789', checkAfterSeconds: 30 },
+    };
+    const runTikTok = () => runOn(o, id, tiktok);
+
+    // Nothing is sent on the old grant: the variant waits for a reconnect, and says why.
+    expect(await runTikTok()).toEqual({ action: 'call', status: 'paused' });
+    expect(sent).toHaveLength(0);
+    expect((await calls(id)).map((c) => c.state)).toEqual(['failed']);
+    const paused = await variant(o, postId);
+    expect([paused.status, paused.error?.kind, paused.error?.code]).toEqual(['paused', 'permission', 'CHANNEL_SCOPE_MISSING']);
+    // The channel itself stays active: its direct posts go on.
+    const channels = await api.query<Array<{ id: string; status: string }>>('kernel.channel.list', {}, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(channels.find((c) => c.id === connectionId)?.status).toBe('active');
+    expect(await runTikTok()).toEqual({ action: 'none', reason: 'paused' });
+
+    // Reconnected without the scope again: paused again, nothing sent.
+    await connectTikTok(['user.info.basic', 'video.publish']);
+    expect(await runTikTok()).toEqual({ action: 'none', reason: 'resumed' });
+    expect(await runTikTok()).toEqual({ action: 'call', status: 'paused' });
+    expect(sent).toHaveLength(0);
+    // Reconnected with it: the upload goes out once, without a privacy level, and TikTok processes it.
+    await connectTikTok(['user.info.basic', 'video.publish', 'video.upload']);
+    expect(await runTikTok()).toEqual({ action: 'none', reason: 'resumed' });
+    expect(await runTikTok()).toEqual({ action: 'call', status: 'processing' });
+    expect(sent.map((s) => s.settings)).toEqual([{ tiktokMode: 'inbox' }]);
+
+    // The status check ends at SEND_TO_USER_INBOX: published for Crove, but with no post id or address, and its note.
+    statuses.push({ kind: 'accepted', externalId: 'v_inbox_file~v2.123456789', url: null, sentToApp: true });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET next_check_at = now() - interval '1 second' WHERE id = $1", [id]));
+    expect(await runTikTok()).toEqual({ action: 'status', status: 'published' });
+    const done = await variant(o, postId);
+    expect([done.status, done.externalUrl, done.error]).toEqual(['published', null, { kind: null, code: 'SENT_TO_APP', action: null, message: null, retryAt: null }]);
+    const row = await admin(async (c) => (await c.query<{ external_post_id: string | null }>('SELECT external_post_id FROM crove_social.post_variant WHERE id = $1', [id])).rows[0]);
+    expect(row?.external_post_id).toBeNull();
+    // The publish_id stays on the call ledger; nothing reads the draft as a post (no counts, no comment).
+    const ledger = await admin(async (c) => (await c.query<{ external_ref: string }>("SELECT external_ref FROM crove_kernel.external_call WHERE key LIKE $1 AND state = 'succeeded'", [`social.publish:${id}:%`])).rows);
+    expect(ledger).toEqual([{ external_ref: 'v_inbox_file~v2.123456789' }]);
+    await expect(worker.query('social.metrics.target', { variantId: id }, { actor: system, orgId: o.orgId })).rejects.toMatchObject({ code: 'VARIANT_NOT_FOUND' });
+    const timeline = await api.query<{ items: Array<{ kind: string; code: string | null; url: string | null }> }>('social.post.activity', { postId }, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(timeline.items.find((i) => i.kind === 'published')).toMatchObject({ code: 'SENT_TO_APP', url: null });
+  });
+
+  it('fails a TikTok inbox draft with nothing sent where the deployment has not turned inbox mode on', async () => {
+    const o = await org();
+    // Even on a connection granted video.upload (inbox mode was on, then turned off): the adapter refuses it first.
+    const { postId, id } = await dueTikTokInbox(o, ['user.info.basic', 'video.publish', 'video.upload']);
+    const requests: string[] = [];
+    const tiktok = new TikTokPublisher({ clientKey: 'awtestclientkey01', clientSecret: 'test-tiktok-secret-not-real' }, async (url) => {
+      requests.push(String(url));
+      throw new Error('no TikTok call in this test');
+    });
+    expect(await runOn(o, id, tiktok)).toEqual({ action: 'call', status: 'failed' });
+    expect(requests).toEqual([]);
+    const v = await variant(o, postId);
+    expect([v.status, v.error?.kind, v.error?.code]).toEqual(['failed', 'bad_request', 'TIKTOK_INBOX_NOT_ENABLED']);
+    expect((await calls(id)).map((c) => c.state)).toEqual(['failed']);
+  });
+
   it('reconciles a post still processing after a day, and records it published when the platform has it', async () => {
     const o = await org();
     const platform = new FakePlatform();
@@ -541,6 +852,33 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(await run(o, id, platform)).toEqual({ action: 'reconcile', status: 'published' });
     expect((await variant(o, postId)).status).toBe('published');
     expect((await calls(id)).map((c) => c.state)).toEqual(['succeeded']);
+  });
+
+  it('keeps checking an unclear status for a day, then asks a person when the platform cannot say (#848)', async () => {
+    const o = await org();
+    const platform = new FakePlatform();
+    platform.answers.push({ kind: 'pending', externalRef: 'container-3', checkAfterSeconds: 30 });
+    platform.statuses.push({ kind: 'unknown', code: 'STATUS_UNREADABLE' }, { kind: 'pending', externalRef: 'container-3', checkAfterSeconds: 30 });
+    platform.reconcileEnabled = false;
+    const { postId, variants } = await duePost(o);
+    const id = variants[0] as string;
+    expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'processing' });
+    const checkNow = () => admin((c) => c.query("UPDATE crove_social.post_variant SET next_check_at = now() - interval '1 second' WHERE id = $1", [id]));
+    // Within the day, an unclear or pending answer is checked again later.
+    for (let i = 0; i < 2; i++) {
+      await checkNow();
+      expect(await run(o, id, platform)).toEqual({ action: 'status', status: 'processing' });
+    }
+    expect((await variant(o, postId)).status).toBe('processing');
+    await admin(async (c) => {
+      await c.query("SET session_replication_role = 'replica'");
+      await c.query("UPDATE crove_kernel.external_call SET started_at = now() - interval '25 hours' WHERE key LIKE $1", [`social.publish:${id}:%`]);
+      await c.query("UPDATE crove_social.post_variant SET next_check_at = now() - interval '1 second' WHERE id = $1", [id]);
+    });
+    // A day on, the platform cannot say whether it went out: a person decides, nothing is posted again.
+    expect(await run(o, id, platform)).toMatchObject({ action: 'reconcile', status: 'needs_attention' });
+    expect((await variant(o, postId)).status).toBe('needs_attention');
+    expect(platform.posts).toHaveLength(1);
   });
 
   it('ignores an answer for a key that is no longer the variant’s', async () => {
@@ -760,6 +1098,28 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(read).toEqual({ [video.fileId]: 'read', [cover.fileId]: 'read', [stray.fileId]: 'refused' });
   });
 
+  it('asks one platform about two variants at a time at most, and totals every published channel in SQL (#397)', async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    const { variants } = await duePost(o, 4);
+    for (const id of variants) expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, id as string, 'sandbox')).toMatchObject({ status: 'published' });
+    let inFlight = 0;
+    let most = 0;
+    const metrics = platform.metrics.bind(platform);
+    platform.metrics = async (input) => {
+      inFlight += 1;
+      most = Math.max(most, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      inFlight -= 1;
+      return metrics(input);
+    };
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    expect(most).toBe(2);
+    const totals = await api.query<{ posts: number; metrics: Record<string, number>; clicks: number | null }>('social.metrics.totals', {}, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(totals).toEqual({ posts: 4, metrics: expect.objectContaining({ impressions: 160, reach: 120, reactions: 12 }), clicks: null });
+    expect(await api.query('social.metrics.totals', { days: 1, labelId: randomUUID() }, { actor: asUser(o.owner), orgId: o.orgId })).toEqual({ posts: 0, metrics: {}, clicks: null });
+  });
+
   // S8 (#238): the metrics sweep asks the platform about published variants and keeps a snapshot per 6-hour capture.
   it('captures metrics of published variants once per capture and shows the latest in the summary', async () => {
     const o = await org();
@@ -796,6 +1156,109 @@ suite('social publishing on PostgreSQL (S4)', () => {
       (await c.query<{ role: string }>(`SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r WHERE has_function_privilege(r, 'crove_social.metrics_due(int, text[], int)', 'EXECUTE')`)).rows,
     );
     expect(roles.map((r) => r.role)).toEqual(['crove_worker']);
+  });
+
+  // A post with an auto-reply on likes, approved and due (#746).
+  async function dueReply(o: Awaited<ReturnType<typeof org>>, autoReply: { text: string; likes: number }) {
+    const conn = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', channels: [{ connectionId: conn, settings: { autoReply } }] });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    return { postId, id: post.variants[0]?.id as string };
+  }
+  const activityOf = async (o: Awaited<ReturnType<typeof org>>, postId: string) =>
+    (await api.query<{ items: { kind: string; code: string | null; variantId: string | null }[] }>('social.post.activity', { postId }, { actor: asUser(o.owner), orgId: o.orgId })).items;
+  // Makes a variant's metrics due again, as if its last capture were 7 hours old.
+  const ageCaptures = (variantId: string) => admin((c) => c.query("UPDATE crove_social.metric_snapshot SET captured_at = captured_at - interval '7 hours', capture_key = capture_key || '-old' WHERE variant_id = $1", [variantId]));
+
+  it('replies once when the post reaches its like count, and shows it on the post (#746)', async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    // The sandbox reports 3 likes on a new post.
+    const low = await dueReply(o, { text: 'Cảm ơn cả nhà!', likes: 50 });
+    const high = await dueReply(o, { text: 'Đặt hàng tại đây', likes: 3 });
+    for (const v of [low, high]) expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, v.id, 'sandbox')).toMatchObject({ status: 'published' });
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    expect(platform.comments.map((c) => c.text)).toEqual(['Đặt hàng tại đây']);
+    expect(await calls(high.id)).toContainEqual(expect.objectContaining({ key: `social.publish:${high.id}:1:1:autoreply`, state: 'succeeded' }));
+    expect(await calls(low.id)).not.toContainEqual(expect.objectContaining({ key: expect.stringContaining('autoreply') }));
+    expect(await activityOf(o, high.postId)).toContainEqual(expect.objectContaining({ kind: 'auto_replied', variantId: high.id, code: null }));
+    // Asked again later, the count still over the mark: no second reply.
+    await ageCaptures(high.id);
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    expect(platform.comments.filter((c) => c.text === 'Đặt hàng tại đây')).toHaveLength(1);
+    // Only the worker begins or records a reply.
+    await expect(api.execute('social.auto_reply.begin', { variantId: high.id, likes: 100 }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('records a refused auto-reply on the post and never tries it again by itself (#746)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    let tries = 0;
+    const refusing: Publisher = {
+      provider: 'sandbox',
+      publishSafety: sandbox.publishSafety,
+      publish: (i) => sandbox.publish(i),
+      reconcile: (i) => sandbox.reconcile(i),
+      metrics: (i) => sandbox.metrics(i),
+      comment: async () => {
+        tries += 1;
+        return { kind: 'rejected', error: 'permission', code: 'NO_REPLY_RIGHT' };
+      },
+    };
+    const v = await dueReply(o, { text: 'Cảm ơn!', likes: 1 });
+    expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: refusing }, callTimeoutMs: 2_000 }, o.orgId, v.id, 'sandbox')).toMatchObject({ status: 'published' });
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: refusing } });
+    expect(tries).toBe(1);
+    expect(await activityOf(o, v.postId)).toContainEqual(expect.objectContaining({ kind: 'auto_reply_failed', variantId: v.id, code: 'NO_REPLY_RIGHT' }));
+    await ageCaptures(v.id);
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: refusing } });
+    expect(tries).toBe(1);
+
+    // A reply whose worker died mid-call shows as unclear on the activity once it went quiet.
+    const quiet = await dueReply(o, { text: 'Cảm ơn!', likes: 1 });
+    expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox }, callTimeoutMs: 2_000 }, o.orgId, quiet.id, 'sandbox')).toMatchObject({ status: 'published' });
+    const key = `social.publish:${quiet.id}:1:1:autoreply`;
+    await admin((c) => c.query("INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, started_at) VALUES ($1, $2, 'social', 'sandbox', 'autoreply', 'never', NULL, now() - interval '11 minutes')", [o.orgId, key]));
+    expect(await activityOf(o, quiet.postId)).toContainEqual(expect.objectContaining({ kind: 'auto_reply_failed', variantId: quiet.id, code: 'OUTCOME_UNKNOWN' }));
+  });
+
+  async function dueRepost(o: Awaited<ReturnType<typeof org>>, repost: { likes?: number; afterHours?: number }) {
+    const conn = (await connect(o, `acct-${randomUUID().slice(0, 8)}`)).connectionId;
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Bài nổi', channels: [{ connectionId: conn, settings: { repost } }] });
+    await exec(o, 'social.post.submit', { postId });
+    const post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    return { postId, id: post.variants[0]?.id as string };
+  }
+
+  it('reposts once when the post reaches its like count or its hours, and shows it on the post (#773)', async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    // The sandbox reports 3 likes on a new post.
+    const liked = await dueRepost(o, { likes: 3 });
+    const later = await dueRepost(o, { afterHours: 24 });
+    const notYet = await dueRepost(o, { likes: 50, afterHours: 48 });
+    for (const v of [liked, later, notYet]) expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, v.id, 'sandbox')).toMatchObject({ status: 'published' });
+    // A day has passed for one of them.
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET published_at = now() - interval '25 hours' WHERE id = $1", [later.id]));
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    const reposted = (id: string) => calls(id).then((rows) => rows.filter((r) => r.key.endsWith(':repost')));
+    expect(await reposted(liked.id)).toEqual([expect.objectContaining({ state: 'succeeded' })]);
+    expect(await reposted(later.id)).toEqual([expect.objectContaining({ state: 'succeeded' })]);
+    expect(await reposted(notYet.id)).toEqual([]);
+    expect(platform.reposts).toHaveLength(2);
+    expect(await activityOf(o, liked.postId)).toContainEqual(expect.objectContaining({ kind: 'reposted', variantId: liked.id }));
+    // Asked again later: no second repost.
+    await ageCaptures(liked.id);
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    expect(platform.reposts).toHaveLength(2);
+    await expect(api.execute('social.repost.begin', { variantId: liked.id, likes: 100 }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
   });
 
   it('keeps a failed metrics try as an empty capture, never asks a gone post again, and shows the last real answer', async () => {

@@ -59,6 +59,8 @@ export const reportLinkCreate = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('revoked_at', 'is', null)
       .where('expires_at', '>', ctx.now)
+      // The links a report schedule makes per mail (#704) are not the org's to count here.
+      .where('schedule_id', 'is', null)
       .executeTakeFirstOrThrow();
     if (Number(live.n) >= REPORT_LINK_LIMIT) throw new DomainError('REPORT_LINK_LIMIT', 409, `Đã có ${REPORT_LINK_LIMIT} liên kết báo cáo còn hạn; hãy thu hồi bớt`);
     const token = newReportToken();
@@ -111,7 +113,7 @@ export interface ReportLinkView {
   revokedAt: string | null;
 }
 
-// The org's report links, newest first (never their tokens).
+// The org's report links, newest first (never their tokens); the ones a schedule made per mail are not listed.
 export const reportLinkList = defineQuery({
   name: 'social.report_link.list',
   input: z.object({}),
@@ -121,6 +123,7 @@ export const reportLinkList = defineQuery({
       .selectFrom('crove_social.report_link')
       .select(['id', 'title', 'period_start', 'period_end', 'connection_ids', 'created_by', 'created_at', 'expires_at', 'revoked_at'])
       .where('org_id', '=', ctx.orgId)
+      .where('schedule_id', 'is', null)
       .orderBy('created_at', 'desc')
       .limit(100)
       .execute();

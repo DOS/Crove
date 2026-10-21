@@ -1,6 +1,7 @@
 // Shared pieces of the Social screens: status tones, provider names, the effective text of a variant as the composer
 // shows it, and grouping by day for the agenda.
-import { CAPABILITIES, countText, isProvider, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { CAPABILITIES, SENT_TO_APP, countText, isProvider, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { getConfig } from './auth.ts';
 
 export type VariantStatus =
   | 'draft'
@@ -16,7 +17,8 @@ export type VariantStatus =
   | 'ambiguous'
   | 'needs_attention'
   | 'paused'
-  | 'cancelled';
+  | 'cancelled'
+  | 'removed';
 
 type Tone = 'secondary' | 'brand' | 'success' | 'warning' | 'destructive' | 'outline';
 
@@ -35,7 +37,19 @@ export const VARIANT_TONE: Record<VariantStatus, Tone> = {
   needs_attention: 'destructive',
   paused: 'warning',
   cancelled: 'outline',
+  removed: 'outline',
 };
+
+// The key of a variant's status label (social.status.*): a draft sent to the platform's app (#903, TikTok's inbox) is
+// published for Crove but not out yet, so it says so instead of "Published".
+export function variantStatusKey(v: { status: VariantStatus; error?: { code: string | null } | null }): VariantStatus | 'sent_to_app' {
+  return v.status === 'published' && v.error?.code === SENT_TO_APP ? 'sent_to_app' : v.status;
+}
+
+// Its tone: a draft waiting in the platform's app still needs a person, so it is not shown as done.
+export function variantTone(v: { status: VariantStatus; error?: { code: string | null } | null }): Tone {
+  return variantStatusKey(v) === 'sent_to_app' ? 'warning' : VARIANT_TONE[v.status];
+}
 
 // Short names of the providers, the same in every language.
 export const PROVIDER_NAMES: Record<Provider, string> = {
@@ -49,6 +63,12 @@ export const PROVIDER_NAMES: Record<Provider, string> = {
   linkedin: 'LinkedIn',
   x: 'X',
   bluesky: 'Bluesky',
+  google_business: 'Google Business',
+  telegram: 'Telegram',
+  mastodon: 'Mastodon',
+  pinterest: 'Pinterest',
+  discord: 'Discord',
+  wordpress: 'WordPress',
 };
 
 export function providerName(provider: string): string {
@@ -67,10 +87,23 @@ export function hasTitle(provider: string): boolean {
 }
 
 // The issues a draft would have at submit, checked as it is typed (the server checks again).
-export function draftIssues(provider: string, content: { body: string; title: string | null; linkUrl?: string | null; media?: readonly { mime: string; sizeBytes: number; durationMs?: number | null | undefined }[]; settings?: Record<string, unknown> }): Issue[] {
+// Whether this deployment keeps files where no public link reaches them (local disk); unknown before the config loads.
+function uploadsDirect(): boolean {
+  try {
+    return getConfig().uploads === 'direct';
+  } catch {
+    return false;
+  }
+}
+
+export function draftIssues(provider: string, content: { body: string; title: string | null; linkUrl?: string | null; media?: readonly { mime: string; sizeBytes: number; durationMs?: number | null | undefined; width?: number | null | undefined; height?: number | null | undefined }[]; settings?: Record<string, unknown> }): Issue[] {
   if (!isProvider(provider)) return [];
-  const media = (content.media ?? []).map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000 }));
-  return validateVariant({ provider, body: content.body, title: content.title, linkUrl: content.linkUrl ?? null, media, ...(content.settings ? { settings: content.settings } : {}) });
+  const media = (content.media ?? []).map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const), mime: m.mime, sizeBytes: m.sizeBytes, // Absent: an upload the server has not read yet (the post is not saved); it reads and checks the length on save.
+    durationSeconds: m.durationMs === undefined ? 0 : m.durationMs === null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null }));
+  const issues = validateVariant({ provider, body: content.body, title: content.title, linkUrl: content.linkUrl ?? null, media, ...(content.settings ? { settings: content.settings } : {}) });
+  // Files that channel fetches by URL, on a deployment that hands out none (#772): said before the post is submitted.
+  if (uploadsDirect() && needsPublicUrls(provider, media, content.settings)) issues.push({ code: 'MEDIA_NEEDS_PUBLIC_STORAGE', field: 'media', limit: null, actual: null });
+  return issues;
 }
 
 // Local calendar day (yyyy-mm-dd) of an instant, in the viewer's time zone.

@@ -1,8 +1,7 @@
 // Customers (issue #670), on a real PostgreSQL 17, through the HTTP API where a user would act: the customers of the
 // org's sales invoices with their tax code, receivable on 131 (a receipt and a voided sale included) and latest invoice,
-// searched by name and tax code, a page at a time; vendors left out; corrections of a party's name, tax code and email
-// by owners and admins only, audited, with a tax code kept to one party; and nothing of one org read or changed from
-// another.
+// searched by name and tax code, a page at a time; vendors left out; a customer edited through the party editor (#887)
+// and its duplicates counted under it; and nothing of one org read or changed from another.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -331,42 +330,38 @@ suite('customers (#670)', () => {
     expect(byName(second.body.items, 'Khách 51') ?? byName(first.body.items, 'Khách 51')).toMatchObject({ invoiceCount: 0, lastInvoiceDate: null, receivable: '1000' });
   });
 
-  it('lets owners and admins correct a name, tax code and email, audited, and nobody else', async () => {
-    expect(await update({ partyId: buyerId, name: 'Đổi tên' }, viewer)).toMatchObject({ status: 403 });
-    expect(await update({ partyId: buyerId, taxCode: '12345' })).toMatchObject({ status: 422, body: { code: 'INVALID_TAX_CODE' } });
-    expect(await update({ partyId: buyerId, taxCode: OTHER_TAX_CODE })).toMatchObject({ status: 409, body: { code: 'TAX_CODE_TAKEN' } });
-    expect(await update({ partyId: randomUUID(), name: 'Không có' })).toMatchObject({ status: 404, body: { code: 'PARTY_NOT_FOUND' } });
+  it('edits a customer through the party editor, and counts its duplicates under it', async () => {
+    const before = byName((await customers({ q: BUYER_TAX_CODE })).body.items, BUYER) as CustomerRow & { version: number; address: string | null };
+    const edited = await update({
+      partyId: buyerId,
+      version: before.version,
+      name: 'Công ty CP Người Mua Mẫu',
+      taxCode: BUYER_TAX_CODE,
+      address: before.address,
+      email: 'ketoan@nguoimua.test',
+      phone: null,
+    });
+    expect(edited.status).toBe(200);
+    expect(byName((await customers({ q: BUYER_TAX_CODE })).body.items, 'Công ty CP Người Mua Mẫu')).toMatchObject({ id: buyerId, email: 'ketoan@nguoimua.test', receivable: '1480000' });
 
-    const renamed = await update({ partyId: buyerId, name: 'Công ty CP Người Mua Mẫu', taxCode: ' 0309.876.546-001 ', email: 'ketoan@nguoimua.test' });
-    expect(renamed).toMatchObject({ status: 200, body: { partyId: buyerId, name: 'Công ty CP Người Mua Mẫu', taxCode: '0309876546-001', email: 'ketoan@nguoimua.test' } });
-    expect(byName((await customers({ q: '0309876546-001' })).body.items, 'Công ty CP Người Mua Mẫu')).toMatchObject({ id: buyerId, email: 'ketoan@nguoimua.test', receivable: '1480000' });
-    // Nothing to change: the audit row says so.
-    expect(await update({ partyId: buyerId, email: 'ketoan@nguoimua.test' })).toMatchObject({ status: 200 });
-    expect(await update({ partyId: otherBuyerId, email: null })).toMatchObject({ status: 200 });
+    // The second buyer marked as a duplicate of the first: one customer, with the sales and receivable of both.
+    expect((await rpc('parties/markDuplicate', await tokenFor(viewer), { partyId: otherBuyerId, keepId: buyerId })).status).toBe(403);
+    expect((await rpc('parties/markDuplicate', await tokenFor(owner), { partyId: otherBuyerId, keepId: buyerId })).status).toBe(200);
+    const merged = await customers({ q: 'công ty' });
+    expect(merged.body.items.map((c: CustomerRow) => c.id)).toEqual([buyerId]);
+    expect(merged.body.items[0]).toMatchObject({ invoiceCount: 2, receivable: '3460000', duplicates: [{ id: otherBuyerId, name: OTHER_BUYER, taxCode: OTHER_TAX_CODE }] });
+    // Found by the duplicate's tax code too.
+    expect((await customers({ q: OTHER_TAX_CODE })).body.items.map((c: CustomerRow) => c.id)).toEqual([buyerId]);
 
-    const audits = await admin(
-      async (c) =>
-        (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.party.update' AND outcome = 'ok' ORDER BY occurred_at, id`, [org.orgId])).rows,
-    );
-    expect(audits.map((a) => a.detail)).toEqual([
-      { partyId: buyerId, changed: ['name', 'taxCode', 'email'], taxCode: '0309876546-001', previousTaxCode: BUYER_TAX_CODE },
-      { partyId: buyerId, changed: [] },
-      { partyId: otherBuyerId, changed: [] },
-    ]);
-    const [party] = await admin(async (c) => (await c.query(`SELECT source_trust, version, verified_by FROM crove_kernel.party WHERE id = $1`, [buyerId])).rows);
-    expect(party).toEqual({ source_trust: 'user', version: 2, verified_by: owner.userId });
-    // The posted documents and lines keep naming the same party.
-    const docs = await rpc('documents/list', await tokenFor(viewer), {});
-    expect(docs.body.filter((d: { partyId: string }) => d.partyId === buyerId).map((d: { partyName: string }) => d.partyName)).toEqual([
-      'Công ty CP Người Mua Mẫu',
-      'Công ty CP Người Mua Mẫu',
-    ]);
+    expect((await rpc('parties/unmarkDuplicate', await tokenFor(owner), { partyId: otherBuyerId })).status).toBe(200);
+    expect((await customers({ q: 'công ty' })).body.items.map((c: CustomerRow) => c.id)).toEqual([buyerId, otherBuyerId]);
   });
 
   it('reads and changes nothing of one org from another', async () => {
     expect(await customers({}, owner, other.slug)).toMatchObject({ status: 200, body: { items: [], more: false } });
     expect(await customers({ q: BUYER_TAX_CODE.slice(0, 6) }, owner, other.slug)).toMatchObject({ status: 200, body: { items: [] } });
-    expect(await update({ partyId: buyerId, name: 'Chiếm' }, owner, other.slug)).toMatchObject({ status: 404, body: { code: 'PARTY_NOT_FOUND' } });
+    const foreign = await update({ partyId: buyerId, version: 2, name: 'Chiếm', taxCode: null, address: null, email: null, phone: null }, owner, other.slug);
+    expect(foreign.status).not.toBe(200);
     // The viewer is not a member of the other org.
     expect((await customers({}, viewer, other.slug)).status).toBe(403);
     const [party] = await admin(async (c) => (await c.query(`SELECT name FROM crove_kernel.party WHERE id = $1`, [buyerId])).rows);

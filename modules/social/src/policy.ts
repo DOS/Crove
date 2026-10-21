@@ -1,15 +1,18 @@
 // Review policy per channel (Social plan S9, issue #394): how many different people approve a variant for a channel
 // before it may be scheduled. A channel without a policy needs one approval. Each approval binds the revision and
 // content hash its reviewer saw (post_approval), and a person approves a variant's content once.
+import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
 import { approvalsInRound } from './domain/approval.ts';
 import { approvedValues, lockPost, lockVariants, refreshPostStatus, regateValues, setVariant, type Trx, type VariantRow } from './variants.ts';
+import { agentTaskOf } from './agent.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
+const OWNERS: readonly MemberRole[] = ['owner'];
 export const MAX_APPROVALS = 3;
 // Variants a policy change re-checks: in review, or approved and not yet handed to the publisher.
 const GATED: readonly SocialVariantStatus[] = ['in_review', 'approved', 'scheduled', 'paused'];
@@ -31,6 +34,45 @@ export async function approvalsRequired(trx: Trx, orgId: string, connectionIds: 
 // The review decisions of variants, newest first, as approvalsInRound reads them. Newest by id: uuid_v7 takes the clock
 // when the row is written, under the post lock, while created_at is the start of its transaction, which a decision
 // that waited for the lock may share with an older one.
+// The channels where an author may not approve their own post (four-eyes, #740).
+// The channels among these that wait for the client's approval (#770).
+export async function clientApprovalOn(trx: Trx, orgId: string, connectionIds: readonly string[]): Promise<Set<string>> {
+  if (connectionIds.length === 0) return new Set();
+  const rows = await trx
+    .selectFrom('crove_social.channel_policy')
+    .select('channel_connection_id')
+    .where('org_id', '=', orgId)
+    .where('channel_connection_id', 'in', [...connectionIds])
+    .where('client_approval', '=', true)
+    .execute();
+  return new Set(rows.map((r) => r.channel_connection_id));
+}
+
+// The client's standing answer on a post (#770): the latest "Approved" or "Needs changes" given on a review link for the
+// content as it is now (the link made for it and the answer given before any change), else null. Comments say nothing,
+// and a revoked link takes its answers back.
+export async function clientVerdict(trx: Trx, orgId: string, postId: string): Promise<'approved' | 'changes_requested' | null> {
+  const { rows } = await sql<{ verdict: 'approved' | 'changes_requested' }>`
+    SELECT f.verdict FROM crove_social.review_feedback f
+    JOIN crove_social.review_link l ON l.org_id = f.org_id AND l.id = f.link_id
+    WHERE f.org_id = ${orgId}::uuid AND f.post_id = ${postId}::uuid AND f.verdict IN ('approved', 'changes_requested') AND NOT f.changed AND l.revoked_at IS NULL
+      AND l.content_key = crove_social.review_content_key(${orgId}::uuid, ${postId}::uuid)
+    ORDER BY f.created_at DESC, f.id DESC LIMIT 1`.execute(trx);
+  return rows[0]?.verdict ?? null;
+}
+
+export async function fourEyesOn(trx: Trx, orgId: string, connectionIds: readonly string[]): Promise<Set<string>> {
+  if (connectionIds.length === 0) return new Set();
+  const rows = await trx
+    .selectFrom('crove_social.channel_policy')
+    .select('channel_connection_id')
+    .where('org_id', '=', orgId)
+    .where('channel_connection_id', 'in', [...connectionIds])
+    .where('four_eyes', '=', true)
+    .execute();
+  return new Set(rows.map((r) => r.channel_connection_id));
+}
+
 export async function decisionsOf(trx: Trx, orgId: string, variantIds: readonly string[]) {
   const out = new Map<string, { decision: string; decidedBy: string; revision: number; contentHash: string }[]>();
   if (variantIds.length === 0) return out;
@@ -125,10 +167,97 @@ export const policySet = defineCommand({
     for (const d of decided) {
       await ctx.emit('social.variant.decided', { post_id: d.postId, decision: 'approved', variant_ids: d.variantIds, waiting_variant_ids: [], by_policy: true });
     }
-    for (const r of resubmitted) await ctx.emit('social.post.submitted', { post_id: r.postId, variant_ids: r.variantIds, by_policy: true });
+    for (const r of resubmitted) await ctx.emit('social.post.submitted', { post_id: r.postId, variant_ids: r.variantIds, by_policy: true, agent_task: await agentTaskOf(ctx, r.postId) });
     for (const s of backOnSchedule) await ctx.emit('social.variant.scheduled', { post_id: s.postId, variant_ids: s.variantIds, by_policy: true });
     ctx.audit({ connection_id: input.connectionId, approvals_required: input.approvalsRequired, approved_variants: approved, regated_variants: regated });
     return { connectionId: input.connectionId, approvalsRequired: input.approvalsRequired, approved, regated };
+  },
+});
+
+// Whether the channel's reviewers are reminded of posts waiting for review (#703); on unless turned off.
+export const remindersSet = defineCommand({
+  name: 'social.channel.set_reminders',
+  input: z.strictObject({ connectionId: zId, reviewReminders: z.boolean() }),
+  risk: 'R1',
+  access: ADMINS,
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const userId = ctx.actor.userId;
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .where('status', '<>', 'revoked')
+      .executeTakeFirst();
+    if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh này');
+    // A new policy row keeps the default of one approval.
+    await ctx.trx
+      .insertInto('crove_social.channel_policy')
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, review_reminders: input.reviewReminders, updated_by: userId })
+      .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ review_reminders: input.reviewReminders, updated_by: userId, updated_at: ctx.now }))
+      .execute();
+    ctx.audit({ connection_id: input.connectionId, review_reminders: input.reviewReminders });
+    return { connectionId: input.connectionId, reviewReminders: input.reviewReminders };
+  },
+});
+
+// Four-eyes on a channel (#740): its posts are approved by someone other than their author. Owners only: turning it off
+// weakens review. Posts already approved stay approved.
+export const fourEyesSet = defineCommand({
+  name: 'social.channel.set_four_eyes',
+  input: z.strictObject({ connectionId: zId, fourEyes: z.boolean() }),
+  risk: 'R2',
+  access: OWNERS,
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const userId = ctx.actor.userId;
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .where('status', '<>', 'revoked')
+      .executeTakeFirst();
+    if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh này');
+    await ctx.trx
+      .insertInto('crove_social.channel_policy')
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, four_eyes: input.fourEyes, updated_by: userId })
+      .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ four_eyes: input.fourEyes, updated_by: userId, updated_at: ctx.now }))
+      .execute();
+    ctx.audit({ connection_id: input.connectionId, four_eyes: input.fourEyes });
+    return { connectionId: input.connectionId, fourEyes: input.fourEyes };
+  },
+});
+
+// Whether the channel's posts send their link through Crove's short links (#706), to count clicks; off unless turned on.
+// The link of a post that went out already stays as it went.
+export const shortLinksSet = defineCommand({
+  name: 'social.channel.set_short_links',
+  input: z.strictObject({ connectionId: zId, shortLinks: z.boolean() }),
+  risk: 'R1',
+  access: ADMINS,
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const userId = ctx.actor.userId;
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .where('status', '<>', 'revoked')
+      .executeTakeFirst();
+    if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh này');
+    await ctx.trx
+      .insertInto('crove_social.channel_policy')
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, short_links: input.shortLinks, updated_by: userId })
+      .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ short_links: input.shortLinks, updated_by: userId, updated_at: ctx.now }))
+      .execute();
+    ctx.audit({ connection_id: input.connectionId, short_links: input.shortLinks });
+    return { connectionId: input.connectionId, shortLinks: input.shortLinks };
   },
 });
 
@@ -141,12 +270,12 @@ export const policyList = defineQuery({
     const rows = await ctx.trx
       .selectFrom('crove_social.channel_policy as p')
       .innerJoin('crove_kernel.channel_connection as c', (j) => j.onRef('c.org_id', '=', 'p.org_id').onRef('c.id', '=', 'p.channel_connection_id'))
-      .select(['p.channel_connection_id', 'p.approvals_required', 'p.updated_by', 'p.updated_at'])
+      .select(['p.channel_connection_id', 'p.approvals_required', 'p.review_reminders', 'p.short_links', 'p.four_eyes', 'p.client_approval', 'p.updated_by', 'p.updated_at'])
       .where('p.org_id', '=', ctx.orgId)
       .where('c.status', '<>', 'revoked')
       .orderBy('p.channel_connection_id')
       .execute();
-    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
+    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, reviewReminders: r.review_reminders, shortLinks: r.short_links, fourEyes: r.four_eyes, clientApproval: r.client_approval, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
   },
 });
 
@@ -169,5 +298,68 @@ export const channelWaiting = defineQuery({
   },
 });
 
-export const policyCommands = [policySet];
+// The client's approval on a channel (#770): its posts also wait for the client's "Approved" on a review link. Owners
+// only, like four-eyes: it changes who decides. Posts already approved stay approved.
+export const clientApprovalSet = defineCommand({
+  name: 'social.channel.set_client_approval',
+  input: z.strictObject({ connectionId: zId, clientApproval: z.boolean() }),
+  risk: 'R2',
+  access: OWNERS,
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const userId = ctx.actor.userId;
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .where('status', '<>', 'revoked')
+      .executeTakeFirst();
+    if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh này');
+    await ctx.trx
+      .insertInto('crove_social.channel_policy')
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, client_approval: input.clientApproval, updated_by: userId })
+      .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ client_approval: input.clientApproval, updated_by: userId, updated_at: ctx.now }))
+      .execute();
+    // Turned off, the client no longer holds anything: a variant in review that the team approved in full is approved now,
+    // as a lowered approval count does (#408). Turning it on leaves approved posts as they are.
+    const approved: string[] = [];
+    if (!input.clientApproval) {
+      const touched = await ctx.trx
+        .selectFrom('crove_social.post_variant')
+        .select(['post_id'])
+        .distinct()
+        .where('org_id', '=', ctx.orgId)
+        .where('channel_connection_id', '=', input.connectionId)
+        .where('status', '=', 'in_review')
+        .orderBy('post_id')
+        .execute();
+      const required = (await approvalsRequired(ctx.trx, ctx.orgId, [input.connectionId])).get(input.connectionId) ?? 1;
+      for (const { post_id } of touched) {
+        await lockPost(ctx.trx, ctx.orgId, post_id);
+        const variants = (await lockVariants(ctx.trx, ctx.orgId, post_id)).filter((v) => v.channel_connection_id === input.connectionId && v.status === 'in_review');
+        const decisions = await decisionsOf(ctx.trx, ctx.orgId, variants.map((v) => v.id));
+        const up: string[] = [];
+        const scheduled: string[] = [];
+        for (const v of variants) {
+          if (approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }).length < required) continue;
+          const values = approvedValues(v, ctx.now);
+          await setVariant(ctx, v.id, values);
+          up.push(v.id);
+          if (values.status === 'scheduled') scheduled.push(v.id);
+        }
+        if (up.length === 0) continue;
+        await refreshPostStatus(ctx, post_id);
+        approved.push(...up);
+        await ctx.emit('social.variant.decided', { post_id, decision: 'approved', variant_ids: up, waiting_variant_ids: [], by_policy: true });
+        if (scheduled.length > 0) await ctx.emit('social.variant.scheduled', { post_id, variant_ids: scheduled, by_policy: true });
+      }
+    }
+    ctx.audit({ connection_id: input.connectionId, client_approval: input.clientApproval, approved_variants: approved });
+    return { connectionId: input.connectionId, clientApproval: input.clientApproval, approved };
+  },
+});
+
+export const policyCommands = [policySet, remindersSet, shortLinksSet, fourEyesSet, clientApprovalSet];
 export const policyQueries = [policyList, channelWaiting];

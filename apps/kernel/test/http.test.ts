@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -154,6 +154,101 @@ describe('configuration guards', () => {
     };
     expect(await config({})).toBeNull();
     expect(await config({ SUPPORT_URL: 'mailto:support@example.com' })).toBe('mailto:support@example.com');
+  });
+
+  // #688: the terms of service and privacy notice linked at sign-up and invite acceptance are https: pages.
+  it('accepts https: TERMS_URL and PRIVACY_URL only, and hands them to the app or null', async () => {
+    for (const name of ['TERMS_URL', 'PRIVACY_URL'] as const) {
+      expect(loadConfig(base)[name]).toBeUndefined();
+      expect(loadConfig({ ...base, [name]: ' ' })[name]).toBeUndefined();
+      expect(loadConfig({ ...base, [name]: ' https://crove.example.com/legal/terms ' })[name]).toBe('https://crove.example.com/legal/terms');
+      for (const url of ['http://crove.example.com/terms', 'javascript:alert(1)', 'mailto:legal@example.com', 'data:text/html,x', '/terms', 'https://']) {
+        expect(() => loadConfig({ ...base, [name]: url }), `${name}=${url}`).toThrow(new RegExp(name));
+      }
+    }
+    const app = (env: Record<string, string>) =>
+      createHttpApp({
+        config: loadConfig({ ...base, WEB_DIST: '/nonexistent', ...env }),
+        runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+        store: {} as BlobStore,
+        authenticate: async () => {
+          throw new Error('not used');
+        },
+        pool: {} as pg.Pool,
+        aiEnabled: false,
+      });
+    const read = async (env: Record<string, string>) =>
+      (await (await app(env).request('/api/config')).json()) as { termsUrl: unknown; privacyUrl: unknown };
+    expect(await read({})).toMatchObject({ termsUrl: null, privacyUrl: null });
+    expect(await read({ TERMS_URL: 'https://crove.example.com/terms', PRIVACY_URL: 'https://crove.example.com/privacy' })).toMatchObject({
+      termsUrl: 'https://crove.example.com/terms',
+      privacyUrl: 'https://crove.example.com/privacy',
+    });
+  });
+});
+
+// #892: the deploy's smoke test reads the build and the migrations missing from the ledger.
+describe('GET /version', () => {
+  const base = { DATABASE_URL: 'postgres://localhost/x', AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: 'crove-auth', WEB_DIST: '/nonexistent' };
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'crove-version-'));
+    for (const name of ['20260101000000_crove_kernel_first.sql', '20260102000000_crove_kernel_second.sql']) writeFileSync(join(dir, name), 'SELECT 1;\n');
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+  const app = (env: Record<string, string>, pool: Partial<pg.Pool>) =>
+    createHttpApp({
+      config: loadConfig({ ...base, MIGRATIONS_DIR: dir, ...env }),
+      runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+      store: {} as BlobStore,
+      authenticate: async () => {
+        throw new Error('not used');
+      },
+      pool: pool as pg.Pool,
+      aiEnabled: false,
+    });
+  const ledger = (versions: string[]) => {
+    const released = { count: 0 };
+    const pool = {
+      connect: async () => ({ query: async () => ({ rows: versions.map((version) => ({ version })) }), release: () => void (released.count += 1) }),
+    } as unknown as Partial<pg.Pool>;
+    return { pool, released };
+  };
+
+  it('answers the build and the committed migrations the ledger lacks, without a token', async () => {
+    const full = ledger(['20260101000000', '20260102000000']);
+    const answer = await app({ CROVE_BUILD: '0123456789abcdef0123456789abcdef01234567' }, full.pool).request('/version');
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ build: '0123456789abcdef0123456789abcdef01234567', migrationsMissing: [] });
+    expect(full.released.count).toBe(1);
+
+    const behind = await app({}, ledger(['20260101000000']).pool).request('/version');
+    expect(await behind.json()).toEqual({ build: 'dev', migrationsMissing: ['20260102000000_crove_kernel_second.sql'] });
+  });
+
+  it('answers 503 with the build when the database cannot be reached or the ledger read fails', async () => {
+    const down = await app({ CROVE_BUILD: 'v1.2.3' }, { connect: async () => Promise.reject(new Error('refused')) } as unknown as Partial<pg.Pool>).request('/version');
+    expect(down.status).toBe(503);
+    expect(await down.json()).toEqual({ build: 'v1.2.3', migrationsMissing: null });
+    const lost = Object.assign(new Error('Connection terminated unexpectedly'), { code: '57P01' });
+    const dropped = { connect: async () => ({ query: async () => Promise.reject(lost), release: () => undefined }) } as unknown as Partial<pg.Pool>;
+    const midway = await app({ CROVE_BUILD: 'v1.2.3' }, dropped).request('/version');
+    expect(midway.status).toBe(503);
+    expect(await midway.json()).toEqual({ build: 'v1.2.3', migrationsMissing: null });
+    // A database no migration has run on misses every migration.
+    const fresh = Object.assign(new Error('relation "crove_meta.schema_migrations" does not exist'), { code: '42P01' });
+    const empty = { connect: async () => ({ query: async () => Promise.reject(fresh), release: () => undefined }) } as unknown as Partial<pg.Pool>;
+    expect(await (await app({}, empty).request('/version')).json()).toEqual({
+      build: 'dev',
+      migrationsMissing: ['20260101000000_crove_kernel_first.sql', '20260102000000_crove_kernel_second.sql'],
+    });
+  });
+
+  it('takes a build id of letters, digits, dot, dash and underscore only', () => {
+    expect(loadConfig({ ...base, CROVE_BUILD: ' ' }).CROVE_BUILD).toBeUndefined();
+    for (const bad of ['a b', '<script>', 'x'.repeat(65)]) expect(() => loadConfig({ ...base, CROVE_BUILD: bad }), bad).toThrow(/CROVE_BUILD/);
   });
 });
 
@@ -597,11 +692,13 @@ describe('uploads through the kernel (#432)', () => {
     form.append('file', new File([bytes], name, { type: 'application/octet-stream' }));
     if (!withLength) return app.request('/api/files', { method: 'POST', body: form, headers });
     const encoded = new Response(form);
+    // Read before the body: Bun drops a Response's generated multipart content type once its body has been read (#768).
+    const contentType = encoded.headers.get('content-type') ?? '';
     const body = new Uint8Array(await encoded.arrayBuffer());
     return app.request('/api/files', {
       method: 'POST',
       body,
-      headers: { ...headers, 'content-type': encoded.headers.get('content-type') ?? '', 'content-length': String(body.byteLength) },
+      headers: { ...headers, 'content-type': contentType, 'content-length': String(body.byteLength) },
     });
   }
 

@@ -1,10 +1,13 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Fragment, useDeferredValue, useState } from 'react';
+import { useDeferredValue, useEffect, useState } from 'react';
+import { useSearch } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
+import type { Party } from '@crove/kernel-contract';
+import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
-import { EditPartyButton, PartyEditRow } from '../components/party-edit.tsx';
+import { EditParty, MergeParty, PartyDuplicates, refreshParties } from '../components/party-edit.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { accountLabel, pickableAccounts, type ChartAccount } from '../lib/accounts.ts';
@@ -39,21 +42,112 @@ function DefaultAccount({ vendor, accounts, canManage }: { vendor: { id: string;
   );
 }
 
-export function VendorsPage() {
+// Pairs of vendors that look like one (same enterprise tax code, same phone, or names alike), strongest first, each
+// with "Gộp" for owners and admins.
+function DuplicateHints({ canManage }: { canManage: boolean }) {
+  const t = useTranslations('vendors');
+  const hints = useQuery(orpc.parties.duplicateHints.queryOptions({ input: {} }));
+  const mark = useMutation(orpc.parties.markDuplicate.mutationOptions({ onSuccess: refreshParties }));
+  if (!hints.data || hints.data.length === 0) return null;
+  const label = (p: { name: string; taxCode: string | null }) => (p.taxCode ? `${p.name} (${p.taxCode})` : p.name);
+  return (
+    <section aria-label={t('hintsTitle')} className="mb-4 rounded-xl border bg-card p-4">
+      <h2 className="text-sm font-medium text-foreground">{t('hintsTitle')}</h2>
+      <p className="mb-2 text-xs text-subtle-foreground">{t('hintsIntro')}</p>
+      <ul className="flex flex-col gap-2 text-sm">
+        {hints.data.map((h) => (
+          <li key={`${h.keep.id}-${h.duplicate.id}`} className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-foreground">
+              {t('hint', { duplicate: label(h.duplicate), keep: label(h.keep) })}
+              <span className="ml-2 text-xs text-subtle-foreground">{h.reasons.map((r) => t(`reasons.${r}`)).join(', ')}</span>
+            </span>
+            {canManage && (
+              <Button variant="outline" size="sm" disabled={mark.isPending} onClick={() => mark.mutate({ partyId: h.duplicate.id, keepId: h.keep.id })}>
+                {t('mergeHint', { keep: h.keep.name })}
+              </Button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {mark.error && <ErrorText>{errorMessage(mark.error)}</ErrorText>}
+    </section>
+  );
+}
+
+function VendorRow({
+  vendor,
+  others,
+  accounts,
+  canManage,
+  canEdit,
+}: {
+  vendor: Party;
+  others: readonly Party[];
+  accounts: readonly ChartAccount[];
+  canManage: boolean;
+  canEdit: boolean;
+}) {
   const t = useTranslations('vendors');
   const f = useFormat();
-  const [q, setQ] = useState('');
+  const [editing, setEditing] = useState(false);
+  return (
+    <>
+      <TableRow>
+        <TableCell className="px-4 py-3">
+          <p className="font-medium text-foreground">{vendor.name}</p>
+          {(vendor.email || vendor.phone) && <p className="text-xs text-subtle-foreground">{[vendor.phone, vendor.email].filter(Boolean).join(' · ')}</p>}
+          <PartyDuplicates party={vendor} canManage={canManage} ns="vendors" />
+        </TableCell>
+        <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{vendor.taxCode}</TableCell>
+        <TableCell className="px-4 py-3 text-subtle-foreground">{vendor.address}</TableCell>
+        <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.number(vendor.documentCount)}</TableCell>
+        <TableCell className="px-4 py-3 text-muted-foreground">
+          <DefaultAccount vendor={vendor} accounts={accounts} canManage={canManage} />
+        </TableCell>
+        {canEdit && (
+          <TableCell className="px-4 py-3 text-right">
+            {!editing && (
+              <Button variant="ghost" size="sm" onClick={() => setEditing(true)} aria-label={t('editOf', { name: vendor.name })}>
+                {t('edit')}
+              </Button>
+            )}
+          </TableCell>
+        )}
+      </TableRow>
+      {editing && (
+        <TableRow>
+          <TableCell colSpan={6} className="px-4 py-3">
+            <EditParty party={vendor} ns="vendors" onDone={() => setEditing(false)} />
+            {canManage && (
+              <div className="mt-4 border-t pt-3">
+                <MergeParty party={vendor} others={others} ns="vendors" />
+              </div>
+            )}
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
+
+export function VendorsPage() {
+  const t = useTranslations('vendors');
+  // ?q= from a link (a party found by the command palette, #673) starts the filter.
+  const search: { q?: string } = useSearch({ strict: false });
+  const [q, setQ] = useState(search.q ?? '');
+  useEffect(() => {
+    if (search.q !== undefined) setQ(search.q);
+  }, [search.q]);
   const term = useDeferredValue(q.trim());
   const vendors = useQuery(orpc.parties.list.queryOptions({ input: term ? { q: term } : {} }));
   const accounts = useQuery(orpc.accounts.list.queryOptions());
   const org = useQuery(orpc.org.get.queryOptions());
   const canManage = org.data?.role === 'owner' || org.data?.role === 'admin';
-  const [editing, setEditing] = useState<string | null>(null);
-  const head = [t('columns.name'), t('columns.taxCode'), t('columns.address'), t('columns.documents'), t('columns.defaultAccount')];
-  if (canManage) head.push('');
+  const canEdit = canManage || org.data?.role === 'member';
   return (
     <>
       <PageHeader title={t('title')} subtitle={t('subtitle')} />
+      {canEdit && <DuplicateHints canManage={canManage} />}
       <div className="mb-4 max-w-sm">
         <Input placeholder={t('search')} value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
@@ -64,25 +158,11 @@ export function VendorsPage() {
       ) : (vendors.data?.length ?? 0) === 0 ? (
         <Empty title={t('empty')} />
       ) : (
-        <DataTable head={head}>
+        <DataTable
+          head={[t('columns.name'), t('columns.taxCode'), t('columns.address'), t('columns.documents'), t('columns.defaultAccount'), ...(canEdit ? [''] : [])]}
+        >
           {vendors.data?.map((v) => (
-            <Fragment key={v.id}>
-              <TableRow>
-                <TableCell className="px-4 py-3 font-medium text-foreground">{v.name}</TableCell>
-                <TableCell className="px-4 py-3 font-mono text-xs text-muted-foreground">{v.taxCode}</TableCell>
-                <TableCell className="px-4 py-3 text-subtle-foreground">{v.address}</TableCell>
-                <TableCell className="px-4 py-3 text-muted-foreground tabular-nums">{f.number(v.documentCount)}</TableCell>
-                <TableCell className="px-4 py-3 text-muted-foreground">
-                  <DefaultAccount vendor={v} accounts={accounts.data ?? []} canManage={canManage} />
-                </TableCell>
-                {canManage && (
-                  <TableCell className="px-4 py-3 text-right">
-                    <EditPartyButton party={v} onEdit={() => setEditing(v.id)} />
-                  </TableCell>
-                )}
-              </TableRow>
-              {editing === v.id && <PartyEditRow party={v} columns={head.length} onClose={() => setEditing(null)} />}
-            </Fragment>
+            <VendorRow key={v.id} vendor={v} others={vendors.data ?? []} accounts={accounts.data ?? []} canManage={canManage} canEdit={canEdit} />
           ))}
         </DataTable>
       )}

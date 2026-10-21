@@ -23,6 +23,12 @@ const RULES: Readonly<Record<string, PreviewRule>> = {
   tiktok: { layout: 'vertical', cut: 100, linkCard: false, gridMax: 1 },
   youtube: { layout: 'video', cut: 100, linkCard: false, gridMax: 1 },
   zalo_oa: { layout: 'article', cut: 160, linkCard: false, gridMax: 1 },
+  telegram: { layout: 'feed', cut: null, linkCard: true, gridMax: 4 },
+  mastodon: { layout: 'short', cut: null, linkCard: true, gridMax: 4 },
+  pinterest: { layout: 'short', cut: null, linkCard: false, gridMax: 1 },
+  discord: { layout: 'feed', cut: null, linkCard: true, gridMax: 4 },
+  // A blog post: its title over the text, as an article.
+  wordpress: { layout: 'article', cut: 300, linkCard: false, gridMax: 1 },
 };
 
 export const previewRule = (provider: string): PreviewRule => RULES[provider] ?? { layout: 'feed', cut: null, linkCard: true, gridMax: 4 };

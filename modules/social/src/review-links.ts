@@ -79,8 +79,64 @@ export const reviewLinkRevoke = defineCommand({
   },
 });
 
+// A member removed, or moved below admin (#625): the review and report links and the calendar feed (#862) they made
+// stop working, as their pending invites do (kernel.member.remove and set_role revoke those in the same transaction).
+// The worker runs this for kernel.member.removed and kernel.member.role_changed; the event is read from the outbox,
+// never from the job. The role is read again here, so a member made admin again before this ran keeps their links.
+export const linksRevokeForMember = defineCommand({
+  name: 'social.links.revoke_for_member',
+  input: z.strictObject({ eventId: zId }),
+  risk: 'R1',
+  access: 'system',
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình nền mới thực hiện được việc này');
+    const event = await ctx.trx.selectFrom('crove_kernel.outbox_event').select(['type', 'payload', 'actor_type', 'actor_id']).where('org_id', '=', ctx.orgId).where('id', '=', input.eventId).executeTakeFirst();
+    if (!event || (event.type !== 'kernel.member.removed' && event.type !== 'kernel.member.role_changed')) return { review: 0, report: 0, calendar: 0 };
+    const data = z.object({ userId: zId }).safeParse(event.payload);
+    if (!data.success) return { review: 0, report: 0, calendar: 0 };
+    const userId = data.data.userId;
+    const member = await ctx.trx.selectFrom('crove_kernel.tenant_member').select('role').where('org_id', '=', ctx.orgId).where('user_id', '=', userId).executeTakeFirst();
+    if (member && (member.role === 'owner' || member.role === 'admin')) return { review: 0, report: 0, calendar: 0 };
+    // Who took the right away; the member themself when the event names nobody.
+    const by = event.actor_type === 'user' && event.actor_id ? event.actor_id : userId;
+    const review = await ctx.trx
+      .updateTable('crove_social.review_link')
+      .set({ revoked_at: ctx.now, revoked_by: by })
+      .where('org_id', '=', ctx.orgId)
+      .where('created_by', '=', userId)
+      .where('revoked_at', 'is', null)
+      .where('expires_at', '>', ctx.now)
+      .returning('id')
+      .execute();
+    const report = await ctx.trx
+      .updateTable('crove_social.report_link')
+      .set({ revoked_at: ctx.now, revoked_by: by })
+      .where('org_id', '=', ctx.orgId)
+      .where('created_by', '=', userId)
+      .where('revoked_at', 'is', null)
+      .where('expires_at', '>', ctx.now)
+      .returning('id')
+      .execute();
+    const calendar = await ctx.trx
+      .updateTable('crove_social.calendar_feed')
+      .set({ revoked_at: ctx.now, revoked_by: by })
+      .where('org_id', '=', ctx.orgId)
+      .where('created_by', '=', userId)
+      .where('revoked_at', 'is', null)
+      .returning('id')
+      .execute();
+    ctx.audit({ member: userId, review_links: review.map((r) => r.id), report_links: report.map((r) => r.id), calendar_feeds: calendar.map((r) => r.id) });
+    return { review: review.length, report: report.length, calendar: calendar.length };
+  },
+});
+
+// The answers one link takes (review_feedback_add refuses more, #589); the team sees how many are used (#626).
+export const REVIEW_LINK_ANSWERS_MAX = 100;
+
 export interface ReviewLinkView {
   id: string;
+  // Client answers given through it, of REVIEW_LINK_ANSWERS_MAX.
+  answers: number;
   createdBy: string;
   createdAt: string;
   expiresAt: string;
@@ -103,7 +159,7 @@ export const reviewLinkList = defineQuery({
   input: z.object({ postId: zId }),
   access: ALL,
   handler: async (ctx, input): Promise<{ links: ReviewLinkView[]; feedback: ReviewFeedbackView[] }> => {
-    const [links, feedback, key] = await Promise.all([
+    const [links, feedback, key, counts] = await Promise.all([
       ctx.trx
         .selectFrom('crove_social.review_link')
         .select(['id', 'created_by', 'created_at', 'expires_at', 'revoked_at', 'content_key'])
@@ -121,11 +177,21 @@ export const reviewLinkList = defineQuery({
         .limit(200)
         .execute(),
       sql<{ key: string }>`SELECT crove_social.review_content_key(${ctx.orgId}::uuid, ${input.postId}::uuid) AS key`.execute(ctx.trx),
+      // Every answer counts, not only the 200 listed below.
+      ctx.trx
+        .selectFrom('crove_social.review_feedback')
+        .select(['link_id', (eb) => eb.fn.countAll<string>().as('n')])
+        .where('org_id', '=', ctx.orgId)
+        .where('post_id', '=', input.postId)
+        .groupBy('link_id')
+        .execute(),
     ]);
+    const answers = new Map(counts.map((c) => [c.link_id, Number(c.n)]));
     const current = key.rows[0]?.key ?? '';
     return {
       links: links.map((l) => ({
         id: l.id,
+        answers: answers.get(l.id) ?? 0,
         createdBy: l.created_by,
         createdAt: l.created_at.toISOString(),
         expiresAt: l.expires_at.toISOString(),
@@ -145,5 +211,5 @@ export const reviewLinkList = defineQuery({
   },
 });
 
-export const reviewLinkCommands = [reviewLinkCreate, reviewLinkRevoke];
+export const reviewLinkCommands = [reviewLinkCreate, reviewLinkRevoke, linksRevokeForMember];
 export const reviewLinkQueries = [reviewLinkList];

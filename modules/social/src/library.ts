@@ -1,14 +1,17 @@
 // The media library (Social plan S9, issue #395): the org's post images, uploaded with purpose=social (#372), to reuse
 // across posts, find by name and see where each is used. A library item is a crove_kernel.file row with source
-// 'social'; an upload of the same bytes is the same file, so an image is in the library once.
+// 'social'; an upload of the same bytes is the same file, so an image is in the library once. Members tag files to
+// find them again (#904, media-tags.ts).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { defineQuery } from '@crove/kernel-runtime';
+import { normalizeMediaTag } from './domain/media-tags.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
-const MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
+// The file types of the library: a social upload of another type is not one of its items.
+export const LIBRARY_MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
 export const LIBRARY_PAGE = 60;
 
 export interface LibraryItem {
@@ -18,9 +21,14 @@ export interface LibraryItem {
   sizeBytes: number;
   // A video's duration; null for images.
   durationMs: number | null;
+  // An image's size as shown (#636); null when unknown.
+  width: number | null;
+  height: number | null;
   createdAt: string;
   // Posts that show the image: in their own images or in a channel's own list.
   usedIn: number;
+  // Its tags (#904), by name.
+  tags: string[];
 }
 
 export interface LibraryUse {
@@ -40,11 +48,13 @@ const postsUsing = sql`(
 // LIKE wildcards in a search are matched as themselves.
 export const likeTerm = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
-// Newest first, 60 a page; before is the last item of the previous page.
+// Newest first, 60 a page; before is the last item of the previous page. search matches the file name, tag one of
+// its tags whatever the case (#904); both together narrow the list.
 export const mediaList = defineQuery({
   name: 'social.media.list',
   input: z.object({
     search: z.string().trim().max(200).optional(),
+    tag: z.string().max(200).transform(normalizeMediaTag).optional(),
     before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(),
     limit: z.number().int().min(1).max(100).optional(),
   }),
@@ -53,11 +63,26 @@ export const mediaList = defineQuery({
     const limit = input.limit ?? LIBRARY_PAGE;
     let q = ctx.trx
       .selectFrom('crove_kernel.file as f')
-      .select(['f.id', 'f.filename', 'f.content_type', 'f.size_bytes', 'f.duration_ms', 'f.created_at', sql<string>`(SELECT count(*) FROM ${postsUsing} u)`.as('used_in')])
+      .select([
+        'f.id',
+        'f.filename',
+        'f.content_type',
+        'f.size_bytes',
+        'f.duration_ms',
+        'f.image_width',
+        'f.image_height',
+        'f.created_at',
+        sql<string>`(SELECT count(*) FROM ${postsUsing} u)`.as('used_in'),
+        sql<string[]>`ARRAY(SELECT t.tag FROM crove_social.media_tag t WHERE t.org_id = f.org_id AND t.file_id = f.id ORDER BY lower(t.tag), t.tag)`.as('tags'),
+      ])
       .where('f.org_id', '=', ctx.orgId)
       .where('f.source', '=', 'social')
-      .where('f.content_type', 'in', [...MEDIA_TYPES]);
+      .where('f.content_type', 'in', [...LIBRARY_MEDIA_TYPES]);
     if (input.search) q = q.where(sql<boolean>`f.filename ILIKE ${likeTerm(input.search)}`);
+    if (input.tag) {
+      const tag = input.tag;
+      q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.media_tag t WHERE t.org_id = f.org_id AND t.file_id = f.id AND lower(t.tag) = lower(${tag}))`);
+    }
     if (input.before) {
       const at = new Date(Date.parse(input.before.createdAt));
       q = q.where(sql<boolean>`(f.created_at, f.id) < (${at}, ${input.before.fileId}::uuid)`);
@@ -74,8 +99,11 @@ export const mediaList = defineQuery({
         mime: r.content_type,
         sizeBytes: Number(r.size_bytes),
         durationMs: r.duration_ms === null ? null : Number(r.duration_ms),
+        width: r.image_width,
+        height: r.image_height,
         createdAt: r.created_at.toISOString(),
         usedIn: Number(r.used_in),
+        tags: r.tags,
       })),
       more: rows.length > limit,
     };

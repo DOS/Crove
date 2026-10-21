@@ -3,6 +3,7 @@
 // reposting, the metrics of a published post, and the AI drafting card on a server without a model. Each test signs
 // up its own user and org. States the worker reaches only on a real platform (a refusal, an unknown outcome, a metrics
 // capture) are written with SQL, as social.spec.ts moves a slot forward.
+import { crc32, deflateSync } from 'node:zlib';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { exec, sql } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
@@ -11,6 +12,26 @@ import { createOrg, newEmail, signUp } from '../lib/session.ts';
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
 test.use({ timezoneId: TIME_ZONE });
 
+// A width x height PNG of one colour (an RGB image, rows unfiltered, deflated).
+function solidPng(width: number, height: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, 'latin1'), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const row = Buffer.alloc(1 + width * 3);
+  for (let x = 0; x < width; x++) row.set([200, 60, 60], 1 + x * 3);
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
 // A 1x1 PNG.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==', 'base64');
 
@@ -286,6 +307,20 @@ test('shows the latest metrics of a published channel on the post and in the Met
   await expect(row.getByRole('cell')).toHaveText([new RegExp(`^${body}`), '1.234', '56', '7', '3']);
   await expect(row).toContainText(channel);
   await expect(panel.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận' })).toContainText('1.234');
+  // The best post of the window (#645), and the channel's followers over it from the daily snapshots.
+  await expect(panel.locator('[data-slot="card"]').filter({ hasText: 'Bài nổi bật trong khoảng này' })).toContainText(body);
+  exec(
+    `INSERT INTO crove_social.account_snapshot (org_id, channel_connection_id, captured_on, followers)
+     SELECT c.org_id, c.id, d.day, d.n FROM crove_kernel.channel_connection c,
+       (VALUES ((now() AT TIME ZONE 'UTC')::date - 3, 1000), ((now() AT TIME ZONE 'UTC')::date, 1080)) AS d(day, n)
+     WHERE c.display_name = :'channel'`,
+    { channel },
+  );
+  await page.reload();
+  await page.getByRole('tab', { name: 'Số liệu' }).click();
+  const growth = page.getByRole('tabpanel').locator('[data-slot="card"]').filter({ hasText: 'Tăng trưởng kênh trong 30 ngày' });
+  await expect(growth).toContainText('1.080 người theo dõi');
+  await expect(growth).toContainText('+80');
 
   // A client report link of today (#643), opened without an account: the totals, the channel and the post.
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date());
@@ -396,4 +431,81 @@ test('lets an owner approve and schedule their own post in one step (#638)', asy
   await expect(channelCard(page, 'Trang Một Bước').getByText('Đã lên lịch', { exact: true })).toBeVisible();
   const decided = sql<{ n: number }>(`SELECT count(*)::int AS n FROM crove_social.post_approval WHERE post_id = :'post' AND decision = 'approved'`, { post: postIdOf(page) });
   expect(decided).toEqual([{ n: 1 }]);
+});
+
+test('posts a Story of one image, with no text, in a phone frame (#644)', async ({ page }) => {
+  await signUp(page, newEmail('social-story'));
+  await createOrg(page, 'Công ty Tin');
+  await connectSandbox(page, 'Trang Tin');
+  await compose(page, 'Chữ này không lên Tin');
+  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'tin.png', mimeType: 'image/png', buffer: solidPng(1080, 1920) }]);
+  await expect(page.getByText('1/20').first()).toBeVisible();
+  await page.getByLabel('Kiểu bài').selectOption('story');
+  await expect(page.getByText('Tin (Story) - chỉ hiện ảnh hoặc video')).toBeVisible();
+  await expect(page.getByText('Bình luận đầu tiên (không bắt buộc)')).toHaveCount(0);
+  // A second image is one too many for a Story.
+  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'tin-2.png', mimeType: 'image/png', buffer: solidPng(1080, 1910) }]);
+  await expect(page.getByText('2/20').first()).toBeVisible();
+  await expect(page.getByText('Tin (Story) cần đúng một ảnh hoặc một video')).toBeVisible();
+  await page.getByRole('button', { name: 'Bỏ', exact: true }).last().click();
+  await expect(page.getByText('Tin (Story) cần đúng một ảnh hoặc một video')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  const saved = sql<{ post_type: string }>(`SELECT settings->>'postType' AS post_type FROM crove_social.post_variant WHERE post_id = :'post'`, { post: postIdOf(page) });
+  expect(saved).toEqual([{ post_type: 'story' }]);
+  // The saved post keeps the type in its channel's editor.
+  await expect(page.getByLabel('Kiểu bài')).toHaveValue('story');
+});
+
+test('crops a post image to a frame, and the server reads the new size (#636)', async ({ page }) => {
+  await signUp(page, newEmail('social-crop'));
+  await createOrg(page, 'Công ty Cắt Ảnh');
+  await connectSandbox(page, 'Trang Cắt Ảnh');
+  await compose(page, 'Bài có ảnh dọc');
+  await page.locator('input[type="file"]').first().setInputFiles([{ name: 'doc.png', mimeType: 'image/png', buffer: solidPng(1080, 1920) }]);
+  await expect(page.getByText('1/20').first()).toBeVisible();
+  await page.getByRole('button', { name: 'Cắt', exact: true }).first().click();
+  await page.getByRole('radio', { name: '1:1 · vuông' }).click();
+  await expect(page.getByText('Ảnh gốc 1080 × 1920, sau khi cắt 1080 × 1080')).toBeVisible();
+  await page.getByRole('button', { name: 'Lưu ảnh đã cắt' }).click();
+  await expect(page.getByRole('button', { name: 'Lưu ảnh đã cắt' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  const media = sql<{ image_width: number; image_height: number; content_type: string }>(
+    `SELECT f.image_width, f.image_height, f.content_type FROM crove_social.post_media m JOIN crove_kernel.file f ON f.org_id = m.org_id AND f.id = m.file_id WHERE m.post_id = :'post'`,
+    { post: postIdOf(page) },
+  );
+  expect(media).toEqual([{ image_width: 1080, image_height: 1080, content_type: 'image/png' }]);
+});
+test('turns an idea on the board into a draft, which moves it to Drafted (#701)', async ({ page }) => {
+  await signUp(page, newEmail('social-idea'));
+  await createOrg(page, 'Công ty Ý Tưởng');
+  await connectSandbox(page, 'Trang Ý Tưởng');
+  await page.getByRole('link', { name: 'Quay lại' }).click();
+  await page.getByRole('link', { name: 'Ý tưởng', exact: true }).click();
+  await page.getByRole('button', { name: 'Thêm ý tưởng' }).click();
+  await page.getByLabel('Ý tưởng', { exact: true }).fill('Món mới mùa thu');
+  await page.getByLabel('Ghi chú (không bắt buộc)').fill('Chụp ở quầy, ánh sáng buổi sáng');
+  await page.getByLabel('Liên kết (không bắt buộc)').fill('https://cuahang.vn/thu');
+  await page.getByRole('button', { name: 'Lưu', exact: true }).click();
+  const fresh = page.getByRole('region', { name: 'Mới' });
+  await expect(fresh.getByText('Món mới mùa thu')).toBeVisible();
+  await fresh.getByRole('button', { name: 'Lên kế hoạch' }).click();
+  const planned = page.getByRole('region', { name: 'Đã lên kế hoạch' });
+  await expect(planned.getByText('Món mới mùa thu')).toBeVisible();
+
+  await planned.getByRole('button', { name: 'Viết thành bài nháp' }).click();
+  await expect(page.getByText('Đang soạn từ ý tưởng "Món mới mùa thu"')).toBeVisible();
+  await expect(page.getByLabel('Nội dung chung')).toHaveValue('Món mới mùa thu\n\nChụp ở quầy, ánh sáng buổi sáng');
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  await expect(page.getByText('Bài này được viết từ ý tưởng')).toBeVisible();
+  const saved = sql<{ stage: string; linked: boolean; link_url: string | null }>(
+    `SELECT i.stage, i.post_id = p.id AS linked, p.link_url FROM crove_social.idea i JOIN crove_social.post p ON p.org_id = i.org_id AND p.id = :'post'`,
+    { post: postIdOf(page) },
+  );
+  expect(saved).toEqual([{ stage: 'drafted', linked: true, link_url: 'https://cuahang.vn/thu' }]);
+
+  await page.getByRole('link', { name: 'Món mới mùa thu' }).click();
+  await expect(page.getByRole('region', { name: 'Đã có bài nháp' }).getByRole('link', { name: 'Mở bài nháp' })).toBeVisible();
 });

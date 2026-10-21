@@ -284,6 +284,18 @@ suite('sales e-invoices (#313)', () => {
     const copy = await read(invoice('5001', { salt: '\n' }));
     const detail = await rpc('inbox/get', await tokenFor(owner), { id: copy });
     expect(detail.body.payload.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'duplicate', status: 'fail' })]));
+    // The checks keep their code and parameters (#677) through kernel.extraction.record, in the proposal and the run.
+    expect(detail.body.payload.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'duplicate', code: 'duplicate.found' }),
+        expect.objectContaining({ id: 'issue_date', code: 'issue_date.ok', params: { date: expect.any(String) } }),
+      ]),
+    );
+    const [run] = await admin(
+      async (c) =>
+        (await c.query(`SELECT r.checks FROM crove_kernel.extraction r JOIN crove_kernel.proposal p ON p.org_id = r.org_id AND p.source_file_id = r.file_id WHERE p.id = $1`, [copy])).rows,
+    );
+    expect(run?.checks).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'duplicate.found' })]));
     await expect(approve(copy, { acceptFailedChecks: true })).rejects.toMatchObject({ code: 'DUPLICATE_INVOICE', status: 409 });
     await runtime.execute('kernel.proposal.reject', { id: copy }, { actor: asUser(owner.userId), orgId: org.orgId });
     // The same series and number issued to someone else (here a customer with no tax code) is still the same invoice.
@@ -349,7 +361,7 @@ suite('sales e-invoices (#313)', () => {
       async (c) =>
         (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.journal.export' AND outcome = 'ok'`, [org.orgId])).rows,
     );
-    expect(audits.map((a) => a.detail)).toContainEqual({ entries: 1, format: 'misa_sme_sales' });
+    expect(audits.map((a) => a.detail)).toContainEqual({ entries: 1, format: 'misa_sme_sales', from: null, to: null });
   });
 
   it('books an invoice on the side the tax code says when it is approved', async () => {
@@ -492,5 +504,26 @@ suite('sales e-invoices (#313)', () => {
         await c.query('ROLLBACK');
       }
     });
+  });
+  it('reads an invoice from a branch of the org as a sale and keeps the branch code, and a branch of a supplier as a purchase (#686)', async () => {
+    const branch = `${SELLER_TAX_CODE}-001`;
+    const fromBranch = new TextEncoder().encode(FIXTURE.replace('<SHDon>1234</SHDon>', '<SHDon>6001</SHDon>').replace(`<MST>${SELLER_TAX_CODE}</MST>`, `<MST>${branch}</MST>`));
+    const sale = await read(fromBranch);
+    const saleDetail = await rpc('inbox/get', await tokenFor(owner), { id: sale });
+    expect(saleDetail.body).toMatchObject({ direction: 'sale' });
+    expect(saleDetail.body.payload).toMatchObject({ direction: 'sale', seller: { taxCode: branch }, buyer: { taxCode: BUYER_TAX_CODE } });
+    expect(saleDetail.body.payload.journal.map((j: { accountCode: string }) => j.accountCode)).toEqual(['131', '511', '3331']);
+    const recorded = await approve(sale);
+    const [doc] = await admin(async (c) => (await c.query(`SELECT direction FROM crove_finance.purchase_document WHERE id = $1`, [recorded.documentId])).rows);
+    expect(doc).toEqual({ direction: 'sale' });
+
+    // A supplier's branch selling to the org: still a purchase, and approved as one.
+    const supplierBranch = `${BUYER_TAX_CODE}-002`;
+    const purchaseXml = new TextDecoder().decode(invoice('6002', { purchase: true })).replace(`<MST>${BUYER_TAX_CODE}</MST>`, `<MST>${supplierBranch}</MST>`);
+    const purchase = await read(new TextEncoder().encode(purchaseXml));
+    const purchaseDetail = await rpc('inbox/get', await tokenFor(owner), { id: purchase });
+    expect(purchaseDetail.body).toMatchObject({ direction: 'purchase' });
+    expect(purchaseDetail.body.payload).toMatchObject({ seller: { taxCode: supplierBranch } });
+    await expect(approve(purchase)).resolves.toMatchObject({ documentId: expect.any(String) });
   });
 });

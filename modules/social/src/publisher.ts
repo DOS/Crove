@@ -10,9 +10,12 @@
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
 import { withCallSignal, type Publisher, type PublishResult, type ReconcileResult } from '@crove/channel';
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { COVER_RULES, VIDEO_READY, coverKind, coverOf, type Provider } from './domain/channels.ts';
+import { COVER_RULES, THREAD_PARTS_MAX, VIDEO_READY, coverKind, coverOf, isProvider, scopeNeeded, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 import type { CommentWork } from './comments.ts';
+import type { RemoveRecord, RemoveWork } from './remove.ts';
+import type { ThreadWork } from './thread.ts';import { shortened, shortUrl } from './short-links.ts';
+
 
 export interface PublishDeps {
   runtime: Runtime;
@@ -24,6 +27,8 @@ export interface PublishDeps {
   // Where the images of posts are stored. Unset: a post with images is refused by the adapter with nothing posted.
   store?: BlobStore;
   staleSeconds?: number;
+  // The deployment's public URL (PUBLIC_URL), where short links (#706) point. Unset: a post goes out with its own link.
+  publicUrl?: string;
 }
 
 const ACTOR: SystemActor = { type: 'system', component: 'social.publisher' };
@@ -67,7 +72,7 @@ const clip = (s: string | undefined, max: number) => (s === undefined ? undefine
 function fromPublish(r: PublishResult): PublishRecord {
   switch (r.kind) {
     case 'accepted':
-      return { kind: 'accepted', externalId: r.externalId.slice(0, 500), url: r.url };
+      return { kind: 'accepted', externalId: r.externalId.slice(0, 500), url: r.url, ...(r.sentToApp ? { sentToApp: true as const } : {}) };
     case 'pending':
       return { kind: 'pending', externalRef: r.externalRef.slice(0, 500), checkAfterSeconds: Math.min(86_400, Math.max(5, Math.round(r.checkAfterSeconds))) };
     case 'rejected': {
@@ -131,9 +136,11 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
     // The exact version the post was approved with, checked against its hash.
     return readVerified(deps.store, { key: file.storageKey, generation: file.generation, sha256: file.sha256 });
   };
+  // The content as it goes out: with its short link (#706) when it has one.
+  const content = work.shortLink && deps.publicUrl ? shortened(work.content, { target: work.shortLink.target, url: shortUrl(deps.publicUrl, work.shortLink.code) }) : work.content;
   try {
     switch (work.action) {
-      case 'call':
+      case 'call': {
         // The channel rules hold a video back from a channel whose adapter cannot post it; this keeps it so if a rule changed.
         if (!VIDEO_READY.has(publisher.provider as Provider) && work.content.media.some((m) => m.mime.startsWith('video/'))) {
           return fromPublish({ kind: 'rejected', error: 'bad_request', code: 'VIDEO_NOT_SUPPORTED' });
@@ -142,11 +149,20 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         if (cover && !COVER_RULES[publisher.provider as Provider]?.includes(coverKind(cover))) {
           return fromPublish({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
         }
+        // Settings this deployment's adapter cannot send (#903: TikTok's inbox mode without CHANNEL_TIKTOK_INBOX):
+        // refused for good with nothing sent, before the permission check, since no reconnect would bring it.
+        const refusal = publisher.refusal?.(work.settings);
+        if (refusal) return fromPublish({ kind: 'rejected', error: 'bad_request', code: refusal });
+        // A permission the variant needs that its connection was not granted (#903: a TikTok connection made before
+        // Crove asked for video.upload): nothing is sent, and the variant waits paused for a reconnect.
+        const scope = isProvider(publisher.provider) ? scopeNeeded(publisher.provider, work.settings) : null;
+        if (scope && !work.scopes.includes(scope)) return { kind: 'blocked', code: 'CHANNEL_SCOPE_MISSING' };
         return fromPublish(
           await withTimeout(timeout, () =>
-            publisher.publish({ ...credential, content: work.content, readMedia, mediaUrl, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
+            publisher.publish({ ...credential, content, readMedia, mediaUrl, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
           ),
         );
+      }
       case 'status':
         if (!publisher.status || !work.externalRef) return { kind: 'unknown', code: 'STATUS_UNAVAILABLE' };
         return fromPublish(await withTimeout(timeout, () => publisher.status!({ ...credential, externalRef: work.externalRef as string })));
@@ -156,7 +172,7 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         const after = new Date(Date.parse(work.callStartedAt) - 60_000);
         return fromReconcile(
           await withTimeout(timeout, () =>
-            publisher.reconcile!({ ...credential, callKey: work.callKey, contentHash: work.contentHash, content: work.content, after, before: new Date() }),
+            publisher.reconcile!({ ...credential, callKey: work.callKey, contentHash: work.contentHash, content, settings: work.settings, after, before: new Date() }),
           ),
         );
       }
@@ -207,9 +223,12 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
     { variantId, callKey: begun.callKey, phase: begun.action, result, connectionVersion: begun.connectionVersion },
     { actor: ACTOR, orgId },
   );
-  // Published now: its first comment, if it has one (#587). A failure there never touches the post.
-  if (result.kind === 'accepted' || result.kind === 'found') {
+  // Published now: its first comment, if it has one (#587). A failure there never touches the post. A draft sent to
+  // the platform's app (#903) is not out yet and has no post to comment on.
+  if ((result.kind === 'accepted' && !result.sentToApp) || result.kind === 'found') {
     await runCommentJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-comment] variant ${variantId.slice(0, 8)}`, (error as Error).message));
+    // And its thread (#742), part after part.
+    await runThreadJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-thread] variant ${variantId.slice(0, 8)}`, (error as Error).message));
   }
   return { action: begun.action, status: recorded.status ?? recorded.reason ?? 'not_recorded' };
 }
@@ -233,4 +252,66 @@ export async function runCommentJob(deps: PublishDeps, orgId: string, variantId:
   }
   const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.comment.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
   return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
+}
+
+/** The removal of a published variant a person asked for (#860): begin, one call, record. after: the last remove call the ask saw. */
+export async function runRemoveJob(deps: PublishDeps, orgId: string, variantId: string, provider: string, after: string | null): Promise<{ action: string; reason?: string; state?: string }> {
+  const publisher = deps.publishers[provider];
+  if (!publisher?.remove) return { action: 'none', reason: 'provider_not_configured' };
+  const begun = await deps.runtime.execute<RemoveWork>('social.remove.begin', { variantId, provider, after }, { actor: ACTOR, orgId });
+  if (begun.action === 'none') return { action: 'none', reason: begun.reason };
+  const credential = await openCredential(deps, orgId, begun.connectionId);
+  let result: RemoveRecord;
+  if ('blocked' in credential) result = { kind: 'blocked', code: credential.blocked };
+  else {
+    const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    try {
+      const r = await withTimeout(timeout, () => publisher.remove!({ ...credential, externalId: begun.externalId, settings: begun.settings }));
+      // What the record takes: codes and messages cut to their columns; a retry time is not kept (a person asks again).
+      result =
+        r.kind === 'removed'
+          ? r
+          : r.kind === 'unknown'
+            ? { kind: 'unknown', ...(r.code !== undefined ? { code: r.code.slice(0, 200) } : {}) }
+            : { kind: 'rejected', error: r.error, ...(r.code !== undefined ? { code: r.code.slice(0, 200) } : {}), ...(r.message !== undefined ? { message: r.message.slice(0, 2000) } : {}) };
+    } catch (error) {
+      // A throw or a timeout after the call may have reached the platform.
+      result = { kind: 'unknown', code: error instanceof Timeout ? 'TIMEOUT' : 'ADAPTER_ERROR' };
+    }
+  }
+  const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.remove.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
+  return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
+}
+
+/**
+ * The thread parts of a published variant (#742): begin, one call, record, for each part in turn, as replies to the
+ * part before. It stops at the first part that does not go out. retry: a person asked again, after the call they saw
+ * last.
+ */
+export async function runThreadJob(deps: PublishDeps, orgId: string, variantId: string, provider: string, retry?: { after: string | null }): Promise<{ action: string; reason?: string; state?: string; parts: number }> {
+  const publisher = deps.publishers[provider];
+  if (!publisher?.comment) return { action: 'none', reason: 'provider_not_configured', parts: 0 };
+  let credential: Awaited<ReturnType<typeof openCredential>> | null = null;
+  let parts = 0;
+  for (let i = 0; i < THREAD_PARTS_MAX; i += 1) {
+    const begun = await deps.runtime.execute<ThreadWork>('social.thread.begin', { variantId, provider, ...(retry && i === 0 ? { retry } : {}) }, { actor: ACTOR, orgId });
+    // Nothing more to post: the chain is out, or waits on a person. state: the last part this job posted.
+    if (begun.action === 'none') return parts > 0 ? { action: 'call', state: 'succeeded', reason: begun.reason, parts } : { action: 'none', reason: begun.reason, parts };
+    credential ??= await openCredential(deps, orgId, begun.connectionId);
+    let result: Awaited<ReturnType<NonNullable<Publisher['comment']>>> | { kind: 'blocked'; code: string };
+    if ('blocked' in credential) result = { kind: 'blocked', code: credential.blocked };
+    else {
+      const open = credential;
+      const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+      try {
+        result = await withTimeout(timeout, () => publisher.comment!({ ...open, externalId: begun.externalId, rootExternalId: begun.rootExternalId, text: begun.text, callKey: begun.callKey }));
+      } catch (error) {
+        result = { kind: 'unknown', code: error instanceof Timeout ? 'TIMEOUT' : 'ADAPTER_ERROR' };
+      }
+    }
+    const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.thread.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
+    parts += 1;
+    if (recorded.state !== 'succeeded') return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}), parts };
+  }
+  return { action: 'call', state: 'succeeded', parts };
 }

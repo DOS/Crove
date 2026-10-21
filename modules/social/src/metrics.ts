@@ -11,12 +11,21 @@ import type { Db } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import type { Trx } from './variants.ts';
 import { labelsOfPosts } from './labels.ts';
+import { formatOf, whatWorks, type ChannelInsights, type InsightSample } from './domain/insights.ts';
+import { isValidTimeZone } from './domain/queue.ts';
+import { runAutoReply } from './auto-reply.ts';
+import { runRepost } from './repost.ts';
+import { autoReplyOf, repostRuleOf } from './domain/channels.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
 export const METRICS_INTERVAL_SECONDS = 6 * 3600;
 export const METRICS_SWEEP_MS = 15 * 60_000;
 const METRICS_LIMIT = 200;
+// A pass asks a few platforms at once (#397): at most METRICS_CONCURRENCY variants in flight, METRICS_PER_PROVIDER on
+// one platform, so a slow platform cannot hold the pass and none is asked many things at once.
+const METRICS_CONCURRENCY = 6;
+const METRICS_PER_PROVIDER = 2;
 const ACTOR: SystemActor = { type: 'system', component: 'social.metrics' };
 
 const zCount = z.number().int().min(0).max(1e12);
@@ -55,12 +64,18 @@ export const metricsTarget = defineQuery({
   handler: async (ctx, input) => {
     const row = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['channel_connection_id', 'external_post_id', 'provider', 'status'])
+      .select(['channel_connection_id', 'external_post_id', 'provider', 'status', 'settings'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.variantId)
       .executeTakeFirst();
     if (!row || row.status !== 'published' || !row.external_post_id) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy bài đã đăng này');
-    return { connectionId: row.channel_connection_id, externalPostId: row.external_post_id, provider: row.provider };
+    const reply = autoReplyOf((row.settings ?? {}) as Record<string, unknown>);
+    const repostOf = (s: unknown) => {
+      const rule = repostRuleOf((s ?? {}) as Record<string, unknown>);
+      return rule && rule !== 'invalid' ? rule : null;
+    };
+    // The like count that sets off the variant's auto-reply (#746), so the sweep begins one only when it is reached.
+    return { connectionId: row.channel_connection_id, externalPostId: row.external_post_id, provider: row.provider, autoReplyLikes: reply && reply !== 'invalid' ? reply.likes : null, repost: repostOf(row.settings) };
   },
 });
 
@@ -74,6 +89,8 @@ export interface MetricsRow {
   externalUrl: string | null;
   metrics: Record<string, number>;
   capturedAt: string | null;
+  // Clicks on its short link (#706); null when it went out without one.
+  clicks: number | null;
 }
 
 // The latest snapshot of each variant published in the window, newest first; or of one post's published channels,
@@ -87,6 +104,43 @@ export const metricsSummary = defineQuery({
 
 // What the screens show at most, and what one export holds at most (it says when it was cut).
 const SUMMARY_LIMIT = 500;
+
+// The window's totals (#397), summed in SQL over every published channel, not only the rows the summary lists: the
+// last real answer of each, and the clicks on its short links (null when no channel sent links through them).
+export const metricsTotals = defineQuery({
+  name: 'social.metrics.totals',
+  input: z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() }),
+  access: ALL,
+  handler: async (ctx, input): Promise<{ posts: number; metrics: Record<string, number>; clicks: number | null }> => {
+    const labelled = input.labelId
+      ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${input.labelId}::uuid)`
+      : sql``;
+    const { rows } = await sql<{ posts: string; metrics: Record<string, number>; clicks: string | null }>`
+      WITH v AS (
+        SELECT v.org_id, v.id FROM crove_social.post_variant v
+        WHERE v.org_id = ${ctx.orgId} AND v.status = 'published'
+          AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${input.days ?? 30}::int) ${labelled}
+      ), latest AS (
+        SELECT s.metrics FROM v CROSS JOIN LATERAL (
+          SELECT m.metrics FROM crove_social.metric_snapshot m
+          WHERE m.org_id = v.org_id AND m.variant_id = v.id
+          ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
+        ) s
+      )
+      SELECT (SELECT count(*) FROM v) AS posts,
+             (SELECT coalesce(jsonb_object_agg(t.key, t.total), '{}'::jsonb) FROM (
+                SELECT e.key, sum((e.value #>> '{}')::numeric) AS total FROM latest, jsonb_each(latest.metrics) e
+                WHERE jsonb_typeof(e.value) = 'number' GROUP BY e.key
+              ) t) AS metrics,
+             (SELECT CASE WHEN count(l.id) = 0 THEN NULL ELSE coalesce(sum(c.clicks), 0) END FROM v
+              JOIN crove_social.short_link l ON l.org_id = v.org_id AND l.variant_id = v.id
+              LEFT JOIN crove_social.short_link_click c ON c.org_id = l.org_id AND c.short_link_id = l.id) AS clicks`.execute(ctx.trx);
+    const row = rows[0];
+    const metrics: Record<string, number> = {};
+    for (const [name, value] of Object.entries(row?.metrics ?? {})) metrics[name] = Number(value);
+    return { posts: Number(row?.posts ?? 0), metrics, clicks: row?.clicks === null || row?.clicks === undefined ? null : Number(row.clicks) };
+  },
+});
 export const EXPORT_LIMIT = 10_000;
 
 interface MetricsFilter {
@@ -111,9 +165,13 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
     external_url: string | null;
     metrics: Record<string, number> | null;
     captured_at: Date | null;
+    clicks: string | null;
   }>`
     SELECT v.id AS variant_id, v.post_id, v.provider, v.channel_connection_id, coalesce(v.body, p.body) AS body,
-           v.published_at, v.external_url, s.metrics, s.captured_at
+           v.published_at, v.external_url, s.metrics, s.captured_at,
+           (SELECT CASE WHEN count(l.id) = 0 THEN NULL ELSE coalesce(sum(c.clicks), 0) END FROM crove_social.short_link l
+            LEFT JOIN crove_social.short_link_click c ON c.org_id = l.org_id AND c.short_link_id = l.id
+            WHERE l.org_id = v.org_id AND l.variant_id = v.id) AS clicks
     FROM crove_social.post_variant v
     JOIN crove_social.post p ON p.org_id = v.org_id AND p.id = v.post_id
     LEFT JOIN LATERAL (
@@ -136,6 +194,7 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
     externalUrl: r.external_url,
     metrics: r.metrics ?? {},
     capturedAt: r.captured_at ? r.captured_at.toISOString() : null,
+    clicks: r.clicks === null ? null : Number(r.clicks),
   }));
 }
 
@@ -185,8 +244,97 @@ export const metricsExport = defineCommand({
   },
 });
 
+// What works (#705): each channel's posts of the window against its own median, by label, format, weekday, hour (in
+// the viewer's time zone) and hashtag, with its best and worst posts. From the latest capture of each published
+// variant, at most INSIGHT_LIMIT of them, newest first.
+export const INSIGHT_LIMIT = 2000;
+export interface InsightPost {
+  variantId: string;
+  postId: string;
+  excerpt: string;
+  publishedAt: string | null;
+  externalUrl: string | null;
+  engagement: number;
+}
+export interface ChannelInsightsView extends Omit<ChannelInsights, 'best' | 'worst'> {
+  provider: string;
+  best: InsightPost[];
+  worst: InsightPost[];
+}
+export const metricsInsights = defineQuery({
+  name: 'social.metrics.insights',
+  input: z.object({ days: z.number().int().min(1).max(365), labelId: zId.optional(), timeZone: z.string().min(1).max(64).refine(isValidTimeZone, 'unknown IANA time zone') }),
+  access: ALL,
+  handler: async (ctx, input): Promise<{ channels: ChannelInsightsView[]; truncated: boolean }> => {
+    const labelled = input.labelId
+      ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${input.labelId}::uuid)`
+      : sql``;
+    const { rows } = await sql<{
+      variant_id: string;
+      post_id: string;
+      provider: string;
+      channel_connection_id: string;
+      body: string;
+      published_at: Date | null;
+      external_url: string | null;
+      post_type: string | null;
+      media_types: string[] | null;
+      label_ids: string[] | null;
+      metrics: Record<string, number> | null;
+    }>`
+      SELECT v.id AS variant_id, v.post_id, v.provider, v.channel_connection_id, coalesce(v.body, p.body) AS body,
+             v.published_at, v.external_url, v.settings->>'postType' AS post_type,
+             CASE WHEN jsonb_typeof(v.media) = 'array' THEN (
+               SELECT array_agg(f.content_type ORDER BY x.n) FROM jsonb_array_elements(v.media) WITH ORDINALITY x(e, n)
+               JOIN crove_kernel.file f ON f.org_id = v.org_id AND f.id::text = x.e->>'fileId'
+             ) ELSE (
+               SELECT array_agg(f.content_type ORDER BY m.position) FROM crove_social.post_media m
+               JOIN crove_kernel.file f ON f.org_id = m.org_id AND f.id = m.file_id
+               WHERE m.org_id = v.org_id AND m.post_id = v.post_id
+             ) END AS media_types,
+             (SELECT array_agg(pl.label_id) FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id) AS label_ids,
+             s.metrics
+      FROM crove_social.post_variant v
+      JOIN crove_social.post p ON p.org_id = v.org_id AND p.id = v.post_id
+      LEFT JOIN LATERAL (
+        SELECT m.metrics FROM crove_social.metric_snapshot m
+        WHERE m.org_id = v.org_id AND m.variant_id = v.id
+        ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
+      ) s ON true
+      WHERE v.org_id = ${ctx.orgId} AND v.status = 'published'
+        AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${input.days}::int) ${labelled}
+      ORDER BY v.published_at DESC
+      LIMIT ${INSIGHT_LIMIT + 1}`.execute(ctx.trx);
+    const kept = rows.slice(0, INSIGHT_LIMIT);
+    const samples: InsightSample[] = kept.map((r) => ({
+      variantId: r.variant_id,
+      connectionId: r.channel_connection_id,
+      publishedAt: r.published_at ? r.published_at.toISOString() : null,
+      metrics: r.metrics ?? {},
+      text: r.body,
+      labelIds: r.label_ids ?? [],
+      format: formatOf(r.post_type, r.media_types ?? []),
+    }));
+    const byId = new Map(kept.map((r) => [r.variant_id, r]));
+    const view = (p: { variantId: string; engagement: number }): InsightPost => {
+      const r = byId.get(p.variantId);
+      return {
+        variantId: p.variantId,
+        postId: r?.post_id ?? '',
+        excerpt: (r?.body ?? '').replace(/\s+/g, ' ').trim().slice(0, 160),
+        publishedAt: r?.published_at ? r.published_at.toISOString() : null,
+        externalUrl: r?.external_url ?? null,
+        engagement: p.engagement,
+      };
+    };
+    const providers = new Map(kept.map((r) => [r.channel_connection_id, r.provider]));
+    const channels = whatWorks(samples, input.timeZone).map((c) => ({ ...c, provider: providers.get(c.connectionId) ?? '', best: c.best.map(view), worst: c.worst.map(view) }));
+    return { channels, truncated: rows.length > INSIGHT_LIMIT };
+  },
+});
+
 export const metricsCommands = [metricsRecord, metricsExport];
-export const metricsQueries = [metricsTarget, metricsSummary];
+export const metricsQueries = [metricsTarget, metricsSummary, metricsTotals, metricsInsights];
 
 interface SealedChannelCredential {
   provider: string;
@@ -213,11 +361,11 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
   const { rows } = await sql<{ org_id: string; variant_id: string; provider: string }>`
     SELECT org_id, variant_id, provider FROM crove_social.metrics_due(${METRICS_LIMIT}::int, ${providers}::text[], ${METRICS_INTERVAL_SECONDS}::int)`.execute(deps.workerDb);
   const key = captureKey(deps.now?.() ?? new Date());
-  for (const row of rows) {
+  await eachBounded(rows, async (row) => {
     const publisher = deps.publishers[row.provider];
     try {
       const options = { actor: ACTOR, orgId: row.org_id };
-      const target = await deps.runtime.query<{ connectionId: string; externalPostId: string }>('social.metrics.target', { variantId: row.variant_id }, options);
+      const target = await deps.runtime.query<{ connectionId: string; externalPostId: string; autoReplyLikes: number | null; repost: { likes: number | null; afterHours: number | null } | null }>('social.metrics.target', { variantId: row.variant_id }, options);
       const sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: target.connectionId }, options);
       const secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: row.org_id, provider: sealed.provider, externalAccountId: sealed.externalAccountId });
       const result = await publisher?.metrics?.({ externalAccountId: sealed.externalAccountId, secret, externalId: target.externalPostId });
@@ -231,11 +379,46 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
       if (!result || 'refused' in result) out.skipped += 1;
       const done = await deps.runtime.execute<{ recorded: boolean }>('social.metrics.record', { variantId: row.variant_id, captureKey: key, ...input }, options);
       if (done.recorded && result && !('refused' in result)) out.recorded += 1;
+      // The count may set off the variant's auto-reply (#746); its failure never touches the metrics.
+      const likes = result && !('refused' in result) ? result.metrics.reactions : undefined;
+      // And its repost rule (#773): a like count or a delay, checked by the command against the post's time.
+      if (publisher && target.repost && (target.repost.afterHours !== null || (likes !== undefined && target.repost.likes !== null && likes >= target.repost.likes))) {
+        await runRepost(deps, row.org_id, row.variant_id, publisher, { externalAccountId: sealed.externalAccountId, secret }, likes ?? null).catch((error: unknown) =>
+          console.warn(`[social-repost] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error),
+        );
+      }
+      if (publisher && likes !== undefined && target.autoReplyLikes !== null && likes >= target.autoReplyLikes) {
+        await runAutoReply(deps, row.org_id, row.variant_id, publisher, { externalAccountId: sealed.externalAccountId, secret }, likes).catch((error: unknown) =>
+          console.warn(`[social-auto-reply] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error),
+        );
+      }
     } catch (error) {
       // A connection whose owner left, or a credential that will not open: nothing to read; the publish path reports it.
       if (!(error instanceof DomainError)) console.warn(`[social-metrics] variant ${row.variant_id.slice(0, 8)}`, error instanceof Error ? error.message : error);
       out.skipped += 1;
     }
-  }
+  });
   return out;
+}
+
+// Runs each row, METRICS_CONCURRENCY at a time and METRICS_PER_PROVIDER at a time per platform, in the scan's order
+// otherwise. run never throws: each row catches its own failure.
+async function eachBounded<T extends { provider: string }>(rows: readonly T[], run: (row: T) => Promise<void>): Promise<void> {
+  const waiting = [...rows];
+  const busy = new Map<string, number>();
+  const running = new Set<Promise<void>>();
+  while (waiting.length > 0 || running.size > 0) {
+    const next = running.size < METRICS_CONCURRENCY ? waiting.findIndex((r) => (busy.get(r.provider) ?? 0) < METRICS_PER_PROVIDER) : -1;
+    if (next === -1) {
+      await Promise.race(running);
+      continue;
+    }
+    const row = waiting.splice(next, 1)[0] as T;
+    busy.set(row.provider, (busy.get(row.provider) ?? 0) + 1);
+    const task: Promise<void> = run(row).finally(() => {
+      busy.set(row.provider, (busy.get(row.provider) ?? 1) - 1);
+      running.delete(task);
+    });
+    running.add(task);
+  }
 }

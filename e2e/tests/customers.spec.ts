@@ -1,6 +1,6 @@
 // Customers (issue #670), end to end: a sale proposal links its customer to the customers screen -> once approved the
 // customer is listed with its tax code, receivable on 131 and last invoice date -> search by tax code and name -> the
-// owner corrects its contact email and is refused an invalid tax code -> the receivables report links back to it.
+// owner adds its contact details with the vendors' editor -> the receivables report links back to it.
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
@@ -56,13 +56,13 @@ test('lists the customer of an approved sale with its receivable, edits it, and 
 
   await test.step('the customer with its tax code, invoices, last invoice date and receivable', async () => {
     await nav.getByRole('link', { name: 'Khách hàng' }).click();
-    for (const header of ['Tên', 'Mã số thuế', 'Email', 'Hóa đơn', 'Hóa đơn gần nhất', 'Công nợ phải thu']) {
+    for (const header of ['Tên', 'Mã số thuế', 'Hóa đơn', 'Hóa đơn gần nhất', 'Công nợ phải thu']) {
       await expect(page.getByRole('columnheader', { name: header, exact: true })).toBeVisible();
     }
     await expect(row.getByRole('cell').nth(1)).toHaveText(BUYER_TAX_CODE);
-    await expect(row.getByRole('cell').nth(3)).toHaveText('1');
-    await expect(row.getByRole('cell').nth(4)).toHaveText('15/09/2026');
-    await expect(row.getByRole('cell').nth(5)).toHaveText(/^1\.980\.000/);
+    await expect(row.getByRole('cell').nth(2)).toHaveText('1');
+    await expect(row.getByRole('cell').nth(3)).toHaveText('15/09/2026');
+    await expect(row.getByRole('cell').nth(4)).toHaveText(/^1\.980\.000/);
   });
 
   await test.step('search by tax code and by name', async () => {
@@ -76,17 +76,16 @@ test('lists the customer of an approved sale with its receivable, edits it, and 
     await search.fill('');
   });
 
-  await test.step('the owner corrects the contact email and is refused an invalid tax code', async () => {
-    await row.getByRole('button', { name: `Sửa thông tin ${BUYER}` }).click();
-    const form = page.getByRole('form', { name: `Sửa thông tin ${BUYER}` });
-    await form.getByLabel('Mã số thuế').fill('12345');
-    await form.getByRole('button', { name: 'Lưu' }).click();
-    await expect(form.getByText('Mã số thuế không hợp lệ', { exact: false })).toBeVisible();
-    await form.getByLabel('Mã số thuế').fill(BUYER_TAX_CODE);
-    await form.getByLabel('Email liên hệ').fill('ketoan@nguoimua.test');
+  await test.step('the owner adds the contact email and phone with the editor shared with vendors', async () => {
+    await row.getByRole('button', { name: `Sửa thông tin của ${BUYER}` }).click();
+    const form = page.getByRole('form', { name: `Sửa thông tin của ${BUYER}` });
+    // The tax code is how invoices find the customer: it cannot be changed once set.
+    await expect(form.getByLabel('Mã số thuế')).toBeDisabled();
+    await form.getByLabel('Email').fill('ketoan@nguoimua.test');
+    await form.getByLabel('Điện thoại').fill('028 3822 0000');
     await form.getByRole('button', { name: 'Lưu' }).click();
     await expect(form).toBeHidden();
-    await expect(row.getByRole('cell').nth(2)).toHaveText('ketoan@nguoimua.test');
+    await expect(row.getByRole('cell').first()).toContainText('028 3822 0000 · ketoan@nguoimua.test');
   });
 
   await test.step('the receivables report links the customer back to the customers screen', async () => {
@@ -98,6 +97,6 @@ test('lists the customer of an approved sale with its receivable, edits it, and 
     await page.getByRole('link', { name: BUYER }).click();
     await expect(page).toHaveURL(new RegExp(`/o/${slug}/customers\\?q=${BUYER_TAX_CODE}$`));
     await expect(page.getByRole('searchbox', { name: 'Tìm theo tên hoặc MST' })).toHaveValue(BUYER_TAX_CODE);
-    await expect(row.getByRole('cell').nth(5)).toHaveText(/^1\.980\.000/);
+    await expect(row.getByRole('cell').nth(4)).toHaveText(/^1\.980\.000/);
   });
 });

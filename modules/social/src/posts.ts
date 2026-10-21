@@ -15,24 +15,45 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contr
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_TYPES, coverOf, firstCommentOf, isProvider } from './domain/channels.ts';
+import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_TYPES, coverOf, firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
 import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { activityCommands, activityQueries } from './activity.ts';
+import { accountCommands, accountQueries } from './accounts.ts';
 import { reportLinkCommands, reportLinkQueries } from './report-links.ts';
 import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
+import { reminderCommands } from './reminders.ts';
 import { assignCommands } from './assign.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
 import { labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
+import { ideaCommands, ideaOfPost, ideaQueries, linkIdeaToPost } from './ideas.ts';
+import { bioCommands, bioQueries } from './bio-page.ts';
+import { feedCommands, feedQueries } from './feeds.ts';
+import { reportScheduleCommands, reportScheduleQueries } from './report-schedules.ts';
+import { brandVoiceCommands, brandVoiceQueries } from './brand-voice.ts';
+import { watermarkCommands, watermarkQueries } from './watermark.ts';
+import { chatAlertCommands, chatAlertQueries } from './chat-alerts.ts';
+import { channelSetCommands, channelSetQueries } from './channel-sets.ts';
+import { calendarNoteCommands, calendarNoteQueries } from './calendar-notes.ts';
+import { calendarFeedCommands, calendarFeedQueries } from './calendar-feed.ts';
+import { CONTENT_MANAGER_TEMPLATE, preReviewTask, type PreReview } from './agent.ts';
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
+import { reviewInboxQueries } from './review-inbox.ts';
+import { attentionInboxQueries } from './attention-inbox.ts';
 import { libraryQueries, likeTerm } from './library.ts';
+import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
-import { approvalsRequired, decisionsOf, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
+import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
+import { autoReplyCommands } from './auto-reply.ts';
+import { repostCommands } from './repost.ts';
+import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
+import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
+import { clientReviewCommands } from './client-review.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -72,7 +93,7 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
   if (list.length === 0) return [];
   const files = await ctx.trx
     .selectFrom('crove_kernel.file')
-    .select(['id', 'generation', 'content_type', 'size_bytes', 'source', 'duration_ms'])
+    .select(['id', 'generation', 'content_type', 'size_bytes', 'source', 'duration_ms', 'image_width', 'image_height'])
     .where('org_id', '=', ctx.orgId)
     .where(
       'id',
@@ -86,7 +107,7 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
     // Only images uploaded for posts: an accounting document of the org is never published, whatever its type.
     if (!f || f.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
     if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP và video MP4, MOV');
-    return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes), durationMs: f.duration_ms === null ? null : Number(f.duration_ms) };
+    return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes), durationMs: f.duration_ms === null ? null : Number(f.duration_ms), width: f.image_width ?? null, height: f.image_height ?? null };
   });
 }
 
@@ -212,6 +233,8 @@ export const zPostCreate = z.strictObject({
   origin: z.enum(['human', 'ai']).optional(),
   // The member accepted an AI rewrite into the text (#583).
   aiAssisted: z.literal(true).optional(),
+  // The idea it is made from (#701).
+  ideaId: zId.optional(),
 });
 
 async function createPost(ctx: CommandContext, input: z.infer<typeof zPostCreate>) {
@@ -249,7 +272,8 @@ export const postCreate = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     const { post, variants, media } = await createPost(ctx, input);
-    ctx.audit({ post_id: post.id, variants: variants.length, media: media.length, origin: input.origin ?? 'human' });
+    if (input.ideaId) await linkIdeaToPost(ctx, input.ideaId, post.id);
+    ctx.audit({ post_id: post.id, variants: variants.length, media: media.length, origin: input.origin ?? 'human', ...(input.ideaId ? { idea_id: input.ideaId } : {}) });
     return { postId: post.id, revision: post.revision, variants };
   },
 });
@@ -295,7 +319,7 @@ export const postImport = defineCommand({
         for (const v of ready) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
         if (ready.length > 0) {
           await refreshPostStatus(ctx, post.id);
-          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: ready.map((v) => v.id) });
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: ready.map((v) => v.id), agent_task: preReviewTask({ ...post, tainted: await postTainted(ctx, post.id) }) });
         }
         submitted = ready.length;
       }
@@ -460,7 +484,7 @@ export const postSubmit = defineCommand({
     if (invalid.length > 0) throw new DomainError('VARIANT_INVALID', 422, 'Có kênh chưa đúng yêu cầu của nền tảng', { variants: invalid });
     for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
     await refreshPostStatus(ctx, post.id);
-    await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: chosen.map((v) => v.id) });
+    await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: chosen.map((v) => v.id), agent_task: preReviewTask({ ...post, tainted: await postTainted(ctx, post.id) }) });
     return { postId: post.id, submitted: chosen.map((v) => v.id) };
   },
 });
@@ -507,6 +531,13 @@ export const variantDecide = defineCommand({
       ctx.orgId,
       chosen.map((v) => v.id),
     );
+    // Four-eyes (#740): on these channels the author approves nothing of their own post.
+    const author = (await ctx.trx.selectFrom('crove_social.post').select('author_user_id').where('org_id', '=', ctx.orgId).where('id', '=', post.id).executeTakeFirst())?.author_user_id ?? null;
+    const foureyes = input.decision === 'approved' && author === userId ? await fourEyesOn(ctx.trx, ctx.orgId, chosen.map((v) => v.channel_connection_id)) : new Set<string>();
+    // The client's approval (#770): on its channels, the team's last approval leaves the variant waiting for the client's
+    // "Approved" on a review link, unless it was given for this content already.
+    const clientOn = input.decision === 'approved' ? await clientApprovalOn(ctx.trx, ctx.orgId, chosen.map((v) => v.channel_connection_id)) : new Set<string>();
+    const client = clientOn.size > 0 ? await clientVerdict(ctx.trx, ctx.orgId, post.id) : null;
     const waiting: string[] = [];
     const rescheduled: string[] = [];
     for (const v of chosen) {
@@ -517,8 +548,9 @@ export const variantDecide = defineCommand({
       let status = step(v, DECISION_EVENT[input.decision]);
       if (input.decision === 'approved') {
         const given = approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash });
+        if (foureyes.has(v.channel_connection_id)) throw new DomainError('SOCIAL_SELF_APPROVAL', 403, 'Kênh này cần người khác duyệt bài của bạn', { variantId: v.id });
         if (given.includes(userId)) throw new DomainError('ALREADY_APPROVED', 409, 'Bạn đã duyệt nội dung này của kênh, cần người khác duyệt tiếp', { variantId: v.id });
-        if (given.length + 1 < (required.get(v.channel_connection_id) ?? 1)) {
+        if (given.length + 1 < (required.get(v.channel_connection_id) ?? 1) || (clientOn.has(v.channel_connection_id) && client !== 'approved')) {
           status = v.status;
           waiting.push(v.id);
         }
@@ -579,12 +611,12 @@ async function lockQueue(trx: Trx, orgId: string, connectionId: string): Promise
   if (!queue) return null;
   const slots = await trx
     .selectFrom('crove_social.queue_slot')
-    .select(['weekday', 'minute'])
+    .select(['weekday', 'minute', 'label_id'])
     .where('org_id', '=', orgId)
     .where('queue_id', '=', queue.id)
     .where('active', '=', true)
     .execute();
-  return { id: queue.id, paused: queue.paused, spec: { timeZone: queue.time_zone, slots } };
+  return { id: queue.id, paused: queue.paused, spec: { timeZone: queue.time_zone, slots: slots.map((s) => ({ weekday: s.weekday, minute: s.minute, labelId: s.label_id })) } };
 }
 
 
@@ -641,7 +673,15 @@ export const variantSchedule = defineCommand({
     }
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     const all = await lockVariants(ctx.trx, ctx.orgId, post.id);
+    // A channel added between the read of the queues and the lock of the post (#851) has no queue locked: the post
+    // changed meanwhile, so the member tries again rather than seeing its channel as having no queue.
+    if (input.queue && all.some((v) => !queues.has(v.channel_connection_id))) {
+      throw new DomainError('STALE_REVISION', 409, 'Bài đăng đã được sửa ở nơi khác, hãy tải lại', { revision: post.revision });
+    }
     const times = new Map((input.times ?? []).map((x) => [x.variantId, new Date(Date.parse(x.at))]));
+    // The post's labels, read once, for the slots of content categories (#745).
+    let labels: Set<string> | null = null;
+    const postLabels = async () => (labels ??= new Set(((await labelsOfPosts(ctx.trx, ctx.orgId, [post.id])).get(post.id) ?? []).map((l) => l.id)));
     const chosen = input.times ? pick(all, [...times.keys()]) : input.variantIds ? pick(all, input.variantIds) : all.filter((v) => v.status === 'approved');
     if (chosen.length === 0) throw new DomainError('NOTHING_TO_SCHEDULE', 409, 'Không có kênh nào đã duyệt để lên lịch');
     const shared = input.at ? new Date(Date.parse(input.at)) : post.scheduled_at;
@@ -665,7 +705,8 @@ export const variantSchedule = defineCommand({
       if (input.queue) {
         const queue = queues.get(v.channel_connection_id) ?? null;
         if (!queue || queue.spec.slots.length === 0) throw new DomainError('QUEUE_EMPTY', 409, 'Kênh này chưa có khung giờ đăng trong hàng đợi', { variantId: v.id });
-        const slot = nextFreeSlot(queue.spec, ctx.now.getTime(), await takenSlots(ctx.trx, ctx.orgId, v.channel_connection_id, v.id));
+        // A post's labels pick the slots of their content categories first (#745).
+        const slot = nextFreeSlot(queue.spec, ctx.now.getTime(), await takenSlots(ctx.trx, ctx.orgId, v.channel_connection_id, v.id), 366, await postLabels());
         if (slot === null) throw new DomainError('QUEUE_FULL', 409, 'Hàng đợi của kênh này đã kín trong năm tới', { variantId: v.id });
         await setVariant(ctx, v.id, { status, queue_slot_at: new Date(slot), scheduled_at: null, error_retry_at: null });
         scheduled.push({ variantId: v.id, at: new Date(slot).toISOString() });
@@ -758,7 +799,7 @@ export const queueSet = defineCommand({
     timeZone: zTimeZone,
     paused: z.boolean().optional(),
     slots: z
-      .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional() }))
+      .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional(), labelId: zId.nullable().optional() }))
       .max(MAX_SLOTS),
   }),
   risk: 'R1',
@@ -768,6 +809,12 @@ export const queueSet = defineCommand({
     await liveConnections(ctx, [input.connectionId]);
     if (new Set(input.slots.map((s) => `${s.weekday}:${s.minute}`)).size !== input.slots.length) {
       throw new DomainError('DUPLICATE_SLOT', 422, 'Có khung giờ bị trùng');
+    }
+    // A slot kept for a content category names one of the org's labels (#745).
+    const labelIds = [...new Set(input.slots.map((s) => s.labelId).filter((id): id is string => typeof id === 'string'))];
+    if (labelIds.length > 0) {
+      const found = await ctx.trx.selectFrom('crove_social.label').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', labelIds).execute();
+      if (found.length !== labelIds.length) throw new DomainError('LABEL_NOT_FOUND', 404, 'Không tìm thấy nhãn này');
     }
     // Create the row if missing (a concurrent first set waits here instead of failing on the unique key), then lock
     // it: schedule commands lock the same row before any variant.
@@ -792,10 +839,10 @@ export const queueSet = defineCommand({
     if (input.slots.length > 0) {
       await ctx.trx
         .insertInto('crove_social.queue_slot')
-        .values(input.slots.map((s) => ({ org_id: ctx.orgId, queue_id: queueId, weekday: s.weekday, minute: s.minute, label: s.label ?? null })))
+        .values(input.slots.map((s) => ({ org_id: ctx.orgId, queue_id: queueId, weekday: s.weekday, minute: s.minute, label: s.label ?? null, label_id: s.labelId ?? null })))
         .execute();
     }
-    const spec: QueueSpec = { timeZone: input.timeZone, slots: input.slots };
+    const spec: QueueSpec = { timeZone: input.timeZone, slots: input.slots.map((x) => ({ weekday: x.weekday, minute: x.minute, labelId: x.labelId ?? null })) };
     // Lock order: queue row, then the posts of the variants holding its slots (sorted), then those variants, as every
     // post command locks a post before its variants. No new slot holder appears meanwhile: only schedule assigns
     // slots, and it waits for the queue row this command holds.
@@ -839,11 +886,16 @@ export const queueSet = defineCommand({
     const movable = holders.filter((h) => MOVABLE.includes(h.status) && (h.queue_slot_at as Date).getTime() > now);
     const reserved = new Set(holders.filter((h) => !movable.includes(h)).map((h) => (h.queue_slot_at as Date).getTime()));
     const zoneChanged = before !== null && before.spec.timeZone !== input.timeZone;
+    const labelsOf = await labelsOfPosts(
+      ctx.trx,
+      ctx.orgId,
+      [...new Set(movable.map((q) => q.post_id))],
+    );
     const placed = placeQueued(
       spec,
       movable.map((q) => {
         const at = (q.queue_slot_at as Date).getTime();
-        return { id: q.id, slotAt: zoneChanged ? retime(at, (before as QueueState).spec.timeZone, input.timeZone) : at };
+        return { id: q.id, slotAt: zoneChanged ? retime(at, (before as QueueState).spec.timeZone, input.timeZone) : at, labelIds: (labelsOf.get(q.post_id) ?? []).map((l) => l.id) };
       }),
       now,
       reserved,
@@ -890,15 +942,24 @@ export interface VariantView {
   effectiveAt: string | null;
   queueSlotAt: string | null;
   commentStatus: CommentStatus | null;
+  // The thread of a published channel (#742): how many parts are out (the post counts as one) and the next one's state.
+  threadStatus: { state: 'pending' | 'posted' | 'failed' | 'unknown'; posted: number; total: number } | null;
   queuePaused: boolean;
   attempt: number;
   externalUrl: string | null;
   publishedAt: string | null;
+  // Taken down from its platform (#860): when the platform confirmed it, and who asked and why. removal: where a
+  // person's ask to remove a published channel stands, until it is removed.
+  removedAt: string | null;
+  removedBy: string | null;
+  removeReason: string | null;
+  removal: RemoveState | null;
   error: { kind: string | null; code: string | null; action: string | null; message: string | null; retryAt: string | null } | null;
   issues: Issue[];
   latestDecision: { decision: SocialDecision; comment: string | null; decidedBy: string; at: string; revision: number; current: boolean } | null;
   // The approvals its channel needs (S9) and who approved its current content in the open review round.
-  review: { required: number; approvedBy: string[] };
+  // client: the channel also waits for the client's approval (#770); clientVerdict: the client's standing answer.
+  review: { required: number; approvedBy: string[]; fourEyes: boolean; client: boolean; clientVerdict: 'approved' | 'changes_requested' | null };
 }
 
 export interface MediaView {
@@ -907,9 +968,11 @@ export interface MediaView {
   mime: string;
   sizeBytes: number;
   durationMs: number | null;
+  width: number | null;
+  height: number | null;
 }
 
-const mediaView = (list: readonly PostMedia[]): MediaView[] => list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs ?? null }));
+const mediaView = (list: readonly PostMedia[]): MediaView[] => list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs ?? null, width: m.width ?? null, height: m.height ?? null }));
 
 export interface PostView {
   id: string;
@@ -935,6 +998,8 @@ export interface PostView {
   variants: VariantView[];
   // Its labels (#639), by label name.
   labelIds: string[];
+  // The idea it was made from (#701); on a single post's read only.
+  idea?: { id: string; title: string } | null;
 }
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
@@ -967,6 +1032,10 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const latest = new Map<string, (typeof decisions)[number]>();
   for (const d of decisions) if (!latest.has(d.variant_id)) latest.set(d.variant_id, d);
   const required = await approvalsRequired(ctx.trx, ctx.orgId, [...new Set(variants.map((v) => v.channel_connection_id))]);
+  const foureyes = await fourEyesOn(ctx.trx, ctx.orgId, [...new Set(variants.map((v) => v.channel_connection_id))]);
+  const clientOn = await clientApprovalOn(ctx.trx, ctx.orgId, [...new Set(variants.map((v) => v.channel_connection_id))]);
+  const clientVerdicts = new Map<string, Awaited<ReturnType<typeof clientVerdict>>>();
+  for (const postId of new Set(variants.filter((v) => clientOn.has(v.channel_connection_id)).map((v) => v.post_id))) clientVerdicts.set(postId, await clientVerdict(ctx.trx, ctx.orgId, postId));
   // Queues paused by a person (#576): a variant waiting on a slot there does not go out until it is resumed.
   const queued = [...new Set(variants.filter((v) => v.queue_slot_at !== null).map((v) => v.channel_connection_id))];
   const pausedQueues = new Set(
@@ -981,10 +1050,23 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const calls = await commentCallsOf(ctx.trx, ctx.orgId, commented);
   const now = new Date();
   const comments = new Map<string, CommentStatus>(commented.map((v) => [v.id, commentStatus(calls.get(v.id) ?? [], now, v.published_at)]));
+  // The thread of each published channel that has one (#742).
+  const threaded = variants.filter((v) => v.status === 'published' && v.external_post_id && threadPartsOf(settingsOf(v)));
+  const partCalls = await threadCallsOf(ctx.trx, ctx.orgId, threaded);
+  const threads = new Map(
+    threaded.map((v) => {
+      const s = threadStatus((threadPartsOf(settingsOf(v)) as string[]).length, partCalls.get(v.id) ?? [], now, v.published_at);
+      return [v.id, { state: s.state, posted: s.posted, total: s.total }] as const;
+    }),
+  );
+  // The removals people asked for on published channels (#860).
+  const asked = variants.filter((v) => v.status === 'published' && v.remove_requested_at !== null);
+  const removeCalls = await removeCallsOf(ctx.trx, ctx.orgId, asked);
+  const removals = new Map(asked.map((v) => [v.id, removeState(removeCalls.get(v.id) ?? [], v.remove_requested_at, now)]));
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
-    .select(['m.post_id', 'm.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes', 'f.duration_ms'])
+    .select(['m.post_id', 'm.file_id', 'm.alt_text', 'f.generation', 'f.content_type', 'f.size_bytes', 'f.duration_ms', 'f.image_width', 'f.image_height'])
     .where('m.org_id', '=', ctx.orgId)
     .where('m.post_id', 'in', postIds)
     .orderBy('m.position')
@@ -992,7 +1074,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const mediaByPost = new Map<string, PostMedia[]>();
   for (const r of mediaRows) {
     const list = mediaByPost.get(r.post_id) ?? [];
-    list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms) });
+    list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms), width: r.image_width ?? null, height: r.image_height ?? null });
     mediaByPost.set(r.post_id, list);
   }
   const labels = await labelsOfPosts(ctx.trx, ctx.orgId, postIds);
@@ -1040,14 +1122,19 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               revision: v.revision,
               contentHash: v.content_hash,
               status: v.status,
-              effectiveAt: iso(v.status === 'published' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
+              effectiveAt: iso(v.status === 'published' || v.status === 'removed' ? v.published_at : (v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? p.scheduled_at)),
               queueSlotAt: iso(v.queue_slot_at),
               commentStatus: comments.get(v.id) ?? null,
+              threadStatus: threads.get(v.id) ?? null,
               // As the publisher decides it (queuePaused in publishing.ts): a retry time goes out whatever the queue does.
               queuePaused: v.queue_slot_at !== null && v.scheduled_at === null && v.error_retry_at === null && pausedQueues.has(v.channel_connection_id),
               attempt: v.attempt,
               externalUrl: v.external_url,
               publishedAt: iso(v.published_at),
+              removedAt: iso(v.removed_at),
+              removedBy: v.status === 'removed' ? v.removed_by : null,
+              removeReason: v.status === 'removed' ? v.remove_reason : null,
+              removal: removals.get(v.id) ?? null,
               error: v.error_kind || v.error_code || v.error_message ? { kind: v.error_kind, code: v.error_code, action: v.error_action, message: v.error_message, retryAt: iso(v.error_retry_at) } : null,
               issues: isProvider(v.provider) ? issuesOf(b, row) : [],
               latestDecision: d
@@ -1055,6 +1142,10 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
                 : null,
               review: {
                 required: required.get(v.channel_connection_id) ?? 1,
+                // The author may not approve on this channel (#740).
+                fourEyes: foureyes.has(v.channel_connection_id),
+                client: clientOn.has(v.channel_connection_id),
+                clientVerdict: clientOn.has(v.channel_connection_id) ? (clientVerdicts.get(v.post_id) ?? null) : null,
                 approvedBy: approvalsInRound(
                   decisions.filter((x) => x.variant_id === v.id).map((x) => ({ decision: x.decision, decidedBy: x.decided_by, revision: x.revision, contentHash: x.content_hash })),
                   { revision: v.revision, contentHash: v.content_hash },
@@ -1073,7 +1164,58 @@ export const postGet = defineQuery({
   handler: async (ctx, input): Promise<PostView> => {
     const [view] = await viewPosts(ctx, [input.postId]);
     if (!view) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
-    return view;
+    return { ...view, idea: await ideaOfPost(ctx.trx, ctx.orgId, view.id) };
+  },
+});
+
+// A post's taint (AI-drafted or AI-assisted), for the agent task its submission makes (#799); unknown counts as tainted.
+async function postTainted(ctx: CommandContext, postId: string): Promise<boolean> {
+  const row = await ctx.trx.selectFrom('crove_social.post').select('tainted').where('org_id', '=', ctx.orgId).where('id', '=', postId).executeTakeFirst();
+  return row?.tainted ?? true;
+}
+
+// What a reviewer should look at before deciding (#799), from deterministic checks only: each waiting channel's rule
+// issues, the brand voice's words to avoid in its text, and images without a description. Members and the
+// social.content_manager agent read it; it changes nothing.
+const PRE_REVIEW_FINDINGS_MAX = 30;
+export const postPreReview = defineQuery({
+  name: 'social.post.pre_review',
+  input: z.strictObject({ postId: zId }),
+  access: ALL,
+  agent: { roles: [CONTENT_MANAGER_TEMPLATE] },
+  handler: async (ctx, input): Promise<PreReview> => {
+    const [view] = await viewPosts(ctx, [input.postId]);
+    if (!view) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
+    const waiting = view.variants.filter((v) => v.status === 'in_review');
+    const voices = await ctx.trx.selectFrom('crove_social.brand_voice').select(['channel_connection_id', 'avoid_words']).where('org_id', '=', ctx.orgId).execute();
+    const names = new Map(
+      (
+        await ctx.trx
+          .selectFrom('crove_kernel.channel_connection')
+          .select(['id', 'display_name'])
+          .where('org_id', '=', ctx.orgId)
+          .where(
+            'id',
+            'in',
+            waiting.length > 0 ? waiting.map((v) => v.connectionId) : [input.postId],
+          )
+          .execute()
+      ).map((c) => [c.id, c.display_name]),
+    );
+    const findings: string[] = [];
+    for (const v of waiting) {
+      const name = names.get(v.connectionId) ?? v.provider;
+      const codes = [...new Set(v.issues.map((i) => i.code))];
+      if (codes.length > 0) findings.push(`${name}: chưa đúng yêu cầu của nền tảng (${codes.slice(0, 5).join(', ')}).`);
+      const text = v.effective.body.toLowerCase();
+      const avoid = voices.filter((x) => x.channel_connection_id === null || x.channel_connection_id === v.connectionId).flatMap((x) => x.avoid_words);
+      const used = [...new Set(avoid.map((w) => w.trim()).filter((w) => w && text.includes(w.toLowerCase())))];
+      if (used.length > 0) findings.push(`${name}: có từ nên tránh theo giọng thương hiệu (${used.slice(0, 5).join(', ')}).`);
+      const undescribed = v.media.filter((m) => !m.altText).length;
+      if (undescribed > 0) findings.push(`${name}: ${undescribed} ảnh hoặc video chưa có mô tả cho người đọc màn hình (alt text).`);
+    }
+    const title = view.title?.trim() || view.body.replace(/\s+/g, ' ').trim().slice(0, 120);
+    return { postId: view.id, title, waiting: waiting.length, findings: findings.slice(0, PRE_REVIEW_FINDINGS_MAX) };
   },
 });
 
@@ -1139,7 +1281,7 @@ export const postList = defineQuery({
             .whereRef('v.post_id', '=', 'p.id')
             .where('v.status', '<>', 'cancelled')
             .where((w) => {
-              const at = sql`CASE WHEN v.status = 'published' THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END`;
+              const at = sql`CASE WHEN v.status IN ('published', 'removed') THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END`;
               const parts = [];
               if (input.from) parts.push(w(at, '>=', new Date(Date.parse(input.from))));
               if (input.to) parts.push(w(at, '<', new Date(Date.parse(input.to))));
@@ -1170,16 +1312,19 @@ export const queueGet = defineQuery({
     if (!queue) return { connectionId: input.connectionId, queueId: null, timeZone: null, paused: false, slots: [], nextFree: [] };
     const slots = await ctx.trx
       .selectFrom('crove_social.queue_slot')
-      .select(['weekday', 'minute', 'label', 'active'])
+      .select(['weekday', 'minute', 'label', 'label_id', 'active'])
       .where('org_id', '=', ctx.orgId)
       .where('queue_id', '=', queue.id)
       .orderBy('weekday')
       .orderBy('minute')
       .execute();
-    const spec: QueueSpec = { timeZone: queue.time_zone, slots: slots.filter((s) => s.active) };
+    // The next open slots (a post without a content category's label takes these).
+    const spec: QueueSpec = { timeZone: queue.time_zone, slots: slots.filter((s) => s.active).map((s) => ({ weekday: s.weekday, minute: s.minute, labelId: s.label_id })) };
     const taken = await takenSlots(ctx.trx, ctx.orgId, input.connectionId);
     const nextFree: string[] = [];
-    let after = Date.now();
+    // The transaction's own clock (#851): the same instant the slots taken were read at, whatever the host's clock says.
+    const clock = await sql<{ now: Date }>`SELECT pg_catalog.now() AS now`.execute(ctx.trx);
+    let after = (clock.rows[0]?.now ?? new Date()).getTime();
     for (let i = 0; i < 5; i++) {
       const at = nextFreeSlot(spec, after, taken);
       if (at === null) break;
@@ -1187,7 +1332,14 @@ export const queueGet = defineQuery({
       taken.add(at);
       after = at;
     }
-    return { connectionId: input.connectionId, queueId: queue.id, timeZone: queue.time_zone, paused: queue.paused, slots, nextFree };
+    return {
+      connectionId: input.connectionId,
+      queueId: queue.id,
+      timeZone: queue.time_zone,
+      paused: queue.paused,
+      slots: slots.map((s) => ({ weekday: s.weekday, minute: s.minute, label: s.label, labelId: s.label_id, active: s.active })),
+      nextFree,
+    };
   },
 });
 
@@ -1208,15 +1360,33 @@ export const socialCommands = [
   ...metricsCommands,
   ...evergreenCommands,
   ...commentCommands,
+  ...threadCommands,
+  ...autoReplyCommands,
+  ...repostCommands,
+  ...removeCommands,
   ...policyCommands,
+  ...clientReviewCommands,
   ...assignCommands,
   ...snippetCommands,
   ...labelCommands,
+  ...mediaTagCommands,
+  ...ideaCommands,
+  ...bioCommands,
+  ...feedCommands,
+  ...reportScheduleCommands,
+  ...brandVoiceCommands,
+  ...watermarkCommands,
+  ...chatAlertCommands,
+  ...channelSetCommands,
+  ...calendarNoteCommands,
+  ...calendarFeedCommands,
   ...reviewLinkCommands,
   ...activityCommands,
+  ...accountCommands,
   ...reportLinkCommands,
   ...linkPreviewCommands,
   ...notificationCommands,
+  ...reminderCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
 // org shows, or a variant's video cover, so the job never reads another kind of file through it.
@@ -1259,4 +1429,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...activityQueries, ...reviewLinkQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries];
+export const socialQueries = [postGet, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries];

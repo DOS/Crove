@@ -12,18 +12,23 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
-import { Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
+import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
+import { CalendarFeedCard } from '../components/social-calendar-feed.tsx';
+import { InstagramGrid } from '../components/social-instagram-grid.tsx';
 import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
 import { ReportLinks } from '../components/social-report-links.tsx';
+import { ReportSchedules } from '../components/social-report-schedules.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { AccountGrowth, TopPosts } from '../components/social-growth.tsx';
+import { WhatWorks } from '../components/social-insights.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
-import { dayKey, dayRange, providerName, SOCIAL_TABS, VARIANT_TONE, type SocialSearch, type SocialTab } from '../lib/social.ts';
+import { dayKey, dayRange, providerName, SOCIAL_TABS, variantStatusKey, variantTone, type SocialSearch, type SocialTab } from '../lib/social.ts';
 import { pollEvery, SAFETY_POLL_MS, useStreamLive } from '../lib/stream-hook.ts';
 
 type Tab = SocialTab;
@@ -53,8 +58,8 @@ function ChannelChips({ post, names }: { post: Post; names: Map<string, string> 
       {post.variants
         .filter((v) => v.status !== 'cancelled')
         .map((v) => (
-          <Badge key={v.id} variant={VARIANT_TONE[v.status]} title={names.get(v.connectionId)}>
-            {providerName(v.provider)} · {t(`status.${v.status}`)}
+          <Badge key={v.id} variant={variantTone(v)} title={names.get(v.connectionId)}>
+            {providerName(v.provider)} · {t(`status.${variantStatusKey(v)}`)}
           </Badge>
         ))}
     </div>
@@ -90,6 +95,8 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
   const [days, setDays] = useState(30);
   const label = labelId ? { labelId } : {};
   const rows = useQuery(orpc.social.metrics.summary.queryOptions({ input: { days, ...label } }));
+  // The totals over every published channel of the window, summed by the server (#397); the list below stops at 500.
+  const totals = useQuery(orpc.social.metrics.totals.queryOptions({ input: { days, ...label } }));
   // The window as a CSV file, built and audited by the server, saved by the browser.
   const exportCsv = useMutation({
     mutationFn: () => client.social.metrics.export({ days, ...label }),
@@ -106,7 +113,10 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
   if (rows.isLoading) return <Spinner />;
   if (rows.error) return <ErrorText>{errorMessage(rows.error)}</ErrorText>;
   const data = rows.data ?? [];
-  const total = (name: string) => data.reduce((sum, r) => sum + (r.metrics[name] ?? 0), 0);
+  const total = (name: string) => totals.data?.metrics[name] ?? data.reduce((sum, r) => sum + (r.metrics[name] ?? 0), 0);
+  // Clicks on Crove's short links (#706), where a channel sends its links through them.
+  const clicks = totals.data ? totals.data.clicks : data.some((r) => r.clicks !== null) ? data.reduce((sum, r) => sum + (r.clicks ?? 0), 0) : null;
+  const hasClicks = clicks !== null;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -122,7 +132,10 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
         )}
       </div>
       {exportCsv.error && <ErrorText>{errorMessage(exportCsv.error)}</ErrorText>}
+      {/* Without the server's totals the cards sum the listed rows only. */}
+      {totals.error && <ErrorText>{errorMessage(totals.error)}</ErrorText>}
       {exportCsv.data?.truncated && <p className="text-xs text-warning">{t('metricsExportCut')}</p>}
+      <AccountGrowth days={days} names={names} />
       {data.length === 0 ? (
         <Empty title={t('empty.metrics')} hint={t('metricsHint')} />
       ) : (
@@ -131,12 +144,20 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
             {METRIC_COLUMNS.map((m) => (
               <Card key={m} className="block p-4">
                 <p className="text-xs text-subtle-foreground">{t(`metric.${m}`)}</p>
-                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{f.number(total(m))}</p>
+                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{totals.isLoading ? '…' : f.number(total(m))}</p>
               </Card>
             ))}
+            {hasClicks && (
+              <Card className="block p-4">
+                <p className="text-xs text-subtle-foreground">{t('metricsClicks')}</p>
+                <p className="mt-1 text-xl font-semibold text-foreground tabular-nums">{totals.isLoading ? '…' : f.number(clicks ?? 0)}</p>
+              </Card>
+            )}
           </div>
-          {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t('metricsCapped')}</p>}
+          {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t(totals.data ? 'metricsCapped' : 'metricsCappedPartial')}</p>}
           <BestTimes rows={data} names={names} />
+      <WhatWorks slug={slug} days={days} labelId={labelId} names={names} />
+          <TopPosts rows={data} names={names} slug={slug} />
           <div className="overflow-x-auto rounded-xl border">
             <table className="w-full text-sm">
               <thead className="bg-muted text-xs text-subtle-foreground">
@@ -147,6 +168,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
                       {t(`metric.${m}`)}
                     </th>
                   ))}
+                  {hasClicks && <th className="px-3 py-2 text-right font-medium">{t('metricsClicks')}</th>}
                 </tr>
               </thead>
               <tbody>
@@ -167,6 +189,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
                         {r.metrics[m] === undefined ? '-' : f.number(r.metrics[m])}
                       </td>
                     ))}
+                    {hasClicks && <td className="px-3 py-2 text-right text-foreground tabular-nums">{r.clicks === null ? '-' : f.number(r.clicks)}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -231,16 +254,20 @@ function Usage({ fileId, slug }: { fileId: string; slug: string }) {
   );
 }
 
-// The media library (S9): the org's post images, searchable by name, each with the posts that show it.
+// The media library (S9): the org's post images, searchable by name and filtered by tag (#904), each with the posts
+// that show it and its tags.
 function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const t = useTranslations('social');
   const f = useFormat();
   const [search, setSearch] = useState('');
-  const [open, setOpen] = useState<LibraryItem | null>(null);
+  const [tag, setTag] = useState<string | null>(null);
+  const [chosen, setOpen] = useState<LibraryItem | null>(null);
   const picker = useRef<HTMLInputElement>(null);
-  const library = useLibrary(search);
+  const library = useLibrary(search, tag);
   const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
   const items = library.data?.pages.flatMap((p) => p.items) ?? [];
+  // The chosen file as the list has it now (its tags may have changed), or as it was when it left the list.
+  const open = chosen ? (items.find((i) => i.fileId === chosen.fileId) ?? chosen) : null;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -266,6 +293,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
           </>
         )}
       </div>
+      <TagFilter value={tag} onChange={setTag} />
       <p className="text-xs text-subtle-foreground">{t('libraryHint')}</p>
       {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
       {library.isLoading ? (
@@ -273,7 +301,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
       ) : library.error ? (
         <ErrorText>{errorMessage(library.error)}</ErrorText>
       ) : items.length === 0 ? (
-        <Empty title={search.trim() ? t('libraryNoMatch') : t('libraryEmpty')} />
+        <Empty title={tag ? t('libraryNoTagMatch') : search.trim() ? t('libraryNoMatch') : t('libraryEmpty')} />
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-5">
@@ -295,6 +323,11 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
                   <span className="block text-xs text-subtle-foreground tabular-nums">
                     {sizeLabel(item.sizeBytes)} · {item.usedIn > 0 ? t('libraryUsedIn', { count: String(item.usedIn) }) : t('libraryUnused')}
                   </span>
+                  {item.tags.length > 0 && (
+                    <span className="block truncate text-xs text-muted-foreground" title={item.tags.join(', ')}>
+                      {item.tags.join(' · ')}
+                    </span>
+                  )}
                 </button>
               </li>
             ))}
@@ -304,6 +337,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               <Thumb fileId={open.fileId} alt={open.filename} mime={open.mime} durationMs={open.durationMs} className="aspect-[4/3]" />
               <p className="text-sm font-medium [overflow-wrap:anywhere] text-foreground">{open.filename}</p>
               <p className="text-xs text-subtle-foreground">{f.dateTime(open.createdAt)}</p>
+              <MediaTagEditor key={`${open.fileId}:${open.tags.join('\n')}`} fileId={open.fileId} tags={open.tags} canWrite={canWrite} />
               <p className="text-sm font-medium text-muted-foreground">{t('libraryUsageTitle')}</p>
               <Usage fileId={open.fileId} slug={slug} />
 
@@ -355,7 +389,7 @@ function Agenda({ posts, slug, names, labels }: { posts: Post[]; slug: string; n
                     <Badge variant="outline">{providerName(v.provider)}</Badge>
                     <span className="truncate">{names.get(v.connectionId)}</span>
                     {v.queueSlotAt && <span>· {t('fromQueue')}</span>}
-                    {v.status !== 'scheduled' && <Badge variant={VARIANT_TONE[v.status]}>{t(`status.${v.status}`)}</Badge>}
+                    {v.status !== 'scheduled' && <Badge variant={variantTone(v)}>{t(`status.${variantStatusKey(v)}`)}</Badge>}
                   </div>
                   <PostLabels ids={post.labelIds} labels={labels} />
                 </div>
@@ -458,6 +492,15 @@ export function SocialPage() {
                 {t('import.open')}
               </Link>
             )}
+            <Link to="/o/$slug/social/ideas" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+              {t('ideas.title')}
+            </Link>
+            <Link to="/o/$slug/social/bio" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+              {t('bio.pageTitle')}
+            </Link>
+            <Link to="/o/$slug/social/feeds" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+              {t('feeds.title')}
+            </Link>
             <Link to="/o/$slug/social/snippets" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
               {t('snippets.title')}
             </Link>
@@ -559,11 +602,20 @@ export function SocialPage() {
         <TabsContent value="upcoming">
           {upcoming.isLoading ? <Spinner /> : upcoming.error ? <ErrorText>{errorMessage(upcoming.error)}</ErrorText> : <Agenda posts={upcoming.data ?? []} slug={slug} names={names} labels={labelList} />}
         </TabsContent>
-        <TabsContent value="calendar">{tab === 'calendar' && <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} labelId={search.label} />}</TabsContent>
+        <TabsContent value="calendar">
+          {tab === 'calendar' && (
+            <div className="space-y-4">
+              <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} canWrite={canWrite} labelId={search.label} />
+              <InstagramGrid slug={slug} channels={(channels.data ?? []).filter((c) => c.provider === 'instagram' && c.status !== 'revoked')} canDecide={role === 'owner' || role === 'admin'} />
+              <CalendarFeedCard canManage={role === 'owner' || role === 'admin'} />
+            </div>
+          )}
+        </TabsContent>
         <TabsContent value="metrics">
           <div className="space-y-4">
             <Metrics slug={slug} names={names} labelId={search.label} />
             <ReportLinks channels={channels.data ?? []} />
+            <ReportSchedules channels={channels.data ?? []} />
           </div>
         </TabsContent>
         <TabsContent value="library">{tab === 'library' && <Library slug={slug} canWrite={canWrite} />}</TabsContent>

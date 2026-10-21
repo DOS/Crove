@@ -28,13 +28,24 @@ import {
   zSocialPostUpdate,
   zSocialQueue,
   zSocialMetricsRow,
+  zSocialChannelInsights,
+  zSocialBioPage,
+  zSocialBioSave,
+  zSocialFeed,
+  zSocialIdea,
+  zSocialIdeaCreate,
+  zSocialIdeaUpdate,
   zSocialLibraryItem,
   zSocialLibraryUse,
+  zSocialMediaTagCount,
   zSocialReportLink,
+  zSocialReportSchedule,
+  zSocialReportScheduleSave,
   zSocialReportLinkCreate,
   zSocialLinkPreview,
   zSocialNotificationKind,
   zSocialNotifications,
+  zSocialAccountTrend,
   zSocialSnippet,
   zSocialSnippetCreate,
   zSocialSnippetUpdate,
@@ -47,7 +58,12 @@ import {
   zSocialSchedule,
   zSocialVariantUpdate,
   zSocialChannelInput,
+  SOCIAL_LABEL_COLORS,
+  SOCIAL_WATERMARK_CORNERS,
+  SOCIAL_CHAT_ALERT_KINDS,
+  SOCIAL_CHAT_ALERT_TARGETS,
   SOCIAL_POST_STATUSES,
+  SOCIAL_VARIANT_STATUSES,
   MAX_BATCH_FILES,
   zBatchFile,
   zFileStatus,
@@ -69,9 +85,11 @@ import {
   zParty,
   zCustomerCursor,
   zCustomerPage,
-  zPartyUpdate,
+  zDuplicateHint,
   zProposalStatus,
   zPurchaseDocument,
+  zDocumentExport,
+  zSearchResult,
   zRole,
   zSession,
   zSessionRevoke,
@@ -89,9 +107,18 @@ import {
   zVoucherType,
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
+import { zJournalVoucherRequest } from './journal-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
+import { zTimeline } from './timeline.ts';
+import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
+
+// Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
+export const zProposalPolicy = z.object({
+  remindAfterDays: z.number().int().min(1).max(30).nullable(),
+  escalateAfterDays: z.number().int().min(1).max(60).nullable(),
+});
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
@@ -116,6 +143,15 @@ export const contract = {
     // Owners and admins (issue #324): the org's address, or null to clear it. Stored on one line, at most 500
     // characters; a value with control characters is refused.
     setAddress: oc.input(z.object({ address: z.string().max(2000).nullable() })).output(z.object({ address: z.string().nullable() })),
+    // Everyone reads, owners and admins set (issue #676): after how many days a pending proposal reminds the people who
+    // may approve it, and after how many its owners are told; null turns either off. Escalation must come later.
+    proposalPolicy: oc.output(zProposalPolicy),
+    setProposalPolicy: oc.input(zProposalPolicy).output(zProposalPolicy),
+    // Owners and admins (issue #672): the org's audit log, newest first, filtered and paged; the commands it holds, for
+    // the filter; and the filtered list as a CSV file (the export leaves its own audit row).
+    audit: oc.input(zAuditFilter.extend({ before: zAuditCursor.optional() })).output(zAuditPage),
+    auditCommands: oc.output(z.array(z.string())),
+    auditExport: oc.input(zAuditFilter).output(zAuditExport),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
@@ -167,6 +203,27 @@ export const contract = {
     connectBluesky: oc
       // The format of an app password is checked by the server, which says so in words rather than as a validation error.
       .input(z.object({ handle: z.string().trim().min(3).max(260), appPassword: z.string().trim().min(1).max(100) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    // A Telegram channel (#747): a bot token from @BotFather and the channel's @username, t.me link or numeric id. The
+    // server checks the bot may post there, then seals the token; the formats are checked by the server, in words.
+    // A Mastodon account (#748): the instance's address and an access token made in its settings. The server checks the
+    // token with the instance through the egress guard, then seals it.
+    connectMastodon: oc
+      .input(z.object({ instance: z.string().trim().min(1).max(260), accessToken: z.string().trim().min(1).max(300) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    // A WordPress site (#833): its address (https, with the path WordPress lives under, if any), a user name and an
+    // application password from that user's profile. The server checks the user may publish, through the egress guard,
+    // then seals the password; the formats are checked by the server, in words.
+    connectWordPress: oc
+      .input(z.object({ site: z.string().trim().min(1).max(300), username: z.string().trim().min(1).max(100), appPassword: z.string().trim().min(1).max(100) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    connectTelegram: oc
+      .input(z.object({ botToken: z.string().trim().min(1).max(100), channel: z.string().trim().min(1).max(100) }))
+      .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
+    // A Discord channel (#832): the URL of a webhook a server admin made in the channel's settings. The server checks the
+    // webhook with Discord, then seals its token; the format is checked by the server, in words.
+    connectDiscord: oc
+      .input(z.object({ webhookUrl: z.string().trim().min(1).max(300) }))
       .output(z.object({ connectionId: zId, reconnected: z.boolean() })),
     // Connecting through a provider's OAuth dialog (Social plan S6). Start returns where to send the browser; the
     // provider sends it back to /channels/oauth/:provider/callback, and that screen finishes the attempt with the code
@@ -267,11 +324,18 @@ export const contract = {
       draftWithAi: oc
         .input(
           z.strictObject({
-            brief: z.string().trim().min(1).max(4000),
+            brief: z.string().trim().max(4000),
             connectionIds: z.array(zId).min(1).max(20),
             tone: z.string().trim().max(300).optional(),
             language: z.enum(['vi', 'en']).optional(),
-          }),
+            // A page to write about (#769): read through its link preview, and the post links to it.
+            sourceUrl: z
+              .url({ protocol: /^https?$/ })
+              .max(2000)
+              .refine((u) => !/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(u), 'a link without a user name or password')
+              .optional(),
+          })
+          .refine((v) => v.brief.length > 0 || v.sourceUrl !== undefined, { message: 'a brief or a source page', path: ['brief'] }),
         )
         .output(z.object({ postId: zId })),
       // A rewrite of one text, as a proposal the member accepts or discards (#583); nothing is saved. With a channel,
@@ -286,12 +350,26 @@ export const contract = {
           }),
         )
         .output(z.object({ text: z.string(), title: z.string().nullable() })),
+      // Hashtags the writer suggests for a text (#824), tainted like every AI text; the same budget as drafts.
+      // An image's alt text the writer suggests (#817), when the model takes images; the same budget as drafts.
+      describeImage: oc.input(z.strictObject({ fileId: zId, language: z.enum(['vi', 'en']) })).output(z.object({ altText: z.string() })),
+      suggestHashtags: oc
+        .input(z.strictObject({ text: z.string().trim().min(1).max(20_000), connectionId: zId.optional(), language: z.enum(['vi', 'en']), exclude: z.array(z.string().max(100)).max(50) }))
+        .output(z.object({ hashtags: z.array(z.string()) })),
     },
     // How published posts did (S8): the latest capture of each variant published in the last days days (30 by default).
     metrics: {
       // postId: that post's published channels, whenever they went out.
       // labelId: only posts with that label (#639).
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional(), labelId: zId.optional() })).output(z.array(zSocialMetricsRow)),
+      // The window's totals over every published channel (#397), summed by the server.
+      totals: oc
+        .input(z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() }))
+        .output(z.object({ posts: z.number().int(), metrics: z.record(z.string(), z.number()), clicks: z.number().nullable() })),
+      // What works (#705): each channel's posts against its own median, by label, format, weekday, hour and hashtag.
+      insights: oc
+        .input(z.object({ days: z.number().int().min(1).max(365), labelId: zId.optional(), timeZone: z.string().min(1).max(64) }))
+        .output(z.object({ channels: z.array(zSocialChannelInsights), truncated: z.boolean() })),
       // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
       export: oc
         .input(z.strictObject({ days: z.number().int().min(1).max(365), labelId: zId.optional() }))
@@ -303,6 +381,26 @@ export const contract = {
       create: oc.input(zSocialLabelCreate).output(z.object({ labelId: zId })),
       update: oc.input(zSocialLabelUpdate).output(z.object({ labelId: zId })),
       remove: oc.input(z.strictObject({ labelId: zId })).output(z.object({ labelId: zId })),
+    },
+    // The ideas board (#701): members add, change and move ideas; a draft made from one names it (posts.create ideaId).
+    ideas: {
+      list: oc.input(z.object({ archived: z.boolean().optional(), labelId: zId.optional() })).output(z.object({ ideas: z.array(zSocialIdea), truncated: z.boolean() })),
+      get: oc.input(z.object({ ideaId: zId })).output(zSocialIdea),
+      create: oc.input(zSocialIdeaCreate).output(z.object({ ideaId: zId })),
+      update: oc.input(zSocialIdeaUpdate).output(z.object({ ideaId: zId })),
+      move: oc.input(z.strictObject({ ideaId: zId, stage: z.enum(['new', 'planned', 'archived']) })).output(z.object({ ideaId: zId, stage: z.string() })),
+    },
+    // The org's link-in-bio page (#707): everyone reads it and its clicks; owners and admins save it.
+    bio: {
+      get: oc.input(z.object({})).output(zSocialBioPage.nullable()),
+      save: oc.input(zSocialBioSave).output(z.object({ pageId: zId, slug: z.string() })),
+    },
+    // Blog feeds that become drafts (#708): owners and admins add, change, pause and remove them; everyone reads them.
+    feeds: {
+      list: oc.input(z.object({})).output(z.array(zSocialFeed)),
+      add: oc.input(z.strictObject({ url: z.url({ protocol: /^https?$/ }).max(2000), connectionIds: z.array(zId).min(1).max(20) })).output(z.object({ feedId: zId })),
+      update: oc.input(z.strictObject({ feedId: zId, connectionIds: z.array(zId).min(1).max(20).optional(), paused: z.boolean().optional() })).output(z.object({ feedId: zId })),
+      remove: oc.input(z.strictObject({ feedId: zId })).output(z.object({ feedId: zId })),
     },
     // Saved snippets (#584): members create them and change their own; owners and admins any.
     snippets: {
@@ -317,6 +415,91 @@ export const contract = {
       create: oc.input(zSocialReportLinkCreate).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),
       revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId })),
     },
+    // Saved sets of channels for the composer (#774): owners and admins save and remove them; everyone reads.
+    channelSets: {
+      list: oc.input(z.object({})).output(z.array(z.object({ id: zId, name: z.string(), connectionIds: z.array(zId), updatedAt: z.string() }))),
+      save: oc.input(z.strictObject({ setId: zId.optional(), name: z.string().trim().min(1).max(80), connectionIds: z.array(zId).min(1).max(20) })).output(z.object({ setId: zId })),
+      remove: oc.input(z.strictObject({ setId: zId })).output(z.object({ setId: zId, removed: z.boolean() })),
+    },
+    // The posting calendar feed (#862): owners and admins make (replacing the live one) and revoke it; the token is in
+    // the create answer only. Everyone sees whether there is one.
+    calendarFeed: {
+      get: oc.input(z.object({})).output(z.object({ createdAt: z.string(), createdBy: zId }).nullable()),
+      create: oc.input(z.strictObject({})).output(z.object({ token: z.string() })),
+      revoke: oc.input(z.strictObject({})).output(z.object({ revoked: z.boolean() })),
+    },
+    // Notes on calendar dates (#794): owners, admins and members save and remove them; everyone reads the ones that
+    // overlap the days shown.
+    calendarNotes: {
+      list: oc
+        .input(z.strictObject({ from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }))
+        .output(z.array(z.object({ id: zId, startsOn: z.string(), endsOn: z.string(), title: z.string(), color: z.enum(SOCIAL_LABEL_COLORS), updatedBy: zId, updatedAt: z.string() }))),
+      save: oc
+        .input(
+          z.strictObject({
+            noteId: zId.optional(),
+            startsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            endsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+            title: z.string().trim().min(1).max(120),
+            color: z.enum(SOCIAL_LABEL_COLORS).optional(),
+          }),
+        )
+        .output(z.object({ noteId: zId })),
+      remove: oc.input(z.strictObject({ noteId: zId })).output(z.object({ noteId: zId, removed: z.boolean() })),
+    },
+    // The saved brand voice for AI drafts (#741): the org's and each channel's.
+    brandVoices: {
+      list: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId.nullable(), description: z.string(), useWords: z.array(z.string()), avoidWords: z.array(z.string()), emoji: z.boolean(), updatedAt: z.string() }))),
+      save: oc
+        .input(z.strictObject({ connectionId: zId.nullable().optional(), description: z.string().trim().min(1).max(600), useWords: z.array(z.string().trim().min(1).max(40)).max(20), avoidWords: z.array(z.string().trim().min(1).max(40)).max(20), emoji: z.boolean() }))
+        .output(z.object({ connectionId: zId.nullable() })),
+      remove: oc.input(z.strictObject({ connectionId: zId.nullable().optional() })).output(z.object({ connectionId: zId.nullable(), removed: z.boolean() })),
+    },
+    // The org's logo watermark for post images (#834): the composer draws it on a copy of an image.
+    watermark: {
+      get: oc.input(z.object({})).output(z.object({ fileId: zId, mime: z.string(), corner: z.enum(SOCIAL_WATERMARK_CORNERS), scalePercent: z.number().int(), opacityPercent: z.number().int(), updatedAt: z.string() }).nullable()),
+      save: oc
+        .input(z.strictObject({ fileId: zId, corner: z.enum(SOCIAL_WATERMARK_CORNERS), scalePercent: z.number().int().min(5).max(50), opacityPercent: z.number().int().min(10).max(100) }))
+        .output(z.object({ saved: z.boolean() })),
+      remove: oc.input(z.strictObject({})).output(z.object({ removed: z.boolean() })),
+    },
+    // The org's team chat for Social alerts (#863): a Telegram chat (bot token and chat) or a Discord webhook, and the
+    // kinds of alert it gets. The server checks the target with the platform and seals it; no answer carries it back.
+    chatAlert: {
+      get: oc
+        .input(z.object({}))
+        .output(
+          z
+            .object({
+              kind: z.enum(SOCIAL_CHAT_ALERT_TARGETS),
+              events: z.array(z.enum(SOCIAL_CHAT_ALERT_KINDS)),
+              label: z.string().nullable(),
+              updatedAt: z.string(),
+              // The last test line: when the worker tried it, and the code of why it did not go out (null: it did).
+              lastTestAt: z.string().nullable(),
+              lastTestCode: z.string().nullable(),
+            })
+            .nullable(),
+        ),
+      save: oc
+        .input(
+          z.discriminatedUnion('kind', [
+            z.strictObject({ kind: z.literal('telegram'), botToken: z.string().trim().min(1).max(100), chatId: z.string().trim().min(1).max(100), events: z.array(z.enum(SOCIAL_CHAT_ALERT_KINDS)).min(1).max(4) }),
+            z.strictObject({ kind: z.literal('discord'), webhookUrl: z.string().trim().min(1).max(300), events: z.array(z.enum(SOCIAL_CHAT_ALERT_KINDS)).min(1).max(4) }),
+          ]),
+        )
+        .output(z.object({ saved: z.boolean() })),
+      remove: oc.input(z.strictObject({})).output(z.object({ removed: z.boolean() })),
+      // Asks the worker for one test line to the saved chat now; its outcome shows in get (lastTestAt, lastTestCode).
+      test: oc.input(z.strictObject({})).output(z.object({ queued: z.boolean() })),
+    },
+    // Scheduled client report mail (#704): owners and admins set, pause, test and remove schedules.
+    reportSchedules: {
+      list: oc.input(z.object({})).output(z.array(zSocialReportSchedule)),
+      save: oc.input(zSocialReportScheduleSave).output(z.object({ scheduleId: zId, nextRunAt: z.string() })),
+      remove: oc.input(z.strictObject({ scheduleId: zId })).output(z.object({ scheduleId: zId })),
+      test: oc.input(z.strictObject({ scheduleId: zId })).output(z.object({ runId: zId, mails: z.number().int(), suppressed: z.number().int() })),
+    },
     // Link preview cards (#641): what a link's page says, read by the worker; shown in Crove only.
     linkPreviews: {
       request: oc.input(z.strictObject({ url: z.string().min(1).max(2048) })).output(zSocialLinkPreview),
@@ -327,19 +510,67 @@ export const contract = {
       list: oc.input(z.object({})).output(zSocialNotifications),
       read: oc.input(z.union([z.strictObject({ ids: z.array(zId).min(1).max(100) }), z.strictObject({ all: z.literal(true) })])).output(z.object({ read: z.number().int() })),
       mute: oc.input(z.strictObject({ kind: zSocialNotificationKind, muted: z.boolean() })).output(z.object({ kind: zSocialNotificationKind, muted: z.boolean() })),
+      // The viewer's Social emails on or off (#579).
+      mail: oc.input(z.strictObject({ enabled: z.boolean() })).output(z.object({ enabled: z.boolean() })),
     },
+    // Account growth (#645): each channel's daily followers and reach over the last days.
+    accounts: {
+      trends: oc.input(z.object({ days: z.number().int().min(1).max(366) })).output(z.array(zSocialAccountTrend)),
+    },
+    // Posts waiting for the viewer's review (#749), for the kernel inbox: empty for members and viewers.
+    reviewInbox: oc.input(z.object({})).output(
+      z.object({
+        items: z.array(
+          z.object({
+            postId: zId,
+            title: z.string().nullable(),
+            excerpt: z.string(),
+            channels: z.array(z.object({ variantId: zId, provider: z.string(), displayName: z.string() })),
+            at: z.string().nullable(),
+            submittedAt: z.string(),
+          }),
+        ),
+        total: z.number().int().min(0),
+      }),
+    ),
+    // Channels and posts that need a person (#771), for the kernel inbox: empty for members and viewers.
+    attentionInbox: oc.input(z.object({})).output(
+      z.object({
+        channels: z.array(z.object({ connectionId: zId, provider: z.string(), displayName: z.string(), status: z.enum(['expired', 'error']) })),
+        posts: z.array(
+          z.object({
+            postId: zId,
+            excerpt: z.string(),
+            channels: z.array(z.object({ variantId: zId, provider: z.string(), displayName: z.string(), status: z.string(), errorCode: z.string().nullable() })),
+            updatedAt: z.string(),
+          }),
+        ),
+        total: z.number().int().min(0),
+      }),
+    ),
     // Client review links (#589): owners and admins make and revoke them; the token is in the create answer only.
     reviewLinks: {
       list: oc.input(z.object({ postId: zId })).output(zSocialReviewLinks),
       create: oc.input(z.strictObject({ postId: zId, days: z.number().int().min(1).max(30).optional() })).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),
       revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId, postId: zId })),
     },
-    // The media library (S9): the org's post images, newest first, and the posts that show one.
+    // The media library (S9): the org's post images, newest first, and the posts that show one. Members tag files and
+    // the list filters by one tag, whatever its case (#904); tags lists the org's tags for the filter.
     media: {
       list: oc
-        .input(z.object({ search: z.string().trim().max(200).optional(), before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(), limit: z.number().int().min(1).max(100).optional() }))
+        .input(
+          z.object({
+            search: z.string().trim().max(200).optional(),
+            tag: z.string().max(200).optional(),
+            before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(),
+            limit: z.number().int().min(1).max(100).optional(),
+          }),
+        )
         .output(z.object({ items: z.array(zSocialLibraryItem), more: z.boolean() })),
       usage: oc.input(z.object({ fileId: zId })).output(z.array(zSocialLibraryUse)),
+      tags: oc.input(z.object({})).output(z.array(zSocialMediaTagCount)),
+      tag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
+      untag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
     },
     variants: {
       update: oc.input(zSocialVariantUpdate).output(z.object({ variantId: zId, revision: z.number().int(), changed: z.boolean() })),
@@ -349,11 +580,18 @@ export const contract = {
       unschedule: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
       // Post a published channel's first comment again (#587), after a failure or an unclear answer.
       retryComment: oc.input(z.strictObject({ variantId: zId })).output(z.object({ variantId: zId })),
+      // Post the rest of a published channel's thread (#742), from the first part not out.
+      retryThread: oc.input(z.strictObject({ variantId: zId })).output(z.object({ variantId: zId })),
       // A scheduled variant at another time, its approvals kept (#580).
       reschedule: oc.input(z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }) })).output(z.object({ postId: zId, variantId: zId, at: z.string() })),
       cancel: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
       // Publish failed or needs_attention variants again now (a new attempt).
       retry: oc.input(z.strictObject({ variantIds: z.array(zId).min(1).max(20) })).output(z.object({ postId: zId, variants: z.array(zId) })),
+      // Take a published channel down from its platform (#860), owners and admins, with an optional reason. The worker
+      // makes the call; queued false: an earlier ask is still on its way, or it is removed already.
+      remove: oc
+        .input(z.strictObject({ variantId: zId, reason: z.string().trim().max(500).optional() }))
+        .output(z.object({ postId: zId, variantId: zId, status: z.enum(SOCIAL_VARIANT_STATUSES), queued: z.boolean() })),
       // Settle needs_attention variants: on the platform after all, or dropped.
       resolve: oc
         .input(z.strictObject({ variantIds: z.array(zId).min(1).max(20), outcome: z.enum(['published', 'dropped']), url: z.url({ protocol: /^https?$/ }).max(2000).nullable().optional() }))
@@ -361,10 +599,18 @@ export const contract = {
     },
     // Review policy per channel (S9): how many different people approve a variant before it may be scheduled.
     policies: {
-      list: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId, approvalsRequired: z.number().int(), updatedBy: zId, updatedAt: z.string() }))),
+      list: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId, approvalsRequired: z.number().int(), reviewReminders: z.boolean(), shortLinks: z.boolean(), fourEyes: z.boolean(), clientApproval: z.boolean(), updatedBy: zId, updatedAt: z.string() }))),
       set: oc
         .input(z.strictObject({ connectionId: zId, approvalsRequired: z.number().int().min(1).max(3) }))
         .output(z.object({ connectionId: zId, approvalsRequired: z.number().int(), approved: z.array(zId) })),
+      // Whether the channel's reviewers are reminded of posts waiting for review (#703).
+      setReminders: oc.input(z.strictObject({ connectionId: zId, reviewReminders: z.boolean() })).output(z.object({ connectionId: zId, reviewReminders: z.boolean() })),
+      // Whether the channel's links go through Crove's short links, to count clicks (#706).
+      setShortLinks: oc.input(z.strictObject({ connectionId: zId, shortLinks: z.boolean() })).output(z.object({ connectionId: zId, shortLinks: z.boolean() })),
+      // Four-eyes (#740): owners only.
+      setFourEyes: oc.input(z.strictObject({ connectionId: zId, fourEyes: z.boolean() })).output(z.object({ connectionId: zId, fourEyes: z.boolean() })),
+      // The client's approval on a review link as a review step (#770): owners only.
+      setClientApproval: oc.input(z.strictObject({ connectionId: zId, clientApproval: z.boolean() })).output(z.object({ connectionId: zId, clientApproval: z.boolean(), approved: z.array(zId) })),
     },
     // Variants waiting paused on each channel (expired or disconnected), for the channels screen.
     channels: {
@@ -378,6 +624,8 @@ export const contract = {
   inbox: {
     list: oc.input(z.object({ status: zProposalStatus.optional() })).output(z.array(zInboxItem)),
     get: oc.input(z.object({ id: zId })).output(zInboxDetail),
+    // Every member who can open the proposal (issue #672): what happened to it, its file and the records it touched.
+    timeline: oc.input(z.object({ id: zId })).output(zTimeline),
     approve: oc
       .input(
         z.object({
@@ -457,6 +705,8 @@ export const contract = {
         z.discriminatedUnion('command', [
           z.object({ command: z.literal('finance.journal.reverse'), input: zJournalReversal, idempotencyKey: zId }),
           z.object({ command: z.literal('finance.voucher.record'), input: zCashVoucherRequest, idempotencyKey: zId }),
+          // A general journal voucher (NVK, #888) entered by hand.
+          z.object({ command: z.literal('finance.journal_voucher.record'), input: zJournalVoucherRequest, idempotencyKey: zId }),
         ]),
       )
       .output(z.object({ proposalId: zId })),
@@ -483,12 +733,37 @@ export const contract = {
     // Every role (#670): the customers, by name, a page at a time (after: the last customer shown; more: others
     // follow), each with its receivable on 131 and its last invoice date. q searches the name and the tax code.
     customers: oc.input(z.object({ q: z.string().max(100).optional(), after: zCustomerCursor.optional() })).output(zCustomerPage),
-    // Owners and admins (R1, #670): corrects a customer's or vendor's name, tax code or contact email. A tax code must
-    // be valid and not another party's; posted entries keep pointing at the same party.
-    update: oc.input(zPartyUpdate).output(z.object({ partyId: zId, name: z.string(), taxCode: z.string().nullable(), email: z.string().nullable() })),
+    // Owners, admins and members (R1, #887): the party's name and contact details, from the version the editor read.
+    // A tax code can be added, never changed or removed.
+    update: oc
+      .input(
+        z.object({
+          partyId: zId,
+          version: z.number().int().min(1),
+          name: z.string().max(1000),
+          taxCode: z.string().max(40).nullable(),
+          address: z.string().max(2000).nullable(),
+          email: z.string().max(1000).nullable(),
+          phone: z.string().max(100).nullable(),
+        }),
+      )
+      .output(z.object({ partyId: zId, version: z.number().int() })),
+    // Owners and admins (R1, #887): partyId becomes a duplicate of keepId, hidden from lists and search and reported
+    // under it; nothing is deleted. unmarkDuplicate undoes it.
+    markDuplicate: oc.input(z.object({ partyId: zId, keepId: zId })).output(z.object({ partyId: zId, keepId: zId })),
+    unmarkDuplicate: oc.input(z.object({ partyId: zId })).output(z.object({ partyId: zId })),
+    // Owners, admins and members: pairs of parties that look like duplicates, strongest first.
+    duplicateHints: oc.input(z.object({})).output(z.array(zDuplicateHint)),
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),
+    // Every role (issue #878): the exports a recorded document went out in, for its history.
+    exports: oc.input(z.object({ documentId: zId })).output(z.array(zDocumentExport)),
+  },
+  // Every role (#673): parties by name or tax code, documents by series, number or party, journal entries by
+  // description or amount. Vietnamese marks and case are ignored, and each word matches the start of a word.
+  search: {
+    query: oc.input(z.object({ q: z.string().trim().min(2).max(100) })).output(zSearchResult),
   },
   journal: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zJournalEntry)),

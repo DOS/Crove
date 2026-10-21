@@ -186,6 +186,11 @@ export function OpeningBalancePage() {
                         <TableCell className="px-4 text-subtle-foreground tabular-nums">{r.rowNo}</TableCell>
                         <TableCell className="px-4">
                           <span className="font-mono text-foreground">{r.accountCode}</span> <span className="text-muted-foreground">{r.accountName}</span>
+                          {(r.partyTaxCode || r.partyName) && (
+                            <span className="block text-xs text-subtle-foreground">
+                              {[r.partyTaxCode, r.partyName].filter(Boolean).join(' · ')}
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell className="px-4 text-right tabular-nums">{r.debit && r.debit !== '0' ? f.money(r.debit) : ''}</TableCell>
                         <TableCell className="px-4 text-right tabular-nums">{r.credit && r.credit !== '0' ? f.money(r.credit) : ''}</TableCell>

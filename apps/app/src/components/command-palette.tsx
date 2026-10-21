@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { useTranslations } from 'use-intl';
-import { filterPalette, moveActive, PALETTE_GROUPS, type PaletteItem } from '../lib/palette.ts';
+import { filterPalette, moveActive, PALETTE_GROUPS, withFound, type PaletteItem } from '../lib/palette.ts';
 
 export interface PaletteEntry extends PaletteItem {
   run: () => void;
@@ -8,15 +8,30 @@ export interface PaletteEntry extends PaletteItem {
 
 // The command palette (issue #439): a modal <dialog> holding an editable combobox. The browser's modal dialog traps
 // focus, closes on Esc and gives focus back to whatever had it; the input keeps focus while the arrow keys move the
-// active option (aria-activedescendant) and Enter runs it.
-export function CommandPalette({ entries, open, onOpenChange }: { entries: readonly PaletteEntry[]; open: boolean; onOpenChange: (open: boolean) => void }) {
+// active option (aria-activedescendant) and Enter runs it. found holds what the org's search found for the query
+// (#673), reported through onQueryChange; search says whether that search is running or failed.
+export function CommandPalette({
+  entries,
+  open,
+  onOpenChange,
+  found = [],
+  search = 'idle',
+  onQueryChange,
+}: {
+  entries: readonly PaletteEntry[];
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  found?: readonly PaletteEntry[];
+  search?: 'idle' | 'searching' | 'failed';
+  onQueryChange?: (query: string) => void;
+}) {
   const t = useTranslations('palette');
   const dialog = useRef<HTMLDialogElement>(null);
   const input = useRef<HTMLInputElement>(null);
   const listId = useId();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  const results = useMemo(() => filterPalette(entries, query), [entries, query]);
+  const results = useMemo(() => withFound(filterPalette(entries, query), found), [entries, query, found]);
 
   useEffect(() => {
     const el = dialog.current;
@@ -31,7 +46,10 @@ export function CommandPalette({ entries, open, onOpenChange }: { entries: reado
     }
   }, [open]);
 
-  useEffect(() => setActive(0), [query]);
+  useEffect(() => {
+    setActive(0);
+    onQueryChange?.(query);
+  }, [query, onQueryChange]);
   // A refresh of the pending proposals can shorten the results under the same query: keep the active one in range.
   useEffect(() => setActive((current) => Math.min(current, Math.max(results.length - 1, 0))), [results]);
 
@@ -82,7 +100,7 @@ export function CommandPalette({ entries, open, onOpenChange }: { entries: reado
         />
       </div>
       <ul id={listId} role="listbox" aria-label={t('label')} className="max-h-[min(24rem,60vh)] overflow-y-auto p-1.5">
-        {results.length === 0 && <li className="px-3 py-6 text-center text-sm text-subtle-foreground">{t('empty')}</li>}
+        {results.length === 0 && search === 'idle' && <li className="px-3 py-6 text-center text-sm text-subtle-foreground">{t('empty')}</li>}
         {PALETTE_GROUPS.map((group) => {
           const inGroup = results.filter((r) => r.group === group);
           if (inGroup.length === 0) return null;
@@ -115,6 +133,11 @@ export function CommandPalette({ entries, open, onOpenChange }: { entries: reado
           );
         })}
       </ul>
+      {search !== 'idle' && (
+        <p role="status" className="border-t px-4 py-2 text-xs text-subtle-foreground">
+          {t(search === 'searching' ? 'searching' : 'searchFailed')}
+        </p>
+      )}
       <p className="border-t bg-muted/50 px-4 py-2 text-xs text-subtle-foreground">{t('hint')}</p>
     </dialog>
   );

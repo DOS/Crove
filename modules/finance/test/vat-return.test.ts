@@ -1,5 +1,6 @@
 // VAT working per month or quarter (issue #316): rate buckets, periods, the 8% reduced-rate periods, the split of an
-// invoice's VAT across its rates (rounding edge cases) and the form 01/GTGT indicators. Amounts are hand-checked.
+// invoice's VAT across its rates (rounding edge cases, or the invoice's own VAT table, #685) and the form 01/GTGT
+// indicators. Amounts are hand-checked.
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { Decimal } from '@crove/l10n-vn';
@@ -177,6 +178,56 @@ describe('documentVatByRate', () => {
       allocated: true,
     });
     expect(documentVatByRate({ vatAmount: '0', lines: [line('1000000', null)] })).toEqual({ rates: [{ rate: 'other', taxable: '1000000', vat: '0' }], allocated: false });
+  });
+
+  // The invoice's own VAT table (#685): 10% on 1,000,001 and 8% on 333,333, the seller rounding the 8% VAT down.
+  const mixed = { vatAmount: '126666', subtotal: '1333334', lines: [line('1000001', '10%'), line('333333', '8%')] };
+  const table = [
+    { rate: '10%', taxable: '1000001', vat: '100000' },
+    { rate: '8%', taxable: '333333', vat: '26666' },
+  ];
+
+  it('splits an invoice by its own VAT table, exactly and without the estimate flag', () => {
+    expect(documentVatByRate({ ...mixed, invoiceRates: table })).toEqual({
+      rates: [
+        { rate: '8', taxable: '333333', vat: '26666' },
+        { rate: '10', taxable: '1000001', vat: '100000' },
+      ],
+      allocated: false,
+    });
+    // Without the table (a document recorded before #685, or read from a PDF) the same invoice is estimated and flagged.
+    expect(documentVatByRate(mixed)).toEqual({
+      rates: [
+        { rate: '8', taxable: '333333', vat: '26667' },
+        { rate: '10', taxable: '1000001', vat: '99999' },
+      ],
+      allocated: true,
+    });
+    expect(documentVatByRate({ ...mixed, invoiceRates: [] }).allocated).toBe(true);
+  });
+
+  it('adds the table rows of one rate together and places their rates like the lines', () => {
+    const rows = [
+      { rate: '10%', taxable: '600000', vat: '60000' },
+      { rate: 'KCT', taxable: '200000', vat: '0' },
+      { rate: '10', taxable: '400000', vat: '40000' },
+      { rate: 'KHAC:3.5%', taxable: '0', vat: '0' },
+    ];
+    expect(documentVatByRate({ vatAmount: '100000', subtotal: '1200000', lines: [line('1200000', '10%')], invoiceRates: rows })).toEqual({
+      rates: [
+        { rate: '10', taxable: '1000000', vat: '100000' },
+        { rate: 'KCT', taxable: '200000', vat: '0' },
+        { rate: 'other', taxable: '0', vat: '0' },
+      ],
+      allocated: false,
+    });
+  });
+
+  it('falls back to the estimate when the table does not add up to the invoice', () => {
+    // Its VAT is one dong off the invoice's.
+    expect(documentVatByRate({ ...mixed, invoiceRates: [table[0]!, { rate: '8%', taxable: '333333', vat: '26667' }] }).allocated).toBe(true);
+    // Its taxable values miss the pre-tax total (a row the reader could not fill reads as 0).
+    expect(documentVatByRate({ ...mixed, invoiceRates: [table[0]!, { rate: '8%', taxable: '0', vat: '26666' }] }).allocated).toBe(true);
   });
 
   it('handles a negative (adjusting) invoice the same way', () => {

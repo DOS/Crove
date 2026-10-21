@@ -17,8 +17,8 @@ export interface CalendarItem {
 
 export const DAY_MS = 86_400_000;
 // What the calendar shows a channel at: its schedule, its publish time, or the post's planned time while it is not
-// scheduled yet. Cancelled channels are left out.
-const SHOWN: readonly VariantStatus[] = ['draft', 'in_review', 'changes_requested', 'approved', 'scheduled', 'paused', 'publishing', 'processing', 'published', 'failed', 'ambiguous', 'needs_attention'];
+// scheduled yet. Cancelled channels are left out; a channel removed from its platform (#860) stays at its publish time.
+const SHOWN: readonly VariantStatus[] = ['draft', 'in_review', 'changes_requested', 'approved', 'scheduled', 'paused', 'publishing', 'processing', 'published', 'failed', 'ambiguous', 'needs_attention', 'removed'];
 const PLANNED: readonly VariantStatus[] = ['draft', 'in_review', 'changes_requested', 'approved'];
 
 export function startOfDay(d: Date): Date {
@@ -46,6 +46,17 @@ export const dayId = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1)
 // The same time of day on another day, for a drop.
 export function onDay(at: Date, day: Date): Date {
   return new Date(day.getFullYear(), day.getMonth(), day.getDate(), at.getHours(), at.getMinutes());
+}
+
+// The notes (#794) on each day a view shows: a note covers every day from its start to its end, both included.
+export function notesByDay<N extends { startsOn: string; endsOn: string }>(notes: readonly N[], days: readonly Date[]): Map<string, N[]> {
+  const map = new Map<string, N[]>();
+  for (const d of days) {
+    const id = dayId(d);
+    const on = notes.filter((n) => n.startsOn <= id && id <= n.endsOn);
+    if (on.length > 0) map.set(id, on);
+  }
+  return map;
 }
 
 export function calendarItems(posts: readonly Post[]): CalendarItem[] {

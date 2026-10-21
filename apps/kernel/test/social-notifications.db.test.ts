@@ -150,7 +150,41 @@ suite('social in-app notifications on PostgreSQL (#637)', () => {
 
     // A dispatch run twice for one event writes nothing the second time.
     const last = [...o.dispatched].at(-1) as string;
-    await expect(worker.execute('social.notification.dispatch', { eventId: last }, { actor: system, orgId: o.orgId })).resolves.toEqual({ sent: 0 });
+    await expect(worker.execute('social.notification.dispatch', { eventId: last }, { actor: system, orgId: o.orgId })).resolves.toEqual({ sent: 0, mailed: 0 });
+  });
+
+  it('tells each member a comment mentions, once, and nobody outside the org (#793)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Bài tháng mười', channels: [{ connectionId: conn }] });
+    const stranger = await person('stranger');
+    // The author is mentioned: a mention instead of a comment notice. The viewer reads posts, so is told too; a
+    // stranger's token and a made-up id tell nobody.
+    const { commentId } = await exec<{ commentId: string }>(o, o.other, 'social.post_comment.add', {
+      postId,
+      body: `<@${o.member}> xem giúp ảnh, <@${o.viewer}> và <@${stranger}> <@${randomUUID()}> <@${o.other}>`,
+    });
+    await deliver(o);
+    expect(await kinds(o, o.member)).toEqual(['mention']);
+    expect(await kinds(o, o.viewer)).toEqual(['mention']);
+    expect(await kinds(o, o.other)).toEqual([]);
+    expect((await list(o, o.member)).items[0]).toMatchObject({ kind: 'mention', postId });
+    // A fix that adds the admin tells only the admin.
+    await exec(o, o.other, 'social.post_comment.edit', { commentId, body: `<@${o.member}> <@${o.viewer}> <@${o.admin}> xem giúp ảnh` });
+    await deliver(o);
+    expect(await kinds(o, o.admin)).toEqual(['mention']);
+    expect(await kinds(o, o.member)).toEqual(['mention']);
+    expect(await kinds(o, o.viewer)).toEqual(['mention']);
+    // Taking the admin out and back in tells the admin nothing more.
+    await exec(o, o.other, 'social.post_comment.edit', { commentId, body: `<@${o.member}> xem giúp ảnh` });
+    await exec(o, o.other, 'social.post_comment.edit', { commentId, body: `<@${o.member}> <@${o.admin}> xem giúp ảnh` });
+    await deliver(o);
+    expect(await kinds(o, o.admin)).toEqual(['mention']);
+    // A member who turned mentions off hears nothing of the next one.
+    await exec(o, o.admin, 'social.notification.mute', { kind: 'mention', muted: true });
+    await exec(o, o.member, 'social.post_comment.add', { postId, body: `<@${o.admin}> ok chưa?` });
+    await deliver(o);
+    expect(await kinds(o, o.admin)).toEqual(['mention']);
   });
 
   it('says nothing to reviewers when the post is no longer waiting, and tells the deciders when a channel expires', async () => {
@@ -277,7 +311,7 @@ suite('social in-app notifications on PostgreSQL (#637)', () => {
     await expect(exec(stranger, stranger.owner, 'social.notification.read', { ids })).resolves.toEqual({ read: 0 });
     // An event of another org is not found from this one.
     const foreign = [...o.dispatched][0] as string;
-    await expect(worker.execute('social.notification.dispatch', { eventId: foreign }, { actor: system, orgId: stranger.orgId })).resolves.toEqual({ sent: 0 });
+    await expect(worker.execute('social.notification.dispatch', { eventId: foreign }, { actor: system, orgId: stranger.orgId })).resolves.toEqual({ sent: 0, mailed: 0 });
     // Only the system runs the dispatch.
     await expect(exec(o, o.owner, 'social.notification.dispatch', { eventId: foreign })).rejects.toMatchObject({ status: 403 });
   });

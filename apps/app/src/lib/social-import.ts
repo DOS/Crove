@@ -69,6 +69,14 @@ const PROVIDER_WORDS: Readonly<Record<string, string>> = {
   x: 'x',
   twitter: 'x',
   bluesky: 'bluesky',
+  telegram: 'telegram',
+  tele: 'telegram',
+  mastodon: 'mastodon',
+  fediverse: 'mastodon',
+  pinterest: 'pinterest',
+  discord: 'discord',
+  wordpress: 'wordpress',
+  wp: 'wordpress',
 };
 
 function columnsOf(rows: SheetRows): { header: number; at: Partial<Record<ImportColumn, number>> } | null {

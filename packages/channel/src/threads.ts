@@ -6,16 +6,20 @@
 // Publish: a container (text, an image, a video, or a carousel of 2 to 20 mixing them), a wait until Meta has processed it, then
 // threads_publish, the one visible step. As for Instagram, a PUBLISHED container went out already, and a pending
 // reference carries the text's hash so a status check recognises the post it became.
+// Polls and topic tags (#711): a text post may carry a poll of 2 to 4 options (poll_attachment), and any post one topic
+// tag (topic_tag); both come from the variant's settings and are checked before anything is created.
 // First comment (#609): a reply to the account's own post, made the same way (a TEXT container with reply_to_id, then
 // threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
+import { QUOTA_RETRY_MS, quotaExhausted } from './instagram.ts';
 
 export const THREADS_HOSTS = ['graph.threads.net'] as const;
-export const THREADS_SCOPES = ['threads_basic', 'threads_content_publish', 'threads_manage_replies'] as const;
+// threads_manage_insights (#819): post counts and the account's followers; a channel connected before asks again.
+export const THREADS_SCOPES = ['threads_basic', 'threads_content_publish', 'threads_manage_replies', 'threads_manage_insights'] as const;
 const API = 'https://graph.threads.net';
 const VERSION = 'v1.0';
 const WAIT_MS = 15_000;
@@ -209,6 +213,33 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class NoUrl extends Error {}
 
+// A Threads poll (#711), as the variant's settings carry it (`settings.poll`: { options: 2 to 4 strings of 1 to 25
+// characters }); the form Threads takes (option_a to option_d), null for none, 'invalid' for any other shape.
+const POLL_KEYS = ['option_a', 'option_b', 'option_c', 'option_d'] as const;
+export function threadsPollOf(settings: Readonly<Record<string, unknown>>): Record<string, string> | null | 'invalid' {
+  const poll = settings.poll;
+  if (poll === undefined || poll === null) return null;
+  const options = typeof poll === 'object' ? (poll as { options?: unknown }).options : undefined;
+  if (!Array.isArray(options) || options.length < 2 || options.length > POLL_KEYS.length) return 'invalid';
+  const out: Record<string, string> = {};
+  for (const [i, option] of options.entries()) {
+    const text = typeof option === 'string' ? option.trim() : '';
+    if ([...text].length < 1 || [...text].length > 25) return 'invalid';
+    out[POLL_KEYS[i] as string] = text;
+  }
+  return out;
+}
+
+// A post's topic tag (#711, `settings.topicTag`): 1 to 50 characters, without a period or an ampersand; a leading # is
+// dropped. null for none, false for one Threads would refuse (a tag may be any word, so no string marks a bad one).
+export function threadsTopicTagOf(settings: Readonly<Record<string, unknown>>): string | null | false {
+  const tag = settings.topicTag;
+  if (tag === undefined || tag === null) return null;
+  if (typeof tag !== 'string') return false;
+  const text = tag.trim().replace(/^#/, '');
+  return [...text].length >= 1 && [...text].length <= 50 && !/[.&]/.test(text) ? text : false;
+}
+
 export class ThreadsPublisher implements Publisher {
   readonly provider = 'threads' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
@@ -226,6 +257,52 @@ export class ThreadsPublisher implements Publisher {
     this.commentBudgetMs = timing.commentBudgetMs ?? COMMENT_BUDGET_MS;
   }
 
+  // A post's counts (plan §3.6, #744): views, likes, replies, and reposts, quotes and shares together, from the media
+  // insights endpoint (threads_manage_insights). A post that is gone, or insights not granted, give no counts.
+  // The account's followers (#819), from threads_insights (followers_count is a total, not a daily series).
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalAccountId)) return null;
+    try {
+      const answer = await this.client.call<{ data?: { name?: unknown; total_value?: { value?: unknown } }[] }>('GET', `${VERSION}/${input.externalAccountId}/threads_insights`, { token, params: { metric: 'followers_count' } });
+      const value = (answer.data ?? []).find((r) => r.name === 'followers_count')?.total_value?.value;
+      return { followers: typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null };
+    } catch (error) {
+      const result = threadsResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+      if (result.kind === 'rejected' && result.error === 'permission') return { refused: 'permission' };
+      return null;
+    }
+  }
+
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalId)) return { refused: 'gone' };
+    let answer: { data?: { name?: unknown; values?: { value?: unknown }[]; total_value?: { value?: unknown } }[] };
+    try {
+      answer = await this.client.call('GET', `${VERSION}/${input.externalId}/insights`, { token, params: { metric: 'views,likes,replies,reposts,quotes,shares' } });
+    } catch (error) {
+      const result = threadsResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+      return null;
+    }
+    const metrics: Partial<Record<MetricName, number>> = {};
+    let shared: number | undefined;
+    for (const row of answer.data ?? []) {
+      const raw = row.values?.[0]?.value ?? row.total_value?.value;
+      const value = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined;
+      if (value === undefined || typeof row.name !== 'string') continue;
+      if (row.name === 'views') metrics.views = value;
+      else if (row.name === 'likes') metrics.reactions = value;
+      else if (row.name === 'replies') metrics.comments = value;
+      else if (row.name === 'reposts' || row.name === 'quotes' || row.name === 'shares') shared = (shared ?? 0) + value;
+    }
+    if (shared !== undefined) metrics.shares = shared;
+    return { metrics };
+  }
+
   async publish(input: PublishInput): Promise<PublishResult> {
     const token = tokenIn(input.secret);
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_TOKEN' };
@@ -234,26 +311,39 @@ export class ThreadsPublisher implements Publisher {
     const text = textOf(input.content);
     const media = input.content.media.slice(0, CAROUSEL_MAX);
     if (!text && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    const poll = threadsPollOf(input.settings);
+    const topicTag = threadsTopicTagOf(input.settings);
+    if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
+    if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
+    if (topicTag === false) return { kind: 'rejected', error: 'bad_request', code: 'TOPIC_TAG_INVALID' };
+    const extras = { ...(poll ? { poll_attachment: JSON.stringify(poll) } : {}), ...(topicTag ? { topic_tag: topicTag } : {}) };
+    // The profile's publishing quota (plan §3.6; 250 posts in a rolling 24 hours today), read before any container; a
+    // read that fails does not hold the post.
+    const quota = await this.client.call<Parameters<typeof quotaExhausted>[0]>('GET', `${VERSION}/${user}/threads_publishing_limit`, { token, params: { fields: 'quota_usage,config' } }).catch(() => null);
+    if (quotaExhausted(quota)) return { kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED', retryAt: new Date(Date.now() + QUOTA_RETRY_MS) };
     const urlOf = async (fileId: string) => {
       const url = await input.mediaUrl(fileId).catch(() => null);
       if (!url) throw new NoUrl();
       return url;
     };
-    // An image or a video (#446), each fetched by Meta from its presigned URL.
-    const mediaForm = async (m: { fileId: string; mime: string }) =>
-      m.mime.startsWith('video/') ? { media_type: 'VIDEO', video_url: await urlOf(m.fileId) } : { media_type: 'IMAGE', image_url: await urlOf(m.fileId) };
+    // An image or a video (#446), each fetched by Meta from its presigned URL, with its description for screen readers
+    // (#790), which Threads takes on both, up to 1000 characters.
+    const mediaForm = async (m: { fileId: string; mime: string; altText?: string | null }) => ({
+      ...(m.mime.startsWith('video/') ? { media_type: 'VIDEO', video_url: await urlOf(m.fileId) } : { media_type: 'IMAGE', image_url: await urlOf(m.fileId) }),
+      ...(m.altText ? { alt_text: m.altText.slice(0, 1000) } : {}),
+    });
     let container: string;
     try {
       if (media.length === 0) {
-        container = await this.create(user, token, { media_type: 'TEXT', text });
+        container = await this.create(user, token, { media_type: 'TEXT', text, ...extras });
       } else if (media.length === 1) {
-        const only = media[0] as { fileId: string; mime: string };
-        container = await this.create(user, token, { ...(await mediaForm(only)), ...(text ? { text } : {}) });
+        const only = media[0] as { fileId: string; mime: string; altText?: string | null };
+        container = await this.create(user, token, { ...(await mediaForm(only)), ...(text ? { text } : {}), ...extras });
       } else {
         // A carousel may mix images and videos.
         const children: string[] = [];
         for (const m of media) children.push(await this.create(user, token, { ...(await mediaForm(m)), is_carousel_item: 'true' }));
-        container = await this.create(user, token, { media_type: 'CAROUSEL', children: children.join(','), ...(text ? { text } : {}) });
+        container = await this.create(user, token, { media_type: 'CAROUSEL', children: children.join(','), ...(text ? { text } : {}), ...extras });
       }
     } catch (error) {
       if (error instanceof NoUrl) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
@@ -302,6 +392,20 @@ export class ThreadsPublisher implements Publisher {
   // so any failure before threads_publish posted nothing; a container still processing when the short wait ends is
   // transient, and the person retries. A connection made before Crove asked for threads_manage_replies is refused with
   // a permission error and replies again once it reconnects.
+  // A repost of the account's own post (#773): POST /{media_id}/repost, which answers with the repost's id.
+  async repost(input: RepostInput): Promise<CommentResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_TOKEN' };
+    if (!NUMERIC_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.client.call<{ id?: unknown }>('POST', `${VERSION}/${input.externalId}/repost`, { token, timeoutMs: COMMENT_CALL_MS });
+      if (typeof answer.id !== 'string' || !NUMERIC_ID.test(answer.id)) return { kind: 'unknown', code: 'NO_REPOST_ID' };
+      return { kind: 'accepted', externalId: answer.id };
+    } catch (error) {
+      return commentResult(threadsResult(error));
+    }
+  }
+
   async comment(input: CommentInput): Promise<CommentResult> {
     const token = tokenIn(input.secret);
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_TOKEN' };

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__claude-code-remote__create_session",
+      "mcp__claude-code-remote__send_message",
+      "mcp__claude-code-remote__get_session",
+      "mcp__claude-code-remote__list_sessions",
+      "mcp__claude-code-remote__list_events",
+      "mcp__claude-code-remote__get_event",
+      "mcp__claude-code-remote__archive_session",
+      "mcp__claude-code-remote__interrupt_session",
+      "mcp__claude-code-remote__set_session_title",
+      "mcp__claude-code-remote__set_session_tags",
+      "mcp__claude-code-remote__list_triggers",
+      "mcp__claude-code-remote__update_trigger",
+      "mcp__claude-code-remote__send_later",
+      "mcp__claude-code-remote__list_environments"
+    ]
+  }
+}
