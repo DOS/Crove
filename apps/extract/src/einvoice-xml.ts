@@ -2,8 +2,10 @@
 // that Decree 123/2020/ND-CP as amended by Decree 70/2025/ND-CP, with Circular 78/2021/TT-BTC, then Circular
 // 32/2025/TT-BTC), in the tax authority's data format (Decision 1450/QD-TCT of 2021; since 2026-08-27 Decision
 // 1233/QD-CT, which accepts message versions 2.1.0 and 2.1.1 side by side until 2026-12-31). It reads the same
-// elements in every version, and checks neither the version nor the signature format (XML-DSig or XAdES), only that
-// the seller's signature element is there. Deterministic, no LLM. Entity expansion is disabled and DOCTYPE is rejected.
+// elements in every version and does not check the version. The digital signatures (the seller's and, with a tax
+// authority code, the tax authority's) are verified by einvoice-signature.ts (#674) against the national root CAs
+// shipped in apps/extract/trust; an unverified signature never stops the invoice from being read. Deterministic, no
+// LLM. Entity expansion is disabled and DOCTYPE is rejected.
 // It runs only inside a crove-extract parser process (plan §7.6, External-tenant gate T12). The invoice types,
 // money helpers and checks it shares with the worker stay in @crove/l10n-vn, which holds no parser.
 import { XMLParser } from 'fast-xml-parser';
@@ -20,6 +22,8 @@ import {
   type ParsedInvoice,
   type TaxBreakdown,
 } from '@crove/l10n-vn';
+import { verifyEInvoiceSignatures } from './einvoice-signature.ts';
+import { shippedTrustStore, type TrustStore } from './einvoice-trust.ts';
 
 export class EInvoiceParseError extends Error {}
 
@@ -93,7 +97,12 @@ function nature(code: string | null): LineNature {
   }
 }
 
-export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {
+export interface EInvoiceParseOptions {
+  // The certificates signatures are checked against; the national roots shipped with Crove unless a test passes its own.
+  trust?: TrustStore;
+}
+
+export function parseEInvoiceXml(bytes: Uint8Array, options: EInvoiceParseOptions = {}): ParsedInvoice {
   if (bytes.byteLength > MAX_XML_BYTES) throw new EInvoiceParseError('Tệp XML quá lớn');
   const xml = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
   if (/<!DOCTYPE/i.test(xml) || /<!ENTITY/i.test(xml)) throw new EInvoiceParseError('XML chứa DOCTYPE/ENTITY, bị từ chối');
@@ -144,17 +153,22 @@ export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {
     toMoney(taxBreakdown.length > 0 ? sum(taxBreakdown.map((t) => t.taxableAmount)) : sum(lines.map(lineContribution)));
   const total = amount(totals, 'TgTTTBSo') ?? toMoney(money(subtotal).plus(money(vatTotal)));
 
+  const series = normalizeSeries(text(general, 'KHHDon') ?? '');
+  const seller = party(content.NBan);
+  const taxAuthorityCode = typeof hdon.MCCQT === 'string' ? hdon.MCCQT : text(hdon, 'MCCQT');
+  const signature = verifyEInvoiceSignatures(xml, { sellerTaxCode: seller.taxCode, issueDate, series, taxAuthorityCode }, options.trust ?? shippedTrustStore());
+
   return {
     source: 'einvoice_xml',
     invoiceType: text(general, 'THDon'),
     template: text(general, 'KHMSHDon'),
-    series: normalizeSeries(text(general, 'KHHDon') ?? ''),
+    series,
     number: normalizeNumber(number),
     issueDate: issueDate.slice(0, 10),
     currency: text(general, 'DVTTe') ?? 'VND',
     exchangeRate: amount(general, 'TGia'),
     paymentMethod: text(general, 'HTTToan'),
-    seller: party(content.NBan),
+    seller,
     buyer: party(content.NMua),
     lines,
     taxBreakdown,
@@ -162,7 +176,8 @@ export function parseEInvoiceXml(bytes: Uint8Array): ParsedInvoice {
     vatTotal,
     total,
     totalInWords: text(totals, 'TgTTTBChu'),
-    taxAuthorityCode: typeof hdon.MCCQT === 'string' ? hdon.MCCQT : text(hdon, 'MCCQT'),
+    taxAuthorityCode,
     hasSignature: hdon.DSCKS !== undefined,
+    signature,
   };
 }

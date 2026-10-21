@@ -850,6 +850,7 @@ export const en = {
     failedChecks: '{count, plural, one {# error} other {# errors}}',
     warnChecks: '{count, plural, one {# warning} other {# warnings}}',
     matched: 'All checks pass',
+    signatureUnverified: 'Signature not verified',
     agentProposed: 'Proposed by AI agent: {name}',
     reversalKind: 'Reversal',
     voucherKind: 'Cash or bank voucher',
@@ -862,6 +863,8 @@ export const en = {
       approve: '{count, plural, one {Approve # proposal} other {Approve # proposals}}',
       clear: 'Clear selection',
       hint: 'One two-factor check covers the whole selection. Each proposal is still checked on its own: four-eyes, who may approve it, and that nobody changed it since you saw it.',
+      confirmUnverified:
+        '{count, plural, one {# selected invoice has a digital signature that could not be verified. I checked the original invoice and still want to approve it.} other {# selected invoices have digital signatures that could not be verified. I checked the original invoices and still want to approve them.}}',
       sending: 'Approving: batch {done, number} of {total, number}',
       stepUp: '{count, plural, one {approve and post # proposal} other {approve and post # proposals}}',
       retry: 'Try again',
@@ -909,6 +912,10 @@ export const en = {
     failedChecks:
       '{count, plural, one {# check failed. Compare with the original document before approving.} other {# checks failed. Compare with the original document before approving.}}',
     acceptFailed: 'I compared it with the original document and still want to post it',
+    signatureUnverifiedTitle: 'The digital signature of this invoice could not be verified',
+    signatureUnverifiedHint:
+      'The invoice may have been edited after it was signed, or signed with a certificate Crove does not trust. Look the invoice up on the tax authority portal or ask the seller for the original before approving.',
+    acceptUnverified: 'I checked the original invoice and still want to approve it',
     lateTitle: 'The books are locked through {through}',
     lateNotice: 'This invoice is dated {date}, in a locked month, so it cannot be posted on that date. You can post it in an open month instead; an owner can also unlock the month.',
     latePost: 'Post it in an open month and keep the invoice date on the document',

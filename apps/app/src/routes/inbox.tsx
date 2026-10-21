@@ -109,6 +109,10 @@ export function InboxPage() {
   const selectable = bulkEnabled ? (items.data ?? []).filter((item) => bulkSelectable(item, REVERSAL_KIND)) : [];
   const chosen = selectable.filter((item) => selected.has(item.id));
   const sending = bulk?.sending ?? false;
+  // Invoices whose digital signature is unverified (#674): approving them, in bulk as one by one, asks the approver to
+  // confirm they checked the original invoice.
+  const unverifiedChosen = chosen.filter((item) => item.signatureStatus === 'unverified').length;
+  const [confirmUnverified, setConfirmUnverified] = useState(false);
 
   async function sendBulk(run: BulkRun) {
     setBulk({ ...run, sending: true, stopped: false, progress: { ...run.progress, error: null } });
@@ -124,7 +128,8 @@ export function InboxPage() {
   }
 
   function startBulk() {
-    if (chosen.length === 0 || sending) return;
+    if (chosen.length === 0 || sending || (unverifiedChosen > 0 && !confirmUnverified)) return;
+    setConfirmUnverified(false);
     void sendBulk({
       batches: planBatches(chosen.map((item) => ({ id: item.id, revision: item.revision }))),
       progress: { results: [], next: 0, error: null },
@@ -326,13 +331,19 @@ export function InboxPage() {
                   {t('bulk.clear')}
                 </Button>
               )}
-              <Button size="lg" disabled={chosen.length === 0 || sending} onClick={startBulk}>
+              <Button size="lg" disabled={chosen.length === 0 || sending || (unverifiedChosen > 0 && !confirmUnverified)} onClick={startBulk}>
                 {sending ? <Spinner className="text-current" /> : null}
                 {sending && bulk
                   ? t('bulk.sending', { done: Math.min(bulk.progress.next + 1, bulk.batches.length), total: bulk.batches.length })
                   : t('bulk.approve', { count: chosen.length })}
               </Button>
             </div>
+            {unverifiedChosen > 0 && (
+              <Label className="w-full font-normal text-warning">
+                <Checkbox checked={confirmUnverified} disabled={sending} onCheckedChange={(checked) => setConfirmUnverified(checked === true)} />
+                {t('bulk.confirmUnverified', { count: unverifiedChosen })}
+              </Label>
+            )}
             <p className="w-full text-xs text-subtle-foreground">{t('bulk.hint')}</p>
           </div>
         )}
@@ -400,6 +411,7 @@ export function InboxPage() {
                     {item.kind === VOUCHER_KIND && <Badge variant="secondary">{t('voucherKind')}</Badge>}
                     {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
                     {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
+                    {item.signatureStatus === 'unverified' && <Badge variant="destructive">{t('signatureUnverified')}</Badge>}
                     {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
                     {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
                     {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}

@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
 const INVOICE = fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url));
@@ -44,6 +45,7 @@ test('export the VAT return of a month as the HTKK XML of form 01/GTGT', async (
     const proposal = page.getByRole('row').filter({ has: page.getByRole('link', { name: BUYER }) });
     await expect(proposal).toBeVisible({ timeout: 60_000 });
     await proposal.getByRole('link', { name: BUYER }).click();
+    await confirmUnverifiedSignature(page);
     await page.getByRole('button', { name: 'Duyệt và ghi sổ' }).click();
     await page.getByRole('button', { name: 'Bật xác thực hai lớp' }).click();
     const secret = (await page.getByLabel('Khóa thiết lập').textContent())?.trim() ?? '';

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { sql } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
 const INVOICE = fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url));
@@ -33,6 +34,7 @@ test('lock a month, see a posting into it refused, then unlock it with a reason'
     await page.locator('input[type=file]').setInputFiles(INVOICE);
     await expect(page.getByRole('link', { name: SELLER })).toBeVisible({ timeout: 60_000 });
     await page.getByRole('link', { name: SELLER }).click();
+    await confirmUnverifiedSignature(page);
     await page.getByRole('button', { name: 'Duyệt và ghi sổ' }).click();
     await page.getByRole('button', { name: 'Bật xác thực hai lớp' }).click();
     const secret = (await page.getByLabel('Khóa thiết lập').textContent())?.trim() ?? '';
@@ -54,6 +56,7 @@ test('lock a month, see a posting into it refused, then unlock it with a reason'
 
     await nav.getByRole('link', { name: 'Hộp thư chứng từ' }).click();
     await page.getByRole('link', { name: SELLER }).click();
+    await confirmUnverifiedSignature(page);
     await page.getByRole('button', { name: 'Duyệt và ghi sổ' }).click();
     await expect(page).toHaveURL(new RegExp(`/o/${slug}/inbox$`));
     await page.getByRole('tab', { name: 'Đã ghi sổ' }).click();

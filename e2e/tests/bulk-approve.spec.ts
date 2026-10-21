@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { sql } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
 const FIXTURE = readFileSync(fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url)), 'utf8');
@@ -49,6 +50,7 @@ test('review shortcuts, then approve several proposals under one step-up', async
     await page.keyboard.press('j');
     await expect(page).toHaveURL(next);
     await expect(page.getByRole('heading', { name: SELLER })).toBeVisible();
+    await confirmUnverifiedSignature(page);
     await expect(page.getByRole('button', { name: 'Duyệt và ghi sổ' })).toBeEnabled();
     // A asks for the same approval as the button: without a second factor, the step-up prompt.
     await page.keyboard.press('a');
@@ -82,6 +84,9 @@ test('review shortcuts, then approve several proposals under one step-up', async
   await test.step('select all and approve them under one step-up', async () => {
     await page.getByText(`Chọn tất cả mục duyệt chung được (${NUMBERS.length})`).click();
     await expect(page.getByText(`Đã chọn ${NUMBERS.length}`)).toBeVisible();
+    // The fixtures' signatures are placeholders (#674): the whole selection is confirmed once before it is approved.
+    await expect(page.getByRole('button', { name: `Duyệt ${NUMBERS.length} đề xuất` })).toBeDisabled();
+    await page.getByText(`Có ${NUMBERS.length} hóa đơn đã chọn chưa xác minh được chữ ký số`, { exact: false }).click();
     await page.getByRole('button', { name: `Duyệt ${NUMBERS.length} đề xuất` }).click();
     // Bulk approval is R3: one step-up for the whole selection, then the page sends it again by itself.
     await expect(page.getByText(`Đang chờ: duyệt và ghi sổ ${NUMBERS.length} đề xuất.`)).toBeVisible();

@@ -65,6 +65,14 @@ export const zJournalLineDraft = z.object({
   memo: z.string().max(1000),
 });
 
+// The digital signature verification of an e-invoice XML (#674), as crove-extract reported it: verified, unverified
+// (a reason says why) or not applicable (an invoice read by AI, an unsigned cash register invoice). An unverified
+// signature is a warning; the Inbox asks the approver to confirm it.
+export const SIGNATURE_STATUSES = ['verified', 'unverified', 'not_applicable'] as const;
+export const zSignatureStatus = z.enum(SIGNATURE_STATUSES);
+export type SignatureStatus = z.infer<typeof zSignatureStatus>;
+export const zProposalSignature = z.object({ status: zSignatureStatus, reason: z.string().max(50).nullable() });
+
 // Payload stored on a finance.purchase proposal and executed by finance.purchase.record. direction 'sale' (issue #313):
 // the seller is the org itself (its tax code), the buyer is the customer, and the journal is Dr 131, Cr revenue, Cr
 // 3331. Absent on purchases, including every proposal raised before sales existed.
@@ -89,6 +97,8 @@ export const zPurchaseProposal = z.object({
   checks: z.array(zCheck).max(50),
   sourceFileId: zId,
   extractionMethod: z.enum(['einvoice_xml', 'pdf_text_ai', 'image_ai']),
+  // Absent on proposals read before #674.
+  signature: zProposalSignature.optional(),
 });
 export type PurchaseProposal = z.infer<typeof zPurchaseProposal>;
 
@@ -280,6 +290,8 @@ export const zInboxItem = z.object({
   issueDate: zLocalDate.nullable(),
   failedChecks: z.number().int(),
   warnChecks: z.number().int(),
+  // The invoice's signature verification (#674); null for other kinds and for invoices read before it.
+  signatureStatus: zSignatureStatus.nullable(),
   duplicateOf: zId.nullable(),
   createdAt: z.string(),
   // The AI agent that asked for the proposal (#435); null for a proposal a person or an upload made.

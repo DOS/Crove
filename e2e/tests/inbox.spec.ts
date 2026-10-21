@@ -6,6 +6,7 @@ import { Decimal } from 'decimal.js';
 import ExcelJS from 'exceljs';
 import { sql } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
 const INVOICE = fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url));
@@ -60,6 +61,11 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await expect(page.getByRole('heading', { name: SELLER })).toBeVisible();
     await expect(page.getByText('Hóa đơn C26TAB · số 1234 · ngày 15/09/2026')).toBeVisible();
     const approve = page.getByRole('button', { name: 'Duyệt và ghi sổ' });
+    // The fixture's signature is a placeholder (#674): the page says so and asks for a confirmation before approving.
+    await expect(page.getByText('Chưa xác minh được chữ ký số của hóa đơn này')).toBeVisible();
+    await expect(page.getByText('Chữ ký số không đọc được theo chuẩn XML-DSig').first()).toBeVisible();
+    await expect(approve).toBeDisabled();
+    await confirmUnverifiedSignature(page);
     await expect(approve).toBeEnabled();
     await approve.click();
     // Approving is R3: without a second factor the kernel answers STEP_UP_REQUIRED and the page offers to enable one,

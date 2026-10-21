@@ -11,6 +11,7 @@ import {
   zBulkApproveItems,
   zId,
   zLocalDate,
+  zProposalSignature,
   zPurchaseProposal,
   zRole,
   zSessionRevoke,
@@ -486,6 +487,14 @@ export const editProposal = defineCommand({
   },
 });
 
+// What the approval's audit row says about the invoice's signature (#674) when the approver confirmed it: the status
+// they confirmed. The row is unchanged when no confirmation was sent (an API call, a bulk item, an agent).
+function signatureAudit(payload: unknown, accepted: boolean | undefined): Record<string, unknown> {
+  if (accepted === undefined) return {};
+  const parsed = zProposalSignature.safeParse((payload as { signature?: unknown } | null)?.signature);
+  return { accept_unverified_signature: accepted, signature_status: parsed.success ? parsed.data.status : null };
+}
+
 export const approveProposal = defineCommand({
   name: 'kernel.proposal.approve',
   input: z.object({
@@ -495,6 +504,9 @@ export const approveProposal = defineCommand({
     lineAccounts: zLineAccounts.optional(),
     note: z.string().max(500).optional(),
     acceptFailedChecks: z.boolean().optional(),
+    // The approver confirmed an invoice whose digital signature is unverified (#674). The Inbox asks for it and the audit
+    // row records it. An unverified signature is a warning, so the server does not require it (yet: see the PR).
+    acceptUnverifiedSignature: z.boolean().optional(),
     // A purchase invoice dated in a locked month (#478): the approver posts its entry on this date, in an open month.
     // An approval-time choice like acceptFailedChecks, never part of the revision: finance.purchase.record checks it
     // and the audit row records it. Only a user's single approval sets it; a bulk approval and an agent never do.
@@ -530,6 +542,7 @@ export const approveProposal = defineCommand({
       eligible_approvers: decision.eligibleCount,
       self_approved: decision.selfApproved,
       accept_failed_checks: input.acceptFailedChecks ?? false,
+      ...signatureAudit(proposal.payload, input.acceptUnverifiedSignature),
       ...(input.postingDate !== undefined ? { posting_date: input.postingDate } : {}),
     });
     // Approved for its command by this command: the runtime's proposal state gate lets the command run only now.
