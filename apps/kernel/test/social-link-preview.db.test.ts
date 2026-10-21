@@ -102,9 +102,10 @@ suite('social link previews on PostgreSQL (#641)', () => {
     expect(queued).toHaveLength(1);
 
     const previewId = queued[0]?.payload.preview_id as string;
-    const page = '<html><head><meta property="og:title" content="Khai trương cửa hàng"><meta property="og:description" content="Giảm 20% tuần đầu"><meta property="og:site_name" content="Shop"></head></html>';
+    const page = '<html><head><meta property="og:title" content="Khai trương cửa hàng"><meta property="og:description" content="Giảm 20% tuần đầu"><meta property="og:site_name" content="Shop"></head><body><nav>Menu</nav><article><p>Mở cửa 7 giờ sáng.</p></article></body></html>';
     await expect(job(o, previewId, html(page))).resolves.toBe('ready');
-    expect(await get(o, o.viewer, url)).toMatchObject({ status: 'ready', title: 'Khai trương cửa hàng', description: 'Giảm 20% tuần đầu', siteName: 'Shop', error: null });
+    // The page's main text (#779) is kept with the answer, for AI drafts.
+    expect(await get(o, o.viewer, url)).toMatchObject({ status: 'ready', title: 'Khai trương cửa hàng', description: 'Giảm 20% tuần đầu', siteName: 'Shop', text: 'Mở cửa 7 giờ sáng.', error: null });
     // Answered: a second run does nothing; a fresh answer is reused without a job.
     await expect(job(o, previewId, html(page))).resolves.toBe('none');
     expect(await request(o, o.owner, url)).toMatchObject({ status: 'ready', title: 'Khai trương cửa hàng' });

@@ -116,7 +116,7 @@ function wordpressFailure(code: string | undefined): DomainError {
   return new DomainError('WORDPRESS_SITE_UNREACHABLE', 422, 'Không kết nối được tới trang WordPress này; hãy kiểm tra địa chỉ rồi thử lại');
 }
 
-type LinkPreviewView = { status: 'pending' | 'ready' | 'failed'; title: string | null; description: string | null; siteName: string | null } | null;
+type LinkPreviewView = { status: 'pending' | 'ready' | 'failed'; title: string | null; description: string | null; siteName: string | null; text: string | null } | null;
 const SOURCE_WAIT_MS = 10_000;
 // The link preview of a page an AI draft is written from (#769): requested when there is none, then waited for. A page
 // that cannot be read, or one still pending, is said in words; nothing is drafted from it.
@@ -134,8 +134,8 @@ async function sourcePage(runtime: Runtime, actor: UserActor, orgId: string, url
     }
   }
   if (!view || view.status === 'pending') throw new DomainError('SOURCE_NOT_READY', 409, 'Đang đọc trang này, hãy thử lại sau vài giây');
-  if (view.status === 'failed' || (!view.title && !view.description)) throw new DomainError('SOURCE_UNREADABLE', 422, 'Không đọc được nội dung trang này; hãy mô tả bài bằng lời');
-  return { url, title: view.title, description: view.description, siteName: view.siteName };
+  if (view.status === 'failed' || (!view.title && !view.description && !view.text)) throw new DomainError('SOURCE_UNREADABLE', 422, 'Không đọc được nội dung trang này; hãy mô tả bài bằng lời');
+  return { url, title: view.title, description: view.description, siteName: view.siteName, text: view.text };
 }
 
 // Why a Telegram channel did not connect, in words for the connect form.
