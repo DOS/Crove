@@ -42,6 +42,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_finance.journal_voucher',
   'crove_kernel.notification',
   'crove_kernel.notification_mute',
   'crove_social.chat_alert',
@@ -231,6 +232,22 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => {
       const entry = randomUUID();
       return { setup: [journalEntry(o.id, entry)], row: balancingLine(o.id, entry, 1, 'debit').values, complete: [balancingLine(o.id, entry, 2, 'credit')] };
+    },
+  },
+  // General journal vouchers, NVK (#888): append-only, numbered by the database per org. By commit the voucher has its
+  // journal entry (source finance.journal_voucher, on the voucher's date), which the probe adds.
+  'crove_finance.journal_voucher': {
+    make: (o) => {
+      const id = randomUUID();
+      const entry = randomUUID();
+      return {
+        row: { org_id: o.id, id, voucher_date: '2026-10-01', description: 'RLS matrix' },
+        complete: [
+          { table: 'crove_finance.journal_entry', values: { ...journalEntry(o.id, entry).values, source_type: 'finance.journal_voucher', source_id: id } },
+          balancingLine(o.id, entry, 1, 'debit'),
+          balancingLine(o.id, entry, 2, 'credit'),
+        ],
+      };
     },
   },
   // An org's sub-accounts under the TT133 chart (#319): one row per (org, code), never deleted. The code extends its

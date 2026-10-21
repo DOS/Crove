@@ -1084,11 +1084,20 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       setDefaultAccount: os.parties.setDefaultAccount.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.vendor.set_default_account', input, { actor, orgId })),
       ),
+      update: os.parties.update.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.party.update', input, { actor, orgId }))),
+      markDuplicate: os.parties.markDuplicate.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.party.mark_duplicate', input, { actor, orgId })),
+      ),
+      unmarkDuplicate: os.parties.unmarkDuplicate.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.party.unmark_duplicate', input, { actor, orgId })),
+      ),
+      duplicateHints: os.parties.duplicateHints.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.party.duplicate_hints', {}, { actor, orgId }))),
     },
     documents: {
       list: os.documents.list.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.documents.list', input, { actor, orgId })),
       ),
+      exports: os.documents.exports.handler(({ context, input }) => inFinance(context, (orgId, actor) => runtime.query('finance.document.exports', input, { actor, orgId }))),
     },
     search: {
       query: os.search.query.handler(({ context, input }) =>

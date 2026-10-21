@@ -169,7 +169,7 @@ jobs:
           repo="ghcr.io/${GITHUB_REPOSITORY,,}"
           printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
           labels=(--label "org.opencontainers.image.source=$SOURCE" --label "org.opencontainers.image.revision=$SHA" --label "org.opencontainers.image.version=$RELEASE")
-          docker build "${labels[@]}" -t "$repo:$RELEASE" .
+          docker build "${labels[@]}" --build-arg "CROVE_BUILD=$SHA" -t "$repo:$RELEASE" .
           docker build "${labels[@]}" -f apps/extract/Dockerfile -t "$repo-extract:$RELEASE" .
           docker push --quiet "$repo:$RELEASE"
           docker push --quiet "$repo-extract:$RELEASE"
@@ -198,6 +198,8 @@ jobs:
       RELEASE: ${{ needs.target.outputs.release }}
       IMAGE: ${{ needs.build.outputs.image }}
       EXTRACT: ${{ needs.build.outputs.extract }}
+      # The commit the image was built from; GET /version reports it (#892).
+      BUILD: ${{ needs.target.outputs.sha }}
       PUBLIC_URL: ${{ vars.DEPLOY_PUBLIC_URL }}
     steps:
       - name: Check the environment's settings
@@ -300,13 +302,15 @@ jobs:
             printf '%s\n' "$GH_TOKEN" | ssh -F "$SSH_CONFIG" crove-target "bash '$REMOTE/deploy.sh' rollback $registry"
           else
             [[ "$IMAGE" =~ ^[a-z0-9./_:-]+@sha256:[0-9a-f]{64}$ && "$EXTRACT" =~ ^[a-z0-9./_:-]+@sha256:[0-9a-f]{64}$ ]] || { echo '::error::image digests missing'; exit 1; }
+            [[ "$BUILD" =~ ^[0-9a-f]{40}$ ]] || { echo '::error::the release commit is missing'; exit 1; }
             printf '%s\n' "$GH_TOKEN" | ssh -F "$SSH_CONFIG" crove-target \
-              "bash '$REMOTE/deploy.sh' deploy $registry --release '$RELEASE' --image '$IMAGE' --extract-image '$EXTRACT' --compose '$REMOTE/docker-compose.yml'"
+              "bash '$REMOTE/deploy.sh' deploy $registry --release '$RELEASE' --image '$IMAGE' --extract-image '$EXTRACT' --build '$BUILD' --compose '$REMOTE/docker-compose.yml'"
           fi
 
       # The same checks through the public URL: DNS, TLS and the reverse proxy. Optional (DEPLOY_PUBLIC_URL). With the
       # smoke account's secrets (#690, docs/runbooks/deploy.md "Smoke account") it also signs in and uploads one
-      # synthetic e-invoice into the smoke org; without them that step is skipped with a notice.
+      # synthetic e-invoice into the smoke org; without them that step is skipped with a notice. A deploy also checks
+      # that /version reports the release commit (#892): the public URL reaches the new image, not an old one.
       - name: Smoke test through the public URL
         id: public-smoke
         if: steps.config.outputs.ready == 'true' && env.PUBLIC_URL != ''
@@ -314,7 +318,8 @@ jobs:
           SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
           SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
           SMOKE_ORG: ${{ vars.SMOKE_ORG }}
-        run: bash tools/deploy/deploy.sh smoke "$PUBLIC_URL"
+        run: |
+          if [ "$ACTION" = deploy ]; then bash tools/deploy/deploy.sh smoke "$PUBLIC_URL" "$BUILD"; else bash tools/deploy/deploy.sh smoke "$PUBLIC_URL"; fi
 
       - name: Roll back after a failed public smoke test
         if: failure() && steps.public-smoke.outcome == 'failure' && env.ACTION == 'deploy'

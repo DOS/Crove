@@ -81,8 +81,10 @@ import {
   zOrgExport,
   zOrgSummary,
   zParty,
+  zDuplicateHint,
   zProposalStatus,
   zPurchaseDocument,
+  zDocumentExport,
   zSearchResult,
   zRole,
   zSession,
@@ -705,9 +707,32 @@ export const contract = {
     setDefaultAccount: oc
       .input(z.object({ partyId: zId, accountCode: zAccountCode.nullable() }))
       .output(z.object({ partyId: zId, accountCode: zAccountCode.nullable() })),
+    // Owners, admins and members (R1, #887): the party's name and contact details, from the version the editor read.
+    // A tax code can be added, never changed or removed.
+    update: oc
+      .input(
+        z.object({
+          partyId: zId,
+          version: z.number().int().min(1),
+          name: z.string().max(1000),
+          taxCode: z.string().max(40).nullable(),
+          address: z.string().max(2000).nullable(),
+          email: z.string().max(1000).nullable(),
+          phone: z.string().max(100).nullable(),
+        }),
+      )
+      .output(z.object({ partyId: zId, version: z.number().int() })),
+    // Owners and admins (R1, #887): partyId becomes a duplicate of keepId, hidden from lists and search and reported
+    // under it; nothing is deleted. unmarkDuplicate undoes it.
+    markDuplicate: oc.input(z.object({ partyId: zId, keepId: zId })).output(z.object({ partyId: zId, keepId: zId })),
+    unmarkDuplicate: oc.input(z.object({ partyId: zId })).output(z.object({ partyId: zId })),
+    // Owners, admins and members: pairs of parties that look like duplicates, strongest first.
+    duplicateHints: oc.input(z.object({})).output(z.array(zDuplicateHint)),
   },
   documents: {
     list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),
+    // Every role (issue #878): the exports a recorded document went out in, for its history.
+    exports: oc.input(z.object({ documentId: zId })).output(z.array(zDocumentExport)),
   },
   // Every role (#673): parties by name or tax code, documents by series, number or party, journal entries by
   // description or amount. Vietnamese marks and case are ignored, and each word matches the start of a word.

@@ -383,7 +383,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // time with a gap. Without a mailer (tests, an embedder) queued mail stays queued.
   const mail = deps.mail;
   if (mail) {
-    const mailDeps: MailQueueDeps = { runtime: deps.runtime, ...mail, publicUrl: deps.publicUrl ?? '' };
+    const mailDeps: MailQueueDeps = { runtime: deps.runtime, ...mail, publicUrl: deps.publicUrl ?? '', workerDb: deps.workerDb };
     const sendMail = async (job: { data: MailJob; retryCount: number } | undefined, gap: number) => {
       if (!job) return;
       const label = job.data.messageId.slice(0, 8);

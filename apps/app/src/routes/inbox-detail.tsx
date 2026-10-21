@@ -748,17 +748,31 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           </div>
         )}
       </div>
-      <ProposalTimeline id={item.id} />
+      <ProposalTimeline id={item.id} documentId={item.status === 'executed' ? (item.result?.documentId ?? null) : null} />
     </>
   );
 }
 
 // What happened to the document (#672): received, read, proposed, edited, approved or rejected, recorded, reversed,
-// oldest first, with who did it. The stream's proposal hints refresh it with the rest of the Inbox.
-function ProposalTimeline({ id }: { id: string }) {
+// and the exports it went out in (#878), oldest first, with who did it. The stream's proposal hints refresh it with the
+// rest of the Inbox.
+function ProposalTimeline({ id, documentId }: { id: string; documentId: string | null }) {
   const t = useTranslations('inboxDetail');
   const f = useFormat();
   const timeline = useQuery(orpc.inbox.timeline.queryOptions({ input: { id } }));
+  const exports = useQuery({ ...orpc.documents.exports.queryOptions({ input: { documentId: documentId ?? '' } }), enabled: documentId !== null && getConfig().modules.includes('finance') });
+  const range = (from: string | null, to: string | null) =>
+    from && to ? t('exportRange', { from: f.date(from), to: f.date(to) }) : from ? t('exportFrom', { from: f.date(from) }) : to ? t('exportTo', { to: f.date(to) }) : t('exportAll');
+  const items = [
+    ...(timeline.data?.items ?? []).map((e) => ({ id: e.id, at: e.at, summary: e.summary, actorType: e.actorType, actorName: e.actorName })),
+    ...(exports.data ?? []).map((e) => ({
+      id: `export:${e.id}`,
+      at: e.at,
+      summary: t('exported', { file: t(`exportFormats.${e.format}`), range: range(e.from, e.to) }),
+      actorType: 'user' as const,
+      actorName: e.actorName,
+    })),
+  ].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
   return (
     <Card className="mt-6 block p-4" data-testid="timeline">
       <p className="mb-3 text-sm font-medium text-muted-foreground">{t('timeline')}</p>
@@ -766,13 +780,13 @@ function ProposalTimeline({ id }: { id: string }) {
         <Spinner />
       ) : timeline.error ? (
         <ErrorText>{errorMessage(timeline.error)}</ErrorText>
-      ) : (timeline.data?.items.length ?? 0) === 0 ? (
+      ) : items.length === 0 ? (
         <p className="text-sm text-subtle-foreground">{t('timelineEmpty')}</p>
       ) : (
         <>
           {timeline.data?.more && <p className="mb-2 text-xs text-subtle-foreground">{t('timelineMore')}</p>}
           <ol className="space-y-2 border-l pl-4">
-            {timeline.data?.items.map((e) => (
+            {items.map((e) => (
               <li key={e.id} className="text-sm">
                 <p className="text-foreground">{e.summary}</p>
                 <p className="text-xs text-subtle-foreground">
