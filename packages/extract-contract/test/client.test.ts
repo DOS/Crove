@@ -66,6 +66,16 @@ describe('crove-extract client', () => {
     expect(new Uint8Array(seen[0]?.init?.body as ArrayBuffer)).toEqual(bytes);
   });
 
+  it('accepts the invoice a replacement or an adjustment corrects, and refuses a malformed one (#916)', async () => {
+    const related = { kind: 'replacement', template: '1', series: 'C26TAB', number: '1200', issueDate: '2026-09-01', note: null };
+    const { client } = clientAnswering({ ok: true, kind: 'einvoice_xml', invoice: { ...invoice, related } });
+    expect(await client.extract('einvoice_xml', bytes)).toMatchObject({ ok: true, invoice: { related } });
+    for (const bad of [{ ...related, kind: 'cancel' }, { ...related, extra: 'x' }, { ...related, number: 1200 }]) {
+      const answer = clientAnswering({ ok: true, kind: 'einvoice_xml', invoice: { ...invoice, related: bad } });
+      expect((await serviceError(answer.client)).reason).toBe('malformed');
+    }
+  });
+
   it('returns failures caused by the file as typed results', async () => {
     const { client } = clientAnswering({ ok: false, code: 'invalid', message: 'XML chứa DOCTYPE/ENTITY, bị từ chối' }, 422);
     expect(await client.extract('einvoice_xml', bytes)).toEqual({ ok: false, code: 'invalid', message: 'XML chứa DOCTYPE/ENTITY, bị từ chối' });

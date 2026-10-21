@@ -20,6 +20,7 @@ import {
   type InvoiceParty,
   type LineNature,
   type ParsedInvoice,
+  type RelatedInvoice,
   type TaxBreakdown,
 } from '@crove/l10n-vn';
 import { verifyEInvoiceSignatures } from './einvoice-signature.ts';
@@ -102,6 +103,27 @@ function nature(code: string | null): LineNature {
   }
 }
 
+// TTHDLQuan in TTChung (#916): TCHDon 1 is a replacement (thay thế), 2 an adjustment (điều chỉnh); the original is
+// KHMSHDCLQuan, KHHDCLQuan, SHDCLQuan and NLHDCLQuan. A block of another kind, or one that names no series and number,
+// is left out: the invoice is then read as a standalone one, as before.
+function related(general: Node): RelatedInvoice | null {
+  const block = general.TTHDLQuan;
+  if (!isNode(block)) return null;
+  const code = text(block, 'TCHDon');
+  const kind = code === '1' ? 'replacement' : code === '2' ? 'adjustment' : null;
+  const series = text(block, 'KHHDCLQuan');
+  const number = text(block, 'SHDCLQuan');
+  if (!kind || !series || !number) return null;
+  return {
+    kind,
+    template: text(block, 'KHMSHDCLQuan'),
+    series: normalizeSeries(series),
+    number: normalizeNumber(number),
+    issueDate: text(block, 'NLHDCLQuan')?.slice(0, 10) ?? null,
+    note: text(block, 'GChu'),
+  };
+}
+
 export interface EInvoiceParseOptions {
   // The certificates signatures are checked against; the national roots shipped with Crove unless a test passes its own.
   trust?: TrustStore;
@@ -157,6 +179,7 @@ export function parseEInvoiceXml(bytes: Uint8Array, options: EInvoiceParseOption
     amount(totals, 'TgTCThue') ??
     toMoney(taxBreakdown.length > 0 ? sum(taxBreakdown.map((t) => t.taxableAmount)) : sum(lines.map(lineContribution)));
   const total = amount(totals, 'TgTTTBSo') ?? toMoney(money(subtotal).plus(money(vatTotal)));
+  const original = related(general);
 
   const series = normalizeSeries(text(general, 'KHHDon') ?? '');
   const seller = party(content.NBan);
@@ -184,5 +207,6 @@ export function parseEInvoiceXml(bytes: Uint8Array, options: EInvoiceParseOption
     taxAuthorityCode,
     hasSignature: hdon.DSCKS !== undefined,
     signature,
+    ...(original ? { related: original } : {}),
   };
 }

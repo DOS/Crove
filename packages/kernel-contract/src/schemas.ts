@@ -564,6 +564,24 @@ export const zDocumentExport = z.object({
 });
 export type DocumentExport = z.infer<typeof zDocumentExport>;
 
+// Customers (#670): the parties on the org's sales documents, and any party with a line on 131 (an opening balance or
+// a receipt). The list goes by name, CUSTOMER_PAGE_SIZE at a time; a page starts after the last customer shown.
+export const CUSTOMER_PAGE_SIZE = 50;
+export const zCustomerCursor = z.object({ name: z.string().max(2000), id: zId });
+export type CustomerCursor = z.infer<typeof zCustomerCursor>;
+// A customer is a party (with its contact details, version and duplicates, for the editor shared with vendors) and
+// its sales: the documents still in the books (a voided one, #165, no longer counts) and the latest invoice date among
+// them, and what it owes today: debit minus credit of every posted line on 131 and its sub-accounts naming it or one
+// of its duplicates (#887). Negative when the customer paid ahead.
+export const zCustomer = zParty.omit({ documentCount: true, defaultAccount: true }).extend({
+  invoiceCount: z.number().int(),
+  lastInvoiceDate: zLocalDate.nullable(),
+  receivable: zMoney,
+});
+export type Customer = z.infer<typeof zCustomer>;
+export const zCustomerPage = z.object({ items: z.array(zCustomer), more: z.boolean() });
+export type CustomerPage = z.infer<typeof zCustomerPage>;
+
 export const zPurchaseDocument = z.object({
   id: zId,
   // A purchase (partyId is the supplier) or a sale (partyId is the customer), issue #313.
@@ -1163,11 +1181,44 @@ const zLabelName = z.string().trim().min(1).max(50);
 export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS).optional() });
 export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS) });
 // Client review links (#589): the team's view of a post's links and what clients said through them.
+// A plan link (#902) the post is in is listed too, with the posts it covers and its own cap of answers per post.
 export const zSocialReviewLinks = z.object({
-  links: z.array(z.object({ id: zId, answers: z.number().int().min(0), createdBy: zId, createdAt: z.string(), expiresAt: z.string(), revokedAt: z.string().nullable(), changed: z.boolean() })),
+  links: z.array(
+    z.object({
+      id: zId,
+      kind: z.enum(['post', 'plan']),
+      posts: z.number().int().min(1),
+      answers: z.number().int().min(0),
+      answersMax: z.number().int().min(1),
+      createdBy: zId,
+      createdAt: z.string(),
+      expiresAt: z.string(),
+      revokedAt: z.string().nullable(),
+      changed: z.boolean(),
+    }),
+  ),
   feedback: z.array(
     z.object({ id: zId, linkId: zId, name: z.string(), verdict: z.enum(['approved', 'changes_requested', 'comment']), body: z.string().nullable(), changed: z.boolean(), createdAt: z.string() }),
   ),
+});
+// One client review link for a content plan (#902): the posts picked in the posts list, or those going out in a
+// date range [from, to) on the chosen channels (none: all).
+export const zSocialReviewPlanCreate = z.strictObject({
+  postIds: z.array(zId).min(1).max(50).optional(),
+  range: z.strictObject({ from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }), connectionIds: z.array(zId).min(1).max(50).optional() }).optional(),
+  days: z.number().int().min(1).max(30).optional(),
+});
+export const zSocialReviewPlanLink = z.object({
+  id: zId,
+  createdBy: zId,
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  revokedAt: z.string().nullable(),
+  from: z.string().nullable(),
+  to: z.string().nullable(),
+  posts: z.number().int().min(0),
+  answered: z.number().int().min(0),
+  gone: z.number().int().min(0),
 });
 
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.

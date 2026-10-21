@@ -1,5 +1,6 @@
-import { LocalDiskStore, S3BlobStore, type BlobStore } from '@crove/kernel-runtime';
+import { LocalDiskStore, S3BlobStore, createS3Client, type BlobStore } from '@crove/kernel-runtime';
 import type { Config } from './config.ts';
+import { LocalArchiveStore, S3ArchiveStore, type ArchiveStore } from './worm.ts';
 
 // The one place that turns configuration into a blob store. The API and the worker both call it, so split
 // roles read and write the same objects.
@@ -40,4 +41,19 @@ export function describeStorage(config: Config): string {
   const versioning = config.S3_VERSIONING === 'required' ? 'versions required' : 'versioning off (sha256 checks only)';
   const transfers = config.S3_PRESIGNED_URLS === 'true' ? 'presigned transfers' : 'transfers through the kernel';
   return `s3 bucket ${config.S3_BUCKET} at ${where}, ${versioning}, ${transfers}`;
+}
+
+// The WORM archive (worm.ts). An S3 archive must have Object Lock; the worker checks it before it writes.
+export function createArchiveStore(config: Config): ArchiveStore & { assertObjectLock?: () => Promise<void> } {
+  if (config.ARCHIVE_STORE === 'local') return new LocalArchiveStore(config.ARCHIVE_DIR);
+  if (!config.ARCHIVE_S3_BUCKET) throw new Error('ARCHIVE_STORE=s3 needs ARCHIVE_S3_BUCKET');
+  const client = createS3Client({
+    bucket: config.ARCHIVE_S3_BUCKET,
+    region: config.S3_REGION,
+    endpoint: config.S3_ENDPOINT,
+    accessKeyId: config.S3_ACCESS_KEY_ID,
+    secretAccessKey: config.S3_SECRET_ACCESS_KEY,
+    forcePathStyle: config.S3_FORCE_PATH_STYLE === 'true',
+  });
+  return new S3ArchiveStore({ client, bucket: config.ARCHIVE_S3_BUCKET, lockMode: config.ARCHIVE_LOCK_MODE, retentionDays: config.ARCHIVE_RETENTION_DAYS });
 }

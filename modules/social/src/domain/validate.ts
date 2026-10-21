@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -87,6 +87,10 @@ export type IssueCode =
   // The repost rule (#773): not a like count and/or hours in range; a channel that reposts nothing.
   | 'REPOST_INVALID'
   | 'REPOST_NOT_SUPPORTED'
+  // The planned takedown (#861): not a full ISO 8601 time with Z or an offset; a channel (or a Story) Crove cannot
+  // take down.
+  | 'REMOVE_AT_INVALID'
+  | 'REMOVE_AT_NOT_SUPPORTED'
   // A video's cover (#642): not a frame or an image; set on a post that is not one video; a kind the channel's
   // adapter cannot send; a frame past the end of the video.
   | 'COVER_INVALID'
@@ -297,6 +301,11 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   if (repost !== null) {
     if (story || !REPOST_PROVIDERS.has(variant.provider)) issues.push({ code: 'REPOST_NOT_SUPPORTED', field: 'settings.repost', limit: null, actual: null });
     else if (repost === 'invalid') issues.push({ code: 'REPOST_INVALID', field: 'settings.repost', limit: REPOST_HOURS_MAX, actual: null });
+  }
+  const removeAt = removeAtOf(variant.settings);
+  if (removeAt !== null) {
+    if (story || !REMOVE_READY.has(variant.provider)) issues.push({ code: 'REMOVE_AT_NOT_SUPPORTED', field: 'settings.removeAt', limit: null, actual: null });
+    else if (removeAt === 'invalid') issues.push({ code: 'REMOVE_AT_INVALID', field: 'settings.removeAt', limit: null, actual: null });
   }
   const reply = autoReplyOf(variant.settings);
   if (reply !== null) {

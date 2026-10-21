@@ -12,7 +12,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { ChatAlertSender } from './chat-alerts.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
@@ -25,6 +25,7 @@ import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from '.
 import { runLinkPreviewJob } from './link-preview.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
+import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
 
 const SOCIAL_PUBLISH_RETRY_LIMIT = 2;
@@ -191,6 +192,9 @@ export interface WorkerDeps {
   // Queued mail (#548): the mailer, the templates queued mail is rendered from, and the bounce domain. Unset: queued
   // mail waits.
   mail?: Omit<MailQueueDeps, 'runtime' | 'publicUrl'>;
+  // The WORM fact stream (worm.ts, #891): the store batches go to and how long after a row is written it is archived.
+  // Unset: nothing is archived.
+  archive?: { store: ArchiveStore; lagSeconds: number };
 }
 
 // A person asked for a published variant to come down from its platform (#860).
@@ -467,6 +471,32 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   });
   await boss.schedule(QUEUES.retention, RETENTION_CRON, null, { tz: RETENTION_TZ, missed: 'once' });
 
+  // The WORM fact stream (plan §4.10, #891): batches every minute, the verifier nightly. A failure fails the job: a
+  // batch write after its retries, a verifier mismatch at once (retryLimit 0). pg-boss keeps the failed job and the
+  // prober alerts on the dead letter (docs/runbooks/worm-archive.md).
+  if (deps.archive) {
+    const { store, lagSeconds } = deps.archive;
+    await boss.work(QUEUES.archiveWrite, { batchSize: 1 }, async () => {
+      const written = await writeArchive(deps.workerDb, store, { lagSeconds });
+      if (written > 0) console.log(`[archive] wrote ${written} batch(es)`);
+    });
+    await boss.schedule(QUEUES.archiveWrite, ARCHIVE_WRITE_CRON, null, { tz: RETENTION_TZ });
+    await boss.work(QUEUES.archiveVerify, { batchSize: 1 }, async () => {
+      // The verifier reads every batch and row, so its time grows with the archive: logged on every run.
+      const started = Date.now();
+      const elapsed = () => `${Math.round((Date.now() - started) / 1000)} s`;
+      try {
+        const result = await runArchiveVerification(deps.workerDb, store);
+        console.log(`[archive] verified ${result.batches} batch(es), ${result.rows} row(s) in ${elapsed()}`);
+      } catch (error) {
+        console.error(`[archive] ALERT after ${elapsed()}: ${error instanceof Error ? error.message : 'verification could not run'}`);
+        throw error;
+      }
+    });
+    // An hour before pg-boss counts the run as expired (its default is 15 minutes).
+    await boss.schedule(QUEUES.archiveVerify, ARCHIVE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0, expireInSeconds: 3600 });
+  }
+
   // Inbox triage: tasks for the agents whose template subscribes to the event. The command reads the event from the
   // outbox; the job carries only its id.
   await boss.work<AgentDispatchJob>(QUEUES.agentDispatch, { batchSize: 1 }, async ([job]) => {
@@ -582,6 +612,25 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   };
   const socialTimer = publishing.size > 0 ? setInterval(() => void socialSweep(), SOCIAL_SWEEP_MS) : null;
   void socialSweep();
+
+  // Planned takedowns (#861): every minute, the published posts whose removal time has come are asked to come down, on
+  // the providers this deployment publishes to and whose adapter removes; the remove job above does the rest.
+  const removing = new Set([...publishing].filter((p) => isProvider(p) && REMOVE_READY.has(p) && Boolean(publishers[p]?.remove)));
+  let sweepingRemovals = false;
+  const removeSweep = async () => {
+    if (sweepingRemovals || removing.size === 0) return;
+    sweepingRemovals = true;
+    try {
+      const queued = await sweepRemovals({ runtime: deps.runtime, workerDb: deps.workerDb }, removing);
+      if (queued > 0) console.log(`[social-remove] sweep asked ${queued} planned removal(s)`);
+    } catch (error) {
+      console.error(`[social-remove] sweep: ${error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error'}`);
+    } finally {
+      sweepingRemovals = false;
+    }
+  };
+  const removeTimer = removing.size > 0 ? setInterval(() => void removeSweep(), REMOVE_SWEEP_MS) : null;
+  if (removeTimer) void removeSweep();
 
   // Evergreen posts (S9): every hour, a repost of each one that is due, sent to review.
   let reposting = false;
@@ -980,6 +1029,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     clearInterval(timer);
     clearInterval(heartbeatTimer);
     if (socialTimer) clearInterval(socialTimer);
+    if (removeTimer) clearInterval(removeTimer);
     if (mailTimer) clearInterval(mailTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (reminderTimer) clearInterval(reminderTimer);

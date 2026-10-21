@@ -100,6 +100,16 @@ const zLine = z.strictObject({
   vatRate: zText.nullable(),
 });
 
+// The invoice a replacement or an adjustment corrects (RelatedInvoice in @crove/l10n-vn, #916).
+const zRelatedInvoice = z.strictObject({
+  kind: z.enum(['replacement', 'adjustment']),
+  template: zText.nullable(),
+  series: zText,
+  number: zText,
+  issueDate: zText.nullable(),
+  note: zText.nullable(),
+});
+
 // The signature verification of an e-invoice XML (#674). The same lists as SIGNATURE_STATUSES and SIGNATURE_REASONS
 // in @crove/l10n-vn (apps/extract tests compare them); this package does not depend on it.
 export const SIGNATURE_STATUSES = ['verified', 'unverified', 'not_applicable'] as const;
@@ -155,6 +165,7 @@ export const zExtractedInvoice = z.strictObject({
   hasSignature: z.boolean(),
   // Always set by a sandbox with #674; optional so a worker accepts an older sandbox's answer during a rolling deploy.
   signature: zInvoiceSignature.optional(),
+  related: zRelatedInvoice.optional(),
 });
 export type ExtractedInvoice = z.infer<typeof zExtractedInvoice>;
 

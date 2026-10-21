@@ -4,13 +4,14 @@
 // post down, and social.remove.record stores the answer. The variant stays published until the platform confirms; it
 // is then removed, with the time and who asked, and what reads published variants only (metrics, first comments,
 // threads, reposts, evergreen) leaves it alone. A post the platform no longer has counts as removed, so asking again
-// after a failed or unclear call is harmless; nothing asks again by itself.
+// after a failed or unclear call is harmless; nothing asks again by itself. A post may also be set to come down at a
+// time (#861, settings.removeAt): the worker's sweep asks once when it comes (social.remove.schedule).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
-import type { MemberRole } from '@crove/db';
-import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
-import { REMOVE_READY, isProvider } from './domain/channels.ts';
+import type { Db, MemberRole } from '@crove/db';
+import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
+import { REMOVE_READY, isProvider, removeAtFit, removeAtOf, removeWindowMs } from './domain/channels.ts';
 import { publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, refreshPostStatus, setVariant, settingsOf, step, variantPost, type Trx, type VariantRow } from './variants.ts';
@@ -167,17 +168,80 @@ export const removeRecord = defineCommand({
       .where('key', '=', input.callKey)
       .where('state', '=', 'started')
       .execute();
+    const by = (await ctx.trx.selectFrom('crove_social.post_variant').select('removed_by').where('org_id', '=', ctx.orgId).where('id', '=', v.id).executeTakeFirstOrThrow()).removed_by;
     // Only a published variant moves; the call is recorded whatever the variant became meanwhile.
     if (r.kind === 'removed' && v.status === 'published') {
       await setVariant(ctx, v.id, { status: step(v, { type: 'removed' }), removed_at: ctx.now });
       await refreshPostStatus(ctx, v.post_id);
-      const by = await ctx.trx.selectFrom('crove_social.post_variant').select('removed_by').where('org_id', '=', ctx.orgId).where('id', '=', v.id).executeTakeFirstOrThrow();
-      await ctx.emit('social.variant.removed', { post_id: v.post_id, variant_id: v.id, provider: v.provider, by: by.removed_by });
+      await ctx.emit('social.variant.removed', { post_id: v.post_id, variant_id: v.id, provider: v.provider, by });
       return { recorded: true as const, state, status: 'removed' as const };
     }
-    if (r.kind !== 'removed') await ctx.emit('social.variant.remove_failed', { post_id: v.post_id, variant_id: v.id, provider: v.provider, code: errorCode });
+    // scheduled: the ask was the planned takedown's (#861), which nobody watches; the owners and admins are told.
+    if (r.kind !== 'removed') await ctx.emit('social.variant.remove_failed', { post_id: v.post_id, variant_id: v.id, provider: v.provider, code: errorCode, ...(by === null ? { scheduled: true } : {}) });
     return { recorded: true as const, state, status: v.status };
   },
 });
 
-export const removeCommands = [variantRemove, removeBegin, removeRecord];
+// A post set to come down by itself (#861): its planned time (settings.removeAt) has come, and fits the time the post
+// really went out (at least REMOVE_AT_MIN_GAP_MS after it, within the channel's window). A post that went out late,
+// after a rate limit, a paused channel or a queue edit, so that the time no longer fits, stays up. The same rule as
+// crove_social.remove_due.
+export function removeDue(provider: string, settings: Readonly<Record<string, unknown>>, publishedAt: Date | null, now: Date): boolean {
+  const at = removeAtOf(settings);
+  if (at === null || at === 'invalid' || !publishedAt) return false;
+  return Date.parse(at) <= now.getTime() && removeAtFit(provider, settings, publishedAt) === null;
+}
+
+// The worker's sweep asks for the removal of a published variant whose planned time has come, as a person's ask would:
+// the same columns (no member, no reason) and the same event, so the remove job does the rest. Checked again under the
+// lock; once anyone asked (a person, or this before), it asks nothing more: a failed or unclear removal waits for a person.
+export const removeSchedule = defineCommand({
+  name: 'social.remove.schedule',
+  input: z.strictObject({ variantId: zId }),
+  risk: 'R1',
+  access: 'system',
+  target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
+  handler: async (ctx, input): Promise<{ queued: boolean; reason?: string }> => {
+    requireSystem(ctx);
+    const v = await lockVariant(ctx, input.variantId);
+    if (v.status !== 'published' || !v.external_post_id) return { queued: false, reason: 'not_published' };
+    if (!isProvider(v.provider) || !REMOVE_READY.has(v.provider)) return { queued: false, reason: 'not_supported' };
+    if (v.remove_requested_at) return { queued: false, reason: 'asked' };
+    const settings = settingsOf(v);
+    if (!removeDue(v.provider, settings, v.published_at, ctx.now)) return { queued: false, reason: 'not_due' };
+    const calls = (await removeCallsOf(ctx.trx, ctx.orgId, [v])).get(v.id) ?? [];
+    await setVariant(ctx, v.id, { removed_by: null, remove_reason: null, remove_requested_at: ctx.now });
+    ctx.audit({ post_id: v.post_id, variant_id: v.id, provider: v.provider, scheduled: true, remove_at: removeAtOf(settings) });
+    await ctx.emit('social.variant.remove_requested', { post_id: v.post_id, variant_id: v.id, provider: v.provider, after: calls.at(-1)?.key ?? null });
+    return { queued: true };
+  },
+});
+
+const SWEEP_ACTOR: SystemActor = { type: 'system', component: 'social.remove' };
+// How often the worker looks for planned takedowns, and how many it takes per pass: a post comes down within a minute
+// of its time, plus the remove job's own run.
+export const REMOVE_SWEEP_MS = 60_000;
+export const REMOVE_SWEEP_LIMIT = 200;
+
+// One pass: each published variant whose planned takedown is due, on the providers this worker can remove from, gets its
+// removal asked for. Logs ids and codes only.
+export async function sweepRemovals(deps: { runtime: Runtime; workerDb: Db }, providers: ReadonlySet<string>): Promise<number> {
+  const removable = [...providers].filter((p) => isProvider(p) && REMOVE_READY.has(p));
+  if (removable.length === 0) return 0;
+  // Each provider's window, in seconds, beside it: the scan reads the rule from here, so it stays data in one place.
+  const windows = removable.map((p) => Math.floor(removeWindowMs(p) / 1000));
+  const { rows } = await sql<{ org_id: string; variant_id: string }>`
+    SELECT org_id, variant_id FROM crove_social.remove_due(${REMOVE_SWEEP_LIMIT}::int, ${removable}::text[], ${windows}::int[])`.execute(deps.workerDb);
+  let queued = 0;
+  for (const row of rows) {
+    try {
+      const done = await deps.runtime.execute<{ queued: boolean }>('social.remove.schedule', { variantId: row.variant_id }, { actor: SWEEP_ACTOR, orgId: row.org_id });
+      if (done.queued) queued += 1;
+    } catch (error) {
+      console.warn(`[social-remove] planned removal of variant ${row.variant_id.slice(0, 8)}: ${error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error'}`);
+    }
+  }
+  return queued;
+}
+
+export const removeCommands = [variantRemove, removeBegin, removeRecord, removeSchedule];

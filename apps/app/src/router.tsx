@@ -44,6 +44,7 @@ import { TaskDetailPage, TasksPage } from './routes/tasks.tsx';
 import { VatPage } from './routes/vat.tsx';
 import { PortalListPage } from './routes/portal-list.tsx';
 import { VendorsPage } from './routes/vendors.tsx';
+import { CustomersPage } from './routes/customers.tsx';
 import { VouchersPage } from './routes/vouchers.tsx';
 
 async function requireSession() {
@@ -186,6 +187,14 @@ const requireFinance = ({ params }: { params: { slug: string } }) => {
 // search results go (#673).
 const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', beforeLoad: requireFinance, validateSearch: parseTextSearch, component: DocumentsPage });
 const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, validateSearch: parseTextSearch, component: VendorsPage });
+// Customers of sales invoices and receivables (issue #670); ?q= opens it on a search (a tax code or a name).
+const customersRoute = createRoute({
+  getParentRoute: () => orgRoute,
+  path: 'customers',
+  beforeLoad: requireFinance,
+  validateSearch: parseTextSearch,
+  component: CustomersPage,
+});
 const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, validateSearch: parseJournalSearch, component: JournalPage });
 // Cash and bank vouchers (issue #327).
 const vouchersRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vouchers', beforeLoad: requireFinance, component: VouchersPage });
@@ -268,7 +277,7 @@ const routeTree = rootRoute.addChildren([
   onboardingRoute,
   clientsRoute,
   oauthCallbackRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, auditRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, customersRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, auditRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

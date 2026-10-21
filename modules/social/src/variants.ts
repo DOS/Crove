@@ -5,7 +5,7 @@ import type { Transaction } from 'kysely';
 import type { Database, SocialVariantStatus } from '@crove/db';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
 import { contentHash, effectiveContent, effectiveMedia, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { isProvider } from './domain/channels.ts';
+import { REMOVE_AT_MIN_GAP_MS, isProvider, removeAtFit } from './domain/channels.ts';
 import { postStatus, transitionVariant, type VariantEvent } from './domain/state.ts';
 import { validateVariant, type Issue } from './domain/validate.ts';
 
@@ -149,6 +149,18 @@ export function issuesOf(post: PostContent, v: VariantRow): Issue[] {
   const content = effectiveContent(post, overrides(v), v.content_frozen);
   const media = mediaFor(post, v).map((m) => ({ kind: mediaKind(m.mime), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null }));
   return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, linkUrl: content.linkUrl, media, settings: settingsOf(v) });
+}
+
+// A planned takedown (#861) must come at least REMOVE_AT_MIN_GAP_MS and at most the channel's window after the time the
+// variant goes out: refused where that time becomes known, like a time in the past.
+export function refuseRemoveAtMisfit(v: Pick<VariantRow, 'id' | 'provider' | 'settings'>, publishAt: Date): void {
+  const fit = removeAtFit(v.provider, settingsOf(v), publishAt);
+  if (fit?.problem === 'too_soon') {
+    throw new DomainError('REMOVE_AT_BEFORE_PUBLISH', 422, `Giờ gỡ bài phải sau giờ đăng ít nhất ${REMOVE_AT_MIN_GAP_MS / 60_000} phút`, { variantId: v.id });
+  }
+  if (fit?.problem === 'too_late') {
+    throw new DomainError('REMOVE_AT_TOO_LATE', 422, `Giờ gỡ bài phải trong vòng ${fit.hours} giờ sau giờ đăng`, { variantId: v.id, limit: fit.hours });
+  }
 }
 
 export function step(v: { id: string; status: SocialVariantStatus }, event: VariantEvent): SocialVariantStatus {

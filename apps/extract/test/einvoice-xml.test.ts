@@ -31,6 +31,36 @@ describe('e-invoice XML', () => {
     expect(parseEInvoiceXml(fixture)).toEqual(parsed);
   });
 
+  it('reads the invoice a replacement or an adjustment corrects (TTHDLQuan, #916)', () => {
+    const replacement = parseEInvoiceXml(readFileSync(new URL('./fixtures/einvoice-replacement.xml', import.meta.url)));
+    expect(replacement.number).toBe('1240');
+    expect(replacement.related).toEqual({
+      kind: 'replacement',
+      template: '1',
+      series: 'C26TAB',
+      number: '1234',
+      issueDate: '2026-09-15',
+      note: 'Thay thế hóa đơn số 1234 do sai địa chỉ người mua',
+    });
+    // Apart from the block, a replacement reads like any invoice.
+    const { related: _, ...rest } = replacement;
+    expect(rest).toEqual({ ...parsed, number: '1240', issueDate: '2026-09-20' });
+
+    const adjustment = parseEInvoiceXml(readFileSync(new URL('./fixtures/einvoice-adjustment.xml', import.meta.url)));
+    // The original's number is normalized as invoice numbers are, so it matches the recorded document.
+    expect(adjustment.related).toMatchObject({ kind: 'adjustment', series: 'C26TAB', number: '1234', issueDate: '2026-09-15' });
+    // An adjustment carries the signed difference.
+    expect([adjustment.subtotal, adjustment.vatTotal, adjustment.total]).toEqual(['-200000', '-20000', '-220000']);
+  });
+
+  it('leaves out a related block of another kind or without the original number, and an invoice without one is unchanged', () => {
+    expect('related' in parseEInvoiceXml(fixture)).toBe(false);
+    const variant = (from: string, to: string) =>
+      parseEInvoiceXml(new TextEncoder().encode(readFileSync(new URL('./fixtures/einvoice-replacement.xml', import.meta.url), 'utf8').replace(from, to)));
+    expect(variant('<TCHDon>1</TCHDon>', '<TCHDon>9</TCHDon>').related).toBeUndefined();
+    expect(variant('<SHDCLQuan>1234</SHDCLQuan>', '').related).toBeUndefined();
+  });
+
   it('derives the subtotal from the lines when a sales invoice has no subtotal or rate table', () => {
     const xml = fixture
       .toString('utf8')
