@@ -9,6 +9,7 @@ export * from './vat-deadline.ts';
 export * from './vietnam-time.ts';
 export * from './bank-statement.ts';
 export * from './timeline.ts';
+export * from './audit.ts';
 
 export const ORG_HEADER = 'x-crove-org';
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
