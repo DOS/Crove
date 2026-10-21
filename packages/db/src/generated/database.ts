@@ -64,6 +64,7 @@ export interface CroveSocialSchema {
   'crove_social.bio_click': SocialBioClickTable;
   'crove_social.bio_page': SocialBioPageTable;
   'crove_social.brand_voice': SocialBrandVoiceTable;
+  'crove_social.calendar_feed': SocialCalendarFeedTable;
   'crove_social.calendar_note': SocialCalendarNoteTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.channel_set': SocialChannelSetTable;
@@ -789,6 +790,17 @@ export interface SocialBrandVoiceTable {
   updated_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.calendar_feed */
+export interface SocialCalendarFeedTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  token_sha256: ColumnType<string, string, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  revoked_by: string | null;
 }
 
 /** crove_social.calendar_note */
