@@ -97,8 +97,8 @@ Values:
 
 ## Not in this file
 
-- The notes, B09-DNN: written by the accountant in HTKK (follow-up issue, Icebox).
-- The cash flow statement, B03-DNN (optional appendices `PL_LCTTTT`, `PL_LCTTGT`).
+- The notes, B09-DNN: written by the accountant in HTKK (follow-up #967, with the cash flow statement).
+- The cash flow statement, B03-DNN (optional appendices `PL_LCTTTT`, `PL_LCTTGT`; #967).
 - B01b-DNN, B01-DNNKLT and B01-DNSN, a fiscal year that is not the calendar year, and a supplementary filing.
 
 ## Questions for the partner's accountant
