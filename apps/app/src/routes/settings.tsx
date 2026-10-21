@@ -631,14 +631,25 @@ function TaxCalendarField({ canManage }: { canManage: boolean }) {
       },
     }),
   );
+  const pitId = useId();
+  const fyId = useId();
+  // The stored calendar is not shown as empty while it loads.
+  if (profile.isLoading) {
+    return (
+      <div>
+        <dt className="text-subtle-foreground">{t('taxCalendar')}</dt>
+        <dd className="mt-1">
+          <Spinner />
+        </dd>
+      </div>
+    );
+  }
   const stored: TaxProfile = profile.data
     ? { obligations: profile.data.obligations, pitFilingPeriod: profile.data.pitFilingPeriod, fiscalYearEndMonth: profile.data.fiscalYearEndMonth }
     : { obligations: [], pitFilingPeriod: null, fiscalYearEndMonth: 12 };
   const current = draft ?? stored;
   const toggle = (o: TaxProfile['obligations'][number], on: boolean) =>
     setDraft({ ...current, obligations: on ? [...current.obligations, o] : current.obligations.filter((x) => x !== o) });
-  const pitId = useId();
-  const fyId = useId();
   return (
     <div>
       <dt className="text-subtle-foreground">{t('taxCalendar')}</dt>
@@ -648,7 +659,7 @@ function TaxCalendarField({ canManage }: { canManage: boolean }) {
             <li key={o} className="flex items-center gap-2">
               {canManage ? (
                 <label className="flex items-center gap-2">
-                  <Checkbox checked={current.obligations.includes(o)} disabled={save.isPending || profile.isLoading} onCheckedChange={(checked) => toggle(o, checked)} />
+                  <Checkbox checked={current.obligations.includes(o)} disabled={save.isPending} onCheckedChange={(checked) => toggle(o, checked)} />
                   <span>{tt(`obligations.${o}`)}</span>
                 </label>
               ) : (

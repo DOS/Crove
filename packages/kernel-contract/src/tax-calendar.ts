@@ -250,8 +250,10 @@ export function taxDues(profile: TaxProfileSettings, from: string, to: string): 
   const toIndex = monthIndex(Number(to.slice(0, 4)), Number(to.slice(5, 7)));
   const out: TaxDue[] = [];
   for (const rule of rulesOf(profile)) {
-    // No rule falls due more than 12 months after its period, nor before the period's last month.
-    for (const period of periods(rule, profile.fiscalYearEndMonth, fromIndex - 13, toIndex)) {
+    // No rule falls due more than 12 months after its period ends; one due inside its own period (inYear) falls due up
+    // to 11 months before the period ends, so its periods are searched that far past the window too.
+    const ahead = rule.due.kind === 'inYear' ? 12 : 0;
+    for (const period of periods(rule, profile.fiscalYearEndMonth, fromIndex - 13, toIndex + ahead)) {
       const periodStart = dateOf(period.first, 1);
       if (periodStart < rule.effectiveFrom || (rule.effectiveTo !== null && periodStart > rule.effectiveTo)) continue;
       const dueDate = dueOf(rule, period);

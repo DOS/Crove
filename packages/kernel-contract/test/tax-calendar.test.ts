@@ -80,6 +80,9 @@ describe('tax calendar rules', () => {
   it('lists the license fee for the years it was due, and not from 2026', () => {
     const p = profile({ obligations: ['license_fee'] });
     expect(dues(p, '2025-01-01', '2025-12-31')).toEqual([['license_fee', '2025', '2025-01-30']]);
+    // A window in January, before the year it covers has ended, still finds it.
+    expect(dues(p, '2025-01-15', '2025-02-14')).toEqual([['license_fee', '2025', '2025-01-30']]);
+    expect(dues(p, '2024-12-20', '2025-01-19')).toEqual([]);
     expect(dues(p, '2026-01-01', '2027-12-31')).toEqual([]);
   });
 

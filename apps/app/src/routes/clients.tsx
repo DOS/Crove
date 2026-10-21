@@ -79,17 +79,48 @@ function DueWhen({ due }: { due: { dueDate: string; daysLeft: number } }) {
   );
 }
 
+// One row of the tax calendar, with its own "done" request: marking one obligation does not hold the other rows, and a
+// refusal shows next to the row it concerns.
+function TaxCalendarRow({ row, periodLabel }: { row: TaxDueRow; periodLabel: (period: string) => string }) {
+  const tt = useTranslations('taxCalendar');
+  const done = useMutation({
+    mutationFn: () => clientForOrg(row.slug).org.markTaxObligation({ obligation: row.obligation, period: row.period, done: true }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: orpc.me.clients.key() });
+    },
+  });
+  return (
+    <TableRow>
+      <TableCell className="px-4 py-3">
+        <DueWhen due={row} />
+      </TableCell>
+      <TableCell className="px-4 py-3">
+        <Link to="/o/$slug/inbox" params={{ slug: row.slug }} className="font-medium text-foreground hover:text-link hover:underline">
+          {row.name}
+        </Link>
+      </TableCell>
+      <TableCell className="px-4 py-3" title={row.legalBasis}>
+        {tt(`obligations.${row.obligation}`)}
+      </TableCell>
+      <TableCell className="px-4 py-3 text-muted-foreground">{periodLabel(row.period)}</TableCell>
+      <TableCell className="px-4 py-3 text-right">
+        {canMarkTaxDone(row.role) && (
+          <Button size="sm" variant="outline" onClick={() => done.mutate()} disabled={done.isPending}>
+            {done.isPending ? <Spinner className="text-current" /> : null}
+            {tt('markDone')}
+          </Button>
+        )}
+        {done.error && <ErrorText>{errorMessage(done.error)}</ErrorText>}
+      </TableCell>
+    </TableRow>
+  );
+}
+
 // Every client's tax obligations due in the next 30 days or overdue, by due date. Marking one done (owners, admins and
 // members of that client) runs in the client's own org and removes it from the list.
 function TaxCalendar({ rows }: { rows: TaxDueRow[] }) {
   const tt = useTranslations('taxCalendar');
   const periodLabel = usePeriodLabel();
-  const done = useMutation({
-    mutationFn: (row: TaxDueRow) => clientForOrg(row.slug).org.markTaxObligation({ obligation: row.obligation, period: row.period, done: true }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: orpc.me.clients.key() });
-    },
-  });
   return (
     <section className="mt-8" aria-label={tt('title')}>
       <h2 className="text-sm font-semibold">{tt('title')}</h2>
@@ -100,32 +131,11 @@ function TaxCalendar({ rows }: { rows: TaxDueRow[] }) {
         <div className="overflow-x-auto">
           <DataTable head={[tt('columns.due'), tt('columns.company'), tt('columns.obligation'), tt('columns.period'), '']}>
             {rows.map((r) => (
-              <TableRow key={`${r.orgId}:${r.obligation}:${r.period}`}>
-                <TableCell className="px-4 py-3">
-                  <DueWhen due={r} />
-                </TableCell>
-                <TableCell className="px-4 py-3">
-                  <Link to="/o/$slug/inbox" params={{ slug: r.slug }} className="font-medium text-foreground hover:text-link hover:underline">
-                    {r.name}
-                  </Link>
-                </TableCell>
-                <TableCell className="px-4 py-3" title={r.legalBasis}>
-                  {tt(`obligations.${r.obligation}`)}
-                </TableCell>
-                <TableCell className="px-4 py-3 text-muted-foreground">{periodLabel(r.period)}</TableCell>
-                <TableCell className="px-4 py-3 text-right">
-                  {canMarkTaxDone(r.role) && (
-                    <Button size="sm" variant="outline" onClick={() => done.mutate(r)} disabled={done.isPending}>
-                      {tt('markDone')}
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
+              <TaxCalendarRow key={`${r.orgId}:${r.obligation}:${r.period}`} row={r} periodLabel={periodLabel} />
             ))}
           </DataTable>
         </div>
       )}
-      {done.error && <ErrorText>{errorMessage(done.error)}</ErrorText>}
       <p className="mt-3 text-xs text-subtle-foreground">{tt('unconfirmed')}</p>
     </section>
   );
