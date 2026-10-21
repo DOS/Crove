@@ -14,6 +14,8 @@ import { useFormat } from '../i18n/provider.tsx';
 import { isZeroAmount } from '../lib/decimal.ts';
 import { OPENING_BALANCE_SOURCE, canImportOpeningBalance } from '../lib/opening-balance.ts';
 import { MAX_REASON_LENGTH, canAskReversal, defaultReversalDate, reversalErrorMessage, reversalFormError } from '../lib/reversal.ts';
+import { canEnterVoucher } from '../lib/vouchers.ts';
+import { JournalVoucherFormCard } from './journal-voucher.tsx';
 
 interface Entry {
   id: string;
@@ -140,6 +142,8 @@ export function JournalPage() {
     }
   }, [search.from, search.to]);
   const [reversing, setReversing] = useState<string | null>(null);
+  // The general journal voucher form (NVK, #888), for owners, admins and members.
+  const [entering, setEntering] = useState(false);
   const range = { ...(from ? { from } : {}), ...(to ? { to } : {}) };
   const journal = useQuery(orpc.journal.list.queryOptions({ input: range }));
   const org = useQuery(orpc.org.get.queryOptions());
@@ -179,6 +183,11 @@ export function JournalPage() {
         subtitle={t('subtitle')}
         actions={
           <div className="flex flex-wrap gap-2">
+            {canEnterVoucher(org.data?.role) && !entering && (
+              <Button size="lg" variant="outline" onClick={() => setEntering(true)}>
+                {t('newJournalVoucher')}
+              </Button>
+            )}
             {canImportOpeningBalance(org.data?.role) && (
               <Link to="/o/$slug/journal/opening-balances" params={{ slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
                 {ob('open')}
@@ -199,6 +208,7 @@ export function JournalPage() {
           </div>
         }
       />
+      {entering && <JournalVoucherFormCard slug={slug} onClose={() => setEntering(false)} />}
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <label className="text-xs">
           <span className="text-subtle-foreground">{t('from')}</span>

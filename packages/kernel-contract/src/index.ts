@@ -4,6 +4,7 @@ export * from './opening-balance.ts';
 export * from './accounts.ts';
 export * from './tax-code.ts';
 export * from './cash-voucher.ts';
+export * from './journal-voucher.ts';
 export * from './portal-list.ts';
 export * from './vat-deadline.ts';
 export * from './vietnam-time.ts';

@@ -36,8 +36,8 @@ export function voucherCode(type: VoucherType, number: number): string {
   return `${VOUCHER_PREFIXES[type]}${String(number).padStart(5, '0')}`;
 }
 
-// A code voucherCode writes: a prefix and at least five digits.
-export const zVoucherCode = z.string().regex(/^(PT|PC|BC|BN)\d{5,}$/);
+// A code voucherCode or journalVoucherCode (NVK, #888) writes: a prefix and at least five digits.
+export const zVoucherCode = z.string().regex(/^(PT|PC|BC|BN|NVK)\d{5,}$/);
 
 // Money in (receipts and bank credits: the cash or bank account is debited) or out (payments and bank debits).
 export function isInflow(type: VoucherType): boolean {
