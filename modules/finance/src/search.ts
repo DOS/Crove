@@ -48,9 +48,10 @@ export interface SearchResult {
 // ("1.234.567", "1,234,567", "1 234 567"), or digits alone, with an optional "đ" or "VND" after them. Null otherwise.
 // Decimals are not read: a dong amount has none, and "1,5" is not an amount anyone types to find an entry.
 export function searchAmount(text: string): string | null {
+  // The unit is cut first and the spaces before it after, so no pattern scans a run of spaces (CodeQL).
   const t = text
     .trim()
-    .replace(/\s*(đ|vnd|vnđ)$/i, '')
+    .replace(/(?:đ|vnd|vnđ)$/i, '')
     .trim();
   const grouped = /^\d{1,3}(?:([.,\s])\d{3})(?:\1\d{3})*$/.test(t);
   if (!grouped && !/^\d+$/.test(t)) return null;
