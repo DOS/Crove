@@ -103,6 +103,7 @@ import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance
 import { zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
+import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
 
 // Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
 export const zProposalPolicy = z.object({
@@ -137,6 +138,11 @@ export const contract = {
     // may approve it, and after how many its owners are told; null turns either off. Escalation must come later.
     proposalPolicy: oc.output(zProposalPolicy),
     setProposalPolicy: oc.input(zProposalPolicy).output(zProposalPolicy),
+    // Owners and admins (issue #672): the org's audit log, newest first, filtered and paged; the commands it holds, for
+    // the filter; and the filtered list as a CSV file (the export leaves its own audit row).
+    audit: oc.input(zAuditFilter.extend({ before: zAuditCursor.optional() })).output(zAuditPage),
+    auditCommands: oc.output(z.array(z.string())),
+    auditExport: oc.input(zAuditFilter).output(zAuditExport),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),

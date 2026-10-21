@@ -1,10 +1,10 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useSearch } from '@tanstack/react-router';
+import { Link, useSearch } from '@tanstack/react-router';
 import { useId, useState, type FormEvent } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { MemberSessions, MySessions } from '../components/sessions.tsx';
 import { Badge } from '@crove/ui/components/badge';
-import { Button } from '@crove/ui/components/button';
+import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
@@ -745,7 +745,18 @@ export function SettingsPage() {
 
   return (
     <>
-      <PageHeader title={t('title')} subtitle={org.data?.name} />
+      <PageHeader
+        title={t('title')}
+        subtitle={org.data?.name}
+        actions={
+          canManage &&
+          org.data && (
+            <Link to="/o/$slug/audit" params={{ slug: org.data.slug }} className={buttonVariants({ variant: 'outline', size: 'lg' })}>
+              {root('audit.open')}
+            </Link>
+          )
+        }
+      />
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="block p-4">
           <p className="text-sm font-medium text-muted-foreground">{t('org')}</p>
