@@ -32,6 +32,10 @@ describe('media tag normalization', () => {
     // Counted in characters as the database does, not in UTF-16 units.
     expect(mediaTagProblem('🎉'.repeat(MEDIA_TAG_MAX_LENGTH))).toBeNull();
     expect(mediaTagProblem('a\u0000b')).toBe('control');
+    // Invisible format characters: a zero-width space, a direction override and an isolate.
+    expect(mediaTagProblem('Tết\u200B')).toBe('control');
+    expect(mediaTagProblem('a\u202Eb')).toBe('control');
+    expect(mediaTagProblem('a\u2066b')).toBe('control');
   });
 
   it('parses a command tag to its normalized form, or refuses it', () => {

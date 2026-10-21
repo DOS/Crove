@@ -13,8 +13,9 @@ export function normalizeMediaTag(raw: string): string {
 // The key two tags are compared by: the same tag whatever its case.
 export const mediaTagKey = (tag: string) => normalizeMediaTag(tag).toLowerCase();
 
-// Control characters other than white space have no place in a tag.
-const CONTROL = /\p{Cc}/u;
+// Control characters other than white space have no place in a tag, nor invisible format characters (zero-width
+// spaces and joiners, direction marks and overrides): two tags that look alike must be the same tag.
+const CONTROL = /[\p{Cc}\p{Cf}]/u;
 
 // Why a normalized tag is refused, or null when it is fine.
 export function mediaTagProblem(tag: string): 'empty' | 'too_long' | 'control' | null {
