@@ -1,0 +1,18 @@
+{
+  "description": "Synthetic PDF invoice with a text layer: two 10% goods lines, amounts printed with dot thousands separators",
+  "expected": {
+    "series": "C26TAA",
+    "number": "501",
+    "issueDate": "2026-09-05",
+    "currency": "VND",
+    "seller": { "name": "CÔNG TY TNHH VĂN PHÒNG PHẨM MẪU", "taxCode": "0312345670" },
+    "buyer": { "name": "CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU", "taxCode": "0309876546" },
+    "lines": [
+      { "description": "Giấy in A4", "quantity": "10", "unitPrice": "75000", "amount": "750000", "vatRate": "10%" },
+      { "description": "Mực in laser", "quantity": "2", "unitPrice": "450000", "amount": "900000", "vatRate": "10%" }
+    ],
+    "subtotal": "1650000",
+    "vatTotal": "165000",
+    "total": "1815000"
+  }
+}

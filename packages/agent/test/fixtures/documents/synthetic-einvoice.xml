@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A synthetic e-invoice for the document eval (#687). The tax codes are fake (checksum-invalid). -->
+<HDon>
+  <DLHDon Id="data">
+    <TTChung>
+      <PBan>2.1.0</PBan>
+      <THDon>HÓA ĐƠN GIÁ TRỊ GIA TĂNG</THDon>
+      <KHMSHDon>1</KHMSHDon>
+      <KHHDon>C26TCC</KHHDon>
+      <SHDon>3001</SHDon>
+      <NLap>2026-09-20</NLap>
+      <DVTTe>VND</DVTTe>
+      <TGia>1</TGia>
+      <HTTToan>CK</HTTToan>
+    </TTChung>
+    <NDHDon>
+      <NBan>
+        <Ten>CÔNG TY TNHH THỰC PHẨM MẪU</Ten>
+        <MST>0101234564</MST>
+        <DChi>1 Đường Mẫu, Quận Mẫu, Hà Nội</DChi>
+      </NBan>
+      <NMua>
+        <Ten>CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU</Ten>
+        <MST>0309876546</MST>
+        <DChi>2 Đường Thử, TP Hồ Chí Minh</DChi>
+      </NMua>
+      <DSHHDVu>
+        <HHDVu>
+          <TChat>1</TChat><STT>1</STT><THHDVu>Gạo tẻ</THHDVu><DVTinh>Kg</DVTinh><SLuong>100</SLuong><DGia>20000</DGia><ThTien>2000000</ThTien><TSuat>5%</TSuat>
+        </HHDVu>
+        <HHDVu>
+          <TChat>1</TChat><STT>2</STT><THHDVu>Dịch vụ giao hàng</THHDVu><DVTinh>Chuyến</DVTinh><SLuong>1</SLuong><DGia>300000</DGia><ThTien>300000</ThTien><TSuat>10%</TSuat>
+        </HHDVu>
+        <HHDVu>
+          <TChat>3</TChat><STT>3</STT><THHDVu>Chiết khấu thương mại</THHDVu><ThTien>100000</ThTien><TSuat>5%</TSuat>
+        </HHDVu>
+        <HHDVu>
+          <TChat>4</TChat><STT>4</STT><THHDVu>Ghi chú: giao trong tuần</THHDVu><ThTien>0</ThTien>
+        </HHDVu>
+      </DSHHDVu>
+      <TToan>
+        <THTTLTSuat>
+          <LTSuat><TSuat>5%</TSuat><ThTien>1900000</ThTien><TThue>95000</TThue></LTSuat>
+          <LTSuat><TSuat>10%</TSuat><ThTien>300000</ThTien><TThue>30000</TThue></LTSuat>
+        </THTTLTSuat>
+        <TgTCThue>2200000</TgTCThue>
+        <TgTThue>125000</TgTThue>
+        <TgTTTBSo>2325000</TgTTTBSo>
+        <TgTTTBChu>Hai triệu ba trăm hai mươi lăm nghìn đồng</TgTTTBChu>
+      </TToan>
+    </NDHDon>
+  </DLHDon>
+  <MCCQT Id="tax">M2-26-ABCDE-00003001</MCCQT>
+</HDon>

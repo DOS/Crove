@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { checkInvoice, parseTaxCode } from '@crove/l10n-vn';
-import { expectedAsParsed, formatEvalSummary, scoreExtraction, summarizeEval, type ExpectedInvoice } from '../src/index.ts';
+import {
+  documentType,
+  expectedAsParsed,
+  fieldKey,
+  formatDocumentEvalReport,
+  formatEvalSummary,
+  scoreExtraction,
+  summarizeDocumentEval,
+  summarizeEval,
+  type DocumentKind,
+  type ExpectedInvoice,
+} from '../src/index.ts';
 import { loadExtractionFixtures } from './support.ts';
 
 const expected: ExpectedInvoice = {
@@ -101,6 +112,88 @@ describe('extraction scoring', () => {
     expect(summary.criticalMisses).toEqual(['quote: isInvoice', 'injected: total']);
     expect(summary.passed).toBe(false);
     expect(formatEvalSummary(summary)).toContain('critical fields wrong: quote: isInvoice, injected: total');
+  });
+});
+
+describe('document eval summary (#687)', () => {
+  const doc = (id: string, kind: DocumentKind, edit: (a: ReturnType<typeof expectedAsParsed>) => void = () => {}) => {
+    const actual = expectedAsParsed(expected);
+    edit(actual);
+    return { kind, ...scoreExtraction(id, expected, actual) };
+  };
+
+  it('knows the kinds by extension', () => {
+    expect(documentType('a/HD-01.XML')).toEqual({ kind: 'xml', mediaType: 'application/xml' });
+    expect(documentType('b.pdf')?.kind).toBe('pdf');
+    expect(documentType('c.JPEG')).toEqual({ kind: 'image', mediaType: 'image/jpeg' });
+    expect(documentType('d.webp')?.mediaType).toBe('image/webp');
+    expect(documentType('e.json')).toBeNull();
+    expect(documentType('noext')).toBeNull();
+    expect(fieldKey('lines[12].amount')).toBe('lines[].amount');
+    expect(fieldKey('seller.taxCode')).toBe('seller.taxCode');
+  });
+
+  it('reports accuracy per kind and per field, and the most frequent errors', () => {
+    const summary = summarizeDocumentEval([
+      doc('x1', 'xml'),
+      doc('p1', 'pdf', (a) => {
+        a.seller.taxCode = '0000000000';
+        a.lines[1]!.vatRate = '8%';
+      }),
+      doc('p2', 'pdf', (a) => {
+        a.seller.taxCode = null;
+      }),
+      { kind: 'image' as const, ...scoreExtraction('i1', expected, undefined, 'AmountFormatError: x') },
+    ]);
+    expect(summary.byKind.map((k) => [k.kind, k.documents, k.matched, k.total])).toEqual([
+      ['xml', 1, FIELDS, FIELDS],
+      ['pdf', 2, 2 * FIELDS - 3, 2 * FIELDS],
+      ['image', 1, 0, FIELDS],
+    ]);
+    expect(summary.byField.find((f) => f.field === 'seller.taxCode')).toMatchObject({ matched: 1, total: 4 });
+    expect(summary.byField.find((f) => f.field === 'lines[].vatRate')).toMatchObject({ matched: 5, total: 8 });
+    expect(summary.topErrors[0]).toEqual({ kind: 'pdf', field: 'seller.taxCode', count: 2 });
+    expect(summary.topErrors).toHaveLength(5);
+    expect(summary.topErrors.map((e) => e.kind)).toContain('image');
+    // PDF and photo errors are measured, not gated.
+    expect(summary).toMatchObject({ passed: true, xmlAmountMisses: [] });
+  });
+
+  it('fails on any wrong XML amount, a line amount too', () => {
+    const summary = summarizeDocumentEval([
+      doc('x1', 'xml', (a) => {
+        a.lines[0]!.amount = '1000001';
+      }),
+      doc('x2', 'xml', (a) => {
+        a.vatTotal = '90001';
+      }),
+      doc('p1', 'pdf', (a) => {
+        a.total = '1';
+      }),
+    ]);
+    expect(summary.xmlAmountMisses).toEqual(['x1: lines[0].amount', 'x2: vatTotal']);
+    expect(summary.passed).toBe(false);
+    expect(summarizeDocumentEval([]).passed).toBe(false);
+  });
+
+  it('prints wrong values only when asked, so a private document never reaches a log', () => {
+    const summary = summarizeDocumentEval([
+      doc('private/hd-01', 'pdf', (a) => {
+        a.seller.name = 'Công ty thật';
+      }),
+      { kind: 'image' as const, ...scoreExtraction('private/hd-02', expected, undefined, 'AmountFormatError: 1.250.000') },
+    ]);
+    const hidden = formatDocumentEvalReport(summary, { showValues: false });
+    expect(hidden).toContain('- private/hd-01 (pdf):');
+    expect(hidden).toContain('  - seller.name');
+    expect(hidden).toContain('extraction failed');
+    expect(hidden).not.toContain('Công ty thật');
+    expect(hidden).not.toContain('MẪU THỬ');
+    expect(hidden).not.toContain('1.250.000');
+    const shown = formatDocumentEvalReport(summary, { showValues: true });
+    expect(shown).toContain('expected "CÔNG TY TNHH MẪU THỬ", got "Công ty thật"');
+    expect(shown).toContain('error: AmountFormatError: 1.250.000');
+    expect(shown).toContain('| pdf | 1 |');
   });
 });
 

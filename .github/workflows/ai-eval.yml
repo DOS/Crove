@@ -1,0 +1,81 @@
+name: ai-eval
+
+# AI extraction evals (#687, plan M2-11), run on demand before a model or prompt change and on PRs that change the
+# extractor: the document eval over the committed synthetic set (an e-invoice XML, a PDF, a photo; accuracy per kind
+# and per field, every XML amount exact) and the text eval over the synthetic fixtures. The private documents never
+# reach GitHub: they are scored outside it (docs/runbooks/ai-eval.md).
+#
+# Needs the AI endpoint as repository secrets AI_BASE_URL and AI_MODEL (AI_API_KEY when the endpoint wants one).
+# Without them, and on a fork PR (forks never get secrets), the job says so in its summary and passes without
+# running anything. pull_request, never pull_request_target: a fork's code never runs with the secrets.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'packages/agent/src/**'
+      - '.github/workflows/ai-eval.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  eval:
+    name: AI extraction eval (synthetic set)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Is the AI endpoint configured
+        id: endpoint
+        env:
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+        run: |
+          if [ -n "$AI_BASE_URL" ] && [ -n "$AI_MODEL" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            message="AI eval skipped: the AI_BASE_URL and AI_MODEL secrets are not available (not set, or a fork PR). See docs/runbooks/ai-eval.md."
+            echo "::notice::$message"
+            echo "$message" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - if: steps.endpoint.outputs.ready == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - if: steps.endpoint.outputs.ready == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Install pnpm
+        if: steps.endpoint.outputs.ready == 'true'
+        run: npm install -g pnpm@10.34.7 --no-fund --no-audit
+
+      - name: Install dependencies
+        if: steps.endpoint.outputs.ready == 'true'
+        run: pnpm install --frozen-lockfile --filter "@crove/agent..." --filter "@crove/extract..." --filter "crove-monorepo"
+
+      # Accuracy per kind and per field goes to the job summary. Values of wrong fields are printed: the set is
+      # synthetic and public.
+      - name: Document eval (XML, PDF, photo)
+        if: steps.endpoint.outputs.ready == 'true'
+        env:
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: pnpm ai:eval:documents
+
+      - name: Text eval (synthetic PDF text)
+        if: steps.endpoint.outputs.ready == 'true'
+        env:
+          AI_BASE_URL: ${{ secrets.AI_BASE_URL }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+        run: pnpm ai:eval

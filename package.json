@@ -20,6 +20,7 @@
     "test:e2e": "pnpm --filter @crove/e2e test",
     "ai:conformance": "vitest run --project ai conformance",
     "ai:eval": "vitest run --project ai extraction-eval --silent=false",
+    "ai:eval:documents": "vitest run --project ai document-eval --silent=false",
     "docs:check": "node tools/docs-check.mjs",
     "db:migrate": "pnpm --filter @crove/db migrate",
     "db:types": "node tools/db-types.mjs",

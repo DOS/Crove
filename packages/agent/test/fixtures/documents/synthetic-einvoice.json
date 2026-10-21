@@ -1,0 +1,19 @@
+{
+  "description": "Synthetic e-invoice XML: 5% goods with a trade discount, a 10% service and a note line (not a goods line)",
+  "expected": {
+    "series": "C26TCC",
+    "number": "3001",
+    "issueDate": "2026-09-20",
+    "currency": "VND",
+    "seller": { "name": "CÔNG TY TNHH THỰC PHẨM MẪU", "taxCode": "0101234564" },
+    "buyer": { "name": "CÔNG TY CỔ PHẦN NGƯỜI MUA MẪU", "taxCode": "0309876546" },
+    "lines": [
+      { "description": "Gạo tẻ", "quantity": "100", "unitPrice": "20000", "amount": "2000000", "vatRate": "5%" },
+      { "description": "Dịch vụ giao hàng", "quantity": "1", "unitPrice": "300000", "amount": "300000", "vatRate": "10%" },
+      { "description": "Chiết khấu thương mại", "quantity": null, "unitPrice": null, "amount": "100000", "vatRate": "5%", "discount": true }
+    ],
+    "subtotal": "2200000",
+    "vatTotal": "125000",
+    "total": "2325000"
+  }
+}
