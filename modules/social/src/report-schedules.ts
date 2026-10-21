@@ -420,6 +420,26 @@ export const reportScheduleList = defineQuery({
   },
 });
 
+// A run that failed (#736): the schedule waits RETRY_MINUTES before it is tried again, so a schedule that keeps
+// failing moves down the due scan instead of holding its head and starving the others. A run that ends sets the next
+// time from the schedule as usual.
+export const REPORT_SCHEDULE_RETRY_MINUTES = 30;
+export const reportScheduleDefer = defineCommand({
+  name: 'social.report_schedule.defer',
+  input: z.strictObject({ scheduleId: zId }),
+  risk: 'R1',
+  access: 'system',
+  handler: async (ctx, input) => {
+    requireSystem(ctx);
+    const done = await sql<{ id: string }>`
+      UPDATE crove_social.report_schedule
+      SET next_run_at = pg_catalog.now() + pg_catalog.make_interval(mins => ${REPORT_SCHEDULE_RETRY_MINUTES}::int)
+      WHERE org_id = ${ctx.orgId} AND id = ${input.scheduleId} AND NOT paused AND next_run_at <= pg_catalog.now()
+      RETURNING id`.execute(ctx.trx);
+    return { deferred: done.rows.length > 0 };
+  },
+});
+
 // The worker looks for due schedules every 5 minutes, so a mail leaves within minutes of its hour.
 export const REPORT_SCHEDULE_SWEEP_MS = 5 * 60_000;
 const SWEEP_LIMIT = 50;
@@ -435,10 +455,11 @@ export async function sweepReportSchedules(deps: { runtime: Runtime; workerDb: D
       if (done.ran) ran += 1;
     } catch (error) {
       console.warn(`[social-report-schedule] ${row.schedule_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'ERROR');
+      await deps.runtime.execute('social.report_schedule.defer', { scheduleId: row.schedule_id }, { actor: SWEEP_ACTOR, orgId: row.org_id }).catch(() => undefined);
     }
   }
   return ran;
 }
 
-export const reportScheduleCommands = [reportScheduleSave, reportScheduleRemove, reportScheduleRun, reportScheduleTest, reportScheduleMintLink];
+export const reportScheduleCommands = [reportScheduleSave, reportScheduleRemove, reportScheduleRun, reportScheduleDefer, reportScheduleTest, reportScheduleMintLink];
 export const reportScheduleQueries = [reportScheduleList];
