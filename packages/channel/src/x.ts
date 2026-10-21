@@ -6,6 +6,7 @@
 // token lives two hours and the refresh schedule renews it, keeping whichever refresh token X hands back.
 // Publish: each image is uploaded first (nothing is visible until a post names it), then one POST /2/tweets; a video
 // goes through the chunked upload and X's processing first (#449). An unclear answer is checked against the account's recent posts by text and time.
+// The post may carry a poll (never with media) and who may reply (#948), as poll and reply_settings.
 import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
@@ -253,6 +254,43 @@ export function comparableText(text: string): string {
 
 const postUrl = (id: string) => `https://x.com/i/status/${id}`;
 
+// A poll on X (#948), as the variant's settings carry it (`settings.poll`: { options, durationMinutes }, the shape
+// Threads reads, with a length X needs): POST /2/tweets takes poll { options: 2 to 4 strings of 1 to 25 characters,
+// duration_minutes: 5 to 10080 }, and a post carries media or a poll, never both. Without a length the poll runs a day,
+// as on X. null for none, 'invalid' for any other shape.
+export const X_POLL_DEFAULT_MINUTES = 1440;
+export function xPollOf(settings: Readonly<Record<string, unknown>>): { options: string[]; duration_minutes: number } | null | 'invalid' {
+  const poll = settings.poll;
+  if (poll === undefined || poll === null) return null;
+  if (typeof poll !== 'object' || Array.isArray(poll)) return 'invalid';
+  const { options, durationMinutes } = poll as { options?: unknown; durationMinutes?: unknown };
+  if (!Array.isArray(options) || options.length < 2 || options.length > 4) return 'invalid';
+  const texts: string[] = [];
+  for (const option of options) {
+    const text = typeof option === 'string' ? option.trim() : '';
+    if ([...text].length < 1 || [...text].length > 25) return 'invalid';
+    texts.push(text);
+  }
+  const minutes = durationMinutes === undefined || durationMinutes === null ? X_POLL_DEFAULT_MINUTES : durationMinutes;
+  if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 5 || minutes > 10080) return 'invalid';
+  return { options: texts, duration_minutes: minutes };
+}
+
+// Who may reply (#948, `settings.replySettings`): everyone (the default, sent as nothing), the accounts the poster
+// follows, or the people the post mentions, sent as reply_settings. null for everyone, 'invalid' for any other value.
+export const X_REPLY_SETTINGS = ['everyone', 'following', 'mentionedUsers'] as const;
+export function xReplySettingsOf(settings: Readonly<Record<string, unknown>>): 'following' | 'mentionedUsers' | null | 'invalid' {
+  const value = settings.replySettings;
+  if (value === undefined || value === null || value === 'everyone') return null;
+  return value === 'following' || value === 'mentionedUsers' ? value : 'invalid';
+}
+
+// What the first post carries besides its text and media (#948). Thread parts are replies (comment()) and carry neither.
+interface PostExtras {
+  poll?: { options: string[]; duration_minutes: number };
+  reply_settings?: 'following' | 'mentionedUsers';
+}
+
 interface Timeline {
   data?: { id?: unknown; text?: unknown; created_at?: unknown }[];
 }
@@ -303,7 +341,14 @@ export class XPublisher implements Publisher {
     const s = xSecretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
     const { media } = input.content;
-    if (media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, s.accessToken);
+    // The poll and who may reply are checked before anything is read or uploaded, so a refusal posts nothing.
+    const poll = xPollOf(input.settings);
+    const replySettings = xReplySettingsOf(input.settings);
+    if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
+    if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
+    if (replySettings === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'REPLY_SETTINGS_INVALID' };
+    const extras: PostExtras = { ...(poll ? { poll } : {}), ...(replySettings ? { reply_settings: replySettings } : {}) };
+    if (media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, s.accessToken, extras);
     if (media.length > MAX_IMAGES) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_IMAGES' };
     if (media.some((m) => !IMAGE_TYPES.includes(m.mime))) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TYPE' };
     const text = textOf(input.content);
@@ -333,7 +378,7 @@ export class XPublisher implements Publisher {
         return beforePost(publishResult(error));
       }
     }
-    return this.post(s.accessToken, text, mediaIds);
+    return this.post(s.accessToken, text, mediaIds, extras);
   }
 
   // A reply in the post's thread (#587), as the first comment X has none of its own.
@@ -428,10 +473,12 @@ export class XPublisher implements Publisher {
   }
 
   // The one visible step.
-  private async post(token: string, text: string, mediaIds: readonly string[]): Promise<PublishResult> {
+  private async post(token: string, text: string, mediaIds: readonly string[], extras: PostExtras): Promise<PublishResult> {
     const post: Record<string, unknown> = {};
     if (text) post.text = text;
     if (mediaIds.length > 0) post.media = { media_ids: mediaIds };
+    if (extras.poll) post.poll = extras.poll;
+    if (extras.reply_settings) post.reply_settings = extras.reply_settings;
     try {
       const answer = await this.client.call<{ data?: { id?: unknown } }>('POST', '/tweets', token, { json: post });
       const id = answer?.data?.id;
@@ -446,7 +493,7 @@ export class XPublisher implements Publisher {
   // the post. The video is invisible until the post names it, so every failure before the post posted nothing, and a
   // video X is still processing when the wait ends is a transient failure: the next attempt uploads it again. The text
   // is not kept anywhere on X meanwhile, which is why the post is not left to a later status check.
-  private async publishVideo(input: PublishInput, token: string): Promise<PublishResult> {
+  private async publishVideo(input: PublishInput, token: string, extras: PostExtras): Promise<PublishResult> {
     const { media } = input.content;
     const video = media[0];
     if (!video || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
@@ -494,7 +541,7 @@ export class XPublisher implements Publisher {
       return beforePost(publishResult(error));
     }
     if (Date.now() >= budgetEnd) return late();
-    return this.post(token, textOf(input.content), [id]);
+    return this.post(token, textOf(input.content), [id], extras);
   }
 
   // The account's own posts since just before the call, matched by their text with links left out. A post with no

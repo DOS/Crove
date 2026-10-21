@@ -231,15 +231,37 @@ export function autoReplyOf(settings: Readonly<Record<string, unknown>> | undefi
   return { text: text.trim(), likes };
 }
 
-// Polls and topic tags (#711), in the variant's settings, on the channels that take them (Threads): `settings.poll`
-// is { options: 2 to 4 strings of 1 to 25 characters } on a post without media; `settings.topicTag` is one tag of 1 to 50
-// characters with no period or ampersand (a leading # is dropped). The Threads adapter reads the same shapes.
+// Polls and topic tags (#711), in the variant's settings, on the channels that take them (Threads, and X for polls since
+// #948): `settings.poll` is { options: 2 to 4 strings of 1 to 25 characters } on a post without media; on X it also has
+// a length (`durationMinutes`, 5 minutes to 7 days, a day when unsaid; POST /2/tweets poll.duration_minutes), where a
+// Threads poll always runs a day. `settings.topicTag` is one tag of 1 to 50 characters with no period or ampersand (a
+// leading # is dropped). The Threads and X adapters read the same shapes. Options count in code points (X's schema
+// maxLength, Threads' text count).
 export interface PollRule {
   minOptions: number;
   maxOptions: number;
   maxChars: number;
+  // The poll's length in whole minutes, on channels that take one; absent where the platform sets it.
+  duration?: { min: number; max: number; default: number };
 }
-export const POLL_RULES: Readonly<Partial<Record<Provider, PollRule>>> = { threads: { minOptions: 2, maxOptions: 4, maxChars: 25 } };
+export const POLL_RULES: Readonly<Partial<Record<Provider, PollRule>>> = {
+  threads: { minOptions: 2, maxOptions: 4, maxChars: 25 },
+  x: { minOptions: 2, maxOptions: 4, maxChars: 25, duration: { min: 5, max: 10_080, default: 1440 } },
+};
+
+// The poll's length in a variant's settings: null when unsaid, 'invalid' when it is not a whole number of minutes.
+export function pollDurationOf(settings: Readonly<Record<string, unknown>> | undefined): number | null | 'invalid' {
+  const poll = settings?.poll;
+  if (!poll || typeof poll !== 'object') return null;
+  const value = (poll as { durationMinutes?: unknown }).durationMinutes;
+  if (value === undefined || value === null) return null;
+  return typeof value === 'number' && Number.isInteger(value) ? value : 'invalid';
+}
+
+// Who may reply to an X post (#948), in `settings.replySettings`: everyone (the default, sent as nothing), the accounts
+// the poster follows, or the people the post mentions (POST /2/tweets reply_settings). The adapter reads the same value.
+export const X_REPLY_SETTINGS = ['everyone', 'following', 'mentionedUsers'] as const;
+export type XReplySetting = (typeof X_REPLY_SETTINGS)[number];
 export const TOPIC_TAG_RULES: Readonly<Partial<Record<Provider, { maxChars: number }>>> = { threads: { maxChars: 50 } };
 
 // The poll's options, trimmed; null when there is none, 'invalid' when it is not { options: string[] }.
