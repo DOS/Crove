@@ -45,3 +45,18 @@ export type YearClosingRequest = z.infer<typeof zYearClosingRequest>;
 // The proposal (kind finance.journal_voucher, shown as one) with the year it closes.
 export const zYearClosingProposal = zJournalVoucherProposal.extend({ closingYear: zYearClosingRequest.shape.year });
 export type YearClosingProposal = z.infer<typeof zYearClosingProposal>;
+
+// Monthly depreciation and allocation (#919): for one month, every fixed asset and prepaid cost of the register its
+// schedule counts, Dr expense / Cr 214x or 242, as one general journal voucher dated the month's last day. A user names
+// the month; the server builds the lines from the register.
+export const DEPRECIATION_COMMAND = 'finance.depreciation.record';
+export const zMonth = z.string().regex(/^(20\d{2}|2100)-(0[1-9]|1[0-2])$/, 'YYYY-MM');
+export const zDepreciationRequest = z.object({ month: zMonth });
+export type DepreciationRequest = z.infer<typeof zDepreciationRequest>;
+// The proposal (kind finance.journal_voucher, shown as one) with the month and each asset's amount, which recording
+// writes to crove_finance.depreciation_line.
+export const zDepreciationProposal = zJournalVoucherProposal.extend({
+  depreciationMonth: zMonth,
+  assets: z.array(z.object({ assetId: zId, amount: zJournalAmount })).min(1).max(2000),
+});
+export type DepreciationProposal = z.infer<typeof zDepreciationProposal>;

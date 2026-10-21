@@ -349,6 +349,23 @@ export const INPUT_VAT_CHECK_OUTCOMES = ['paid_by_bank', 'not_deductible', 'clea
 export type InputVatCheckOutcome = (typeof INPUT_VAT_CHECK_OUTCOMES)[number];
 export type InputVatCheckTable = Refine<G.FinanceInputVatCheckTable, { outcome: ColumnType<InputVatCheckOutcome, InputVatCheckOutcome, never> }>;
 
+// The register of fixed assets and prepaid costs (#919). Tenant roles update only the end of a schedule, once.
+export const FIXED_ASSET_KINDS = ['fixed_asset', 'prepaid_cost'] as const;
+export type FixedAssetKind = (typeof FIXED_ASSET_KINDS)[number];
+export type FixedAssetTable = Refine<
+  G.FinanceFixedAssetTable,
+  {
+    kind: ColumnType<FixedAssetKind, FixedAssetKind, never>;
+    accumulated_account: ColumnType<string | null, string | null | undefined, never>;
+    source_document_id: ColumnType<string | null, string | null | undefined, never>;
+    source_line_no: ColumnType<number | null, number | null | undefined, never>;
+    ended_month: ColumnType<string | null, string | null | undefined, string | null>;
+    end_reason: ColumnType<string | null, string | null | undefined, string | null>;
+    ended_by: ColumnType<string | null, string | null | undefined, string | null>;
+    created_by: ColumnType<string | null, string | null | undefined, never>;
+  }
+>;
+
 // General journal vouchers (#888): phiếu kế toán khác, NVK. The insert trigger numbers each one per org (any number
 // given is replaced), and rows never change.
 export type JournalVoucherTable = Refine<G.FinanceJournalVoucherTable, { number: ColumnType<number, never, never> }, 'number'>;
@@ -504,6 +521,7 @@ type Refined = Tables<{
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;
   'crove_finance.cash_voucher': CashVoucherTable;
+  'crove_finance.fixed_asset': FixedAssetTable;
   'crove_finance.input_vat_check': InputVatCheckTable;
   'crove_finance.journal_voucher': JournalVoucherTable;
   'crove_finance.portal_invoice_list': PortalInvoiceListTable;

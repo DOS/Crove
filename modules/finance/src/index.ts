@@ -1,3 +1,4 @@
+import { fixedAssetCommands, fixedAssetQueries } from './fixed-assets.ts';
 import { createAccount, setVendorDefaultAccount, updateAccount } from './accounts.ts';
 import { recordPurchase, revisePurchase } from './record.ts';
 import { cashVouchers, prepareVoucher, recordVoucher, vouchersList } from './cash-voucher.ts';
@@ -60,6 +61,7 @@ export { buildVatWorkbook, VAT_RATE_LABELS, VAT_WARNING_LABELS } from './vat-exp
 export { buildVat01Xml } from './vat-xml.ts';
 export { buildLedgerWorkbook } from './ledger-export.ts';
 export { buildStatementsWorkbook } from './statements-export.ts';
+export { buildFixedAssetsWorkbook } from './fixed-assets-export.ts';
 export {
   MISA_SME_CASH_PAYMENT,
   MISA_SME_CASH_RECEIPT,
@@ -104,8 +106,9 @@ export { SEARCH_LIMIT, searchAmount, type SearchResult } from './search.ts';
 export { ARCHIVE_FORMAT, type ArchiveSource, type ArchiveSourceFile, type RecordedArchive } from './year-archive.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, vatPaymentMark, ...financeNotificationCommands, ...yearArchiveCommands];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, vatPaymentMark, ...financeNotificationCommands, ...yearArchiveCommands, ...fixedAssetCommands];
 export const financeQueries = [
+  ...fixedAssetQueries,
   fileForExtraction,
   purchaseLookup,
   vendorsList,
