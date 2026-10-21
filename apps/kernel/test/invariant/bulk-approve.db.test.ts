@@ -131,7 +131,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     return revision;
   }
 
-  const bulk = (orgId: string, actor: ReturnType<typeof asMfa> | ReturnType<typeof asUser>, items: Array<{ id: string; revision: number }>) =>
+  const bulk = (orgId: string, actor: ReturnType<typeof asMfa> | ReturnType<typeof asUser>, items: Array<{ id: string; revision: number; acceptUnverifiedSignature?: boolean }>) =>
     runtime.execute<{ results: Result[] }>('kernel.proposal.approve_many', { items }, { actor, orgId });
 
   async function refusalOf(promise: Promise<unknown>): Promise<{ code: string | undefined; status: number | undefined }> {
@@ -205,10 +205,10 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     expect(await editAs(orgId, owner, edited)).toBe(2);
     const foreign = await proposeIn(other.orgId, other.owner);
     const items = [
-      { id: own, revision: 1 },
-      { id: fine, revision: 1 },
-      { id: edited, revision: 1 },
-      { id: foreign, revision: 1 },
+      { id: own, revision: 1, acceptUnverifiedSignature: true },
+      { id: fine, revision: 1, acceptUnverifiedSignature: true },
+      { id: edited, revision: 1, acceptUnverifiedSignature: true },
+      { id: foreign, revision: 1, acceptUnverifiedSignature: true },
     ];
 
     // A member may not approve, so a member's batch approves nothing.
@@ -231,15 +231,15 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     expect(await proposalState(foreign)).toEqual({ status: 'pending', documents: 0, approvals: [] });
 
     // Alone, each refused item gets the same answer, so the batch is never more permissive.
-    expect(await refusalOf(runtime.execute('kernel.proposal.approve', { id: own, revision: 1 }, { actor: asMfa(admin), orgId }))).toEqual({
+    expect(await refusalOf(runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: own, revision: 1 }, { actor: asMfa(admin), orgId }))).toEqual({
       code: 'FOUR_EYES_REQUIRED',
       status: 403,
     });
-    expect(await refusalOf(runtime.execute('kernel.proposal.approve', { id: edited, revision: 1 }, { actor: asMfa(admin), orgId }))).toEqual({
+    expect(await refusalOf(runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: edited, revision: 1 }, { actor: asMfa(admin), orgId }))).toEqual({
       code: 'STALE_REVISION',
       status: 409,
     });
-    expect(await refusalOf(runtime.execute('kernel.proposal.approve', { id: foreign, revision: 1 }, { actor: asMfa(admin), orgId }))).toEqual({
+    expect(await refusalOf(runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: foreign, revision: 1 }, { actor: asMfa(admin), orgId }))).toEqual({
       code: 'NOT_FOUND',
       status: 404,
     });
@@ -259,7 +259,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     expect(batch[0]?.detail.items.map((i) => [i.id, i.outcome, i.code ?? null])).toEqual(results.map((r) => [r.id, r.outcome, r.code ?? null]));
 
     // A proposal approved already is decided: a second batch refuses it.
-    const again = await bulk(orgId, asMfa(owner), [{ id: fine, revision: 1 }]);
+    const again = await bulk(orgId, asMfa(owner), [{ id: fine, revision: 1, acceptUnverifiedSignature: true }]);
     expect(again.results).toEqual([{ id: fine, outcome: 'refused', code: 'PROPOSAL_DECIDED', rule: null }]);
   });
 
@@ -269,8 +269,8 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     const a = await proposeIn(orgId, owner);
     const b = await proposeIn(orgId, owner);
     const items = [
-      { id: a, revision: 1 },
-      { id: b, revision: 1 },
+      { id: a, revision: 1, acceptUnverifiedSignature: true },
+      { id: b, revision: 1, acceptUnverifiedSignature: true },
     ];
     // Ten minutes after the second factor, and with no second factor at all.
     expect(await refusalOf(bulk(orgId, asMfa(admin, 600), items))).toEqual({ code: 'STEP_UP_REQUIRED', status: 403 });
@@ -291,8 +291,8 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     const { orgId, owner, people } = await orgWith('Bulk stale midway', ['admin']);
     const admin = people[0] as string;
     const items = [
-      { id: await proposeIn(orgId, owner), revision: 1 },
-      { id: await proposeIn(orgId, owner), revision: 1 },
+      { id: await proposeIn(orgId, owner), revision: 1, acceptUnverifiedSignature: true },
+      { id: await proposeIn(orgId, owner), revision: 1, acceptUnverifiedSignature: true },
     ];
     // The clock moves past the 5-minute window right after the first item is posted.
     const realNow = Date.now.bind(Date);
@@ -336,14 +336,14 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       await a.query("UPDATE crove_kernel.proposal SET command = 'test.unsupported' WHERE id = $1", [odd]);
     });
     const items = [
-      { id: fine, revision: 1 },
-      { id: odd, revision: 1 },
+      { id: fine, revision: 1, acceptUnverifiedSignature: true },
+      { id: odd, revision: 1, acceptUnverifiedSignature: true },
     ];
     expect(await refusalOf(bulk(orgId, asMfa(owner), items))).toEqual({ code: 'FORBIDDEN', status: 403 });
     expect(await proposalState(fine)).toEqual({ status: 'pending', documents: 0, approvals: [] });
     expect(await proposalState(odd)).toEqual({ status: 'pending', documents: 0, approvals: [] });
     // Alone, the good one still goes through.
-    expect((await bulk(orgId, asMfa(owner), [{ id: fine, revision: 1 }])).results).toEqual([expect.objectContaining({ id: fine, outcome: 'approved' })]);
+    expect((await bulk(orgId, asMfa(owner), [{ id: fine, revision: 1, acceptUnverifiedSignature: true }])).results).toEqual([expect.objectContaining({ id: fine, outcome: 'approved' })]);
   });
 
   it('refuses an AI agent, which never approves (P05)', async () => {
@@ -361,7 +361,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     });
     if (!started.runId) throw new Error('no run');
     const agent = { type: 'agent' as const, agentId, runId: started.runId };
-    expect(await refusalOf(runtime.execute('kernel.proposal.approve_many', { items: [{ id, revision: 1 }] }, { actor: agent, orgId }))).toEqual({
+    expect(await refusalOf(runtime.execute('kernel.proposal.approve_many', { items: [{ id, revision: 1, acceptUnverifiedSignature: true }] }, { actor: agent, orgId }))).toEqual({
       code: 'FORBIDDEN',
       status: 403,
     });
@@ -401,10 +401,10 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     const foreign = await proposeIn(other.orgId, other.owner);
     const actor = asMfa(admin);
     const { results } = await bulk(orgId, actor, [
-      { id: own, revision: 1 },
-      { id: fine, revision: 1 },
-      { id: edited, revision: 1 },
-      { id: foreign, revision: 1 },
+      { id: own, revision: 1, acceptUnverifiedSignature: true },
+      { id: fine, revision: 1, acceptUnverifiedSignature: true },
+      { id: edited, revision: 1, acceptUnverifiedSignature: true },
+      { id: foreign, revision: 1, acceptUnverifiedSignature: true },
     ]);
     expect(results.map((r) => r.outcome)).toEqual(['refused', 'approved', 'refused', 'refused']);
     const [batch] = await auditRows(orgId, 'kernel.proposal.approve_many');
@@ -431,7 +431,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
 
     // The same approval alone, refused, writes the same row but for the link.
     for (const id of [own, edited, foreign]) {
-      await refusalOf(runtime.execute('kernel.proposal.approve', { id, revision: 1 }, { actor, orgId }));
+      await refusalOf(runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id, revision: 1 }, { actor, orgId }));
       const [nested, alone] = (await auditRows(orgId, 'kernel.proposal.approve')).filter((r) => r.target_id === id);
       expect(alone).toBeDefined();
       const { parentCommand, parentCommandId, ...nestedDetail } = nested?.detail ?? {};
@@ -455,8 +455,8 @@ suite('bulk approval on PostgreSQL (#315)', () => {
       await a.query("UPDATE crove_kernel.proposal SET command = 'test.unsupported' WHERE id = $1", [odd]);
     });
     const items = [
-      { id: stale, revision: 1 },
-      { id: odd, revision: 1 },
+      { id: stale, revision: 1, acceptUnverifiedSignature: true },
+      { id: odd, revision: 1, acceptUnverifiedSignature: true },
     ];
     expect(await refusalOf(bulk(orgId, asMfa(owner), items))).toEqual({ code: 'FORBIDDEN', status: 403 });
     expect((await auditRows(orgId, 'kernel.proposal.approve')).filter((r) => r.target_id === stale || r.target_id === odd)).toEqual([]);
@@ -464,7 +464,7 @@ suite('bulk approval on PostgreSQL (#315)', () => {
     expect(batch.map((r) => [r.outcome, r.detail.code])).toEqual([['denied', 'FORBIDDEN']]);
     expect(batch[0]?.detail).not.toHaveProperty('parentCommandId');
     // Alone, the stale item is still refused, so it would have been recorded had the batch committed.
-    expect((await bulk(orgId, asMfa(owner), [{ id: stale, revision: 1 }])).results).toEqual([{ id: stale, outcome: 'refused', code: 'STALE_REVISION', rule: null }]);
+    expect((await bulk(orgId, asMfa(owner), [{ id: stale, revision: 1, acceptUnverifiedSignature: true }])).results).toEqual([{ id: stale, outcome: 'refused', code: 'STALE_REVISION', rule: null }]);
     expect((await auditRows(orgId, 'kernel.proposal.approve')).filter((r) => r.target_id === stale).map((r) => r.outcome)).toEqual(['failed']);
   });
 
