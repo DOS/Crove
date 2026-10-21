@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useRef, useState, type DragEvent } from 'react';
 import { useTranslations } from 'use-intl';
+import { JOURNAL_VOUCHER_KIND } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -475,12 +476,13 @@ export function InboxPage() {
                     {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}
                     {item.kind === REVERSAL_KIND && <Badge variant="secondary">{t('reversalKind')}</Badge>}
                     {item.kind === VOUCHER_KIND && <Badge variant="secondary">{t('voucherKind')}</Badge>}
+                    {item.kind === JOURNAL_VOUCHER_KIND && <Badge variant="secondary">{t('journalVoucherKind')}</Badge>}
                     {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
                     {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
                     {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
                     {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
                     {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
-                    {showMatched(item, REVERSAL_KIND, VOUCHER_KIND) && (
+                    {showMatched(item, REVERSAL_KIND, VOUCHER_KIND, JOURNAL_VOUCHER_KIND) && (
                       <Badge variant="success">{t('matched')}</Badge>
                     )}
                   </div>

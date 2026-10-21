@@ -140,6 +140,7 @@ export const KERNEL_ERROR_CODES = [
   'PARTY_NOT_FOUND',
   // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
+  'JOURNAL_VOUCHER_INVALID',
   'BANK_LINE_NOT_FOUND',
   'BANK_LINE_MISMATCH',
   'BANK_LINE_PROPOSED',
