@@ -13,6 +13,8 @@ export interface OutboundMail {
   // The envelope sender that bounce reports go to (#539: bounce+<token>@INBOUND_DOMAIN). SMTP uses it; HTTP providers
   // report bounces through their webhooks instead.
   returnPath?: string;
+  // Where replies go (#669: the org's inbound address, so a client's reply with invoices reaches the Inbox).
+  replyTo?: string;
 }
 
 // How safe it is to repeat a send whose outcome is unknown (ADR-0025): 'idempotent' when the provider drops a repeat

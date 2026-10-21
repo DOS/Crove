@@ -107,7 +107,7 @@ import {
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
 import { zJournalVoucherRequest } from './journal-voucher.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
-import { zPortalReconciliation } from './portal-list.ts';
+import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
@@ -141,6 +141,9 @@ export const contract = {
     // Owners and admins (issue #324): the org's address, or null to clear it. Stored on one line, at most 500
     // characters; a value with control characters is refused.
     setAddress: oc.input(z.object({ address: z.string().max(2000).nullable() })).output(z.object({ address: z.string().nullable() })),
+    // Owners and admins (issue #669): the org's contact email, where its own mail goes (a request for missing invoices),
+    // or null to clear it.
+    setContactEmail: oc.input(z.object({ email: z.email().max(320).nullable() })).output(z.object({ contactEmail: z.string().nullable() })),
     // Everyone reads, owners and admins set (issue #676): after how many days a pending proposal reminds the people who
     // may approve it, and after how many its owners are told; null turns either off. Escalation must come later.
     proposalPolicy: oc.output(zProposalPolicy),
@@ -807,6 +810,20 @@ export const contract = {
     reconcile: oc.input(z.object({ period: zVatPeriod })).output(zPortalReconciliation),
     import: oc.input(z.object({ period: zVatPeriod, fileId: zId })).output(z.object({ listId: zId })),
     remove: oc.input(z.object({ listId: zId })).output(z.object({ listId: zId })),
+  },
+  // Asking the client company for the purchase invoices the portal lists and Crove lacks (issue #669). status: every
+  // role. request (owners, admins, members; R1): one mail listing a period's missing invoices to the org's contact email,
+  // queued and sent by the worker; CONTACT_EMAIL_REQUIRED (409) without a contact email, NOTHING_MISSING (409),
+  // REQUEST_TOO_SOON (409) within an hour of the last request for the period; status 'suppressed' when the org stopped
+  // mail to the address. setReminder (owners, admins, members; R1): the day of the month of the reminder, or null.
+  missingInvoices: {
+    status: oc.output(zMissingInvoiceStatus),
+    request: oc
+      .input(z.object({ period: zVatPeriod }))
+      .output(z.object({ messageId: zId, status: z.enum(['queued', 'suppressed']), count: z.number().int().positive() })),
+    setReminder: oc
+      .input(z.object({ day: z.number().int().min(1).max(MISSING_INVOICE_REMINDER_DAY_MAX).nullable() }))
+      .output(z.object({ day: z.number().int().min(1).max(MISSING_INVOICE_REMINDER_DAY_MAX).nullable() })),
   },
   // Ledger reports of a month, quarter or year (issue #321): the trial balance and the receivables and payables per
   // party, and the general ledger of one account. The Excel workbook is GET /api/export/ledger.xlsx?period=<period>.

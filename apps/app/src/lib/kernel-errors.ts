@@ -111,6 +111,10 @@ export const KERNEL_ERROR_CODES = [
   // The tax portal's purchase list (#465).
   'PORTAL_LIST_EXISTS',
   'PORTAL_LIST_LIMIT',
+  // Asking the client company for its missing invoices (#669).
+  'CONTACT_EMAIL_REQUIRED',
+  'NOTHING_MISSING',
+  'REQUEST_TOO_SOON',
   // Period lock (#329).
   'PERIOD_LOCKED',
   'PERIOD_ALREADY_LOCKED',

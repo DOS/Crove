@@ -13,6 +13,7 @@ import { bankImport, bankLines, bankPreview } from './bank.ts';
 import { bankLineVoucher, bankOpenLines, bankSuggestions } from './bank-match.ts';
 import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts';
 import { statementsExport, statementsPeriodQuery } from './statements.ts';
+import { missingInvoicesReminderSet, missingInvoicesRemind, missingInvoicesRequest, missingInvoicesStatus } from './missing-invoices.ts';
 import { searchQuery } from './search.ts';
 import { documentExports } from './document-exports.ts';
 
@@ -25,8 +26,25 @@ export {
   PORTAL_PERIOD_ROW_LIMIT,
   PORTAL_RECONCILE_ITEMS_PER_OUTCOME,
   PORTAL_RECONCILE_LIMIT,
+  reconcilePeriod,
   type PortalListDeps,
 } from './portal-list.ts';
+export {
+  MISSING_INVOICE_ACTOR,
+  MISSING_INVOICE_REMIND_SOURCE,
+  MISSING_INVOICE_REQUEST_SOURCE,
+  MISSING_INVOICE_TEMPLATE,
+  MISSING_INVOICES_PER_MAIL,
+  REMINDER_DAY_MAX,
+  formatAmount,
+  periodLabel,
+  renderMissingInvoiceMail,
+  zMissingInvoiceMail,
+  type MissingInvoiceMail,
+  type MissingInvoiceStatus,
+  type RemindResult,
+  type RenderedMail,
+} from './missing-invoices.ts';
 export * from './domain/portal-reconcile.ts';
 export { foldVietnamese, portalStatus } from './domain/portal-status.ts';
 export { buildJournalWorkbook } from './export.ts';
@@ -76,7 +94,7 @@ export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type Ledger
 export { SEARCH_LIMIT, searchAmount, type SearchResult } from './search.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, portalListImport, portalListRemove, portalListRecord];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind];
 export const financeQueries = [
   fileForExtraction,
   purchaseLookup,
@@ -100,6 +118,7 @@ export const financeQueries = [
   cashVouchers,
   portalListSource,
   portalListReconcile,
+  missingInvoicesStatus,
   periodLockStateQuery,
   bankPreview,
   bankLines,

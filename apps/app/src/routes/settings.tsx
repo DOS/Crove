@@ -728,6 +728,64 @@ function AddressField({ address, canManage }: { address: string | null; canManag
   );
 }
 
+// The org's contact email (issue #669): where Crove sends the requests for missing purchase invoices. Owners and admins
+// edit it; everyone else sees it.
+function ContactEmailField({ email, canManage }: { email: string | null; canManage: boolean }) {
+  const t = useTranslations('settings');
+  const tc = useTranslations('common');
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(email ?? '');
+  const save = useMutation(
+    orpc.org.setContactEmail.mutationOptions({
+      onSuccess: async () => {
+        setEditing(false);
+        await queryClient.invalidateQueries({ queryKey: orpc.org.get.key() });
+      },
+    }),
+  );
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    save.mutate({ email: value.trim() ? value.trim() : null });
+  };
+  return (
+    <div>
+      <dt className="text-subtle-foreground">{t('contactEmail')}</dt>
+      {editing ? (
+        <form onSubmit={submit} aria-label={t('contactEmail')} className="mt-1 flex flex-wrap items-center gap-2">
+          <Input type="email" value={value} onChange={(e) => setValue(e.target.value)} maxLength={320} aria-label={t('contactEmail')} className="min-w-64 flex-1" />
+          <Button type="submit" size="sm" disabled={save.isPending}>
+            {save.isPending ? <Spinner className="text-current" /> : null}
+            {t('contactEmailSave')}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              setEditing(false);
+              setValue(email ?? '');
+              save.reset();
+            }}
+          >
+            {tc('cancel')}
+          </Button>
+        </form>
+      ) : (
+        <dd className="flex flex-wrap items-center gap-2">
+          <span className={email ? 'break-all text-foreground' : 'text-subtle-foreground'}>{email ?? t('contactEmailUnset')}</span>
+          {canManage && (
+            <Button type="button" size="sm" variant="outline" onClick={() => setEditing(true)}>
+              {email ? t('contactEmailChange') : t('contactEmailSet')}
+            </Button>
+          )}
+        </dd>
+      )}
+      <dd className="mt-1 text-xs text-subtle-foreground">{t('contactEmailHint')}</dd>
+      {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const root = useTranslations();
   const t = useTranslations('settings');
@@ -775,6 +833,9 @@ export function SettingsPage() {
             )}
             {getConfig().modules.includes('finance') && <VatFilingPeriodField period={org.data?.vatFilingPeriod ?? null} canManage={canManage} />}
             <AddressField key={`${org.data?.slug}:${org.data?.address ?? ''}`} address={org.data?.address ?? null} canManage={canManage} />
+            {getConfig().modules.includes('finance') && (
+              <ContactEmailField key={`${org.data?.slug}:${org.data?.contactEmail ?? ''}`} email={org.data?.contactEmail ?? null} canManage={canManage} />
+            )}
             {getConfig().modules.includes('finance') && <ProposalRemindersField key={org.data?.slug} canManage={canManage} />}
             <div>
               <dt className="text-subtle-foreground">{t('inboundAddress')}</dt>

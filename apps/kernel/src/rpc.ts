@@ -299,6 +299,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       setAddress: os.org.setAddress.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_address', input, { actor, orgId })),
       ),
+      setContactEmail: os.org.setContactEmail.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_contact_email', input, { actor, orgId })),
+      ),
       proposalPolicy: os.org.proposalPolicy.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.proposal_policy.get', {}, { actor, orgId }))),
       setProposalPolicy: os.org.setProposalPolicy.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal_policy.save', input, { actor, orgId })),
@@ -1159,6 +1162,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       remove: os.portalList.remove.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.portal_list.remove', input, { actor, orgId })),
+      ),
+    },
+    missingInvoices: {
+      status: os.missingInvoices.status.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.missing_invoices.status', {}, { actor, orgId })),
+      ),
+      request: os.missingInvoices.request.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.missing_invoices.request', input, { actor, orgId })),
+      ),
+      setReminder: os.missingInvoices.setReminder.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.missing_invoices.reminder.set', input, { actor, orgId })),
       ),
     },
     ledger: {

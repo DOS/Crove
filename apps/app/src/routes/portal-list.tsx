@@ -12,7 +12,19 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
-import { SECTIONS, canImportPortalList, invoiceLabel, itemsByOutcome, outcomeTotal, pickProblem, pollWhilePending, type ReconcileItem } from '../lib/portal-list.ts';
+import {
+  SECTIONS,
+  canImportPortalList,
+  formatPeriod,
+  invoiceLabel,
+  itemsByOutcome,
+  mailFailed,
+  outcomeTotal,
+  pickProblem,
+  pollWhilePending,
+  pollWhileSending,
+  type ReconcileItem,
+} from '../lib/portal-list.ts';
 import { defaultPeriod, periodKey, switchKind, yearOptions, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
 
 const SKIPPED_SHOWN = 20;
@@ -98,6 +110,108 @@ function Section({ outcome, items, total, folded, slug }: { outcome: ReconcileOu
       {table}
       {truncated}
     </section>
+  );
+}
+
+const REMINDER_DAYS = Array.from({ length: 28 }, (_, i) => i + 1);
+
+// Asking the company for the invoices the portal lists and Crove lacks (issue #669): one email for the period, to the
+// company's contact email (Settings), and an optional monthly reminder. Editors send and set the reminder; everyone
+// sees what was sent.
+function MissingInvoiceRequest({ period, missing, editor, canManage, slug }: { period: string; missing: number; editor: boolean; canManage: boolean; slug: string }) {
+  const t = useTranslations('portalList.request');
+  const f = useFormat();
+  const status = useQuery({ ...orpc.missingInvoices.status.queryOptions(), refetchInterval: (q) => pollWhileSending(q.state.data) });
+  const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.missingInvoices.status.key() });
+  const send = useMutation(orpc.missingInvoices.request.mutationOptions({ onSettled: refresh }));
+  const reminder = useMutation(orpc.missingInvoices.setReminder.mutationOptions({ onSettled: refresh }));
+  const data = status.data;
+  if (status.isLoading) return <Spinner />;
+  if (status.error) return <ErrorText>{errorMessage(status.error)}</ErrorText>;
+  if (!data) return null;
+  const contact = data.contactEmail;
+  return (
+    <Card className="block p-4" role="region" aria-label={t('title')}>
+      <h2 className="text-base font-semibold text-foreground">{t('title')}</h2>
+      {missing === 0 ? (
+        <p className="mt-1 text-sm text-muted-foreground">{t('introNone')}</p>
+      ) : contact ? (
+        <p className="mt-1 text-sm text-muted-foreground">{t('intro', { email: contact, count: missing })}</p>
+      ) : (
+        <Alert className="mt-2 border-warning/30 bg-warning/10 text-warning">
+          <AlertTitle>{t('noContact')}</AlertTitle>
+          <AlertDescription>
+            {canManage ? (
+              <Link to="/o/$slug/settings" params={{ slug }} className="text-link underline-offset-4 hover:underline">
+                {t('noContactManage')}
+              </Link>
+            ) : (
+              t('noContactAsk')
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+      {editor && (
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          {missing > 0 && contact && (
+            <Button
+              onClick={() => {
+                send.reset();
+                send.mutate({ period });
+              }}
+              disabled={send.isPending}
+            >
+              {send.isPending ? <Spinner className="text-current" /> : null}
+              {t('send')}
+            </Button>
+          )}
+          <label className="text-xs">
+            <span className="text-subtle-foreground">{t('reminder')}</span>
+            <NativeSelect
+              aria-label={t('reminder')}
+              className="mt-1 w-36"
+              value={data.reminderDay ?? ''}
+              disabled={reminder.isPending || (!contact && data.reminderDay === null)}
+              onChange={(e) => reminder.mutate({ day: e.target.value ? Number(e.target.value) : null })}
+            >
+              <NativeSelectOption value="">{t('reminderOff')}</NativeSelectOption>
+              {REMINDER_DAYS.map((day) => (
+                <NativeSelectOption key={day} value={day}>
+                  {t('reminderDay', { day: String(day) })}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </label>
+        </div>
+      )}
+      {send.data && (
+        <p role="status" className={`mt-2 text-sm ${send.data.status === 'suppressed' ? 'text-warning' : 'text-muted-foreground'}`}>
+          {send.data.status === 'suppressed' ? t('suppressed') : t('queued')}
+        </p>
+      )}
+      {(send.error || reminder.error) && (
+        <div className="mt-2">
+          <ErrorText>{errorMessage(send.error ?? reminder.error)}</ErrorText>
+        </div>
+      )}
+      <p className="mt-2 text-xs text-subtle-foreground">{data.reminderDay !== null ? t('reminderOn', { day: String(data.reminderDay) }) : t('reminderHint')}</p>
+      {data.mails.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-sm font-medium text-foreground">{t('historyTitle')}</h3>
+          <ul className="mt-1 space-y-1 text-sm">
+            {data.mails.map((mail) => (
+              <li key={mail.id} className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                <span>{f.dateTime(mail.createdAt)}</span>
+                <span className="text-foreground">{t(`kind.${mail.kind}`)}</span>
+                {mail.periods.length > 0 && <span>{mail.periods.map(formatPeriod).join(', ')}</span>}
+                {mail.count !== null && <span>{t('invoices', { count: mail.count })}</span>}
+                <Badge variant={mailFailed(mail.status) ? 'warning' : mail.status === 'sent' || mail.status === 'delivered' ? 'success' : 'outline'}>{t(`status.${mail.status}`)}</Badge>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
   );
 }
 
@@ -319,6 +433,7 @@ export function PortalListPage() {
               <p className="text-sm text-muted-foreground">
                 {t('summaryLine', { portal: data.summary.portalInvoices, matched: data.summary.matched, inbox: data.summary.inInbox })}
               </p>
+              <MissingInvoiceRequest period={period} missing={data.summary.missing} editor={editor} canManage={org.data?.role === 'owner' || org.data?.role === 'admin'} slug={slug} />
               {SECTIONS.map(({ outcome, folded }) => {
                 const items = grouped.get(outcome) ?? [];
                 return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} total={outcomeTotal(data.summary, outcome)} folded={folded} slug={slug} /> : null;

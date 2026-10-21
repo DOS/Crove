@@ -1,6 +1,6 @@
 // The tax portal reconciliation screen (issue #465): who may import a list, which sections the outcomes fall into and
 // in what order, and when to poll. The kernel decides every rule; these only arrange its answer.
-import { MAX_IMPORT_BYTES, type PortalReconciliation, type ReconcileOutcome } from '@crove/kernel-contract';
+import { MAX_IMPORT_BYTES, type MissingInvoiceStatusView, type PortalReconciliation, type ReconcileOutcome } from '@crove/kernel-contract';
 
 export type ReconcileItem = PortalReconciliation['items'][number];
 export type PortalList = PortalReconciliation['lists'][number];
@@ -70,4 +70,23 @@ export function pickProblem(file: { name: string; size: number }): 'not_xlsx' | 
 // Series and number as the portal shows them ("1C26TAA-123", template included when known).
 export function invoiceLabel(invoice: { template: string | null; series: string; number: string }): string {
   return `${invoice.template ?? ''}${invoice.series}-${invoice.number}`;
+}
+
+// Asking the company for its missing invoices (issue #669).
+export type MissingInvoiceMail = MissingInvoiceStatusView['mails'][number];
+
+// "09/2026" or "Q3/2026", the same in every language.
+export function formatPeriod(period: string): string {
+  const [year, part] = period.split('-');
+  return `${part}/${year}`;
+}
+
+// Polls the request history while a mail is still waiting or being sent.
+export function pollWhileSending(data: MissingInvoiceStatusView | undefined, ms = 2000): number | false {
+  return data?.mails.some((m) => m.status === 'queued' || m.status === 'sending') ? ms : false;
+}
+
+// Statuses after which nothing went out, shown as a warning.
+export function mailFailed(status: MissingInvoiceMail['status']): boolean {
+  return status === 'suppressed' || status === 'failed' || status === 'bounced' || status === 'complained' || status === 'ambiguous';
 }
