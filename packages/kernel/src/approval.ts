@@ -50,6 +50,8 @@ const POLICIES: Record<string, CommandPolicy> = {
   'finance.voucher.record': { roles: ['owner', 'admin'], fourEyes: true },
   // A general journal voucher (NVK, #888) posts to the ledger: the same rule.
   'finance.journal_voucher.record': { roles: ['owner', 'admin'], fourEyes: true },
+  // A year-end closing (#889) is a general journal voucher built from the ledger: the same rule.
+  'finance.closing.record': { roles: ['owner', 'admin'], fourEyes: true },
 };
 
 const NOBODY: CommandPolicy = { roles: [], fourEyes: true };

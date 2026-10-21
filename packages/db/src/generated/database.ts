@@ -184,6 +184,7 @@ export interface FinanceJournalVoucherTable {
   proposal_id: ColumnType<string | null, string | null, NotGranted>;
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  closing_year: ColumnType<number | null, number | null, NotGranted>;
 }
 
 /** crove_finance.org_account */
