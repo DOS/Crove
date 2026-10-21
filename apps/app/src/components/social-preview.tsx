@@ -35,7 +35,7 @@ function hostOf(link: string): string {
 function Media({ media, layout, max, cover }: { media: readonly MediaItem[]; layout: string; max: number; cover?: Cover | null | undefined }) {
   const t = useTranslations('social');
   if (media.length === 0) return null;
-  const alt = (m: MediaItem, i: number) => m.altText || t('imageAlt', { n: String(i + 1) });
+  const alt = (m: MediaItem, i: number) => m.altText?.trim() || t('imageAlt', { n: String(i + 1) });
   if (layout === 'vertical' || layout === 'video' || layout === 'square' || layout === 'article') {
     const first = media[0] as MediaItem;
     const frame = layout === 'vertical' ? 'aspect-[9/16] max-h-96' : layout === 'video' ? 'aspect-video' : layout === 'square' ? 'aspect-square' : 'aspect-[16/9]';
@@ -199,8 +199,8 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
         <div className="mt-1">{body}</div>
         {after.map((m, i) => (
           <figure key={m.fileId} className="mt-3">
-            <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 2) })} mime={m.mime} className="mx-auto aspect-[4/3] w-full" />
-            {m.altText && <figcaption className="mt-1 text-center text-xs text-muted-foreground">{m.altText}</figcaption>}
+            <Thumb fileId={m.fileId} alt={m.altText?.trim() || t('imageAlt', { n: String(i + 2) })} mime={m.mime} className="mx-auto aspect-[4/3] w-full" />
+            {m.altText?.trim() ? <figcaption className="mt-1 text-center text-xs text-muted-foreground">{m.altText.trim()}</figcaption> : null}
           </figure>
         ))}
       </div>
