@@ -44,6 +44,7 @@ const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_kernel.org_usage',
   'crove_kernel.usage_deferral',
+  'crove_social.publish_hold',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -760,6 +761,9 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       return { setup, row: variant };
     },
   },
+  // A hold on all of an org's publishing (#946), by an owner or admin with a reason. The commands keep one live hold per
+  // org under an advisory lock; the table has no unique index, so an org's rows may all be live.
+  'crove_social.publish_hold': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), reason: `RLS matrix hold ${tag()}`, held_by: o.owner } }) },
   // One queue per connection, so every queue row gets its own connection.
   'crove_social.queue': {
     make: (o) => {
