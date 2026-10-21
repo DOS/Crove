@@ -14,7 +14,8 @@ import { LocaleSwitcher, useFormat, useLocaleSetting } from '../i18n/provider.ts
 import { orpc } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { installedItems } from '../lib/modules.ts';
-import { isPaletteShortcut } from '../lib/palette.ts';
+import { isPaletteShortcut, searchTerm } from '../lib/palette.ts';
+import { documentNumber } from '../lib/search.ts';
 import { proposalName } from '../lib/review.ts';
 import { THEMES } from '../lib/theme.ts';
 import { useThemeSetting } from '../lib/theme-runtime.ts';
@@ -40,6 +41,16 @@ const ALL_NAV = [
   { to: '/o/$slug/social/notifications', label: 'notifications', module: 'social' },
   { to: '/o/$slug/settings', label: 'settings', module: 'kernel' },
 ] as const;
+
+// The value, once it has stayed the same for `ms`: the palette's search (#673) waits for a pause in the typing.
+function useSettled<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
+}
 
 export function OrgLayout() {
   const NAV = useMemo(() => installedItems(getConfig().modules, ALL_NAV), []);
@@ -71,6 +82,13 @@ export function OrgLayout() {
   const { locale, setLocale } = useLocaleSetting();
   const [theme, setTheme] = useThemeSetting();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // The org's search (#673): parties, documents and journal entries for what is typed in the palette, where finance runs.
+  const financeOn = NAV.some((n) => n.module === 'finance');
+  const [paletteQuery, setPaletteQuery] = useState('');
+  const typed = financeOn && paletteOpen ? searchTerm(paletteQuery) : null;
+  const term = useSettled(typed, 250);
+  const found = useQuery({ ...orpc.search.query.queryOptions({ input: { q: term ?? '' } }), enabled: term !== null && term === typed, staleTime: 30_000 });
+  const searchState = typed === null ? 'idle' : found.isError ? 'failed' : term !== typed || found.isFetching ? 'searching' : 'idle';
   const paletteKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘ K' : 'Ctrl K';
 
   // Ctrl K (Cmd K on a Mac) opens or closes the command palette from any screen of the org.
@@ -132,6 +150,47 @@ export function OrgLayout() {
     ],
     [NAV, pending.data, reviews.data, me.data, slug, locale, theme, t, tp, tc, f, navigate, setLocale, setTheme],
   );
+  const foundEntries = useMemo<PaletteEntry[]>(() => {
+    const data = typed !== null && term === typed ? found.data : undefined;
+    if (!data) return [];
+    return [
+      ...data.parties.map((p) => ({
+        id: `party:${p.id}`,
+        group: 'parties' as const,
+        label: p.name,
+        ...(p.taxCode ? { detail: tp('taxCode', { code: p.taxCode }) } : {}),
+        // A customer that never sold to the org is not among the vendors: its invoices are with the documents.
+        run: () =>
+          void (p.customerOnly
+            ? navigate({ to: '/o/$slug/documents', params: { slug }, search: { q: p.name } })
+            : navigate({ to: '/o/$slug/vendors', params: { slug }, search: { q: p.taxCode ?? p.name } })),
+      })),
+      ...data.documents.map((d) => ({
+        id: `document:${d.id}`,
+        group: 'documents' as const,
+        label: documentNumber(d),
+        detail: [
+          d.direction === 'sale' ? tp('saleDocument') : null,
+          d.voided ? tp('voidedDocument') : null,
+          tp('documentDetail', { party: d.partyName, date: f.date(d.issueDate), total: f.money(d.total) }),
+        ]
+          .filter(Boolean)
+          .join(', '),
+        // The approved proposal shows the invoice with its file; a document without one opens in the list.
+        run: () =>
+          void (d.proposalId
+            ? navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: d.proposalId } })
+            : navigate({ to: '/o/$slug/documents', params: { slug }, search: { q: d.number } })),
+      })),
+      ...data.entries.map((e) => ({
+        id: `entry:${e.id}`,
+        group: 'entries' as const,
+        label: e.description,
+        detail: tp('entryDetail', { date: f.date(e.entryDate), amount: f.money(e.amount) }),
+        run: () => void navigate({ to: '/o/$slug/journal', params: { slug }, search: { from: e.entryDate, to: e.entryDate }, hash: `entry-${e.id}` }),
+      })),
+    ];
+  }, [found.data, typed, term, slug, tp, f, navigate]);
 
   return (
     <div className="flex min-h-full bg-background">
@@ -237,7 +296,14 @@ export function OrgLayout() {
           <OrgLeftNotice />
           {me.isSuccess && !org ? <p className="text-sm text-destructive">{t('notMember')}</p> : <Outlet />}
         </main>
-        <CommandPalette entries={paletteEntries} open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <CommandPalette
+          entries={paletteEntries}
+          found={foundEntries}
+          search={searchState}
+          onQueryChange={setPaletteQuery}
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+        />
       </div>
     </div>
   );

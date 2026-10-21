@@ -24,11 +24,42 @@ export const zAccountCode = z.string().regex(ACCOUNT_CODE_PATTERN);
 export const zRole = z.enum(['owner', 'admin', 'member', 'viewer']);
 export const zSlug = z.string().regex(/^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/);
 
+// The outcomes of the deterministic invoice checks (@crove/l10n-vn checkInvoice, issue #677), one code per wording.
+// A check stores its code and parameters, and the SPA renders the sentence in the reader's language from them. The
+// Vietnamese `message` is kept: it is what payloads written before #677 carry, and what the SPA falls back to for a
+// code it does not know.
+export const INVOICE_CHECK_CODES = [
+  'currency.unsupported',
+  'lines_sum.ok',
+  'lines_sum.mismatch',
+  'total.ok',
+  'total.mismatch',
+  'vat_breakdown.ok',
+  'vat_breakdown.mismatch',
+  'seller_tax_code.unreadable',
+  'seller_tax_code.checksum',
+  'seller_tax_code.ok',
+  'issue_date.invalid',
+  'issue_date.future',
+  'issue_date.ok',
+  'tax_authority_code.present',
+  'tax_authority_code.missing',
+  'signature.unverified',
+  'signature.missing',
+  'source.ai',
+  'duplicate.found',
+] as const;
+export type InvoiceCheckCode = (typeof INVOICE_CHECK_CODES)[number];
+
 export const zCheck = z.object({
   id: z.string().max(50),
   status: z.enum(['pass', 'warn', 'fail']),
   message: z.string().max(1000),
+  // Absent on payloads written before #677. Any string is kept, so a newer code still parses in an older reader.
+  code: z.string().max(80).optional(),
+  params: z.record(z.string().max(40), z.string().max(200)).optional(),
 });
+export type Check = z.infer<typeof zCheck>;
 
 export const zPartyRef = z.object({
   name: z.string().max(500),
@@ -493,6 +524,26 @@ export const zJournalEntry = z.object({
     .optional(),
   // The cash or bank voucher this entry posts, when it does (#327; absent otherwise).
   voucher: z.object({ id: zId, type: zVoucherType, code: z.string(), partyName: z.string().nullable() }).optional(),
+});
+
+// What the command palette's search found (#673): at most 8 rows per group. A party that is customerOnly (a customer of
+// sales that never sold to the org) is not among the vendors. A document's proposalId opens it in the Inbox.
+export const zSearchResult = z.object({
+  parties: z.array(z.object({ id: zId, name: z.string(), taxCode: z.string().nullable(), customerOnly: z.boolean() })),
+  documents: z.array(
+    z.object({
+      id: zId,
+      direction: zDocumentDirection,
+      series: z.string(),
+      number: z.string(),
+      issueDate: zLocalDate,
+      partyName: z.string(),
+      total: zMoney,
+      proposalId: zId.nullable(),
+      voided: z.boolean(),
+    }),
+  ),
+  entries: z.array(z.object({ id: zId, entryDate: zLocalDate, description: z.string(), amount: zMoney })),
 });
 
 // One account of the org's chart: a TT133 account (custom false, always active) or one of the org's sub-accounts

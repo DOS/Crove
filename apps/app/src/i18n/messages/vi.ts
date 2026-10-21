@@ -33,15 +33,25 @@ export const vi = {
   palette: {
     label: 'Bảng lệnh',
     open: 'Tìm hoặc mở trang',
-    placeholder: 'Gõ tên trang, nhà cung cấp hoặc lệnh',
+    placeholder: 'Gõ tên trang, đối tác, mã số thuế, số hóa đơn, số tiền hoặc lệnh',
     empty: 'Không tìm thấy kết quả phù hợp.',
     hint: 'Mũi tên lên xuống để chọn, Enter để mở, Esc để đóng.',
     switchOrg: 'Chuyển sang {name}',
     switchLocale: 'Đổi ngôn ngữ sang {name}',
     switchTheme: 'Giao diện: {name}',
+    searching: 'Đang tìm trong dữ liệu của tổ chức…',
+    searchFailed: 'Chưa tìm được trong dữ liệu của tổ chức. Thử lại sau.',
+    taxCode: 'MST {code}',
+    documentDetail: '{party}, {date}, {total}',
+    saleDocument: 'Bán ra',
+    voidedDocument: 'Đã hủy',
+    entryDetail: '{date}, {amount}',
     groups: {
       go: 'Đi tới',
       proposals: 'Đề xuất chờ duyệt',
+      parties: 'Đối tác',
+      documents: 'Hóa đơn',
+      entries: 'Bút toán',
       orgs: 'Tổ chức',
       actions: 'Lệnh',
     },
@@ -156,6 +166,8 @@ export const vi = {
       'Hóa đơn mua vào và bán ra đã được duyệt và ghi sổ. Chứng từ đã hủy là chứng từ có bút toán đã bị đảo: Crove không còn tính nó, còn hóa đơn của người bán không thay đổi.',
     empty: 'Chưa có chứng từ nào được ghi sổ',
     emptyHint: 'Duyệt đề xuất trong Hộp thư chứng từ để ghi sổ.',
+    search: 'Lọc theo số hóa đơn, đối tác hoặc ngày',
+    noMatch: 'Không có chứng từ nào khớp với bộ lọc',
     columns: {
       issueDate: 'Ngày HĐ',
       number: 'Số HĐ',
@@ -2381,6 +2393,22 @@ export const vi = {
   },
   // Kernel errors worded by the SPA (lib/kernel-errors.ts). The kernel sends the same text with the
   // code, and Vietnamese screens show the kernel's own message; these are used when an answer has none.
+  invoiceChecks: {
+    currency: { unsupported: 'Hóa đơn bằng {currency}; chưa hỗ trợ ghi sổ ngoại tệ' },
+    lines_sum: { ok: 'Tổng các dòng khớp tiền trước thuế', mismatch: 'Tổng các dòng ({lines}) lệch tiền trước thuế ({subtotal})' },
+    total: { ok: 'Tiền trước thuế + VAT khớp tổng thanh toán', mismatch: 'Tiền trước thuế + VAT lệch tổng thanh toán' },
+    vat_breakdown: { ok: 'Bảng thuế suất khớp tổng VAT', mismatch: 'Bảng thuế suất lệch tổng VAT' },
+    seller_tax_code: {
+      unreadable: 'Không đọc được MST người bán',
+      checksum: 'MST người bán {taxCode} sai số kiểm tra',
+      ok: 'MST người bán {taxCode} hợp lệ',
+    },
+    issue_date: { invalid: 'Ngày lập hóa đơn không hợp lệ', future: 'Ngày lập hóa đơn ở tương lai', ok: 'Ngày lập {date}' },
+    tax_authority_code: { present: 'Có mã của cơ quan thuế', missing: 'Không có mã của cơ quan thuế' },
+    signature: { unverified: 'Có chữ ký số, chưa xác minh với nguồn chính thức', missing: 'Không có chữ ký số' },
+    source: { ai: 'Đọc bằng AI từ ảnh/PDF, cần người kiểm tra' },
+    duplicate: { found: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' },
+  },
   kernelErrors: {
     codes: {
       UNAUTHENTICATED: 'Phiên đăng nhập đã hết hiệu lực, hãy đăng nhập lại',

@@ -1,9 +1,10 @@
 // The command palette (issue #439, DESIGN.md 5.2): which entries match what the user typed, in which order, and the
 // key that opens it. No browser or React imports, so it is unit tested.
 
-export type PaletteGroup = 'go' | 'proposals' | 'orgs' | 'actions';
+// parties, documents and entries hold what the org's search found (#673).
+export type PaletteGroup = 'go' | 'proposals' | 'parties' | 'documents' | 'entries' | 'orgs' | 'actions';
 
-export const PALETTE_GROUPS: readonly PaletteGroup[] = ['go', 'proposals', 'orgs', 'actions'];
+export const PALETTE_GROUPS: readonly PaletteGroup[] = ['go', 'proposals', 'parties', 'documents', 'entries', 'orgs', 'actions'];
 
 export interface PaletteItem {
   id: string;
@@ -44,6 +45,23 @@ export function filterPalette<T extends PaletteItem>(items: readonly T[], query:
     shown.set(item.group, n + 1);
     return [item];
   });
+}
+
+// What the server's search (#673) is asked for, or null: two characters at least, and a letter or a digit among them
+// (the server answers nothing for "!!" anyway).
+export function searchTerm(query: string): string | null {
+  const q = query.trim();
+  return q.length >= 2 && /[\p{L}\p{N}]/u.test(q) ? q.slice(0, 100) : null;
+}
+
+// The palette's list: what filterPalette kept, then what the server's search found, in PALETTE_GROUPS order so the
+// arrow keys walk the list as it is shown. Found entries are not filtered again: the server matched them, by words
+// a label may not show (a typed amount, a tax code).
+export function withFound<T extends PaletteItem>(local: readonly T[], found: readonly T[]): T[] {
+  return [...local, ...found]
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => PALETTE_GROUPS.indexOf(a.item.group) - PALETTE_GROUPS.indexOf(b.item.group) || a.index - b.index)
+    .map(({ item }) => item);
 }
 
 interface KeyLike {
