@@ -35,17 +35,11 @@ export interface PlanFilter {
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const ids = (value: unknown, max: number) =>
-  typeof value === 'string'
-    ? [
-        ...new Set(
-          value
-            .split(',')
-            .map((s) => s.trim().toLowerCase())
-            .filter((s) => UUID.test(s)),
-        ),
-      ].slice(0, max)
-    : [];
+// A comma list, or the same parameter given more than once (the router then hands an array).
+const ids = (value: unknown, max: number) => {
+  const parts = typeof value === 'string' ? value.split(',') : Array.isArray(value) ? value.flatMap((v) => (typeof v === 'string' ? v.split(',') : [])) : [];
+  return [...new Set(parts.map((s) => s.trim().toLowerCase()).filter((s) => UUID.test(s)))].slice(0, max);
+};
 
 // The print layout's address: /o/<slug>/print/social-plan?from=&to=&channels=&labels=.
 export function planPrintPath(slug: string, filter: PlanFilter): string {
