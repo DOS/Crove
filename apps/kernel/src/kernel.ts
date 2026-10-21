@@ -62,6 +62,7 @@ import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type Modu
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
 import { rebindExports as rebindOrgExports } from './export-rebind.ts';
 import { exportSealer } from './export-seal.ts';
+import { runUserDisable } from './user-disable.ts';
 import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
 import { createLogProvider, createMailer, messageIdDomain, type MailProvider } from './mail.ts';
@@ -126,6 +127,9 @@ export interface Kernel {
   // After a restore into a new bucket: re-records each org's export with the restored object versions, as the worker
   // (issue #351, export-rebind.ts). Resolves to the exit code.
   rebindExports(orgIds: readonly string[]): Promise<number>;
+  // The operator blocks (true) or unblocks a user account, as the worker (issue #985, user-disable.ts). Resolves to the
+  // exit code.
+  setUserStatus(disabled: boolean, argv: readonly string[]): Promise<number>;
 }
 
 // No-op defaults for the optional ports: nothing can be bound, no connector is installed, every module is on.
@@ -413,7 +417,23 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     }
   }
 
-  return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports };
+  // The operator's user-disable and user-enable roles (#985): the worker login is the only role that may execute
+  // crove_kernel.user_set_disabled and enter the system context the audit notes run in.
+  async function setUserStatus(disabled: boolean, argv: readonly string[]): Promise<number> {
+    const workerUrl = config.WORKER_DATABASE_URL;
+    if (!workerUrl) throw new Error(`WORKER_DATABASE_URL is required for ${disabled ? 'user-disable' : 'user-enable'}; run it in the worker container`);
+    const { pool, runtime } = buildRuntime(workerUrl, 'crove-operator');
+    try {
+      await assertRlsEnforced(pool);
+      await assertSystemContextAccess(pool, 'granted');
+      return await runUserDisable({ runtime }, disabled, argv);
+    } finally {
+      // Best effort: a failure to close never hides the run's own outcome.
+      await pool.end().catch((error: unknown) => console.error('[user-status] could not close the pool', error));
+    }
+  }
+
+  return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports, setUserStatus };
 }
 
 // The Social writer as the API uses it: drafts, rewrites and hashtags as they are, and with an image-capable model
