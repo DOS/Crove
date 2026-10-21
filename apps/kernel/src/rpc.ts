@@ -574,6 +574,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         update: os.social.labels.update.handler(socialCommand('social.label.update')),
         remove: os.social.labels.remove.handler(socialCommand('social.label.delete')),
       },
+      calendarFeed: {
+        get: os.social.calendarFeed.get.handler(socialQuery('social.calendar_feed.get')),
+        create: os.social.calendarFeed.create.handler(socialCommand('social.calendar_feed.create')),
+        revoke: os.social.calendarFeed.revoke.handler(socialCommand('social.calendar_feed.revoke')),
+      },
       calendarNotes: {
         list: os.social.calendarNotes.list.handler(socialQuery('social.calendar_note.list')),
         save: os.social.calendarNotes.save.handler(socialCommand('social.calendar_note.save')),
