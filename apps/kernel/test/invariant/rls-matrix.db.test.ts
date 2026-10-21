@@ -46,10 +46,6 @@ const PENDING_TABLES = new Set<string>([
   'crove_kernel.notification_mute',
   'crove_kernel.org_usage',
   'crove_kernel.usage_deferral',
-  'crove_social.chat_alert',
-  'crove_social.chat_alert_target',
-  'crove_social.media_tag',
-  'crove_social.review_link_post',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;

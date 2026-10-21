@@ -238,7 +238,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
   it('never re-reads a booked invoice, and never changes a decided proposal', async () => {
     const { fileId, proposalId } = await proposed();
     const before = await get(proposalId);
-    await runtime.execute('kernel.proposal.approve', { id: proposalId, revision: before.revision }, { actor: asMfa(users.admin), orgId: orgA });
+    await runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: proposalId, revision: before.revision }, { actor: asMfa(users.admin), orgId: orgA });
     await expect(reextract(fileId)).rejects.toMatchObject({ code: 'PROPOSAL_DECIDED', status: 409 });
     expect(await versions(fileId)).toHaveLength(1);
     const after = await get(proposalId);
@@ -257,7 +257,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     // The command acts on the file's newest proposal, so the rejected one no longer offers a re-read.
     expect(await get(second.proposalId)).toMatchObject({ canReextract: false });
     // Once the newest is booked, no proposal of the file offers it, and the command refuses.
-    await runtime.execute('kernel.proposal.approve', { id: replacement, revision: 1 }, { actor: asMfa(users.admin), orgId: orgA });
+    await runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: replacement, revision: 1 }, { actor: asMfa(users.admin), orgId: orgA });
     expect(await get(replacement as string)).toMatchObject({ canReextract: false });
     expect(await get(second.proposalId)).toMatchObject({ canReextract: false });
     await expect(reextract(second.fileId)).rejects.toMatchObject({ code: 'PROPOSAL_DECIDED' });
@@ -275,7 +275,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
 
     // While the re-read is in flight nobody decides on the proposal.
     for (const [name, input] of [
-      ['kernel.proposal.approve', { id: proposalId, revision: 2 }],
+      ['kernel.proposal.approve', { acceptUnverifiedSignature: true, id: proposalId, revision: 2 }],
       ['kernel.proposal.edit', { id: proposalId, revision: 2, lineAccounts: [{ lineNo: 1, debitAccount: line1.debitAccount }] }],
       ['kernel.proposal.reject', { id: proposalId }],
     ] as const) {
@@ -294,10 +294,10 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     expect(revised.payload?.checks.some((c) => c.id === 'duplicate')).toBe(false);
 
     const asAdmin = { actor: asMfa(users.admin), orgId: orgA };
-    await expect(runtime.execute('kernel.proposal.approve', { id: proposalId, revision: 2 }, asAdmin)).rejects.toMatchObject({ code: 'STALE_REVISION' });
+    await expect(runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: proposalId, revision: 2 }, asAdmin)).rejects.toMatchObject({ code: 'STALE_REVISION' });
     // The accounts the approver saw on revision 2 are not what revision 3 says.
     await expect(
-      runtime.execute('kernel.proposal.approve', { id: proposalId, revision: 3, lineAccounts: [{ lineNo: 1, debitAccount: other }] }, asAdmin),
+      runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: proposalId, revision: 3, lineAccounts: [{ lineNo: 1, debitAccount: other }] }, asAdmin),
     ).rejects.toMatchObject({ code: 'CONTENT_CHANGED' });
 
     // Authors accumulate: the uploader, the editor and the member who asked for the re-read. The admin is none of them.
@@ -306,7 +306,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
       return rows[0]?.authors.filter((a) => a.type === 'user').map((a) => a.id);
     });
     expect(new Set(authors)).toEqual(new Set([users.owner, users.member]));
-    await expect(runtime.execute('kernel.proposal.approve', { id: proposalId, revision: 3 }, asAdmin)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
+    await expect(runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: proposalId, revision: 3 }, asAdmin)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
   });
 
   it('makes the user who asked for a re-read an author of the new revision (P10)', async () => {
@@ -315,7 +315,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     reads.push(invoice(number, 'Đọc lại bởi quản trị'));
     await extractAndPropose(deps(), orgA, fileId, version);
     expect(await get(proposalId, users.admin)).toMatchObject({ revision: 2, canApprove: false });
-    await expect(runtime.execute('kernel.proposal.approve', { id: proposalId, revision: 2 }, { actor: asMfa(users.admin), orgId: orgA })).rejects.toMatchObject({
+    await expect(runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: proposalId, revision: 2 }, { actor: asMfa(users.admin), orgId: orgA })).rejects.toMatchObject({
       code: 'FOUR_EYES_REQUIRED',
     });
   });
@@ -395,7 +395,7 @@ suite('re-extraction invariants on PostgreSQL (issue #40)', () => {
     for (let i = 0; i < 4; i++) {
       const { fileId, proposalId } = await proposed();
       const [approved, requested] = await Promise.allSettled([
-        runtime.execute('kernel.proposal.approve', { id: proposalId, revision: 1 }, { actor: asMfa(users.admin), orgId: orgA }),
+        runtime.execute('kernel.proposal.approve', { acceptUnverifiedSignature: true, id: proposalId, revision: 1 }, { actor: asMfa(users.admin), orgId: orgA }),
         reextract(fileId),
       ]);
       const rows = await versions(fileId);

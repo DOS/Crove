@@ -145,6 +145,12 @@ export const KERNEL_ERROR_CODES = [
   // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
   'JOURNAL_VOUCHER_INVALID',
+  // Year-end closing (#889).
+  'YEAR_NOT_ENDED',
+  'YEAR_CLOSED',
+  'CLOSING_EMPTY',
+  'CLOSING_UNSUPPORTED',
+  'CLOSING_STALE',
   'BANK_LINE_NOT_FOUND',
   'BANK_LINE_MISMATCH',
   'BANK_LINE_PROPOSED',
