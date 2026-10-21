@@ -4,14 +4,15 @@ import { sql } from 'kysely';
 import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
+import { vietnamToday } from '@crove/kernel-contract';
 import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
-import { PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges } from '@crove/kernel';
+import { KERNEL_NOTIFYING_EVENTS, PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
-import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
+import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
 import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { ChatAlertSender } from './chat-alerts.ts';
@@ -41,6 +42,12 @@ const AGENT_PROPOSAL_COMMANDS: Readonly<Record<string, string>> = {
 };
 const AGENT_RETRY_LIMIT = 3;
 const SOCIAL_NOTIFY_RETRY_LIMIT = 3;
+// In-app notifications of the kernel and finance (#671): the dispatch command of the module whose event it is.
+const NOTIFY_COMMANDS: ReadonlyMap<string, { module: string; command: string }> = new Map<string, { module: string; command: string }>([
+  ...KERNEL_NOTIFYING_EVENTS.map((type): [string, { module: string; command: string }] => [type, { module: 'kernel', command: 'kernel.notification.dispatch' }]),
+  ...FINANCE_NOTIFYING_EVENTS.map((type): [string, { module: string; command: string }] => [type, { module: 'finance', command: 'finance.notification.dispatch' }]),
+]);
+const NOTIFY_RETRY_LIMIT = 3;
 const NOTIFYING: ReadonlySet<string> = new Set(NOTIFYING_EVENTS);
 // Team chat alerts (#863): one job per alerting event, never retried. pg-boss refuses a second job with the same
 // singleton key in the same slot of this many seconds, even once the first is done, so a relay batch sent again after a
@@ -514,6 +521,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     });
   }
 
+  // In-app notifications of the kernel and finance (#671): the module's dispatch reads the event from the outbox.
+  await boss.work<AgentDispatchJob & { type: string }>(QUEUES.notify, { batchSize: 1 }, async ([job]) => {
+    if (!job) return;
+    const notify = NOTIFY_COMMANDS.get(job.data.type);
+    if (!notify || !deps.runtime.installed(notify.module)) return;
+    await deps.runtime.execute(notify.command, { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.notify' }, orgId: job.data.orgId });
+  });
+
   // In-app notifications (#637): the command reads the event from the outbox and writes one row per person; the job
   // carries only its id.
   if (social) {
@@ -700,6 +715,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   };
   const missingInvoiceTimer = finance ? setInterval(() => void missingInvoiceSweep(), MISSING_INVOICE_SWEEP_MS) : null;
   if (missingInvoiceTimer) void missingInvoiceSweep();
+  // Periods closing (#671): every hour, owners and admins of an org whose VAT return is due within days and whose
+  // period is not locked yet are told, once per period.
+  let closing = false;
+  const closingSweep = async () => {
+    if (closing) return;
+    closing = true;
+    try {
+      const sent = await sweepPeriodClosing({ runtime: deps.runtime, workerDb: deps.workerDb, today: vietnamToday(new Date()) });
+      if (sent > 0) console.log(`[period-closing] told ${sent}`);
+    } catch (error) {
+      console.error('[period-closing] sweep', error);
+    } finally {
+      closing = false;
+    }
+  };
+  const closingTimer = deps.runtime.installed('finance') ? setInterval(() => void closingSweep(), PERIOD_CLOSING_SWEEP_MS) : null;
+  if (closingTimer) void closingSweep();
 
   // Scheduled client report mail (#704): every 5 minutes, the schedules due queue their mails (sent by the mail queue).
   let reporting = false;
@@ -936,6 +968,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   .catch((error: unknown) => console.error(`[social-chat-alert] event ${row.event_id.slice(0, 8)}: not queued (${error instanceof Error ? error.name : typeof error})`));
                 if (test) return null;
               }
+              // An in-app notification (#671), besides whatever else the event starts (an agent's review task).
+              const notify = NOTIFY_COMMANDS.get(row.type);
+              if (notify && deps.runtime.installed(notify.module)) {
+                await boss.send(QUEUES.notify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
+                  singletonKey: `${row.org_id}:${row.event_id}`,
+                  retryLimit: NOTIFY_RETRY_LIMIT,
+                  retryDelay: 20,
+                  retryBackoff: true,
+                });
+              }
               if (social && NOTIFYING.has(row.type)) {
                 return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
                   singletonKey: `${row.org_id}:${row.event_id}`,
@@ -1053,6 +1095,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (reminderTimer) clearInterval(reminderTimer);
     if (missingInvoiceTimer) clearInterval(missingInvoiceTimer);
     clearInterval(proposalNudgeTimer);
+    if (closingTimer) clearInterval(closingTimer);
     if (reportTimer) clearInterval(reportTimer);
     if (feedTimer) clearInterval(feedTimer);
     if (refreshTimer) clearInterval(refreshTimer);

@@ -23,10 +23,13 @@ import { signOut } from '../lib/session-actions.ts';
 import { SAFETY_POLL_MS, pollEvery, useInvalidationStream, useStreamLive } from '../lib/stream-hook.ts';
 import { unreadLabel } from '../lib/social-notifications.ts';
 import { useNotifications } from './social-notifications.tsx';
+import { useWorkNotifications } from './notifications.tsx';
 
 // Each item belongs to a module; the menu shows only the modules this deployment runs (CROVE_MODULES).
 const ALL_NAV = [
   { to: '/o/$slug/inbox', label: 'inbox', module: 'kernel' },
+  // In-app notifications of the kernel and finance (#671), with the unread count.
+  { to: '/o/$slug/notifications', label: 'alerts', module: 'kernel' },
   { to: '/o/$slug/documents', label: 'documents', module: 'finance' },
   { to: '/o/$slug/customers', label: 'customers', module: 'finance' },
   { to: '/o/$slug/vendors', label: 'vendors', module: 'finance' },
@@ -76,6 +79,9 @@ export function OrgLayout() {
   // The member's unread notifications (#637), where Social runs.
   const notifications = useNotifications(NAV.some((n) => n.module === 'social'));
   const unread = unreadLabel(notifications.data?.unread ?? 0);
+  // The kernel's and finance's (#671).
+  const work = useWorkNotifications();
+  const workUnread = unreadLabel(work.data?.unread ?? 0);
   const org = me.data?.orgs.find((o) => o.slug === slug);
   const orgSelectId = useId();
   const tp = useTranslations('palette');
@@ -248,6 +254,7 @@ export function OrgLayout() {
                 <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{inboxCount}</span>
               )}
               {item.to === '/o/$slug/social/notifications' && unread && <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{unread}</span>}
+              {item.to === '/o/$slug/notifications' && workUnread && <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{workUnread}</span>}
             </Link>
           ))}
         </nav>

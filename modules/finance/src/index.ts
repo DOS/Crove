@@ -18,6 +18,7 @@ import { missingInvoicesReminderSet, missingInvoicesRemind, missingInvoicesReque
 import { searchQuery } from './search.ts';
 import { documentExports } from './document-exports.ts';
 import { customersList } from './parties.ts';
+import { financeNotificationCommands } from './notifications.ts';
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
 export {
@@ -97,10 +98,11 @@ export {
   type VatWarning,
 } from './vat.ts';
 export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type LedgerReport } from './ledger-reports.ts';
+export { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, sweepPeriodClosing } from './notifications.ts';
 export { SEARCH_LIMIT, searchAmount, type SearchResult } from './search.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, ...financeNotificationCommands];
 export const financeQueries = [
   fileForExtraction,
   purchaseLookup,

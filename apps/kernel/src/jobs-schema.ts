@@ -38,6 +38,8 @@ export const QUEUES = {
   // Created by the WORM archive migration (20261023230000).
   archiveWrite: 'kernel-archive-write',
   archiveVerify: 'kernel-archive-verify',
+  // Created by the kernel notifications migration (20261025030000).
+  notify: 'kernel-notify',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
