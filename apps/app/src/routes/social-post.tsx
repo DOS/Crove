@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf } from '@crove/mod-social/contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -465,6 +465,40 @@ function RepostField({ settings, disabled, onChange }: { settings: Record<string
   );
 }
 
+// The time the post comes down by itself (#861), on the channels Crove can take a post down from. onApplyAll: the same
+// time for every channel of the post that can (absent with a single channel).
+function RemoveAtField({ settings, disabled, onChange, onApplyAll }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void; onApplyAll?: ((removeAt: string) => void) | undefined }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const current = settings.removeAt === undefined || settings.removeAt === null ? null : settings.removeAt;
+  const parsed = removeAtOf(settings);
+  const set = (next: string | null) => {
+    const { removeAt: _old, ...rest } = settings;
+    onChange(next ? { ...rest, removeAt: next } : rest);
+  };
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <Label htmlFor={id} className="text-xs">
+          {t('removeAt')}
+        </Label>
+        <Input id={id} type="datetime-local" className="h-8 w-auto" disabled={disabled} value={parsed !== null && parsed !== 'invalid' ? toLocalInput(parsed) : ''} onChange={(e) => set(fromLocalInput(e.target.value))} />
+        {current !== null && (
+          <Button variant="ghost" size="sm" disabled={disabled} onClick={() => set(null)}>
+            {t('removeAtClear')}
+          </Button>
+        )}
+        {onApplyAll && parsed !== null && parsed !== 'invalid' && (
+          <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onApplyAll(parsed)}>
+            {t('removeAtApplyAll')}
+          </Button>
+        )}
+      </div>
+      <p className="text-xs text-subtle-foreground">{t('removeAtHint')}</p>
+    </div>
+  );
+}
+
 // The auto-reply on likes (#746): a text and the like count that sets it off; both or neither.
 function AutoReplyField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
   const t = useTranslations('social');
@@ -706,6 +740,7 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
               delete rest.threadParts;
               delete rest.autoReply;
               delete rest.repost;
+              delete rest.removeAt;
               delete rest.cover;
             }
             onChange(e.target.value === 'feed' ? rest : { ...rest, postType: e.target.value });
@@ -915,6 +950,7 @@ function ChannelEditor({
   scopes,
   onAiUsed,
   slug,
+  onRemoveAtAll,
 }: {
   provider: string;
   channel: string;
@@ -931,6 +967,8 @@ function ChannelEditor({
   scopes?: readonly string[];
   onAiUsed?: () => void;
   slug?: string;
+  // The same takedown time for every channel of the post that can take one (#861).
+  onRemoveAtAll?: ((removeAt: string) => void) | undefined;
 }) {
   const t = useTranslations('social');
   // The link as the channel sends it, with its UTM tags (#585).
@@ -994,6 +1032,10 @@ function ChannelEditor({
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       {isProvider(provider) && REPOST_PROVIDERS.has(provider) && postType !== 'story' && <RepostField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
+      {/* A channel Crove cannot take a post down from shows the field only to clear a time set elsewhere (its issue says why). */}
+      {((isProvider(provider) && REMOVE_READY.has(provider) && postType !== 'story') || own.settings.removeAt !== undefined) && (
+        <RemoveAtField settings={own.settings} disabled={disabled} onApplyAll={onRemoveAtAll} onChange={(settings) => onChange({ ...own, settings })} />
+      )}
       {isProvider(provider) && AUTO_REPLY_RULES[provider] && postType !== 'story' && <AutoReplyField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {isProvider(provider) && THREAD_RULES[provider] && postType !== 'story' && <ThreadField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && (!threadPartsOf(own.settings) || typeof own.settings.firstComment === 'string') && (
@@ -1443,6 +1485,18 @@ export function SocialComposePage() {
                 connectionId={c.id}
                 scopes={c.scopes}
                 onAiUsed={() => setAiUsed(true)}
+                onRemoveAtAll={
+                  selected.length > 1
+                    ? (removeAt) => {
+                        const next = { ...own };
+                        for (const s of selected) {
+                          const mine = own[s.id] ?? EMPTY_OWN;
+                          if (isProvider(s.provider) && REMOVE_READY.has(s.provider) && postTypeOf(mine.settings) !== 'story') next[s.id] = { ...mine, settings: { ...mine.settings, removeAt } };
+                        }
+                        setOwn(next);
+                      }
+                    : undefined
+                }
               />
             ))
           )}
@@ -1480,8 +1534,15 @@ function sameOwn(a: Own, b: Own): boolean {
   );
 }
 
+// A channel's planned takedown time (#861), when it has a valid one.
+function plannedRemoval(v: Variant): string | null {
+  const at = removeAtOf(v.settings);
+  return at === null || at === 'invalid' ? null : at;
+}
+
 function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, string>; onDone: () => void }) {
   const t = useTranslations('social');
+  const f = useFormat();
   const me = useQuery(orpc.me.get.queryOptions());
   const self = me.data?.userId;
   const inReview = post.variants.filter((v) => v.status === 'in_review');
@@ -1530,6 +1591,8 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
               {v.review.required > 1 && (
                 <span className="text-xs text-subtle-foreground tabular-nums">{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</span>
               )}
+              {/* Approving approves the planned takedown too (#861). */}
+              {plannedRemoval(v) && <span className="text-xs text-warning">{t('remove.planned', { when: f.dateTime(plannedRemoval(v) as string) })}</span>}
             </label>
           ))}
         </div>
@@ -1783,7 +1846,13 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
       </div>
     );
   }
-  if (!v.removal) return null;
+  if (!v.removal) {
+    // A takedown set for later (#861), on a channel that went out before it: the worker asks for it when it comes.
+    const planned = v.status === 'published' && isProvider(v.provider) && REMOVE_READY.has(v.provider) ? removeAtOf(v.settings) : null;
+    // One that no longer fits the time the post went out stays up, as the worker's sweep decides.
+    if (planned === null || planned === 'invalid' || !v.publishedAt || removeAtFit(v.provider, v.settings, new Date(v.publishedAt)) !== null) return null;
+    return <p>{t('remove.planned', { when: f.dateTime(planned) })}</p>;
+  }
   const known = v.removal.code === 'TELEGRAM_CANNOT_DELETE' || v.removal.code === 'REMOVE_NOT_RUN' ? v.removal.code : null;
   return (
     <div className="space-y-1">
@@ -2022,6 +2091,15 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
     for (const v of p.variants) if (EDITABLE.includes(v.status)) changed[v.id] = withUtm(own[v.id] ?? ownOf(v), next);
     setOwn(changed);
   };
+  // The same takedown time (#861) for every channel still to go out that can take one.
+  const setRemoveAtAll = (removeAt: string) => {
+    const changed = { ...own };
+    for (const v of p.variants) {
+      const mine = own[v.id] ?? ownOf(v);
+      if (EDITABLE.includes(v.status) && isProvider(v.provider) && REMOVE_READY.has(v.provider) && postTypeOf(mine.settings) !== 'story') changed[v.id] = { ...mine, settings: { ...mine.settings, removeAt } };
+    }
+    setOwn(changed);
+  };
   const dirty = editsOf(origin);
   const editable = canWrite && p.variants.some((v) => EDITABLE.includes(v.status));
   const submittable = p.variants.filter((v) => SUBMITTABLE.includes(v.status));
@@ -2171,6 +2249,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 status={v.status}
                 statusError={v.error}
                 onChange={(next) => setOwn({ ...own, [v.id]: next })}
+                onRemoveAtAll={!frozen && p.variants.filter((x) => EDITABLE.includes(x.status)).length > 1 ? setRemoveAtAll : undefined}
                 footer={
                   <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
                     {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (

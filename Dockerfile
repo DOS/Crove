@@ -25,12 +25,13 @@ FROM node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce055
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     STORAGE_DIR=/data/files \
+    ARCHIVE_DIR=/data/archive \
     WEB_DIST=/app/apps/app/dist \
     MIGRATIONS_DIR=/app/supabase/migrations
 WORKDIR /app
 COPY --from=kernel --chown=node:node /app /app
 COPY --from=web --chown=node:node /app/apps/app/dist /app/apps/app/dist
-RUN mkdir -p /data/files /data/keys /data/status && chown node:node /data/files /data/keys /data/status && chmod 700 /data/keys
+RUN mkdir -p /data/files /data/keys /data/status /data/archive && chown node:node /data/files /data/keys /data/status /data/archive && chmod 700 /data/keys
 # The build id GET /version reports (#892): the release workflow passes the git SHA. Last, so a new SHA rebuilds no
 # layer above.
 ARG CROVE_BUILD=

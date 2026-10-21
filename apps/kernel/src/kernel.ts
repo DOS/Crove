@@ -67,7 +67,7 @@ import { createHttpApp, type StreamDeps } from './http.ts';
 import { createLogProvider, createMailer, messageIdDomain, type MailProvider } from './mail.ts';
 import { MAIL_TEMPLATES } from './mail-templates.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
-import { createBlobStore } from './storage.ts';
+import { createArchiveStore, createBlobStore } from './storage.ts';
 import type { SocialDrafter } from './rpc.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
 import { createTaxCodeLookup } from './tax-lookup.ts';
@@ -364,6 +364,10 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
         stops.push(() => pool.end());
         await assertRlsEnforced(pool);
         await assertSystemContextAccess(pool, 'granted');
+        // The WORM archive (#891): an S3 archive without Object Lock stops the worker before it writes anything.
+        const archiveStore = createArchiveStore(config);
+        await archiveStore.assertObjectLock?.();
+        console.log(`[archive] ${archiveStore.describe()}`);
         stops.push(
           await startWorker({
             connectionString: workerUrl,
@@ -382,6 +386,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             publicUrl: config.PUBLIC_URL,
             // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).
             mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
+            archive: { store: archiveStore, lagSeconds: config.ARCHIVE_LAG_SECONDS },
           }),
         );
       }

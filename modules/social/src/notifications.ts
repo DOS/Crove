@@ -34,6 +34,8 @@ export const NOTIFYING_EVENTS = [
   'social.variant.decided',
   'social.variant.failed',
   'social.variant.needs_attention',
+  // A planned takedown that did not happen (#861); a person's own failed ask shows on the post they were looking at.
+  'social.variant.remove_failed',
   'kernel.channel.expired',
   'social.post.commented',
   'social.post.mentioned',
@@ -122,6 +124,21 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
         connectionId: v?.channel_connection_id ?? null,
         detail: v ? { provider: v.provider } : {},
       };
+    }
+    // A failed removal tells the owners and admins only when it was the planned takedown's (#861): nobody was watching
+    // it. It counts as a failed post (kind failed, muted and mailed with it), worded as a removal.
+    case 'social.variant.remove_failed': {
+      const e = z.object({ post_id: zId, variant_id: zId, scheduled: z.literal(true) }).safeParse(payload);
+      if (!e.success) return null;
+      const v = await ctx.trx
+        .selectFrom('crove_social.post_variant')
+        .select(['provider', 'channel_connection_id', 'status'])
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', e.data.variant_id)
+        .executeTakeFirst();
+      // Gone, or removed since (a person asked again): nothing left to do.
+      if (!v || v.status !== 'published') return null;
+      return { kind: 'failed', users: await deciders(ctx), postId: e.data.post_id, connectionId: v.channel_connection_id, detail: { provider: v.provider, removal: 'scheduled' } };
     }
     case 'kernel.channel.expired': {
       const e = z.object({ connection_id: zId, provider: z.string().max(32) }).safeParse(payload);
@@ -217,6 +234,7 @@ function subjectOf(kind: SocialNotificationKind, detail: Record<string, string>,
     case 'decided':
       return `${detail.decision === 'approved' ? 'Bài của bạn đã được duyệt' : detail.decision === 'rejected' ? 'Bài của bạn bị từ chối' : 'Bài của bạn cần sửa'}${about}`;
     case 'failed':
+      if (detail.removal === 'scheduled') return `Tự gỡ bài không thành công${channel ? ` trên ${oneLine(channel, 60)}` : ''}${about}`;
       return `Đăng bài không thành công${channel ? ` trên ${oneLine(channel, 60)}` : ''}${about}`;
     case 'needs_attention':
       return `Bài đăng cần bạn xử lý${channel ? ` trên ${oneLine(channel, 60)}` : ''}${about}`;
@@ -268,7 +286,7 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
       templateKey: NOTIFICATION_MAIL_TEMPLATE,
       to: email,
       subject,
-      payload: { kind: plan.kind, org: org.name, post: postText, channel, decision: plan.detail.decision ?? null, path },
+      payload: { kind: plan.kind, org: org.name, post: postText, channel, decision: plan.detail.decision ?? null, ...(plan.detail.removal ? { removal: plan.detail.removal } : {}), path },
       status: 'queued',
     });
     if (mail.status === 'queued') queued++;
