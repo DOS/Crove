@@ -68,7 +68,8 @@ Values:
 - Amounts are whole dong (`xs:long`). Each line read from accounts is rounded half up, then every total line is worked
   out again from the rounded lines with the form's formulas, so the file adds up exactly. An amount beyond HTKK's 14
   digits is refused (422).
-- F01 takes each listed account's row of the year's trial balance (`ledger.period`), whose rows hold their
+- F01 takes each listed account's row of the year's trial balance, the same as `ledger.period` shows, but summed per
+  account and party in SQL, so a year of any size is written (the ledger reports stop at 50,000 lines). Rows hold their
   sub-accounts: an org sub-account (`6422.DV`) is inside 6422 and 642. `tongCong` is the sum of the level-1 rows.
   Payables and receivables (131, 331) keep both sides per party, as on the trial balance.
 

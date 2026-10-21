@@ -14,7 +14,7 @@ import type { ExtractClient } from '@crove/extract-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
-import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { F01_ACCOUNTS, extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
@@ -512,6 +512,22 @@ suite('ledger reports per month, quarter or year (#321)', () => {
     expect(xmlValue(xml, 'NamNay/ct24')).toBe('5400000');
     expect(xmlValue(xml, 'NamTruoc/ct24')).toBe('0');
     expect(xmlValue(xml, 'SoDuCuoiKy/Co/ct331')).toBe('5940000');
+    // F01 is summed per account in SQL rather than from every line: it must equal the year's trial balance of the
+    // ledger report on every account HTKK lists.
+    const year = await rpc('ledger/period', await tokenFor(viewer), { period: '2026' });
+    const sides = [
+      ['SoDuDauKy/No', 'openingDebit'],
+      ['SoDuDauKy/Co', 'openingCredit'],
+      ['SoPhatSinhTrongKy/No', 'debit'],
+      ['SoPhatSinhTrongKy/Co', 'credit'],
+      ['SoDuCuoiKy/No', 'closingDebit'],
+      ['SoDuCuoiKy/Co', 'closingCredit'],
+    ] as const;
+    const listed = (year.body.trialBalance.rows as TrialRow[]).filter((r) => F01_ACCOUNTS.includes(r.accountCode as (typeof F01_ACCOUNTS)[number]));
+    expect(listed.length).toBeGreaterThan(3);
+    for (const row of listed) {
+      for (const [path, key] of sides) expect(xmlValue(xml, `${path}/ct${row.accountCode}`), `${path} ${row.accountCode}`).toBe(String(Math.round(Number(row[key]))));
+    }
     expect((await statementAudits()).slice(before).map((r) => r.detail)).toEqual([{ period: '2026', format: 'htkk_bctc_xml', warnings: ['YEAR_NOT_CLOSED'] }]);
 
     // A malformed or out-of-range year, and another org's member, get no file and record nothing.
