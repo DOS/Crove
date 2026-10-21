@@ -109,9 +109,9 @@ type Probe = { kind: 'email'; email: string } | { kind: 'digits'; digits: string
 export function personalDataProbe(value: string): Probe | null {
   const trimmed = value.trim();
   if (/^[^\s@]+@[^\s@]+$/.test(trimmed)) return { kind: 'email', email: trimmed.toLowerCase() };
-  // A phone number (spaces, dots, dashes, brackets and a leading + allowed), a tax code (10 digits, or 13 with a
-  // branch suffix) or a national ID (12 digits).
-  if (/^[+\d][\d\s().-]{7,24}$/.test(trimmed)) {
+  // A phone number (spaces, dots, dashes, brackets and a leading + allowed, as in "(028) 3829 1234"), a tax code (10
+  // digits, or 13 with a branch suffix) or a national ID (12 digits).
+  if (/^[+(\d][\d\s().-]{7,24}$/.test(trimmed)) {
     const digits = trimmed.replace(/\D/g, '');
     if (digits.length >= 8 && digits.length <= 15) return { kind: 'digits', digits };
   }

@@ -107,7 +107,7 @@ suite('finding a person in the org (#923)', () => {
   });
 
   it('finds a phone number however it is spelled, and a tax code', async () => {
-    for (const phone of ['0912345678', '0912.345.678', '+84 912 345 678', '84912345678']) {
+    for (const phone of ['0912345678', '0912.345.678', '+84 912 345 678', '84912345678', '(091) 234 5678']) {
       expect(columns(await find(phone)), phone).toContain('crove_kernel.party.phone');
     }
     const byCode = await find('0101234564');
