@@ -1,6 +1,6 @@
 // Search across parties, documents and journal entries (issue #673), for the command palette. finance.search folds
 // what was typed the way the stored search columns fold each row (crove_kernel.search_fold, migration
-// 20261023050000_crove_finance_search: Vietnamese marks, đ and case ignored), so "dien luc" finds "Điện lực". Every
+// 20261023060000_crove_finance_search: Vietnamese marks, đ and case ignored), so "dien luc" finds "Điện lực". Every
 // word must start a word of the row (a prefix match): parties by name or tax code, documents by series and number or
 // by their party, entries by description, and entries by amount when what was typed reads as one. Each group holds at
 // most SEARCH_LIMIT rows: parties with the closest match first, documents and entries newest first. It runs as the
@@ -59,7 +59,7 @@ export function searchAmount(text: string): string | null {
   return digits.length <= 15 ? digits : null;
 }
 
-// The stored search columns (migration 20261023050000), each with its GIN index.
+// The stored search columns (migration 20261023060000), each with its GIN index.
 const PARTY_VECTOR = sql`p.search`;
 const DOCUMENT_VECTOR = sql`d.search`;
 const ENTRY_VECTOR = sql`j.search`;
