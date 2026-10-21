@@ -1,6 +1,7 @@
 import { createAccount, setVendorDefaultAccount, updateAccount } from './accounts.ts';
 import { recordPurchase, revisePurchase } from './record.ts';
 import { cashVouchers, prepareVoucher, recordVoucher, vouchersList } from './cash-voucher.ts';
+import { prepareJournalVoucher, recordJournalVoucher } from './journal-voucher.ts';
 import { prepareReversal, reverseEntry } from './reversal.ts';
 import { openingBalancePost, openingBalancePreview } from './opening-balance.ts';
 import { fileForExtraction, purchaseLookup } from './extract.ts';
@@ -12,6 +13,8 @@ import { bankImport, bankLines, bankPreview } from './bank.ts';
 import { bankLineVoucher, bankOpenLines, bankSuggestions } from './bank-match.ts';
 import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts';
 import { statementsExport, statementsPeriodQuery } from './statements.ts';
+import { searchQuery } from './search.ts';
+import { documentExports } from './document-exports.ts';
 
 export { extractAndPropose, recordExtractionFailure, type ExtractDeps } from './extract.ts';
 export {
@@ -70,14 +73,16 @@ export {
   type VatWarning,
 } from './vat.ts';
 export { LEDGER_LINE_LIMIT, type AccountLedgerView, type LedgerBook, type LedgerReport } from './ledger-reports.ts';
+export { SEARCH_LIMIT, searchAmount, type SearchResult } from './search.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, portalListImport, portalListRemove, portalListRecord];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, portalListImport, portalListRemove, portalListRecord];
 export const financeQueries = [
   fileForExtraction,
   purchaseLookup,
   vendorsList,
   documentsList,
+  documentExports,
   journalList,
   journalGet,
   accountsList,
@@ -101,4 +106,5 @@ export const financeQueries = [
   bankLineVoucher,
   bankSuggestions,
   bankOpenLines,
+  searchQuery,
 ];

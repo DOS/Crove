@@ -16,7 +16,7 @@ docker compose up
 
 Open http://localhost:8080, create an account, create your organization, and drop an e-invoice XML into the Inbox. Emails sent by the bundled auth service (confirmation, password reset) and Crove's member invites are caught by Mailpit at http://localhost:8025.
 
-The defaults are for local use. Before anyone else can reach your instance, copy `.env.example` to `.env` and change every secret.
+The defaults are for local use. Before anyone else can reach your instance, copy `.env.example` to `.env` and change every secret: [docs/self-host/](docs/self-host/README.md) walks through a server setup (TLS, mail, storage, sign-up, backups, upgrades).
 
 ## What works today (MVP)
 
@@ -34,6 +34,7 @@ The defaults are for local use. Before anyone else can reach your instance, copy
 | Modules | `CROVE_MODULES`: comma-separated modules to run, such as `finance` (default: every module; `kernel` is always on). A module left out registers no commands, routes, jobs or menus; migrations still apply to every schema. Give the `api` and `worker` roles the same value (ADR-0031) |
 | AI for PDFs and photos | `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL` (any OpenAI-compatible endpoint: OpenAI, Ollama, vLLM, ...) |
 | Feedback and support link | `SUPPORT_URL`: where the app's "Góp ý / Hỗ trợ" link goes, an `https:` page (a chat group, a help desk) or a `mailto:` address. Unset hides the link; any other scheme stops the boot. Browsers read it from `/api/config` |
+| Terms and privacy notice | `TERMS_URL`, `PRIVACY_URL`: `https:` pages the sign-up and invite screens link to ("Khi tiếp tục, bạn đồng ý với..."). Unset hides each link; any other scheme stops the boot. Drafts to adapt, not yet reviewed by a lawyer: [docs/legal/](docs/legal/README.md) |
 | Onboarding by tax code | `TAX_CODE_LOOKUP_URL`: an https URL template with `{taxCode}` (for example `https://api.vietqr.io/v2/business/{taxCode}`, which answers in the shape the kernel reads). With it, the new-organization form looks up a client's tax code and fills in the name and address; unset hides the button, since the lookup sends the tax codes users type to that provider. Answers are cached in the process for a day |
 | Inbound email | `INBOUND_DOMAIN`, `INBOUND_SECRET`; your mail worker POSTs raw MIME to `/api/inbound/email` with `Authorization: Bearer <INBOUND_SECRET>` and the envelope recipient in `X-Crove-Recipient`. [`tools/inbound-mail/worker.js`](tools/inbound-mail/worker.js) is a ready worker for Cloudflare Email Routing (setup: [provision-pilot.md](docs/runbooks/provision-pilot.md), "Inbound email") |
 | Org exports (offboarding) | `EXPORT_ENCRYPTION_KEY` (32 random bytes, `openssl rand -base64 32`; required on a public URL) seals exports at rest with AES-256-GCM; `EXPORT_RETENTION_DAYS` (35 to 90, default 35) before the worker deletes them; `EXPORT_ENCRYPTION_KEY_PREVIOUS` to read exports sealed before a key rotation. Give the bucket a lifecycle rule for noncurrent versions under `export/` and `inbound/` too |
@@ -96,6 +97,8 @@ docker compose --profile prober up -d
 ```
 
 Without Compose, run `node apps/kernel/src/main.ts prober` from any scheduler with `PROBER_DATABASE_URL=postgres://crove_prober:<password>@<host>:5432/<db>`. The prober cannot report its own absence or a whole-host outage: for those, add an outside uptime check on `/healthz` and set `PROBER_HEARTBEAT_URL` to an outside heartbeat monitor (a dead man's switch), which the prober pings after each probe that read the database and delivered every alert it owed, so the monitor pages when the pings stop. Setting up all three for the owner's phone, step by step: [docs/runbooks/alerts.md](./docs/runbooks/alerts.md).
+
+**Status page.** Set `STATUS_FILE=/data/status/status.json` and the prober writes each result to the shared `status` volume, the API serves `PUBLIC_URL/status` from it (a plain page with no script and no account, in Vietnamese), and the app links to it next to "Góp ý / Hỗ trợ". The page says, for the database, uploaded documents, mail and live updates, whether each works; it shows no count, message or anything about an org. A result older than 15 minutes (the prober stopped) reads "no recent result". The volume is mounted in the all-in-one `crove` service and the prober; in the split layout, mount it into `api` too. What to do when a line turns red: [docs/runbooks/incidents.md](./docs/runbooks/incidents.md).
 
 ## Weekly usage report
 
@@ -174,9 +177,12 @@ export AI_BASE_URL=http://localhost:11434/v1 AI_MODEL=<model> AI_API_KEY=<key-if
 pnpm ai:conformance   # chat, tool calls, structured output (zod), streaming, error mapping
 pnpm ai:eval          # extraction accuracy on synthetic invoices; fails below AI_EVAL_THRESHOLD (default 0.9)
                       # or when isInvoice or the total is wrong on any fixture
+pnpm ai:eval:documents  # XML, PDF and photos through their production paths: accuracy per kind and field;
+                        # fails on any wrong XML amount. AI_EVAL_DIR=<folder> scores a private set instead
+                        # (docs/runbooks/ai-eval.md)
 ```
 
-Fixtures live in `packages/agent/test/fixtures/extraction` (`<id>.txt` document text plus `<id>.json` expected fields). They are synthetic: use invented names and checksum-invalid tax codes only (a unit test rejects checksum-valid tax codes and 12-digit IDs). 429 and 5xx mapping is tested against a local fake server in `pnpm test`.
+Fixtures live in `packages/agent/test/fixtures/extraction` (`<id>.txt` document text plus `<id>.json` expected fields) and `packages/agent/test/fixtures/documents` (one XML, PDF and PNG, each with its `.json`). They are synthetic: use invented names and checksum-invalid tax codes only (a unit test rejects checksum-valid tax codes and 12-digit IDs). 429 and 5xx mapping is tested against a local fake server in `pnpm test`.
 
 ## License
 

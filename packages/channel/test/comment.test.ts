@@ -10,6 +10,7 @@ import {
   LinkedInPublisher,
   SandboxPublisher,
   THREADS_SCOPES,
+  MastodonPublisher,
   ThreadsPublisher,
   XPublisher,
   type CommentInput,
@@ -33,7 +34,10 @@ function fake(routes: Record<string, Answer[]>) {
     const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
     const raw = init?.body;
     calls.push({ route, url, body: typeof raw === 'string' ? bodyOf(raw) : raw, auth: new Headers(init?.headers).get('authorization') });
-    const answer = routes[route]?.shift() ?? { status: 500, body: { message: `no answer for ${route}` } };
+    // A Bluesky DID's document names a Bluesky-hosted PDS unless a test says otherwise (#804).
+    const did = url.host === 'plc.directory' ? url.pathname.slice(1) : null;
+    const hosted: Answer | null = did ? { body: { id: did, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: 'https://morel.us-east.host.bsky.network' }] } } : null;
+    const answer = routes[route]?.shift() ?? hosted ?? { status: 500, body: { message: `no answer for ${route}` } };
     if (answer.network) throw new TypeError('fetch failed');
     return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json', ...answer.headers } });
   };
@@ -78,6 +82,28 @@ describe('first comments', () => {
     const record = (last ? (last.body as { record: { reply: unknown; text: string } }) : { record: { reply: null, text: '' } }).record;
     expect(record.reply).toEqual({ root: { uri, cid: 'bafyreicid1' }, parent: { uri, cid: 'bafyreicid1' } });
     expect(record.text).toBe('#khaitruong #quan3');
+  });
+
+  it('replies on Bluesky to a thread part, naming the first post of the thread as root (#742)', async () => {
+    const DID = 'did:plc:abc123def456ghi789jkl012';
+    const PDS = 'https://morel.us-east.host.bsky.network';
+    const root = `at://${DID}/app.bsky.feed.post/3kroot22222z`;
+    const part = `at://${DID}/app.bsky.feed.post/3kpart22222z`;
+    const { fetchImpl, calls } = fake({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [{ body: { did: DID, handle: 'quan-a.bsky.social', accessJwt: 'a', refreshJwt: 'r', didDoc: { service: [{ id: '#atproto_pds', serviceEndpoint: PDS }] } } }],
+      'GET morel.us-east.host.bsky.network/xrpc/com.atproto.repo.getRecord': [{ body: { uri: part, cid: 'bafypart' } }, { body: { uri: root, cid: 'bafyroot' } }],
+      'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kpart32222z`, cid: 'bafy3' } }],
+    });
+    const secret = JSON.stringify({ identifier: DID, appPassword: 'abcd-efgh-ijkl-mnop' });
+    const result = await new BlueskyPublisher(fetchImpl).comment(input({ externalAccountId: DID, secret, externalId: part, rootExternalId: root, text: 'Phần ba' }));
+    expect(result).toEqual({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kpart32222z` });
+    expect(calls.filter((c) => c.route.endsWith('getRecord')).map((c) => c.url.searchParams.get('rkey'))).toEqual(['3kpart22222z', '3kroot22222z']);
+    expect(calls.at(-1)?.body).toMatchObject({ record: { reply: { root: { uri: root, cid: 'bafyroot' }, parent: { uri: part, cid: 'bafypart' } } } });
+    // A root of another account is refused before any post.
+    const other = await new BlueskyPublisher(fake({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [{ body: { did: DID, handle: 'quan-a.bsky.social', accessJwt: 'a', refreshJwt: 'r', didDoc: { service: [{ id: '#atproto_pds', serviceEndpoint: PDS }] } } }] }).fetchImpl).comment(
+      input({ externalAccountId: DID, secret, externalId: part, rootExternalId: 'at://did:plc:someoneelse0000000000000/app.bsky.feed.post/3kroot22222z' }),
+    );
+    expect(other).toMatchObject({ kind: 'rejected', code: 'NOT_OWN_POST' });
   });
 
   // Graph API errors (developers.facebook.com/docs/graph-api/guides/error-handling): 190 an expired or revoked token,
@@ -182,5 +208,66 @@ describe('first comments', () => {
   it('comments on a sandbox post it holds', async () => {
     const sandbox = new SandboxPublisher();
     expect((await sandbox.comment(input({ secret: JSON.stringify({ accessToken: 'sbx_x' }), externalId: 'missing' }))).kind).toBe('rejected');
+  });
+});
+
+// Reposts of the account's own post (#773): X retweets, Threads reposts, Bluesky repost records, Mastodon boosts.
+describe('reposts', () => {
+  const ask = (over: Partial<CommentInput>) => ({ externalAccountId: 'acct', secret: '{}', externalId: 'post', callKey: 'social.publish:v:1:1:repost', ...over });
+
+  it('retweets on X as the account', async () => {
+    const { fetchImpl, calls } = fake({ 'POST api.x.com/2/users/1580661436147937281/retweets': [{ body: { data: { retweeted: true } } }] });
+    const x = new XPublisher({ clientId: 'M1M5R3BMVy13QmpScXkzTUt5OE46MTpjaQ', clientSecret: 'test' }, fetchImpl);
+    const result = await x.repost(ask({ externalAccountId: '1580661436147937281', secret: JSON.stringify({ accessToken: 'x-1', refreshToken: 'r' }), externalId: '1850000000000000001' }));
+    expect(result).toEqual({ kind: 'accepted', externalId: 'retweet:1580661436147937281:1850000000000000001' });
+    expect(calls[0]?.body).toEqual({ tweet_id: '1850000000000000001' });
+    expect((await x.repost(ask({ externalAccountId: 'not-an-id', secret: JSON.stringify({ accessToken: 'x-1', refreshToken: 'r' }), externalId: '1' }))).kind).toBe('rejected');
+  });
+
+  it('reposts on Threads and answers with the repost id', async () => {
+    const { fetchImpl, calls } = fake({ 'POST graph.threads.net/v1.0/18100000000000001/repost': [{ body: { id: '18100000000000009' } }] });
+    const result = await new ThreadsPublisher(fetchImpl, { pollMs: 0 }).repost(ask({ externalAccountId: '17841400000000009', secret: JSON.stringify({ accessToken: 'th-1' }), externalId: '18100000000000001' }));
+    expect(result).toEqual({ kind: 'accepted', externalId: '18100000000000009' });
+    expect(calls[0]?.auth).toBe('Bearer th-1');
+  });
+
+  it('reposts on Bluesky with a repost record naming the post by uri and cid', async () => {
+    const DID = 'did:plc:abc123def456ghi789jkl012';
+    const PDS = 'https://morel.us-east.host.bsky.network';
+    const uri = `at://${DID}/app.bsky.feed.post/3kabcde2fgh2z`;
+    const { fetchImpl, calls } = fake({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [{ body: { did: DID, handle: 'quan-a.bsky.social', accessJwt: 'a', refreshJwt: 'r', didDoc: { service: [{ id: '#atproto_pds', serviceEndpoint: PDS }] } } }],
+      'GET morel.us-east.host.bsky.network/xrpc/com.atproto.repo.getRecord': [{ body: { uri, cid: 'bafyreicid1' } }],
+      'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.repost/3krepost2zz2`, cid: 'bafyreicid3' } }],
+    });
+    const result = await new BlueskyPublisher(fetchImpl).repost(ask({ externalAccountId: DID, secret: JSON.stringify({ identifier: DID, appPassword: 'abcd-efgh-ijkl-mnop' }), externalId: uri }));
+    expect(result).toEqual({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.repost/3krepost2zz2` });
+    expect(calls.at(-1)?.body).toMatchObject({ collection: 'app.bsky.feed.repost', record: { $type: 'app.bsky.feed.repost', subject: { uri, cid: 'bafyreicid1' } } });
+  });
+
+  it('boosts on Mastodon with the call key as its idempotency key', async () => {
+    const seen: { url: string; key: string | null }[] = [];
+    const fetchImpl: Fetch = async (url, init) => {
+      seen.push({ url, key: new Headers(init?.headers).get('idempotency-key') });
+      return new Response(JSON.stringify({ id: '103254962155278999' }), { status: 200 });
+    };
+    const secret = JSON.stringify({ instance: 'https://mastodon.example', accessToken: 'test-token-test-token-test-token' });
+    const result = await new MastodonPublisher(fetchImpl).repost(ask({ externalAccountId: '1@mastodon.example', secret, externalId: '103254962155278888' }));
+    expect(result).toEqual({ kind: 'accepted', externalId: '103254962155278999' });
+    expect(seen).toEqual([{ url: 'https://mastodon.example/api/v1/statuses/103254962155278888/reblog', key: 'social.publish:v:1:1:repost' }]);
+  });
+});
+
+describe('Sandbox remove (#860)', () => {
+  it('takes the post off the sandbox, counts one already gone as removed, and refuses a token it never issued', async () => {
+    const sandbox = new SandboxPublisher();
+    const secret = JSON.stringify({ accessToken: 'sbx_test' });
+    const published = await sandbox.publish({ externalAccountId: 'sandbox-a', secret, content: { body: 'Khai trương', title: null, linkUrl: null, media: [] }, readMedia: async () => new Uint8Array(), mediaUrl: async () => null, settings: {}, callKey: 'k-1', contentHash: `sha256:${'0'.repeat(64)}` });
+    const externalId = published.kind === 'accepted' ? published.externalId : '';
+    expect(sandbox.posts('sandbox-a')).toHaveLength(1);
+    expect(await sandbox.remove({ externalAccountId: 'sandbox-a', secret, externalId })).toEqual({ kind: 'removed' });
+    expect(sandbox.posts('sandbox-a')).toHaveLength(0);
+    expect(await sandbox.remove({ externalAccountId: 'sandbox-a', secret, externalId })).toEqual({ kind: 'removed' });
+    expect(await sandbox.remove({ externalAccountId: 'sandbox-a', secret: JSON.stringify({ accessToken: 'other' }), externalId })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' });
   });
 });

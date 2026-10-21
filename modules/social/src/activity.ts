@@ -8,6 +8,10 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
+import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
+import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
+import { mentionsOf } from './domain/mentions.ts';
+import { SENT_TO_APP } from './domain/channels.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -16,6 +20,15 @@ export const COMMENT_EDIT_MS = 15 * 60_000;
 export const ACTIVITY_LIMIT = 500;
 
 const zBody = z.string().trim().min(1).max(4000);
+
+// The members of the org among the ones a comment mentions (#793), other than its author; anyone else is text.
+async function mentionedMembers(ctx: CommandContext, body: string, author: string): Promise<string[]> {
+  const ids = mentionsOf(body).filter((id) => id !== author);
+  if (ids.length === 0) return [];
+  const rows = await ctx.trx.selectFrom('crove_kernel.tenant_member').select('user_id').where('org_id', '=', ctx.orgId).where('user_id', 'in', ids).execute();
+  const members = new Set(rows.map((r) => r.user_id));
+  return ids.filter((id) => members.has(id));
+}
 
 function requireUser(ctx: CommandContext): string {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -47,7 +60,10 @@ export const commentAdd = defineCommand({
       .values({ org_id: ctx.orgId, post_id: input.postId, variant_id: input.variantId ?? null, author_user_id: userId, body: input.body, created_at: ctx.now })
       .returning('id')
       .executeTakeFirstOrThrow();
-    await ctx.emit('social.post.commented', { post_id: input.postId, comment_id: row.id, ...(input.variantId ? { variant_id: input.variantId } : {}) });
+    const mentioned = await mentionedMembers(ctx, input.body, userId);
+    // The people mentioned hear of it once, as a mention, not as one more comment on the thread.
+    await ctx.emit('social.post.commented', { post_id: input.postId, comment_id: row.id, ...(input.variantId ? { variant_id: input.variantId } : {}), ...(mentioned.length ? { mentioned } : {}) });
+    if (mentioned.length) await ctx.emit('social.post.mentioned', { post_id: input.postId, comment_id: row.id, user_ids: mentioned });
     return { commentId: row.id };
   },
 });
@@ -72,6 +88,14 @@ export const commentEdit = defineCommand({
     if (ctx.now.getTime() - c.created_at.getTime() > COMMENT_EDIT_MS) throw new DomainError('COMMENT_EDIT_CLOSED', 409, 'Đã quá thời gian sửa bình luận này');
     if (c.body !== input.body) {
       await ctx.trx.updateTable('crove_social.post_comment').set({ body: input.body, edited_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', c.id).execute();
+      // Only members this comment never mentioned are told: not the ones in the text before, nor anyone told by an
+      // earlier fix, so taking a mention out and back in tells nobody twice.
+      const told = await sql<{ id: string }>`
+        SELECT DISTINCT pg_catalog.jsonb_array_elements_text(payload -> 'user_ids') AS id FROM crove_kernel.outbox_event
+        WHERE org_id = ${ctx.orgId} AND type = 'social.post.mentioned' AND created_at >= ${c.created_at} AND payload ->> 'comment_id' = ${c.id}`.execute(ctx.trx);
+      const before = new Set([...mentionsOf(c.body), ...told.rows.map((r) => r.id)]);
+      const added = (await mentionedMembers(ctx, input.body, userId)).filter((id) => !before.has(id));
+      if (added.length) await ctx.emit('social.post.mentioned', { post_id: c.post_id, comment_id: c.id, user_ids: added });
     }
     return { commentId: c.id, postId: c.post_id };
   },
@@ -90,6 +114,14 @@ export const ACTIVITY_KINDS = [
   'published',
   'failed',
   'cancelled',
+  // The auto-reply on likes (#746): posted, or not (its code says why).
+  'auto_replied',
+  'auto_reply_failed',
+  // The repost when a post takes off (#773): made, or not (its code says why).
+  'reposted',
+  'repost_failed',
+  // Taken down from its platform (#860), by the member who asked, with their reason.
+  'removed',
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
@@ -108,7 +140,7 @@ export interface ActivityItem {
   editedAt: string | null;
   // The viewer may still change this comment.
   editable: boolean;
-  // A published channel's link, a failed channel's error code.
+  // A published channel's link, a failed channel's error code; SENT_TO_APP on a draft sent to the platform's app (#903).
   url: string | null;
   code: string | null;
 }
@@ -139,7 +171,7 @@ export const postActivity = defineQuery({
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
     const variants = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at'])
+      .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at', 'removed_at', 'removed_by', 'remove_reason'])
       .where('org_id', '=', ctx.orgId)
       .where('post_id', '=', post.id)
       .execute();
@@ -170,6 +202,9 @@ export const postActivity = defineQuery({
             OR (target_type = 'social.post_variant' AND target_id = ANY(${variantIds}::uuid[])))
         ORDER BY occurred_at DESC LIMIT ${ACTIVITY_LIMIT}`.execute(ctx.trx),
     ]);
+    const keyed = await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'revision', 'attempt']).where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).execute();
+    const replies = await autoReplyCallsOf(ctx.trx, ctx.orgId, keyed);
+    const reposts = await repostCallsOf(ctx.trx, ctx.orgId, keyed);
     const viewer = ctx.actor.type === 'user' ? ctx.actor.userId : null;
     const now = Date.now();
     const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null };
@@ -196,11 +231,27 @@ export const postActivity = defineQuery({
         variantId: a.target_type === 'social.post_variant' ? a.target_id : null,
       })),
       ...variants.flatMap((v): ActivityItem[] => {
-        if (v.status === 'published' && v.published_at) return [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id, url: v.external_url }];
+        // A draft sent to the platform's app (#903) carries its SENT_TO_APP note, so the timeline does not call it out.
+        if (v.status === 'published' && v.published_at) return [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id, url: v.external_url, code: v.error_code === SENT_TO_APP ? SENT_TO_APP : null }];
+        if (v.status === 'removed' && v.removed_at) {
+          const removed: ActivityItem = { ...none, id: `removed:${v.id}`, kind: 'removed', at: v.removed_at.toISOString(), userId: v.removed_by, variantId: v.id, body: v.remove_reason };
+          return v.published_at ? [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id }, removed] : [removed];
+        }
         if (v.status === 'failed' || v.status === 'needs_attention') return [{ ...none, id: `failed:${v.id}`, kind: 'failed', at: v.updated_at.toISOString(), variantId: v.id, code: v.error_code }];
         if (v.status === 'cancelled') return [{ ...none, id: `cancelled:${v.id}`, kind: 'cancelled', at: v.updated_at.toISOString(), variantId: v.id }];
         return [];
       }),
+      ...[...reposts].flatMap(([variantId, call]): ActivityItem[] =>
+        call.state === 'started' && now - call.started_at.getTime() <= REPOST_STALE_MS
+          ? []
+          : [{ ...none, id: `repost:${variantId}`, kind: call.state === 'succeeded' ? 'reposted' : 'repost_failed', at: (call.finished_at ?? call.started_at).toISOString(), variantId, code: call.state === 'succeeded' ? null : call.state === 'started' ? 'OUTCOME_UNKNOWN' : (call.error_code ?? 'OUTCOME_UNKNOWN') }],
+      ),
+      ...[...replies].flatMap(([variantId, call]): ActivityItem[] =>
+        // A call still on its way shows nothing yet; one that went quiet is unclear.
+        call.state === 'started' && now - call.started_at.getTime() <= AUTO_REPLY_STALE_MS
+          ? []
+          : [{ ...none, id: `auto_reply:${variantId}`, kind: call.state === 'succeeded' ? 'auto_replied' : 'auto_reply_failed', at: (call.finished_at ?? call.started_at).toISOString(), variantId, code: call.state === 'succeeded' ? null : call.state === 'started' ? 'OUTCOME_UNKNOWN' : (call.error_code ?? 'OUTCOME_UNKNOWN') }],
+      ),
     ];
     items.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
     const shown = items.slice(0, ACTIVITY_LIMIT);

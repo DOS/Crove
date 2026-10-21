@@ -17,6 +17,11 @@ export interface PreviewContent {
   media: readonly MediaItem[];
   // A video's cover (#642): a frame of it, or an image shown in its place.
   cover?: Cover | null;
+  // The channel's post type (#644): a Story shows only its image or video, in a phone frame.
+  postType?: string;
+  // A Threads poll's options and topic tag (#711).
+  poll?: readonly string[];
+  topicTag?: string;
 }
 
 function hostOf(link: string): string {
@@ -143,6 +148,21 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
   );
   const plainLink = linkDropped ? <p className="mt-2 text-xs text-subtle-foreground">{t('previewLinkNotSent', { host })}</p> : null;
 
+  if (content.postType === 'story') {
+    // A Story: the image or video fills an upright frame under the account's name; no text, link or caption.
+    return (
+      <div className="mx-auto max-w-56 rounded-2xl border bg-foreground/90 p-1.5">
+        <div className="relative">
+          <Media media={content.media} layout="vertical" max={1} />
+          <div className="absolute inset-x-0 top-0 flex items-center gap-1.5 rounded-t-xl bg-gradient-to-b from-foreground/60 to-transparent p-2">
+            <span aria-hidden="true" className="size-5 shrink-0 rounded-full bg-background/80" />
+            <span className="truncate text-xs font-semibold text-background">{channel}</span>
+          </div>
+        </div>
+        <p className="mt-1.5 text-center text-xs text-background/80">{t('previewStory')}</p>
+      </div>
+    );
+  }
   if (rule.layout === 'vertical') {
     // TikTok: the video fills the frame, the caption sits over its lower part.
     return (
@@ -192,7 +212,17 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
     <div className={cn('rounded-xl border bg-background p-3', rule.layout === 'short' && 'space-y-0')}>
       {header}
       {title && <p className="mt-3 text-sm font-semibold text-foreground">{title}</p>}
+      {content.topicTag && <p className="mt-2 text-xs font-medium text-link">{content.topicTag}</p>}
       <div className="mt-2">{body}</div>
+      {content.poll && content.poll.length > 0 && (
+        <ul className="mt-2 space-y-1" aria-label={t('previewPoll')}>
+          {content.poll.map((option, i) => (
+            <li key={i} className="rounded-full border px-3 py-1 text-xs text-foreground">
+              {option || '\u00a0'}
+            </li>
+          ))}
+        </ul>
+      )}
       <Media media={content.media} layout="feed" max={rule.gridMax} />
       {card}
     </div>

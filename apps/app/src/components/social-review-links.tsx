@@ -15,6 +15,10 @@ import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 
 const DAYS = [3, 7, 14, 30] as const;
 
+// What review_feedback_add takes per link (REVIEW_LINK_ANSWERS_MAX on the server), and where the card starts warning.
+const ANSWERS_MAX = 100;
+const ANSWERS_WARN = 90;
+
 export function ReviewLinks({ postId, canDecide }: { postId: string; canDecide: boolean }) {
   const t = useTranslations('social.reviewLinks');
   const f = useFormat();
@@ -85,6 +89,18 @@ export function ReviewLinks({ postId, canDecide }: { postId: string; canDecide: 
             <li key={l.id} className="flex flex-wrap items-center gap-2">
               <span>{t('liveUntil', { until: f.dateTime(l.expiresAt) })}</span>
               {l.changed && <Badge variant="outline">{t('changedSince')}</Badge>}
+              {/* A link takes 100 answers (#626): near the end, the team sends a new one before the client hits the wall. */}
+              {l.answers >= ANSWERS_MAX ? (
+                <Badge variant="outline" className="border-destructive/50 text-destructive">
+                  {t('full', { max: ANSWERS_MAX })}
+                </Badge>
+              ) : l.answers >= ANSWERS_WARN ? (
+                <Badge variant="outline" className="border-warning/50 text-warning">
+                  {t('nearlyFull', { used: l.answers, max: ANSWERS_MAX })}
+                </Badge>
+              ) : l.answers > 0 ? (
+                <span>{t('answers', { used: l.answers, max: ANSWERS_MAX })}</span>
+              ) : null}
               {canDecide && (
                 <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={revoke.isPending} onClick={() => revoke.mutate(l.id)}>
                   {t('revoke')}

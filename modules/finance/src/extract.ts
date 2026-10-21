@@ -8,6 +8,7 @@ import { zId, zPurchaseProposal, type DocumentDirection, type PurchaseProposal }
 import { defineQuery, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
 import { AiNotConfiguredError, AmountFormatError, type InvoiceReader } from '@crove/agent';
 import { journalMemo } from './memo.ts';
+import { isOwnTaxCode } from './own-tax-code.ts';
 import {
   bookableLines,
   bookableSaleLines,
@@ -41,12 +42,24 @@ export const fileForExtraction = defineQuery({
     if (input.version !== undefined) query = query.where('version', '=', input.version);
     const extraction = await query.limit(1).executeTakeFirst();
     const due = input.version === undefined ? !extraction : extraction?.status === 'pending';
-    return file ? { ...file, hasExtraction: Boolean(extraction), due } : null;
+    // "Dừng AI" (#886): a kill switch engaged for the org, or for the finance module, stops the AI reads of PDFs and
+    // images; e-invoice XML is parsed without AI and goes on.
+    const stopped = await ctx.trx
+      .selectFrom('crove_kernel.kill_switch')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('released_at', 'is', null)
+      .where((eb) => eb.or([eb('scope', '=', 'org'), eb.and([eb('scope', '=', 'module'), eb('target', '=', 'finance')])]))
+      .limit(1)
+      .executeTakeFirst();
+    // And the operator's switch for every org (#886).
+    const { rows: global } = await sql<{ on: boolean }>`SELECT crove_kernel.global_kill_switch_on('ai') AS on`.execute(ctx.trx);
+    return file ? { ...file, hasExtraction: Boolean(extraction), due, aiStopped: Boolean(stopped) || global[0]?.on === true } : null;
   },
 });
 
 export interface InvoiceLookup {
-  // 'sale' when the seller's tax code is the org's own (crove_kernel.tenant.tax_code, issue #313).
+  // 'sale' when the seller's tax code is the org's own or one of its branches (crove_kernel.tenant.tax_code, #313, #686).
   direction: DocumentDirection;
   vendorDefault: string | null;
   duplicateDocumentId: string | null;
@@ -62,7 +75,7 @@ export const purchaseLookup = defineQuery({
     const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
     // A sale (issue #313): the org issued the invoice and numbers its own invoices, so a duplicate is the same series
     // and number whoever the customer is, and no account is remembered per customer.
-    const sale = Boolean(input.sellerTaxCode && org?.tax_code && input.sellerTaxCode === org.tax_code);
+    const sale = isOwnTaxCode(input.sellerTaxCode, org?.tax_code);
     const party =
       !sale && input.sellerTaxCode
         ? await ctx.trx
@@ -159,9 +172,12 @@ function unreadable(result: ExtractFailure): string {
   }
 }
 
+// The message of a PDF or photo left unread while AI is stopped (#886); "Đọc lại" reads it once AI is back on.
+export const AI_STOPPED_MESSAGE = 'AI đang tạm dừng trong tổ chức nên chưa đọc tệp này; bật lại AI rồi bấm "Đọc lại"';
+
 async function readInvoice(
   deps: ExtractDeps,
-  file: { filename: string; content_type: string },
+  file: { filename: string; content_type: string; aiStopped: boolean },
   bytes: Uint8Array,
 ): Promise<{ method: Method; invoice: ParsedInvoice | null; error: string | null }> {
   // This process has no parser (External-tenant gate T12): without the crove-extract client it fails closed,
@@ -179,6 +195,7 @@ async function readInvoice(
     }
     if (file.content_type === 'application/pdf' || name.endsWith('.pdf')) {
       if (!deps.extractor) throw new AiNotConfiguredError('Chưa cấu hình AI nên chưa đọc được PDF; hãy gửi tệp XML hóa đơn điện tử');
+      if (file.aiStopped) return { method: 'pdf_text_ai', invoice: null, error: AI_STOPPED_MESSAGE };
       const result = await sandbox.extract('pdf_text', bytes);
       if (!result.ok) return { method: 'pdf_text_ai', invoice: null, error: unreadable(result) };
       const text = result.text.trim();
@@ -188,6 +205,7 @@ async function readInvoice(
     }
     if (IMAGE_TYPES.includes(file.content_type)) {
       if (!deps.extractor) throw new AiNotConfiguredError('Chưa cấu hình AI nên chưa đọc được ảnh; hãy gửi tệp XML hóa đơn điện tử');
+      if (file.aiStopped) return { method: 'image_ai', invoice: null, error: AI_STOPPED_MESSAGE };
       const invoice = await deps.extractor.fromImage(bytes, file.content_type);
       return { method: 'image_ai', invoice, error: invoice ? null : 'Ảnh không phải hóa đơn mua vào' };
     }
@@ -200,6 +218,15 @@ async function readInvoice(
   }
 }
 
+// The invoice's own VAT table (#685), from e-invoice XML only: the VAT working splits the invoice by rate with it. A
+// table the proposal cannot hold (a rate longer than a line's, an amount out of range) is left out rather than failing
+// the extraction; the VAT working then estimates the split from the lines, as for a PDF.
+function invoiceTaxTable(method: Method, invoice: ParsedInvoice): Pick<PurchaseProposal['invoice'], 'taxBreakdown'> {
+  if (method !== 'einvoice_xml' || invoice.taxBreakdown.length === 0) return {};
+  const parsed = zPurchaseProposal.shape.invoice.shape.taxBreakdown.safeParse(invoice.taxBreakdown);
+  return parsed.success && parsed.data ? { taxBreakdown: parsed.data } : {};
+}
+
 interface ExtractionFile {
   id: string;
   filename: string;
@@ -209,6 +236,7 @@ interface ExtractionFile {
   sha256: string;
   hasExtraction: boolean;
   due: boolean;
+  aiStopped: boolean;
 }
 
 // Marks a run as unreadable so the file leaves the "processing" state: the first extraction (no version) if the
@@ -258,7 +286,7 @@ export async function extractAndPropose(
 
   const checks = checkInvoice(invoice, deps.today?.());
   if (lookup.duplicateDocumentId || lookup.duplicateProposalId) {
-    checks.unshift({ id: 'duplicate', status: 'fail', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
+    checks.unshift({ id: 'duplicate', status: 'fail', code: 'duplicate.found', message: 'Hóa đơn này đã có trong Inbox hoặc đã ghi sổ' });
   }
   // A sale (issue #313) books every line to revenue; a purchase proposes an expense or asset account per line.
   const sale = lookup.direction === 'sale';
@@ -284,6 +312,7 @@ export async function extractAndPropose(
       subtotal: invoice.subtotal,
       vatTotal: invoice.vatTotal,
       total: invoice.total,
+      ...invoiceTaxTable(method, invoice),
     },
     lines,
     journal: sale ? buildSalesJournal(lines, invoice.vatTotal, memo) : buildPurchaseJournal(lines, invoice.vatTotal, memo),

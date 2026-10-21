@@ -18,6 +18,7 @@ export interface CroveFinanceSchema {
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
+  'crove_finance.journal_voucher': FinanceJournalVoucherTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
   'crove_finance.period_lock': FinancePeriodLockTable;
   'crove_finance.portal_invoice_list': FinancePortalInvoiceListTable;
@@ -25,6 +26,7 @@ export interface CroveFinanceSchema {
   'crove_finance.purchase_document': FinancePurchaseDocumentTable;
   'crove_finance.purchase_document_void': FinancePurchaseDocumentVoidTable;
   'crove_finance.purchase_line': FinancePurchaseLineTable;
+  'crove_finance.purchase_tax_rate': FinancePurchaseTaxRateTable;
   'crove_finance.vendor_account_rule': FinanceVendorAccountRuleTable;
 }
 
@@ -52,6 +54,7 @@ export interface CroveKernelSchema {
   'crove_kernel.party': KernelPartyTable;
   'crove_kernel.position': KernelPositionTable;
   'crove_kernel.proposal': KernelProposalTable;
+  'crove_kernel.proposal_policy': KernelProposalPolicyTable;
   'crove_kernel.task': KernelTaskTable;
   'crove_kernel.task_comment': KernelTaskCommentTable;
   'crove_kernel.tenant': KernelTenantTable;
@@ -59,11 +62,25 @@ export interface CroveKernelSchema {
 }
 
 export interface CroveSocialSchema {
+  'crove_social.account_snapshot': SocialAccountSnapshotTable;
+  'crove_social.bio_click': SocialBioClickTable;
+  'crove_social.bio_page': SocialBioPageTable;
+  'crove_social.brand_voice': SocialBrandVoiceTable;
+  'crove_social.calendar_feed': SocialCalendarFeedTable;
+  'crove_social.calendar_note': SocialCalendarNoteTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
+  'crove_social.channel_set': SocialChannelSetTable;
+  'crove_social.chat_alert': SocialChatAlertTable;
+  'crove_social.feed': SocialFeedTable;
+  'crove_social.feed_item': SocialFeedItemTable;
+  'crove_social.idea': SocialIdeaTable;
+  'crove_social.idea_label': SocialIdeaLabelTable;
   'crove_social.label': SocialLabelTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
+  'crove_social.media_tag': SocialMediaTagTable;
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
   'crove_social.notification': SocialNotificationTable;
+  'crove_social.notification_mail_off': SocialNotificationMailOffTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_approval': SocialPostApprovalTable;
@@ -74,9 +91,14 @@ export interface CroveSocialSchema {
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
   'crove_social.report_link': SocialReportLinkTable;
+  'crove_social.report_schedule': SocialReportScheduleTable;
+  'crove_social.report_schedule_run': SocialReportScheduleRunTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.review_link': SocialReviewLinkTable;
+  'crove_social.short_link': SocialShortLinkTable;
+  'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
+  'crove_social.watermark': SocialWatermarkTable;
 }
 
 /** crove_finance.account */
@@ -136,6 +158,7 @@ export interface FinanceJournalEntryTable {
   created_xact_id: ColumnType<string | null, NotGranted, NotGranted>;
   created_xact_start: ColumnType<Date | null, NotGranted, NotGranted>;
   reverses_entry_id: ColumnType<string | null, NotGranted, NotGranted>;
+  search: ColumnType<string | null, NotGranted, NotGranted>;
 }
 
 /** crove_finance.journal_line */
@@ -148,6 +171,18 @@ export interface FinanceJournalLineTable {
   credit: ColumnType<string, NotGranted, NotGranted>;
   party_id: ColumnType<string | null, NotGranted, NotGranted>;
   memo: ColumnType<string | null, NotGranted, NotGranted>;
+}
+
+/** crove_finance.journal_voucher */
+export interface FinanceJournalVoucherTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  number: ColumnType<number, number, NotGranted>;
+  voucher_date: ColumnType<string, string, NotGranted>;
+  description: ColumnType<string, string, NotGranted>;
+  proposal_id: ColumnType<string | null, string | null, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_finance.org_account */
@@ -239,6 +274,7 @@ export interface FinancePurchaseDocumentTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   replaces_document_id: ColumnType<string | null, string | null, NotGranted>;
   direction: ColumnType<string, string | undefined, NotGranted>;
+  search: ColumnType<string | null, never, NotGranted>;
 }
 
 /** crove_finance.purchase_document_void */
@@ -265,6 +301,16 @@ export interface FinancePurchaseLineTable {
   vat_amount: ColumnType<string, string | undefined, NotGranted>;
   debit_account: ColumnType<string | null, string | null, NotGranted>;
   credit_account: ColumnType<string | null, string | null, NotGranted>;
+}
+
+/** crove_finance.purchase_tax_rate */
+export interface FinancePurchaseTaxRateTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  document_id: ColumnType<string, string, NotGranted>;
+  row_no: ColumnType<number, number, NotGranted>;
+  vat_rate: ColumnType<string, string, NotGranted>;
+  taxable_amount: ColumnType<string, string, NotGranted>;
+  vat_amount: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.vendor_account_rule */
@@ -597,6 +643,8 @@ export interface KernelPartyTable {
   version: Generated<number>;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  search: ColumnType<string | null, never, never>;
+  duplicate_of: string | null;
 }
 
 /** crove_kernel.position */
@@ -613,6 +661,17 @@ export interface KernelPositionTable {
   flags: Generated<string[]>;
   job_description: ColumnType<unknown, string | undefined, string>;
   status: Generated<string>;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_kernel.proposal_policy */
+export interface KernelProposalPolicyTable {
+  org_id: string;
+  id: Generated<string>;
+  remind_after_days: number | null;
+  escalate_after_days: number | null;
+  updated_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
@@ -645,6 +704,8 @@ export interface KernelProposalTable {
   tainted: Generated<boolean>;
   policy_flags: string[] | null;
   decided_by_agent: string | null;
+  reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  escalated_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_kernel.task_comment */
@@ -709,6 +770,83 @@ export interface KernelTenantTable {
   address: string | null;
 }
 
+/** crove_social.account_snapshot */
+export interface SocialAccountSnapshotTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  channel_connection_id: ColumnType<string, string, NotGranted>;
+  captured_on: ColumnType<string, string, NotGranted>;
+  followers: ColumnType<string | null, string | null, NotGranted>;
+  reach: ColumnType<string | null, string | null, NotGranted>;
+  error: ColumnType<string | null, string | null, NotGranted>;
+  captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.bio_click */
+export interface SocialBioClickTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  page_id: ColumnType<string, NotGranted, NotGranted>;
+  target: ColumnType<string, NotGranted, NotGranted>;
+  day: ColumnType<string, NotGranted, NotGranted>;
+  clicks: ColumnType<string, NotGranted, NotGranted>;
+}
+
+/** crove_social.bio_page */
+export interface SocialBioPageTable {
+  org_id: string;
+  id: Generated<string>;
+  slug: string;
+  title: string;
+  about: string | null;
+  avatar_file_id: string | null;
+  buttons: ColumnType<unknown, string | undefined, string>;
+  show_posts: Generated<boolean>;
+  published: Generated<boolean>;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.brand_voice */
+export interface SocialBrandVoiceTable {
+  org_id: string;
+  id: Generated<string>;
+  channel_connection_id: string | null;
+  description: string;
+  use_words: Generated<string[]>;
+  avoid_words: Generated<string[]>;
+  emoji: Generated<boolean>;
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.calendar_feed */
+export interface SocialCalendarFeedTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  token_sha256: ColumnType<string, string, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  revoked_by: string | null;
+}
+
+/** crove_social.calendar_note */
+export interface SocialCalendarNoteTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  starts_on: string;
+  ends_on: string;
+  title: string;
+  color: Generated<string>;
+  created_by: ColumnType<string, string, NotGranted>;
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 /** crove_social.channel_policy */
 export interface SocialChannelPolicyTable {
   org_id: string;
@@ -716,6 +854,86 @@ export interface SocialChannelPolicyTable {
   channel_connection_id: string;
   approvals_required: Generated<number>;
   updated_by: string;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  review_reminders: Generated<boolean>;
+  short_links: Generated<boolean>;
+  four_eyes: Generated<boolean>;
+  client_approval: Generated<boolean>;
+}
+
+/** crove_social.channel_set */
+export interface SocialChannelSetTable {
+  org_id: string;
+  id: Generated<string>;
+  name: string;
+  connection_ids: Generated<string[]>;
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.chat_alert */
+export interface SocialChatAlertTable {
+  org_id: string;
+  id: Generated<string>;
+  kind: string;
+  label: string | null;
+  events: string[];
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  last_test_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  last_test_code: string | null;
+}
+
+/** crove_social.feed_item */
+export interface SocialFeedItemTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  feed_id: ColumnType<string, string, NotGranted>;
+  item_key: ColumnType<string, string, NotGranted>;
+  title: ColumnType<string | null, string | null, NotGranted>;
+  post_id: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.feed */
+export interface SocialFeedTable {
+  org_id: string;
+  id: Generated<string>;
+  url: string;
+  title: string | null;
+  connection_ids: Generated<string[]>;
+  paused: Generated<boolean>;
+  failures: Generated<number>;
+  last_checked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  last_error: string | null;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.idea_label */
+export interface SocialIdeaLabelTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  idea_id: ColumnType<string, string, NotGranted>;
+  label_id: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.idea */
+export interface SocialIdeaTable {
+  org_id: string;
+  id: Generated<string>;
+  title: string;
+  note: string | null;
+  link_url: string | null;
+  file_ids: Generated<string[]>;
+  stage: Generated<string>;
+  post_id: string | null;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
@@ -743,6 +961,17 @@ export interface SocialLinkPreviewTable {
   requested_at: ColumnType<Date, Date | string, Date | string>;
   fetched_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  text: string | null;
+}
+
+/** crove_social.media_tag */
+export interface SocialMediaTagTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  file_id: ColumnType<string, string, NotGranted>;
+  tag: ColumnType<string, string, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.metric_snapshot */
@@ -754,6 +983,14 @@ export interface SocialMetricSnapshotTable {
   captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   metrics: ColumnType<unknown, string | undefined, NotGranted>;
   extra: ColumnType<unknown, string | null | undefined, NotGranted>;
+}
+
+/** crove_social.notification_mail_off */
+export interface SocialNotificationMailOffTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.notification_mute */
@@ -883,6 +1120,13 @@ export interface SocialPostVariantTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   paused_connection_version: ColumnType<Date | null, Date | string | null, Date | string | null>;
   media: ColumnType<unknown, string | null | undefined, string | null>;
+  review_since: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  reminded_waiting_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  reminded_due_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  removed_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  removed_by: string | null;
+  remove_reason: string | null;
+  remove_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.queue_slot */
@@ -895,6 +1139,7 @@ export interface SocialQueueSlotTable {
   label: string | null;
   active: Generated<boolean>;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  label_id: string | null;
 }
 
 /** crove_social.queue */
@@ -922,6 +1167,43 @@ export interface SocialReportLinkTable {
   expires_at: ColumnType<Date, Date | string, NotGranted>;
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
+  schedule_id: ColumnType<string | null, string | null, NotGranted>;
+  mail_message_id: ColumnType<string | null, string | null, NotGranted>;
+}
+
+/** crove_social.report_schedule_run */
+export interface SocialReportScheduleRunTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  schedule_id: ColumnType<string, string, NotGranted>;
+  kind: ColumnType<string, string, NotGranted>;
+  period_start: ColumnType<Date, Date | string, NotGranted>;
+  period_end: ColumnType<Date, Date | string, NotGranted>;
+  mails: Generated<number>;
+  suppressed: Generated<number>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.report_schedule */
+export interface SocialReportScheduleTable {
+  org_id: string;
+  id: Generated<string>;
+  name: string;
+  cadence: string;
+  weekday: number | null;
+  month_day: number | null;
+  send_hour: Generated<number>;
+  time_zone: Generated<string>;
+  period: string;
+  connection_ids: Generated<string[]>;
+  recipients: string[];
+  paused: Generated<boolean>;
+  next_run_at: ColumnType<Date, Date | string, Date | string>;
+  last_run_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_social.review_feedback */
@@ -951,6 +1233,27 @@ export interface SocialReviewLinkTable {
   revoked_by: string | null;
 }
 
+/** crove_social.short_link_click */
+export interface SocialShortLinkClickTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  short_link_id: ColumnType<string, NotGranted, NotGranted>;
+  day: ColumnType<string, NotGranted, NotGranted>;
+  clicks: ColumnType<string, NotGranted, NotGranted>;
+}
+
+/** crove_social.short_link */
+export interface SocialShortLinkTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  code: ColumnType<string, string, NotGranted>;
+  variant_id: ColumnType<string, string, NotGranted>;
+  revision: ColumnType<number, number | undefined, NotGranted>;
+  post_id: ColumnType<string, string, NotGranted>;
+  target_url: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
 /** crove_social.snippet */
 export interface SocialSnippetTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -961,5 +1264,18 @@ export interface SocialSnippetTable {
   is_template: Generated<boolean>;
   created_by: ColumnType<string, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.watermark */
+export interface SocialWatermarkTable {
+  org_id: string;
+  id: Generated<string>;
+  file_id: string;
+  corner: string;
+  scale_percent: number;
+  opacity_percent: number;
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }

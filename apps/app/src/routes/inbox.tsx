@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useRef, useState, type DragEvent } from 'react';
 import { useTranslations } from 'use-intl';
+import { JOURNAL_VOUCHER_KIND } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -17,6 +18,7 @@ import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../li
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
+import { providerName } from '../lib/social.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
 import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, showMatched, type BulkBatch, type BulkProgress } from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
@@ -69,6 +71,80 @@ function OpenBankLines({ slug }: { slug: string }) {
 
 // The name a proposal goes by in the list, its checkbox and the bulk report: the customer of a sale (#313; its seller is
 // the org itself), the seller of a purchase, else its title.
+// Social posts waiting for the viewer's review (#749), where Social runs: each opens its post, where it is decided.
+// Social work that needs a person (#771): channels to reconnect and posts that did not go out, each opening where it
+// is fixed.
+function SocialAttention({ slug }: { slug: string }) {
+  const t = useTranslations('inbox.socialAttention');
+  const live = useStreamLive();
+  const attention = useQuery({ ...orpc.social.attentionInbox.queryOptions({ input: {} }), refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
+  const data = attention.data;
+  if (!data || data.total === 0) return null;
+  const status = (s: string) => (s === 'failed' || s === 'needs_attention' || s === 'paused' ? t(`post.${s}`) : s);
+  return (
+    <Card className="mt-6 block p-4">
+      <p className="text-sm font-medium text-foreground">{t('title', { count: data.total })}</p>
+      <ul className="mt-2 divide-y text-sm">
+        {data.channels.map((c) => (
+          <li key={c.connectionId} className="py-2">
+            <Link to="/o/$slug/social/channels" params={{ slug }} className="block text-foreground hover:underline">
+              {t(`channel.${c.status}`, { channel: `${providerName(c.provider)} · ${c.displayName}` })}
+            </Link>
+          </li>
+        ))}
+        {data.posts.map((p) => (
+          <li key={p.postId} className="py-2">
+            <Link to="/o/$slug/social/$id" params={{ slug, id: p.postId }} className="block text-foreground hover:underline">
+              {p.excerpt || t('noText')}
+            </Link>
+            <p className="text-xs text-warning">{p.channels.map((c) => `${providerName(c.provider)} · ${c.displayName}: ${status(c.status)}`).join(', ')}</p>
+          </li>
+        ))}
+      </ul>
+      {/* The total counts every post that needs a person; past the first 50, the Social home lists them all. */}
+      {data.total > data.channels.length + data.posts.length && (
+        <Link to="/o/$slug/social" params={{ slug }} className="mt-2 inline-block text-sm text-link underline">
+          {t('more', { count: data.total - data.channels.length - data.posts.length })}
+        </Link>
+      )}
+    </Card>
+  );
+}
+
+function SocialReviews({ slug }: { slug: string }) {
+  const t = useTranslations('inbox.socialReviews');
+  const f = useFormat();
+  const live = useStreamLive();
+  const reviews = useQuery({ ...orpc.social.reviewInbox.queryOptions({ input: {} }), refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
+  const items = reviews.data?.items ?? [];
+  if (items.length === 0) return null;
+  const more = (reviews.data?.total ?? 0) - items.length;
+  return (
+    <Card className="mt-6 block p-4">
+      <p className="text-sm font-medium text-foreground">{t('title', { count: reviews.data?.total ?? items.length })}</p>
+      <ul className="mt-2 divide-y text-sm">
+        {items.map((item) => (
+          <li key={item.postId} className="py-2">
+            <Link to="/o/$slug/social/$id" params={{ slug, id: item.postId }} className="block text-foreground hover:underline">
+              {item.title || item.excerpt || t('noText')}
+            </Link>
+            {item.title && item.excerpt && <p className="truncate text-xs text-muted-foreground">{item.excerpt}</p>}
+            <p className="text-xs text-subtle-foreground">
+              {item.channels.map((c) => `${providerName(c.provider)} · ${c.displayName}`).join(', ')}
+              {item.at ? ` · ${t('goesOut', { when: f.dateTime(item.at) })}` : ` · ${t('noTime')}`}
+            </p>
+          </li>
+        ))}
+      </ul>
+      {more > 0 && (
+        <Link to="/o/$slug/social" params={{ slug }} className="mt-2 inline-block text-sm text-link underline">
+          {t('more', { count: more })}
+        </Link>
+      )}
+    </Card>
+  );
+}
+
 export function InboxPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('inbox');
@@ -213,6 +289,8 @@ export function InboxPage() {
 
       <IntakePanel intake={intake} />
       {config.modules.includes('finance') && <OpenBankLines slug={slug} />}
+      {config.modules.includes('social') && <SocialAttention slug={slug} />}
+      {config.modules.includes('social') && <SocialReviews slug={slug} />}
 
       {(files.data?.length ?? 0) > 0 && (
         <div className="mt-6">
@@ -409,13 +487,14 @@ export function InboxPage() {
                     {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}
                     {item.kind === REVERSAL_KIND && <Badge variant="secondary">{t('reversalKind')}</Badge>}
                     {item.kind === VOUCHER_KIND && <Badge variant="secondary">{t('voucherKind')}</Badge>}
+                    {item.kind === JOURNAL_VOUCHER_KIND && <Badge variant="secondary">{t('journalVoucherKind')}</Badge>}
                     {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
                     {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
                     {item.signatureStatus === 'unverified' && <Badge variant="destructive">{t('signatureUnverified')}</Badge>}
                     {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
                     {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
                     {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
-                    {showMatched(item, REVERSAL_KIND, VOUCHER_KIND) && (
+                    {showMatched(item, REVERSAL_KIND, VOUCHER_KIND, JOURNAL_VOUCHER_KIND) && (
                       <Badge variant="success">{t('matched')}</Badge>
                     )}
                   </div>

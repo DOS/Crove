@@ -3,16 +3,38 @@
 # image in $STUB_DEPLOY_DIR/docker-compose.override.yml; when it holds $STUB_BAD_DIGEST, or STUB_READYZ_FAIL is
 # set, /readyz answers 503. STUB_NO_BUNDLE (always) and STUB_NO_BUNDLE_DIGEST (while that image runs) serve a
 # sign-in page without its script.
+#
+# /version (#892) reports the first 12 hex digits of the running image's digest as its build ("dev" when nothing
+# runs), "stale" while $STUB_STALE_DIGEST runs (an old container still answers), and a missing migration with
+# STUB_MIGRATION_MISSING.
+#
+# The account step of the smoke test (#690): every command line goes to $STUB_LOG.argv, so a test can check that no
+# secret is on one; the sign-in body read from stdin goes to $STUB_LOG.signin, the uploaded file to
+# $STUB_LOG.upload, an RPC body to $STUB_LOG.rpc. STUB_SIGNIN_FAIL refuses the sign-in, STUB_FILE_STATUS sets the
+# uploaded file's status (default proposed), STUB_REJECT_FAIL fails the rejection.
 set -euo pipefail
 
-out='' url=''
+printf '%s\n' "$*" >>"$STUB_LOG.argv"
+out='' url='' headers='' data='' form=''
 while (($# > 0)); do
   case "$1" in
     --output)
       out="$2"
       shift 2
       ;;
-    --max-time)
+    --max-time | --request)
+      shift 2
+      ;;
+    --header)
+      if [[ "$2" == @* ]]; then headers="$(cat "${2#@}")"; fi
+      shift 2
+      ;;
+    --data-binary)
+      if [ "$2" = @- ]; then data="$(cat)"; else data="$2"; fi
+      shift 2
+      ;;
+    --form)
+      form="$2"
       shift 2
       ;;
     http://* | https://*)
@@ -35,6 +57,14 @@ case "$url" in
       body='{"ready":true}'
     fi
     ;;
+  */version)
+    build=dev
+    if [[ "$running" =~ /crove@sha256:([0-9a-f]{12}) ]]; then build="${BASH_REMATCH[1]}"; fi
+    if [ -n "${STUB_STALE_DIGEST:-}" ] && [[ "$running" == *"$STUB_STALE_DIGEST"* ]]; then build=stale; fi
+    missing='[]'
+    if [ -n "${STUB_MIGRATION_MISSING:-}" ]; then missing='["20990101000000_crove_kernel_next.sql"]'; fi
+    body="{\"build\":\"$build\",\"migrationsMissing\":$missing}"
+    ;;
   */api/config) body='{"authUrl":"http://127.0.0.1:18080/auth/v1","modules":[]}' ;;
   */auth/v1/health) body='{"name":"GoTrue"}' ;;
   */login)
@@ -45,6 +75,32 @@ case "$url" in
     fi
     ;;
   */assets/index-abc123.js) body='console.log(1)' ;;
+  */auth/v1/token\?grant_type=password)
+    printf '%s' "$data" >"$STUB_LOG.signin"
+    if [ -n "${STUB_SIGNIN_FAIL:-}" ]; then status=400 body='{"error":"invalid_grant"}'; else body='{"access_token":"stub-access-token","token_type":"bearer"}'; fi
+    ;;
+  */api/files | */api/rpc/*)
+    if [[ "$headers" != *'authorization: Bearer stub-access-token'* || "$headers" != *'x-crove-org: crove-smoke'* ]]; then
+      status=401 body='{"code":"UNAUTHENTICATED"}'
+    elif [[ "$url" == */api/files ]]; then
+      file="${form#file=@}"
+      cp "${file%%;*}" "$STUB_LOG.upload"
+      body='{"files":[{"fileId":"file-1","duplicate":false}]}'
+    elif [[ "$url" == */api/rpc/files/recent ]]; then
+      case "${STUB_FILE_STATUS:-proposed}" in
+        proposed) mine='{"id":"file-1","status":"proposed","proposalId":"proposal-1","error":null}' ;;
+        failed) mine='{"id":"file-1","status":"failed","proposalId":null,"error":"UNREADABLE"}' ;;
+        proposed-no-id) mine='{"id":"file-1","status":"proposed","proposalId":null,"error":"SOME_ERROR"}' ;;
+        *) mine="{\"id\":\"file-1\",\"status\":\"$STUB_FILE_STATUS\",\"proposalId\":null,\"error\":null}" ;;
+      esac
+      body="{\"json\":[{\"id\":\"file-0\",\"status\":\"proposed\",\"proposalId\":\"proposal-0\",\"error\":null},$mine]}"
+    elif [[ "$url" == */api/rpc/inbox/reject ]]; then
+      printf '%s' "$data" >"$STUB_LOG.rpc"
+      if [ -n "${STUB_REJECT_FAIL:-}" ]; then status=500 body='{"code":"INTERNAL"}'; else body='{"json":{"ok":true}}'; fi
+    else
+      status=404
+    fi
+    ;;
   *) status=404 ;;
 esac
 

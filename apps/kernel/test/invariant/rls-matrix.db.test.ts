@@ -34,6 +34,7 @@ const MACHINERY = new Set([
   'crove_kernel.inbound_drop',
   'crove_kernel.outbox_pending',
   'crove_kernel.refusal_tally',
+  'crove_social.chat_alert_target',
 ]);
 // Tables whose row factory (and MACHINERY entry, for definer-only tables) lands on main before the table itself. CI
 // runs main's copy of this file on the PR that adds a table with org_id, so the factory has to be on main first;
@@ -41,6 +42,12 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.notification',
+  'crove_kernel.notification_mute',
+  'crove_social.chat_alert',
+  'crove_social.chat_alert_target',
+  'crove_social.media_tag',
+  'crove_social.review_link_post',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -104,6 +111,14 @@ const channelConnectionRow = (o: { id: string; owner: string }) => ({
   display_name: 'RLS matrix channel',
   connected_by: o.owner,
 });
+// The org's team chat alert (#863): its kind and alert kinds; the sealed target is in chat_alert_target.
+const chatAlertRow = (o: { id: string; owner: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  kind: 'discord',
+  events: '{needs_approval}',
+  updated_by: o.owner,
+});
 // An outbound mail (Email plan §3.2, #538), with its id so a delivery event can name it.
 const mailMessageRow = (o: { id: string }) => ({
   org_id: o.id,
@@ -122,6 +137,20 @@ const MUTE_KINDS = ['review_requested', 'decided', 'failed', 'comment'] as const
 const muteRows = new Map<string, number>();
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
 const socialLabelRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), name: `rls-${tag()}`, color: 'blue', created_by: o.owner });
+const socialReportScheduleRow = (o: { id: string; owner: string }) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  name: 'RLS matrix schedule',
+  cadence: 'weekly',
+  weekday: 1,
+  period: 'previous_week',
+  recipients: '{rls@example.com}',
+  next_run_at: new Date(Date.now() + 86_400_000).toISOString(),
+  created_by: o.owner,
+});
+const socialFeedRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), url: `https://rls-${tag()}.example/feed.xml`, created_by: o.owner });
+const socialBioPageRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), slug: `rls-${tag()}`, title: 'RLS matrix bio', created_by: o.owner });
+const socialIdeaRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), title: 'RLS matrix idea', stage: 'new', created_by: o.owner });
 const socialReviewLinkRow = (o: { id: string; owner: string }) => {
   const post = socialPostRow(o);
   return { post, row: { org_id: o.id, id: randomUUID(), post_id: post.id, token_sha256: hex64(), created_by: o.owner, expires_at: new Date(Date.now() + 86_400_000).toISOString() } };
@@ -136,6 +165,14 @@ const socialVariantRows = (o: { id: string; owner: string }) => {
       { table: 'crove_social.post', values: post },
     ],
     variant,
+  };
+};
+// A short link of a published variant (#706), with what it needs.
+const socialShortLinkRows = (o: { id: string; owner: string }) => {
+  const { setup, variant } = socialVariantRows(o);
+  return {
+    setup: [...setup, { table: 'crove_social.post_variant', values: variant }],
+    link: { org_id: o.id, id: randomUUID(), code: `rls${tag()}`.slice(0, 16), variant_id: variant.id, post_id: variant.post_id, target_url: 'https://rls.example/' },
   };
 };
 let portalListYear = 2000;
@@ -196,6 +233,22 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => {
       const entry = randomUUID();
       return { setup: [journalEntry(o.id, entry)], row: balancingLine(o.id, entry, 1, 'debit').values, complete: [balancingLine(o.id, entry, 2, 'credit')] };
+    },
+  },
+  // General journal vouchers, NVK (#888): append-only, numbered by the database per org. By commit the voucher has its
+  // journal entry (source finance.journal_voucher, on the voucher's date), which the probe adds.
+  'crove_finance.journal_voucher': {
+    make: (o) => {
+      const id = randomUUID();
+      const entry = randomUUID();
+      return {
+        row: { org_id: o.id, id, voucher_date: '2026-10-01', description: 'RLS matrix' },
+        complete: [
+          { table: 'crove_finance.journal_entry', values: { ...journalEntry(o.id, entry).values, source_type: 'finance.journal_voucher', source_id: id } },
+          balancingLine(o.id, entry, 1, 'debit'),
+          balancingLine(o.id, entry, 2, 'credit'),
+        ],
+      };
     },
   },
   // An org's sub-accounts under the TT133 chart (#319): one row per (org, code), never deleted. The code extends its
@@ -278,6 +331,28 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   'crove_finance.purchase_line': {
     make: (o) => ({ row: { org_id: o.id, document_id: o.document, line_no: lineNo++, description: 'RLS matrix', amount: '100', debit_account: '6422' } }),
+  },
+  // The invoice's own VAT table by rate (#685). It joins its document only before the document's entry is posted
+  // (purchase_tax_rate_before_insert), so each row gets a fresh document, completed with its entry after the row.
+  'crove_finance.purchase_tax_rate': {
+    make: (o) => {
+      const document = randomUUID();
+      const entry = randomUUID();
+      return {
+        setup: [
+          {
+            table: 'crove_finance.purchase_document',
+            values: { org_id: o.id, id: document, party_id: o.party, invoice_number: tag(), invoice_date: '2026-10-01', subtotal: '100', vat_amount: '10', total: '110' },
+          },
+        ],
+        row: { org_id: o.id, document_id: document, row_no: 1, vat_rate: '10%', taxable_amount: '100', vat_amount: '10' },
+        complete: [
+          { table: 'crove_finance.journal_entry', values: { ...journalEntry(o.id, entry).values, source_type: 'finance.purchase_document', source_id: document } },
+          balancingLine(o.id, entry, 1, 'debit'),
+          balancingLine(o.id, entry, 2, 'credit'),
+        ],
+      };
+    },
   },
   'crove_finance.vendor_account_rule': {
     make: (o) => {
@@ -435,6 +510,14 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.member_invite': {
     make: (o) => ({ row: { org_id: o.id, email: `invite-${tag()}@rls.test`, role: 'member', invited_by: o.owner } }),
   },
+  // A notification for one member (#671), the kernel's own for every module (a finance proposal to approve, a file
+  // that failed to read). A restrictive policy shows each member only their own; the factory's rows belong to the
+  // owner, the user every member-context actor enters as. Members change only read_at.
+  'crove_kernel.notification': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, kind: 'kernel.rls_matrix', dedupe_key: `rls-${tag()}` } }),
+  },
+  // A kind of notification a member turned off (#671), under the same restrictive policy; a kind of its own per row.
+  'crove_kernel.notification_mute': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, kind: `kernel.rls_${tag()}` } }) },
   // Definer-only machinery (Social plan §3.5, S6): one single-use OAuth state per connect attempt, holding the hash of
   // the state parameter and the PKCE verifier; only the start and callback definers touch it.
   'crove_kernel.oauth_state': {
@@ -446,6 +529,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.proposal': {
     make: (o) => ({ row: { org_id: o.id, kind: 'rls.matrix', command: 'rls.matrix', status: 'rejected', title: 'RLS matrix', payload: '{}' } }),
   },
+  // #676: per-org reminder and escalation settings for pending proposals (one row per org).
+  'crove_kernel.proposal_policy': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), remind_after_days: 3, escalate_after_days: 7, updated_by: o.owner } }) },
   // Refusals counted per org, window, actor and (command, code) (issue #162). Definer-only machinery: no role but
   // the owner holds a privilege on it. A random code keeps every row its own key.
   'crove_kernel.refusal_tally': {
@@ -471,7 +556,33 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => ({ row: { org_id: o.id, slug: `rls-${tag()}`, name: 'RLS matrix', created_by: o.owner } }),
   },
   'crove_kernel.tenant_member': { make: (o) => ({ row: { org_id: o.id, user_id: o.freshUser(), role: 'member' } }) },
-  // The review policy of a channel (S9, issue #394): how many people approve a variant, one row per connection.
+  // A channel's daily count of followers (#645), recorded by the worker: one per channel and day.
+  'crove_social.account_snapshot': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, captured_on: '2026-10-20', followers: 120 },
+      };
+    },
+  },
+  // An org's link-in-bio page (#707), and a day's clicks on one of its links; only the page's definer counts clicks.
+  'crove_social.bio_click': {
+    make: (o) => {
+      const page = socialBioPageRow(o);
+      return { setup: [{ table: 'crove_social.bio_page', values: page }], row: { org_id: o.id, page_id: page.id, target: 'button:0', day: '2026-10-20', clicks: 2 } };
+    },
+    noInsertControl: 'only the bio page definer counts clicks, for a visitor following a link; tenant roles may only read them',
+  },
+  'crove_social.bio_page': { make: (o) => ({ row: socialBioPageRow(o) }) },
+  // The org's brand voice for AI drafts, or one channel's (#741).
+  'crove_social.brand_voice': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), description: 'RLS matrix voice', updated_by: o.owner } }) },
+  // A private calendar feed of the org's posts (#862): the SHA-256 of its token, who made it, its revocation.
+  'crove_social.calendar_feed': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), token_sha256: hex64(), created_by: o.owner } }) },
+  // A team's note on calendar dates (#794): a title over one day or a range, with a colour from the app's palette.
+  'crove_social.calendar_note': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), starts_on: '2026-10-20', ends_on: '2026-10-22', title: 'RLS matrix note', created_by: o.owner, updated_by: o.owner } }) },
+  // The review policy of a channel (S9, issue #394): how many people approve a variant, and whether its reviewers
+  // are reminded (#703), one row per connection.
   'crove_social.channel_policy': {
     make: (o) => {
       const connection = channelConnectionRow(o);
@@ -481,13 +592,55 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // A saved set of channels for the composer (#774): a name and the connections it picks.
+  'crove_social.channel_set': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: `RLS matrix set ${randomUUID().slice(0, 6)}`, updated_by: o.owner } }) },
+  // The org's team chat for Social alerts (#863): a Telegram or Discord target, sealed, and the kinds it gets.
+  'crove_social.chat_alert': { make: (o) => ({ row: chatAlertRow(o) }) },
+  // Definer-only machinery: the sealed target of the org's team chat alert (#863), one row per alert. The envelope is
+  // opaque bytes here; only the vault in the worker opens a real one.
+  'crove_social.chat_alert_target': {
+    make: (o) => {
+      const alert = chatAlertRow(o);
+      return {
+        setup: [{ table: 'crove_social.chat_alert', values: alert }],
+        row: { org_id: o.id, alert_id: alert.id, key_id: 'rls-matrix', envelope: '\\x00' },
+      };
+    },
+  },
   // A metrics snapshot of a published variant (S8, issue #238): append-only, one per capture key.
   // An org's label for posts (#639): a name and a colour from the app's palette.
+  // A blog feed an org drafts posts from (#708).
+  'crove_social.feed': { make: (o) => ({ row: socialFeedRow(o) }) },
+  // An item of a feed, once it became a draft (#708).
+  'crove_social.feed_item': {
+    make: (o) => {
+      const feed = socialFeedRow(o);
+      return { setup: [{ table: 'crove_social.feed', values: feed }], row: { org_id: o.id, feed_id: feed.id, item_key: hex64(), title: 'RLS matrix item' } };
+    },
+  },
+  // An idea on the Social ideas board (#701), before it becomes a draft.
+  'crove_social.idea': { make: (o) => ({ row: socialIdeaRow(o) }) },
+  // A label on an idea (#701).
+  'crove_social.idea_label': {
+    make: (o) => {
+      const idea = socialIdeaRow(o);
+      const label = socialLabelRow(o);
+      return {
+        setup: [
+          { table: 'crove_social.idea', values: idea },
+          { table: 'crove_social.label', values: label },
+        ],
+        row: { org_id: o.id, idea_id: idea.id, label_id: label.id },
+      };
+    },
+  },
   'crove_social.label': { make: (o) => ({ row: socialLabelRow(o) }) },
   // A link's preview card (#641), cached per org and URL: asked for by a member, filled in by the worker.
   'crove_social.link_preview': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), url: `https://example.com/rls-${tag()}`, url_sha256: hex64(), status: 'pending', requested_at: new Date().toISOString() } }),
   },
+  // A tag on a media library file (#904): one name per file (case-insensitive), so every row gets its own name.
+  'crove_social.media_tag': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), file_id: o.file, tag: `rls-${tag()}`, created_by: o.owner } }) },
   'crove_social.metric_snapshot': {
     make: (o) => {
       const { setup, variant } = socialVariantRows(o);
@@ -500,6 +653,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // A notification for one member (#637), written once per event and person. A restrictive policy shows each member
   // only their own; the factory's rows belong to the owner, the user every member-context actor enters as.
   'crove_social.notification': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, kind: 'comment', event_id: randomUUID() } }) },
+  // A member who turned Social emails off (#579), under the same restrictive policy as the mutes.
+  'crove_social.notification_mail_off': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner } }) },
   // A kind of notification a member turned off (#637), under the same restrictive policy. One row per member and kind:
   // an org's first row (the seeded one) takes the first kind, every later row (a probe, rolled back) another one.
   'crove_social.notification_mute': {
@@ -592,6 +747,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       row: { org_id: o.id, id: randomUUID(), token_sha256: hex64(), period_start: '2026-10-01T00:00:00Z', period_end: '2026-11-01T00:00:00Z', created_by: o.owner, expires_at: new Date(Date.now() + 86_400_000).toISOString() },
     }),
   },
+  // A schedule that mails the client report (#704): weekly or monthly, its period, channels and recipients.
+  'crove_social.report_schedule': { make: (o) => ({ row: socialReportScheduleRow(o) }) },
+  // One time a schedule sent (or a test send): the period, written by the worker or an owner's test.
+  'crove_social.report_schedule_run': {
+    make: (o) => {
+      const schedule = socialReportScheduleRow(o);
+      return {
+        setup: [{ table: 'crove_social.report_schedule', values: schedule }],
+        row: { org_id: o.id, id: randomUUID(), schedule_id: schedule.id, kind: 'scheduled', period_start: '2026-10-12T00:00:00Z', period_end: '2026-10-19T00:00:00Z' },
+      };
+    },
+  },
   // What a client said through a review link (#589): only the review definer adds rows, for a client with the link;
   // members read them.
   'crove_social.review_feedback': {
@@ -614,8 +781,40 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       return { setup: [{ table: 'crove_social.post', values: link.post }], row: link.row };
     },
   },
+  // A post of a plan review link (#902): a plan link names no post, its posts are these rows, one per post of a link,
+  // so every row gets its own link and post. Members read them; the create command adds them once.
+  'crove_social.review_link_post': {
+    make: (o) => {
+      const post = socialPostRow(o);
+      const link = { org_id: o.id, id: randomUUID(), kind: 'plan', token_sha256: hex64(), created_by: o.owner, expires_at: new Date(Date.now() + 86_400_000).toISOString() };
+      return {
+        setup: [
+          { table: 'crove_social.post', values: post },
+          { table: 'crove_social.review_link', values: link },
+        ],
+        row: { org_id: o.id, id: randomUUID(), link_id: link.id, post_id: post.id, position: 0 },
+      };
+    },
+  },
   // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
+  // A post's link as Crove shortened it when the variant went out (#706); the worker writes it.
+  'crove_social.short_link': {
+    make: (o) => {
+      const { setup, link } = socialShortLinkRows(o);
+      return { setup, row: link };
+    },
+  },
+  // A day's clicks on a short link (#706): only the redirect's definer counts them; members read them.
+  'crove_social.short_link_click': {
+    make: (o) => {
+      const { setup, link } = socialShortLinkRows(o);
+      return { setup: [...setup, { table: 'crove_social.short_link', values: link }], row: { org_id: o.id, short_link_id: link.id, day: '2026-10-20', clicks: 3 } };
+    },
+    noInsertControl: 'only the redirect definer counts clicks, for a visitor following the link; tenant roles may only read them',
+  },
   'crove_social.snippet': { make: (o) => ({ row: { org_id: o.id, name: `rls-${tag()}`, body: '#rls', created_by: o.owner } }) },
+  // The org's logo watermark for post images (#834): the logo file, a corner, a size and an opacity.
+  'crove_social.watermark': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), file_id: o.file, corner: 'bottom_right', scale_percent: 20, opacity_percent: 80, updated_by: o.owner } }) },
 };
 
 function insertSql(row: Row): { text: string; values: Array<string | number> } {

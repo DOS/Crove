@@ -626,6 +626,9 @@ importers:
       '@crove/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@crove/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
       '@crove/kernel-contract':
         specifier: workspace:*
         version: link:../../packages/kernel-contract
@@ -657,6 +660,13 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 4.6.7
+    devDependencies:
+      '@crove/extract':
+        specifier: workspace:*
+        version: link:../../apps/extract
+      '@crove/extract-contract':
+        specifier: workspace:*
+        version: link:../extract-contract
 
   packages/channel: {}
 

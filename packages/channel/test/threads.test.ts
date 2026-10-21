@@ -13,6 +13,12 @@ function threads(routes: Record<string, { status?: number; body: unknown }[]>) {
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const route = `${init?.method ?? 'GET'} ${url.pathname}`;
+    // The quota read (#743) is kept apart, so the other calls keep their order.
+    if (route.endsWith('/threads_publishing_limit')) {
+      const answer = routes[route]?.shift();
+      if (answer) return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
+      return new Response('{}', { status: 500 });
+    }
     calls.push({ route, form: Object.fromEntries(new URLSearchParams(typeof init?.body === 'string' ? init.body : '')), query: url.searchParams, auth: new Headers(init?.headers).get('authorization') });
     const answer = routes[route]?.shift() ?? { status: 500, body: { error: { message: `no answer for ${route}`, code: 1 } } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
@@ -44,7 +50,7 @@ describe('ThreadsConnector', () => {
     const connector = new ThreadsConnector(APP, fetchImpl);
     const url = new URL(connector.authorizeUrl({ state: 'st', redirectUri: REDIRECT, codeChallenge: null }));
     expect(`${url.origin}${url.pathname}`).toBe('https://threads.net/oauth/authorize');
-    expect(url.searchParams.get('scope')).toBe('threads_basic,threads_content_publish,threads_manage_replies');
+    expect(url.searchParams.get('scope')).toBe('threads_basic,threads_content_publish,threads_manage_replies,threads_manage_insights');
     const before = Date.now();
     const [account] = await connector.exchange({ code: 'c', redirectUri: REDIRECT, codeVerifier: null });
     expect(account).toMatchObject({ provider: 'threads', externalAccountId: USER, displayName: '@quan.a', secret: JSON.stringify({ accessToken: 'long-token' }) });
@@ -74,6 +80,38 @@ describe('ThreadsRefresher', () => {
 });
 
 describe('ThreadsPublisher', () => {
+  it("reads a post's views, likes, replies and shares from its insights (#744)", async () => {
+    const { fetchImpl, calls } = threads({
+      'GET /v1.0/18100000000000001/insights': [
+        {
+          body: {
+            data: [
+              { name: 'views', values: [{ value: 900 }] },
+              { name: 'likes', values: [{ value: 40 }] },
+              { name: 'replies', values: [{ value: 5 }] },
+              { name: 'reposts', values: [{ value: 2 }] },
+              { name: 'quotes', values: [{ value: 1 }] },
+              { name: 'shares', total_value: { value: 3 } },
+            ],
+          },
+        },
+        { status: 400, body: { error: { message: 'Unsupported request', code: 100 } } },
+      ],
+    });
+    const publisher = new ThreadsPublisher(fetchImpl, fast);
+    const ask = { externalAccountId: USER, secret: SECRET, externalId: '18100000000000001' };
+    expect(await publisher.metrics(ask)).toEqual({ metrics: { views: 900, reactions: 40, comments: 5, shares: 6 } });
+    expect(calls[0]?.query.get('metric')).toBe('views,likes,replies,reposts,quotes,shares');
+    expect(await publisher.metrics(ask)).toBeNull();
+    expect(await publisher.metrics({ ...ask, externalId: 'not-a-post' })).toEqual({ refused: 'gone' });
+  });
+
+  it('waits hours with nothing created when the publishing quota is used up (#743)', async () => {
+    const { fetchImpl, calls } = threads({ [`GET /v1.0/${USER}/threads_publishing_limit`]: [{ body: { data: [{ quota_usage: 250, config: { quota_total: 250, quota_duration: 86400 } }] } }] });
+    expect(await new ThreadsPublisher(fetchImpl, fast).publish(input())).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'QUOTA_EXHAUSTED' });
+    expect(calls).toEqual([]);
+  });
+
   it('publishes a text post through a container, once', async () => {
     const { fetchImpl, calls } = threads({
       [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }],
@@ -84,6 +122,33 @@ describe('ThreadsPublisher', () => {
     expect(await new ThreadsPublisher(fetchImpl, fast).publish(input())).toEqual({ kind: 'accepted', externalId: '18100000000000001', url: 'https://www.threads.net/@quan.a/post/abc' });
     expect(calls[0]?.form).toEqual({ media_type: 'TEXT', text: 'Khai trương!' });
     expect(calls[2]?.form).toEqual({ creation_id: '9001' });
+  });
+
+  it('sends a poll on a text post and a topic tag on any post, and refuses bad ones before creating anything (#711)', async () => {
+    const { fetchImpl, calls } = threads({
+      [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }],
+      'GET /v1.0/9001': [{ body: { status: 'FINISHED' } }],
+      'GET /v1.0/9002': [{ body: { status: 'FINISHED' } }],
+      [`POST /v1.0/${USER}/threads_publish`]: [{ body: { id: '18100000000000011' } }, { body: { id: '18100000000000012' } }],
+      'GET /v1.0/18100000000000011': [{ body: {} }],
+      'GET /v1.0/18100000000000012': [{ body: {} }],
+    });
+    const publisher = new ThreadsPublisher(fetchImpl, fast);
+    const settings = { poll: { options: [' Cà phê ', 'Trà sữa', 'Nước ép'] }, topicTag: '#Ăn uống' };
+    expect((await publisher.publish(input({ settings }))).kind).toBe('accepted');
+    expect(calls[0]?.form).toEqual({ media_type: 'TEXT', text: 'Khai trương!', poll_attachment: JSON.stringify({ option_a: 'Cà phê', option_b: 'Trà sữa', option_c: 'Nước ép' }), topic_tag: 'Ăn uống' });
+    const image = { body: 'Ảnh', title: null, linkUrl: null, media: [{ fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 10, altText: null }] };
+    expect((await publisher.publish(input({ content: image, settings: { topicTag: 'Khai trương' } }))).kind).toBe('accepted');
+    expect(calls[4]?.form).toEqual({ media_type: 'IMAGE', image_url: 'https://bucket.example/f-1', text: 'Ảnh', topic_tag: 'Khai trương' });
+
+    const none = threads({});
+    const refused = new ThreadsPublisher(none.fetchImpl, fast);
+    expect(await refused.publish(input({ settings: { poll: { options: ['Chỉ một'] } } }))).toMatchObject({ kind: 'rejected', code: 'POLL_INVALID' });
+    expect(await refused.publish(input({ settings: { poll: { options: ['a', 'x'.repeat(26)] } } }))).toMatchObject({ kind: 'rejected', code: 'POLL_INVALID' });
+    expect(await refused.publish(input({ content: image, settings: { poll: { options: ['a', 'b'] } } }))).toMatchObject({ kind: 'rejected', code: 'POLL_WITH_MEDIA' });
+    expect(await refused.publish(input({ settings: { topicTag: 'a.b' } }))).toMatchObject({ kind: 'rejected', code: 'TOPIC_TAG_INVALID' });
+    expect(await refused.publish(input({ settings: { topicTag: 7 } }))).toMatchObject({ kind: 'rejected', code: 'TOPIC_TAG_INVALID' });
+    expect(none.calls).toHaveLength(0);
   });
 
   it('makes a carousel of images, and refuses without image URLs before creating anything', async () => {
@@ -107,6 +172,22 @@ describe('ThreadsPublisher', () => {
     const empty = threads({});
     expect(await new ThreadsPublisher(empty.fetchImpl, fast).publish(input({ content, mediaUrl: async () => null }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_URL_UNAVAILABLE' });
     expect(empty.calls).toHaveLength(0);
+  });
+
+  it('sends alt text on described images and videos (#790)', async () => {
+    const { fetchImpl, calls } = threads({
+      [`POST /v1.0/${USER}/threads`]: [{ body: { id: '9001' } }, { body: { id: '9002' } }, { body: { id: '9003' } }],
+      'GET /v1.0/9003': [{ body: { status: 'FINISHED' } }],
+      [`POST /v1.0/${USER}/threads_publish`]: [{ body: { id: '18100000000000002' } }],
+      'GET /v1.0/18100000000000002': [{ body: {} }],
+    });
+    const media = [
+      { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 10, altText: `Mặt tiền ${'c'.repeat(1200)}` },
+      { fileId: 'f-2', mime: 'image/png', sizeBytes: 10, altText: null },
+    ];
+    await new ThreadsPublisher(fetchImpl, fast).publish(input({ content: { body: 'Bộ ảnh', title: null, linkUrl: null, media } }));
+    expect(String(calls[0]?.form?.alt_text)).toHaveLength(1000);
+    expect(calls[1]?.form).toEqual({ media_type: 'IMAGE', image_url: 'https://bucket.example/f-2', is_carousel_item: 'true' });
   });
 
   it('posts a video alone or in a carousel with images', async () => {
@@ -151,5 +232,15 @@ describe('ThreadsPublisher', () => {
       [`POST /v1.0/${USER}/threads_publish`]: [{ status: 500, body: { error: { message: 'Service temporarily unavailable', code: 2 } } }],
     });
     expect((await new ThreadsPublisher(down.fetchImpl, fast).publish(input())).kind).toBe('unknown');
+  });
+});
+
+describe('Threads followers (#819)', () => {
+  it('reads followers_count from threads_insights, and tells a missing permission apart', async () => {
+    const { fetchImpl, calls } = threads({ [`GET /v1.0/${USER}/threads_insights`]: [{ body: { data: [{ name: 'followers_count', period: 'day', total_value: { value: 1234 } }] } }] });
+    expect(await new ThreadsPublisher(fetchImpl, fast).accountMetrics({ externalAccountId: USER, secret: SECRET })).toEqual({ followers: 1234 });
+    expect(calls[0]?.query.get('metric')).toBe('followers_count');
+    const denied = threads({ [`GET /v1.0/${USER}/threads_insights`]: [{ status: 403, body: { error: { message: 'Application does not have permission for this action', type: 'OAuthException', code: 10 } } }] });
+    expect(await new ThreadsPublisher(denied.fetchImpl, fast).accountMetrics({ externalAccountId: USER, secret: SECRET })).toEqual({ refused: 'permission' });
   });
 });

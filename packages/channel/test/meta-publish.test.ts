@@ -211,6 +211,17 @@ describe('FacebookPagePublisher with images', () => {
     });
   });
 
+  it('gives each described photo its alt text, cut to 1000 characters, and leaves the others to Facebook (#790)', async () => {
+    const { calls, publisher } = sequence([{ body: { id: 'photo-1' } }, { body: { id: 'photo-2' } }, { body: { id: `${PAGE}_7` } }]);
+    const described = [
+      { ...(media[0] as PublishInput['content']['media'][number]), altText: `Bánh mới ${'b'.repeat(1200)}` },
+      { ...(media[1] as PublishInput['content']['media'][number]), altText: null },
+    ];
+    await publisher.publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: described }, readMedia: async () => new Uint8Array([1]) }));
+    expect(String(calls[0]?.multipart?.get('alt_text_custom'))).toHaveLength(1000);
+    expect(calls[1]?.multipart?.has('alt_text_custom')).toBe(false);
+  });
+
   it('puts the link in a photo post once when the text already holds it', async () => {
     const { calls, publisher } = sequence([{ body: { id: 'photo-1' } }, { body: { id: `${PAGE}_8` } }]);
     const one = input({ content: { body: 'Xem https://example.com/a nhé', title: null, linkUrl: 'https://example.com/a', media: [media[0]!] }, readMedia: async () => new Uint8Array([1]) });
@@ -260,5 +271,100 @@ describe('FacebookPagePublisher.metrics', () => {
     expect(await fake(graphError(400, 100, 'Requires pages_read_engagement')).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toBeNull();
     expect(await fake(graphError(400, 190)).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toEqual({ refused: 'token_expired' });
     expect(await fake(graphError(500, 2)).publisher.metrics({ externalAccountId: PAGE, secret: SECRET, externalId: `${PAGE}_42` })).toBeNull();
+  });
+});
+
+// Several answers by route, for the multi-step Story and Reel endpoints (#644).
+function routed(routes: Record<string, { status?: number; body: unknown }[]>) {
+  const calls: { route: string; host: string; form: URLSearchParams; headers: Headers; bytes: number }[] = [];
+  const fetchImpl: Fetch = async (input, init) => {
+    const url = new URL(input);
+    const route = `${init?.method ?? 'GET'} ${url.pathname.replace('/v24.0', '')}`;
+    const body = init?.body;
+    calls.push({
+      route,
+      host: url.host,
+      form: new URLSearchParams(typeof body === 'string' ? body : ''),
+      headers: new Headers(init?.headers),
+      bytes: body instanceof Uint8Array ? body.byteLength : 0,
+    });
+    const answer = routes[route]?.shift() ?? { status: 500, body: { error: { message: `no answer for ${route}`, code: 1 } } };
+    return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
+  };
+  return { calls, publisher: new FacebookPagePublisher(APP, fetchImpl) };
+}
+
+describe('FacebookPagePublisher Stories and Reels (#644)', () => {
+  const photo = { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 3, altText: null };
+  const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5, altText: null };
+  const read = async () => new Uint8Array([1, 2, 3, 4, 5]);
+
+  it('makes a photo Story from an unpublished photo, sending no text', async () => {
+    const { calls, publisher } = routed({
+      [`POST /${PAGE}/photos`]: [{ body: { id: '5551' } }],
+      [`POST /${PAGE}/photo_stories`]: [{ body: { success: true, post_id: '7771' } }],
+    });
+    const result = await publisher.publish(input({ content: { body: 'Không gửi', title: null, linkUrl: null, media: [photo] }, readMedia: read, settings: { postType: 'story' } }));
+    expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_7771`, url: `https://www.facebook.com/${PAGE}_7771` });
+    expect(calls.map((c) => c.route)).toEqual([`POST /${PAGE}/photos`, `POST /${PAGE}/photo_stories`]);
+    expect(Object.fromEntries(calls[1]?.form ?? [])).toEqual({ photo_id: '5551' });
+  });
+
+  it('starts a video Story, uploads its bytes to the upload host by the id Meta gave, and finishes it', async () => {
+    const { calls, publisher } = routed({
+      [`POST /${PAGE}/video_stories`]: [{ body: { video_id: '8881', upload_url: 'https://evil.example/steal' } }, { body: { success: true, post_id: `${PAGE}_9991` } }],
+      'POST /video-upload/8881': [{ body: { success: true } }],
+    });
+    const result = await publisher.publish(input({ content: { body: '', title: null, linkUrl: null, media: [clip] }, readMedia: read, settings: { postType: 'story' } }));
+    expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_9991`, url: `https://www.facebook.com/${PAGE}_9991` });
+    expect(calls.map((c) => [c.route, c.host])).toEqual([
+      [`POST /${PAGE}/video_stories`, 'graph.facebook.com'],
+      ['POST /video-upload/8881', 'rupload.facebook.com'],
+      [`POST /${PAGE}/video_stories`, 'graph.facebook.com'],
+    ]);
+    expect(Object.fromEntries(calls[0]?.form ?? [])).toEqual({ upload_phase: 'start' });
+    expect(calls[1]?.headers.get('authorization')).toBe('OAuth page-token-1');
+    expect(calls[1]?.headers.get('offset')).toBe('0');
+    expect(calls[1]?.headers.get('file_size')).toBe('5');
+    expect(calls[1]?.bytes).toBe(5);
+    expect(Object.fromEntries(calls[2]?.form ?? [])).toEqual({ upload_phase: 'finish', video_id: '8881' });
+  });
+
+  it('publishes a Reel with the text as its description, named by its video id', async () => {
+    const { calls, publisher } = routed({
+      [`POST /${PAGE}/video_reels`]: [{ body: { video_id: '4441' } }, { body: { success: true } }],
+      'POST /video-upload/4441': [{ body: { success: true } }],
+    });
+    const result = await publisher.publish(input({ content: { body: 'Reel khai trương', title: null, linkUrl: null, media: [clip] }, readMedia: read, settings: { postType: 'reel' } }));
+    expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_4441`, url: 'https://www.facebook.com/reel/4441' });
+    expect(Object.fromEntries(calls[2]?.form ?? [])).toEqual({ upload_phase: 'finish', video_id: '4441', video_state: 'PUBLISHED', description: 'Reel khai trương' });
+  });
+
+  it('posts nothing when a step before the last fails, and calls the last answer unclear when Meta does not confirm', async () => {
+    // The upload refused: nothing was published, a failure to retry.
+    const upload = routed({ [`POST /${PAGE}/video_reels`]: [{ body: { video_id: '4442' } }], 'POST /video-upload/4442': [{ status: 500, body: { error: { message: 'oops', code: 1 } } }] });
+    expect(await upload.publisher.publish(input({ content: { body: 'x', title: null, linkUrl: null, media: [clip] }, readMedia: read, settings: { postType: 'reel' } }))).toMatchObject({ kind: 'rejected', error: 'transient' });
+    expect(upload.calls.filter((c) => c.route === `POST /${PAGE}/video_reels`)).toHaveLength(1);
+    // The finish answered without success: unknown, for reconcile.
+    const finish = routed({ [`POST /${PAGE}/video_reels`]: [{ body: { video_id: '4443' } }, { body: {} }], 'POST /video-upload/4443': [{ body: { success: true } }] });
+    expect(await finish.publisher.publish(input({ content: { body: 'x', title: null, linkUrl: null, media: [clip] }, readMedia: read, settings: { postType: 'reel' } }))).toEqual({ kind: 'unknown', code: 'REEL_NOT_CONFIRMED' });
+    // A bad video id from start: never sent anywhere.
+    const odd = routed({ [`POST /${PAGE}/video_stories`]: [{ body: { video_id: '../x' } }] });
+    expect(await odd.publisher.publish(input({ content: { body: '', title: null, linkUrl: null, media: [clip] }, readMedia: read, settings: { postType: 'story' } }))).toMatchObject({ kind: 'rejected', code: 'NO_VIDEO_ID' });
+    expect(odd.calls).toHaveLength(1);
+  });
+
+  it('refuses a Story of two images, a Reel of a photo and an unknown type before calling Meta, and never reconciles them by text', async () => {
+    const { calls, publisher } = routed({});
+    expect(await publisher.publish(input({ content: { body: 'x', title: null, linkUrl: null, media: [photo, photo] }, settings: { postType: 'story' } }))).toMatchObject({ code: 'STORY_ONE_MEDIA' });
+    expect(await publisher.publish(input({ content: { body: 'x', title: null, linkUrl: null, media: [photo] }, settings: { postType: 'reel' } }))).toMatchObject({ code: 'REEL_ONE_VIDEO' });
+    expect(await publisher.publish(input({ settings: { postType: 'live' } }))).toMatchObject({ code: 'POST_TYPE_NOT_SUPPORTED' });
+    expect(calls).toEqual([]);
+    const window = { after: new Date(), before: new Date() };
+    for (const postType of ['story', 'reel']) {
+      const asked: ReconcileInput = { externalAccountId: PAGE, secret: SECRET, callKey: 'k', contentHash: 'h', content: { body: 'x', title: null, linkUrl: null, media: [clip] }, settings: { postType }, ...window };
+      expect(await publisher.reconcile(asked)).toEqual({ found: 'unknown' });
+    }
+    expect(calls).toEqual([]);
   });
 });

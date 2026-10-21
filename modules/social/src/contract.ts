@@ -4,3 +4,6 @@ export * from './domain/channels.ts';
 export * from './domain/validate.ts';
 export * from './domain/insights.ts';
 export * from './domain/utm.ts';
+export * from './domain/occasions.ts';
+export * from './domain/mentions.ts';
+export * from './domain/media-tags.ts';

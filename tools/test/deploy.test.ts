@@ -38,6 +38,10 @@ function run(args: string[], env: Record<string, string> = {}, input?: string) {
       CROVE_WORKER_SETTLE: '0',
       STUB_LOG: log,
       STUB_DEPLOY_DIR: dir,
+      // The account step of the smoke test stays off unless a case turns it on.
+      SMOKE_EMAIL: '',
+      SMOKE_PASSWORD: '',
+      SMOKE_ORG: '',
       ...env,
     },
   });
@@ -105,6 +109,66 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(existsSync(`${dir}/.deploy/lock`)).toBe(false);
   });
 
+  // #892: with --build, /version must report the build being deployed, so an old container that still answers fails.
+  describe('build check', () => {
+    const build = (c: string) => digest(c).slice(0, 12);
+    const withBuild = (release: string, c: string, env: Record<string, string> = {}) =>
+      run(['deploy', '--release', release, '--image', image(c), '--extract-image', extract(c), '--compose', compose, '--build', build(c)], env);
+    const versionCalls = () => readFileSync(log, 'utf8').split('\n').filter((l) => l.startsWith('curl ') && l.endsWith('/version'));
+
+    it('checks /version and records the build of the release', () => {
+      const res = withBuild('v1.0.0', 'a');
+      expect(res.status, res.out).toBe(0);
+      expect(res.out).toContain(`smoke ok: /version answers build ${build('a')} with every migration applied`);
+      expect(readFileSync(`${dir}/releases/${releaseDir('v1.0.0', 'a')}/release.env`, 'utf8')).toContain(`BUILD=${build('a')}\n`);
+    });
+
+    it('skips /version without --build (a release from before it)', () => {
+      expect(deploy('v1.0.0', 'a').status).toBe(0);
+      expect(versionCalls()).toEqual([]);
+      expect(readFileSync(`${dir}/releases/${releaseDir('v1.0.0', 'a')}/release.env`, 'utf8')).toContain('BUILD=\n');
+    });
+
+    it('rolls back when an old container answers instead of the new build', () => {
+      expect(deploy('v1.0.0', 'a').status).toBe(0);
+      const res = withBuild('v1.1.0', 'b', { STUB_STALE_DIGEST: digest('b') });
+      expect(res.status, res.out).toBe(1);
+      expect(res.out).toContain(`smoke: expected build ${build('b')} with no missing migration; /version answered: {"build":"stale","migrationsMissing":[]}`);
+      expect(res.out).toContain(`rolled back to ${releaseDir('v1.0.0', 'a')}, which serves again`);
+      expect(running()).toContain(image('a'));
+    });
+
+    it('rolls back when a committed migration is missing from the ledger', () => {
+      expect(deploy('v1.0.0', 'a').status).toBe(0);
+      rmSync(log);
+      const res = withBuild('v1.1.0', 'b', { STUB_MIGRATION_MISSING: '1' });
+      expect(res.status, res.out).toBe(1);
+      expect(res.out).toContain(`smoke failed: /version answers build ${build('b')} with every migration applied`);
+      // The release rolled back to was deployed without a build id: its smoke test does not ask /version.
+      expect(versionCalls()).toHaveLength(1);
+    });
+
+    it('checks the build of the release it rolls back to, when that release has one', () => {
+      expect(withBuild('v1.0.0', 'a').status).toBe(0);
+      const failed = withBuild('v1.1.0', 'b', { STUB_NO_BUNDLE_DIGEST: digest('b') });
+      expect(failed.status, failed.out).toBe(1);
+      expect(failed.out).toContain(`smoke ok: /version answers build ${build('a')} with every migration applied`);
+      expect(withBuild('v1.1.0', 'b').status).toBe(0);
+      rmSync(log);
+      const back = run(['rollback']);
+      expect(back.status, back.out).toBe(0);
+      expect(back.out).toContain(`smoke ok: /version answers build ${build('a')} with every migration applied`);
+    });
+
+    it('refuses a build id with other characters, or an empty one', () => {
+      for (const id of ["a'b", '']) {
+        const res = run(['deploy', '--release', 'v1.0.0', '--image', image('a'), '--extract-image', extract('a'), '--compose', compose, '--build', id]);
+        expect(res.status, id).toBe(2);
+        expect(res.out).toContain('--build must match');
+      }
+    });
+  });
+
   it('rolls the worker before the API when they run as separate services', () => {
     const res = deploy('v1.0.0', 'a', { STUB_SERVICES: 'db migrate auth auth-grants crove-extract api worker' });
     expect(res.status, res.out).toBe(0);
@@ -154,6 +218,13 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
     expect(running()).toContain(image('a'));
     expect(running()).not.toContain(image('b'));
     expect(readFileSync(`${dir}/.deploy/history.log`, 'utf8')).toContain(`deploy ${releaseDir('v1.1.0', 'b')} failed, rolled back to ${releaseDir('v1.0.0', 'a')}`);
+  });
+
+  it('never runs the account step of the smoke test on the host, so a rollback cannot depend on the smoke account', () => {
+    const res = deploy('v1.0.0', 'a', { SMOKE_EMAIL: 'smoke@example.com', SMOKE_PASSWORD: 'x', SMOKE_ORG: 'crove-smoke', STUB_SIGNIN_FAIL: '1' });
+    expect(res.status, res.out).toBe(0);
+    expect(res.out).not.toContain('signs in, uploads');
+    expect(readFileSync(log, 'utf8')).not.toContain('/auth/v1/token');
   });
 
   it('rolls back when the smoke test fails after the instance is ready', () => {
@@ -316,11 +387,106 @@ describe.skipIf(!runHere)('deploy.sh', { timeout: 300_000 }, () => {
       }
     });
 
+    it('checks /version when given the build being deployed (#892)', () => {
+      const ok = run(['smoke', 'https://crove.example.test', 'dev']);
+      expect(ok.status, ok.out).toBe(0);
+      expect(ok.out).toContain('smoke ok: /version answers build dev with every migration applied');
+      const other = run(['smoke', 'https://crove.example.test', '0123456789ab']);
+      expect(other.status).toBe(1);
+      expect(other.out).toContain('smoke failed: /version answers build 0123456789ab with every migration applied');
+      const behind = run(['smoke', 'https://crove.example.test', 'dev'], { STUB_MIGRATION_MISSING: '1' });
+      expect(behind.status).toBe(1);
+      expect(behind.out).toContain('"migrationsMissing":["20990101000000_crove_kernel_next.sql"]');
+      expect(run(['smoke', 'https://crove.example.test']).out).not.toContain('/version');
+      expect(run(['smoke', 'https://crove.example.test', 'a b']).status).toBe(2);
+    });
+
     it('fails, naming the check, when one does not answer', () => {
       const res = run(['smoke', 'https://crove.example.test'], { STUB_READYZ_FAIL: '1' });
       expect(res.status).toBe(1);
       expect(res.out).toContain('smoke failed: /readyz answers ready');
       expect(res.out).toContain('smoke ok: /healthz answers ok');
+    });
+
+    describe('account step (#690)', () => {
+      // A password with characters a JSON body or a shell would have to escape.
+      const PASSWORD = 'smoke "pass" \\ word $HOME 0123';
+      const account = { SMOKE_EMAIL: 'smoke@example.com', SMOKE_PASSWORD: PASSWORD, SMOKE_ORG: 'crove-smoke', CROVE_SMOKE_POLL_SECONDS: '1' };
+      const STEP = 'signs in, uploads a synthetic e-invoice to org crove-smoke and gets a proposal';
+      const read = (suffix: string) => (existsSync(`${log}.${suffix}`) ? readFileSync(`${log}.${suffix}`, 'utf8') : '');
+
+      it('is skipped with a notice without SMOKE_EMAIL and SMOKE_PASSWORD', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { SMOKE_EMAIL: 'smoke@example.com' });
+        expect(res.status, res.out).toBe(0);
+        expect(res.out).toContain('smoke skipped: sign-in and upload (SMOKE_EMAIL and SMOKE_PASSWORD are not set)');
+        expect(readFileSync(log, 'utf8')).not.toContain('/auth/v1/token');
+      });
+
+      it('fails the smoke command, which makes the workflow roll back', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { ...account, STUB_SIGNIN_FAIL: '1' });
+        expect(res.status).toBe(1);
+        expect(res.out).toContain('smoke test failed on https://crove.example.test');
+      });
+
+      it('signs in, uploads one synthetic e-invoice, waits for its proposal and rejects it', () => {
+        const res = run(['smoke', 'https://crove.example.test'], account);
+        expect(res.status, res.out).toBe(0);
+        expect(res.out).toContain(`smoke ok: ${STEP}`);
+        expect(JSON.parse(read('signin'))).toEqual({ email: 'smoke@example.com', password: PASSWORD });
+        const invoice = read('upload');
+        expect(invoice).toMatch(/<SHDon>\d{10}<\/SHDon>/);
+        // Synthetic parties only: tax codes that fail the checksum.
+        expect(invoice).toContain('<MST>0101234564</MST>');
+        expect(invoice).toContain('<MST>0309876546</MST>');
+        expect(JSON.parse(read('rpc'))).toEqual({ json: { id: 'proposal-1', reason: 'Kiểm thử sau triển khai' } });
+        // Neither the password nor the access token is on any command line.
+        const argv = read('argv');
+        expect(argv).toContain('/auth/v1/token?grant_type=password');
+        expect(argv).not.toContain('"pass"');
+        expect(argv).not.toContain('stub-access-token');
+      });
+
+      it('fails when the sign-in is refused, without uploading', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { ...account, STUB_SIGNIN_FAIL: '1' });
+        expect(res.status).toBe(1);
+        expect(res.out).toContain('smoke: signing in with SMOKE_EMAIL and SMOKE_PASSWORD failed');
+        expect(res.out).toContain(`smoke failed: ${STEP}`);
+        expect(read('upload')).toBe('');
+      });
+
+      it('fails when the worker cannot extract the upload, or no proposal comes in time', () => {
+        const failed = run(['smoke', 'https://crove.example.test'], { ...account, STUB_FILE_STATUS: 'failed' });
+        expect(failed.status).toBe(1);
+        expect(failed.out).toContain('smoke: the worker could not extract the synthetic e-invoice: UNREADABLE');
+        const pending = run(['smoke', 'https://crove.example.test'], { ...account, STUB_FILE_STATUS: 'extracting' });
+        expect(pending.status).toBe(1);
+        expect(pending.out).toContain('smoke: no proposal after 1s (file extracting)');
+        // An empty proposal id is not filled from the next field.
+        const noId = run(['smoke', 'https://crove.example.test'], { ...account, STUB_FILE_STATUS: 'proposed-no-id' });
+        expect(noId.status).toBe(1);
+        expect(noId.out).toContain('smoke: no proposal after 1s (file proposed)');
+        expect(read('rpc')).toBe('');
+      });
+
+      it('fails when the proposal cannot be rejected', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { ...account, STUB_REJECT_FAIL: '1' });
+        expect(res.status).toBe(1);
+        expect(res.out).toContain('smoke: rejecting the smoke proposal proposal-1 failed');
+      });
+
+      it('never sends the password over plain http to another host', () => {
+        const res = run(['smoke', 'http://crove.example.test'], account);
+        expect(res.status).toBe(1);
+        expect(res.out).toContain('the account step signs in only over https');
+        expect(read('signin')).toBe('');
+      });
+
+      it('refuses an org that is not a slug', () => {
+        const res = run(['smoke', 'https://crove.example.test'], { ...account, SMOKE_ORG: 'Crove Smoke' });
+        expect(res.status).toBe(1);
+        expect(res.out).toContain("SMOKE_ORG must be the smoke org's slug");
+        expect(read('signin')).toBe('');
+      });
     });
   });
 });

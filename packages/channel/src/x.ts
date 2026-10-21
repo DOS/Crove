@@ -6,8 +6,8 @@
 // token lives two hours and the refresh schedule renews it, keeping whichever refresh token X hands back.
 // Publish: each image is uploaded first (nothing is visible until a post names it), then one POST /2/tweets; a video
 // goes through the chunked upload and X's processing first (#449). An unclear answer is checked against the account's recent posts by text and time.
-import type { CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
-import { commentResult } from './comment.ts';
+import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -20,6 +20,8 @@ const MEDIA_ID = /^\d{1,32}$/;
 const USERNAME = /^[A-Za-z0-9_]{1,15}$/;
 // X shows at most 4 images in a post.
 const MAX_IMAGES = 4;
+// X takes at most 1000 characters of alt text per image.
+const ALT_TEXT_MAX = 1000;
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
 export interface XAppConfig {
@@ -95,7 +97,7 @@ class XClient {
     return json as TokenAnswer;
   }
 
-  async call<T>(method: 'GET' | 'POST', path: string, token: string, body?: { json: unknown } | { form: FormData }): Promise<T | null> {
+  async call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, token: string, body?: { json: unknown } | { form: FormData }): Promise<T | null> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     let payload: string | FormData | undefined;
     if (body && 'json' in body) {
@@ -279,8 +281,18 @@ export class XPublisher implements Publisher {
   private readonly pollMinMs: number;
   private readonly budgetMs: number;
 
-  constructor(app: XAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMinMs?: number; budgetMs?: number } = {}) {
+  // Post counts (#797), when the deployment turns them on (CHANNEL_X_METRICS): X bills every post read, so they are
+  // off by default and the metrics sweep then skips X.
+  readonly metrics?: (input: MetricsInput) => Promise<MetricsResult>;
+  // The account's followers (#819), on the same switch: one more billed read a day.
+  readonly accountMetrics?: (input: AccountMetricsInput) => Promise<AccountMetricsResult>;
+
+  constructor(app: XAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMinMs?: number; budgetMs?: number } = {}, options: { metrics?: boolean } = {}) {
     this.client = new XClient(app, fetchImpl);
+    if (options.metrics) {
+      this.metrics = (input) => this.readMetrics(input);
+      this.accountMetrics = (input) => this.readFollowers(input);
+    }
     this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
     this.pollMinMs = timing.pollMinMs ?? 1000;
     // The last status check and the post (30 s each at most) plus slack fit between the budget and callTimeoutMs.
@@ -297,10 +309,10 @@ export class XPublisher implements Publisher {
     const text = textOf(input.content);
     if (!text && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
     // Every image is read before the first upload, so a read failure posts nothing.
-    const files: { bytes: Uint8Array; mime: string }[] = [];
+    const files: { bytes: Uint8Array; mime: string; altText?: string }[] = [];
     for (const m of media) {
       try {
-        files.push({ bytes: await input.readMedia(m.fileId), mime: m.mime });
+        files.push({ bytes: await input.readMedia(m.fileId), mime: m.mime, ...(m.altText ? { altText: m.altText } : {}) });
       } catch {
         return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
       }
@@ -314,6 +326,8 @@ export class XPublisher implements Publisher {
         const uploaded = await this.client.call<{ data?: { id?: unknown } }>('POST', '/media/upload', s.accessToken, { form });
         const id = uploaded?.data?.id;
         if (typeof id !== 'string' || !MEDIA_ID.test(id)) return { kind: 'rejected', error: 'transient', code: 'NO_MEDIA_ID' };
+        // The image's description for screen readers (#790), set before the post names the image: still nothing visible.
+        if (f.altText) await this.client.call('POST', '/media/metadata', s.accessToken, { json: { id, metadata: { alt_text: { text: f.altText.slice(0, ALT_TEXT_MAX) } } } });
         mediaIds.push(id);
       } catch (error) {
         return beforePost(publishResult(error));
@@ -323,6 +337,36 @@ export class XPublisher implements Publisher {
   }
 
   // A reply in the post's thread (#587), as the first comment X has none of its own.
+  // A repost of the account's own post (#773): POST /2/users/:id/retweets. X answers with the post retweeted, not a new
+  // id, so the repost is named by the account and the post.
+  async repost(input: RepostInput): Promise<CommentResult> {
+    const s = xSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!USER_ID.test(input.externalAccountId) || !POST_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.client.call<{ data?: { retweeted?: unknown } }>('POST', `/users/${input.externalAccountId}/retweets`, s.accessToken, { json: { tweet_id: input.externalId } });
+      if (answer?.data?.retweeted !== true) return { kind: 'unknown', code: 'NOT_RETWEETED' };
+      return { kind: 'accepted', externalId: `retweet:${input.externalAccountId}:${input.externalId}` };
+    } catch (error) {
+      return commentResult(publishResult(error));
+    }
+  }
+
+  // Deletes the account's own post (#860): DELETE /2/tweets/:id, answered { data: { deleted: true } }. A post X no
+  // longer has (404) is gone already; any other answer leaves it unclear.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = xSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!POST_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.client.call<{ data?: { deleted?: unknown } }>('DELETE', `/tweets/${input.externalId}`, s.accessToken);
+      return answer?.data?.deleted === true ? { kind: 'removed' } : { kind: 'unknown', code: 'NOT_DELETED' };
+    } catch (error) {
+      if (error instanceof XError && (error.status === 404 || error.status === 410)) return { kind: 'removed' };
+      return removeResult(publishResult(error));
+    }
+  }
+
   async comment(input: CommentInput): Promise<CommentResult> {
     const s = xSecretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
@@ -334,6 +378,52 @@ export class XPublisher implements Publisher {
       return { kind: 'accepted', externalId: id };
     } catch (error) {
       return commentResult(publishResult(error));
+    }
+  }
+
+  private async readFollowers(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const s = xSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    try {
+      const answer = await this.client.call<{ data?: { id?: unknown; public_metrics?: { followers_count?: unknown } } }>('GET', '/users/me?user.fields=public_metrics', s.accessToken);
+      if (answer?.data?.id !== input.externalAccountId) return null;
+      const n = answer.data.public_metrics?.followers_count;
+      return { followers: typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null };
+    } catch (error) {
+      if (error instanceof XError && error.status === 401) return { refused: 'token_expired' };
+      if (error instanceof XError && error.status === 403) return { refused: 'permission' };
+      return null;
+    }
+  }
+
+  // Likes, replies, reposts and quotes, bookmarks and impressions of the account's own post, from public_metrics (one
+  // post read). A post X no longer has is gone.
+  private async readMetrics(input: MetricsInput): Promise<MetricsResult> {
+    const s = xSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!POST_ID.test(input.externalId)) return { refused: 'gone' };
+    try {
+      const answer = await this.client.call<{ data?: { id?: unknown; public_metrics?: Record<string, unknown> }; errors?: { type?: unknown }[] }>('GET', `/tweets/${input.externalId}?tweet.fields=public_metrics`, s.accessToken);
+      if (!answer?.data && answer?.errors?.some((e) => typeof e.type === 'string' && e.type.endsWith('/resource-not-found'))) return { refused: 'gone' };
+      const m = answer?.data?.public_metrics;
+      if (!m) return null;
+      const n = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : undefined);
+      const reposts = n(m.retweet_count);
+      const quotes = n(m.quote_count);
+      const metrics = Object.fromEntries(
+        Object.entries({
+          reactions: n(m.like_count),
+          comments: n(m.reply_count),
+          shares: reposts === undefined && quotes === undefined ? undefined : (reposts ?? 0) + (quotes ?? 0),
+          saves: n(m.bookmark_count),
+          impressions: n(m.impression_count),
+        }).filter(([, v]) => v !== undefined),
+      );
+      return { metrics };
+    } catch (error) {
+      if (error instanceof XError && error.status === 401) return { refused: 'token_expired' };
+      if (error instanceof XError && error.status === 404) return { refused: 'gone' };
+      return null;
     }
   }
 

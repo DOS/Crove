@@ -88,9 +88,20 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await nav.getByRole('link', { name: 'Nhà cung cấp' }).click();
     const vendor = page.getByRole('row').filter({ hasText: SELLER });
     await expect(vendor).toHaveCount(1);
-    // The last cell is the vendor's default account (#319): for an owner, a picker on the account approving set.
-    await expect(vendor.getByRole('cell')).toHaveText([SELLER, SELLER_TAX_CODE, /Hà Nội/, '1', /6422 · Chi phí quản lý doanh nghiệp/]);
+    // The fifth cell is the vendor's default account (#319): for an owner, a picker on the account approving set. The
+    // last one opens the edit form (#887).
+    // Under the name, the contact the invoice gave: the seller's email.
+    await expect(vendor.getByRole('cell')).toHaveText([`${SELLER}hoadon@example.com`, SELLER_TAX_CODE, /Hà Nội/, '1', /6422 · Chi phí quản lý doanh nghiệp/, 'Sửa']);
     await expect(vendor.getByRole('combobox', { name: `Tài khoản mặc định của ${SELLER}` })).toHaveValue('6422');
+
+    // A member of the team adds the vendor's phone (#887); the tax code from the invoice stays locked.
+    await vendor.getByRole('button', { name: `Sửa thông tin của ${SELLER}` }).click();
+    const form = page.getByRole('form', { name: `Sửa thông tin của ${SELLER}` });
+    await expect(form.getByLabel('Mã số thuế')).toBeDisabled();
+    await form.getByLabel('Điện thoại').fill('024 3826 0000');
+    await form.getByRole('button', { name: 'Lưu' }).click();
+    await expect(form).toHaveCount(0);
+    await expect(vendor.getByRole('cell').first()).toHaveText(`${SELLER}024 3826 0000 · hoadon@example.com`);
 
     await nav.getByRole('link', { name: 'Chứng từ', exact: true }).click();
     const document = page.getByRole('row').filter({ hasText: 'C26TAB-1234' });

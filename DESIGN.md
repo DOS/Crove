@@ -170,7 +170,7 @@ Approve, edit and reject have equal visual access (reject is not hidden in a men
 
 ### 5.2 Keyboard
 
-- `⌘K` / `Ctrl K` opens the command palette everywhere in the app.
+- `⌘K` / `Ctrl K` opens the command palette everywhere in the app. It goes to screens and runs commands, and where finance runs it also searches the org's data: parties by name or tax code, invoices by number or party, journal entries by description or amount, without Vietnamese marks (`finance.search`, #673).
 - Lists: `J` / `K` move, `Enter` opens, `A` approves, `E` edits, `R` rejects, `Esc` closes. Shortcuts are shown in menus and tooltips, and every one has a pointer equivalent.
 - Drag interactions always have a non-drag alternative (WCAG 2.5.7).
 

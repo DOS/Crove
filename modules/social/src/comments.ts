@@ -56,12 +56,14 @@ export async function commentCalls(trx: Trx, orgId: string, v: CommentVariant): 
 
 // What a variant's first comment shows on the post screen. now and publishedAt tell a call or a job that went quiet
 // from one still on its way.
-export type CommentStatus = 'pending' | 'posted' | 'failed' | 'unknown';
+// reconnect: the last call failed because the channel was connected without the permission to comment (#791).
+export type CommentStatus = 'pending' | 'posted' | 'failed' | 'reconnect' | 'unknown';
+export const RECONNECT_FOR_COMMENTS = 'RECONNECT_FOR_COMMENTS';
 export function commentStatus(calls: readonly CommentCall[], now: Date, publishedAt: Date | null): CommentStatus {
   const last = calls.at(-1);
   if (!last) return publishedAt && now.getTime() - publishedAt.getTime() > COMMENT_STALE_MS ? 'failed' : 'pending';
   if (calls.some((c) => c.state === 'succeeded')) return 'posted';
-  if (last.state === 'failed') return 'failed';
+  if (last.state === 'failed') return last.error_code === RECONNECT_FOR_COMMENTS ? 'reconnect' : 'failed';
   if (last.state === 'ambiguous') return 'unknown';
   return now.getTime() - last.started_at.getTime() > COMMENT_STALE_MS ? 'unknown' : 'pending';
 }
@@ -100,7 +102,7 @@ export const commentBegin = defineCommand({
     // one goes again only when a person asked, once per ask: the ask names the last call it saw, so a second job from
     // the same ask finds a newer call and stops.
     const go = input.retry
-      ? (status === 'failed' || status === 'unknown') && (calls.at(-1)?.key ?? null) === input.retry.after
+      ? (status === 'failed' || status === 'reconnect' || status === 'unknown') && (calls.at(-1)?.key ?? null) === input.retry.after
       : calls.length === 0;
     if (!go) return { action: 'none', reason: status };
     const step = calls.length === 0 ? COMMENT_STEP : `${COMMENT_STEP}_${calls.length + 1}`;
@@ -166,7 +168,7 @@ export const commentRetry = defineCommand({
     const v = await lockVariant(ctx, input.variantId);
     const calls = await commentCalls(ctx.trx, ctx.orgId, v);
     const status = commentStatus(calls, ctx.now, v.published_at);
-    if (v.status !== 'published' || !v.external_post_id || !firstCommentOf(settingsOf(v)) || (status !== 'failed' && status !== 'unknown')) {
+    if (v.status !== 'published' || !v.external_post_id || !firstCommentOf(settingsOf(v)) || (status !== 'failed' && status !== 'reconnect' && status !== 'unknown')) {
       throw new DomainError('COMMENT_NOT_RETRYABLE', 409, 'Bình luận của kênh này không cần thử lại');
     }
     await ctx.emit('social.comment.retry_requested', { post_id: v.post_id, variant_id: v.id, provider: v.provider, after: calls.at(-1)?.key ?? null });

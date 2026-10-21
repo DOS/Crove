@@ -1,6 +1,7 @@
 // Social domain layer (issue #231): channel rules, lifecycles, approval hash, publish decisions.
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import * as channel from '@crove/channel';
 import {
   approvalCovers,
   approvalsInRound,
@@ -10,16 +11,24 @@ import {
   countText,
   sentText,
   effectiveContent,
+  needsPublicUrls,
+  limitWait,
+  PUBLISH_LIMITS,
   nextAction,
   POST_STATUSES,
   postStatus,
   PROVIDERS,
+  REMOVE_READY,
+  VIDEO_READY,
   publishCallKey,
   publishJobKey,
+  scopeNeeded,
   startsNewAttempt,
   transitionVariant,
   validateVariant,
   VARIANT_STATUSES,
+  YOUTUBE_CATEGORIES,
+  youtubeTagsLength,
   type CallState,
   type HashedVariant,
   type MediaItem,
@@ -31,6 +40,14 @@ import {
 const jpeg = (sizeBytes = 100_000): MediaItem => ({ kind: 'image', mime: 'image/jpeg', sizeBytes, durationSeconds: null });
 const png = (): MediaItem => ({ kind: 'image', mime: 'image/png', sizeBytes: 100_000, durationSeconds: null });
 const mp4 = (durationSeconds = 30, sizeBytes = 10_000_000): MediaItem => ({ kind: 'video', mime: 'video/mp4', sizeBytes, durationSeconds });
+
+describe('video length (#850)', () => {
+  it('flags a video whose length could not be read on a channel with a length limit', () => {
+    const codes = (provider: 'tiktok' | 'sandbox', durationSeconds: number | null) => validateVariant({ provider, body: 'x', title: null, media: [mp4(durationSeconds as number)] }).map((i) => i.code);
+    expect(codes('tiktok', null)).toContain('VIDEO_LENGTH_UNKNOWN');
+    expect(codes('tiktok', 30)).not.toContain('VIDEO_LENGTH_UNKNOWN');
+  });
+});
 
 describe('countText', () => {
   it('counts Vietnamese the same whether typed precomposed or with combining marks', () => {
@@ -171,6 +188,36 @@ describe('validateVariant', () => {
     expect(codes([jpeg(5 * 1024 * 1024)])).toEqual(['IMAGE_TOO_LARGE']);
   });
 
+  it('checks Stories and Reels on the channels that post them (#644)', () => {
+    const img = (): MediaItem => ({ kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null });
+    const vid = (seconds: number): MediaItem => ({ kind: 'video', mime: 'video/mp4', sizeBytes: 1_000_000, durationSeconds: seconds });
+    const codes = (provider: 'instagram' | 'facebook_page' | 'x', postType: unknown, media: MediaItem[], extra: Record<string, unknown> = {}, body = 'Chữ không gửi') =>
+      validateVariant({ provider, body, title: null, linkUrl: 'https://shop.example/', media, settings: { postType, ...extra } }).map((i) => i.code);
+    // A Story: one image or a video of up to a minute; its text and link are not checked, since they are not sent.
+    expect(codes('instagram', 'story', [img()], {}, 'x'.repeat(5000))).toEqual([]);
+    expect(codes('facebook_page', 'story', [vid(45)])).toEqual([]);
+    expect(codes('instagram', 'story', [img(), img()])).toEqual(['STORY_ONE_MEDIA']);
+    expect(codes('instagram', 'story', [])).toEqual(['STORY_ONE_MEDIA']);
+    expect(codes('instagram', 'story', [vid(61)])).toEqual(['VIDEO_TOO_LONG']);
+    expect(codes('instagram', 'story', [img()], { firstComment: 'Mua ngay' })).toEqual(['COMMENT_NOT_SUPPORTED']);
+    expect(codes('instagram', 'story', [vid(10)], { cover: { atMs: 1000 } })).toEqual(['COVER_NOT_SUPPORTED']);
+    // A Reel: one video, as long as the platform takes; Facebook Reels last at most 90 s.
+    expect(codes('facebook_page', 'reel', [vid(60)])).toEqual([]);
+    expect(codes('facebook_page', 'reel', [vid(91)])).toEqual(['VIDEO_TOO_LONG']);
+    expect(codes('instagram', 'reel', [img()])).toEqual(['REEL_ONE_VIDEO']);
+    // Other channels, and unknown types, are refused; a feed post is checked as before.
+    expect(codes('x', 'story', [img()])).toEqual(['POST_TYPE_NOT_SUPPORTED']);
+    expect(codes('instagram', 'carousel', [img()])).toEqual(['POST_TYPE_NOT_SUPPORTED']);
+    expect(codes('instagram', 'feed', [img()])).toEqual([]);
+    // A Story image is upright (9:16 passes, the feed's 4:5 and wider do not), whatever the feed takes; an unknown size is not checked.
+    const sized = (width: number, height: number): MediaItem => ({ ...img(), width, height });
+    expect(codes('instagram', 'story', [sized(1080, 1920)])).toEqual([]);
+    expect(codes('facebook_page', 'story', [sized(1080, 2340)])).toEqual([]);
+    expect(codes('instagram', 'story', [sized(1080, 1350)])).toEqual(['IMAGE_RATIO_NOT_ALLOWED']);
+    expect(codes('facebook_page', 'story', [sized(1920, 1080)])).toEqual(['IMAGE_RATIO_NOT_ALLOWED']);
+    expect(codes('instagram', 'story', [sized(180, 320)])).toEqual(['IMAGE_TOO_SMALL']);
+  });
+
   it("holds Instagram and Threads images to their shapes and widths, when the size is known (#636)", () => {
     const img = (width: number | null, height: number | null): MediaItem => ({ kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null, width, height });
     const codes = (provider: 'instagram' | 'threads' | 'facebook_page', media: MediaItem[]) => validateVariant({ provider, body: 'x', title: null, media }).map((i) => i.code);
@@ -186,6 +233,51 @@ describe('validateVariant', () => {
     expect(codes('instagram', [img(null, null), { kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null }])).toEqual([]);
   });
 
+  it('checks Threads polls and topic tags, and refuses them elsewhere (#711)', () => {
+    const codes = (provider: 'threads' | 'facebook_page', settings: Record<string, unknown>, media: MediaItem[] = []) =>
+      validateVariant({ provider, body: 'Bạn thích món nào?', title: null, media, settings }).map((i) => i.code);
+    const img: MediaItem = { kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null };
+    expect(codes('threads', { poll: { options: ['Cà phê', 'Trà sữa'] }, topicTag: '#Ăn uống' })).toEqual([]);
+    expect(codes('threads', { poll: { options: ['Một'] } })).toEqual(['POLL_OPTIONS']);
+    expect(codes('threads', { poll: { options: ['a', 'b', 'c', 'd', 'e'] } })).toEqual(['POLL_OPTIONS']);
+    expect(codes('threads', { poll: 'có' })).toEqual(['POLL_OPTIONS']);
+    expect(validateVariant({ provider: 'threads', body: 'x', title: null, media: [], settings: { poll: { options: ['a', ' ', 'x'.repeat(26)] } } })).toEqual([
+      { code: 'POLL_OPTION_LENGTH', field: 'settings.poll.1', limit: 25, actual: 0 },
+      { code: 'POLL_OPTION_LENGTH', field: 'settings.poll.2', limit: 25, actual: 26 },
+    ]);
+    expect(codes('threads', { poll: { options: ['a', 'b'] } }, [img])).toEqual(['POLL_WITH_MEDIA']);
+    expect(codes('threads', { topicTag: 'a.b' })).toEqual(['TOPIC_TAG_INVALID']);
+    expect(codes('threads', { topicTag: 'x'.repeat(51) })).toEqual(['TOPIC_TAG_INVALID']);
+    expect(codes('threads', { topicTag: '#' })).toEqual(['TOPIC_TAG_INVALID']);
+    expect(codes('threads', { topicTag: 7 })).toEqual(['TOPIC_TAG_INVALID']);
+    // Any word is a tag, this one too.
+    expect(codes('threads', { topicTag: 'invalid' })).toEqual([]);
+    expect(codes('facebook_page', { poll: { options: ['a', 'b'] }, topicTag: 'Ăn uống' })).toEqual(['POLL_NOT_SUPPORTED', 'TOPIC_TAG_NOT_SUPPORTED']);
+  });
+
+  it('checks Google Business Profile posts, and refuses their settings elsewhere (#709)', () => {
+    const codes = (provider: 'google_business' | 'facebook_page', gbp: unknown, linkUrl: string | null = 'https://tiembanh.example/') =>
+      validateVariant({ provider, body: 'Bánh mới', title: null, media: [], linkUrl, settings: { gbp } }).map((i) => i.code);
+    const day = { startDate: '2026-09-25', endDate: '2026-09-26' };
+    expect(codes('google_business', { topic: 'STANDARD', cta: 'ORDER' })).toEqual([]);
+    expect(codes('google_business', { topic: 'EVENT', event: { title: 'Trung thu', ...day, startTime: '18:30' } })).toEqual([]);
+    expect(codes('google_business', { topic: 'OFFER', event: day, offer: { couponCode: 'SALE' } })).toEqual([]);
+    expect(codes('google_business', { topic: 'EVENT', event: day })).toEqual(['GBP_INVALID']);
+    expect(codes('google_business', { topic: 'OFFER', event: { startDate: '2026-09-26', endDate: '2026-09-25' } })).toEqual(['GBP_INVALID']);
+    expect(codes('google_business', { topic: 'EVENT', event: { title: 'x', ...day, startTime: '25:00' } })).toEqual(['GBP_INVALID']);
+    expect(codes('google_business', { topic: 'PRODUCT' })).toEqual(['GBP_INVALID']);
+    // The post's language (#730): one Google takes, Vietnamese when unsaid.
+    expect(codes('google_business', { language: 'en' })).toEqual([]);
+    expect(codes('google_business', { language: 'english' })).toEqual(['GBP_INVALID']);
+    expect(codes('google_business', { cta: 'SHOP' }, null)).toEqual(['GBP_CTA_NEEDS_LINK']);
+    expect(codes('google_business', { cta: 'CALL' }, null)).toEqual([]);
+    expect(codes('facebook_page', { topic: 'STANDARD' })).toEqual(['GBP_NOT_SUPPORTED']);
+    // One photo at most, JPEG or PNG; no video.
+    const photo = (mime: string): MediaItem => ({ kind: 'image', mime, sizeBytes: 1000, durationSeconds: null });
+    expect(validateVariant({ provider: 'google_business', body: 'x', title: null, media: [photo('image/jpeg'), photo('image/png')] }).map((i) => i.code)).toEqual(['TOO_MANY_MEDIA']);
+    expect(validateVariant({ provider: 'google_business', body: 'x', title: null, media: [photo('image/webp')] }).map((i) => i.code)).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
+    expect(validateVariant({ provider: 'google_business', body: 'x'.repeat(1501), title: null, media: [] }).map((i) => i.code)).toEqual(['TEXT_TOO_LONG']);
+  });
   it('refuses images mixed with video where the channel does not mix them', () => {
     const codes = validateVariant({ provider: 'facebook_page', body: '', title: null, media: [jpeg(), mp4()] }).map((i) => i.code);
     expect(codes).toEqual(['MEDIA_MIX_NOT_ALLOWED']);
@@ -200,15 +292,116 @@ describe('validateVariant', () => {
     expect(tiktokLong).toEqual(['VIDEO_TOO_LONG', 'PRIVACY_REQUIRED']);
     const tiktokOk = validateVariant({ provider: 'tiktok', body: '', title: null, media: [mp4(30)], settings: { privacyLevel: 'SELF_ONLY' } });
     expect(tiktokOk).toEqual([]);
-    // TikTok's photo mode is not built: images are flagged before they are approved.
-    const tiktokPhoto = validateVariant({ provider: 'tiktok', body: '', title: null, media: [jpeg()], settings: { privacyLevel: 'SELF_ONLY' } }).map((i) => i.code);
-    expect(tiktokPhoto).toEqual(['IMAGES_NOT_SUPPORTED_YET']);
+    // TikTok photo posts (#710): JPEG or WebP, up to 35, never with a video.
+    const tiktok = (media: MediaItem[]) => validateVariant({ provider: 'tiktok', body: '', title: null, media, settings: { privacyLevel: 'SELF_ONLY' } }).map((i) => i.code);
+    expect(tiktok([jpeg(), jpeg()])).toEqual([]);
+    expect(tiktok([{ ...jpeg(), mime: 'image/png' }])).toEqual(['IMAGE_TYPE_NOT_ALLOWED']);
+    expect(tiktok(Array.from({ length: 36 }, () => jpeg()))).toEqual(['TOO_MANY_MEDIA']);
+    // A photo post's description takes 4,000 characters; a video's caption keeps 2,200.
+    const long = (media: MediaItem[], n: number) => validateVariant({ provider: 'tiktok', body: 'x'.repeat(n), title: null, media, settings: { privacyLevel: 'SELF_ONLY' } }).map((i) => i.code);
+    expect(long([jpeg()], 4000)).toEqual([]);
+    expect(long([jpeg()], 4001)).toEqual(['TEXT_TOO_LONG']);
+    expect(long([{ kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 10 }], 2201)).toEqual(['TEXT_TOO_LONG']);
   });
 
-  it('says when a channel takes video but its Crove adapter does not post it yet', () => {
+  it('asks no privacy level of a TikTok draft sent to the inbox, and no cover (#903)', () => {
+    const tt = (settings: Record<string, unknown>, media: MediaItem[] = [mp4(30)]) => validateVariant({ provider: 'tiktok', body: 'Khai trương', title: null, media, settings }).map((i) => i.code);
+    expect(tt({ tiktokMode: 'inbox' })).toEqual([]);
+    expect(tt({ tiktokMode: 'inbox' }, [jpeg(), jpeg()])).toEqual([]);
+    // Direct, stored or by default, still needs it, as variants saved before #903 did.
+    expect(tt({})).toEqual(['PRIVACY_REQUIRED']);
+    expect(tt({ tiktokMode: 'direct' })).toEqual(['PRIVACY_REQUIRED']);
+    expect(tt({ tiktokMode: 'direct', privacyLevel: 'SELF_ONLY' })).toEqual([]);
+    expect(tt({ tiktokMode: 'draft', privacyLevel: 'SELF_ONLY' })).toEqual(['TIKTOK_MODE_INVALID']);
+    expect(tt({ tiktokMode: 'inbox', cover: { atMs: 1000 } })).toEqual(['COVER_NOT_SUPPORTED']);
+    expect(tt({ privacyLevel: 'SELF_ONLY', cover: { atMs: 1000 } })).toEqual([]);
+    // Only an inbox draft needs video.upload on its connection.
+    expect(scopeNeeded('tiktok', { tiktokMode: 'inbox' })).toBe('video.upload');
+    expect(scopeNeeded('tiktok', {})).toBeNull();
+    expect(scopeNeeded('youtube', { tiktokMode: 'inbox' })).toBeNull();
+  });
+
+  it('checks a Mastodon post: 500 characters by default, its visibility and content warning (#748)', () => {
+    const md = (body: string, settings: Record<string, unknown> = {}) => validateVariant({ provider: 'mastodon', body, title: null, media: [], settings }).map((i) => i.code);
+    expect(md('x'.repeat(500))).toEqual([]);
+    expect(md('x'.repeat(501))).toEqual(['TEXT_TOO_LONG']);
+    expect(md('Khai trương', { visibility: 'unlisted', contentWarning: 'Đồ ăn' })).toEqual([]);
+    expect(md('Khai trương', { visibility: 'direct' })).toEqual(['VISIBILITY_INVALID']);
+    expect(md('Khai trương', { contentWarning: 'x'.repeat(501) })).toEqual(['CONTENT_WARNING_TOO_LONG']);
+    expect(md('Khai trương', { contentWarning: 7 })).toEqual(['CONTENT_WARNING_TOO_LONG']);
+  });
+
+  it('checks a YouTube video: its audience, a category from the assignable list and tags as YouTube counts them (#905)', () => {
+    const yt = (settings: Record<string, unknown>) => validateVariant({ provider: 'youtube', body: '', title: 'Khai trương', media: [mp4()], settings });
+    const codes = (settings: Record<string, unknown>) => yt(settings).map((i) => i.code);
+    // A variant saved before these settings existed is fine as it is.
+    expect(codes({})).toEqual([]);
+    expect(codes({ madeForKids: true, categoryId: '27', tags: ['bánh mì', 'Sài Gòn', 'ẩm-thực'] })).toEqual([]);
+    expect(codes({ madeForKids: false, categoryId: '22' })).toEqual([]);
+    expect(codes({ madeForKids: 'yes' })).toEqual(['YT_AUDIENCE_INVALID']);
+    // 18 (Short Movies) is listed by YouTube but not assignable; a number is not a category id.
+    expect(codes({ categoryId: '18' })).toEqual(['YT_CATEGORY_INVALID']);
+    expect(codes({ categoryId: 22 })).toEqual(['YT_CATEGORY_INVALID']);
+    expect(yt({ tags: 'bánh mì' })).toEqual([{ code: 'YT_TAG_INVALID', field: 'settings.tags', limit: null, actual: null }]);
+    expect(yt({ tags: ['phở', ' ', 'a<b>'] }).map((i) => i.field)).toEqual(['settings.tags.1', 'settings.tags.2']);
+    // 500 characters in all: a Vietnamese letter with its marks is one, composed or not.
+    expect(codes({ tags: ['ệ'.repeat(500)] })).toEqual([]);
+    expect(codes({ tags: ['ệ'.normalize('NFD').repeat(500)] })).toEqual([]);
+    expect(yt({ tags: ['ệ'.repeat(501)] })).toEqual([{ code: 'YT_TAGS_TOO_LONG', field: 'settings.tags', limit: 500, actual: 501 }]);
+    // A tag with a space counts its two quotes, and every comma between tags counts.
+    expect(codes({ tags: [`${'ệ'.repeat(248)} ${'ệ'.repeat(249)}`] })).toEqual([]);
+    expect(yt({ tags: [`${'ệ'.repeat(249)} ${'ệ'.repeat(249)}`] })[0]).toMatchObject({ code: 'YT_TAGS_TOO_LONG', actual: 501 });
+    expect(yt({ tags: Array.from({ length: 100 }, () => 'ẩmthực') })[0]).toMatchObject({ code: 'YT_TAGS_TOO_LONG', actual: 100 * 6 + 99 });
+  });
+
+  it('counts YouTube tags as YouTube does: quotes around a tag with a space, commas between tags (#905)', () => {
+    expect(youtubeTagsLength([])).toBe(0);
+    expect(youtubeTagsLength(['Foo-Baz'])).toBe(7);
+    expect(youtubeTagsLength(['Foo Baz'])).toBe(9);
+    expect(youtubeTagsLength(['bánh mì', 'cà-phê'])).toBe(9 + 1 + 6);
+    // Counted trimmed, as the adapter sends it.
+    expect(youtubeTagsLength(['  phở  '])).toBe(3);
+    expect(YOUTUBE_CATEGORIES).toContain('22');
+    expect(YOUTUBE_CATEGORIES).not.toContain('18');
+  });
+
+  it('checks a WordPress post: text required, an optional title, up to 10 images and no video (#833)', () => {
+    const wp = (body: string, title: string | null, media: MediaItem[] = []) => validateVariant({ provider: 'wordpress', body, title, media, settings: {} }).map((i) => i.code);
+    expect(wp('x'.repeat(100_000), null)).toEqual([]);
+    expect(wp('x'.repeat(100_001), null)).toEqual(['TEXT_TOO_LONG']);
+    expect(wp('Khai trương', 'Thực đơn', Array.from({ length: 10 }, () => jpeg()))).toEqual([]);
+    expect(wp('Khai trương', 'x'.repeat(201))).toEqual(['TITLE_TOO_LONG']);
+    expect(wp('', 'Thực đơn', [jpeg()])).toEqual(['TEXT_REQUIRED']);
+    expect(wp('Khai trương', null, Array.from({ length: 11 }, () => jpeg()))).toEqual(['TOO_MANY_MEDIA']);
+    expect(wp('Khai trương', null, [mp4()])).toEqual(['MEDIA_KIND_NOT_ALLOWED']);
+  });
+
+  it('gives a Telegram post with media the caption limit of 1,024, and text alone 4,096 (#747)', () => {
+    const tg = (media: MediaItem[], n: number) => validateVariant({ provider: 'telegram', body: 'x'.repeat(n), title: null, media, settings: {} }).map((i) => i.code);
+    expect(tg([], 4096)).toEqual([]);
+    expect(tg([], 4097)).toEqual(['TEXT_TOO_LONG']);
+    expect(tg([jpeg()], 1024)).toEqual([]);
+    expect(tg([jpeg()], 1025)).toEqual(['TEXT_TOO_LONG']);
+    expect(tg([jpeg(), { kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 10 }], 10)).toEqual([]);
+    expect(tg(Array.from({ length: 11 }, () => jpeg()), 10)).toEqual(['TOO_MANY_MEDIA']);
+  });
+
+  it('checks a Discord post: 2,000 characters, up to 10 images and videos of 10 MB each (#832)', () => {
+    const dc = (media: MediaItem[], n: number) => validateVariant({ provider: 'discord', body: 'x'.repeat(n), title: null, media, settings: {} }).map((i) => i.code);
+    expect(dc([], 2000)).toEqual([]);
+    expect(dc([], 2001)).toEqual(['TEXT_TOO_LONG']);
+    expect(dc([jpeg(), mp4(30, 5_000_000)], 2000)).toEqual([]);
+    expect(dc(Array.from({ length: 11 }, () => jpeg()), 10)).toEqual(['TOO_MANY_MEDIA']);
+    expect(dc([jpeg(10 * 1024 * 1024 + 1)], 10)).toEqual(['IMAGE_TOO_LARGE']);
+    expect(dc([mp4(30, 10 * 1024 * 1024 + 1)], 10)).toEqual(['VIDEO_TOO_LARGE']);
+  });
+
+  it('posts video on every channel that takes it', () => {
     expect(validateVariant({ provider: 'facebook_page', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
     expect(validateVariant({ provider: 'linkedin', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
-    expect(validateVariant({ provider: 'bluesky', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual(['VIDEO_NOT_SUPPORTED_YET']);
+    expect(validateVariant({ provider: 'pinterest', body: '', title: null, media: [mp4()] }).map((i) => i.code)).toEqual([]);
+    // VIDEO_NOT_SUPPORTED_YET stays for a platform added before its adapter learns video; none is left today.
+    for (const p of PROVIDERS) if (CAPABILITIES[p].media.kinds.includes('video')) expect(VIDEO_READY.has(p), p).toBe(true);
     expect(validateVariant({ provider: 'sandbox', body: '', title: null, media: [mp4()] })).toEqual([]);
   });
 
@@ -266,6 +459,7 @@ describe('variant lifecycle', () => {
     { type: 'retry' },
     { type: 'drop' },
     { type: 'confirm_published' },
+    { type: 'removed' },
   ];
 
   function run(from: VariantStatus, path: VariantEvent[]): VariantStatus {
@@ -294,7 +488,7 @@ describe('variant lifecycle', () => {
   });
 
   it('never edits or cancels a variant in flight, waiting on a human, or history', () => {
-    for (const s of ['publishing', 'processing', 'ambiguous', 'needs_attention', 'published', 'cancelled'] as const) {
+    for (const s of ['publishing', 'processing', 'ambiguous', 'needs_attention', 'published', 'cancelled', 'removed'] as const) {
       expect(transitionVariant(s, { type: 'edit' }).ok).toBe(false);
       expect(transitionVariant(s, { type: 'cancel' }).ok).toBe(false);
     }
@@ -350,24 +544,40 @@ describe('variant lifecycle', () => {
     expect(startsNewAttempt({ type: 'schedule' })).toBe(false);
   });
 
-  it('never leaves published', () => {
+  it('never leaves published but by a confirmed removal, and never leaves removed (#860)', () => {
     fc.assert(
       fc.property(fc.array(fc.constantFrom(...events), { maxLength: 40 }), (path) => {
         let s: VariantStatus = path.length % 2 === 0 ? 'scheduled' : 'publishing';
-        let published = false;
         for (const e of path) {
           const t = transitionVariant(s, e);
           if (!t.ok) continue;
-          if (published) throw new Error(`left published via ${e.type}`);
+          if (s === 'removed') throw new Error(`left removed via ${e.type}`);
+          if (s === 'published' && !(e.type === 'removed' && t.status === 'removed')) throw new Error(`left published via ${e.type}`);
           s = t.status;
-          if (s === 'published') published = true;
         }
       }),
     );
   });
 
+  it('removes only a published variant, and keeps a removed one as history (#860)', () => {
+    for (const s of VARIANT_STATUSES) expect(transitionVariant(s, { type: 'removed' }).ok).toBe(s === 'published');
+    expect(transitionVariant('removed', { type: 'edit' }).ok).toBe(false);
+    expect(transitionVariant('removed', { type: 'cancel' }).ok).toBe(false);
+    expect(transitionVariant('removed', { type: 'retry' }).ok).toBe(false);
+  });
+
   it('starts a publish only from scheduled', () => {
     for (const s of VARIANT_STATUSES) expect(transitionVariant(s, { type: 'start' }).ok).toBe(s === 'scheduled');
+  });
+});
+
+describe('REMOVE_READY (#860)', () => {
+  it('names exactly the providers whose adapter takes a post down', () => {
+    const exported: unknown[] = Object.values(channel);
+    const adapters = exported.filter((x): x is { name: string; prototype: { remove?: unknown } } => typeof x === 'function' && x.name.endsWith('Publisher'));
+    const removers = adapters.filter((a) => typeof a.prototype.remove === 'function').map((a) => a.name);
+    expect(removers.sort()).toEqual(['BlueskyPublisher', 'DiscordPublisher', 'MastodonPublisher', 'SandboxPublisher', 'TelegramPublisher', 'XPublisher']);
+    expect([...REMOVE_READY].sort()).toEqual(['bluesky', 'discord', 'mastodon', 'sandbox', 'telegram', 'x']);
   });
 });
 
@@ -383,6 +593,11 @@ describe('postStatus', () => {
     expect(postStatus(['published', 'cancelled'])).toBe('published');
     expect(postStatus(['failed', 'cancelled'])).toBe('failed');
     expect(postStatus(['cancelled', 'cancelled'])).toBe('cancelled');
+    // A removed channel counts like a cancelled one (#860): the post says what is still live.
+    expect(postStatus(['published', 'removed'])).toBe('published');
+    expect(postStatus(['failed', 'removed'])).toBe('failed');
+    expect(postStatus(['removed', 'cancelled'])).toBe('cancelled');
+    expect(postStatus(['removed'])).toBe('cancelled');
   });
 
   it('always answers a known status', () => {
@@ -503,5 +718,42 @@ describe('nextAction', () => {
     expect(() => publishCallKey('v-1', 1, 1, 'Publish:x')).toThrow();
     expect(() => publishCallKey('v:1', 1, 1, 'publish')).toThrow();
     expect(() => publishJobKey('o:1', 'v-1', 1, 1)).toThrow();
+  });
+});
+
+describe('counted publishing limits (#775)', () => {
+  const now = new Date('2026-10-21T10:00:00Z');
+  const ago = (ms: number) => new Date(now.getTime() - ms);
+  it('lets a post go while the window has room, and says when the oldest counted post leaves it', () => {
+    const limit = { count: 3, windowMs: 60 * 60_000 };
+    expect(limitWait([], limit, now)).toBeNull();
+    expect(limitWait([ago(10 * 60_000), ago(20 * 60_000)], limit, now)).toBeNull();
+    // Three in the hour, the oldest 50 minutes ago: room again in 10 minutes (and a second).
+    expect(limitWait([ago(10 * 60_000), ago(30 * 60_000), ago(50 * 60_000)], limit, now)).toEqual(new Date(now.getTime() + 10 * 60_000 + 1000));
+    // Posts older than the window do not count.
+    expect(limitWait([ago(10 * 60_000), ago(30 * 60_000), ago(70 * 60_000)], limit, now)).toBeNull();
+    // With more than the limit in the window, the one that must leave is the count-th newest.
+    expect(limitWait([ago(5 * 60_000), ago(10 * 60_000), ago(30 * 60_000), ago(50 * 60_000)], limit, now)).toEqual(new Date(now.getTime() + 30 * 60_000 + 1000));
+  });
+  it('counts the platforms without a quota endpoint', () => {
+    expect(Object.keys(PUBLISH_LIMITS).sort()).toEqual(['linkedin', 'tiktok', 'x', 'youtube']);
+    expect(PUBLISH_LIMITS.youtube).toEqual({ count: 100, windowMs: 24 * 3_600_000 });
+  });
+});
+
+describe('media fetched by URL (#772)', () => {
+  const image = { kind: 'image' as const };
+  const video = { kind: 'video' as const };
+  it('names what a deployment without public file URLs cannot post', () => {
+    expect(needsPublicUrls('instagram', [video])).toBe(false);
+    expect(needsPublicUrls('instagram', [image])).toBe(true);
+    expect(needsPublicUrls('instagram', [video, video])).toBe(true);
+    expect(needsPublicUrls('instagram', [video], { cover: { fileId: 'c' } })).toBe(true);
+    expect(needsPublicUrls('instagram', [video], { cover: { atMs: 1000 } })).toBe(false);
+    for (const p of ['threads', 'google_business', 'zalo_oa'] as const) expect(needsPublicUrls(p, [image])).toBe(true);
+    expect(needsPublicUrls('tiktok', [video])).toBe(false);
+    expect(needsPublicUrls('tiktok', [image])).toBe(true);
+    for (const p of ['facebook_page', 'x', 'linkedin', 'bluesky', 'telegram', 'mastodon', 'youtube'] as const) expect(needsPublicUrls(p, [image, video])).toBe(false);
+    expect(needsPublicUrls('threads', [])).toBe(false);
   });
 });

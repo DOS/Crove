@@ -182,6 +182,70 @@ suite('evidence integrity on PostgreSQL (ADR-0013, issue #109)', () => {
     });
   });
 
+  it('lets an image size go from none to set once, only in a system context (#668)', async () => {
+    const sha256 = sha256Hex(new TextEncoder().encode(`image-${randomUUID()}`));
+    const id = randomUUID();
+    await withAdmin((a) =>
+      a.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'anh.png', 'image/png', 1000, 'social', $6)`,
+        [orgA, id, sha256, fileKey(orgA, sha256), `content:${sha256}`, users.owner],
+      ),
+    );
+    // A member's session and the database owner may not set it.
+    await asApp(users.owner, async (c) => {
+      await expect(c.query('UPDATE crove_kernel.file SET image_width = 10, image_height = 20 WHERE id = $1', [id])).rejects.toMatchObject({ code: '42501', message: 'FILE_IMMUTABLE' });
+    });
+    await withAdmin(async (a) => {
+      await expect(a.query('UPDATE crove_kernel.file SET image_width = 10, image_height = 20 WHERE id = $1', [id])).rejects.toMatchObject({ message: 'FILE_IMMUTABLE' });
+    });
+    const system = { actor: { type: 'system' as const, component: 'invariant' }, orgId: orgA };
+    expect(await workerRuntime.execute('kernel.file.image_size.record', { fileId: id, width: 10, height: 20 }, system)).toEqual({ recorded: true });
+    // Once set, it stays: the command leaves it, and no role may change or clear it.
+    expect(await workerRuntime.execute('kernel.file.image_size.record', { fileId: id, width: 99, height: 99 }, system)).toEqual({ recorded: false });
+    for (const set of ['image_width = 11, image_height = 21', 'image_width = NULL, image_height = NULL']) {
+      await withAdmin(async (a) => {
+        await expect(a.query(`UPDATE crove_kernel.file SET ${set} WHERE id = $1`, [id]), set).rejects.toMatchObject({ message: 'FILE_IMMUTABLE' });
+      });
+    }
+    const { rows } = await withAdmin((a) => a.query('SELECT image_width, image_height FROM crove_kernel.file WHERE id = $1', [id]));
+    expect(rows[0]).toEqual({ image_width: 10, image_height: 20 });
+    // A file that is not a Social image gets no size from the command.
+    expect(await workerRuntime.execute('kernel.file.image_size.record', { fileId, width: 10, height: 20 }, system)).toEqual({ recorded: false });
+
+    // In a real system context, raw SQL may only set both sizes of a file that has none, and nothing else with them.
+    const other = sha256Hex(new TextEncoder().encode(`image-${randomUUID()}`));
+    const fresh = randomUUID();
+    await withAdmin((a) =>
+      a.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'anh.png', 'image/png', 1000, 'social', $6)`,
+        [orgA, fresh, other, fileKey(orgA, other), `content:${other}`, users.owner],
+      ),
+    );
+    const inSystem = async (text: string) => {
+      const c = await workerPool.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgA]);
+        await c.query(text, [fresh]);
+        await c.query('COMMIT');
+      } catch (error) {
+        await c.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      } finally {
+        c.release();
+      }
+    };
+    await expect(inSystem('UPDATE crove_kernel.file SET image_width = 10 WHERE id = $1')).rejects.toBeTruthy();
+    await expect(inSystem("UPDATE crove_kernel.file SET image_width = 10, image_height = 20, filename = 'other.png' WHERE id = $1")).rejects.toMatchObject({ message: 'FILE_IMMUTABLE' });
+    await expect(inSystem("UPDATE crove_kernel.file SET image_width = 10, image_height = 20, content_type = 'image/jpeg' WHERE id = $1")).rejects.toMatchObject({ message: 'FILE_IMMUTABLE' });
+    await inSystem('UPDATE crove_kernel.file SET image_width = 30, image_height = 40 WHERE id = $1');
+    await expect(inSystem('UPDATE crove_kernel.file SET image_width = 31, image_height = 41 WHERE id = $1')).rejects.toMatchObject({ message: 'FILE_IMMUTABLE' });
+    const { rows: after } = await withAdmin((a) => a.query('SELECT image_width, image_height, filename FROM crove_kernel.file WHERE id = $1', [fresh]));
+    expect(after[0]).toEqual({ image_width: 30, image_height: 40, filename: 'anh.png' });
+  });
+
   it('creates a grant with the database clock and the creator from the context, whatever the insert says', async () => {
     const other = users.member;
     const row = await asApp(users.owner, async (c) => {

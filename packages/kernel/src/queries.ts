@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { sql } from 'kysely';
 import {
+  JOURNAL_VOUCHER_KIND,
   VOUCHER_KIND,
   zCashVoucherProposal,
+  zJournalVoucherProposal,
   zId,
   zJournalReversal,
   zLocalDate,
@@ -13,6 +15,7 @@ import {
   zVoucherCode,
   type CashVoucherProposal,
   type JournalReversal,
+  type JournalVoucherProposal,
   type PurchaseProposal,
   type SignatureStatus,
 } from '@crove/kernel-contract';
@@ -26,9 +29,13 @@ import { agentQueries } from './agents.ts';
 import { channelQueries } from './channels.ts';
 import { inviteQueries } from './invites.ts';
 import { mailQueries } from './mail.ts';
+import { timelineQueries } from './timeline.ts';
+import { auditLogQueries } from './audit-log.ts';
 import { offboardingQueries } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { orgOverview, RECENT_FILES } from './overview.ts';
+import { proposalReminderQueries } from './proposal-reminders.ts';
+import { partyQueries } from './parties.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -116,6 +123,13 @@ function signatureStatusOf(value: string | null): SignatureStatus | null {
   return parsed.success ? parsed.data : null;
 }
 
+// A general journal voucher entered by hand (#888).
+function parseJournalVoucher(kind: string, raw: unknown): JournalVoucherProposal | null {
+  if (kind !== JOURNAL_VOUCHER_KIND) return null;
+  const result = zJournalVoucherProposal.safeParse(raw);
+  return result.success ? result.data : null;
+}
+
 function toInboxItem(row: {
   id: string;
   kind: string;
@@ -128,7 +142,7 @@ function toInboxItem(row: {
   requested_by_agent: string | null;
 }, agentName: string | null) {
   const payload = parsePayload(row.kind, row.payload);
-  const voucher = parseVoucher(row.kind, row.payload);
+  const voucher = parseVoucher(row.kind, row.payload) ?? parseJournalVoucher(row.kind, row.payload);
   const direction = payload ? (payload.direction ?? 'purchase') : null;
   return {
     id: row.id,
@@ -172,9 +186,9 @@ export const inboxList = defineQuery({
         sql<string | null>`left(payload #>> '{seller,name}', 500)`.as('seller_name'),
         sql<boolean>`coalesce(payload ->> 'direction' = 'sale', false)`.as('is_sale'),
         sql<string | null>`left(payload #>> '{buyer,name}', 500)`.as('buyer_name'),
-        // A voucher (#327) keeps its total and date at the top of its payload.
-        sql<string | null>`left(CASE WHEN kind = ${VOUCHER_KIND} THEN payload ->> 'total' ELSE payload #>> '{invoice,total}' END, 30)`.as('total'),
-        sql<string | null>`left(CASE WHEN kind = ${VOUCHER_KIND} THEN payload ->> 'date' ELSE payload #>> '{invoice,issueDate}' END, 10)`.as('issue_date'),
+        // A voucher (#327) and a general journal voucher (#888) keep their total and date at the top of their payload.
+        sql<string | null>`left(CASE WHEN kind IN (${VOUCHER_KIND}, ${JOURNAL_VOUCHER_KIND}) THEN payload ->> 'total' ELSE payload #>> '{invoice,total}' END, 30)`.as('total'),
+        sql<string | null>`left(CASE WHEN kind IN (${VOUCHER_KIND}, ${JOURNAL_VOUCHER_KIND}) THEN payload ->> 'date' ELSE payload #>> '{invoice,issueDate}' END, 10)`.as('issue_date'),
         // The requesting agent's name, read in the same org under the agent table's own row security (no cross-org read).
         sql<string | null>`(SELECT a.display_name FROM crove_kernel.agent a WHERE a.org_id = crove_kernel.proposal.org_id AND a.id = crove_kernel.proposal.requested_by_agent)`.as('agent_name'),
         countChecksSql('fail').as('failed_checks'),
@@ -277,6 +291,7 @@ export const inboxGet = defineQuery({
       payload: parsePayload(row.kind, row.payload),
       reversal: parseReversal(row.kind, row.payload),
       voucher: parseVoucher(row.kind, row.payload),
+      journalVoucher: parseJournalVoucher(row.kind, row.payload),
       error: null,
       file: file ? { id: file.id, filename: file.filename, contentType: file.content_type, sizeBytes: file.size_bytes } : null,
       decidedAt: row.decided_at ? row.decided_at.toISOString() : null,
@@ -375,5 +390,5 @@ export const streamCheck = defineQuery({
 });
 
 export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), orgOverview, streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries];
+  return [orgDetailQuery(options), orgOverview, streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...timelineQueries, ...auditLogQueries, ...partyQueries];
 }

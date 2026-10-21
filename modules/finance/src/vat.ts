@@ -3,7 +3,9 @@
 // Excel export of it (GET /api/export/vat.xlsx), like finance.journal.export.
 //
 // Input invoices are the recorded purchase documents, output invoices the recorded sales documents (sales e-invoices,
-// issue #313); both live in crove_finance.purchase_document, told apart by direction.
+// issue #313); both live in crove_finance.purchase_document, told apart by direction. A document recorded from e-invoice
+// XML since #685 carries the invoice's own VAT table (crove_finance.purchase_tax_rate), which splits it by rate exactly;
+// the others are split by estimate from their lines and flagged rate_split when that spreads VAT over several rates.
 //
 // The period of an input invoice is its posting date, the date of its journal entry (#478). That is its invoice date,
 // except for an invoice recorded after its own month was locked, or dated on or before the org's opening entry (#366),
@@ -24,6 +26,7 @@ import {
   documentVatByRate,
   form01Indicators,
   reducedRateApplies,
+  type InvoiceRateInput,
   sideTotals,
   vatMismatch,
   vatPeriod,
@@ -90,13 +93,14 @@ function invoiceView(
     total: string;
   },
   lines: Array<{ amount: string; vatRate: string | null }>,
+  invoiceRates: InvoiceRateInput[],
 ): VatInvoiceView {
-  const breakdown = documentVatByRate({ vatAmount: doc.vatAmount, lines });
+  const breakdown = documentVatByRate({ vatAmount: doc.vatAmount, subtotal: doc.subtotal, lines, invoiceRates });
   const warnings: VatWarning[] = [];
   if (breakdown.rates.some((r) => r.rate === 'other')) warnings.push('rate_unknown');
   if (breakdown.allocated) warnings.push('rate_split');
   if (breakdown.rates.some((r) => r.rate === '8') && !reducedRateApplies(doc.issueDate)) warnings.push('reduced_rate_outside_period');
-  const linesTaxable = breakdown.rates.reduce((acc, r) => acc.plus(money(r.taxable)), money(0));
+  const linesTaxable = lines.reduce((acc, l) => acc.plus(money(l.amount)), money(0));
   if (!linesTaxable.equals(money(doc.subtotal))) warnings.push('lines_mismatch');
   if (vatMismatch({ vatAmount: doc.vatAmount, lines })) warnings.push('vat_mismatch');
   // An invoice of an earlier period, posted in this one after its own month was locked (#478).
@@ -171,6 +175,25 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
     list.push({ amount: line.amount, vatRate: line.vat_rate });
     byDocument.set(line.document_id, list);
   }
+  // The invoice's own VAT table, for the documents recorded from e-invoice XML since #685.
+  const rateRows = await ctx.trx
+    .selectFrom('crove_finance.purchase_tax_rate')
+    .select(['document_id', 'vat_rate', 'taxable_amount', 'vat_amount'])
+    .where('org_id', '=', ctx.orgId)
+    .where(
+      'document_id',
+      'in',
+      docs.map((d) => d.id),
+    )
+    .orderBy('document_id')
+    .orderBy('row_no')
+    .execute();
+  const ratesByDocument = new Map<string, InvoiceRateInput[]>();
+  for (const row of rateRows) {
+    const list = ratesByDocument.get(row.document_id) ?? [];
+    list.push({ rate: row.vat_rate, taxable: row.taxable_amount, vat: row.vat_amount });
+    ratesByDocument.set(row.document_id, list);
+  }
   return docs.map((d) =>
     invoiceView(
       period,
@@ -187,6 +210,7 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
         total: d.total,
       },
       byDocument.get(d.id) ?? [],
+      ratesByDocument.get(d.id) ?? [],
     ),
   );
 }
@@ -213,10 +237,11 @@ export const vatPeriodQuery = defineQuery({
   handler: (ctx, input): Promise<VatReport> => loadVatReport(ctx, input.period),
 });
 
-// The taxpayer block of the HTKK return (issue #332): the org's tax code (#313) and name.
+// The taxpayer block of the HTKK return (issue #332): the org's tax code (#313), name and address (#324, #692).
 export interface VatTaxpayer {
   taxCode: string;
   name: string;
+  address: string | null;
 }
 
 export interface VatDeclaration {
@@ -231,7 +256,7 @@ export const vatDeclarationQuery = defineQuery({
   input: zVatPeriodInput,
   access: ALL,
   handler: async (ctx, input): Promise<VatDeclaration> => {
-    const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['tax_code', 'name', 'vat_filing_period']).where('org_id', '=', ctx.orgId).executeTakeFirst();
+    const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['tax_code', 'name', 'address', 'vat_filing_period']).where('org_id', '=', ctx.orgId).executeTakeFirst();
     if (!org?.tax_code) {
       throw new DomainError('TAX_CODE_REQUIRED', 422, 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi xuất lại.');
     }
@@ -248,7 +273,7 @@ export const vatDeclarationQuery = defineQuery({
           : 'Tổ chức khai thuế GTGT theo quý nên không xuất được tờ khai XML theo tháng. Chọn một quý, hoặc đổi kỳ khai trong Cài đặt.',
       );
     }
-    return { report: await loadVatReport(ctx, input.period), taxpayer: { taxCode: org.tax_code, name: org.name } };
+    return { report: await loadVatReport(ctx, input.period), taxpayer: { taxCode: org.tax_code, name: org.name, address: org.address } };
   },
 });
 
@@ -257,18 +282,25 @@ export const vatDeclarationQuery = defineQuery({
 export const VAT_EXPORT_FORMATS = ['htkk_01gtgt_xml'] as const;
 
 // Records one export of a period's VAT working after the file is built. It changes nothing: its audit row is the
-// record, with the period, the number of invoices and the format, never their content. Same roles as
+// record, with the period, the number of invoices, the format and the [25] choice, never their content. Same roles as
 // finance.vat.period.
 export const vatExport = defineCommand({
   name: 'finance.vat.export',
   input: zVatPeriodInput.extend({
     documents: z.number().int().nonnegative().max(2 * VAT_PERIOD_LIMIT),
     format: z.enum(VAT_EXPORT_FORMATS).optional(),
+    // The HTKK XML with [25] = [24] (#692), the accountant's choice for that download.
+    deductInput: z.boolean().optional(),
   }),
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
-    ctx.audit(input.format ? { period: input.period, documents: input.documents, format: input.format } : { period: input.period, documents: input.documents });
+    ctx.audit({
+      period: input.period,
+      documents: input.documents,
+      ...(input.format ? { format: input.format } : {}),
+      ...(input.deductInput ? { deduct_input: true } : {}),
+    });
     return { ok: true as const };
   },
 });

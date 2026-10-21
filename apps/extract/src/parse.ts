@@ -7,6 +7,7 @@ import { EXTRACT_LIMITS, zExtractSuccess, type ExtractFailure, type ExtractKind,
 import { DsnError, readDsn } from './dsn.ts';
 import { EInvoiceParseError, parseEInvoiceXml } from './einvoice-xml.ts';
 import { HtmlMetaError, readHtmlMeta } from './html-meta.ts';
+import { FeedError, readFeed } from './feed.ts';
 import { PortalListError, readPortalList } from './portal-list.ts';
 import { ArchiveError, readZip } from './zip.ts';
 
@@ -94,6 +95,9 @@ async function parseKind(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractS
     case 'html_meta':
       // A web page's head, for a link preview (#641).
       return { ok: true, kind, page: readHtmlMeta(bytes) };
+    case 'feed':
+      // A blog's RSS or Atom feed, for Social drafts (#708).
+      return { ok: true, kind, feed: readFeed(bytes) };
   }
 }
 
@@ -105,6 +109,7 @@ const UNREADABLE: Record<ExtractKind, string> = {
   portal_invoice_list: 'Không đọc được danh sách hóa đơn từ cổng thuế',
   dsn: 'Không đọc được báo cáo trạng thái gửi thư',
   html_meta: 'Không đọc được trang web',
+  feed: 'Không đọc được nguồn tin',
 };
 
 export async function parse(kind: ExtractKind, bytes: Uint8Array): Promise<ExtractResponse> {
@@ -113,7 +118,7 @@ export async function parse(kind: ExtractKind, bytes: Uint8Array): Promise<Extra
     result = await parseKind(kind, bytes);
   } catch (error) {
     // The e-invoice parser and the ZIP reader explain what is wrong; other parser errors are not passed on.
-    if (error instanceof EInvoiceParseError || error instanceof ArchiveError || error instanceof PortalListError || error instanceof DsnError || error instanceof HtmlMetaError) return failure('invalid', error.message);
+    if (error instanceof EInvoiceParseError || error instanceof ArchiveError || error instanceof PortalListError || error instanceof DsnError || error instanceof HtmlMetaError || error instanceof FeedError) return failure('invalid', error.message);
     // A stack overflow (deeply nested input) or an impossible allocation: the input is beyond what we read.
     if (error instanceof RangeError) return failure('invalid', `${UNREADABLE[kind]}: tệp vượt giới hạn xử lý`);
     return failure('invalid', UNREADABLE[kind]);

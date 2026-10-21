@@ -5,6 +5,10 @@ import { serve } from '@hono/node-server';
 import { InvoiceExtractor, SocialWriter, type InvoiceReader } from '@crove/agent';
 import {
   BlueskyPublisher,
+  TelegramPublisher,
+  DiscordPublisher,
+  MastodonPublisher,
+  WordPressPublisher,
   FacebookPageConnector,
   FacebookPagePublisher,
   InstagramConnector,
@@ -17,10 +21,16 @@ import {
   YouTubeConnector,
   YouTubePublisher,
   YouTubeRefresher,
+  GoogleBusinessConnector,
+  GoogleBusinessPublisher,
+  GoogleBusinessRefresher,
   LinkedInPublisher,
   XConnector,
   XPublisher,
   XRefresher,
+  PinterestConnector,
+  PinterestPublisher,
+  PinterestRefresher,
   ThreadsConnector,
   ThreadsPublisher,
   ThreadsRefresher,
@@ -33,18 +43,20 @@ import {
 } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
-import { buildKernelCommands, kernelQueries } from '@crove/kernel';
+import { buildKernelCommands, kernelQueries, setMessageIdDomain } from '@crove/kernel';
 import {
   LocalDiskStore,
+  egressFetch,
   Runtime,
   type BlobStore,
+  readVerified,
   type CommandDef,
   type CredentialBroker,
   type QueryDef,
   type SessionStatusSource,
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
-import { socialCommands, socialQueries } from '@crove/mod-social';
+import { socialAgentPrograms, socialCommands, socialQueries } from '@crove/mod-social';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
@@ -53,8 +65,10 @@ import { exportSealer } from './export-seal.ts';
 import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
 import { createLogProvider, createMailer, messageIdDomain, type MailProvider } from './mail.ts';
+import { MAIL_TEMPLATES } from './mail-templates.ts';
 import { createSessionRevoker, createSessionStatusSource, type SessionRevoker } from './sessions.ts';
 import { createBlobStore } from './storage.ts';
+import type { SocialDrafter } from './rpc.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
 import { createTaxCodeLookup } from './tax-lookup.ts';
 import { startWorker } from './worker.ts';
@@ -89,7 +103,7 @@ export interface KernelAdapters {
   // The AI invoice reader; null runs without AI (e-invoice XML still works, PDF and images do not).
   ai: InvoiceReader | null;
   // Drafts Social posts (Social plan S7) through the same endpoint; null runs without AI drafting.
-  writer?: Pick<SocialWriter, 'draft' | 'rewrite'> | null;
+  writer?: (Pick<SocialWriter, 'draft' | 'rewrite'> & Partial<Pick<SocialWriter, 'hashtags' | 'describeImage'>>) | null;
   storage: BlobStore;
   // Outbound mail (member invites, issue #129); the default logs that nothing was sent.
   mail?: MailProvider;
@@ -129,6 +143,8 @@ export interface ModuleDefinitions {
 // absentModules buildRuntime passes), and the
 // routes and jobs that ask Runtime.installed() are not registered either.
 export function moduleDefinitions(config: Config): ModuleDefinitions {
+  // Mail a module queues (the scheduled report, #704) gets the deployment's Message-ID domain too.
+  setMessageIdDomain(messageIdDomain(config));
   const all: Record<ModuleId, () => ModuleDefinitions> = {
     kernel: () => ({
       commands: buildKernelCommands({
@@ -149,8 +165,11 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
 
 // OAuth connectors of the providers this deployment has app credentials for (Social plan S6); a provider without
 // them is not offered.
-type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_THREADS_APP_ID' | 'CHANNEL_THREADS_APP_SECRET' | 'CHANNEL_LINKEDIN_CLIENT_ID' | 'CHANNEL_LINKEDIN_CLIENT_SECRET' | 'CHANNEL_GOOGLE_CLIENT_ID' | 'CHANNEL_GOOGLE_CLIENT_SECRET' | 'CHANNEL_TIKTOK_CLIENT_KEY' | 'CHANNEL_TIKTOK_CLIENT_SECRET' | 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>;
+type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_TELEGRAM' | 'CHANNEL_MASTODON' | 'CHANNEL_DISCORD' | 'CHANNEL_WORDPRESS' | 'CHANNEL_THREADS_APP_ID' | 'CHANNEL_THREADS_APP_SECRET' | 'CHANNEL_LINKEDIN_CLIENT_ID' | 'CHANNEL_LINKEDIN_CLIENT_SECRET' | 'CHANNEL_GOOGLE_CLIENT_ID' | 'CHANNEL_GOOGLE_CLIENT_SECRET' | 'CHANNEL_GOOGLE_BUSINESS' | 'CHANNEL_TIKTOK_CLIENT_KEY' | 'CHANNEL_TIKTOK_CLIENT_SECRET' | 'CHANNEL_TIKTOK_VIDEO_LIST' | 'CHANNEL_TIKTOK_INBOX' | 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET' | 'CHANNEL_PINTEREST_APP_ID' | 'CHANNEL_PINTEREST_APP_SECRET' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'> &
+  Partial<Pick<Config, 'CHANNEL_X_METRICS' | 'CHANNEL_LINKEDIN_ANALYTICS'>>;
 const xApp = (config: Pick<Config, 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET'>) => (config.CHANNEL_X_CLIENT_ID && config.CHANNEL_X_CLIENT_SECRET ? { clientId: config.CHANNEL_X_CLIENT_ID, clientSecret: config.CHANNEL_X_CLIENT_SECRET } : null);
+const pinterestApp = (config: Pick<Config, 'CHANNEL_PINTEREST_APP_ID' | 'CHANNEL_PINTEREST_APP_SECRET'>) =>
+  config.CHANNEL_PINTEREST_APP_ID && config.CHANNEL_PINTEREST_APP_SECRET ? { appId: config.CHANNEL_PINTEREST_APP_ID, appSecret: config.CHANNEL_PINTEREST_APP_SECRET } : null;
 const zaloApp = (config: Pick<Config, 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'>) => (config.CHANNEL_ZALO_APP_ID && config.CHANNEL_ZALO_APP_SECRET ? { appId: config.CHANNEL_ZALO_APP_ID, appSecret: config.CHANNEL_ZALO_APP_SECRET } : null);
 
 export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>): Partial<Record<string, OAuthConnector>> {
@@ -164,11 +183,14 @@ export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>
   const zalo = zaloApp(config);
   if (zalo) connectors.zalo_oa = new ZaloOaConnector(zalo);
   if (config.CHANNEL_THREADS_APP_ID && config.CHANNEL_THREADS_APP_SECRET) connectors.threads = new ThreadsConnector({ appId: config.CHANNEL_THREADS_APP_ID, appSecret: config.CHANNEL_THREADS_APP_SECRET });
-  if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) connectors.linkedin = new LinkedInConnector({ clientId: config.CHANNEL_LINKEDIN_CLIENT_ID, clientSecret: config.CHANNEL_LINKEDIN_CLIENT_SECRET });
-  if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) connectors.tiktok = new TikTokConnector({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET });
+  if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) connectors.linkedin = new LinkedInConnector({ clientId: config.CHANNEL_LINKEDIN_CLIENT_ID, clientSecret: config.CHANNEL_LINKEDIN_CLIENT_SECRET, analytics: config.CHANNEL_LINKEDIN_ANALYTICS === 'true' });
+  if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) connectors.tiktok = new TikTokConnector({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET, videoList: config.CHANNEL_TIKTOK_VIDEO_LIST === 'true', inbox: config.CHANNEL_TIKTOK_INBOX === 'true' });
   if (config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) connectors.youtube = new YouTubeConnector({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
+  if (config.CHANNEL_GOOGLE_BUSINESS === 'true' && config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) connectors.google_business = new GoogleBusinessConnector({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
   const x = xApp(config);
   if (x) connectors.x = new XConnector(x);
+  const pinterest = pinterestApp(config);
+  if (pinterest) connectors.pinterest = new PinterestConnector(pinterest);
   return connectors;
 }
 
@@ -176,7 +198,14 @@ export function channelConnectors(config: Omit<ChannelConfig, 'CHANNEL_SANDBOX'>
 export function channelPublishers(config: ChannelConfig): Record<string, Publisher> {
   const publishers: Record<string, Publisher> = {};
   if (config.CHANNEL_SANDBOX === 'true') publishers.sandbox = new SandboxPublisher();
-  if (config.CHANNEL_BLUESKY === 'true') publishers.bluesky = new BlueskyPublisher();
+  // An account on its own PDS (#792) is called through the egress guard; images go up to 1 MB each.
+  if (config.CHANNEL_BLUESKY === 'true') publishers.bluesky = new BlueskyPublisher(undefined, egressFetch({ timeoutMs: 30_000, maxBytes: 2_000_000, overLimit: 'fail' }));
+  if (config.CHANNEL_TELEGRAM === 'true') publishers.telegram = new TelegramPublisher();
+  if (config.CHANNEL_DISCORD === 'true') publishers.discord = new DiscordPublisher();
+  // An instance is the tenant's to name: its calls go through the egress guard, never a plain fetch.
+  if (config.CHANNEL_MASTODON === 'true') publishers.mastodon = new MastodonPublisher(egressFetch({ timeoutMs: 300_000, maxBytes: 2_000_000, overLimit: 'fail' }));
+  // A WordPress site is the tenant's to name too (#833); each call, an image upload among them, gets two minutes.
+  if (config.CHANNEL_WORDPRESS === 'true') publishers.wordpress = new WordPressPublisher(egressFetch({ timeoutMs: 120_000, maxBytes: 2_000_000, overLimit: 'fail' }));
   if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
     publishers.facebook_page = new FacebookPagePublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
     publishers.instagram = new InstagramPublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
@@ -184,11 +213,14 @@ export function channelPublishers(config: ChannelConfig): Record<string, Publish
   const zalo = zaloApp(config);
   if (zalo) publishers.zalo_oa = new ZaloOaPublisher(zalo);
   if (config.CHANNEL_THREADS_APP_ID && config.CHANNEL_THREADS_APP_SECRET) publishers.threads = new ThreadsPublisher();
-  if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) publishers.linkedin = new LinkedInPublisher();
-  if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) publishers.tiktok = new TikTokPublisher({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET });
+  if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) publishers.linkedin = new LinkedInPublisher({ analytics: config.CHANNEL_LINKEDIN_ANALYTICS === 'true' });
+  if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) publishers.tiktok = new TikTokPublisher({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET, videoList: config.CHANNEL_TIKTOK_VIDEO_LIST === 'true', inbox: config.CHANNEL_TIKTOK_INBOX === 'true' });
   if (config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) publishers.youtube = new YouTubePublisher({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
+  if (config.CHANNEL_GOOGLE_BUSINESS === 'true' && config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) publishers.google_business = new GoogleBusinessPublisher({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
   const x = xApp(config);
-  if (x) publishers.x = new XPublisher(x);
+  if (x) publishers.x = new XPublisher(x, undefined, {}, { metrics: config.CHANNEL_X_METRICS === 'true' });
+  const pinterest = pinterestApp(config);
+  if (pinterest) publishers.pinterest = new PinterestPublisher(pinterest);
   return publishers;
 }
 
@@ -200,8 +232,11 @@ export function channelRefreshers(config: ChannelConfig): Record<string, Refresh
   if (config.CHANNEL_THREADS_APP_ID && config.CHANNEL_THREADS_APP_SECRET) refreshers.threads = new ThreadsRefresher();
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && config.CHANNEL_TIKTOK_CLIENT_SECRET) refreshers.tiktok = new TikTokRefresher({ clientKey: config.CHANNEL_TIKTOK_CLIENT_KEY, clientSecret: config.CHANNEL_TIKTOK_CLIENT_SECRET });
   if (config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) refreshers.youtube = new YouTubeRefresher({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
+  if (config.CHANNEL_GOOGLE_BUSINESS === 'true' && config.CHANNEL_GOOGLE_CLIENT_ID && config.CHANNEL_GOOGLE_CLIENT_SECRET) refreshers.google_business = new GoogleBusinessRefresher({ clientId: config.CHANNEL_GOOGLE_CLIENT_ID, clientSecret: config.CHANNEL_GOOGLE_CLIENT_SECRET });
   const x = xApp(config);
   if (x) refreshers.x = new XRefresher(x);
+  const pinterest = pinterestApp(config);
+  if (pinterest) refreshers.pinterest = new PinterestRefresher(pinterest);
   return refreshers;
 }
 
@@ -306,10 +341,10 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           authenticate,
           pool,
           aiEnabled: resolved.ai !== null,
-          ...(resolved.writer ? { socialWriter: resolved.writer } : {}),
+          ...(resolved.writer ? { socialWriter: socialDrafter(resolved.writer, config.AI_VISION === 'true' ? store : null) } : {}),
           ...(config.TAX_CODE_LOOKUP_URL ? { taxLookup: createTaxCodeLookup(config.TAX_CODE_LOOKUP_URL) } : {}),
           mailer: resolved.mail,
-          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
+          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
           ...(stream ? { stream } : {}),
         });
         const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
@@ -340,10 +375,13 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             inboundDomain: config.INBOUND_DOMAIN ?? null,
             revoker: resolved.identity.revoker,
             refusalTallyRetentionDays: config.REFUSAL_TALLY_RETENTION_DAYS,
-            agentPrograms: financeAgentPrograms,
+            agentPrograms: { ...financeAgentPrograms, ...socialAgentPrograms },
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
             channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config) },
+            publicUrl: config.PUBLIC_URL,
+            // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).
+            mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
           }),
         );
       }
@@ -369,6 +407,18 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   }
 
   return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports };
+}
+
+// The Social writer as the API uses it: drafts, rewrites and hashtags as they are, and with an image-capable model
+// (AI_VISION) an image's alt text from its stored bytes, read and checked like a download (#817).
+function socialDrafter(writer: NonNullable<KernelAdapters['writer']>, store: BlobStore | null): SocialDrafter {
+  const describe = writer.describeImage?.bind(writer);
+  return {
+    draft: (request) => writer.draft(request),
+    rewrite: (request) => writer.rewrite(request),
+    ...(writer.hashtags ? { hashtags: writer.hashtags.bind(writer) } : {}),
+    ...(store && describe ? { describeStored: async (file, mime, language) => describe({ image: await readVerified(store, file), mime, language }) } : {}),
+  };
 }
 
 // The open-source defaults, built from configuration: Supabase Auth identity (ADR-0028), any OpenAI-compatible

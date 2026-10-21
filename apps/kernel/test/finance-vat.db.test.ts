@@ -1,8 +1,9 @@
 // VAT working per month or quarter (issue #316), on a real PostgreSQL 17, through the HTTP API: the period's purchase
 // invoices by rate (voided documents left out), month and quarter ranges, the form 01/GTGT indicators, the empty sales
 // side, the Excel export with its audit row, the roles and the org boundary; then the HTKK XML of form 01/GTGT
-// (#332): refused without the org tax code, its audit row, the roles and the org boundary. The totals logic itself is unit-tested in
-// modules/finance/test/vat-return.test.ts.
+// (#332): refused without the org tax code, its audit row, the roles and the org boundary; then a mixed-rate invoice
+// split by its own VAT table (#685), beside one without the table, estimated as before. The totals logic itself is
+// unit-tested in modules/finance/test/vat-return.test.ts.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -110,8 +111,7 @@ suite('VAT working per month or quarter (#316)', () => {
     new TextEncoder().encode(FIXTURE.replace('<SHDon>1234</SHDon>', `<SHDon>${number}</SHDon>`).replace('<NLap>2026-09-15</NLap>', `<NLap>${date}</NLap>`));
 
   // Uploads, reads and approves one invoice; returns its document and journal entry.
-  async function record(number: string, date: string) {
-    const bytes = invoice(number, date);
+  async function record(number: string, date: string, bytes = invoice(number, date)) {
     const sha256 = sha256Hex(bytes);
     const storageKey = fileKey(org.orgId, sha256);
     const generation = await store.put(storageKey, bytes);
@@ -370,6 +370,37 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(await xmlAudits()).toHaveLength(before + 4);
   });
 
+  it('writes the org address and, when asked, [24] in [25], and records that choice (#692)', async () => {
+    const owned = await tokenFor(owner);
+    const before = (await xmlAudits()).length;
+    const deducted = await app.request(`/api/export/vat-01gtgt.xml?${new URLSearchParams({ period: '2026-09', deductInput: '1' })}`, {
+      headers: { authorization: `Bearer ${owned}`, 'x-crove-org': org.slug },
+    });
+    expect(deducted.status).toBe(200);
+    const xml = await deducted.text();
+    expect(['ct24', 'ct25', 'ct36'].map((tag) => valueOf(xml, tag))).toEqual(['180000', '180000', '-180000']);
+    expect(valueOf(xml, 'ct43')).toBe('180000');
+    // No address yet: an empty element, as before.
+    expect(xml).toContain('<dchiNNT/>');
+    // Any other value of the parameter keeps [25] at 0.
+    const plain = await app.request(`/api/export/vat-01gtgt.xml?${new URLSearchParams({ period: '2026-09', deductInput: 'true' })}`, {
+      headers: { authorization: `Bearer ${owned}`, 'x-crove-org': org.slug },
+    });
+    expect(valueOf(await plain.text(), 'ct25')).toBe('0');
+
+    expect((await rpc('org/setAddress', owned, { address: 'Số 2 Đường Thử, Phường Bến Nghé, TP Hồ Chí Minh' }, org.slug)).status).toBe(200);
+    try {
+      expect(valueOf(await (await exportXml(owned, '2026-09')).text(), 'dchiNNT')).toBe('Số 2 Đường Thử, Phường Bến Nghé, TP Hồ Chí Minh');
+    } finally {
+      expect((await rpc('org/setAddress', owned, { address: null }, org.slug)).status).toBe(200);
+    }
+    expect((await xmlAudits()).slice(before).map((row: { detail: unknown }) => row.detail)).toEqual([
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml', deduct_input: true },
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml' },
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml' },
+    ]);
+  });
+
   it('keeps the HTKK XML to members of the org', async () => {
     const before = (await xmlAudits()).length;
     const foreign = await exportXml(await tokenFor(outsider), '2026-09');
@@ -380,5 +411,81 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(await xmlAudits()).toHaveLength(before);
     const unauthenticated = await app.request(`/api/export/vat-01gtgt.xml?period=2026-09`, { headers: { 'x-crove-org': org.slug } });
     expect(unauthenticated.status).toBe(401);
+  });
+  // A sales invoice at 5% and 10% (#685): the org (BUYER_TAX_CODE since the test above) is the seller. 5% of 1,000,001
+  // and 10% of 333,333 give 50,000.05 and 33,333.3; the seller rounded the 10% VAT up, to 83,334 in all. With its VAT
+  // table (THTTLTSuat) the working takes the seller's split; without it, it estimates 50,000 and 33,333 and puts the
+  // missing dong on the larger taxable value (5%), flagged rate_split, as for every document recorded before #685.
+  const mixedSale = (number: string, table: boolean) =>
+    new TextEncoder().encode(`<?xml version="1.0" encoding="UTF-8"?>
+<HDon>
+  <DLHDon Id="data">
+    <TTChung>
+      <PBan>2.1.0</PBan><THDon>HÓA ĐƠN GIÁ TRỊ GIA TĂNG</THDon><KHMSHDon>1</KHMSHDon><KHHDon>C26TBB</KHHDon>
+      <SHDon>${number}</SHDon><NLap>2026-06-10</NLap><DVTTe>VND</DVTTe><TGia>1</TGia><HTTToan>TM/CK</HTTToan>
+    </TTChung>
+    <NDHDon>
+      <NBan><Ten>CÔNG TY TỜ KHAI GTGT</Ten><MST>${BUYER_TAX_CODE}</MST><DChi>2 Đường Thử, TP Hồ Chí Minh</DChi></NBan>
+      <NMua><Ten>CÔNG TY TNHH KHÁCH HÀNG MẪU</Ten><MST>0101234564</MST><DChi>1 Đường Mẫu, Hà Nội</DChi></NMua>
+      <DSHHDVu>
+        <HHDVu><TChat>1</TChat><STT>1</STT><THHDVu>Gạo</THHDVu><DVTinh>Kg</DVTinh><SLuong>1</SLuong><DGia>1000001</DGia><ThTien>1000001</ThTien><TSuat>5%</TSuat></HHDVu>
+        <HHDVu><TChat>1</TChat><STT>2</STT><THHDVu>Dịch vụ vận chuyển</THHDVu><DVTinh>Chuyến</DVTinh><SLuong>1</SLuong><DGia>333333</DGia><ThTien>333333</ThTien><TSuat>10%</TSuat></HHDVu>
+      </DSHHDVu>
+      <TToan>
+        ${table ? '<THTTLTSuat><LTSuat><TSuat>5%</TSuat><ThTien>1000001</ThTien><TThue>50000</TThue></LTSuat><LTSuat><TSuat>10%</TSuat><ThTien>333333</ThTien><TThue>33334</TThue></LTSuat></THTTLTSuat>' : ''}
+        <TgTCThue>1333334</TgTCThue><TgTThue>83334</TgTThue><TgTTTBSo>1416668</TgTTTBSo>
+      </TToan>
+    </NDHDon>
+  </DLHDon>
+  <MCCQT Id="tax">M2-26-ABCDE-0000${number}</MCCQT>
+</HDon>`);
+
+  it('splits a mixed-rate invoice by its own VAT table, and estimates one recorded without it (#685)', async () => {
+    const withTable = await record('6001', '2026-06-10', mixedSale('6001', true));
+    const withoutTable = await record('6002', '2026-06-10', mixedSale('6002', false));
+    const stored = await admin(async (c) => {
+      const sql = `SELECT document_id, row_no, vat_rate, taxable_amount::text, vat_amount::text FROM crove_finance.purchase_tax_rate
+                   WHERE org_id = $1 AND document_id = ANY($2) ORDER BY row_no`;
+      return (await c.query(sql, [org.orgId, [withTable.documentId, withoutTable.documentId]])).rows;
+    });
+    expect(stored).toEqual([
+      { document_id: withTable.documentId, row_no: 1, vat_rate: '5%', taxable_amount: '1000001.0000', vat_amount: '50000.0000' },
+      { document_id: withTable.documentId, row_no: 2, vat_rate: '10%', taxable_amount: '333333.0000', vat_amount: '33334.0000' },
+    ]);
+
+    const report = await rpc('vat/period', await tokenFor(viewer), { period: '2026-06' });
+    expect(report.status).toBe(200);
+    expect(report.body.output.documents).toEqual([
+      expect.objectContaining({
+        number: '6001',
+        rates: [
+          { rate: '5', taxable: '1000001', vat: '50000' },
+          { rate: '10', taxable: '333333', vat: '33334' },
+        ],
+        warnings: [],
+      }),
+      expect.objectContaining({
+        number: '6002',
+        rates: [
+          { rate: '5', taxable: '1000001', vat: '50001' },
+          { rate: '10', taxable: '333333', vat: '33333' },
+        ],
+        warnings: ['rate_split'],
+      }),
+    ]);
+    const xml = await (await exportXml(await tokenFor(owner), '2026-06')).text();
+    expect(valueOf(xml, 'ct30')).toBe('2000002');
+    expect(valueOf(xml, 'ct31')).toBe('100001');
+    expect(valueOf(xml, 'ct32')).toBe('666666');
+    expect(valueOf(xml, 'ct33')).toBe('66667');
+
+    // The table is written with its document only: a recorded document takes no more rows, and its rows never change.
+    const refusal = (sql: string, params: unknown[]) =>
+      admin((c) => c.query(sql, params).then(() => null, (error: { message: string }) => error.message));
+    expect(
+      await refusal(`INSERT INTO crove_finance.purchase_tax_rate (org_id, document_id, row_no, vat_rate, taxable_amount, vat_amount) VALUES ($1, $2, 9, '0%', 1, 0)`, [org.orgId, withoutTable.documentId]),
+    ).toMatch(/already posted/);
+    expect(await refusal(`UPDATE crove_finance.purchase_tax_rate SET vat_amount = 50001 WHERE org_id = $1 AND row_no = 1`, [org.orgId])).not.toBeNull();
+    expect(await refusal(`DELETE FROM crove_finance.purchase_tax_rate WHERE org_id = $1`, [org.orgId])).not.toBeNull();
   });
 });

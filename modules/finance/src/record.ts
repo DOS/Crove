@@ -25,6 +25,7 @@ import {
 import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
 import { journalMemo } from './memo.ts';
+import { isOwnTaxCode } from './own-tax-code.ts';
 import { databaseToday, dateLabel, liveOpeningDate } from './period-lock.ts';
 
 function directionOf(payload: PurchaseProposal): DocumentDirection {
@@ -37,8 +38,8 @@ export function invoiceJournal(direction: DocumentDirection, lines: ProposedLine
 }
 
 // The party of the invoice in Crove's books: the supplier of a purchase, the customer of a sale. Matched by tax code,
-// or by name when the invoice gives none.
-async function upsertParty(ctx: CommandContext, ref: PurchaseProposal['seller'], direction: DocumentDirection): Promise<string> {
+// or by name when the invoice gives none. Opening balances per party (#689) find or create theirs the same way.
+export async function upsertParty(ctx: CommandContext, ref: PurchaseProposal['seller'], direction: DocumentDirection): Promise<string> {
   const taxCode = parseTaxCode(ref.taxCode)?.normalized ?? null;
   const name = ref.name.trim() || (direction === 'sale' ? 'Khách hàng chưa rõ tên' : 'Nhà cung cấp chưa rõ tên');
   const existing = taxCode
@@ -108,8 +109,8 @@ async function replaceableDocument(ctx: CommandContext, direction: DocumentDirec
 async function assertDirection(ctx: CommandContext, payload: PurchaseProposal): Promise<void> {
   const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).forShare().executeTakeFirst();
   const orgTaxCode = org?.tax_code ?? null;
-  const sellerTaxCode = parseTaxCode(payload.seller.taxCode)?.normalized ?? null;
-  const ownInvoice = orgTaxCode !== null && sellerTaxCode === orgTaxCode;
+  // The org's branches (#686) issue its own invoices too.
+  const ownInvoice = isOwnTaxCode(payload.seller.taxCode, orgTaxCode);
   if (directionOf(payload) === 'sale' && !ownInvoice) {
     throw new DomainError('NOT_OWN_SALE', 422, 'Mã số thuế người bán không phải mã số thuế của tổ chức nên không ghi sổ như hóa đơn bán ra được; hãy kiểm tra mã số thuế trong Cài đặt rồi đọc lại tệp');
   }
@@ -313,6 +314,24 @@ export const recordPurchase = defineCommand({
         })),
       )
       .execute();
+    // The invoice's own VAT table (#685), written before the entry is posted: once a document has its entry, the
+    // database refuses more rows for it (purchase_tax_rate_before_insert).
+    const taxRates = invoice.taxBreakdown ?? [];
+    if (taxRates.length > 0) {
+      await ctx.trx
+        .insertInto('crove_finance.purchase_tax_rate')
+        .values(
+          taxRates.map((t, i) => ({
+            org_id: ctx.orgId,
+            document_id: document.id,
+            row_no: i + 1,
+            vat_rate: t.rate,
+            taxable_amount: t.taxableAmount,
+            vat_amount: t.vatAmount,
+          })),
+        )
+        .execute();
+    }
 
     const journalEntryId = await postJournalEntry(ctx, {
       entryDate: lateDate ?? invoice.issueDate,

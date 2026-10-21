@@ -7,15 +7,18 @@
 // `/me/accounts` lists the Pages the user granted in Meta's dialog, each with its own Page token. A Page token from a
 // long-lived user token has no expiry timer, so it is sealed as is; the user token is dropped.
 import { createHmac } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { videoCoverOf } from './cover.ts';
+import { postTypeOf } from './post-type.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const META_GRAPH_HOST = 'graph.facebook.com';
 // Video uploads go to Graph's video host.
 export const META_VIDEO_HOST = 'graph-video.facebook.com';
+// Where a Reel's or a video Story's bytes go (#644): Meta's resumable upload host, one request for the whole file.
+export const META_RUPLOAD_HOST = 'rupload.facebook.com';
 export const META_DEFAULT_GRAPH_VERSION = 'v24.0';
 // What a Page connection needs: list the Pages, post to them, read posts back to reconcile and for metrics, and
 // comment under its own posts (pages_manage_engagement, the first comment of #609).
@@ -65,7 +68,7 @@ export class Graph {
     if (!/^v\d{1,3}\.\d{1,2}$/.test(version)) throw new Error('invalid Graph API version');
     this.version = version;
     this.appSecret = appSecret;
-    this.fetch = allowlistedFetch([META_GRAPH_HOST, META_VIDEO_HOST], fetchImpl);
+    this.fetch = allowlistedFetch([META_GRAPH_HOST, META_VIDEO_HOST, META_RUPLOAD_HOST], fetchImpl);
   }
 
   url(path: string, params: Record<string, string> = {}, host: string = META_GRAPH_HOST): string {
@@ -99,6 +102,35 @@ export class Graph {
     const json = (await response.json().catch(() => null)) as ({ error?: GraphErrorBody } & Record<string, unknown>) | null;
     if (!response.ok || !json || json.error) throw new GraphError(response.status, json?.error);
     return json as T;
+  }
+
+  // The bytes of an Instagram video container made with upload_type=resumable (#772), to Meta's upload host, in one
+  // request: how a deployment without public file URLs posts a Reel or a video Story. The address is built from the
+  // container id Meta answered, never taken from the answer.
+  async uploadInstagram(containerId: string, token: string, bytes: Uint8Array, timeoutMs: number): Promise<void> {
+    if (!/^\d{1,32}$/.test(containerId)) throw new GraphError(400, { message: 'bad container id' });
+    const response = await this.fetch(`https://${META_RUPLOAD_HOST}/ig-api-upload/${this.version}/${containerId}`, {
+      method: 'POST',
+      headers: { authorization: `OAuth ${token}`, offset: '0', file_size: String(bytes.byteLength), 'content-type': 'application/octet-stream' },
+      body: new Uint8Array(bytes),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const json = (await response.json().catch(() => null)) as { success?: unknown; error?: GraphErrorBody } | null;
+    if (!response.ok || !json || json.error || json.success !== true) throw new GraphError(response.status, json?.error);
+  }
+
+  // The bytes of a video started with upload_phase=start (#644), to Meta's upload host, in one request. The address is
+  // built from the video id Meta answered, never taken from the answer.
+  async upload(videoId: string, token: string, bytes: Uint8Array, timeoutMs: number): Promise<void> {
+    if (!/^\d{1,32}$/.test(videoId)) throw new GraphError(400, { message: 'bad video id' });
+    const response = await this.fetch(`https://${META_RUPLOAD_HOST}/video-upload/${this.version}/${videoId}`, {
+      method: 'POST',
+      headers: { authorization: `OAuth ${token}`, offset: '0', file_size: String(bytes.byteLength), 'content-type': 'application/octet-stream' },
+      body: new Uint8Array(bytes),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const json = (await response.json().catch(() => null)) as { success?: unknown; error?: GraphErrorBody } | null;
+    if (!response.ok || !json || json.error || json.success !== true) throw new GraphError(response.status, json?.error);
   }
 }
 
@@ -198,6 +230,8 @@ export class MetaLogin {
 }
 
 const NUMERIC_ID = /^\d{1,32}$/;
+// Alt text per image, as Instagram and Threads cap it.
+const ALT_TEXT_MAX = 1000;
 
 export class FacebookPageConnector implements OAuthConnector {
   readonly provider = 'facebook_page' as const;
@@ -259,6 +293,17 @@ const UNCLEAR_CODES = new Set([1, 2, 506]);
 interface FeedAnswer {
   id?: unknown;
 }
+// photo_stories and video_stories (finish): success and the Story's post id.
+interface StoryAnswer {
+  success?: unknown;
+  post_id?: unknown;
+}
+// The Story as a Page post id, <page>_<post>, the shape the metrics read and comments take; a bare id gets the Page's.
+function storyResult(page: string, answer: StoryAnswer): PublishResult {
+  if (answer.success !== true || typeof answer.post_id !== 'string' || !/^\d{1,32}(_\d{1,32})?$/.test(answer.post_id)) return { kind: 'unknown', code: 'STORY_NOT_CONFIRMED' };
+  const id = answer.post_id.includes('_') ? answer.post_id : `${page}_${answer.post_id}`;
+  return { kind: 'accepted', externalId: id, url: `https://www.facebook.com/${id}` };
+}
 interface PostsAnswer {
   data?: { id?: unknown; message?: unknown; created_time?: unknown; permalink_url?: unknown }[];
 }
@@ -316,6 +361,11 @@ export class FacebookPagePublisher implements Publisher {
     const media = input.content.media;
     // A Page post or video takes no cover from Crove (#642): refused before anything is posted.
     if (videoCoverOf(input.settings)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
+    // The post type (#644): a Story (one image or video, no text) or a Reel (one video), each through its own endpoint.
+    const type = postTypeOf(input.settings);
+    if (type === null) return { kind: 'rejected', error: 'bad_request', code: 'POST_TYPE_NOT_SUPPORTED' };
+    if (type === 'story') return this.publishStory(input, token);
+    if (type === 'reel') return this.publishReel(input, token);
     if (media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token);
     const form: Record<string, string> = { message: feedMessage(input.content) };
     if (input.content.linkUrl && media.length === 0) form.link = input.content.linkUrl;
@@ -362,6 +412,78 @@ export class FacebookPagePublisher implements Publisher {
     }
   }
 
+  // A Page Story (#644): an image is uploaded as an unpublished photo and then made a photo Story; a video is started
+  // on video_stories, its bytes sent to the upload host, and finished, which publishes it. Nothing is visible before
+  // the last call, so a failure earlier posted nothing; an unclear last answer is unknown. A Story is not a Page post
+  // with a message, so reconcile has nothing to match it on.
+  private async publishStory(input: PublishInput, token: string): Promise<PublishResult> {
+    const media = input.content.media;
+    const item = media[0];
+    if (!item || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'STORY_ONE_MEDIA' };
+    const page = input.externalAccountId;
+    if (!item.mime.startsWith('video/')) {
+      const uploaded = await this.uploadPhotos(input, token);
+      if ('rejected' in uploaded) return uploaded.rejected;
+      try {
+        const answer = await this.graph.call<StoryAnswer>('POST', `${page}/photo_stories`, { token, form: { photo_id: uploaded.ids[0] as string } });
+        return storyResult(page, answer);
+      } catch (error) {
+        return graphPublishResult(error);
+      }
+    }
+    const started = await this.startVideo(input, token, `${page}/video_stories`, item);
+    if ('rejected' in started) return started.rejected;
+    try {
+      const answer = await this.graph.call<StoryAnswer>('POST', `${page}/video_stories`, { token, form: { upload_phase: 'finish', video_id: started.videoId } });
+      return storyResult(page, answer);
+    } catch (error) {
+      return graphPublishResult(error);
+    }
+  }
+
+  // A Page Reel (#644): started on video_reels, its bytes sent to the upload host, then finished with
+  // video_state=PUBLISHED and the post text as its description. Meta processes it after the answer; the Reel is named
+  // by its video id.
+  private async publishReel(input: PublishInput, token: string): Promise<PublishResult> {
+    const media = input.content.media;
+    const video = media[0];
+    if (!video || media.length !== 1 || !video.mime.startsWith('video/')) return { kind: 'rejected', error: 'bad_request', code: 'REEL_ONE_VIDEO' };
+    const page = input.externalAccountId;
+    const started = await this.startVideo(input, token, `${page}/video_reels`, video);
+    if ('rejected' in started) return started.rejected;
+    try {
+      const answer = await this.graph.call<{ success?: unknown }>('POST', `${page}/video_reels`, {
+        token,
+        form: { upload_phase: 'finish', video_id: started.videoId, video_state: 'PUBLISHED', description: feedMessage(input.content) },
+      });
+      if (answer.success !== true) return { kind: 'unknown', code: 'REEL_NOT_CONFIRMED' };
+      // Named like a Page video post, <page>_<video>, which the metrics read takes (#443).
+      return { kind: 'accepted', externalId: `${page}_${started.videoId}`, url: `https://www.facebook.com/reel/${started.videoId}` };
+    } catch (error) {
+      return graphPublishResult(error);
+    }
+  }
+
+  // upload_phase=start on a Story or Reel edge, then the bytes: the video id, or why nothing was posted.
+  private async startVideo(input: PublishInput, token: string, edge: string, video: { fileId: string }): Promise<{ videoId: string } | { rejected: PublishResult }> {
+    let bytes: Uint8Array;
+    try {
+      bytes = await input.readMedia(video.fileId);
+    } catch {
+      return { rejected: { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' } };
+    }
+    try {
+      const started = await this.graph.call<{ video_id?: unknown }>('POST', edge, { token, form: { upload_phase: 'start' } });
+      if (typeof started.video_id !== 'string' || !/^\d{1,32}$/.test(started.video_id)) return { rejected: { kind: 'rejected', error: 'transient', code: 'NO_VIDEO_ID' } };
+      await this.graph.upload(started.video_id, token, bytes, VIDEO_UPLOAD_TIMEOUT_MS);
+      return { videoId: started.video_id };
+    } catch (error) {
+      const result = graphPublishResult(error);
+      // Nothing is published before the finish call, so an unclear answer here is a failure to retry.
+      return { rejected: result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) } };
+    }
+  }
+
   // Uploads the post's images as unpublished photos of the Page: invisible until the feed post attaches them, so this
   // step is safe to repeat and any failure here posted nothing. One image at a time is held in memory.
   private async uploadPhotos(input: PublishInput, token: string): Promise<{ ids: string[] } | { rejected: PublishResult }> {
@@ -376,6 +498,8 @@ export class FacebookPagePublisher implements Publisher {
       const body = new FormData();
       body.set('published', 'false');
       body.set('source', new Blob([new Uint8Array(bytes)], { type: m.mime }), `image-${i + 1}`);
+      // The image's description for screen readers (#790); Facebook writes its own when none is given.
+      if (m.altText) body.set('alt_text_custom', m.altText.slice(0, ALT_TEXT_MAX));
       try {
         const answer = await this.graph.call<FeedAnswer>('POST', `${input.externalAccountId}/photos`, { token, multipart: body });
         if (typeof answer.id !== 'string' || !answer.id) return { rejected: { kind: 'rejected', error: 'transient', code: 'NO_PHOTO_ID' } };
@@ -409,6 +533,22 @@ export class FacebookPagePublisher implements Publisher {
 
   // Reactions, comments and shares of a Page post: plain fields of the post, which Meta's 2026 Page Insights changes do
   // not touch; impressions need Page Insights metrics that are being retired, so they are not read.
+  // The Page's followers (#645): followers_count, or the older fan_count (likes) where Meta gives only that.
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const token = pageToken(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!/^\d{1,32}$/.test(input.externalAccountId)) return null;
+    try {
+      const answer = await this.graph.call<{ followers_count?: unknown; fan_count?: unknown }>('GET', input.externalAccountId, { token, params: { fields: 'followers_count,fan_count' } });
+      const n = (v: unknown) => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
+      return { followers: n(answer.followers_count) ?? n(answer.fan_count) };
+    } catch (error) {
+      const result = graphPublishResult(error);
+      if (result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'permission')) return { refused: result.error };
+      return null;
+    }
+  }
+
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const token = pageToken(input.secret);
     if (!token) return { refused: 'token_expired' };
@@ -441,6 +581,8 @@ export class FacebookPagePublisher implements Publisher {
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {
     const token = pageToken(input.secret);
     if (!token || !/^\d{1,32}$/.test(input.externalAccountId)) return { found: 'unknown' };
+    // A Story or a Reel is not matched by its text among the Page's posts (#644): never a guess.
+    if (postTypeOf(input.settings) !== 'feed') return { found: 'unknown' };
     const message = feedMessage(input.content);
     // A post without text (link only, or photos only) has no message to match on, so it cannot be found again.
     if (!message) return { found: 'unknown' };

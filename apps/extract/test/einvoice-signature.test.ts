@@ -52,6 +52,7 @@ describe('e-invoice signature verification', () => {
     expect(checkInvoice(invoice, '2026-10-20').find((c) => c.id === 'signature')).toEqual({
       id: 'signature',
       status: 'warn',
+      code: 'signature.digest_mismatch',
       message: 'Nội dung hóa đơn không khớp chữ ký số (có thể đã bị sửa sau khi ký)',
     });
   });

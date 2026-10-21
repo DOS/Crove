@@ -25,12 +25,16 @@ export const QUEUES = {
   agentProposal: 'kernel-agent-proposal',
   // Created by the portal invoice list migration (20261020060000).
   portalList: 'finance-portal-list',
-  // Created by the mail events migration (20261021030000).
+  // Created by the mail events migration (20261021100000).
   mailEvent: 'kernel-mail-event',
   // Created by the Social link preview migration (20261021150000).
   socialLinkPreview: 'social-link-preview',
   // Created by the Social notifications migration (20261021140000).
   socialNotify: 'social-notify',
+  // Created by the Social remove migration (20261023141000).
+  socialRemove: 'social-remove',
+  // Created by the team chat alert migration (20261023143000).
+  socialChatAlert: 'social-chat-alert',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
@@ -40,6 +44,11 @@ type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 // waits until it is stale). Created by the Social publish migration (20261019040000).
 export const socialPublishQueue = (provider: string) => `social-publish-${provider}`;
 export const SOCIAL_PUBLISH_QUEUES: readonly string[] = CHANNEL_PROVIDERS.map(socialPublishQueue);
+
+// Queued mail (Email plan §3.2, #548): system and transactional mail at once, marketing throttled. 'stately' with the
+// mail's id as singleton key, so a sweep never queues a mail twice. Created by the mail queue migration
+// (20261022050000).
+export const MAIL_QUEUES: readonly string[] = ['kernel-mail-send', 'kernel-mail-bulk'];
 
 // The pg-boss policy of each queue that is not 'standard'. kernel-agent-wake is 'stately' with the singleton key
 // <org>:<agent>: at most one queued and one active job per agent, so wake-ups coalesce and an agent runs once at a

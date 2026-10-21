@@ -7,6 +7,7 @@ import { landingFor } from './lib/clients.ts';
 import { pendingInvite, rememberInvite, takeTokenFromHash } from './lib/invite.ts';
 import { signOut } from './lib/session-actions.ts';
 import { AgentsPage } from './routes/agents.tsx';
+import { AuditPage } from './routes/audit.tsx';
 import { AuthPage } from './routes/auth.tsx';
 import { ClientsPage } from './routes/clients.tsx';
 import { DocumentsPage } from './routes/documents.tsx';
@@ -28,9 +29,14 @@ import { SocialImportPage } from './routes/social-import.tsx';
 import { SocialSnippetsPage } from './routes/social-snippets.tsx';
 import { SocialNotificationsPage } from './routes/social-notifications.tsx';
 import { SocialLabelsPage } from './routes/social-labels.tsx';
+import { SocialIdeasPage } from './routes/social-ideas.tsx';
+import { SocialBioPage } from './routes/social-bio.tsx';
+import { SocialFeedsPage } from './routes/social-feeds.tsx';
+import { OCCASION_IDS } from './lib/social-occasions.ts';
 import { SocialReviewPage } from './routes/social-review.tsx';
 import { SocialReportPage } from './routes/social-report.tsx';
 import { parseSocialSearch } from './lib/social.ts';
+import { parseJournalSearch, parseTextSearch } from './lib/search.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
@@ -176,9 +182,11 @@ export const inboxDetailRoute = createRoute({ getParentRoute: () => orgRoute, pa
 const requireFinance = ({ params }: { params: { slug: string } }) => {
   if (!getConfig().modules.includes('finance')) throw redirect({ to: '/o/$slug/inbox', params: { slug: params.slug } });
 };
-const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', beforeLoad: requireFinance, component: DocumentsPage });
-const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, component: VendorsPage });
-const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, component: JournalPage });
+// ?q= starts the documents and vendors filters, and ?from=&to= sets the journal's range: where the command palette's
+// search results go (#673).
+const documentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'documents', beforeLoad: requireFinance, validateSearch: parseTextSearch, component: DocumentsPage });
+const vendorsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vendors', beforeLoad: requireFinance, validateSearch: parseTextSearch, component: VendorsPage });
+const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, validateSearch: parseJournalSearch, component: JournalPage });
 // Cash and bank vouchers (issue #327).
 const vouchersRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vouchers', beforeLoad: requireFinance, component: VouchersPage });
 // VAT working per month or quarter (issue #316).
@@ -213,11 +221,17 @@ const requireSocial = ({ params }: { params: { slug: string } }) => {
 };
 const socialRoute = createRoute({ getParentRoute: () => orgRoute, path: 'social', beforeLoad: requireSocial, component: () => <Outlet /> });
 const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', validateSearch: parseSocialSearch, component: SocialPage });
-// ?at=<ISO time>: the calendar starts a post planned for that time (#580).
+// ?at=<ISO time>: the calendar starts a post planned for that time (#580); ?idea=<id>: a draft made from an idea (#701).
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const socialNewRoute = createRoute({
   getParentRoute: () => socialRoute,
   path: 'new',
-  validateSearch: (search: Record<string, unknown>): { at?: string } => (typeof search.at === 'string' && !Number.isNaN(Date.parse(search.at)) ? { at: new Date(search.at).toISOString() } : {}),
+  validateSearch: (search: Record<string, unknown>): { at?: string; idea?: string; occasion?: string; on?: string } => ({
+    ...(typeof search.at === 'string' && !Number.isNaN(Date.parse(search.at)) ? { at: new Date(search.at).toISOString() } : {}),
+    // ?occasion=<id>&on=<YYYY-MM-DD>: a post for an occasion of the calendar (#702).
+    ...(typeof search.occasion === 'string' && OCCASION_IDS.has(search.occasion) && typeof search.on === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.on) ? { occasion: search.occasion, on: search.on } : {}),
+    ...(typeof search.idea === 'string' && UUID.test(search.idea) ? { idea: search.idea.toLowerCase() } : {}),
+  }),
   component: SocialComposePage,
 });
 const socialChannelsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'channels', component: SocialChannelsPage });
@@ -225,6 +239,9 @@ const socialImportRoute = createRoute({ getParentRoute: () => socialRoute, path:
 const socialSnippetsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'snippets', component: SocialSnippetsPage });
 const socialNotificationsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'notifications', component: SocialNotificationsPage });
 const socialLabelsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'labels', component: SocialLabelsPage });
+const socialIdeasRoute = createRoute({ getParentRoute: () => socialRoute, path: 'ideas', component: SocialIdeasPage });
+const socialBioRoute = createRoute({ getParentRoute: () => socialRoute, path: 'bio', component: SocialBioPage });
+const socialFeedsRoute = createRoute({ getParentRoute: () => socialRoute, path: 'feeds', component: SocialFeedsPage });
 const socialPostRoute = createRoute({ getParentRoute: () => socialRoute, path: '$id', component: SocialPostPage });
 // ?invite=<email> fills the invite form: onboarding sends a firm here to invite the new client's contact (issue #324).
 const settingsRoute = createRoute({
@@ -233,6 +250,8 @@ const settingsRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { invite?: string } => (typeof search.invite === 'string' ? { invite: search.invite.slice(0, 320) } : {}),
   component: SettingsPage,
 });
+// The audit log (#672): owners and admins only, which the page checks and the server enforces.
+const auditRoute = createRoute({ getParentRoute: () => orgRoute, path: 'audit', component: AuditPage });
 // AI agents and tasks (ADR-0029) belong to the kernel, so every deployment has them.
 const agentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'agents', component: AgentsPage });
 const tasksRoute = createRoute({ getParentRoute: () => orgRoute, path: 'tasks', component: TasksPage });
@@ -249,7 +268,7 @@ const routeTree = rootRoute.addChildren([
   onboardingRoute,
   clientsRoute,
   oauthCallbackRoute,
-  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialNotificationsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, guideRoute]),
+  orgRoute.addChildren([orgIndexRoute, inboxRoute, inboxDetailRoute, documentsRoute, vendorsRoute, journalRoute, vouchersRoute, vatRoute, portalListRoute, ledgerRoute, bankRoute, openingBalanceRoute, socialRoute.addChildren([socialIndexRoute, socialNewRoute, socialChannelsRoute, socialImportRoute, socialSnippetsRoute, socialLabelsRoute, socialIdeasRoute, socialFeedsRoute, socialBioRoute, socialNotificationsRoute, socialPostRoute]), agentsRoute, tasksRoute, taskDetailRoute, settingsRoute, auditRoute, guideRoute]),
 ]);
 
 export const router = createRouter({ routeTree, defaultPreload: 'intent' });

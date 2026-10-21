@@ -5,16 +5,21 @@ import pg from 'pg';
 import { PgBoss } from 'pg-boss';
 import type { Db } from '@crove/db';
 import { DomainError, inboundKey, type AgentProgram, type BlobStore, type CredentialBroker, type Runtime } from '@crove/kernel-runtime';
-import { runAgentWake } from '@crove/kernel';
+import { PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
+import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { EVERGREEN_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, runCommentJob, runPublishJob, sweepEvergreen, sweepMetrics } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
+import { sweepFeeds } from './feeds.ts';
+import { ChatAlertSender } from './chat-alerts.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
+import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
+import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, mailErrorCode, purgeMail, runMailJob, sweepMail, type MailJob, type MailQueueDeps } from './mail-queue.ts';
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { runLinkPreviewJob } from './link-preview.ts';
@@ -35,6 +40,13 @@ const AGENT_PROPOSAL_COMMANDS: Readonly<Record<string, string>> = {
 const AGENT_RETRY_LIMIT = 3;
 const SOCIAL_NOTIFY_RETRY_LIMIT = 3;
 const NOTIFYING: ReadonlySet<string> = new Set(NOTIFYING_EVENTS);
+// Team chat alerts (#863): one job per alerting event, never retried. pg-boss refuses a second job with the same
+// singleton key in the same slot of this many seconds, even once the first is done, so a relay batch sent again after a
+// failed claim does not queue the event twice.
+const CHAT_ALERTING: ReadonlySet<string> = new Set(CHAT_ALERTING_EVENTS);
+const CHAT_ALERT_SINGLETON_SECONDS = 3600;
+// An owner's test line: one job per org in a slot this short, on top of the API's few a minute.
+const CHAT_ALERT_TEST_SINGLETON_SECONDS = 10;
 // Every 10 minutes the worker wakes agents whose wake-up is still pending and that can run now
 // (crove_kernel.agent_wakeups_due): a run refused earlier by the daily cap, a kill switch or a budget that has since
 // lifted, or blocked by a run left live by a crashed worker. Agents still capped, switched off, out of budget or of a
@@ -174,6 +186,20 @@ export interface WorkerDeps {
   // Social publishing: the credential broker that opens channel tokens, and the providers this deployment can publish
   // to. Without it, or without the social module, scheduled posts wait.
   channels?: { broker: CredentialBroker; publishers: Readonly<Record<string, Publisher>>; refreshers?: Readonly<Record<string, Refresher>> };
+  // PUBLIC_URL, where Social short links (#706) point.
+  publicUrl?: string;
+  // Queued mail (#548): the mailer, the templates queued mail is rendered from, and the bounce domain. Unset: queued
+  // mail waits.
+  mail?: Omit<MailQueueDeps, 'runtime' | 'publicUrl'>;
+}
+
+// A person asked for a published variant to come down from its platform (#860).
+interface SocialRemoveJob {
+  orgId: string;
+  variantId: string;
+  provider: string;
+  // The last remove call the person saw when they asked (null: none was made).
+  after: string | null;
 }
 
 interface SocialPublishJob {
@@ -182,7 +208,9 @@ interface SocialPublishJob {
   provider: string;
   // A person asked for the variant's first comment again (#587): the job posts the comment, not the post.
   comment?: true;
-  // The last comment call the person saw when they asked (null: none was made).
+  // A person asked for the rest of the variant's thread again (#742).
+  thread?: true;
+  // The last comment (or thread) call the person saw when they asked (null: none was made).
   after?: string | null;
 }
 
@@ -360,6 +388,43 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     }
   });
 
+  // Queued mail (#548): a sweep queues what is due; system and transactional mail go out at once, marketing one at a
+  // time with a gap. Without a mailer (tests, an embedder) queued mail stays queued.
+  const mail = deps.mail;
+  if (mail) {
+    const mailDeps: MailQueueDeps = { runtime: deps.runtime, ...mail, publicUrl: deps.publicUrl ?? '', workerDb: deps.workerDb };
+    const sendMail = async (job: { data: MailJob; retryCount: number } | undefined, gap: number) => {
+      if (!job) return;
+      const label = job.data.messageId.slice(0, 8);
+      try {
+        const done = await runMailJob(mailDeps, job.data);
+        if (done.action === 'recorded') console.log(`[mail] ${label}: ${done.outcome}${done.code ? ` ${done.code}` : ''}`);
+        else if (done.action === 'suppressed') console.log(`[mail] ${label}: suppressed`);
+      } catch (error) {
+        console.error(`[mail] ${label} attempt ${job.retryCount + 1}: ${mailErrorCode(error)}`);
+        throw error;
+      } finally {
+        if (gap > 0) await new Promise<void>((resolve) => setTimeout(resolve, gap));
+      }
+    };
+    await boss.work<MailJob>(MAIL_SEND_QUEUE, { batchSize: 1 }, async ([job]) => sendMail(job, 0));
+    await boss.work<MailJob>(MAIL_BULK_QUEUE, { batchSize: 1 }, async ([job]) => sendMail(job, MAIL_BULK_GAP_MS));
+  }
+  let mailSweeping = false;
+  const mailSweep = async () => {
+    if (mailSweeping || !mail) return;
+    mailSweeping = true;
+    try {
+      await sweepMail(boss, deps.workerDb, deps.runtime, mail.mailer);
+    } catch (error) {
+      console.error(`[mail] sweep: ${mailErrorCode(error)}`);
+    } finally {
+      mailSweeping = false;
+    }
+  };
+  const mailTimer = mail ? setInterval(() => void mailSweep(), MAIL_SWEEP_MS) : null;
+  void mailSweep();
+
   await boss.work<SignOutTarget>(QUEUES.signOut, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     await runSignOut(deps.revoker, job.data, job.retryCount);
@@ -389,6 +454,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   await boss.work(QUEUES.retention, { batchSize: 1 }, async () => {
     try {
       await runRetention(deps.workerDb);
+      const mailCleared = await purgeMail(deps.workerDb);
+      console.log(`[retention] ${Object.entries(mailCleared).map(([store, n]) => `${store}=${n}`).join(' ')}`);
       const pruned = await pruneRefusalTally(deps.workerDb, keepDays);
       console.log(`[retention] refusal_tally=${pruned}`);
     } finally {
@@ -419,9 +486,29 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // In-app notifications (#637): the command reads the event from the outbox and writes one row per person; the job
   // carries only its id.
   if (social) {
-    await boss.work<AgentDispatchJob>(QUEUES.socialNotify, { batchSize: 1 }, async ([job]) => {
+    await boss.work<AgentDispatchJob & { type?: string }>(QUEUES.socialNotify, { batchSize: 1 }, async ([job]) => {
       if (!job) return;
+      // A client's answer on a review link may settle variants waiting for it (#770), before the team is told.
+      // A member who lost the right to make links (#625): their review and report links stop working.
+      if (job.data.type === 'kernel.member.removed' || job.data.type === 'kernel.member.role_changed') {
+        await deps.runtime.execute('social.links.revoke_for_member', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.links' }, orgId: job.data.orgId });
+        return;
+      }
+      if (job.data.type === 'social.review.answered') {
+        await deps.runtime.execute('social.review.client_settle', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.review' }, orgId: job.data.orgId });
+      }
       await deps.runtime.execute('social.notification.dispatch', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.notify' }, orgId: job.data.orgId });
+    });
+  }
+
+  // Team chat alerts (#863): one short line in the org's Telegram or Discord chat, sent apart from the notices and
+  // their mail; the sender logs a failure and never throws, so the job is never retried.
+  const chatAlerts = social && deps.channels ? new ChatAlertSender({ runtime: deps.runtime, broker: deps.channels.broker, publicUrl: deps.publicUrl ?? '' }) : null;
+  if (chatAlerts) {
+    await boss.work<AgentDispatchJob & { test?: true }>(QUEUES.socialChatAlert, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      if (job.data.test) await chatAlerts.test(job.data.orgId, job.data.eventId);
+      else await chatAlerts.handle(job.data.orgId, job.data.eventId);
     });
   }
 
@@ -458,13 +545,27 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.work<SocialPublishJob>(socialPublishQueue(provider), { batchSize: 1 }, async ([job]) => {
       if (!job || !channels) return;
       const { orgId, variantId } = job.data;
+      if (job.data.thread) {
+        const done = await runThreadJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, { after: job.data.after ?? null });
+        console.log(`[social-thread] ${provider} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason} (${done.parts} parts)`);
+        return;
+      }
       if (job.data.comment) {
         const done = await runCommentJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, { after: job.data.after ?? null });
         console.log(`[social-comment] ${provider} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
         return;
       }
-      const outcome = await runPublishJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider);
+      const outcome = await runPublishJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store, ...(deps.publicUrl ? { publicUrl: deps.publicUrl } : {}) }, orgId, variantId, provider);
       if (outcome.action !== 'none') console.log(`[social-publish] ${provider} variant ${variantId.slice(0, 8)}: ${outcome.action} -> ${outcome.status}`);
+    });
+  }
+  // Removals (#860): one job per ask, on its own queue so a removal never waits behind a channel's publishing.
+  if (publishing.size > 0) {
+    await boss.work<SocialRemoveJob>(QUEUES.socialRemove, { batchSize: 1 }, async ([job]) => {
+      if (!job || !channels) return;
+      const { orgId, variantId, provider, after } = job.data;
+      const done = await runRemoveJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, after);
+      console.log(`[social-remove] ${provider.slice(0, 32)} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
     });
   }
   let sweeping = false;
@@ -499,6 +600,97 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const evergreenTimer = deps.runtime.installed('social') ? setInterval(() => void evergreenSweep(), EVERGREEN_SWEEP_MS) : null;
   void evergreenSweep();
 
+  // Review reminders (#703): every 15 minutes, the posts whose review has waited a day or whose time is close.
+  let reminding = false;
+  const reminderSweep = async () => {
+    if (reminding) return;
+    reminding = true;
+    try {
+      const sent = await sweepReminders({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (sent > 0) console.log(`[social-reminders] reminded ${sent}`);
+    } catch (error) {
+      console.error('[social-reminders] sweep', error);
+    } finally {
+      reminding = false;
+    }
+  };
+  const reminderTimer = deps.runtime.installed('social') ? setInterval(() => void reminderSweep(), REMINDER_SWEEP_MS) : null;
+  if (reminderTimer) void reminderSweep();
+
+  // Proposal reminders and escalation (#676): every half hour, the pending proposals past the days their org set.
+  let nudging = false;
+  const proposalNudgeSweep = async () => {
+    if (nudging) return;
+    nudging = true;
+    try {
+      const done = await sweepProposalNudges({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (done > 0) console.log(`[proposal-reminders] nudged ${done}`);
+    } catch (error) {
+      console.error('[proposal-reminders] sweep', error);
+    } finally {
+      nudging = false;
+    }
+  };
+  const proposalNudgeTimer = setInterval(() => void proposalNudgeSweep(), PROPOSAL_NUDGE_SWEEP_MS);
+  void proposalNudgeSweep();
+
+  // Scheduled client report mail (#704): every 5 minutes, the schedules due queue their mails (sent by the mail queue).
+  let reporting = false;
+  const reportSweep = async () => {
+    if (reporting) return;
+    reporting = true;
+    try {
+      const ran = await sweepReportSchedules({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (ran > 0) console.log(`[social-report-schedule] ran ${ran}`);
+    } catch (error) {
+      console.error(`[social-report-schedule] sweep: ${mailErrorCode(error)}`);
+    } finally {
+      reporting = false;
+    }
+  };
+  const reportTimer = deps.runtime.installed('social') ? setInterval(() => void reportSweep(), REPORT_SCHEDULE_SWEEP_MS) : null;
+  if (reportTimer) void reportSweep();
+
+  // Blog feeds (#708): every quarter hour, the feeds due for their hourly read; new items become drafts.
+  let readingFeeds = false;
+  const feedSweep = async () => {
+    if (readingFeeds) return;
+    readingFeeds = true;
+    try {
+      const drafted = await sweepFeeds({ runtime: deps.runtime, workerDb: deps.workerDb, extract: deps.extract });
+      if (drafted > 0) console.log(`[social-feeds] drafted ${drafted}`);
+    } catch (error) {
+      console.error('[social-feeds] sweep', error);
+    } finally {
+      readingFeeds = false;
+    }
+  };
+  const feedTimer = deps.runtime.installed('social') ? setInterval(() => void feedSweep(), FEED_SWEEP_MS) : null;
+  if (feedTimer) void feedSweep();
+
+  // After a credential key rotation (#776), envelopes still sealed with the previous key are sealed again with the
+  // current one, a batch at a time, until none is left; the log says how many remain.
+  let resealing = false;
+  const resealSweep = async () => {
+    if (resealing || !channels) return;
+    resealing = true;
+    try {
+      const done = await resealCredentials({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb });
+      if (done.resealed + done.failed + done.leftActive + done.leftInactive > 0) {
+        console.log(`[credential-reseal] resealed ${done.resealed}, failed ${done.failed}; left under an older key: ${done.leftActive} active, ${done.leftInactive} to reconnect`);
+      }
+    } catch (error) {
+      console.error('[credential-reseal] sweep', error instanceof Error ? error.name : typeof error);
+    } finally {
+      resealing = false;
+    }
+  };
+  const resealTimer = channels ? setInterval(() => void resealSweep(), RESEAL_SWEEP_MS) : null;
+  if (resealTimer) {
+    resealTimer.unref();
+    void resealSweep();
+  }
+
   // Channel tokens are renewed before they expire (S6.4), whatever module uses the channel.
   const refreshers = channels?.refreshers ?? {};
   let refreshing = false;
@@ -517,6 +709,24 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const refreshTimer = Object.keys(refreshers).length > 0 ? setInterval(() => void refreshSweep(), REFRESH_SWEEP_MS) : null;
   void refreshSweep();
 
+  // Sizes of Social images uploaded before sizes were read at upload (#668): a batch every 10 minutes, a round a day.
+  const sizes = { after: null as string | null, pausedUntil: 0 };
+  let sizing = false;
+  const sizeSweep = async () => {
+    if (sizing) return;
+    sizing = true;
+    try {
+      const done = await backfillImageSizes({ runtime: deps.runtime, workerDb: deps.workerDb, store: deps.store }, sizes);
+      if (done.recorded + done.unreadable > 0) console.log(`[image-size] recorded ${done.recorded}, unreadable ${done.unreadable}`);
+    } catch (error) {
+      console.error('[image-size] sweep', error);
+    } finally {
+      sizing = false;
+    }
+  };
+  const sizeTimer = deps.runtime.installed('social') ? setInterval(() => void sizeSweep(), IMAGE_SIZE_SWEEP_MS) : null;
+  if (sizeTimer) void sizeSweep();
+
   // Metrics of published posts (S8): every 15 minutes, the variants whose last capture is older than 6 hours.
   let measuring = false;
   const metricsSweep = async () => {
@@ -533,6 +743,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   };
   const metricsTimer = publishing.size > 0 ? setInterval(() => void metricsSweep(), METRICS_SWEEP_MS) : null;
 
+  // Account growth (#645): every hour, the channels with no snapshot for today (UTC) get one.
+  let counting = false;
+  const accountSweep = async () => {
+    if (counting || publishing.size === 0 || !channels) return;
+    counting = true;
+    try {
+      const done = await sweepAccounts({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, publishers });
+      if (done.recorded > 0) console.log(`[social-accounts] recorded ${done.recorded}, skipped ${done.skipped}`);
+    } catch (error) {
+      console.error('[social-accounts] sweep', error);
+    } finally {
+      counting = false;
+    }
+  };
+  const accountTimer = publishing.size > 0 ? setInterval(() => void accountSweep(), ACCOUNT_SWEEP_MS) : null;
+  void accountSweep();
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -545,7 +772,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
           const priorities = finance ? await extractPriorities(trx, rows) : new Map<OutboxRow, number>();
           // A failed send rolls back the claim; singletonKey makes the retry idempotent.
           await Promise.all(
-            rows.map((row) => {
+            rows.map(async (row) => {
               if (!finance && (row.type === 'kernel.file.ingested' || row.type === 'kernel.file.reextract_requested' || row.type === 'finance.portal_list.import_requested')) {
                 return null;
               }
@@ -585,6 +812,30 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   retryLimit: 0,
                 });
               }
+              // A person asked for the rest of a thread again (#742): like a comment retry, keyed apart.
+              if (row.type === 'social.thread.retry_requested') {
+                const provider = String(row.payload.provider);
+                const variantId = String(row.payload.variant_id);
+                if (!SOCIAL_PUBLISH_QUEUES.includes(socialPublishQueue(provider))) {
+                  console.warn(`[social-thread] no publish queue for provider ${provider.slice(0, 32)}, variant ${variantId.slice(0, 8)}: retry dropped`);
+                  return null;
+                }
+                const after = typeof row.payload.after === 'string' ? row.payload.after : null;
+                return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, thread: true, after } satisfies SocialPublishJob, {
+                  singletonKey: `${row.org_id}:${variantId}:thread:${after ?? '-'}`,
+                  retryLimit: 0,
+                });
+              }
+              // A person asked for a published post to come down (#860): one job per ask, keyed by the call it saw.
+              if (social && row.type === 'social.variant.remove_requested') {
+                const provider = String(row.payload.provider);
+                const variantId = String(row.payload.variant_id);
+                const after = typeof row.payload.after === 'string' ? row.payload.after : null;
+                return boss.send(QUEUES.socialRemove, { orgId: row.org_id, variantId, provider, after } satisfies SocialRemoveJob, {
+                  singletonKey: `${row.org_id}:${variantId}:remove:${after ?? '-'}`,
+                  retryLimit: 0,
+                });
+              }
               if (social && row.type === 'social.link_preview.requested') {
                 const previewId = String(row.payload.preview_id);
                 return boss.send(QUEUES.socialLinkPreview, { orgId: row.org_id, previewId } satisfies LinkPreviewJob, {
@@ -594,8 +845,32 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   retryBackoff: true,
                 });
               }
+              // A post sent for review also goes to the content manager agent's triage (#799), besides the notices.
+              const triage =
+                social && row.type === 'social.post.submitted'
+                  ? boss.send(QUEUES.agentDispatch, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
+                      singletonKey: `${row.org_id}:${row.event_id}`,
+                      retryLimit: AGENT_RETRY_LIMIT,
+                      retryDelay: 20,
+                      retryBackoff: true,
+                    })
+                  : null;
+              if (triage) await triage;
+              // A team chat alert (#863), besides the notices. Queued best effort: a failure here is logged and never
+              // rolls the claim back, so it holds up neither the relay nor the notices.
+              if (chatAlerts && (CHAT_ALERTING.has(row.type) || row.type === CHAT_ALERT_TEST_EVENT)) {
+                const test = row.type === CHAT_ALERT_TEST_EVENT;
+                await boss
+                  .send(QUEUES.socialChatAlert, { orgId: row.org_id, eventId: row.event_id, ...(test ? { test: true as const } : {}) } satisfies AgentDispatchJob & { test?: true }, {
+                    singletonKey: test ? `${row.org_id}:test` : `${row.org_id}:${row.event_id}`,
+                    singletonSeconds: test ? CHAT_ALERT_TEST_SINGLETON_SECONDS : CHAT_ALERT_SINGLETON_SECONDS,
+                    retryLimit: 0,
+                  })
+                  .catch((error: unknown) => console.error(`[social-chat-alert] event ${row.event_id.slice(0, 8)}: not queued (${error instanceof Error ? error.name : typeof error})`));
+                if (test) return null;
+              }
               if (social && NOTIFYING.has(row.type)) {
-                return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
+                return boss.send(QUEUES.socialNotify, { orgId: row.org_id, eventId: row.event_id, type: row.type } satisfies AgentDispatchJob & { type: string }, {
                   singletonKey: `${row.org_id}:${row.event_id}`,
                   retryLimit: SOCIAL_NOTIFY_RETRY_LIMIT,
                   retryDelay: 20,
@@ -705,9 +980,17 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     clearInterval(timer);
     clearInterval(heartbeatTimer);
     if (socialTimer) clearInterval(socialTimer);
+    if (mailTimer) clearInterval(mailTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
+    if (reminderTimer) clearInterval(reminderTimer);
+    clearInterval(proposalNudgeTimer);
+    if (reportTimer) clearInterval(reportTimer);
+    if (feedTimer) clearInterval(feedTimer);
     if (refreshTimer) clearInterval(refreshTimer);
+    if (resealTimer) clearInterval(resealTimer);
     if (metricsTimer) clearInterval(metricsTimer);
+    if (sizeTimer) clearInterval(sizeTimer);
+    if (accountTimer) clearInterval(accountTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
   };

@@ -1,20 +1,49 @@
 // TikTok video posts (S9, issue #412), written from TikTok's Login Kit and Content Posting API docs. One TikTok app
 // serves every org of a deployment: CHANNEL_TIKTOK_CLIENT_KEY and CHANNEL_TIKTOK_CLIENT_SECRET.
 //
-// Connect: TikTok's consent screen for user.info.basic and video.publish; the access token lives a day and the refresh
-// token a year, and the refresh schedule renews the access token. One grant is one TikTok account.
+// Connect: TikTok's consent screen for user.info.basic and video.publish (and video.upload where the deployment turns
+// inbox mode on); the access token lives a day and the refresh token a year, and the refresh schedule renews the
+// access token. One grant is one TikTok account.
 // Publish (Direct Post): the creator's current options first (privacy levels, interactions it allows, longest video),
 // then an init call that opens the upload, the bytes in chunks, and a status check until TikTok has published it. The
 // person posting chooses the privacy level and the interaction settings (TikTok's rules for the posting UI); an app TikTok
 // has not audited can only post SELF_ONLY. A post is visible only after the bytes are in, so a failure before then
 // posted nothing; after init, the publish_id says where it stands.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+// Photo posts (#710): 1 to 35 JPEG or WebP images through content/init with media_type PHOTO, which TikTok pulls from
+// Crove's presigned URLs (PULL_FROM_URL; the URL's domain must be verified for the TikTok app, or TikTok answers
+// url_ownership_unverified). The text goes as the description; the status check is the same as for a video.
+// Inbox mode (#903, settings.tiktokMode 'inbox'; 'direct', the default, is the above): TikTok's Upload API sends the
+// video to the creator's TikTok inbox as a draft, where they add sound, write the caption and post it inside TikTok.
+// No privacy level, interaction settings or cover is sent (the creator picks them in TikTok), and none is needed, so
+// it also works for an app TikTok has not audited, whose direct posts stay SELF_ONLY. The init call is
+// inbox/video/init with source_info alone, the chunks are the same, and the status check ends at SEND_TO_USER_INBOX:
+// the draft is in the app, not public, with no post id yet. Photos go through content/init with post_mode
+// MEDIA_UPLOAD and their description. It needs the video.upload scope, which Crove asks for only when the deployment
+// sets CHANNEL_TIKTOK_INBOX (its TikTok app must be approved for it), and which connections made before then lack.
+import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { videoCoverOf } from './cover.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const TIKTOK_HOSTS = ['open.tiktokapis.com', 'open-upload.tiktokapis.com'] as const;
 export const TIKTOK_SCOPES = ['user.info.basic', 'video.publish'] as const;
+// What inbox mode needs (#903): TikTok's Upload API refuses a token without it (scope_not_authorized). Asked for only
+// when the deployment turns inbox mode on (CHANNEL_TIKTOK_INBOX): TikTok refuses a whole sign-in that asks for a scope
+// the app has not been approved for, so it is never asked for by default.
+export const TIKTOK_UPLOAD_SCOPE = 'video.upload';
+// How a variant goes to TikTok (#903): posted at once (direct, the default), or sent to the creator's TikTok inbox as
+// a draft they finish in the app (inbox).
+export const TIKTOK_MODES = ['direct', 'inbox'] as const;
+export type TikTokMode = (typeof TIKTOK_MODES)[number];
+// The mode in a variant's settings; null when settings.tiktokMode is set to something else.
+export function tiktokModeOf(settings: Readonly<Record<string, unknown>> | undefined): TikTokMode | null {
+  const value = settings?.tiktokMode;
+  if (value === undefined || value === null) return 'direct';
+  return TIKTOK_MODES.find((m) => m === value) ?? null;
+}
+// Asked for only when the deployment's app has the Display API (CHANNEL_TIKTOK_VIDEO_LIST): it reads a video's counts
+// (#744). An app without it would refuse the whole sign-in, so it is never asked for by default.
+export const TIKTOK_METRICS_SCOPE = 'video.list';
 export const TIKTOK_PRIVACY_LEVELS = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const;
 export type TikTokPrivacy = (typeof TIKTOK_PRIVACY_LEVELS)[number];
 const API = 'https://open.tiktokapis.com/v2';
@@ -22,13 +51,25 @@ const OPEN_ID = /^[A-Za-z0-9_.-]{1,128}$/;
 const PUBLISH_ID = /^[A-Za-z0-9_.~-]{1,128}$/;
 const CHECK_AFTER_SECONDS = 30;
 const TITLE_MAX = 2200;
+// A photo post's description, and how many images it takes.
+const PHOTO_DESCRIPTION_MAX = 4000;
+const PHOTO_MAX = 35;
+const PHOTO_TYPES: readonly string[] = ['image/jpeg', 'image/webp'];
 // TikTok takes chunks of 5 to 64 MB, the last one up to 128 MB; a video under 5 MB goes whole.
 const CHUNK = 64 * 1024 * 1024;
 
 export interface TikTokAppConfig {
   clientKey: string;
   clientSecret: string;
+  // The app has the Display API: connections ask for video.list and posts' counts are read (#744).
+  videoList?: boolean;
+  // The app is approved for video.upload (CHANNEL_TIKTOK_INBOX, #903): connections ask for it and inbox mode is sent.
+  // Without it, an inbox variant is refused with TIKTOK_INBOX_NOT_ENABLED and nothing is sent.
+  inbox?: boolean;
 }
+
+// The code for a variant this deployment's TikTok app cannot send (#903): inbox mode on an app without video.upload.
+export const TIKTOK_INBOX_NOT_ENABLED = 'TIKTOK_INBOX_NOT_ENABLED';
 
 export class TikTokError extends Error {
   readonly status: number;
@@ -80,6 +121,14 @@ class TikTokClient {
 
   get clientKey(): string {
     return this.app.clientKey;
+  }
+
+  get videoList(): boolean {
+    return this.app.videoList === true;
+  }
+
+  get inbox(): boolean {
+    return this.app.inbox === true;
   }
 
   async token(form: Record<string, string>): Promise<TokenAnswer> {
@@ -155,7 +204,7 @@ export class TikTokConnector implements OAuthConnector {
   authorizeUrl(input: AuthorizeInput): string {
     const url = new URL('https://www.tiktok.com/v2/auth/authorize/');
     url.searchParams.set('client_key', this.client.clientKey);
-    url.searchParams.set('scope', TIKTOK_SCOPES.join(','));
+    url.searchParams.set('scope', [...TIKTOK_SCOPES, ...(this.client.inbox ? [TIKTOK_UPLOAD_SCOPE] : []), ...(this.client.videoList ? [TIKTOK_METRICS_SCOPE] : [])].join(','));
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('redirect_uri', input.redirectUri);
     url.searchParams.set('state', input.state);
@@ -209,10 +258,24 @@ export class TikTokRefresher implements Refresher {
   }
 }
 
-function publishResult(error: unknown): PublishResult {
+// What TikTok's Upload API answers mean in inbox mode (#903), in plain words for the post screen.
+const INBOX_HINTS: Readonly<Record<string, string>> = {
+  spam_risk_too_many_pending_share:
+    "The TikTok inbox already holds as many drafts as TikTok allows from apps in a day; post or delete some in the TikTok app, then publish again",
+};
+
+// inbox: the call was one of inbox mode's, where scope_not_authorized means the connection lacks video.upload (it was
+// made before Crove asked for it): a refusal that asks for a reconnect, never an expired token, so the connection's
+// direct posts go on.
+function publishResult(error: unknown, inbox = false): PublishResult {
   if (!(error instanceof TikTokError)) return { kind: 'unknown', code: 'NETWORK' };
   const code = error.code ?? `HTTP_${error.status}`;
   if (error.status >= 500) return { kind: 'unknown', code, message: error.message };
+  if (inbox && error.code === 'scope_not_authorized') {
+    return { kind: 'rejected', error: 'permission', code: 'CHANNEL_SCOPE_MISSING', message: `TikTok refused the upload: the connection lacks ${TIKTOK_UPLOAD_SCOPE}; reconnect the channel`, httpStatus: error.status };
+  }
+  const hint = inbox && error.code ? INBOX_HINTS[error.code] : undefined;
+  if (hint) return { kind: 'rejected', error: 'permission', code, message: hint, httpStatus: error.status };
   if (error.status === 401 || error.code === 'access_token_invalid' || error.code === 'token_not_authorized_for_specified_scope') {
     return { kind: 'rejected', error: 'token_expired', code, message: error.message, httpStatus: error.status };
   }
@@ -239,9 +302,15 @@ interface StatusAnswer {
   publicaly_available_post_id?: unknown;
 }
 
-const captionOf = (content: { body: string; linkUrl: string | null }) => {
+const captionOf = (content: { body: string; linkUrl: string | null }, max = TITLE_MAX) => {
   const body = content.body.trim();
-  return (content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body).slice(0, TITLE_MAX);
+  return (content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body).slice(0, max);
+};
+
+// What TikTok's answers about photo URLs mean for the deployment, in plain words for the post screen.
+const PHOTO_HINTS: Readonly<Record<string, string>> = {
+  url_ownership_unverified: "TikTok did not take the image links: this deployment's media domain must be verified in the TikTok app's settings",
+  unaudited_client_can_only_post_to_private_accounts: 'This TikTok app is not audited yet, so it can post only to private accounts (privacy SELF_ONLY)',
 };
 
 export class TikTokPublisher implements Publisher {
@@ -257,58 +326,117 @@ export class TikTokPublisher implements Publisher {
     this.client = new TikTokClient(app, fetchImpl);
   }
 
+  // Inbox mode on a deployment that has not turned it on (#903): refused before anything else, nothing sent.
+  refusal(settings: Readonly<Record<string, unknown>>): string | null {
+    return tiktokModeOf(settings) === 'inbox' && !this.client.inbox ? TIKTOK_INBOX_NOT_ENABLED : null;
+  }
+
+  // A video's counts (#744): views, likes, comments and shares from the video query endpoint (video.list). Without
+  // the scope, or for a post id TikTok has not given (a private post), no counts.
+  async metrics(input: MetricsInput): Promise<MetricsResult> {
+    const s = tiktokSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!/^\d{1,32}$/.test(input.externalId)) return null;
+    let answer: { videos?: { id?: unknown; view_count?: unknown; like_count?: unknown; comment_count?: unknown; share_count?: unknown }[] };
+    try {
+      answer = await this.client.call('POST', '/video/query/?fields=id,view_count,like_count,comment_count,share_count', s.accessToken, { filters: { video_ids: [input.externalId] } });
+    } catch (error) {
+      if (error instanceof TikTokError && (error.status === 401 || error.code === 'access_token_invalid')) return { refused: 'token_expired' };
+      return null;
+    }
+    const video = answer.videos?.[0];
+    if (!video) return null;
+    const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+    const metrics: Partial<Record<MetricName, number>> = {};
+    const views = n(video.view_count);
+    const likes = n(video.like_count);
+    const comments = n(video.comment_count);
+    const shares = n(video.share_count);
+    if (views !== undefined) metrics.views = views;
+    if (likes !== undefined) metrics.reactions = likes;
+    if (comments !== undefined) metrics.comments = comments;
+    if (shares !== undefined) metrics.shares = shares;
+    return { metrics };
+  }
+
   async publish(input: PublishInput): Promise<PublishResult> {
     const s = tiktokSecretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
-    const video = input.content.media[0];
-    if (!video || !video.mime.startsWith('video/') || input.content.media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
+    const mode = tiktokModeOf(input.settings);
+    if (!mode) return { kind: 'rejected', error: 'bad_request', code: 'TIKTOK_MODE_INVALID' };
+    const notEnabled = this.refusal(input.settings);
+    if (notEnabled) return { kind: 'rejected', error: 'bad_request', code: notEnabled, message: 'Inbox mode is not turned on for this deployment (CHANNEL_TIKTOK_INBOX)' };
+    const inbox = mode === 'inbox';
+    // Inbox mode takes no privacy level: the creator picks who sees the post in TikTok.
     const privacy = TIKTOK_PRIVACY_LEVELS.find((p) => p === input.settings.privacyLevel);
-    if (!privacy) return { kind: 'rejected', error: 'bad_request', code: 'PRIVACY_REQUIRED' };
-    // A cover (#642): direct post takes a frame of the video (video_cover_timestamp_ms), never an uploaded image.
+    const media = input.content.media;
+    if (media.length > 0 && media.every((m) => m.mime.startsWith('image/'))) {
+      if (inbox) return this.publishPhotos(input, s.accessToken, null);
+      if (!privacy) return { kind: 'rejected', error: 'bad_request', code: 'PRIVACY_REQUIRED' };
+      return this.publishPhotos(input, s.accessToken, privacy);
+    }
+    const video = media[0];
+    if (!video || !video.mime.startsWith('video/') || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
+    if (!inbox && !privacy) return { kind: 'rejected', error: 'bad_request', code: 'PRIVACY_REQUIRED' };
+    // A cover (#642): direct post takes a frame of the video (video_cover_timestamp_ms), never an uploaded image; the
+    // inbox upload takes none (the creator picks it in TikTok).
     const cover = videoCoverOf(input.settings);
-    if (cover && !('atMs' in cover)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
+    if (cover && (inbox || !('atMs' in cover))) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
     let bytes: Uint8Array;
     try {
       bytes = await input.readMedia(video.fileId);
     } catch {
       return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
     }
-    // The creator's options now: the chosen privacy level must be one of them, and an interaction the creator turned
-    // off stays off whatever the post asked.
-    let creator: CreatorInfo;
-    try {
-      creator = await this.client.call<CreatorInfo>('POST', '/post/publish/creator_info/query/', s.accessToken, {});
-    } catch (error) {
-      const result = publishResult(error);
-      return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
-    }
-    const options = Array.isArray(creator.privacy_level_options) ? creator.privacy_level_options : [];
-    if (!options.includes(privacy)) return { kind: 'rejected', error: 'permission', code: 'PRIVACY_NOT_ALLOWED', message: `${privacy} is not available for this account` };
-    // The creator's own limit on a video's length (it differs per account); TikTok would refuse the init otherwise.
-    const maxSeconds = Number(creator.max_video_post_duration_sec);
-    if (Number.isFinite(maxSeconds) && maxSeconds > 0 && typeof video.durationSeconds === 'number' && video.durationSeconds > maxSeconds) {
-      return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TOO_LONG', message: `This account posts videos of up to ${Math.floor(maxSeconds)} seconds` };
-    }
     const size = bytes.byteLength;
     const chunk = Math.min(size, CHUNK);
     const count = Math.max(1, Math.floor(size / chunk));
-    let init: { publish_id?: unknown; upload_url?: unknown };
-    try {
-      init = await this.client.call('POST', '/post/publish/video/init/', s.accessToken, {
-        post_info: {
-          title: captionOf(input.content),
-          privacy_level: privacy,
-          disable_comment: creator.comment_disabled === true || input.settings.allowComments !== true,
-          disable_duet: creator.duet_disabled === true || input.settings.allowDuet !== true,
-          disable_stitch: creator.stitch_disabled === true || input.settings.allowStitch !== true,
-          ...(cover ? { video_cover_timestamp_ms: cover.atMs } : {}),
-        },
-        source_info: { source: 'FILE_UPLOAD', video_size: size, chunk_size: chunk, total_chunk_count: count },
-      });
-    } catch (error) {
-      // Nothing is posted before the bytes arrive.
-      const result = publishResult(error);
+    const source = { source: 'FILE_UPLOAD', video_size: size, chunk_size: chunk, total_chunk_count: count };
+    // An init TikTok refused, or did not answer clearly, opened nothing: nothing is posted before the bytes arrive.
+    const refused = (error: unknown): PublishResult => {
+      const result = publishResult(error, inbox);
       return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
+    };
+    let init: { publish_id?: unknown; upload_url?: unknown };
+    if (inbox) {
+      // The Upload API's init takes the file's size and chunks only; the creator's options are TikTok's to show.
+      try {
+        init = await this.client.call('POST', '/post/publish/inbox/video/init/', s.accessToken, { source_info: source });
+      } catch (error) {
+        return refused(error);
+      }
+    } else {
+      const chosen = privacy as TikTokPrivacy;
+      // The creator's options now: the chosen privacy level must be one of them, and an interaction the creator turned
+      // off stays off whatever the post asked.
+      let creator: CreatorInfo;
+      try {
+        creator = await this.client.call<CreatorInfo>('POST', '/post/publish/creator_info/query/', s.accessToken, {});
+      } catch (error) {
+        return refused(error);
+      }
+      const options = Array.isArray(creator.privacy_level_options) ? creator.privacy_level_options : [];
+      if (!options.includes(chosen)) return { kind: 'rejected', error: 'permission', code: 'PRIVACY_NOT_ALLOWED', message: `${chosen} is not available for this account` };
+      // The creator's own limit on a video's length (it differs per account); TikTok would refuse the init otherwise.
+      const maxSeconds = Number(creator.max_video_post_duration_sec);
+      if (Number.isFinite(maxSeconds) && maxSeconds > 0 && typeof video.durationSeconds === 'number' && video.durationSeconds > maxSeconds) {
+        return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TOO_LONG', message: `This account posts videos of up to ${Math.floor(maxSeconds)} seconds` };
+      }
+      try {
+        init = await this.client.call('POST', '/post/publish/video/init/', s.accessToken, {
+          post_info: {
+            title: captionOf(input.content),
+            privacy_level: chosen,
+            disable_comment: creator.comment_disabled === true || input.settings.allowComments !== true,
+            disable_duet: creator.duet_disabled === true || input.settings.allowDuet !== true,
+            disable_stitch: creator.stitch_disabled === true || input.settings.allowStitch !== true,
+            ...(cover && 'atMs' in cover ? { video_cover_timestamp_ms: cover.atMs } : {}),
+          },
+          source_info: source,
+        });
+      } catch (error) {
+        return refused(error);
+      }
     }
     const publishId = typeof init.publish_id === 'string' ? init.publish_id : '';
     const uploadUrl = typeof init.upload_url === 'string' ? init.upload_url : '';
@@ -324,6 +452,55 @@ export class TikTokPublisher implements Publisher {
       const result = publishResult(error);
       return result.kind === 'rejected' ? { kind: 'rejected', error: 'transient', ...(result.code ? { code: result.code } : {}) } : { kind: 'pending', externalRef: publishId, checkAfterSeconds: CHECK_AFTER_SECONDS };
     }
+    return { kind: 'pending', externalRef: publishId, checkAfterSeconds: CHECK_AFTER_SECONDS };
+  }
+
+  // A photo post: every image's URL first (nothing is sent without all of them), the creator's options, then one init.
+  // privacy null: inbox mode (#903), an upload to the creator's TikTok inbox (MEDIA_UPLOAD) with its description only.
+  private async publishPhotos(input: PublishInput, token: string, privacy: TikTokPrivacy | null): Promise<PublishResult> {
+    const images = input.content.media;
+    if (images.length > PHOTO_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_MEDIA' };
+    if (images.some((m) => !PHOTO_TYPES.includes(m.mime.toLowerCase()))) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TYPE_NOT_ALLOWED', message: 'TikTok takes JPEG or WebP photos' };
+    // The URLs together: presigning is local, and none is sent unless all of them are there.
+    const found = await Promise.all(images.map((m) => input.mediaUrl(m.fileId).catch(() => null)));
+    if (found.some((url) => !url)) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    const urls = found as string[];
+    const inbox = privacy === null;
+    let postInfo: Record<string, unknown> = { description: captionOf(input.content, PHOTO_DESCRIPTION_MAX) };
+    if (privacy !== null) {
+      let creator: CreatorInfo;
+      try {
+        creator = await this.client.call<CreatorInfo>('POST', '/post/publish/creator_info/query/', token, {});
+      } catch (error) {
+        const result = publishResult(error);
+        return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
+      }
+      const options = Array.isArray(creator.privacy_level_options) ? creator.privacy_level_options : [];
+      if (!options.includes(privacy)) return { kind: 'rejected', error: 'permission', code: 'PRIVACY_NOT_ALLOWED', message: `${privacy} is not available for this account` };
+      postInfo = {
+        ...postInfo,
+        privacy_level: privacy,
+        disable_comment: creator.comment_disabled === true || input.settings.allowComments !== true,
+        auto_add_music: input.settings.autoAddMusic === true,
+      };
+    }
+    let init: { publish_id?: unknown };
+    try {
+      init = await this.client.call('POST', '/post/publish/content/init/', token, {
+        post_info: postInfo,
+        source_info: { source: 'PULL_FROM_URL', photo_cover_index: 0, photo_images: urls },
+        post_mode: inbox ? 'MEDIA_UPLOAD' : 'DIRECT_POST',
+        media_type: 'PHOTO',
+      });
+    } catch (error) {
+      // An init TikTok refused posted nothing; an unclear answer did not either, since no publish_id came back.
+      const result = publishResult(error, inbox);
+      const hint = result.kind === 'rejected' && result.code ? PHOTO_HINTS[result.code] : undefined;
+      if (result.kind === 'rejected') return hint ? { ...result, message: hint } : result;
+      return { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
+    }
+    const publishId = typeof init.publish_id === 'string' ? init.publish_id : '';
+    if (!PUBLISH_ID.test(publishId)) return { kind: 'rejected', error: 'transient', code: 'NO_PUBLISH_ID' };
     return { kind: 'pending', externalRef: publishId, checkAfterSeconds: CHECK_AFTER_SECONDS };
   }
 
@@ -352,6 +529,10 @@ export class TikTokPublisher implements Publisher {
         // A private (SELF_ONLY) post has no public id: it is known by its publish_id.
         return { kind: 'accepted', externalId: id ?? input.externalRef, url: null };
       }
+      case 'SEND_TO_USER_INBOX':
+        // Inbox mode (#903): the draft is in the creator's TikTok inbox. The check ends here; the post is not public and
+        // has no id until the creator posts it in TikTok, so it is known by its publish_id.
+        return { kind: 'accepted', externalId: input.externalRef, url: null, sentToApp: true };
       case 'FAILED':
         return { kind: 'rejected', error: 'bad_request', code: typeof answer.fail_reason === 'string' ? answer.fail_reason.slice(0, 100) : 'FAILED' };
       default:

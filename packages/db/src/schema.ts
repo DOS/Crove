@@ -330,6 +330,10 @@ export type CashVoucherTable = Refine<
   'number'
 >;
 
+// General journal vouchers (#888): phiếu kế toán khác, NVK. The insert trigger numbers each one per org (any number
+// given is replaced), and rows never change.
+export type JournalVoucherTable = Refine<G.FinanceJournalVoucherTable, { number: ColumnType<number, never, never> }, 'number'>;
+
 // The tax portal's purchase-invoice lists (#465). A list starts pending; the insert trigger stamps created_at and the
 // update trigger stamps recorded_at and removed_at with the database clock. Rows are append-only.
 export const PORTAL_LIST_STATUSES = ['pending', 'done', 'failed'] as const;
@@ -361,6 +365,8 @@ export const SOCIAL_VARIANT_STATUSES = [
   'needs_attention',
   'paused',
   'cancelled',
+  // Taken down from its platform (#860).
+  'removed',
 ] as const;
 export const SOCIAL_ORIGINS = ['human', 'ai'] as const;
 export const SOCIAL_ACTOR_ORIGINS = ['ui', 'api', 'mcp', 'agent', 'system'] as const;
@@ -368,7 +374,9 @@ export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as
 // What a client said through a review link (#589): a signal for the team, never an approval.
 export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment'] as const;
 // What an in-app notification is about (#637); a member may turn each kind off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned'] as const;
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention'] as const;
+// Why a channel's daily account snapshot has no counts (#645).
+export const SOCIAL_ACCOUNT_SNAPSHOT_ERRORS = ['no_answer', 'token_expired', 'permission'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
 // A link preview card (#641): waiting for the worker, read, or not readable and why.
 export const SOCIAL_LINK_PREVIEW_STATUSES = ['pending', 'ready', 'failed'] as const;
@@ -377,13 +385,32 @@ export type SocialLinkPreviewStatus = (typeof SOCIAL_LINK_PREVIEW_STATUSES)[numb
 export type SocialLinkPreviewError = (typeof SOCIAL_LINK_PREVIEW_ERRORS)[number];
 // The palette a label's colour comes from (#639); the app maps each name to a theme tone.
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
+// The corner of an image the org's logo watermark goes in (#834).
+export const SOCIAL_WATERMARK_CORNERS = ['top_left', 'top_right', 'bottom_left', 'bottom_right'] as const;
+// The org's team chat for Social alerts (#863): where it is, and the kinds of alert it may get.
+export const SOCIAL_CHAT_ALERT_TARGETS = ['telegram', 'discord'] as const;
+export const SOCIAL_CHAT_ALERT_KINDS = ['needs_approval', 'failed', 'published', 'client_answered'] as const;
+// The stages of an idea on the ideas board (#701).
+export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
+// Scheduled client report mail (#704): how often, the period each mail covers, and a run's kind.
+export const SOCIAL_REPORT_CADENCES = ['weekly', 'monthly'] as const;
+export const SOCIAL_REPORT_PERIODS = ['previous_week', 'previous_month', 'last_7_days', 'last_30_days'] as const;
+export const SOCIAL_REPORT_RUN_KINDS = ['scheduled', 'test'] as const;
 export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
 export type SocialDecision = (typeof SOCIAL_DECISIONS)[number];
 export type SocialReviewVerdict = (typeof SOCIAL_REVIEW_VERDICTS)[number];
+export type SocialAccountSnapshotError = (typeof SOCIAL_ACCOUNT_SNAPSHOT_ERRORS)[number];
 export type SocialNotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
 export type SocialLabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
+export type SocialIdeaStage = (typeof SOCIAL_IDEA_STAGES)[number];
+export type SocialWatermarkCorner = (typeof SOCIAL_WATERMARK_CORNERS)[number];
+export type SocialChatAlertTarget = (typeof SOCIAL_CHAT_ALERT_TARGETS)[number];
+export type SocialChatAlertKind = (typeof SOCIAL_CHAT_ALERT_KINDS)[number];
+export type SocialReportCadence = (typeof SOCIAL_REPORT_CADENCES)[number];
+export type SocialReportPeriod = (typeof SOCIAL_REPORT_PERIODS)[number];
+export type SocialReportRunKind = (typeof SOCIAL_REPORT_RUN_KINDS)[number];
 
 export type SocialPostTable = Refine<
   G.SocialPostTable,
@@ -401,6 +428,7 @@ export type SocialPostVariantTable = Refine<
   }
 >;
 export type SocialReviewFeedbackTable = Refine<G.SocialReviewFeedbackTable, { verdict: ColumnType<SocialReviewVerdict, never, never> }>;
+export type SocialAccountSnapshotTable = Refine<G.SocialAccountSnapshotTable, { error: ColumnType<SocialAccountSnapshotError | null, SocialAccountSnapshotError | null | undefined, never> }>;
 export type SocialLinkPreviewTable = Refine<
   G.SocialLinkPreviewTable,
   {
@@ -410,7 +438,13 @@ export type SocialLinkPreviewTable = Refine<
 >;
 export type SocialNotificationTable = Refine<G.SocialNotificationTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialNotificationMuteTable = Refine<G.SocialNotificationMuteTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
+export type SocialCalendarNoteTable = Refine<G.SocialCalendarNoteTable, { color: Generated<SocialLabelColor> }>;
+export type SocialWatermarkTable = Refine<G.SocialWatermarkTable, { corner: SocialWatermarkCorner }>;
+export type SocialChatAlertTable = Refine<G.SocialChatAlertTable, { kind: SocialChatAlertTarget; events: SocialChatAlertKind[] }>;
 export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
+export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<SocialIdeaStage> }>;
+export type SocialReportScheduleTable = Refine<G.SocialReportScheduleTable, { cadence: SocialReportCadence; period: SocialReportPeriod }>;
+export type SocialReportScheduleRunTable = Refine<G.SocialReportScheduleRunTable, { kind: SocialReportRunKind }>;
 
 export type SocialPostApprovalTable = Refine<
   G.SocialPostApprovalTable,
@@ -447,16 +481,24 @@ type Refined = Tables<{
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;
   'crove_finance.cash_voucher': CashVoucherTable;
+  'crove_finance.journal_voucher': JournalVoucherTable;
   'crove_finance.portal_invoice_list': PortalInvoiceListTable;
   'crove_finance.portal_invoice_row': PortalInvoiceRowTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_approval': SocialPostApprovalTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
+  'crove_social.account_snapshot': SocialAccountSnapshotTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
+  'crove_social.calendar_note': SocialCalendarNoteTable;
+  'crove_social.watermark': SocialWatermarkTable;
+  'crove_social.chat_alert': SocialChatAlertTable;
   'crove_social.label': SocialLabelTable;
+  'crove_social.idea': SocialIdeaTable;
+  'crove_social.report_schedule': SocialReportScheduleTable;
+  'crove_social.report_schedule_run': SocialReportScheduleRunTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.

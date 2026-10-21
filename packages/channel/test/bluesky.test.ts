@@ -1,6 +1,6 @@
 // Bluesky against recorded XRPC answers (shapes from the AT Protocol lexicons); no live call.
 import { describe, expect, it } from 'vitest';
-import { BlueskyPublisher, connectBluesky, isBlueskyHost, linkFacets, type Fetch, type PublishInput } from '../src/index.ts';
+import { BlueskyPublisher, blueskyFacets, blueskyLangs, connectBluesky, isBlueskyHost, linkFacets, pdsOrigin, tagFacets, type BlueskyFacet, type Fetch, type PublishInput } from '../src/index.ts';
 
 const DID = 'did:plc:abc123def456ghi789jkl012';
 const PDS = 'https://morel.us-east.host.bsky.network';
@@ -17,7 +17,9 @@ function xrpc(routes: Record<string, { status?: number; body: unknown }[]>) {
     const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
     const headers = new Headers(init?.headers);
     calls.push({ route, auth: headers.get('authorization'), json: typeof init?.body === 'string' ? JSON.parse(init.body) : null, type: headers.get('content-type') });
-    const answer = routes[route]?.shift() ?? { status: 500, body: { error: 'InternalServerError', message: `no answer for ${route}` } };
+    // A Bluesky-hosted DID document unless a test says otherwise: a publish reads it before signing in (#804).
+    const hosted: { status?: number; body: unknown } | null = route === `GET plc.directory/${DID}` ? { body: { id: DID, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: PDS }] } } : null;
+    const answer = routes[route]?.shift() ?? hosted ?? { status: 500, body: { error: 'InternalServerError', message: `no answer for ${route}` } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
   };
   return { calls, fetchImpl };
@@ -70,6 +72,121 @@ describe('Bluesky connect', () => {
   });
 });
 
+describe('Bluesky on its own PDS (#792)', () => {
+  const OWN = 'https://pds.example.org';
+  const refused = { status: 401, body: { error: 'AuthenticationRequired', message: 'Invalid identifier or password' } };
+  const doc = (pds: string, alsoKnownAs = ['at://quan-a.bsky.social']) => ({ body: { id: DID, alsoKnownAs, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: pds }] } });
+  const own = (pds = OWN) => ({
+    bluesky: xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [refused, refused],
+      'GET public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle': [{ body: { did: DID } }],
+      [`GET plc.directory/${DID}`]: [doc(pds), doc(pds)],
+    }),
+    egress: xrpc({
+      'POST pds.example.org/xrpc/com.atproto.server.createSession': [session(OWN), session(OWN)],
+      'POST pds.example.org/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kown`, cid: 'bafy' } }, { body: { uri: `at://${DID}/app.bsky.feed.post/3kown2`, cid: 'bafy' } }],
+    }),
+  });
+
+  it('connects through the PDS the DID document names, called only through the egress fetch', async () => {
+    const { bluesky, egress } = own();
+    const account = await connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl);
+    expect(account).toMatchObject({ externalAccountId: DID, displayName: '@quan-a.bsky.social' });
+    expect(bluesky.calls.map((c) => c.route)).toEqual(['POST bsky.social/xrpc/com.atproto.server.createSession', 'GET public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle', `GET plc.directory/${DID}`]);
+    expect(egress.calls.map((c) => c.route)).toEqual(['POST pds.example.org/xrpc/com.atproto.server.createSession']);
+    expect(egress.calls[0]?.json).toEqual({ identifier: 'quan-a.example.org', password: APP_PASSWORD });
+  });
+
+  it('posts on that PDS, and goes straight there while the lookup is kept', async () => {
+    const { bluesky, egress } = own();
+    const publisher = new BlueskyPublisher(bluesky.fetchImpl, egress.fetchImpl);
+    expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kown` });
+    expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kown2` });
+    // The DID is looked up first, so bsky.social never sees the password (#804); the second publish reuses the lookup.
+    expect(bluesky.calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`]);
+    expect(egress.calls.map((c) => c.route)).toEqual([
+      'POST pds.example.org/xrpc/com.atproto.server.createSession',
+      'POST pds.example.org/xrpc/com.atproto.repo.createRecord',
+      'POST pds.example.org/xrpc/com.atproto.server.createSession',
+      'POST pds.example.org/xrpc/com.atproto.repo.createRecord',
+    ]);
+  });
+
+  it('refuses such an account without an egress fetch, and a PDS named by address or on another port', async () => {
+    const plain = own();
+    await expect(connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, plain.bluesky.fetchImpl)).rejects.toMatchObject({ code: 'UnsupportedPds' });
+    for (const pds of ['https://10.0.0.5', 'https://pds.example.org:8443', 'http://pds.example.org']) {
+      const { bluesky, egress } = own(pds);
+      // The identity names no PDS Crove calls, so the login stays refused as bsky.social said.
+      await expect(connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl)).rejects.toMatchObject({ status: 401 });
+      expect(egress.calls).toHaveLength(0);
+    }
+  });
+
+  it('names the account by its DID when the DID document does not claim the handle its PDS reports', async () => {
+    const bluesky = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [refused],
+      'GET public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle': [{ body: { did: DID } }],
+      [`GET plc.directory/${DID}`]: [doc(OWN, ['at://someone-else.example.org'])],
+    });
+    const egress = xrpc({ 'POST pds.example.org/xrpc/com.atproto.server.createSession': [session(OWN)] });
+    expect(await connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl)).toMatchObject({ displayName: `@${DID}` });
+  });
+  it('never trusts a session that signs in another account', async () => {
+    const { bluesky } = own();
+    const egress = xrpc({ 'POST pds.example.org/xrpc/com.atproto.server.createSession': [{ body: { ...session(OWN).body, did: 'did:plc:someoneelse0000000000000' } }] });
+    await expect(connectBluesky({ handle: 'quan-a.example.org', appPassword: APP_PASSWORD }, bluesky.fetchImpl, egress.fetchImpl)).rejects.toMatchObject({ code: 'BadSession' });
+  });
+
+  it('reads a Bluesky-hosted DID once while it is fresh, so a revoked password costs no directory read', async () => {
+    const revoked = xrpc({
+      [`GET plc.directory/${DID}`]: [doc(PDS)],
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [refused, refused],
+    });
+    const publisher = new BlueskyPublisher(revoked.fetchImpl);
+    for (let i = 0; i < 2; i += 1) expect(await publisher.publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    expect(revoked.calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`, 'POST bsky.social/xrpc/com.atproto.server.createSession', 'POST bsky.social/xrpc/com.atproto.server.createSession']);
+  });
+
+  it('sends the password nowhere when the DID document cannot be read or names no PDS Crove calls', async () => {
+    for (const answer of [{ status: 503, body: {} }, doc('https://10.0.0.5'), { body: { id: DID, service: [] } }]) {
+      const down = xrpc({ [`GET plc.directory/${DID}`]: [answer], 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+      const egress = xrpc({});
+      expect(await new BlueskyPublisher(down.fetchImpl, egress.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'transient' });
+      expect(down.calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`]);
+      expect(egress.calls).toHaveLength(0);
+    }
+    // A did:web account without an egress fetch: its document host is not reachable, so nothing is sent either.
+    const web = 'did:web:pds.example.org';
+    const plain = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+    expect(await new BlueskyPublisher(plain.fetchImpl).publish(input({ externalAccountId: web, secret: JSON.stringify({ identifier: web, appPassword: APP_PASSWORD }) }))).toMatchObject({ kind: 'rejected', error: 'transient' });
+    expect(plain.calls).toHaveLength(0);
+  });
+
+  it('takes a PDS on an IDN top-level domain in its xn-- form (#804)', () => {
+    expect(pdsOrigin('https://pds.example.xn--p1ai')).toBe('https://pds.example.xn--p1ai');
+    expect(pdsOrigin('https://pds.example.xn--')).toBeNull();
+  });
+
+  it('looks the account up again when its PDS refuses the login, as after a move', async () => {
+    const moved = 'https://pds2.example.org';
+    const bluesky = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [refused, refused],
+      [`GET plc.directory/${DID}`]: [doc(OWN), doc(moved)],
+    });
+    const egress = xrpc({
+      'POST pds.example.org/xrpc/com.atproto.server.createSession': [session(OWN), refused],
+      'POST pds.example.org/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3ka`, cid: 'bafy' } }],
+      'POST pds2.example.org/xrpc/com.atproto.server.createSession': [session(moved)],
+      'POST pds2.example.org/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kb`, cid: 'bafy' } }],
+    });
+    const publisher = new BlueskyPublisher(bluesky.fetchImpl, egress.fetchImpl);
+    expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted' });
+    expect(await publisher.publish(input())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kb` });
+    expect(egress.calls.at(-1)?.route).toBe('POST pds2.example.org/xrpc/com.atproto.repo.createRecord');
+  });
+});
+
 describe('BlueskyPublisher', () => {
   it('posts the text with link facets on the account PDS', async () => {
     const { fetchImpl, calls } = xrpc({
@@ -78,11 +195,12 @@ describe('BlueskyPublisher', () => {
     });
     const result = await new BlueskyPublisher(fetchImpl).publish(input());
     expect(result).toEqual({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kabc`, url: 'https://bsky.app/profile/quan-a.bsky.social/post/3kabc' });
-    const record = (calls[1]?.json as { record: { text: string; facets: unknown[] } } | undefined)?.record;
+    const post = calls.find((c) => c.route.endsWith('/com.atproto.repo.createRecord'));
+    const record = (post?.json as { record: { text: string; facets: unknown[] } } | undefined)?.record;
     if (!record) throw new Error('no record');
     expect(record.text).toBe('Khai trương! Xem https://example.com/a');
     expect(record.facets).toEqual(linkFacets(record.text));
-    expect(calls[1]?.auth).toBe('Bearer access-jwt-1');
+    expect(post?.auth).toBe('Bearer access-jwt-1');
   });
 
   it('counts facet offsets in UTF-8 bytes', () => {
@@ -99,8 +217,8 @@ describe('BlueskyPublisher', () => {
     });
     const content = { body: 'Ảnh mới', title: null, linkUrl: null, media: [{ fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 3, altText: 'Mặt tiền' }] };
     expect((await new BlueskyPublisher(fetchImpl).publish(input({ content }))).kind).toBe('accepted');
-    expect(calls[1]?.type).toBe('image/jpeg');
-    expect((calls[2]?.json as { record: { embed: unknown } } | undefined)?.record.embed).toEqual({ $type: 'app.bsky.embed.images', images: [{ alt: 'Mặt tiền', image: { $type: 'blob', ref: { $link: 'bafyimg' }, mimeType: 'image/jpeg', size: 3 } }] });
+    expect(calls.find((c) => c.route.endsWith('/com.atproto.repo.uploadBlob'))?.type).toBe('image/jpeg');
+    expect((calls.find((c) => c.route.endsWith('/com.atproto.repo.createRecord'))?.json as { record: { embed: unknown } } | undefined)?.record.embed).toEqual({ $type: 'app.bsky.embed.images', images: [{ alt: 'Mặt tiền', image: { $type: 'blob', ref: { $link: 'bafyimg' }, mimeType: 'image/jpeg', size: 3 } }] });
   });
 
   it('maps a revoked app password to token_expired and an outage after the post to unknown', async () => {
@@ -135,6 +253,7 @@ describe('Bluesky edge answers', () => {
     const fetchImpl: Fetch = async (input) => {
       const url = new URL(input);
       calls.push(url.pathname);
+      if (url.host === 'plc.directory') return new Response(JSON.stringify({ id: DID, service: [{ id: '#atproto_pds', serviceEndpoint: PDS }] }), { status: 200 });
       if (url.pathname.endsWith('createSession')) return new Response(JSON.stringify(session().body), { status: 200 });
       return new Response('', { status: 200 });
     };
@@ -173,5 +292,181 @@ describe('BlueskyPublisher metrics', () => {
     expect(other.calls).toHaveLength(0);
     const down = xrpc({ 'GET public.api.bsky.app/xrpc/app.bsky.feed.getPosts': [{ status: 502, body: {} }] });
     expect(await new BlueskyPublisher(down.fetchImpl).metrics(metricsInput)).toBeNull();
+  });
+});
+
+describe('Bluesky video (#455)', () => {
+  const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: 'Lò bánh buổi sáng' };
+  const videoInput = (over: Partial<PublishInput['content']> = {}) => input({ content: { body: 'Mẻ bánh đầu tiên', title: null, linkUrl: null, media: [clip], ...over } });
+  const blob = { $type: 'blob', ref: { $link: 'bafkreivideo' }, mimeType: 'video/mp4', size: 4_000_000 };
+  const fast = { pollMs: 1, videoWaitMs: 1000 };
+  const routes = (job: { status?: number; body: unknown }, statuses: { body: unknown }[]) => ({
+    'POST bsky.social/xrpc/com.atproto.server.createSession': [session()],
+    'GET morel.us-east.host.bsky.network/xrpc/com.atproto.server.getServiceAuth': [{ body: { token: 'service-jwt-1' } }],
+    'POST video.bsky.app/xrpc/app.bsky.video.uploadVideo': [job],
+    'GET video.bsky.app/xrpc/app.bsky.video.getJobStatus': statuses,
+    'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kvid`, cid: 'bafy' } }],
+  });
+
+  it('uploads the MP4 to the video service with a service token, waits for the job, and posts it embedded', async () => {
+    const { fetchImpl, calls } = xrpc(
+      routes({ body: { jobStatus: { jobId: 'job-1', state: 'JOB_STATE_CREATED' } } }, [{ body: { jobStatus: { jobId: 'job-1', state: 'JOB_STATE_ENCODING' } } }, { body: { jobStatus: { jobId: 'job-1', state: 'JOB_STATE_COMPLETED', blob } } }]),
+    );
+    expect(await new BlueskyPublisher(fetchImpl, undefined, fast).publish(videoInput())).toMatchObject({ kind: 'accepted', externalId: `at://${DID}/app.bsky.feed.post/3kvid` });
+    const upload = calls.find((c) => c.route === 'POST video.bsky.app/xrpc/app.bsky.video.uploadVideo');
+    expect(upload?.auth).toBe('Bearer service-jwt-1');
+    expect(upload?.type).toBe('video/mp4');
+    const sent = calls.at(-1)?.json as { record: { embed: unknown } } | undefined;
+    if (!sent) throw new Error('no post call');
+    const record = sent.record;
+    expect(record.embed).toEqual({ $type: 'app.bsky.embed.video', video: blob, alt: 'Lò bánh buổi sáng' });
+  });
+
+  it('takes the job of a video sent before, and posts nothing when processing fails, runs late, or the video comes with images', async () => {
+    const again = xrpc(routes({ status: 409, body: { error: 'already_exists', message: 'Video already processed', jobId: 'job-0' } }, [{ body: { jobStatus: { jobId: 'job-0', state: 'JOB_STATE_COMPLETED', blob } } }]));
+    expect((await new BlueskyPublisher(again.fetchImpl, undefined, fast).publish(videoInput())).kind).toBe('accepted');
+    const failed = xrpc(routes({ body: { jobStatus: { jobId: 'job-2' } } }, [{ body: { jobStatus: { jobId: 'job-2', state: 'JOB_STATE_FAILED', message: 'Video too long' } } }]));
+    expect(await new BlueskyPublisher(failed.fetchImpl, undefined, fast).publish(videoInput())).toMatchObject({ kind: 'rejected', code: 'VIDEO_PROCESSING_FAILED' });
+    expect(failed.calls.some((c) => c.route.endsWith('createRecord'))).toBe(false);
+    const slow = xrpc(routes({ body: { jobStatus: { jobId: 'job-3' } } }, Array.from({ length: 50 }, () => ({ body: { jobStatus: { jobId: 'job-3', state: 'JOB_STATE_ENCODING' } } }))));
+    expect(await new BlueskyPublisher(slow.fetchImpl, undefined, { pollMs: 5, videoWaitMs: 20 }).publish(videoInput())).toMatchObject({ kind: 'rejected', error: 'transient', code: 'VIDEO_PROCESSING_SLOW' });
+    const mixed = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+    expect(await new BlueskyPublisher(mixed.fetchImpl, undefined, fast).publish(videoInput({ media: [clip, { fileId: 'i', mime: 'image/jpeg', sizeBytes: 3, altText: null }] }))).toMatchObject({ code: 'ONE_VIDEO_ALONE' });
+  });
+});
+
+describe('Bluesky rich text (#906)', () => {
+  // The recorded XRPC answers of a post, plus resolveHandle answered per handle: a DID, 'hang' (no answer until the
+  // lookup is aborted), or absent (Bluesky's 400 for a handle that does not resolve).
+  function withHandles(handles: Record<string, string>) {
+    const base = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [session()],
+      'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3krich`, cid: 'bafy' } }],
+    });
+    const looked: string[] = [];
+    const fetchImpl: Fetch = async (input, init) => {
+      const url = new URL(input);
+      if (url.pathname !== '/xrpc/com.atproto.identity.resolveHandle') return base.fetchImpl(input, init);
+      const handle = url.searchParams.get('handle') ?? '';
+      looked.push(`${url.host} ${handle}`);
+      const did = handles[handle];
+      if (did === 'hang') return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))));
+      if (!did) return new Response(JSON.stringify({ error: 'InvalidRequest', message: 'Unable to resolve handle' }), { status: 400 });
+      return new Response(JSON.stringify({ did }), { status: 200 });
+    };
+    return { fetchImpl, calls: base.calls, looked };
+  }
+  const sent = (calls: { route: string; json: unknown }[]) => {
+    const record = (calls.find((c) => c.route.endsWith('/com.atproto.repo.createRecord'))?.json as { record?: { text: string; facets?: BlueskyFacet[]; langs?: string[] } } | undefined)?.record;
+    if (!record) throw new Error('no record');
+    return record;
+  };
+  const post = (body: string) => input({ content: { body, title: null, linkUrl: null, media: [] } });
+  // What a facet covers, read back from the UTF-8 bytes of the text, as Bluesky reads it.
+  const covered = (text: string, f: BlueskyFacet) => new TextDecoder().decode(new TextEncoder().encode(text).slice(f.index.byteStart, f.index.byteEnd));
+  const tagOf = (f: BlueskyFacet) => (f.features[0] as { tag?: string }).tag;
+  const alice = 'did:plc:alice0000000000000000000';
+
+  it('counts tag offsets in UTF-8 bytes past Vietnamese diacritics and emoji', () => {
+    const text = 'Khai trương 🎉 quán mới #CàPhêSữa và ☕️ #KhaiTrương2026';
+    const facets = tagFacets(text);
+    expect(facets.map((f) => f.features[0])).toEqual([
+      { $type: 'app.bsky.richtext.facet#tag', tag: 'CàPhêSữa' },
+      { $type: 'app.bsky.richtext.facet#tag', tag: 'KhaiTrương2026' },
+    ]);
+    expect(facets.map((f) => covered(text, f))).toEqual(['#CàPhêSữa', '#KhaiTrương2026']);
+    // 'Khai trương 🎉 quán mới ' is 31 bytes for 23 code points: ư, ơ and á take two bytes, ớ three and the emoji four.
+    expect(facets[0]?.index).toEqual({ byteStart: 31, byteEnd: 31 + Buffer.byteLength('#CàPhêSữa') });
+  });
+
+  it('drops trailing punctuation and skips what is not a tag', () => {
+    const text = 'Mừng #COVID-19 qua, a#b, #2026, ＃全角 và (#ngoặc) #QuánMới.';
+    const facets = tagFacets(text);
+    expect(facets.map(tagOf)).toEqual(['COVID-19', '全角', 'QuánMới']);
+    expect(covered(text, facets.at(-1) as BlueskyFacet)).toBe('#QuánMới');
+    expect(tagFacets(`#${'a'.repeat(64)} #${'b'.repeat(65)}`).map(tagOf)).toEqual(['a'.repeat(64)]);
+    expect(tagFacets('#️⃣ keycap')).toEqual([]);
+  });
+
+  it('leaves a # inside a URL to the link facet', async () => {
+    const text = 'Thực đơn https://example.com/menu#mon-moi và #MónMới';
+    const facets = await blueskyFacets(text, async () => null);
+    expect(facets.map((f) => [f.features[0]?.$type, covered(text, f)])).toEqual([
+      ['app.bsky.richtext.facet#link', 'https://example.com/menu#mon-moi'],
+      ['app.bsky.richtext.facet#tag', '#MónMới'],
+    ]);
+  });
+
+  it('posts tags and resolved mentions, leaves an unresolvable handle and an email address plain, and sets langs', async () => {
+    const { fetchImpl, calls, looked } = withHandles({ 'alice.bsky.social': alice });
+    const body = 'Cảm ơn @Alice.bsky.social và @ghost.bsky.social! Liên hệ joy@example.com #KhaiTrương https://example.com/a';
+    expect(await new BlueskyPublisher(fetchImpl).publish(post(body))).toMatchObject({ kind: 'accepted' });
+    const record = sent(calls);
+    expect(record.langs).toEqual(['vi']);
+    expect(looked).toEqual(['public.api.bsky.app alice.bsky.social', 'public.api.bsky.app ghost.bsky.social']);
+    expect((record.facets ?? []).map((f) => [f.features[0], covered(record.text, f)])).toEqual([
+      [{ $type: 'app.bsky.richtext.facet#mention', did: alice }, '@Alice.bsky.social'],
+      [{ $type: 'app.bsky.richtext.facet#tag', tag: 'KhaiTrương' }, '#KhaiTrương'],
+      [{ $type: 'app.bsky.richtext.facet#link', uri: 'https://example.com/a' }, 'https://example.com/a'],
+    ]);
+  });
+
+  it('posts with the mention as plain text when the lookup runs late', async () => {
+    const { fetchImpl, calls } = withHandles({ 'slow.bsky.social': 'hang' });
+    expect(await new BlueskyPublisher(fetchImpl, undefined, { mentionMs: 20 }).publish(post('Chào @slow.bsky.social'))).toMatchObject({ kind: 'accepted' });
+    expect(sent(calls).facets).toBeUndefined();
+  });
+
+  it('looks up at most ten distinct handles per post, each once', async () => {
+    const handles = Array.from({ length: 12 }, (_, i) => `u${i}.bsky.social`);
+    const { fetchImpl, calls, looked } = withHandles(Object.fromEntries(handles.map((h, i) => [h, `did:plc:user${String(i).padStart(20, '0')}`])));
+    expect(await new BlueskyPublisher(fetchImpl).publish(post(`${handles.map((h) => `@${h}`).join(' ')} @u0.bsky.social`))).toMatchObject({ kind: 'accepted' });
+    expect(looked).toEqual(handles.slice(0, 10).map((h) => `public.api.bsky.app ${h}`));
+    const record = sent(calls);
+    // The ten looked up and the repeat of the first; the last two stay plain text.
+    expect((record.facets ?? []).map((f) => covered(record.text, f))).toEqual([...handles.slice(0, 10).map((h) => `@${h}`), '@u0.bsky.social']);
+  });
+
+  it('takes the post languages from the variant setting, else Vietnamese', async () => {
+    expect(blueskyLangs({})).toEqual(['vi']);
+    expect(blueskyLangs(undefined)).toEqual(['vi']);
+    expect(blueskyLangs({ langs: 'en' })).toEqual(['en']);
+    expect(blueskyLangs({ langs: ['vi', 'en-US', 'vi', 'ja', 'fr'] })).toEqual(['vi', 'en-US', 'ja']);
+    expect(blueskyLangs({ langs: ['not a language', 42] })).toEqual(['vi']);
+    const { fetchImpl, calls } = withHandles({});
+    await new BlueskyPublisher(fetchImpl).publish({ ...post('Hello'), settings: { langs: ['en'] } });
+    expect(sent(calls).langs).toEqual(['en']);
+  });
+});
+
+describe('Bluesky remove (#860)', () => {
+  const POST = `at://${DID}/app.bsky.feed.post/3kq2abcdxyz22`;
+  const DELETE = `POST ${new URL(PDS).host}/xrpc/com.atproto.repo.deleteRecord`;
+  const remove = (fetchImpl: Fetch, externalId = POST) => new BlueskyPublisher(fetchImpl).remove({ externalAccountId: DID, secret: SECRET, externalId });
+
+  it('deletes the post record on the account PDS by its record key', async () => {
+    const { fetchImpl, calls } = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()], [DELETE]: [{ body: { commit: { cid: 'bafyreib', rev: '3kq2' } } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    const call = calls.find((c) => c.route === DELETE);
+    expect(call?.json).toEqual({ repo: DID, collection: 'app.bsky.feed.post', rkey: '3kq2abcdxyz22' });
+    expect(call?.auth).toBe('Bearer access-jwt-1');
+  });
+
+  it('counts a record already gone as removed', async () => {
+    const { fetchImpl } = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()], [DELETE]: [{ status: 400, body: { error: 'RecordNotFound', message: 'Could not locate record' } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+  });
+
+  it('maps a refused app password, a rate limit and a server error, and never deletes another account post', async () => {
+    const refused = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [{ status: 401, body: { error: 'AuthenticationRequired', message: 'Invalid identifier or password' } }] });
+    expect(await remove(refused.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'AuthenticationRequired' });
+    const limited = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()], [DELETE]: [{ status: 429, body: { error: 'RateLimitExceeded', message: 'Rate Limit Exceeded' } }] });
+    expect(await remove(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const down = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()], [DELETE]: [{ status: 502, body: { error: 'UpstreamFailure', message: 'Upstream Failure' } }] });
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'UpstreamFailure' });
+    const other = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+    expect(await remove(other.fetchImpl, 'at://did:plc:someoneelse0000000000000/app.bsky.feed.post/3kq2abcdxyz22')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'NOT_OWN_POST' });
+    expect(await remove(other.fetchImpl, 'https://bsky.app/profile/x/post/1')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(other.calls.some((c) => c.route === DELETE)).toBe(false);
   });
 });

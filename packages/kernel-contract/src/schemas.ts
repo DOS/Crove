@@ -24,11 +24,59 @@ export const zAccountCode = z.string().regex(ACCOUNT_CODE_PATTERN);
 export const zRole = z.enum(['owner', 'admin', 'member', 'viewer']);
 export const zSlug = z.string().regex(/^[a-z0-9][a-z0-9-]{1,46}[a-z0-9]$/);
 
+// The outcomes of the deterministic invoice checks (@crove/l10n-vn checkInvoice, issue #677), one code per wording.
+// A check stores its code and parameters, and the SPA renders the sentence in the reader's language from them. The
+// Vietnamese `message` is kept: it is what payloads written before #677 carry, and what the SPA falls back to for a
+// code it does not know.
+export const INVOICE_CHECK_CODES = [
+  'currency.unsupported',
+  'lines_sum.ok',
+  'lines_sum.mismatch',
+  'total.ok',
+  'total.mismatch',
+  'vat_breakdown.ok',
+  'vat_breakdown.mismatch',
+  'seller_tax_code.unreadable',
+  'seller_tax_code.checksum',
+  'seller_tax_code.ok',
+  'issue_date.invalid',
+  'issue_date.future',
+  'issue_date.ok',
+  'tax_authority_code.present',
+  'tax_authority_code.missing',
+  'signature.unverified',
+  'signature.missing',
+  // The signature verification in crove-extract (#674): verified (params.signer when a certificate names one), or the
+  // reason it is unverified or not applicable (SIGNATURE_REASONS in @crove/l10n-vn; missing is signature.missing).
+  'signature.verified',
+  'signature.malformed',
+  'signature.ambiguous',
+  'signature.not_covering',
+  'signature.digest_mismatch',
+  'signature.bad_signature',
+  'signature.unsupported_algorithm',
+  'signature.no_certificate',
+  'signature.untrusted_certificate',
+  'signature.certificate_expired',
+  'signature.signer_mismatch',
+  'signature.tax_authority_missing',
+  'signature.tax_authority_invalid',
+  'signature.tax_authority_untrusted',
+  'signature.cash_register',
+  'source.ai',
+  'duplicate.found',
+] as const;
+export type InvoiceCheckCode = (typeof INVOICE_CHECK_CODES)[number];
+
 export const zCheck = z.object({
   id: z.string().max(50),
   status: z.enum(['pass', 'warn', 'fail']),
   message: z.string().max(1000),
+  // Absent on payloads written before #677. Any string is kept, so a newer code still parses in an older reader.
+  code: z.string().max(80).optional(),
+  params: z.record(z.string().max(40), z.string().max(200)).optional(),
 });
+export type Check = z.infer<typeof zCheck>;
 
 export const zPartyRef = z.object({
   name: z.string().max(500),
@@ -91,6 +139,12 @@ export const zPurchaseProposal = z.object({
     subtotal: zMoney,
     vatTotal: zMoney,
     total: zMoney,
+    // The invoice's own VAT table (THTTLTSuat, #685): for each rate as the invoice writes it, the taxable value and the
+    // VAT. Only from e-invoice XML; absent on proposals read from a PDF or an image, and on those raised before #685.
+    taxBreakdown: z
+      .array(z.object({ rate: z.string().max(20), taxableAmount: zMoney, vatAmount: zMoney }))
+      .max(100)
+      .optional(),
   }),
   lines: z.array(zProposedLine).min(1).max(1000),
   journal: z.array(zJournalLineDraft).min(2).max(1010),
@@ -231,7 +285,7 @@ export const zChannelConnection = z.object({
 });
 
 // Providers connected through an OAuth dialog (Social plan S6), and the attempt's state: 32 random bytes, base64url.
-export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x'] as const;
+export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x', 'google_business', 'pinterest'] as const;
 // Accounts one OAuth grant connects in a request, one command each (#375): a Meta user may manage hundreds of Pages.
 export const OAUTH_MAX_ACCOUNTS_PER_GRANT = 100;
 export const zOAuthProvider = z.enum(OAUTH_CHANNEL_PROVIDERS);
@@ -341,6 +395,32 @@ export const zCashVoucherProposal = z.object({
 });
 export type CashVoucherProposal = z.infer<typeof zCashVoucherProposal>;
 
+// General journal vouchers (issue #888; journal-voucher.ts has the rest). A whole number of VND, at most 15 digits; 0
+// on the side a line does not use.
+export const zJournalAmount = z.string().regex(/^\d{1,15}$/, 'whole VND amount');
+export const JOURNAL_VOUCHER_MAX_LINES = 50;
+
+// The payload of a finance.journal_voucher proposal, built by the server from the request (each party as found, the
+// total of the debits). finance.journal_voucher.record checks it all again when the proposal is approved.
+export const zJournalVoucherProposal = z.object({
+  date: zLocalDate,
+  description: z.string().min(1).max(300),
+  lines: z
+    .array(
+      z.object({
+        account: zAccountCode,
+        party: z.object({ id: zId, name: z.string().max(500), taxCode: z.string().max(20).nullable() }).nullable(),
+        debit: zJournalAmount,
+        credit: zJournalAmount,
+        memo: z.string().max(300).optional(),
+      }),
+    )
+    .min(2)
+    .max(JOURNAL_VOUCHER_MAX_LINES),
+  total: zJournalAmount,
+});
+export type JournalVoucherProposal = z.infer<typeof zJournalVoucherProposal>;
+
 // Payload of a finance.journal_reversal proposal (#138), asked for with inbox.request and executed by
 // finance.journal.reverse on approval.
 export const zJournalReversal = z.object({
@@ -358,6 +438,8 @@ export const zInboxDetail = zInboxItem.extend({
   payload: zPurchaseProposal.nullable(),
   reversal: zJournalReversal.nullable(),
   voucher: zCashVoucherProposal.nullable(),
+  // A general journal voucher (kind finance.journal_voucher, #888).
+  journalVoucher: zJournalVoucherProposal.nullable(),
   error: z.string().nullable(),
   file: z.object({ id: zId, filename: z.string(), contentType: z.string(), sizeBytes: z.string() }).nullable(),
   decidedAt: z.string().nullable(),
@@ -452,10 +534,34 @@ export const zParty = z.object({
   name: z.string(),
   taxCode: z.string().nullable(),
   address: z.string().nullable(),
+  email: z.string().nullable(),
+  phone: z.string().nullable(),
+  // The version an edit sends back (kernel.party.update, #887): a save made meanwhile by someone else refuses it.
+  version: z.number().int(),
   documentCount: z.number().int(),
   // The debit account proposed first for this vendor's invoices (set by approving one, or by hand), or null.
   defaultAccount: z.string().nullable(),
+  // The parties marked as duplicates of this one (#887): hidden from lists and search, their documents counted here.
+  duplicates: z.array(z.object({ id: zId, name: z.string(), taxCode: z.string().nullable() })),
 });
+export type Party = z.infer<typeof zParty>;
+
+const zPartyName = z.object({ id: zId, name: z.string(), taxCode: z.string().nullable() });
+// Two parties that look like one (#887), and why: one enterprise's tax codes, the same phone, or names alike. keep is
+// the one to keep (the one with a tax code, else the older).
+export const zDuplicateHint = z.object({ keep: zPartyName, duplicate: zPartyName, reasons: z.array(z.enum(['tax_code', 'phone', 'name'])) });
+
+// An export a recorded document went out in (issue #878): the journal, or the MISA file of its direction, whose date
+// range took in the document's entry date; from and to are null for an open end.
+export const zDocumentExport = z.object({
+  id: zId,
+  at: z.string(),
+  format: z.enum(['journal', 'misa_sme_purchases', 'misa_sme_sales']),
+  from: zLocalDate.nullable(),
+  to: zLocalDate.nullable(),
+  actorName: z.string().nullable(),
+});
+export type DocumentExport = z.infer<typeof zDocumentExport>;
 
 export const zPurchaseDocument = z.object({
   id: zId,
@@ -499,6 +605,26 @@ export const zJournalEntry = z.object({
     .optional(),
   // The cash or bank voucher this entry posts, when it does (#327; absent otherwise).
   voucher: z.object({ id: zId, type: zVoucherType, code: z.string(), partyName: z.string().nullable() }).optional(),
+});
+
+// What the command palette's search found (#673): at most 8 rows per group. A party that is customerOnly (a customer of
+// sales that never sold to the org) is not among the vendors. A document's proposalId opens it in the Inbox.
+export const zSearchResult = z.object({
+  parties: z.array(z.object({ id: zId, name: z.string(), taxCode: z.string().nullable(), customerOnly: z.boolean() })),
+  documents: z.array(
+    z.object({
+      id: zId,
+      direction: zDocumentDirection,
+      series: z.string(),
+      number: z.string(),
+      issueDate: zLocalDate,
+      partyName: z.string(),
+      total: zMoney,
+      proposalId: zId.nullable(),
+      voided: z.boolean(),
+    }),
+  ),
+  entries: z.array(z.object({ id: zId, entryDate: zLocalDate, description: z.string(), amount: zMoney })),
 });
 
 // One account of the org's chart: a TT133 account (custom false, always active) or one of the org's sub-accounts
@@ -758,11 +884,21 @@ export const SOCIAL_VARIANT_STATUSES = [
   'needs_attention',
   'paused',
   'cancelled',
+  // Taken down from its platform (#860).
+  'removed',
 ] as const;
 export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
 export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as const;
 // The palette a label's colour comes from (#639).
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
+// The corner of an image the org's logo watermark goes in (#834); the same list as crove_social.watermark's CHECK.
+export const SOCIAL_WATERMARK_CORNERS = ['top_left', 'top_right', 'bottom_left', 'bottom_right'] as const;
+// The org's team chat for Social alerts (#863): where it is, and the kinds of alert it may get; the same lists as
+// crove_social.chat_alert's CHECKs.
+export const SOCIAL_CHAT_ALERT_TARGETS = ['telegram', 'discord'] as const;
+export const SOCIAL_CHAT_ALERT_KINDS = ['needs_approval', 'failed', 'published', 'client_answered'] as const;
+// The stages of an idea on the ideas board (#701).
+export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
 
 const zSocialText = z.string().max(100_000);
 const zSocialTitle = z.string().max(500);
@@ -794,6 +930,8 @@ export const zSocialPostCreate = z.strictObject({
   channels: z.array(zSocialChannelInput).min(1).max(20),
   // The member accepted an AI rewrite into the text (#583): the post is tainted. Never cleared.
   aiAssisted: z.literal(true).optional(),
+  // The idea the post is made from (#701): linked to it, its labels copied, moved to drafted.
+  ideaId: zId.optional(),
 });
 
 export const zSocialPostUpdate = z.strictObject({
@@ -848,7 +986,7 @@ export const zSocialQueueSet = z.strictObject({
   timeZone: z.string().min(1).max(64),
   paused: z.boolean().optional(),
   slots: z
-    .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional() }))
+    .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional(), labelId: zId.nullable().optional() }))
     .max(100),
 });
 
@@ -873,12 +1011,19 @@ export const zSocialVariant = z.object({
   effectiveAt: z.string().nullable(),
   queueSlotAt: z.string().nullable(),
   // The first comment of a published channel (#587): pending, posted, failed, unknown; null without one.
-  commentStatus: z.enum(['pending', 'posted', 'failed', 'unknown']).nullable(),
+  commentStatus: z.enum(['pending', 'posted', 'failed', 'reconnect', 'unknown']).nullable(),
+  // The thread of a published channel (#742): parts out (the post is one) of the total, and the next part's state.
+  threadStatus: z.object({ state: z.enum(['pending', 'posted', 'failed', 'unknown']), posted: z.number().int().min(1), total: z.number().int().min(2) }).nullable(),
   // Waiting on a slot of a queue a person paused.
   queuePaused: z.boolean(),
   attempt: z.number().int(),
   externalUrl: z.string().nullable(),
   publishedAt: z.string().nullable(),
+  // Taken down from its platform (#860): when, who asked and why; removal: where an ask on a published channel stands.
+  removedAt: z.string().nullable(),
+  removedBy: zId.nullable(),
+  removeReason: z.string().nullable(),
+  removal: z.object({ state: z.enum(['pending', 'failed', 'unknown']), code: z.string().nullable() }).nullable(),
   error: z
     .object({ kind: z.string().nullable(), code: z.string().nullable(), action: z.string().nullable(), message: z.string().nullable(), retryAt: z.string().nullable() })
     .nullable(),
@@ -887,7 +1032,9 @@ export const zSocialVariant = z.object({
     .object({ decision: z.enum(SOCIAL_DECISIONS), comment: z.string().nullable(), decidedBy: zId, at: z.string(), revision: z.number().int(), current: z.boolean() })
     .nullable(),
   // Approvals the channel needs (S9) and who approved the current content in the open review round.
-  review: z.object({ required: z.number().int(), approvedBy: z.array(zId) }),
+  // client: the channel also waits for the client's approval on a review link (#770); clientVerdict: the client's
+  // standing answer for the content as it is now.
+  review: z.object({ required: z.number().int(), approvedBy: z.array(zId), fourEyes: z.boolean(), client: z.boolean(), clientVerdict: z.enum(['approved', 'changes_requested']).nullable() }),
 });
 
 export const zSocialPost = z.object({
@@ -912,11 +1059,15 @@ export const zSocialPost = z.object({
   variants: z.array(zSocialVariant),
   // The post's labels (#639), by label name.
   labelIds: z.array(zId),
+  // The idea it was made from (#701); on a single post's read only.
+  idea: z.object({ id: zId, title: z.string() }).nullable().optional(),
 });
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
-// A media library item (S9): an image of the org uploaded for posts, and how many posts show it.
-export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int() });
+// A media library item (S9): an image of the org uploaded for posts, how many posts show it and its tags (#904).
+export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()) });
+// A tag of the library and how many files carry it (#904).
+export const zSocialMediaTagCount = z.object({ tag: z.string(), files: z.number().int() });
 // A saved snippet (#584): hashtags, a signature, or a whole post to start from (isTemplate).
 export const zSocialSnippet = z.object({
   id: zId,
@@ -931,6 +1082,80 @@ export const zSocialSnippet = z.object({
 const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string().trim().min(1).max(10_000), provider: z.string().min(1).max(32).nullable(), isTemplate: z.boolean() };
 export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
 export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
+// What works (#705): a group of a channel's posts and its median engagement against the channel's.
+const zInsightGroup = z.object({ key: z.string(), posts: z.number().int(), median: z.number(), ratio: z.number().nullable() });
+const zInsightPost = z.object({ variantId: zId, postId: zId, excerpt: z.string(), publishedAt: z.string().nullable(), externalUrl: z.string().nullable(), engagement: z.number() });
+export const zSocialChannelInsights = z.object({
+  connectionId: zId,
+  provider: z.string(),
+  posts: z.number().int(),
+  median: z.number(),
+  best: z.array(zInsightPost),
+  worst: z.array(zInsightPost),
+  byLabel: z.array(zInsightGroup),
+  byFormat: z.array(zInsightGroup),
+  byWeekday: z.array(zInsightGroup),
+  byHour: z.array(zInsightGroup),
+  byHashtag: z.array(zInsightGroup),
+});
+// An idea on the ideas board (#701), with the library files it still has.
+export const zSocialIdea = z.object({
+  id: zId,
+  title: z.string(),
+  note: z.string().nullable(),
+  linkUrl: z.string().nullable(),
+  media: z.array(z.object({ fileId: zId, mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable() })),
+  labelIds: z.array(zId),
+  stage: z.enum(SOCIAL_IDEA_STAGES),
+  postId: zId.nullable(),
+  createdBy: zId,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+const zIdeaFields = {
+  title: z.string().trim().min(1).max(200),
+  note: z.string().max(5000).nullable().optional(),
+  linkUrl: zSocialLink.nullable().optional(),
+  fileIds: z.array(zId).max(10).optional(),
+  labelIds: z.array(zId).max(10).optional(),
+};
+export const zSocialIdeaCreate = z.strictObject({ ...zIdeaFields, stage: z.enum(['new', 'planned']).optional() });
+export const zSocialIdeaUpdate = z.strictObject({ ideaId: zId, ...zIdeaFields });
+// An org's link-in-bio page (#707) and its clicks of the last 30 days, by button:<index> or post:<id>.
+export const zSocialBioPage = z.object({
+  id: zId,
+  slug: z.string(),
+  title: z.string(),
+  about: z.string().nullable(),
+  avatarFileId: zId.nullable(),
+  buttons: z.array(z.object({ label: z.string(), url: z.string() })),
+  showPosts: z.boolean(),
+  published: z.boolean(),
+  updatedAt: z.string(),
+  clicks: z.record(z.string(), z.number()),
+});
+export const zSocialBioSave = z.strictObject({
+  slug: z.string().trim().min(3).max(40),
+  title: z.string().trim().min(1).max(100),
+  about: z.string().max(300).nullable().optional(),
+  avatarFileId: zId.nullable().optional(),
+  buttons: z.array(z.strictObject({ label: z.string().trim().min(1).max(60), url: z.url({ protocol: /^https?$/ }).max(2000) })).max(12),
+  showPosts: z.boolean(),
+  published: z.boolean(),
+});
+// A blog feed an org drafts posts from (#708), and how its reads went.
+export const zSocialFeed = z.object({
+  id: zId,
+  url: z.string(),
+  title: z.string().nullable(),
+  connectionIds: z.array(zId),
+  paused: z.boolean(),
+  failures: z.number().int(),
+  lastCheckedAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+  drafts: z.number().int(),
+  createdAt: z.string(),
+});
 // A label for posts (#639) and how many posts carry it.
 export const zSocialLabel = z.object({ id: zId, name: z.string(), color: z.enum(SOCIAL_LABEL_COLORS), createdBy: zId, postCount: z.number().int() });
 const zLabelName = z.string().trim().min(1).max(50);
@@ -938,7 +1163,7 @@ export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.en
 export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS) });
 // Client review links (#589): the team's view of a post's links and what clients said through them.
 export const zSocialReviewLinks = z.object({
-  links: z.array(z.object({ id: zId, createdBy: zId, createdAt: z.string(), expiresAt: z.string(), revokedAt: z.string().nullable(), changed: z.boolean() })),
+  links: z.array(z.object({ id: zId, answers: z.number().int().min(0), createdBy: zId, createdAt: z.string(), expiresAt: z.string(), revokedAt: z.string().nullable(), changed: z.boolean() })),
   feedback: z.array(
     z.object({ id: zId, linkId: zId, name: z.string(), verdict: z.enum(['approved', 'changes_requested', 'comment']), body: z.string().nullable(), changed: z.boolean(), createdAt: z.string() }),
   ),
@@ -947,7 +1172,7 @@ export const zSocialReviewLinks = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),
@@ -972,6 +1197,8 @@ export const zSocialMetricsRow = z.object({
   externalUrl: z.string().nullable(),
   metrics: z.record(z.string(), z.number()),
   capturedAt: z.string().nullable(),
+  // Clicks on its short link (#706); null when it went out without one.
+  clicks: z.number().int().nullable(),
 });
 
 export const zSocialQueue = z.object({
@@ -979,7 +1206,7 @@ export const zSocialQueue = z.object({
   queueId: zId.nullable(),
   timeZone: z.string().nullable(),
   paused: z.boolean(),
-  slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), active: z.boolean() })),
+  slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), labelId: zId.nullable(), active: z.boolean() })),
   nextFree: z.array(z.string()),
 });
 
@@ -1003,6 +1230,46 @@ export const zSocialReportLinkCreate = z.strictObject({
   days: z.number().int().min(1).max(90).optional(),
 });
 
+// A schedule that mails the client report (#704), with its latest sends and each mail's delivery status.
+export const zSocialReportSchedule = z.object({
+  id: zId,
+  name: z.string(),
+  cadence: z.enum(['weekly', 'monthly']),
+  weekday: z.number().int().nullable(),
+  monthDay: z.number().int().nullable(),
+  sendHour: z.number().int(),
+  timeZone: z.string(),
+  period: z.enum(['previous_week', 'previous_month', 'last_7_days', 'last_30_days']),
+  connectionIds: z.array(zId),
+  recipients: z.array(z.string()),
+  paused: z.boolean(),
+  nextRunAt: z.string(),
+  lastRunAt: z.string().nullable(),
+  runs: z.array(
+    z.object({
+      id: zId,
+      kind: z.enum(['scheduled', 'test']),
+      periodStart: z.string(),
+      periodEnd: z.string(),
+      createdAt: z.string(),
+      mails: z.array(z.object({ to: z.string().nullable(), status: z.string(), errorCode: z.string().nullable() })),
+    }),
+  ),
+});
+export const zSocialReportScheduleSave = z.strictObject({
+  scheduleId: zId.optional(),
+  name: z.string().trim().min(1).max(120),
+  cadence: z.enum(['weekly', 'monthly']),
+  weekday: z.number().int().min(1).max(7).nullable().optional(),
+  monthDay: z.number().int().min(1).max(28).nullable().optional(),
+  sendHour: z.number().int().min(0).max(23),
+  timeZone: z.string().min(1).max(64),
+  period: z.enum(['previous_week', 'previous_month', 'last_7_days', 'last_30_days']),
+  connectionIds: z.array(zId).max(50),
+  recipients: z.array(z.email().max(320)).min(1).max(10),
+  paused: z.boolean().optional(),
+});
+
 // A link's preview card (#641): pending until the worker read the page; failed with why.
 export const zSocialLinkPreview = z.object({
   url: z.string(),
@@ -1015,7 +1282,7 @@ export const zSocialLinkPreview = z.object({
 });
 
 // In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned'] as const;
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention'] as const;
 export const zSocialNotificationKind = z.enum(SOCIAL_NOTIFICATION_KINDS);
 export const zSocialNotifications = z.object({
   items: z.array(
@@ -1034,4 +1301,13 @@ export const zSocialNotifications = z.object({
   ),
   unread: z.number().int(),
   muted: z.array(zSocialNotificationKind),
+  // Social emails turned off by the viewer (#579).
+  mailOff: z.boolean(),
+});
+
+// A channel's daily account snapshots (#645), oldest first.
+export const zSocialAccountTrend = z.object({
+  connectionId: zId,
+  provider: z.string(),
+  points: z.array(z.object({ day: z.string(), followers: z.number().int().nullable(), reach: z.number().int().nullable() })),
 });

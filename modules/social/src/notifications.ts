@@ -3,13 +3,22 @@
 // and never trusts the job): a post sent to review tells the owners and admins; a review decision tells the author; a
 // channel that failed or needs attention tells the owners, the admins and the author; an expired channel tells the
 // owners and admins; an internal comment or a client's answer tells the author and the people who commented before;
-// an assignment tells the assignee. Never the person who acted, never a kind the person turned off, and only people
+// an assignment tells the assignee; a reminder of a post still waiting for review (#703) tells the owners and admins who
+// have not approved its current content yet. Never the person who acted, never a kind the person turned off, and only people
 // who are members when it is written. Each member reads and marks only their own (a restrictive policy).
+//
+// Email (#579): the kinds someone must act on (a post to review, a decision, a failed or stuck post, an expired channel)
+// also go out by email, one per notification, through the kernel's queued mail (the suppression list, the mail log),
+// unless the member turned Social emails off. The mail names the post and links to it; nothing secret is in it. A
+// deployment without mail records the mail as not sent and nothing fails.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import { SOCIAL_NOTIFICATION_KINDS, type MemberRole, type SocialNotificationKind } from '@crove/db';
+import { createMailMessage } from '@crove/kernel';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
+import { approvalsInRound } from './domain/approval.ts';
+import { decisionsOf } from './policy.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The newest notifications a read returns, and the unread count it reports at most.
@@ -27,8 +36,14 @@ export const NOTIFYING_EVENTS = [
   'social.variant.needs_attention',
   'kernel.channel.expired',
   'social.post.commented',
+  'social.post.mentioned',
   'social.review.answered',
   'social.post.assigned',
+  'social.review.reminder',
+  'social.feed.paused',
+  // Not a notice: a member's links stop working when they lose the right to make them (#625).
+  'kernel.member.removed',
+  'kernel.member.role_changed',
 ] as const;
 
 function requireUser(ctx: Pick<CommandContext, 'actor'>): string {
@@ -118,7 +133,16 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
       if (!e.success) return null;
       const p = await authorOf(ctx, e.data.post_id);
       if (!p) return null;
-      return { ...base, kind: 'comment', users: await threadOf(ctx, e.data.post_id, p.author), postId: e.data.post_id };
+      // Those the comment mentions get a mention instead (#793).
+      const mentioned = new Set(z.object({ mentioned: z.array(zId).max(50) }).safeParse(payload).data?.mentioned ?? []);
+      return { ...base, kind: 'comment', users: (await threadOf(ctx, e.data.post_id, p.author)).filter((u) => !mentioned.has(u)), postId: e.data.post_id };
+    }
+    case 'social.post.mentioned': {
+      const e = z.object({ post_id: zId, user_ids: z.array(zId).min(1).max(50) }).safeParse(payload);
+      if (!e.success) return null;
+      // Gone since (deleted): nothing to open.
+      if (!(await authorOf(ctx, e.data.post_id))) return null;
+      return { ...base, kind: 'mention', users: e.data.user_ids, postId: e.data.post_id };
     }
     case 'social.review.answered': {
       const e = z.object({ post_id: zId, feedback_id: zId }).safeParse(payload);
@@ -141,9 +165,115 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
       if (!(await authorOf(ctx, e.data.post_id))) return null;
       return { ...base, kind: 'assigned', users: [e.data.assignee_user_id], postId: e.data.post_id };
     }
+    case 'social.feed.paused': {
+      const e = z.object({ feed_id: zId }).safeParse(payload);
+      if (!e.success) return null;
+      const feed = await ctx.trx.selectFrom('crove_social.feed').select(['url', 'title']).where('org_id', '=', ctx.orgId).where('id', '=', e.data.feed_id).executeTakeFirst();
+      if (!feed) return null;
+      return { ...base, kind: 'feed_paused', users: await deciders(ctx), postId: null, detail: { feed: (feed.title ?? feed.url).slice(0, 300) } };
+    }
+    case 'social.review.reminder': {
+      const e = z.object({ post_id: zId, stage: z.enum(['waiting', 'due']), variant_ids: z.array(zId).min(1).max(100) }).safeParse(payload);
+      if (!e.success) return null;
+      // Still waiting: decided or edited since, there is nothing to remind of.
+      const waiting = await ctx.trx
+        .selectFrom('crove_social.post_variant')
+        .select(['id', 'revision', 'content_hash'])
+        .where('org_id', '=', ctx.orgId)
+        .where('post_id', '=', e.data.post_id)
+        .where('id', 'in', e.data.variant_ids)
+        .where('status', '=', 'in_review')
+        .execute();
+      if (waiting.length === 0) return null;
+      // A reviewer who already approved the current content of every waiting channel has nothing left to do.
+      const decisions = await decisionsOf(
+        ctx.trx,
+        ctx.orgId,
+        waiting.map((v) => v.id),
+      );
+      const done = (user: string) => waiting.every((v) => approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }).includes(user));
+      const users = (await deciders(ctx)).filter((u) => !done(u));
+      return { ...base, kind: 'review_reminder', users, postId: e.data.post_id, detail: { stage: e.data.stage } };
+    }
     default:
       return null;
   }
+}
+
+// The kinds that also go out by email, and the template they use.
+export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'mention']);
+export const NOTIFICATION_MAIL_TEMPLATE = 'social.notification';
+
+const oneLine = (text: string, max: number) => {
+  const s = text.replace(/\s+/g, ' ').trim();
+  return [...s].length > max ? `${[...s].slice(0, max - 1).join('')}…` : s;
+};
+
+function subjectOf(kind: SocialNotificationKind, detail: Record<string, string>, post: string | null, channel: string | null): string {
+  const about = post ? `: ${oneLine(post, 80)}` : '';
+  switch (kind) {
+    case 'review_requested':
+      return `Có bài chờ duyệt${about}`;
+    case 'decided':
+      return `${detail.decision === 'approved' ? 'Bài của bạn đã được duyệt' : detail.decision === 'rejected' ? 'Bài của bạn bị từ chối' : 'Bài của bạn cần sửa'}${about}`;
+    case 'failed':
+      return `Đăng bài không thành công${channel ? ` trên ${oneLine(channel, 60)}` : ''}${about}`;
+    case 'needs_attention':
+      return `Bài đăng cần bạn xử lý${channel ? ` trên ${oneLine(channel, 60)}` : ''}${about}`;
+    case 'mention':
+      return `Bạn được nhắc đến trong một bình luận${about}`;
+    default:
+      return `Kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} cần kết nối lại`;
+  }
+}
+
+// One mail per new notification of a mailed kind, to members who did not turn Social emails off.
+async function mailNotifications(ctx: CommandContext, plan: Plan, created: readonly { id: string; user_id: string }[]): Promise<number> {
+  if (!MAILED_KINDS.has(plan.kind) || created.length === 0) return 0;
+  const off = await ctx.trx
+    .selectFrom('crove_social.notification_mail_off')
+    .select('user_id')
+    .where('org_id', '=', ctx.orgId)
+    .where(
+      'user_id',
+      'in',
+      created.map((c) => c.user_id),
+    )
+    .execute();
+  const offSet = new Set(off.map((o) => o.user_id));
+  const to = created.filter((c) => !offSet.has(c.user_id));
+  if (to.length === 0) return 0;
+  const { rows: people } = await sql<{ user_id: string; email: string | null }>`
+    SELECT user_id, email FROM crove_kernel.member_emails(${to.map((c) => c.user_id)}::uuid[])`.execute(ctx.trx);
+  const emails = new Map(people.filter((p) => p.email).map((p) => [p.user_id, p.email as string]));
+  const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['slug', 'name']).where('org_id', '=', ctx.orgId).executeTakeFirst();
+  if (!org) return 0;
+  const post = plan.postId
+    ? await ctx.trx.selectFrom('crove_social.post').select(['title', 'body']).where('org_id', '=', ctx.orgId).where('id', '=', plan.postId).executeTakeFirst()
+    : undefined;
+  const postText = post ? oneLine([...(post.title?.trim() || post.body || '')].slice(0, 400).join(''), 200) || null : null;
+  const channel = plan.connectionId
+    ? ((await ctx.trx.selectFrom('crove_kernel.channel_connection').select('display_name').where('org_id', '=', ctx.orgId).where('id', '=', plan.connectionId).executeTakeFirst())?.display_name ?? null)
+    : null;
+  const path = plan.postId ? `/o/${org.slug}/social/${plan.postId}` : `/o/${org.slug}/social/channels`;
+  const subject = subjectOf(plan.kind, plan.detail, postText, channel);
+  let queued = 0;
+  for (const c of to) {
+    const email = emails.get(c.user_id);
+    if (!email) continue;
+    const mail = await createMailMessage(ctx, {
+      stream: 'transactional',
+      source: 'social.notification.dispatch',
+      sourceId: c.id,
+      templateKey: NOTIFICATION_MAIL_TEMPLATE,
+      to: email,
+      subject,
+      payload: { kind: plan.kind, org: org.name, post: postText, channel, decision: plan.detail.decision ?? null, path },
+      status: 'queued',
+    });
+    if (mail.status === 'queued') queued++;
+  }
+  return queued;
 }
 
 export const notificationDispatch = defineCommand({
@@ -158,18 +288,18 @@ export const notificationDispatch = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.eventId)
       .executeTakeFirst();
-    if (!event) return { sent: 0 };
+    if (!event) return { sent: 0, mailed: 0 };
     const plan = await planFor(ctx, event.type, event.payload);
-    if (!plan) return { sent: 0 };
+    if (!plan) return { sent: 0, mailed: 0 };
     const actor = event.actor_type === 'user' || event.actor_type === null ? event.actor_id : null;
     const wanted = [...new Set(plan.users)].filter((u) => u !== actor);
-    if (wanted.length === 0) return { sent: 0 };
+    if (wanted.length === 0) return { sent: 0, mailed: 0 };
     // Members now, who have not turned this kind off.
     const { rows } = await sql<{ user_id: string }>`
       SELECT m.user_id FROM crove_kernel.tenant_member m
       WHERE m.org_id = ${ctx.orgId} AND m.user_id = ANY(${wanted}::uuid[])
         AND NOT EXISTS (SELECT 1 FROM crove_social.notification_mute x WHERE x.org_id = m.org_id AND x.user_id = m.user_id AND x.kind = ${plan.kind})`.execute(ctx.trx);
-    if (rows.length === 0) return { sent: 0 };
+    if (rows.length === 0) return { sent: 0, mailed: 0 };
     const users = rows.map((r) => r.user_id);
     const inserted = await ctx.trx
       .insertInto('crove_social.notification')
@@ -187,15 +317,23 @@ export const notificationDispatch = defineCommand({
         })),
       )
       .onConflict((oc) => oc.columns(['org_id', 'event_id', 'user_id']).doNothing())
-      .returning('id')
+      .returning(['id', 'user_id'])
       .execute();
+    // Only the notifications this run wrote: a replayed event mails nobody twice.
+    const mailed = await mailNotifications(ctx, plan, inserted);
+    // A post's newest reminder replaces the ones before it.
+    if (plan.kind === 'review_reminder' && plan.postId) {
+      await sql`
+        DELETE FROM crove_social.notification
+        WHERE org_id = ${ctx.orgId} AND user_id = ANY(${users}::uuid[]) AND kind = 'review_reminder' AND post_id = ${plan.postId} AND event_id <> ${event.id}`.execute(ctx.trx);
+    }
     // The recipients' old ones go.
     await sql`
       DELETE FROM crove_social.notification
       WHERE org_id = ${ctx.orgId} AND user_id = ANY(${users}::uuid[])
         AND (read_at < ${ctx.now}::timestamptz - make_interval(days => ${NOTIFICATION_READ_KEEP_DAYS}::int)
              OR created_at < ${ctx.now}::timestamptz - make_interval(days => ${NOTIFICATION_KEEP_DAYS}::int))`.execute(ctx.trx);
-    return { sent: inserted.length };
+    return { sent: inserted.length, mailed };
   },
 });
 
@@ -215,12 +353,15 @@ export interface NotificationItem {
 }
 
 // The viewer's newest notifications, how many are unread (up to NOTIFICATION_UNREAD_CAP + 1) and the kinds they
-// turned off.
+// turned off. A review reminder shows only while its post still has a channel in the round of review it was about.
+const STILL_WAITING = sql`(n.kind <> 'review_reminder' OR EXISTS (
+  SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = n.org_id AND v.post_id = n.post_id AND v.status = 'in_review'
+    AND v.review_since <= n.created_at))`;
 export const notificationList = defineQuery({
   name: 'social.notification.list',
   input: z.object({}),
   access: ALL,
-  handler: async (ctx): Promise<{ items: NotificationItem[]; unread: number; muted: SocialNotificationKind[] }> => {
+  handler: async (ctx): Promise<{ items: NotificationItem[]; unread: number; muted: SocialNotificationKind[]; mailOff: boolean }> => {
     const me = requireUser(ctx);
     const { rows } = await sql<{
       id: string;
@@ -239,13 +380,14 @@ export const notificationList = defineQuery({
       FROM crove_social.notification n
       LEFT JOIN crove_social.post p ON p.org_id = n.org_id AND p.id = n.post_id
       LEFT JOIN crove_kernel.channel_connection c ON c.org_id = n.org_id AND c.id = n.connection_id
-      WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me}
+      WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND ${STILL_WAITING}
       ORDER BY n.created_at DESC, n.id DESC
       LIMIT ${NOTIFICATION_LIST_LIMIT}`.execute(ctx.trx);
     const unread = await sql<{ n: number }>`
       SELECT count(*)::int AS n FROM (
-        SELECT 1 FROM crove_social.notification WHERE org_id = ${ctx.orgId} AND user_id = ${me} AND read_at IS NULL LIMIT ${NOTIFICATION_UNREAD_CAP + 1}
+        SELECT 1 FROM crove_social.notification n WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND n.read_at IS NULL AND ${STILL_WAITING} LIMIT ${NOTIFICATION_UNREAD_CAP + 1}
       ) u`.execute(ctx.trx);
+    const mailOff = await ctx.trx.selectFrom('crove_social.notification_mail_off').select('id').where('org_id', '=', ctx.orgId).where('user_id', '=', me).limit(1).executeTakeFirst();
     const muted = await ctx.trx.selectFrom('crove_social.notification_mute').select('kind').where('org_id', '=', ctx.orgId).where('user_id', '=', me).orderBy('kind').execute();
     const ids = [...new Set(rows.map((r) => r.actor_user_id).filter((u): u is string => u !== null))];
     const names = new Map<string, string>();
@@ -269,6 +411,7 @@ export const notificationList = defineQuery({
       })),
       unread: unread.rows[0]?.n ?? 0,
       muted: muted.map((m) => m.kind),
+      mailOff: mailOff !== undefined,
     };
   },
 });
@@ -309,5 +452,19 @@ export const notificationMute = defineCommand({
   },
 });
 
-export const notificationCommands = [notificationDispatch, notificationRead, notificationMute];
+// Turns the viewer's Social emails off in this org, or back on. The in-app notifications are not touched.
+export const notificationMail = defineCommand({
+  name: 'social.notification.mail',
+  input: z.strictObject({ enabled: z.boolean() }),
+  risk: 'R1',
+  access: ALL,
+  handler: async (ctx, input) => {
+    const me = requireUser(ctx);
+    await ctx.trx.deleteFrom('crove_social.notification_mail_off').where('org_id', '=', ctx.orgId).where('user_id', '=', me).execute();
+    if (!input.enabled) await ctx.trx.insertInto('crove_social.notification_mail_off').values({ org_id: ctx.orgId, user_id: me, created_at: ctx.now }).execute();
+    return { enabled: input.enabled };
+  },
+});
+
+export const notificationCommands = [notificationDispatch, notificationRead, notificationMute, notificationMail];
 export const notificationQueries = [notificationList];

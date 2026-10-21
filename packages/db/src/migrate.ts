@@ -328,12 +328,16 @@ async function listHardeningViolations(client: pg.ClientBase): Promise<string[]>
   ];
 }
 
-// Versions present in the repo but missing from the database ledger (used by /readyz).
+// Versions present in the repo but missing from the database ledger (used by /readyz and /version). A database with no
+// ledger yet misses every migration; any other error (a lost connection, say) is thrown, so the caller answers that
+// the database failed rather than that the schema is behind.
 export async function schemaMissing(client: pg.ClientBase, dir: string): Promise<string[]> {
   const files = await readMigrations(dir);
-  const { rows } = await client.query<{ version: string }>(
-    "SELECT version FROM crove_meta.schema_migrations WHERE to_regclass('crove_meta.schema_migrations') IS NOT NULL",
-  ).catch(() => ({ rows: [] as { version: string }[] }));
+  const { rows } = await client.query<{ version: string }>('SELECT version FROM crove_meta.schema_migrations').catch((error: { code?: string }) => {
+    // 42P01 undefined_table, 3F000 invalid_schema_name: no migration has run on this database.
+    if (error?.code === '42P01' || error?.code === '3F000') return { rows: [] as { version: string }[] };
+    throw error;
+  });
   const have = new Set(rows.map((r) => r.version));
   return files.filter((f) => !have.has(f.version)).map((f) => f.name);
 }

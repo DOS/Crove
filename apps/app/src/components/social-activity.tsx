@@ -6,8 +6,9 @@ import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { Textarea } from '@crove/ui/components/textarea';
+import { SENT_TO_APP, mentionsForEditing, mentionsForStoring } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
+import { CommentBody, MentionBox, useMemberNames, type Picked } from './social-mentions.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -19,8 +20,10 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
   const t = useTranslations('social.activity');
   const f = useFormat();
   const [editing, setEditing] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Picked>([]);
+  const { labelOf } = useMemberNames();
   const edit = useMutation({
-    mutationFn: (body: string) => client.social.posts.editComment({ commentId: item.id, body }),
+    mutationFn: (body: string) => client.social.posts.editComment({ commentId: item.id, body: mentionsForStoring(body, picked) }),
     onSuccess: () => {
       setEditing(null);
       void queryClient.invalidateQueries({ queryKey: orpc.social.posts.activity.key() });
@@ -28,16 +31,23 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
   });
   const who = item.name ?? t(item.userId ? 'formerMember' : 'system');
   const what =
-    item.kind === 'decision' ? t(`decision.${item.decision === 'approved' ? 'approved' : item.decision === 'rejected' ? 'rejected' : 'changes_requested'}`) : item.kind === 'created' && item.code === 'ai' ? t('createdAi') : t(`kind.${item.kind}`);
+    item.kind === 'decision'
+      ? t(`decision.${item.decision === 'approved' ? 'approved' : item.decision === 'rejected' ? 'rejected' : 'changes_requested'}`)
+      : item.kind === 'created' && item.code === 'ai'
+        ? t('createdAi')
+        : // A draft sent to the TikTok app (#903) is not out yet.
+          item.kind === 'published' && item.code === SENT_TO_APP
+          ? t('sentToApp')
+          : t(`kind.${item.kind}`);
   return (
     <li className={cn('space-y-1 border-l-2 py-1 pl-3 text-sm', item.kind === 'comment' ? 'border-primary' : 'border-border')}>
       <p className="text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{item.kind === 'published' || item.kind === 'failed' || item.kind === 'cancelled' ? (channel ?? t('channel')) : who}</span>{' '}
+        <span className="font-medium text-foreground">{item.kind === 'published' || item.kind === 'failed' || item.kind === 'cancelled' || item.kind === 'auto_replied' || item.kind === 'auto_reply_failed' || item.kind === 'reposted' || item.kind === 'repost_failed' ? (channel ?? t('channel')) : who}</span>{' '}
         {what}
-        {channel && item.kind !== 'published' && item.kind !== 'failed' && item.kind !== 'cancelled' ? ` · ${channel}` : ''} · <time dateTime={item.at}>{f.dateTime(item.at)}</time>
+        {channel && !['published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed'].includes(item.kind) ? ` · ${channel}` : ''} · <time dateTime={item.at}>{f.dateTime(item.at)}</time>
         {item.editedAt ? ` · ${t('edited')}` : ''}
       </p>
-      {item.kind === 'failed' && item.code && <p className="font-mono text-xs text-warning">{item.code}</p>}
+      {(item.kind === 'failed' || item.kind === 'auto_reply_failed' || item.kind === 'repost_failed') && item.code && <p className="font-mono text-xs text-warning">{item.code}</p>}
       {item.kind === 'published' && item.url && /^https?:\/\//.test(item.url) && (
         <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-xs text-link hover:underline">
           {t('open')}
@@ -45,10 +55,11 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
       )}
       {editing !== null ? (
         <div className="space-y-2">
-          <Textarea value={editing} maxLength={MAX} rows={3} onChange={(e) => setEditing(e.target.value)} aria-label={t('editLabel')} />
+          <MentionBox value={editing} onChange={setEditing} picked={picked} onPicked={setPicked} maxLength={MAX} rows={3} label={t('editLabel')} />
+          {mentionsForStoring(editing.trim(), picked).length > MAX && <ErrorText>{t('tooLong', { max: MAX })}</ErrorText>}
           {edit.error && <ErrorText>{errorMessage(edit.error)}</ErrorText>}
           <div className="flex gap-2">
-            <Button size="sm" disabled={edit.isPending || editing.trim() === ''} onClick={() => edit.mutate(editing.trim())}>
+            <Button size="sm" disabled={edit.isPending || editing.trim() === '' || mentionsForStoring(editing.trim(), picked).length > MAX} onClick={() => edit.mutate(editing.trim())}>
               {t('saveEdit')}
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
@@ -57,10 +68,15 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
           </div>
         </div>
       ) : (
-        item.body && <p className="whitespace-pre-wrap break-words text-foreground">{item.body}</p>
+        item.body && (item.kind === 'comment' ? <CommentBody body={item.body} /> : <p className="whitespace-pre-wrap break-words text-foreground">{item.body}</p>)
       )}
       {item.kind === 'comment' && item.editable && canWrite && editing === null && (
-        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setEditing(item.body ?? '')}>
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => {
+            const shown = mentionsForEditing(item.body ?? '', labelOf);
+            setPicked(shown.picked);
+            setEditing(shown.text);
+          }}
+        >
           {t('edit')}
         </Button>
       )}
@@ -73,14 +89,18 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
   const activity = useQuery(orpc.social.posts.activity.queryOptions({ input: { postId } }));
   const [body, setBody] = useState('');
   const [variantId, setVariantId] = useState('');
+  const [picked, setPicked] = useState<Picked>([]);
   const add = useMutation({
-    mutationFn: () => client.social.posts.comment({ postId, body: body.trim(), ...(variantId ? { variantId } : {}) }),
+    mutationFn: () => client.social.posts.comment({ postId, body: mentionsForStoring(body.trim(), picked), ...(variantId ? { variantId } : {}) }),
     onSuccess: () => {
       setBody('');
+      setPicked([]);
       void queryClient.invalidateQueries({ queryKey: orpc.social.posts.activity.key() });
     },
   });
   const nameOf = new Map(channels.map((c) => [c.variantId, c.name]));
+  // Each mention is stored as its member's token, longer than the @name shown, so the limit counts what is stored.
+  const tooLong = mentionsForStoring(body.trim(), picked).length > MAX;
   return (
     <Card className={cn('block space-y-3 p-4', className)}>
       <div>
@@ -92,10 +112,10 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
           className="space-y-2"
           onSubmit={(e) => {
             e.preventDefault();
-            if (body.trim() !== '' && !add.isPending) add.mutate();
+            if (body.trim() !== '' && !add.isPending && !tooLong) add.mutate();
           }}
         >
-          <Textarea value={body} maxLength={MAX} rows={3} placeholder={t('placeholder')} aria-label={t('placeholder')} onChange={(e) => setBody(e.target.value)} />
+          <MentionBox value={body} onChange={setBody} picked={picked} onPicked={setPicked} maxLength={MAX} rows={3} placeholder={t('placeholder')} label={t('placeholder')} />
           <div className="flex flex-wrap items-center gap-2">
             {channels.length > 1 && (
               <NativeSelect value={variantId} onChange={(e) => setVariantId(e.target.value)} aria-label={t('about')} className="w-auto">
@@ -107,11 +127,12 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
                 ))}
               </NativeSelect>
             )}
-            <Button type="submit" size="sm" disabled={add.isPending || body.trim() === ''}>
+            <Button type="submit" size="sm" disabled={add.isPending || body.trim() === '' || tooLong}>
               {add.isPending ? <Spinner className="text-current" /> : null}
               {t('send')}
             </Button>
           </div>
+          {tooLong && <ErrorText>{t('tooLong', { max: MAX })}</ErrorText>}
           {add.error && <ErrorText>{errorMessage(add.error)}</ErrorText>}
         </form>
       )}

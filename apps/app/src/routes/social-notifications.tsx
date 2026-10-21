@@ -43,18 +43,24 @@ function useLine() {
         return t(`text.${n.kind}`, { provider });
       case 'channel_expired':
         return t('text.channel_expired', { channel: n.channel ?? provider });
+      case 'feed_paused':
+        return t('text.feed_paused', { feed: n.detail.feed ?? '' });
+      case 'review_reminder':
+        return t(n.detail.stage === 'due' ? 'text.reminder_due' : 'text.reminder_waiting');
       default:
         return t(`text.${n.kind}`, { actor });
     }
   };
 }
 
-function Settings({ muted }: { muted: readonly NotificationKind[] }) {
+function Settings({ muted, mailOff }: { muted: readonly NotificationKind[]; mailOff: boolean }) {
   const t = useTranslations('social.notifications');
   const mute = useMutation({
     mutationFn: (v: { kind: NotificationKind; muted: boolean }) => client.social.notifications.mute(v),
     onSettled: refresh,
   });
+  const mail = useMutation({ mutationFn: (enabled: boolean) => client.social.notifications.mail({ enabled }), onSettled: refresh });
+  const mailOn = mail.isPending && mail.variables !== undefined ? mail.variables : !mailOff;
   return (
     <Card className="block space-y-3 p-4">
       <div>
@@ -72,7 +78,14 @@ function Settings({ muted }: { muted: readonly NotificationKind[] }) {
           );
         })}
       </div>
-      {mute.error && <ErrorText>{errorMessage(mute.error)}</ErrorText>}
+      <label className="flex items-start gap-2 border-t pt-3 text-sm text-muted-foreground">
+        <Checkbox checked={mailOn} disabled={mail.isPending} onCheckedChange={(checked) => mail.mutate(checked === true)} />
+        <span>
+          <span className="block text-foreground">{t('mail')}</span>
+          <span className="block text-xs text-subtle-foreground">{t('mailHint')}</span>
+        </span>
+      </label>
+      {(mute.error ?? mail.error) && <ErrorText>{errorMessage(mute.error ?? mail.error)}</ErrorText>}
     </Card>
   );
 }
@@ -93,6 +106,7 @@ export function SocialNotificationsPage() {
     const target = notificationTarget(n);
     if (target?.to === 'post') void navigate({ to: '/o/$slug/social/$id', params: { slug, id: target.postId } });
     else if (target?.to === 'channels') void navigate({ to: '/o/$slug/social/channels', params: { slug } });
+    else if (target?.to === 'feeds') void navigate({ to: '/o/$slug/social/feeds', params: { slug } });
   };
   const items = list.data?.items ?? [];
   return (
@@ -140,7 +154,7 @@ export function SocialNotificationsPage() {
         </Card>
       )}
       {read.error && <ErrorText>{errorMessage(read.error)}</ErrorText>}
-      {list.data && <Settings muted={list.data.muted} />}
+      {list.data && <Settings muted={list.data.muted} mailOff={list.data.mailOff} />}
     </div>
   );
 }

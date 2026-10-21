@@ -18,7 +18,8 @@ import { DomainError, defineCommand, defineQuery, type CommandContext, type Quer
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 
-const zProvider = z.string().regex(/^[a-z][a-z0-9_]{1,31}$/);
+// One character is enough: X's id is x (#784).
+const zProvider = z.string().regex(/^[a-z][a-z0-9_]{0,31}$/);
 const zKeyId = z.string().regex(/^[A-Za-z0-9_.-]{1,64}$/);
 // The sealed envelope as base64; its size is checked again by the column (64 KiB).
 const zEnvelope = z.string().regex(/^[A-Za-z0-9+/]+={0,2}$/).max(90_000);
@@ -276,6 +277,44 @@ export const channelRefresh = defineCommand({
   },
 });
 
+// Stores a credential sealed again with the current key after a rotation (#776), for the worker's reseal sweep. The
+// envelope is replaced only while it is still the one the worker read (its key id and the sha256 of its bytes): a
+// reconnect or refresh in between sealed a newer one, even with the old key on a replica not yet restarted, and the
+// answer says nothing was changed. The connection's version is left alone,
+// so a refresh about to compare it is not turned away.
+export const channelReseal = defineCommand({
+  name: 'kernel.channel.reseal',
+  input: z.strictObject({ connectionId: zId, fromKeyId: zKeyId, fromEnvelopeSha256: z.string().regex(/^[0-9a-f]{64}$/), credential: z.strictObject({ keyId: zKeyId, envelope: zEnvelope }) }),
+  risk: 'R1',
+  access: 'system',
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
+    const row = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select(['status', 'provider'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!row || row.status !== 'active') return { connectionId: input.connectionId, resealed: false };
+    const { rows } = await sql<{ key_id: string; envelope_sha256: string }>`
+      SELECT key_id, encode(sha256(envelope), 'hex') AS envelope_sha256 FROM crove_kernel.credential_get(${input.connectionId}::uuid)`
+      .execute(ctx.trx)
+      .catch(credentialError);
+    const stored = rows[0];
+    if (!stored || stored.key_id !== input.fromKeyId || stored.envelope_sha256 !== input.fromEnvelopeSha256 || input.fromKeyId === input.credential.keyId) {
+      return { connectionId: input.connectionId, resealed: false };
+    }
+    await sql`SELECT crove_kernel.credential_put(${input.connectionId}::uuid, ${input.credential.keyId}, decode(${input.credential.envelope}, 'base64'))`
+      .execute(ctx.trx)
+      .catch(credentialError);
+    // Key ids only: they name a key without revealing it.
+    ctx.audit({ connection_id: input.connectionId, provider: row.provider, from_key_id: input.fromKeyId, key_id: input.credential.keyId });
+    return { connectionId: input.connectionId, resealed: true };
+  },
+});
+
 export interface ChannelConnectionView {
   id: string;
   provider: string;
@@ -343,5 +382,5 @@ export const channelCredential = defineQuery({
   },
 });
 
-export const channelCommands = [channelConnect, channelDisconnect, channelMarkExpired, channelOAuthBegin, channelOAuthConsume, channelRefresh];
+export const channelCommands = [channelConnect, channelDisconnect, channelMarkExpired, channelOAuthBegin, channelOAuthConsume, channelRefresh, channelReseal];
 export const channelQueries = [channelsList, channelCredential];

@@ -128,7 +128,8 @@ suite('usage report privileges', () => {
     const reporter = await connect(loginUrl('crove_reporter', 'test-reporter-pw'));
     const { rows } = await reporter.query('SELECT * FROM crove_kernel.usage_weekly(1, true)');
     expect(rows).toHaveLength(1);
-    expect(Object.keys(rows[0] as object)).toEqual([
+    // Counts only. ai_calls (#852, model calls of the Social writer) may follow the others while it rolls out.
+    const columns = [
       'week_start',
       'iso_week',
       'org_id',
@@ -143,7 +144,9 @@ suite('usage report privileges', () => {
       'median_upload_to_approval_seconds',
       'journal_exports',
       'org_exports',
-    ]);
+    ];
+    const keys = Object.keys(rows[0] as object);
+    expect([columns, [...columns, 'ai_calls']]).toContainEqual(keys);
     const refused = [
       'SELECT 1 FROM crove_kernel.audit_event LIMIT 1',
       'SELECT 1 FROM crove_kernel.tenant LIMIT 1',
