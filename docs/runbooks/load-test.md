@@ -29,6 +29,7 @@ Exit codes: 0 every target met, 1 a target missed, 2 the run failed.
 - **List and search queries** over the parties: `finance.vendors.list` (all, and with a search term), `finance.customers.list`, `finance.search`. The plan sets no target; the report shows p95.
 - **Outbox lag.** One relay loop claims events as the worker does (`crove_kernel.outbox_claim`, 100 at a time) while `kernel.file.ingest` runs at `--rate` per second. The lag runs from the event's emit to its claim, both by the database clock: an event id is a UUIDv7 whose first 48 bits are its emit time. Target: p95 < 2 s.
 - **Relay capacity.** A backlog of events is drained by the one relay as fast as it can. Target: at least 50 events per second.
+- **Context guard cost** (plan §4.5 item 1, gate row T10). While the commands run, a second connection counts `pg_locks` every 100 ms. The guard reads `pg_locks` on every context entry, and #105 measured that at about 13 µs plus about 0.27 µs per lock held server-wide, so the report gives the cost those lock counts imply. No target: the plan asks for the re-check.
 - **Back-pressure** (outbox lag over 30 s pauses background jobs) is not built yet (#894). The report marks it N/A.
 
 The relay here claims and drops. The worker also hands each claimed event to its job queue, so the numbers are the database's share of the lag and of the throughput.
@@ -49,3 +50,14 @@ The relay here claims and drops. The worker also hands each claimed event to its
 | `finance.vendors.list` with a search term, p95 | 3.8 s | none |
 
 Every plan target passes. The vendor list is the slow query at this size (#999).
+
+2026-10-21, same container, default flags, after #1010 added the lock count:
+
+| Measure | Result |
+|---|---|
+| `kernel.party.update` p95 | 15.8 ms |
+| `kernel.file.ingest` p95 | 18.4 ms |
+| Locks held server-wide during the commands, p50 / p95 / max (54 samples) | 157 / 230 / 238 |
+| Context guard cost per entry at p95 / max locks | 75.1 / 77.3 µs |
+
+At 230 locks the guard adds about 0.08 ms to a command whose p95 is 15.8 ms, under 0.5%. The `pg_locks` read stays (#105).
