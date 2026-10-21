@@ -233,6 +233,9 @@ const schema = z.object({
   CHANNEL_TIKTOK_CLIENT_SECRET: optional,
   // The TikTok app also has the Display API: connections ask for video.list, and posts' counts are read (#744).
   CHANNEL_TIKTOK_VIDEO_LIST: z.enum(['true', 'false']).default('false'),
+  // The TikTok app is approved for video.upload (#903): connections ask for it, and the editor offers sending a video
+  // to the creator's TikTok inbox as a draft. Off by default: TikTok refuses a sign-in that asks for a scope the app lacks.
+  CHANNEL_TIKTOK_INBOX: z.enum(['true', 'false']).default('false'),
   // The deployment's X app (OAuth 2.0, a confidential client with PKCE), S9; X bills each post to its account.
   // Callback URL: PUBLIC_URL/channels/oauth/x/callback.
   CHANNEL_X_CLIENT_ID: optional,

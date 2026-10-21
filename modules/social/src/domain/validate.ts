@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, REMOVE_READY, removeAtOf } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -56,8 +56,11 @@ export type IssueCode =
   | 'VIDEO_LENGTH_UNKNOWN'
   // The platform takes video, Crove's adapter for it does not yet.
   | 'VIDEO_NOT_SUPPORTED_YET'
-  // TikTok: the person posting picks who sees the video; there is no default.
+  // TikTok: the person posting picks who sees the video; there is no default. Not in inbox mode (#903), where the
+  // creator picks it in TikTok.
   | 'PRIVACY_REQUIRED'
+  // TikTok (#903): settings.tiktokMode is neither 'direct' nor 'inbox'.
+  | 'TIKTOK_MODE_INVALID'
   // The platform takes photos, Crove's adapter for it posts only video.
   | 'IMAGES_NOT_SUPPORTED_YET'
   | 'TOO_MANY_LINKS'
@@ -327,8 +330,13 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkPollAndTag(issues, variant, caps);
   checkGbp(issues, variant);
-  if (variant.provider === 'tiktok' && !TIKTOK_PRIVACY.includes(String(variant.settings?.privacyLevel ?? ''))) {
-    issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
+  if (variant.provider === 'tiktok') {
+    // Direct posts need a privacy level; a draft sent to the TikTok inbox (#903) takes none.
+    const mode = tiktokModeOf(variant.settings);
+    if (mode === null) issues.push({ code: 'TIKTOK_MODE_INVALID', field: 'settings.tiktokMode', limit: null, actual: null });
+    else if (mode === 'direct' && !TIKTOK_PRIVACY.includes(String(variant.settings?.privacyLevel ?? ''))) {
+      issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
+    }
   }
   if (caps.maxLinks !== null) {
     const links = countLinks(sent);
@@ -404,8 +412,9 @@ function checkCover(issues: Issue[], variant: VariantDraft): void {
     issues.push({ code: 'COVER_NEEDS_VIDEO', field, limit: null, actual: null });
     return;
   }
-  // A Story takes no cover (#644).
-  if (postTypeOf(variant.settings) === 'story' || !COVER_RULES[variant.provider]?.includes(coverKind(cover))) {
+  // A Story takes no cover (#644), nor a draft sent to the TikTok inbox (#903): the creator picks it in TikTok.
+  const tiktokInbox = variant.provider === 'tiktok' && tiktokModeOf(variant.settings) === 'inbox';
+  if (postTypeOf(variant.settings) === 'story' || tiktokInbox || !COVER_RULES[variant.provider]?.includes(coverKind(cover))) {
     issues.push({ code: 'COVER_NOT_SUPPORTED', field, limit: null, actual: null });
     return;
   }

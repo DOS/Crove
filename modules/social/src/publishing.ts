@@ -17,7 +17,7 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { shortOfPolicy } from './policy.ts';
-import { PUBLISH_LIMITS, isProvider, limitWait } from './domain/channels.ts';
+import { PUBLISH_LIMITS, SENT_TO_APP, isProvider, limitWait } from './domain/channels.ts';
 import { sentLink } from './domain/utm.ts';
 import { withShortLink } from './short-links.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
@@ -86,6 +86,9 @@ export interface PublishWork {
   // The connection's updated_at as begin saw it: an expired token marks the connection only if it has not changed
   // since (a reconnect in between brought a new token).
   connectionVersion: string | null;
+  // What the platform granted the connection (#903): the job checks a permission the variant needs against it
+  // (scopeNeeded) before calling, and pauses the variant for a reconnect when it is missing.
+  scopes: string[];
   // The post's link as Crove shortened it (#706): its code, and the link it stands for (content.linkUrl).
   shortLink?: { code: string; target: string };
 }
@@ -169,6 +172,7 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
     externalRef: v.external_post_id,
     callStartedAt: startedAt.toISOString(),
     connectionVersion: connection ? connection.updatedAt.toISOString() : null,
+    scopes: connection ? [...connection.scopes] : [],
   };
 }
 
@@ -218,6 +222,8 @@ async function needsHuman(ctx: CommandContext, post: PostRow, v: VariantRow): Pr
 interface ConnectionState {
   status: string;
   updatedAt: Date;
+  // What the platform granted when the channel was connected (or last reconnected).
+  scopes: readonly string[];
 }
 
 // The variant's connection, read under a share lock (after the post and its variants), so a reconnect or a disconnect
@@ -225,9 +231,9 @@ interface ConnectionState {
 // lock 'update' where the same transaction may go on to update the connection (mark_expired): a share lock upgraded
 // later would deadlock two jobs of one channel.
 async function connectionOf(ctx: CommandContext, connectionId: string, lock: 'share' | 'update' = 'share'): Promise<ConnectionState | null> {
-  const q = ctx.trx.selectFrom('crove_kernel.channel_connection').select(['status', 'updated_at']).where('org_id', '=', ctx.orgId).where('id', '=', connectionId);
+  const q = ctx.trx.selectFrom('crove_kernel.channel_connection').select(['status', 'updated_at', 'scopes']).where('org_id', '=', ctx.orgId).where('id', '=', connectionId);
   const row = await (lock === 'update' ? q.forUpdate() : q.forShare()).executeTakeFirst();
-  return row ? { status: row.status, updatedAt: row.updated_at } : null;
+  return row ? { status: row.status, updatedAt: row.updated_at, scopes: row.scopes } : null;
 }
 
 // Pauses a variant on its channel and stamps the connection's version as stored now (in SQL, never through a
@@ -391,7 +397,8 @@ export const publishBegin = defineCommand({
 
 const zText = (max: number) => z.string().max(max);
 const zResult = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('accepted'), externalId: z.string().min(1).max(500), url: z.url({ protocol: /^https?$/ }).max(2000).nullable() }),
+  // sentToApp: a draft the account finishes in the platform's own app (#903); externalId is the platform's tracking id.
+  z.strictObject({ kind: z.literal('accepted'), externalId: z.string().min(1).max(500), url: z.url({ protocol: /^https?$/ }).max(2000).nullable(), sentToApp: z.literal(true).optional() }),
   z.strictObject({ kind: z.literal('pending'), externalRef: z.string().min(1).max(500), checkAfterSeconds: z.number().int().min(5).max(86_400) }),
   z.strictObject({
     kind: z.literal('rejected'),
@@ -407,7 +414,8 @@ const zResult = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('missing') }),
   z.strictObject({ kind: z.literal('unknowable'), code: zText(200).optional() }),
   // Nothing was called: the channel's credential could not be used (disconnected, its connector left the org, no
-  // credential key configured).
+  // credential key configured), or the connection lacks a permission the variant needs (CHANNEL_SCOPE_MISSING, #903).
+  // The variant waits paused for a reconnect; other posts of the channel go on.
   z.strictObject({ kind: z.literal('blocked'), code: zText(200) }),
 ]);
 export type PublishRecord = z.infer<typeof zResult>;
@@ -459,6 +467,16 @@ export const publishRecord = defineCommand({
     switch (r.kind) {
       case 'accepted':
       case 'found': {
+        if (r.kind === 'accepted' && r.sentToApp) {
+          // A draft in the platform's app (#903, TikTok's inbox): the platform's part is done, so the variant is
+          // published, but with no post id or address and the SENT_TO_APP note. Nothing that reads a published post
+          // (counts, first comment, thread, auto-reply, repost) finds a post id to act on, and the screens say the
+          // account still has to post it in the app. The platform's tracking id stays on the call ledger row.
+          await move(ctx, v, { type: 'accepted' }, { ...published(r.externalId, null), external_post_id: null, error_code: SENT_TO_APP });
+          if (input.phase !== 'status') await setCall(ctx, key, { state: 'succeeded', external_ref: r.externalId, error_kind: null, error_code: null, ...done });
+          event = 'social.variant.sent_to_app';
+          break;
+        }
         await move(ctx, v, input.phase === 'reconcile' ? { type: 'reconciled', found: true } : { type: 'accepted' }, published(r.externalId, r.url));
         if (input.phase !== 'status') await setCall(ctx, key, { state: 'succeeded', external_ref: r.externalId, error_kind: null, error_code: null, ...done });
         event = 'social.variant.published';

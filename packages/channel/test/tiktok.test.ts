@@ -238,3 +238,119 @@ describe('TikTokPublisher', () => {
     expect(await new TikTokPublisher(APP, fetchImpl).publish(input())).toEqual({ kind: 'pending', externalRef: 'v_pub_file~v2-1.124', checkAfterSeconds: 30 });
   });
 });
+
+// Inbox mode (#903): shapes from TikTok's Content Posting API reference, "Upload" (post/publish/inbox/video/init,
+// scope video.upload) and "Get Post Status" (SEND_TO_USER_INBOX).
+describe('TikTokPublisher in inbox mode', () => {
+  const INBOX = 'v_inbox_file~v2.123456789';
+  // A deployment that turned inbox mode on (CHANNEL_TIKTOK_INBOX).
+  const INBOX_APP = { ...APP, inbox: true };
+  const inbox = (over: Partial<PublishInput> = {}) => input({ settings: { tiktokMode: 'inbox' }, ...over });
+
+  it('asks for video.upload only where the deployment turned inbox mode on', () => {
+    const scope = (app: typeof APP & { inbox?: boolean; videoList?: boolean }) => new URL(new TikTokConnector(app).authorizeUrl({ state: 's', redirectUri: REDIRECT, codeChallenge: null })).searchParams.get('scope');
+    expect(scope(APP)).toBe('user.info.basic,video.publish');
+    expect(scope({ ...APP, inbox: false })).toBe('user.info.basic,video.publish');
+    expect(scope(INBOX_APP)).toBe('user.info.basic,video.publish,video.upload');
+    expect(scope({ ...INBOX_APP, videoList: true })).toBe('user.info.basic,video.publish,video.upload,video.list');
+  });
+
+  it('refuses an inbox draft with nothing sent where the deployment has not turned inbox mode on', async () => {
+    const none = tiktok({});
+    const publisher = new TikTokPublisher(APP, none.fetchImpl);
+    expect(publisher.refusal({ tiktokMode: 'inbox' })).toBe('TIKTOK_INBOX_NOT_ENABLED');
+    expect(publisher.refusal({ privacyLevel: 'SELF_ONLY' })).toBeNull();
+    expect(new TikTokPublisher(INBOX_APP).refusal({ tiktokMode: 'inbox' })).toBeNull();
+    expect(await publisher.publish(inbox())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'TIKTOK_INBOX_NOT_ENABLED' });
+    const jpeg = { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 4, altText: null };
+    expect(await publisher.publish(inbox({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [jpeg] }, mediaUrl: async () => 'https://m.example/a' }))).toMatchObject({ code: 'TIKTOK_INBOX_NOT_ENABLED' });
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('opens an inbox upload with the source only, with no privacy level or creator query, and sends the bytes in chunks', async () => {
+    const { fetchImpl, calls } = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/inbox/video/init/': [{ body: { data: { publish_id: INBOX, upload_url: UPLOAD }, error: ok } }],
+      'PUT open-upload.tiktokapis.com/video/': [{ status: 206 }, { status: 201 }],
+    });
+    // Two chunks: 64 MB, then the remaining 66 MB in the last one (TikTok takes up to 128 MB there).
+    const size = 130 * 1024 * 1024;
+    const chunk = 64 * 1024 * 1024;
+    const content = { ...input().content, media: [{ ...video, sizeBytes: size }] };
+    expect(await new TikTokPublisher(INBOX_APP, fetchImpl).publish(inbox({ content, readMedia: async () => new Uint8Array(size) }))).toEqual({ kind: 'pending', externalRef: INBOX, checkAfterSeconds: 30 });
+    expect(calls.map((c) => c.route)).toEqual(['POST open.tiktokapis.com/v2/post/publish/inbox/video/init/', 'PUT open-upload.tiktokapis.com/video/', 'PUT open-upload.tiktokapis.com/video/']);
+    expect(calls[0]?.body).toEqual({ source_info: { source: 'FILE_UPLOAD', video_size: size, chunk_size: chunk, total_chunk_count: 2 } });
+    expect(calls[0]?.headers.get('authorization')).toBe('Bearer act.token-1');
+    expect(calls[1]?.headers.get('content-range')).toBe(`bytes 0-${chunk - 1}/${size}`);
+    expect(calls[2]?.headers.get('content-range')).toBe(`bytes ${chunk}-${size - 1}/${size}`);
+    expect(calls[2]?.headers.get('content-type')).toBe('video/mp4');
+  });
+
+  it('ends the status check at SEND_TO_USER_INBOX: a draft in the app, with no post id', async () => {
+    const { fetchImpl, calls } = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/status/fetch/': [
+        { body: { data: { status: 'PROCESSING_UPLOAD', uploaded_bytes: 2 }, error: ok } },
+        { body: { data: { status: 'SEND_TO_USER_INBOX' }, error: ok } },
+      ],
+    });
+    const publisher = new TikTokPublisher(APP, fetchImpl);
+    const ref = { externalAccountId: OPEN_ID, secret: SECRET, externalRef: INBOX };
+    expect(await publisher.status(ref)).toEqual({ kind: 'pending', externalRef: INBOX, checkAfterSeconds: 30 });
+    expect(await publisher.status(ref)).toEqual({ kind: 'accepted', externalId: INBOX, url: null, sentToApp: true });
+    expect(calls[1]?.body).toEqual({ publish_id: INBOX });
+  });
+
+  it('asks for a reconnect when the connection lacks video.upload, where direct mode keeps reading it as a dead token', async () => {
+    const scopeless = { status: 401, body: { error: { code: 'scope_not_authorized', message: "The access_token does not bear user's grant on video.upload scope", log_id: 'log-2' } } };
+    const missing = tiktok({ 'POST open.tiktokapis.com/v2/post/publish/inbox/video/init/': [scopeless] });
+    const refused = await new TikTokPublisher(INBOX_APP, missing.fetchImpl).publish(inbox());
+    expect(refused).toMatchObject({ kind: 'rejected', error: 'permission', code: 'CHANNEL_SCOPE_MISSING', httpStatus: 401 });
+    expect(missing.calls.some((c) => c.route.startsWith('PUT'))).toBe(false);
+    const direct = tiktok({ 'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [scopeless] });
+    expect(await new TikTokPublisher(APP, direct.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'scope_not_authorized' });
+  });
+
+  it('explains the cap on drafts waiting in the TikTok inbox', async () => {
+    const full = tiktok({ 'POST open.tiktokapis.com/v2/post/publish/inbox/video/init/': [{ status: 403, body: { error: { code: 'spam_risk_too_many_pending_share', message: 'The daily upload cap from the API is reached for the current user.' } } }] });
+    const refused = await new TikTokPublisher(INBOX_APP, full.fetchImpl).publish(inbox());
+    expect(refused).toMatchObject({ kind: 'rejected', error: 'permission', code: 'spam_risk_too_many_pending_share' });
+    expect(refused.kind === 'rejected' && refused.message).toContain('post or delete some in the TikTok app');
+  });
+
+  it('sends photos to the inbox with MEDIA_UPLOAD and their description only', async () => {
+    const { fetchImpl, calls } = tiktok({ 'POST open.tiktokapis.com/v2/post/publish/content/init/': [{ body: { data: { publish_id: 'p_inbox_url~v2.1' }, error: ok } }] });
+    const content = { body: 'Bộ ảnh bánh mới', title: null, linkUrl: null, media: [{ fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 4, altText: null }] };
+    const result = await new TikTokPublisher(INBOX_APP, fetchImpl).publish(inbox({ content, mediaUrl: async (id) => `https://media.crove.example/${id}` }));
+    expect(result).toEqual({ kind: 'pending', externalRef: 'p_inbox_url~v2.1', checkAfterSeconds: 30 });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.body).toEqual({
+      post_info: { description: 'Bộ ảnh bánh mới' },
+      source_info: { source: 'PULL_FROM_URL', photo_cover_index: 0, photo_images: ['https://media.crove.example/f-1'] },
+      post_mode: 'MEDIA_UPLOAD',
+      media_type: 'PHOTO',
+    });
+  });
+
+  it('ignores privacy and interaction settings, and refuses a cover or an unknown mode with nothing sent', async () => {
+    const leftover = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/inbox/video/init/': [{ body: { data: { publish_id: INBOX, upload_url: UPLOAD }, error: ok } }],
+      'PUT open-upload.tiktokapis.com/video/': [{ status: 201 }],
+    });
+    expect(await new TikTokPublisher(INBOX_APP, leftover.fetchImpl).publish(inbox({ settings: { tiktokMode: 'inbox', privacyLevel: 'PUBLIC_TO_EVERYONE', allowComments: true } }))).toMatchObject({ kind: 'pending' });
+    expect(leftover.calls[0]?.body).toEqual({ source_info: { source: 'FILE_UPLOAD', video_size: 4, chunk_size: 4, total_chunk_count: 1 } });
+    const none = tiktok({});
+    const publisher = new TikTokPublisher(INBOX_APP, none.fetchImpl);
+    expect(await publisher.publish(inbox({ settings: { tiktokMode: 'inbox', cover: { atMs: 1000 } } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
+    expect(await publisher.publish(input({ settings: { tiktokMode: 'draft', privacyLevel: 'SELF_ONLY' } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'TIKTOK_MODE_INVALID' });
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('keeps direct mode as it was when the mode is set to direct', async () => {
+    const { fetchImpl, calls } = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator()],
+      'POST open.tiktokapis.com/v2/post/publish/video/init/': [{ body: { data: { publish_id: 'v_pub_file~v2-1.126', upload_url: UPLOAD }, error: ok } }],
+      'PUT open-upload.tiktokapis.com/video/': [{ status: 201 }],
+    });
+    expect(await new TikTokPublisher(APP, fetchImpl).publish(input({ settings: { tiktokMode: 'direct', privacyLevel: 'SELF_ONLY', allowComments: true } }))).toMatchObject({ kind: 'pending', externalRef: 'v_pub_file~v2-1.126' });
+    expect(calls[1]?.body).toMatchObject({ post_info: { privacy_level: 'SELF_ONLY', disable_comment: false } });
+  });
+});
