@@ -435,7 +435,7 @@ export function PortalListPage() {
               <p className="text-sm text-muted-foreground">
                 {t('summaryLine', { portal: data.summary.portalInvoices, matched: data.summary.matched, inbox: data.summary.inInbox })}
               </p>
-              <MissingInvoiceRequest period={period} missing={data.summary.missing} editor={editor} canManage={org.data?.role === 'owner' || org.data?.role === 'admin'} slug={slug} />
+              <MissingInvoiceRequest key={period} period={period} missing={data.summary.missing} editor={editor} canManage={org.data?.role === 'owner' || org.data?.role === 'admin'} slug={slug} />
               {SECTIONS.map(({ outcome, folded }) => {
                 const items = grouped.get(outcome) ?? [];
                 return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} total={outcomeTotal(data.summary, outcome)} folded={folded} slug={slug} /> : null;

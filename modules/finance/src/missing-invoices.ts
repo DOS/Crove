@@ -31,6 +31,11 @@ export const MISSING_INVOICE_TEMPLATE = 'finance.missing_invoices';
 export const MISSING_INVOICE_ACTOR = { type: 'system' as const, component: 'finance.missing_invoices' };
 // Invoices listed in one mail; the mail says how many more there are.
 export const MISSING_INVOICES_PER_MAIL = 150;
+// The merge data stays this far under the kernel's cap on it (MAIL_PAYLOAD_MAX_BYTES, 64 KiB), so a mail with long
+// seller names is cut short rather than refused.
+export const MISSING_INVOICE_PAYLOAD_BYTES = 48 * 1024;
+// A seller's name as the mail shows it (the template's oneLine cuts it there too).
+const SELLER_NAME_SHOWN = 200;
 // A second request for the same period within this long is refused, so a double click mails the company once.
 export const REQUEST_COOLDOWN_MS = 60 * 60 * 1000;
 // The reminder covers the periods that ended within this many days.
@@ -75,7 +80,7 @@ async function missingIn(ctx: QueryContext, period: string): Promise<Item[]> {
     i.outcome === 'missing' && i.portal
       ? [
           {
-            sellerName: i.portal.sellerName.slice(0, 500),
+            sellerName: i.portal.sellerName.slice(0, SELLER_NAME_SHOWN),
             sellerTaxCode: i.portal.sellerTaxCode,
             template: i.portal.template,
             series: i.portal.series,
@@ -89,15 +94,61 @@ async function missingIn(ctx: QueryContext, period: string): Promise<Item[]> {
   );
 }
 
-// The mail's merge data: every period with its count, and at most MISSING_INVOICES_PER_MAIL invoices in all.
-function mailPayload(kind: 'request' | 'reminder', orgName: string, periods: { period: string; items: Item[] }[], requestPeriod?: string): MissingInvoiceMail {
+export type MissingItem = Item;
+const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'utf8');
+
+// The mail's merge data: every period with its count, and the invoices in order while there are at most
+// MISSING_INVOICES_PER_MAIL of them and the data stays within MISSING_INVOICE_PAYLOAD_BYTES. count covers them all, so
+// the mail says how many it left out.
+export function mailPayload(kind: 'request' | 'reminder', orgName: string, periods: { period: string; items: Item[] }[], requestPeriod?: string): MissingInvoiceMail {
+  const count = periods.reduce((n, p) => n + p.items.length, 0);
+  const base = { kind, orgName: orgName.slice(0, 200), ...(requestPeriod ? { requestPeriod } : {}), count };
+  const shown = periods.map(({ period, items }) => ({ period, count: items.length, items: [] as Item[] }));
+  let bytes = bytesOf({ ...base, periods: shown });
   let room = MISSING_INVOICES_PER_MAIL;
-  const shown = periods.map(({ period, items }) => {
-    const taken = items.slice(0, Math.max(room, 0));
-    room -= taken.length;
-    return { period, count: items.length, items: taken };
-  });
-  return { kind, orgName: orgName.slice(0, 200), ...(requestPeriod ? { requestPeriod } : {}), periods: shown, count: periods.reduce((n, p) => n + p.items.length, 0) };
+  for (const [i, { items }] of periods.entries()) {
+    for (const raw of items) {
+      const item = { ...raw, sellerName: raw.sellerName.slice(0, SELLER_NAME_SHOWN) };
+      const size = bytesOf(item) + 1;
+      if (room === 0 || bytes + size > MISSING_INVOICE_PAYLOAD_BYTES) return { ...base, periods: shown };
+      shown[i]?.items.push(item);
+      bytes += size;
+      room -= 1;
+    }
+  }
+  return { ...base, periods: shown };
+}
+
+// The missing invoices of the reminder's periods, in period order. An invoice in a month and in its quarter (both
+// imported) is listed once, under the first period. A period too large to reconcile (PERIOD_TOO_LARGE) is skipped and
+// named in `skipped`; the others still count.
+export async function collectMissing(
+  periods: readonly string[],
+  load: (period: string) => Promise<Item[]>,
+): Promise<{ missing: { period: string; items: Item[] }[]; skipped: string[] }> {
+  const seen = new Set<string>();
+  const missing: { period: string; items: Item[] }[] = [];
+  const skipped: string[] = [];
+  for (const period of periods) {
+    let items: Item[];
+    try {
+      items = await load(period);
+    } catch (error) {
+      if (error instanceof DomainError && error.code === 'PERIOD_TOO_LARGE') {
+        skipped.push(period);
+        continue;
+      }
+      throw error;
+    }
+    const fresh = items.filter((item) => {
+      const key = `${item.sellerTaxCode}|${item.template ?? ''}|${item.series}|${item.number}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (fresh.length > 0) missing.push({ period, items: fresh });
+  }
+  return { missing, skipped };
 }
 
 // The start of the current month in Vietnam, as an instant.
@@ -188,6 +239,7 @@ export const missingInvoicesReminderSet = defineCommand({
 
 export type RemindResult =
   | { action: 'off' | 'already' | 'no_contact' | 'stopped' }
+  | { action: 'skipped'; skipped: string[] }
   | { action: 'sent'; messageId: string; status: 'queued' | 'suppressed'; count: number };
 
 // The monthly reminder of one org, run by the worker on the reminder's day. Once a month at most; nothing when the
@@ -215,7 +267,19 @@ export const missingInvoicesRemind = defineCommand({
       .where('created_at', '>=', vnMonthStart(ctx.now))
       .limit(1)
       .executeTakeFirst();
-    if (sent) return { action: 'already' };
+    // Once a month: a run that sent nothing (every period too large to reconcile) counts too, so the sweep does not
+    // run it again all day.
+    const ran = await ctx.trx
+      .selectFrom('crove_kernel.audit_event')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('command', '=', 'finance.missing_invoices.remind')
+      .where('outcome', '=', 'ok')
+      .where('occurred_at', '>=', vnMonthStart(ctx.now))
+      .where(sql<boolean>`detail ? 'skipped'`)
+      .limit(1)
+      .executeTakeFirst();
+    if (sent || ran) return { action: 'already' };
     if (!tenant.contact_email) return { action: 'no_contact' };
     const today = vnToday(ctx.now);
     const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - REMINDER_LOOKBACK_DAYS * 86_400_000).toISOString().slice(0, 10);
@@ -234,10 +298,11 @@ export const missingInvoicesRemind = defineCommand({
         return to >= cutoff && from <= today;
       })
       .sort();
-    const missing: { period: string; items: Item[] }[] = [];
-    for (const period of periods) {
-      const items = await missingIn(ctx, period);
-      if (items.length > 0) missing.push({ period, items });
+    const { missing, skipped } = await collectMissing(periods, (period) => missingIn(ctx, period));
+    if (missing.length === 0 && skipped.length > 0) {
+      // Nothing could be checked: the reminder stays on; this run's audit row keeps it from running again this month.
+      ctx.audit({ skipped });
+      return { action: 'skipped', skipped };
     }
     if (missing.length === 0) {
       await ctx.trx.updateTable('crove_kernel.tenant').set({ missing_invoice_reminder_day: null }).where('org_id', '=', ctx.orgId).execute();
@@ -258,7 +323,7 @@ export const missingInvoicesRemind = defineCommand({
       'missing_invoices.reminded',
       queued.status === 'suppressed' ? 'Không gửi được email nhắc hằng tháng: email liên hệ đang bị chặn' : `Gửi email nhắc công ty bổ sung ${payload.count} hóa đơn mua vào còn thiếu`,
     );
-    ctx.audit({ count: payload.count, periods: missing.map((m) => m.period), message_id: queued.messageId, status: queued.status });
+    ctx.audit({ count: payload.count, periods: missing.map((m) => m.period), message_id: queued.messageId, status: queued.status, ...(skipped.length > 0 ? { skipped } : {}) });
     return { action: 'sent', messageId: queued.messageId, status: queued.status, count: payload.count };
   },
 });

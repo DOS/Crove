@@ -2,7 +2,17 @@
 // data (request and reminder, Reply-To, the cut-off list, escaping). The commands are covered on PostgreSQL in
 // apps/kernel/test/finance-missing-invoices.db.test.ts.
 import { describe, expect, it } from 'vitest';
-import { formatAmount, periodLabel, renderMissingInvoiceMail, type MissingInvoiceMail } from '../src/index.ts';
+import { DomainError } from '@crove/kernel-runtime';
+import {
+  MISSING_INVOICE_PAYLOAD_BYTES,
+  collectMissing,
+  formatAmount,
+  mailPayload,
+  periodLabel,
+  renderMissingInvoiceMail,
+  type MissingInvoiceMail,
+  type MissingItem,
+} from '../src/index.ts';
 
 const item = (number: string, extra: Partial<MissingInvoiceMail['periods'][number]['items'][number]> = {}) => ({
   sellerName: 'Công ty TNHH Văn phòng phẩm Hồng Hà',
@@ -84,6 +94,49 @@ describe('missing invoice mail (#669)', () => {
     expect(mail.html).toContain('&lt;script&gt;x&lt;/script&gt;');
     expect(mail.html).toContain('A &lt;b&gt;&amp;&lt;/b&gt; B');
     expect(mail.text).not.toContain('‮');
+  });
+
+  it('keeps the merge data under its byte budget, however long the seller names, and counts what it left out', () => {
+    const long = 'Công ty Trách nhiệm hữu hạn Thương mại và Dịch vụ Kỹ thuật Hưng Thịnh Phát Đạt Miền Bắc '.repeat(6);
+    const items = Array.from({ length: 150 }, (_, i) => item(String(i + 1), { sellerName: long }));
+    const payload = mailPayload('request', 'Công ty Người Mua Mẫu', [{ period: '2026-09', items }], '2026-09');
+    const shown = payload.periods[0]?.items ?? [];
+    expect(Buffer.byteLength(JSON.stringify(payload), 'utf8')).toBeLessThanOrEqual(MISSING_INVOICE_PAYLOAD_BYTES);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.length).toBeLessThan(150);
+    expect(shown.every((i) => i.sellerName.length <= 200)).toBe(true);
+    expect(payload).toMatchObject({ count: 150, periods: [{ period: '2026-09', count: 150 }] });
+    expect(renderMissingInvoiceMail(payload, { replyTo: null }).text).toContain(`Và ${150 - shown.length} hóa đơn khác;`);
+    // Short names: the count cap.
+    const many = mailPayload('reminder', 'A', [
+      { period: '2026-08', items: Array.from({ length: 100 }, (_, i) => item(`8${i}`)) },
+      { period: '2026-09', items: Array.from({ length: 100 }, (_, i) => item(`9${i}`)) },
+    ]);
+    expect(many.periods.map((p) => [p.count, p.items.length])).toEqual([
+      [100, 100],
+      [100, 50],
+    ]);
+  });
+
+  it('lists an invoice of a month and its quarter once, and skips a period too large to reconcile', async () => {
+    const lists: Record<string, MissingItem[]> = {
+      '2026-08': [item('8001')],
+      '2026-09': [item('9001'), item('9002')],
+      '2026-Q3': [item('8001'), item('9001'), item('9002'), item('9100', { issueDate: '2026-07-10' })],
+    };
+    const load = async (period: string) => {
+      if (period === '2026-10') throw new DomainError('PERIOD_TOO_LARGE', 422, 'too large');
+      return lists[period] ?? [];
+    };
+    const { missing, skipped } = await collectMissing(['2026-08', '2026-09', '2026-10', '2026-Q3'], load);
+    expect(skipped).toEqual(['2026-10']);
+    expect(missing.map((m) => [m.period, m.items.map((i) => i.number)])).toEqual([
+      ['2026-08', ['8001']],
+      ['2026-09', ['9001', '9002']],
+      ['2026-Q3', ['9100']],
+    ]);
+    // Any other failure still fails the reminder.
+    await expect(collectMissing(['2026-08'], async () => Promise.reject(new Error('connection lost')))).rejects.toThrow('connection lost');
   });
 
   it('refuses merge data that is not a missing-invoice mail', () => {

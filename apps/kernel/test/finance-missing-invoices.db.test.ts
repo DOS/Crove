@@ -307,6 +307,8 @@ suite('missing invoice requests (#669)', () => {
     expect((await rpc('missingInvoices/setReminder', viewer, { day: 5 })).status).toBe(403);
     expect((await rpc('missingInvoices/setReminder', member, { day: 29 })).status).toBe(400);
     expect((await rpc('missingInvoices/setReminder', member, { day: 5 })).body).toEqual({ day: 5 });
+    // A list for the quarter as well: its invoices of September are listed once, under the month.
+    await importList([spec('9007', '20/09/2026'), spec('9008', '21/09/2026', { total: 2_200_000 })], '2026-Q3');
     const first = await workerRuntime.execute<any>('finance.missing_invoices.remind', {}, { actor: ACTOR, orgId: org.orgId });
     expect(first).toMatchObject({ action: 'sent', status: 'queued', count: 3 });
     const row = await mailRow(first.messageId);
@@ -339,6 +341,20 @@ suite('missing invoice requests (#669)', () => {
       // The sweep runs it: nothing missing there, so the reminder turns off and the org is no longer due.
       expect(await sweepMissingInvoiceReminders({ runtime: workerRuntime, workerDb })).toBe(0);
       expect(await due()).not.toContain(otherOrg.orgId);
+      // A run that could reconcile none of its periods (detail.skipped) counts as this month's run.
+      const third = await rpc('org/create', member, { name: 'Công ty thứ ba', idempotencyKey: randomUUID() }, null);
+      const thirdId = String(third.body?.orgId);
+      await admin((c) => c.query(`UPDATE crove_kernel.tenant SET contact_email = 'ketoan@thuba.test', missing_invoice_reminder_day = $2 WHERE org_id = $1`, [thirdId, today]));
+      expect(await due()).toContain(thirdId);
+      await admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.audit_event (org_id, actor_type, command, command_id, outcome, input_sha256, detail)
+           VALUES ($1, 'system', 'finance.missing_invoices.remind', gen_random_uuid(), 'ok', repeat('0', 64), '{"skipped":["2026-09"]}')`,
+          [thirdId],
+        ),
+      );
+      expect(await due()).not.toContain(thirdId);
+      expect(await workerRuntime.execute('finance.missing_invoices.remind', {}, { actor: ACTOR, orgId: thirdId })).toEqual({ action: 'already' });
     } else {
       expect(rows).not.toContain(otherOrg.orgId);
     }

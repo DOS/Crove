@@ -83,7 +83,8 @@ CREATE TRIGGER tenant_contact_email_guard BEFORE INSERT OR UPDATE OF contact_ema
 REVOKE ALL ON FUNCTION crove_kernel.tenant_contact_email_guard() FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 
 -- The orgs whose monthly reminder is due now: the reminder is on, today (Vietnam time) is its day and it is 08:00 or
--- later, the org is active and has a contact email, and no reminder mail was written since the start of this month. Ids only; each job reads
+-- later, the org is active and has a contact email, and since the start of this month neither a reminder mail was
+-- written nor a run skipped every period (its 'ok' audit row names them in detail.skipped). Ids only; each run reads
 -- the org again in its own system context and checks the same before it writes a mail.
 CREATE OR REPLACE FUNCTION crove_finance.missing_invoice_reminders_due(p_limit int)
 RETURNS TABLE (org_id uuid)
@@ -99,6 +100,11 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
     AND NOT EXISTS (
       SELECT 1 FROM crove_kernel.mail_message m
       WHERE m.org_id = t.org_id AND m.source = 'finance.missing_invoices.remind' AND m.created_at >= s.at
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM crove_kernel.audit_event a
+      WHERE a.org_id = t.org_id AND a.occurred_at >= s.at AND a.command = 'finance.missing_invoices.remind'
+        AND a.outcome = 'ok' AND a.detail ? 'skipped'
     )
   ORDER BY t.org_id
   LIMIT LEAST(GREATEST(p_limit, 1), 1000)
