@@ -779,6 +779,10 @@ export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
 // The corner of an image the org's logo watermark goes in (#834); the same list as crove_social.watermark's CHECK.
 export const SOCIAL_WATERMARK_CORNERS = ['top_left', 'top_right', 'bottom_left', 'bottom_right'] as const;
+// The org's team chat for Social alerts (#863): where it is, and the kinds of alert it may get; the same lists as
+// crove_social.chat_alert's CHECKs.
+export const SOCIAL_CHAT_ALERT_TARGETS = ['telegram', 'discord'] as const;
+export const SOCIAL_CHAT_ALERT_KINDS = ['needs_approval', 'failed', 'published', 'client_answered'] as const;
 // The stages of an idea on the ideas board (#701).
 export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
 

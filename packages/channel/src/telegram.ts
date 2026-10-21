@@ -107,6 +107,71 @@ export async function connectTelegram(login: { botToken: string; channel: string
   return { provider: 'telegram', externalAccountId: String(chat.id), displayName: title.slice(0, 200), scopes: [], expiresAt: null, secret: JSON.stringify(secret) };
 }
 
+// Team alerts (#863): the org's own chat for Social alerts, not a channel posts go to. A group or supergroup the bot
+// was added to, a channel where it may post, or a private chat with the bot, by @username, t.me link or numeric id.
+const ALERT_CHAT_ID = /^-?\d{5,20}$/;
+
+export interface TelegramChatTarget {
+  botToken: string;
+  // The chat's numeric id, as getChat answered it.
+  chatId: string;
+}
+
+// The alert form's fields, checked before any call.
+export function telegramChatLogin(input: { botToken: string; chatId: string }): { botToken: string; chat: string } {
+  const botToken = input.botToken.trim();
+  const chat = input.chatId.trim().replace(/^https?:\/\/t\.me\//i, '@');
+  if (!TOKEN.test(botToken)) throw new ConnectorError('denied', 'not a Telegram bot token', 'TELEGRAM_TOKEN_INVALID');
+  if (!USERNAME.test(chat) && !ALERT_CHAT_ID.test(chat)) throw new ConnectorError('denied', 'not a Telegram chat id or name', 'TELEGRAM_CHAT_INVALID');
+  return { botToken, chat: ALERT_CHAT_ID.test(chat) ? chat : `@${(USERNAME.exec(chat) as RegExpExecArray)[1]}` };
+}
+
+// getMe checks the token, getChat finds the chat, getChatMember checks the bot may write there. Returns the target
+// (to be sealed) and the chat's title for the settings card.
+export async function checkTelegramChat(login: { botToken: string; chat: string }, fetchImpl?: Fetch): Promise<{ target: TelegramChatTarget; label: string }> {
+  const client = new TelegramClient(fetchImpl, 15_000);
+  const failed = (error: unknown): never => {
+    if (error instanceof TelegramError && (error.status === 401 || error.status === 404)) throw new ConnectorError('denied', 'Telegram refused the bot token', 'TELEGRAM_TOKEN_REFUSED');
+    if (error instanceof TelegramError && (error.status === 400 || error.status === 403)) throw new ConnectorError('denied', 'Telegram does not know this chat for the bot', 'TELEGRAM_CHAT_NOT_FOUND');
+    throw new ConnectorError('provider', 'Telegram did not answer');
+  };
+  const me = await client.call<{ id?: unknown; is_bot?: unknown }>(login.botToken, 'getMe', {}).catch(failed);
+  if (typeof me.id !== 'number' || me.is_bot !== true) throw new ConnectorError('denied', 'not a bot token', 'TELEGRAM_TOKEN_REFUSED');
+  const chat = await client
+    .call<{ id?: unknown; type?: unknown; title?: unknown; username?: unknown; first_name?: unknown }>(login.botToken, 'getChat', { chat_id: login.chat })
+    .catch(failed);
+  if (typeof chat.id !== 'number' || !['private', 'group', 'supergroup', 'channel'].includes(String(chat.type))) throw new ConnectorError('denied', 'not a Telegram chat', 'TELEGRAM_CHAT_NOT_FOUND');
+  // A private chat is the bot's own with a person who started it; anywhere else the bot must be able to write.
+  if (chat.type !== 'private') {
+    const member = await client.call<{ status?: unknown; can_post_messages?: unknown; can_send_messages?: unknown }>(login.botToken, 'getChatMember', { chat_id: chat.id, user_id: me.id }).catch(failed);
+    const canSend =
+      chat.type === 'channel'
+        ? member.status === 'creator' || (member.status === 'administrator' && member.can_post_messages === true)
+        : member.status === 'creator' || member.status === 'administrator' || member.status === 'member' || (member.status === 'restricted' && member.can_send_messages === true);
+    if (!canSend) throw new ConnectorError('denied', 'the bot may not write in this chat', 'TELEGRAM_BOT_CANNOT_SEND');
+  }
+  const username = typeof chat.username === 'string' && USERNAME.test(chat.username) ? chat.username : null;
+  const named = [chat.title, chat.first_name].find((n): n is string => typeof n === 'string' && n.trim().length > 0);
+  const label = named?.trim() ?? (username ? `@${username}` : 'Telegram');
+  return { target: { botToken: login.botToken, chatId: String(chat.id) }, label: label.slice(0, 200) };
+}
+
+export function telegramChatTargetOf(secret: string): TelegramChatTarget | null {
+  try {
+    const s = JSON.parse(secret) as Partial<TelegramChatTarget>;
+    if (typeof s.botToken !== 'string' || !TOKEN.test(s.botToken) || typeof s.chatId !== 'string' || !ALERT_CHAT_ID.test(s.chatId)) return null;
+    return { botToken: s.botToken, chatId: s.chatId };
+  } catch {
+    return null;
+  }
+}
+
+// One line of plain text (no parse mode, so nothing in it is markup) without a link preview. Throws TelegramError.
+export async function sendTelegramText(target: TelegramChatTarget, text: string, fetchImpl?: Fetch): Promise<void> {
+  if (text.length === 0 || utf16(text) > TELEGRAM_TEXT_MAX) throw new TelegramError(400, { description: 'message text is empty or too long' });
+  await new TelegramClient(fetchImpl, 15_000).call(target.botToken, 'sendMessage', { chat_id: target.chatId, text, link_preview_options: { is_disabled: true } });
+}
+
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
   return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;

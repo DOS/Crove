@@ -108,6 +108,33 @@ export async function connectDiscord(login: { webhookId: string; token: string }
   return { provider: 'discord', externalAccountId: login.webhookId, displayName: name.slice(0, 200), scopes: [], expiresAt: null, secret: JSON.stringify(secret) };
 }
 
+// Team alerts (#863): the org's own Discord channel for Social alerts, as a webhook. Connect it with discordLogin and
+// connectDiscord (the webhook's name is the label); the target sealed is the webhook's id and token.
+export interface DiscordChatTarget {
+  webhookId: string;
+  token: string;
+}
+
+export function discordChatTargetOf(secret: string): DiscordChatTarget | null {
+  try {
+    const s = JSON.parse(secret) as Partial<DiscordChatTarget>;
+    if (typeof s.webhookId !== 'string' || !SNOWFLAKE.test(s.webhookId) || typeof s.token !== 'string' || !TOKEN.test(s.token)) return null;
+    return { webhookId: s.webhookId, token: s.token };
+  } catch {
+    return null;
+  }
+}
+
+// Discord's SUPPRESS_EMBEDS message flag: a link in the line shows no preview card.
+const SUPPRESS_EMBEDS = 1 << 2;
+
+// One line, mentions never parsed and links without embeds. Throws DiscordError.
+export async function sendDiscordText(target: DiscordChatTarget, text: string, fetchImpl?: Fetch): Promise<void> {
+  if (text.length === 0 || text.length > DISCORD_TEXT_MAX) throw new DiscordError(400, { message: 'message text is empty or too long' });
+  const body = JSON.stringify({ content: text, allowed_mentions: { parse: [] }, flags: SUPPRESS_EMBEDS });
+  await new DiscordClient(fetchImpl, 15_000).call(target.webhookId, target.token, { method: 'POST', body });
+}
+
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
   return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;

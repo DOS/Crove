@@ -25,6 +25,7 @@ import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract
 import { DomainError, egressFetch, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { DraftBudget } from './ai-draft-limit.ts';
 import { BlueskyLoginBudget } from './bluesky-login-limit.ts';
+import { ChatAlertTestBudget, requestChatAlertTest, saveChatAlert } from './chat-alert-save.ts';
 import { actorOf, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
@@ -249,6 +250,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     // would go through the provider's dialog for nothing.
     if (channels.broker.id === 'none') throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
     return { orgId, actor: actorOf(context.user), connector, broker: channels.broker };
+  };
+  // The org's team chat for Social alerts (#863): the target is checked with the platform and sealed here, then saved by
+  // the command. The API never reads it back: a test line is only asked for, and the worker sends it.
+  const chatAlertTests = new ChatAlertTestBudget();
+  const chatAlertScope = async (context: RpcContext) => {
+    if (!social) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun mạng xã hội chưa được bật' });
+    const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
+    return { orgId, actor: actorOf(context.user), role };
   };
   const oauthRedirectUri = (provider: string) => `${(channels?.publicUrl ?? '').replace(/\/$/, '')}/channels/oauth/${provider}/callback`;
 
@@ -621,6 +630,22 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         get: os.social.watermark.get.handler(socialQuery('social.watermark.get')),
         save: os.social.watermark.save.handler(socialCommand('social.watermark.save')),
         remove: os.social.watermark.remove.handler(socialCommand('social.watermark.remove')),
+      },
+      chatAlert: {
+        get: os.social.chatAlert.get.handler(socialQuery('social.chat_alert.get')),
+        save: os.social.chatAlert.save.handler(({ context, input }) =>
+          guard(async () => {
+            const scope = await chatAlertScope(context);
+            if (!channels) throw new DomainError('BROKER_NOT_CONFIGURED', 503, 'Chưa cấu hình khóa mã hóa thông tin kết nối (CREDENTIAL_KEY)');
+            return saveChatAlert({ runtime, broker: channels.broker }, scope, input);
+          }),
+        ),
+        remove: os.social.chatAlert.remove.handler(socialCommand('social.chat_alert.remove')),
+        test: os.social.chatAlert.test.handler(({ context }) =>
+          guard(async () => {
+            return requestChatAlertTest(runtime, chatAlertTests, await chatAlertScope(context));
+          }),
+        ),
       },
       reportSchedules: {
         list: os.social.reportSchedules.list.handler(socialQuery('social.report_schedule.list')),
