@@ -10,7 +10,7 @@ This runbook covers setting the archive up, reading its two alerts, and what to 
 ## How it works
 
 - **Batches.** Every minute, the worker cuts the rows that are not yet archived into batches. The rows of one batch span at most 5 minutes. A row is archived no earlier than `ARCHIVE_LAG_SECONDS` (default 600) after it is written, so a transaction that is still open is not cut off. The code is `apps/kernel/src/worm.ts`.
-- **What a batch holds.** References and hashes only: `audit:<id>` or `journal:<org>:<id>`, each with the SHA-256 of a fixed set of columns (`crove_kernel.archive_row_hashes`, migration `20261023160000`). It also holds a batch hash and a chain hash, which folds in the previous batch.
+- **What a batch holds.** References and hashes only: `audit:<id>` or `journal:<org>:<id>`, each with the SHA-256 of a fixed set of columns (`crove_kernel.archive_row_hashes`, migration `20261023230000`). It also holds a batch hash and a chain hash, which folds in the previous batch.
 - **Where batches go.** Each batch is written once to `chain/v1/<sequence>.json` in the archive store, then recorded in `crove_kernel.archive_batch`.
 - **The nightly check.** At 03:10 Vietnam time the verifier reads every batch back from the store, checks the chain, and recomputes every row hash from the database. The result goes to `crove_kernel.archive_verification`.
 - **How alerts reach you.** Both jobs fail loudly:

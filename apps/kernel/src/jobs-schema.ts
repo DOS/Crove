@@ -35,7 +35,7 @@ export const QUEUES = {
   socialRemove: 'social-remove',
   // Created by the team chat alert migration (20261023143000).
   socialChatAlert: 'social-chat-alert',
-  // Created by the WORM archive migration (20261023160000).
+  // Created by the WORM archive migration (20261023230000).
   archiveWrite: 'kernel-archive-write',
   archiveVerify: 'kernel-archive-verify',
 } as const;
