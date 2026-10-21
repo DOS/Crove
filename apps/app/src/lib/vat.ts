@@ -33,3 +33,19 @@ export function yearOptions(today: Date = new Date()): number[] {
   const year = today.getFullYear();
   return Array.from({ length: 6 }, (_, i) => year - i);
 }
+
+// What the HTKK XML puts in [25] (#692, #917): 0 for the accountant to fill in HTKK, all of [24], or the working's
+// suggestion, [24] minus the VAT marked not deductible for want of a non-cash payment.
+export const DEDUCT_CHOICES = ['none', 'all', 'suggested'] as const;
+export type DeductChoice = (typeof DEDUCT_CHOICES)[number];
+
+export function deductParams(choice: DeductChoice): Record<string, string> {
+  if (choice === 'all') return { deductInput: '1' };
+  if (choice === 'suggested') return { deduct: 'suggested' };
+  return {};
+}
+
+// Only owners, admins and members mark invoices (finance.vat.payment_mark); viewers only read.
+export function canMarkPayment(role: string | null | undefined): boolean {
+  return role === 'owner' || role === 'admin' || role === 'member';
+}

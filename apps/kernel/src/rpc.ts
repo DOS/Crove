@@ -1162,6 +1162,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       period: os.vat.period.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.vat.period', input, { actor, orgId })),
       ),
+      markPayment: os.vat.markPayment.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.vat.payment_mark', input, { actor, orgId })),
+      ),
     },
     portalList: {
       reconcile: os.portalList.reconcile.handler(({ context, input }) =>

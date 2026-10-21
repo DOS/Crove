@@ -4,15 +4,13 @@ import { useTranslations } from 'use-intl';
 import type { VAT_RATES, VAT_WARNINGS } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
-import { Checkbox } from '@crove/ui/components/checkbox';
-import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
+import { apiFetch, client, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { isZeroAmount } from '../lib/decimal.ts';
-import { defaultPeriod, periodKey, switchKind, yearOptions, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
+import { DEDUCT_CHOICES, canMarkPayment, deductParams, defaultPeriod, periodKey, switchKind, yearOptions, type DeductChoice, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
 
 type Rate = (typeof VAT_RATES)[number];
 type Warning = (typeof VAT_WARNINGS)[number];
@@ -69,6 +67,100 @@ function InvoiceTable({ invoices, partyLabel }: { invoices: Invoice[]; partyLabe
   );
 }
 
+type VatReport = Awaited<ReturnType<typeof client.vat.period>>;
+type PaymentCheck = VatReport['paymentChecks']['items'][number];
+
+// Input invoices that need proof of non-cash payment before their VAT is deducted (#917), with the accountant's marks.
+function PaymentChecks({ data, canMark }: { data: VatReport; canMark: boolean }) {
+  const t = useTranslations('vat.payment');
+  const f = useFormat();
+  const checks = data.paymentChecks;
+  const byId = new Map(data.input.documents.map((d) => [d.id, d]));
+  // The org's bank payment vouchers (báo Nợ), to name the one that paid an invoice. The newest page is enough to pick from.
+  const vouchers = useQuery({ ...orpc.vouchers.list.queryOptions({ input: { type: 'bank_debit' } }), enabled: canMark && checks.items.length > 0 });
+  const [voucherFor, setVoucherFor] = useState<Record<string, string>>({});
+  const mark = useMutation({
+    mutationFn: (v: { documentId: string; outcome: 'paid_by_bank' | 'not_deductible' | 'cleared'; voucherId?: string | null }) => client.vat.markPayment(v),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: orpc.vat.period.key() }),
+  });
+  const status = (item: PaymentCheck) => (item.mark ? t(`outcome.${item.mark.outcome}`) : t('unchecked'));
+  return (
+    <section>
+      <h2 className="mb-1 text-base font-semibold text-foreground">{t('title', { count: checks.items.length })}</h2>
+      <p className="mb-2 text-xs text-subtle-foreground">{t('hint')}</p>
+      {checks.items.length === 0 ? (
+        <Empty title={t('empty')} />
+      ) : (
+        <>
+          <DataTable head={[t('columns.invoice'), t('columns.seller'), t('columns.total'), t('columns.vat'), t('columns.method'), t('columns.status'), ...(canMark ? [t('columns.actions')] : [])]}>
+            {checks.items.map((item) => {
+              const doc = byId.get(item.documentId);
+              const busy = mark.isPending && mark.variables?.documentId === item.documentId;
+              return (
+                <TableRow key={item.documentId}>
+                  <TableCell className="px-4 py-3 text-foreground">
+                    <span className="font-mono text-xs">{doc ? `${doc.series ? `${doc.series}-` : ''}${doc.number}` : ''}</span>
+                    {doc && <span className="block text-xs text-subtle-foreground">{f.date(doc.issueDate)}</span>}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-foreground">{doc?.partyName ?? ''}</TableCell>
+                  <TableCell className="px-4 py-3 tabular-nums">{f.money(item.total)}</TableCell>
+                  <TableCell className="px-4 py-3 tabular-nums">{f.money(item.vatAmount)}</TableCell>
+                  <TableCell className="px-4 py-3 text-muted-foreground">{item.paymentMethod ?? t('methodMissing')}</TableCell>
+                  <TableCell className="px-4 py-3">
+                    <Badge variant={item.mark?.outcome === 'paid_by_bank' ? 'success' : 'warning'}>{status(item)}</Badge>
+                    {item.mark?.voucherId && <span className="block text-xs text-subtle-foreground">{t('withVoucher')}</span>}
+                  </TableCell>
+                  {canMark && (
+                    <TableCell className="space-y-2 px-4 py-3">
+                      {(vouchers.data?.items.length ?? 0) > 0 && (
+                        <NativeSelect
+                          aria-label={t('voucher')}
+                          className="w-48"
+                          value={voucherFor[item.documentId] ?? ''}
+                          onChange={(e) => setVoucherFor({ ...voucherFor, [item.documentId]: e.target.value })}>
+                          <NativeSelectOption value="">{t('noVoucher')}</NativeSelectOption>
+                          {vouchers.data?.items
+                            .filter((v) => !v.reversal)
+                            .map((v) => (
+                              <NativeSelectOption key={v.id} value={v.id}>
+                                {`${v.code} · ${f.date(v.date)} · ${f.money(v.amount)}`}
+                              </NativeSelectOption>
+                            ))}
+                        </NativeSelect>
+                      )}
+                      <div className="flex flex-wrap gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy}
+                          onClick={() => mark.mutate({ documentId: item.documentId, outcome: 'paid_by_bank', voucherId: voucherFor[item.documentId] || null })}>
+                          {t('markBank')}
+                        </Button>
+                        <Button size="sm" variant="outline" disabled={busy} onClick={() => mark.mutate({ documentId: item.documentId, outcome: 'not_deductible' })}>
+                          {t('markNotDeductible')}
+                        </Button>
+                        {item.mark && (
+                          <Button size="sm" variant="ghost" disabled={busy} onClick={() => mark.mutate({ documentId: item.documentId, outcome: 'cleared' })}>
+                            {t('clear')}
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  )}
+                </TableRow>
+              );
+            })}
+          </DataTable>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {t('summary', { atRisk: f.money(checks.vatAtRisk), notDeductible: f.money(checks.notDeductibleVat), unchecked: checks.unchecked })}
+          </p>
+        </>
+      )}
+      {mark.error && <ErrorText>{errorMessage(mark.error)}</ErrorText>}
+    </section>
+  );
+}
+
 export function VatPage() {
   const t = useTranslations('vat');
   const f = useFormat();
@@ -86,8 +178,8 @@ export function VatPage() {
   // The XML is a filing, so the server refuses the other kind (PERIOD_KIND_MISMATCH); the button says why first.
   const wrongKind = filing !== null && filing !== choice.kind;
 
-  // [25] = [24] in the XML (#692): off by default, the accountant's choice per download.
-  const [deductInput, setDeductInput] = useState(false);
+  // What [25] holds in the XML (#692, #917): 0 by default, the accountant's choice per download.
+  const [deduct, setDeduct] = useState<DeductChoice>('none');
   const download = async (path: string, filename: string, extra: Record<string, string> = {}) => {
     const response = await apiFetch(`${path}?${new URLSearchParams({ period, ...extra })}`);
     const url = URL.createObjectURL(await response.blob());
@@ -101,7 +193,7 @@ export function VatPage() {
     mutationFn: () => download('/api/export/vat.xlsx', t('exportFile', { period, org: getCurrentOrg() ?? 'org' })),
   });
   const exportXml = useMutation({
-    mutationFn: () => download('/api/export/vat-01gtgt.xml', t('exportXmlFile', { period, org: getCurrentOrg() ?? 'org' }), deductInput ? { deductInput: '1' } : {}),
+    mutationFn: () => download('/api/export/vat-01gtgt.xml', t('exportXmlFile', { period, org: getCurrentOrg() ?? 'org' }), deductParams(deduct)),
   });
   const exportError = exportXlsx.error ?? exportXml.error;
 
@@ -196,12 +288,23 @@ export function VatPage() {
             </DataTable>
             <p className="mt-2 text-xs text-subtle-foreground">{t('indicatorsNote')}</p>
             <p className="mt-1 text-xs text-subtle-foreground">{t('xmlNote')}</p>
-            <Label className="mt-2 text-xs font-normal text-muted-foreground">
-              <Checkbox checked={deductInput} onCheckedChange={(checked) => setDeductInput(checked)} />
-              {t('xmlDeductInput')}
-            </Label>
+            <label className="mt-2 block text-xs">
+              <span className="text-subtle-foreground">{t('xmlDeduct')}</span>
+              <NativeSelect aria-label={t('xmlDeduct')} className="mt-1 w-full max-w-md" value={deduct} onChange={(e) => setDeduct(e.target.value as DeductChoice)}>
+                {DEDUCT_CHOICES.map((c) => (
+                  <NativeSelectOption key={c} value={c}>
+                    {c === 'suggested' ? t('xmlDeductSuggested', { amount: f.money(data.paymentChecks.suggested25) }) : t(c === 'all' ? 'xmlDeductAll' : 'xmlDeductNone')}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </label>
+            {deduct === 'suggested' && data.paymentChecks.unchecked > 0 && (
+              <p className="mt-1 text-xs text-warning">{t('xmlDeductUnchecked', { count: data.paymentChecks.unchecked })}</p>
+            )}
             {!isZeroAmount(otherSales) && <p className="mt-2 text-sm text-warning">{t('otherSales', { amount: f.money(otherSales) })}</p>}
           </section>
+
+          <PaymentChecks data={data} canMark={canMarkPayment(org.data?.role)} />
 
           <section>
             <h2 className="mb-2 text-base font-semibold text-foreground">{t('ratesTitle')}</h2>

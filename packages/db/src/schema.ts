@@ -334,6 +334,12 @@ export type CashVoucherTable = Refine<
   'number'
 >;
 
+// The accountant's marks on input invoices that need proof of non-cash payment (#917). Append-only; the latest mark
+// of a document is its state.
+export const INPUT_VAT_CHECK_OUTCOMES = ['paid_by_bank', 'not_deductible', 'cleared'] as const;
+export type InputVatCheckOutcome = (typeof INPUT_VAT_CHECK_OUTCOMES)[number];
+export type InputVatCheckTable = Refine<G.FinanceInputVatCheckTable, { outcome: ColumnType<InputVatCheckOutcome, InputVatCheckOutcome, never> }>;
+
 // General journal vouchers (#888): phiếu kế toán khác, NVK. The insert trigger numbers each one per org (any number
 // given is replaced), and rows never change.
 export type JournalVoucherTable = Refine<G.FinanceJournalVoucherTable, { number: ColumnType<number, never, never> }, 'number'>;
@@ -489,6 +495,7 @@ type Refined = Tables<{
   'crove_finance.journal_entry': JournalEntryTable;
   'crove_finance.org_account': OrgAccountTable;
   'crove_finance.cash_voucher': CashVoucherTable;
+  'crove_finance.input_vat_check': InputVatCheckTable;
   'crove_finance.journal_voucher': JournalVoucherTable;
   'crove_finance.portal_invoice_list': PortalInvoiceListTable;
   'crove_finance.portal_invoice_row': PortalInvoiceRowTable;

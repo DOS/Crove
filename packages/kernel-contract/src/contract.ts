@@ -100,6 +100,7 @@ import {
   zVatPeriod,
   zVatFilingPeriod,
   zVatReport,
+  zInputVatCheckOutcome,
   zAccountLedger,
   zFinancialStatements,
   zLedgerPeriod,
@@ -825,8 +826,22 @@ export const contract = {
       .output(z.object({ code: zAccountCode, name: z.string(), active: z.boolean() })),
   },
   // VAT working for one month or quarter (issue #316); the Excel file is GET /api/export/vat.xlsx?period=<period>.
+  // markPayment (owners, admins, members; R1, audited; #917): the accountant's mark on an input invoice of the period
+  // that needs proof of non-cash payment: paid_by_bank (optionally with the bank voucher, báo Nợ, that paid it),
+  // not_deductible, or cleared. NOT_FLAGGED (409) when the invoice does not need the check; VOUCHER_NOT_BANK (422)
+  // when the voucher is not a báo Nợ of the org.
   vat: {
     period: oc.input(z.object({ period: zVatPeriod })).output(zVatReport),
+    markPayment: oc
+      .input(
+        z.object({
+          documentId: zId,
+          outcome: zInputVatCheckOutcome,
+          voucherId: zId.nullable().optional(),
+          note: z.string().trim().min(1).max(500).nullable().optional(),
+        }),
+      )
+      .output(z.object({ documentId: zId, outcome: zInputVatCheckOutcome })),
   },
   // The tax portal's purchase-invoice list (issue #465) for one VAT period. reconcile: every role; the lists of the
   // period and how their invoices compare with Crove's purchases. import (owners, admins, members; R1): files an .xlsx

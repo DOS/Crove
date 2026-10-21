@@ -16,6 +16,7 @@ export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
   'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
+  'crove_finance.input_vat_check': FinanceInputVatCheckTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.journal_voucher': FinanceJournalVoucherTable;
@@ -146,6 +147,18 @@ export interface FinanceCashVoucherTable {
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   bank_line_id: ColumnType<string | null, string | null, NotGranted>;
+}
+
+/** crove_finance.input_vat_check */
+export interface FinanceInputVatCheckTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  document_id: ColumnType<string, string, NotGranted>;
+  outcome: ColumnType<string, string, NotGranted>;
+  voucher_id: ColumnType<string | null, string | null, NotGranted>;
+  note: ColumnType<string | null, string | null, NotGranted>;
+  marked_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_finance.journal_entry */
