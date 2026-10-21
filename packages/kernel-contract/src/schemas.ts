@@ -1436,6 +1436,22 @@ export const zSocialMetricsRow = z.object({
   clicks: z.number().int().nullable(),
 });
 
+// One channel post of a content plan export (#978), for the print layout.
+export const zSocialPlanRow = z.object({
+  postId: zId,
+  variantId: zId,
+  connectionId: zId,
+  channel: z.string(),
+  provider: z.string(),
+  status: z.string(),
+  at: z.string(),
+  title: z.string().nullable(),
+  body: z.string(),
+  linkUrl: z.string().nullable(),
+  labels: z.array(z.string()),
+  assignee: z.string().nullable(),
+});
+
 // A window's totals of published posts (#397): variants out, the sum of each count, and the clicks on their short
 // links (null when none went out with one); and the same per channel, most posts first (#947).
 const zSocialTotals = z.object({ posts: z.number().int(), metrics: z.record(z.string(), z.number()), clicks: z.number().nullable() });

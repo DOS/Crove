@@ -433,6 +433,21 @@ describe('validateVariant', () => {
     expect(wp('Khai trương', null, [mp4()])).toEqual(['MEDIA_KIND_NOT_ALLOWED']);
   });
 
+  it('checks WordPress categories, tags, excerpt and status (#981)', () => {
+    const wp = (wordpress: unknown, provider: 'wordpress' | 'mastodon' = 'wordpress') => validateVariant({ provider, body: 'Khai trương', title: provider === 'wordpress' ? 'Thực đơn' : null, media: [], settings: { wordpress } });
+    expect(wp({ categories: ['Tin tức', 'Khuyến mãi & Quà'], tags: ['bánh mì'], excerpt: 'Món mới tháng 10', status: 'draft' })).toEqual([]);
+    expect(wp({ status: 'pending' })).toEqual([]);
+    expect(wp({ status: 'publish', excerpt: 'ư'.repeat(500) })).toEqual([]);
+    expect(wp({ categories: ['Tin tức'] }, 'mastodon')).toEqual([{ code: 'WORDPRESS_NOT_SUPPORTED', field: 'settings.wordpress', limit: null, actual: null }]);
+    expect(wp(['Tin tức'])).toEqual([{ code: 'WORDPRESS_INVALID', field: 'settings.wordpress', limit: null, actual: null }]);
+    expect(wp({ categories: Array.from({ length: 11 }, (_, i) => `c${i}`) })).toEqual([{ code: 'WORDPRESS_TOO_MANY_CATEGORIES', field: 'settings.wordpress.categories', limit: 10, actual: 11 }]);
+    expect(wp({ tags: Array.from({ length: 21 }, (_, i) => `t${i}`) })).toEqual([{ code: 'WORDPRESS_TOO_MANY_TAGS', field: 'settings.wordpress.tags', limit: 20, actual: 21 }]);
+    expect(wp({ tags: ['bánh mì', ' ', '<b>', 'x'.repeat(201)] }).map((i) => i.field)).toEqual(['settings.wordpress.tags.1', 'settings.wordpress.tags.2', 'settings.wordpress.tags.3']);
+    expect(wp({ categories: 'Tin tức' })).toEqual([{ code: 'WORDPRESS_TERM_INVALID', field: 'settings.wordpress.categories', limit: 200, actual: null }]);
+    expect(wp({ excerpt: 'ư'.repeat(501) })).toEqual([{ code: 'WORDPRESS_EXCERPT_TOO_LONG', field: 'settings.wordpress.excerpt', limit: 500, actual: 501 }]);
+    expect(wp({ status: 'private' })).toEqual([{ code: 'WORDPRESS_STATUS_INVALID', field: 'settings.wordpress.status', limit: null, actual: null }]);
+  });
+
   it('gives a Telegram post with media the caption limit of 1,024, and text alone 4,096 (#747)', () => {
     const tg = (media: MediaItem[], n: number) => validateVariant({ provider: 'telegram', body: 'x'.repeat(n), title: null, media, settings: {} }).map((i) => i.code);
     expect(tg([], 4096)).toEqual([]);

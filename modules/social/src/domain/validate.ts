@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, REPLY_SETTINGS, LINKEDIN_VISIBILITY, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, REPLY_SETTINGS, LINKEDIN_VISIBILITY } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -129,7 +129,18 @@ export type IssueCode =
   | 'YT_TAG_INVALID'
   | 'YT_TAGS_TOO_LONG'
   // Zalo OA (#943): settings.comments is set and is not true or false.
-  | 'ZALO_COMMENTS_INVALID';
+  | 'ZALO_COMMENTS_INVALID'
+  // WordPress (#981), settings.wordpress: set on another channel, or not an object; more than WORDPRESS_CATEGORIES_MAX
+  // categories or WORDPRESS_TAGS_MAX tags (limit, actual); a name that is not text, is empty, holds < or >, or is over
+  // WORDPRESS_TERM_MAX characters (field settings.wordpress.categories.<index> or .tags.<index>); an excerpt over
+  // WORDPRESS_EXCERPT_MAX characters (limit, actual); a status other than publish, draft or pending.
+  | 'WORDPRESS_NOT_SUPPORTED'
+  | 'WORDPRESS_INVALID'
+  | 'WORDPRESS_TOO_MANY_CATEGORIES'
+  | 'WORDPRESS_TOO_MANY_TAGS'
+  | 'WORDPRESS_TERM_INVALID'
+  | 'WORDPRESS_EXCERPT_TOO_LONG'
+  | 'WORDPRESS_STATUS_INVALID';
 
 export interface Issue {
   code: IssueCode;
@@ -346,6 +357,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkPollAndTag(issues, variant, caps);
   checkGbp(issues, variant);
+  checkWordPress(issues, variant);
   if (variant.provider === 'tiktok') {
     // Direct posts need a privacy level; a draft sent to the TikTok inbox (#903) takes none.
     const mode = tiktokModeOf(variant.settings);
@@ -421,6 +433,46 @@ function checkGbp(issues: Issue[], variant: VariantDraft): void {
     if (!dated || !timed || titleLength > 58 || (g.topic === 'EVENT' && titleLength === 0)) issues.push({ code: 'GBP_INVALID', field: 'settings.gbp.event', limit: 58, actual: titleLength });
   }
   if (g.cta && g.cta !== 'CALL' && !(variant.linkUrl ?? '').trim()) issues.push({ code: 'GBP_CTA_NEEDS_LINK', field, limit: null, actual: null });
+}
+
+// A WordPress post's categories, tags, excerpt and status (#981). Each is optional; the names are checked against the
+// site only when the post goes out (an unknown category then fails it with nothing posted).
+function checkWordPress(issues: Issue[], variant: VariantDraft): void {
+  const raw = variant.settings?.wordpress;
+  if (raw === undefined || raw === null) return;
+  const field = 'settings.wordpress';
+  if (variant.provider !== 'wordpress') {
+    issues.push({ code: 'WORDPRESS_NOT_SUPPORTED', field, limit: null, actual: null });
+    return;
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    issues.push({ code: 'WORDPRESS_INVALID', field, limit: null, actual: null });
+    return;
+  }
+  const w = raw as Record<string, unknown>;
+  const names = (key: 'categories' | 'tags', max: number, tooMany: IssueCode) => {
+    const value = w[key];
+    if (value === undefined || value === null) return;
+    if (!Array.isArray(value)) {
+      issues.push({ code: 'WORDPRESS_TERM_INVALID', field: `${field}.${key}`, limit: WORDPRESS_TERM_MAX, actual: null });
+      return;
+    }
+    if (value.length > max) issues.push({ code: tooMany, field: `${field}.${key}`, limit: max, actual: value.length });
+    value.forEach((name, i) => {
+      const n = typeof name === 'string' ? countText(name.trim(), 'codepoints') : null;
+      if (n === null || n === 0 || n > WORDPRESS_TERM_MAX || /[<>]/.test(name as string)) issues.push({ code: 'WORDPRESS_TERM_INVALID', field: `${field}.${key}.${i}`, limit: WORDPRESS_TERM_MAX, actual: n });
+    });
+  };
+  names('categories', WORDPRESS_CATEGORIES_MAX, 'WORDPRESS_TOO_MANY_CATEGORIES');
+  names('tags', WORDPRESS_TAGS_MAX, 'WORDPRESS_TOO_MANY_TAGS');
+  const excerpt = w.excerpt;
+  if (excerpt !== undefined && excerpt !== null) {
+    const n = typeof excerpt === 'string' ? countText(excerpt.trim(), 'codepoints') : null;
+    if (n === null || n > WORDPRESS_EXCERPT_MAX) issues.push({ code: 'WORDPRESS_EXCERPT_TOO_LONG', field: `${field}.excerpt`, limit: WORDPRESS_EXCERPT_MAX, actual: n });
+  }
+  if (w.status !== undefined && w.status !== null && !(WORDPRESS_STATUSES as readonly unknown[]).includes(w.status)) {
+    issues.push({ code: 'WORDPRESS_STATUS_INVALID', field: `${field}.status`, limit: null, actual: null });
+  }
 }
 
 // A cover belongs to one video, alone in the post (a Reel on Instagram); the channel decides which kinds it takes.

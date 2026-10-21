@@ -16,6 +16,7 @@ import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName, VARIANT_TONE } from '../lib/social.ts';
 import { addDays, calendarItems, DAY_MS, dayId, notesByDay, onDay, startOfDay, viewDays, type CalendarItem, type View } from '../lib/social-calendar.ts';
 import { NoteChip, NoteEditor, type NoteDraft } from './social-calendar-notes.tsx';
+import { PlanExportPanel } from './social-plan-export.tsx';
 import { occasionStart, occasionsShown, setOccasionsShown } from '../lib/social-occasions.ts';
 
 const excerpt = (text: string) => text.replace(/\s+/g, ' ').trim();
@@ -84,6 +85,8 @@ export function SocialCalendar({ slug, names, canDecide, canWrite, labelId }: { 
   const notes = useQuery(orpc.social.calendarNotes.list.queryOptions({ input: { from: dayId(days[0] as Date), to: dayId(days.at(-1) as Date) } }));
   const notesOn = useMemo(() => notesByDay(notes.data ?? [], days), [notes.data, days]);
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
+  // The content plan export (#978), for members and above.
+  const [exporting, setExporting] = useState(false);
   const byDay = useMemo(() => {
     const map = new Map<string, CalendarItem[]>();
     for (const item of items) map.set(dayId(item.at), [...(map.get(dayId(item.at)) ?? []), item]);
@@ -169,6 +172,11 @@ export function SocialCalendar({ slug, names, canDecide, canWrite, labelId }: { 
             {t('calendarNotes.add')}
           </Button>
         )}
+        {canWrite && (
+          <Button variant="ghost" size="sm" aria-expanded={exporting} onClick={() => setExporting(!exporting)}>
+            {t('planExport.open')}
+          </Button>
+        )}
         <div className="flex gap-1" role="group" aria-label={t('calendar.view')}>
           {(['month', 'week'] as const).map((v) => (
             <Button key={v} variant={view === v ? 'secondary' : 'ghost'} size="sm" aria-pressed={view === v} onClick={() => setView(v)}>
@@ -179,6 +187,7 @@ export function SocialCalendar({ slug, names, canDecide, canWrite, labelId }: { 
       </div>
       {canDecide && <p className="text-xs text-subtle-foreground">{t('calendar.dragHint')}</p>}
       {noteDraft && <NoteEditor key={'note' in noteDraft ? noteDraft.note.id : noteDraft.day} draft={noteDraft} onClose={() => setNoteDraft(null)} />}
+      {exporting && canWrite && <PlanExportPanel slug={slug} month={anchor} onClose={() => setExporting(false)} />}
       {notes.error && <ErrorText>{errorMessage(notes.error)}</ErrorText>}
       {move.error && <ErrorText>{errorMessage(move.error)}</ErrorText>}
       {dropError && <ErrorText>{t('calendar.dropPast')}</ErrorText>}
