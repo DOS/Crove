@@ -45,6 +45,7 @@ import {
   buildJournalWorkbook,
   buildLedgerWorkbook,
   buildStatementsWorkbook,
+  buildStatementsHtkkXml,
   buildFixedAssetsWorkbook,
   buildMisaWorkbook,
   buildVat01Xml,
@@ -55,6 +56,7 @@ import {
   type CashVoucher,
   type JournalEntryView,
   type FinancialStatements,
+  type StatementsFiling,
   type LedgerBook,
   type PurchaseVoucher,
   type RecordedArchive,
@@ -1454,6 +1456,35 @@ export function createHttpApp(deps: HttpDeps) {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': attachmentDisposition(orgSlug, ['crove', 'so-tai-san', ORG_SLUG], 'xlsx'),
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // The year-end financial statements as HTKK XML (issue #920), ?year=2026: B01a-DNN, B02-DNN and F01-DNN, form 683.
+    // The query checks the year (422 otherwise), the roles and the tax code, so the file name only holds a valid year.
+    app.get('/api/export/statements-htkk.xml', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const yearText = c.req.query('year') ?? '';
+        const year = /^\d{4}$/.test(yearText) ? Number(yearText) : Number.NaN;
+        const filing = await runtime.query<StatementsFiling>('finance.statements.htkk', { year }, { actor: actorOf(user), orgId });
+        const xml = buildStatementsHtkkXml(filing);
+        // The export's audit row (the year, the format and the warnings only). No row, no download.
+        await runtime.execute(
+          'finance.statements.export',
+          { period: String(filing.input.year), format: 'htkk_bctc_xml', ...(filing.warnings.length > 0 ? { warnings: filing.warnings } : {}) },
+          { actor: actorOf(user), orgId },
+        );
+        return new Response(body(new TextEncoder().encode(xml)), {
+          headers: {
+            'content-type': 'application/xml; charset=utf-8',
+            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'bctc', String(filing.input.year), ORG_SLUG], 'xml'),
             'cache-control': 'private, no-store',
           },
         });

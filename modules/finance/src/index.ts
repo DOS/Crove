@@ -15,6 +15,7 @@ import { bankImport, bankLines, bankPreview } from './bank.ts';
 import { bankLineVoucher, bankOpenLines, bankSuggestions } from './bank-match.ts';
 import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts';
 import { statementsExport, statementsPeriodQuery } from './statements.ts';
+import { statementsHtkkQueries } from './statements-htkk.ts';
 import { missingInvoicesReminderSet, missingInvoicesRemind, missingInvoicesRequest, missingInvoicesStatus } from './missing-invoices.ts';
 import { searchQuery } from './search.ts';
 import { documentExports } from './document-exports.ts';
@@ -61,6 +62,8 @@ export { buildVatWorkbook, VAT_RATE_LABELS, VAT_WARNING_LABELS } from './vat-exp
 export { buildVat01Xml } from './vat-xml.ts';
 export { buildLedgerWorkbook } from './ledger-export.ts';
 export { buildStatementsWorkbook } from './statements-export.ts';
+export { buildStatementsHtkkXml, type StatementsFiling } from './statements-htkk.ts';
+export * from './domain/statements-htkk-xml.ts';
 export { buildFixedAssetsWorkbook } from './fixed-assets-export.ts';
 export {
   MISA_SME_CASH_PAYMENT,
@@ -109,6 +112,7 @@ export { type FinancialStatements, type StatementLine, type UnmappedRow } from '
 export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, vatPaymentMark, ...financeNotificationCommands, ...yearArchiveCommands, ...fixedAssetCommands];
 export const financeQueries = [
   ...fixedAssetQueries,
+  ...statementsHtkkQueries,
   fileForExtraction,
   purchaseLookup,
   vendorsList,

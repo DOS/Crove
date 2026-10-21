@@ -215,6 +215,50 @@ function StatementTable({ title, lines, unmapped }: { title: string; lines: Stat
   );
 }
 
+// A year's statements as HTKK XML (#920): what the file would get wrong or leave out, said before the download; the
+// file is still written, the accountant decides.
+function HtkkStatements({ year }: { year: number }) {
+  const t = useTranslations('ledger');
+  const check = useQuery(orpc.ledger.statementsHtkkCheck.queryOptions({ input: { year } }));
+  const exportXml = useMutation({
+    mutationFn: async () => {
+      const response = await apiFetch(`/api/export/statements-htkk.xml?${new URLSearchParams({ year: String(year) })}`);
+      const url = URL.createObjectURL(await response.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = t('htkkFile', { year: String(year), org: getCurrentOrg() ?? 'org' });
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+  });
+  const warnings = check.data?.warnings ?? [];
+  return (
+    <section className="space-y-3 rounded-xl border bg-card p-4" aria-label={t('htkkTitle', { year: String(year) })}>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">{t('htkkTitle', { year: String(year) })}</h2>
+          <p className="mt-1 max-w-3xl text-xs text-subtle-foreground">{t('htkkIntro')}</p>
+        </div>
+        <Button variant="outline" onClick={() => exportXml.mutate()} disabled={exportXml.isPending || check.isLoading}>
+          {exportXml.isPending ? <Spinner className="text-current" /> : null}
+          {t('htkkExport')}
+        </Button>
+      </div>
+      {check.error && <ErrorText>{errorMessage(check.error)}</ErrorText>}
+      {warnings.length > 0 && (
+        <Alert className="border-warning/30 bg-warning/10 text-warning" role="status">
+          <ul className="list-disc space-y-1 pl-4">
+            {warnings.map((w) => (
+              <li key={w}>{w === 'F01_UNCOVERED' ? t('htkkWarnings.F01_UNCOVERED', { accounts: (check.data?.uncovered ?? []).join(', ') }) : t(`htkkWarnings.${w}`)}</li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+      {exportXml.error && <ErrorText>{errorMessage(exportXml.error)}</ErrorText>}
+    </section>
+  );
+}
+
 function Statements({ period }: { period: string }) {
   const t = useTranslations('ledger');
   const f = useFormat();
@@ -246,6 +290,7 @@ function Statements({ period }: { period: string }) {
         </Button>
       </div>
       {exportXlsx.error && <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>}
+      {/^\d{4}$/.test(period) && <HtkkStatements year={Number(period)} />}
       {!data.b01.balanced && (
         <Alert className="border-warning/30 bg-warning/10 text-warning" role="status">
           {t('statementsUnbalanced')}

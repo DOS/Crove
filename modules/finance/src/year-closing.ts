@@ -46,7 +46,7 @@ async function resultBalances(ctx: QueryContext, year: number): Promise<AccountB
 
 // Whether the year has a closing in force: a closing voucher whose entry has no reversal dated in the year. A reversal
 // dated later leaves the year's balances closed, so the year stays closed.
-async function isClosed(ctx: QueryContext, year: number): Promise<boolean> {
+export async function isClosed(ctx: QueryContext, year: number): Promise<boolean> {
   const row = await ctx.trx
     .selectFrom('crove_finance.journal_voucher as v')
     .innerJoin('crove_finance.journal_entry as e', (join) =>

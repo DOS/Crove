@@ -14,7 +14,7 @@ import type { ExtractClient } from '@crove/extract-contract';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { Runtime, fileKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
-import { extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
+import { F01_ACCOUNTS, extractAndPropose, financeCommands, financeQueries } from '@crove/mod-finance';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
 import { createHttpApp } from '../src/http.ts';
@@ -468,6 +468,73 @@ suite('ledger reports per month, quarter or year (#321)', () => {
     expect((await statementAudits()).map((r) => r.detail)).toEqual([{ period: '2026-09' }]);
     expect((await statementsFile(await tokenFor(owner), '2026-Q9')).status).toBe(422);
     expect(await statementAudits()).toHaveLength(1);
+  });
+
+  // The year's statements as HTKK XML (issue #920); the layout itself is unit-tested in
+  // modules/finance/test/statements-htkk-xml.test.ts.
+  const htkkFile = async (token: string, year: string, slug = org.slug) =>
+    app.request(`/api/export/statements-htkk.xml?${new URLSearchParams({ year })}`, { headers: { authorization: `Bearer ${token}`, 'x-crove-org': slug } });
+  const xmlValue = (xml: string, path: string) => {
+    let rest = xml;
+    for (const tag of path.split('/')) {
+      const start = rest.indexOf(`<${tag}>`);
+      if (start === -1) return undefined;
+      rest = rest.slice(start + tag.length + 2);
+    }
+    return rest.slice(0, rest.indexOf('<'));
+  };
+
+  it('says what the HTKK statements of a year would miss, then writes them for a viewer and records the export', async () => {
+    const check = await rpc('ledger/statementsHtkkCheck', await tokenFor(viewer), { year: 2026 });
+    expect(check.status).toBe(200);
+    // The year has no closing entries (#889) yet; every account is in HTKK's trial balance list.
+    expect(check.body).toEqual({ year: 2026, warnings: ['YEAR_NOT_CLOSED'], uncovered: [] });
+    const before = (await statementAudits()).length;
+    // No tax code yet: refused, nothing recorded.
+    const refused = await htkkFile(await tokenFor(viewer), '2026');
+    expect(refused.status).toBe(422);
+    expect((await refused.json()).code).toBe('TAX_CODE_REQUIRED');
+    expect((await rpc('org/setTaxCode', await tokenFor(owner), { taxCode: '0312345670' })).status).toBe(200);
+
+    const response = await htkkFile(await tokenFor(viewer), '2026');
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('application/xml; charset=utf-8');
+    expect(response.headers.get('content-disposition')).toContain('crove-bctc-2026');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    const xml = await response.text();
+    expect(xmlValue(xml, 'maTKhai')).toBe('683');
+    expect(xmlValue(xml, 'mst')).toBe('0312345670');
+    expect(xmlValue(xml, 'kyKKhai')).toBe('2026');
+    // B01 at 31 December 2026 and at 31 December 2025 (nothing posted then), B02 of 2026, and F01's payable.
+    expect(xmlValue(xml, 'SoCuoiNam/ct311')).toBe('5940000');
+    expect(xmlValue(xml, 'SoCuoiNam/ct500')).toBe('540000');
+    expect(xmlValue(xml, 'SoDauNam/ct500')).toBe('0');
+    expect(xmlValue(xml, 'NamNay/ct24')).toBe('5400000');
+    expect(xmlValue(xml, 'NamTruoc/ct24')).toBe('0');
+    expect(xmlValue(xml, 'SoDuCuoiKy/Co/ct331')).toBe('5940000');
+    // F01 is summed per account in SQL rather than from every line: it must equal the year's trial balance of the
+    // ledger report on every account HTKK lists.
+    const year = await rpc('ledger/period', await tokenFor(viewer), { period: '2026' });
+    const sides = [
+      ['SoDuDauKy/No', 'openingDebit'],
+      ['SoDuDauKy/Co', 'openingCredit'],
+      ['SoPhatSinhTrongKy/No', 'debit'],
+      ['SoPhatSinhTrongKy/Co', 'credit'],
+      ['SoDuCuoiKy/No', 'closingDebit'],
+      ['SoDuCuoiKy/Co', 'closingCredit'],
+    ] as const;
+    const listed = (year.body.trialBalance.rows as TrialRow[]).filter((r) => F01_ACCOUNTS.includes(r.accountCode as (typeof F01_ACCOUNTS)[number]));
+    expect(listed.length).toBeGreaterThan(3);
+    for (const row of listed) {
+      for (const [path, key] of sides) expect(xmlValue(xml, `${path}/ct${row.accountCode}`), `${path} ${row.accountCode}`).toBe(String(Math.round(Number(row[key]))));
+    }
+    expect((await statementAudits()).slice(before).map((r) => r.detail)).toEqual([{ period: '2026', format: 'htkk_bctc_xml', warnings: ['YEAR_NOT_CLOSED'] }]);
+
+    // A malformed or out-of-range year, and another org's member, get no file and record nothing.
+    for (const year of ['26', '2100', '2026-09', '']) expect((await htkkFile(await tokenFor(owner), year)).status, year).toBe(422);
+    expect((await htkkFile(await tokenFor(outsider), '2026')).status).toBeGreaterThanOrEqual(400);
+    expect((await rpc('ledger/statementsHtkkCheck', await tokenFor(owner), { year: 2100 })).status).toBe(400);
+    expect(await statementAudits()).toHaveLength(before + 1);
   });
 
   it('reads the ledger reports at one moment while entries are posted (#365)', async () => {
