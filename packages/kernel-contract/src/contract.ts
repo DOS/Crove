@@ -105,6 +105,12 @@ import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance
 import { zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 
+// Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
+export const zProposalPolicy = z.object({
+  remindAfterDays: z.number().int().min(1).max(30).nullable(),
+  escalateAfterDays: z.number().int().min(1).max(60).nullable(),
+});
+
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
   me: {
@@ -128,6 +134,10 @@ export const contract = {
     // Owners and admins (issue #324): the org's address, or null to clear it. Stored on one line, at most 500
     // characters; a value with control characters is refused.
     setAddress: oc.input(z.object({ address: z.string().max(2000).nullable() })).output(z.object({ address: z.string().nullable() })),
+    // Everyone reads, owners and admins set (issue #676): after how many days a pending proposal reminds the people who
+    // may approve it, and after how many its owners are told; null turns either off. Escalation must come later.
+    proposalPolicy: oc.output(zProposalPolicy),
+    setProposalPolicy: oc.input(zProposalPolicy).output(zProposalPolicy),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
     invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
@@ -396,6 +406,13 @@ export const contract = {
       list: oc.input(z.object({})).output(z.array(z.object({ id: zId, name: z.string(), connectionIds: z.array(zId), updatedAt: z.string() }))),
       save: oc.input(z.strictObject({ setId: zId.optional(), name: z.string().trim().min(1).max(80), connectionIds: z.array(zId).min(1).max(20) })).output(z.object({ setId: zId })),
       remove: oc.input(z.strictObject({ setId: zId })).output(z.object({ setId: zId, removed: z.boolean() })),
+    },
+    // The posting calendar feed (#862): owners and admins make (replacing the live one) and revoke it; the token is in
+    // the create answer only. Everyone sees whether there is one.
+    calendarFeed: {
+      get: oc.input(z.object({})).output(z.object({ createdAt: z.string(), createdBy: zId }).nullable()),
+      create: oc.input(z.strictObject({})).output(z.object({ token: z.string() })),
+      revoke: oc.input(z.strictObject({})).output(z.object({ revoked: z.boolean() })),
     },
     // Notes on calendar dates (#794): owners, admins and members save and remove them; everyone reads the ones that
     // overlap the days shown.

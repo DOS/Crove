@@ -53,6 +53,7 @@ export interface CroveKernelSchema {
   'crove_kernel.party': KernelPartyTable;
   'crove_kernel.position': KernelPositionTable;
   'crove_kernel.proposal': KernelProposalTable;
+  'crove_kernel.proposal_policy': KernelProposalPolicyTable;
   'crove_kernel.task': KernelTaskTable;
   'crove_kernel.task_comment': KernelTaskCommentTable;
   'crove_kernel.tenant': KernelTenantTable;
@@ -64,6 +65,7 @@ export interface CroveSocialSchema {
   'crove_social.bio_click': SocialBioClickTable;
   'crove_social.bio_page': SocialBioPageTable;
   'crove_social.brand_voice': SocialBrandVoiceTable;
+  'crove_social.calendar_feed': SocialCalendarFeedTable;
   'crove_social.calendar_note': SocialCalendarNoteTable;
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.channel_set': SocialChannelSetTable;
@@ -648,6 +650,17 @@ export interface KernelPositionTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
+/** crove_kernel.proposal_policy */
+export interface KernelProposalPolicyTable {
+  org_id: string;
+  id: Generated<string>;
+  remind_after_days: number | null;
+  escalate_after_days: number | null;
+  updated_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 /** crove_kernel.proposal */
 export interface KernelProposalTable {
   org_id: string;
@@ -676,6 +689,8 @@ export interface KernelProposalTable {
   tainted: Generated<boolean>;
   policy_flags: string[] | null;
   decided_by_agent: string | null;
+  reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  escalated_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_kernel.task_comment */
@@ -790,6 +805,17 @@ export interface SocialBrandVoiceTable {
   updated_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.calendar_feed */
+export interface SocialCalendarFeedTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  token_sha256: ColumnType<string, string, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  revoked_by: string | null;
 }
 
 /** crove_social.calendar_note */

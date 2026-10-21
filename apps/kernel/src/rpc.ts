@@ -298,6 +298,10 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       setAddress: os.org.setAddress.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_address', input, { actor, orgId })),
       ),
+      proposalPolicy: os.org.proposalPolicy.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.proposal_policy.get', {}, { actor, orgId }))),
+      setProposalPolicy: os.org.setProposalPolicy.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal_policy.save', input, { actor, orgId })),
+      ),
       // No idempotency key: the answer carries the invite token, which must never be stored with a key. The mail
       // goes out after the command has committed (invite-mail.ts says why), unless the org stopped mail to the
       // address (#538); its outcome is recorded on the invite's mail_message row and never changes the answer, which
@@ -582,6 +586,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         create: os.social.labels.create.handler(socialCommand('social.label.create')),
         update: os.social.labels.update.handler(socialCommand('social.label.update')),
         remove: os.social.labels.remove.handler(socialCommand('social.label.delete')),
+      },
+      calendarFeed: {
+        get: os.social.calendarFeed.get.handler(socialQuery('social.calendar_feed.get')),
+        create: os.social.calendarFeed.create.handler(socialCommand('social.calendar_feed.create')),
+        revoke: os.social.calendarFeed.revoke.handler(socialCommand('social.calendar_feed.revoke')),
       },
       calendarNotes: {
         list: os.social.calendarNotes.list.handler(socialQuery('social.calendar_note.list')),

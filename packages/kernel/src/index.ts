@@ -8,6 +8,7 @@ export * from './extraction.ts';
 export * from './offboarding.ts';
 export * from './agents.ts';
 export * from './channels.ts';
+export * from './proposal-reminders.ts';
 export { decideAgentApproval, decideApproval, eligibleApprovers, HUMAN_REVIEW_RULES } from './approval.ts';
 export * from './archives.ts';
 export { isArchiveType } from './files.ts';

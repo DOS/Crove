@@ -89,6 +89,7 @@ import type { MailProvider } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { reviewAnswer, reviewFile, reviewMedia, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_FILES_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
+import { CALENDAR_FEED_HITS_PER_MINUTE, calendarFeed, renderIcs } from './calendar-feed.ts';
 import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
 import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
 import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
@@ -134,6 +135,8 @@ export interface HttpDeps {
   reviewLimits?: { views: RateLimiter; answers: RateLimiter; files?: RateLimiter };
   // The public report page's budget per client (#643). Unset: REPORT_VIEWS_PER_MINUTE.
   reportLimit?: RateLimiter;
+  // The posting calendar feed's budget per client (#862). Unset: CALENDAR_FEED_HITS_PER_MINUTE.
+  calendarFeedLimit?: RateLimiter;
   // The per-client budget of link-in-bio pages, their links and images (#707), replaceable in tests.
   bioLimit?: RateLimiter;
   // The per-client budget of short link redirects (#706), replaceable in tests.
@@ -578,6 +581,23 @@ export function createHttpApp(deps: HttpDeps) {
       try {
         const view = await reportView(runtime, await c.req.json().catch(() => null));
         return view ? c.json(view) : c.json({ code: 'REPORT_LINK_INVALID', message: 'Liên kết báo cáo không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    // The posting calendar feed (#862) for Google Calendar or Outlook, which can only fetch a URL: the token is in the
+    // path. Nothing in the kernel logs request paths (and the deploy's Caddyfile keeps no access log), and a failed
+    // lookup logs the database error, never the request. An unknown, malformed or revoked token is a plain 404.
+    const calendarFeedLimit = deps.calendarFeedLimit ?? new RateLimiter({ perMinute: CALENDAR_FEED_HITS_PER_MINUTE });
+    app.get('/cal/:file', async (c) => {
+      const limited = reviewBudget(c, calendarFeedLimit);
+      if (limited) return limited;
+      const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
+      try {
+        const file = c.req.param('file');
+        const feed = file.endsWith('.ics') ? await calendarFeed(runtime, file.slice(0, -4)) : null;
+        if (!feed) return c.text('Không tìm thấy lịch này', 404, headers);
+        return c.body(renderIcs(feed, config.PUBLIC_URL, new Date()), 200, { ...headers, 'content-type': 'text/calendar; charset=utf-8' });
       } catch (error) {
         return problem(c, error);
       }
