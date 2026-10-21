@@ -249,7 +249,8 @@ export async function decideAgentApproval(
     SELECT r.tainted, r.status,
            EXISTS (SELECT 1 FROM crove_kernel.kill_switch k
                    WHERE k.org_id = r.org_id AND (k.released_at IS NULL OR k.engaged_at > ${options.stoppedSince ?? null}::timestamptz)
-                     AND (k.scope = 'org' OR (k.scope = 'module' AND k.target = ${seat.module}) OR (k.scope = 'agent' AND k.target = r.agent_id::text))) AS stopped
+                     AND (k.scope = 'org' OR (k.scope = 'module' AND k.target = ${seat.module}) OR (k.scope = 'agent' AND k.target = r.agent_id::text)))
+             OR crove_kernel.global_kill_switch_on('ai') AS stopped
     FROM crove_kernel.ai_run r
     WHERE r.org_id = ${orgId}::uuid AND r.id = ${approver.runId}::uuid AND r.agent_id = ${approver.agentId}::uuid`.execute(trx);
   const run = runs[0];

@@ -219,6 +219,21 @@ export type CommentResult =
   | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string }
   | { kind: 'unknown'; code?: string; message?: string };
 
+// Taking a published post down from its platform (#860). A post the platform no longer has (404, 410) counts as
+// removed, so asking twice is harmless.
+export interface RemoveInput {
+  externalAccountId: string;
+  secret: string;
+  // The published post's id, as publish returned it.
+  externalId: string;
+  settings?: Readonly<Record<string, unknown>>;
+}
+// rejected: the post is still up (the platform refused, or nothing reached it); unknown: it may or may not be gone.
+export type RemoveResult =
+  | { kind: 'removed' }
+  | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string; retryAt?: Date }
+  | { kind: 'unknown'; code?: string };
+
 
 export interface Publisher {
   readonly provider: ChannelProviderId;
@@ -240,6 +255,8 @@ export interface Publisher {
   comment?(input: CommentInput): Promise<CommentResult>;
   // Providers that repost the account's own post (#773). Never retried by itself, like a comment.
   repost?(input: RepostInput): Promise<CommentResult>;
+  // Providers that take a published post down (#860), when a person asks.
+  remove?(input: RemoveInput): Promise<RemoveResult>;
 }
 
 interface SandboxPost {
@@ -291,6 +308,15 @@ export class SandboxPublisher implements Publisher {
     posts.push({ id, callKey: input.callKey, contentHash: input.contentHash, body: input.content.body, at: new Date() });
     this.accounts.set(input.externalAccountId, posts);
     return { kind: 'accepted', externalId: id, url: null };
+  }
+
+  // Takes the post off the sandbox (#860); one it no longer holds is gone already.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const accessToken = (JSON.parse(input.secret) as { accessToken?: unknown }).accessToken;
+    if (typeof accessToken !== 'string' || !accessToken.startsWith('sbx_')) return { kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' };
+    const posts = this.accounts.get(input.externalAccountId) ?? [];
+    this.accounts.set(input.externalAccountId, posts.filter((p) => p.id !== input.externalId));
+    return { kind: 'removed' };
   }
 
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {

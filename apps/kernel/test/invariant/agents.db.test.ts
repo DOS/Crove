@@ -941,6 +941,19 @@ suite('agents in the org chart: T18 negative tests on PostgreSQL (ADR-0029)', ()
     }
   });
 
+  // Issue #886: the operator's AI switch stops every agent of every org, in the database as at the gates.
+  it('refuses every agent context while the deployment-wide AI switch is engaged, and lets it in once released', async () => {
+    const { actor } = await liveAgent(orgA, owner);
+    const set = (engaged: boolean) => withAdmin((c) => c.query(`SELECT crove_kernel.global_kill_switch_set('ai', $1, 'diễn tập', 'ops')`, [engaged]));
+    await set(true);
+    try {
+      await expect(inAgentContext(orgA, actor, async () => 'in')).rejects.toMatchObject({ code: '42501', message: 'KILL_SWITCH_ON' });
+    } finally {
+      await set(false);
+    }
+    await expect(inAgentContext(orgA, actor, async () => 'in')).resolves.toBe('in');
+  });
+
   // Issue #333 item 4: the actor's run always wins over a run a command puts in its own audit detail.
   it('keeps the agent run of the actor on an audit row, whatever run the command names in its detail', async () => {
     const { actor } = await liveAgent(orgA, owner);

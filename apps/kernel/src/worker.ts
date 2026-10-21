@@ -12,7 +12,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.ts';
@@ -183,6 +183,15 @@ export interface WorkerDeps {
   // Queued mail (#548): the mailer, the templates queued mail is rendered from, and the bounce domain. Unset: queued
   // mail waits.
   mail?: Omit<MailQueueDeps, 'runtime' | 'publicUrl'>;
+}
+
+// A person asked for a published variant to come down from its platform (#860).
+interface SocialRemoveJob {
+  orgId: string;
+  variantId: string;
+  provider: string;
+  // The last remove call the person saw when they asked (null: none was made).
+  after: string | null;
 }
 
 interface SocialPublishJob {
@@ -375,7 +384,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // time with a gap. Without a mailer (tests, an embedder) queued mail stays queued.
   const mail = deps.mail;
   if (mail) {
-    const mailDeps: MailQueueDeps = { runtime: deps.runtime, ...mail, publicUrl: deps.publicUrl ?? '' };
+    const mailDeps: MailQueueDeps = { runtime: deps.runtime, ...mail, publicUrl: deps.publicUrl ?? '', workerDb: deps.workerDb };
     const sendMail = async (job: { data: MailJob; retryCount: number } | undefined, gap: number) => {
       if (!job) return;
       const label = job.data.messageId.slice(0, 8);
@@ -529,6 +538,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       }
       const outcome = await runPublishJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store, ...(deps.publicUrl ? { publicUrl: deps.publicUrl } : {}) }, orgId, variantId, provider);
       if (outcome.action !== 'none') console.log(`[social-publish] ${provider} variant ${variantId.slice(0, 8)}: ${outcome.action} -> ${outcome.status}`);
+    });
+  }
+  // Removals (#860): one job per ask, on its own queue so a removal never waits behind a channel's publishing.
+  if (publishing.size > 0) {
+    await boss.work<SocialRemoveJob>(QUEUES.socialRemove, { batchSize: 1 }, async ([job]) => {
+      if (!job || !channels) return;
+      const { orgId, variantId, provider, after } = job.data;
+      const done = await runRemoveJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, after);
+      console.log(`[social-remove] ${provider.slice(0, 32)} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
     });
   }
   let sweeping = false;
@@ -786,6 +804,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 const after = typeof row.payload.after === 'string' ? row.payload.after : null;
                 return boss.send(socialPublishQueue(provider), { orgId: row.org_id, variantId, provider, thread: true, after } satisfies SocialPublishJob, {
                   singletonKey: `${row.org_id}:${variantId}:thread:${after ?? '-'}`,
+                  retryLimit: 0,
+                });
+              }
+              // A person asked for a published post to come down (#860): one job per ask, keyed by the call it saw.
+              if (social && row.type === 'social.variant.remove_requested') {
+                const provider = String(row.payload.provider);
+                const variantId = String(row.payload.variant_id);
+                const after = typeof row.payload.after === 'string' ? row.payload.after : null;
+                return boss.send(QUEUES.socialRemove, { orgId: row.org_id, variantId, provider, after } satisfies SocialRemoveJob, {
+                  singletonKey: `${row.org_id}:${variantId}:remove:${after ?? '-'}`,
                   retryLimit: 0,
                 });
               }

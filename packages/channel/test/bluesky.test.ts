@@ -438,3 +438,35 @@ describe('Bluesky rich text (#906)', () => {
     expect(sent(calls).langs).toEqual(['en']);
   });
 });
+
+describe('Bluesky remove (#860)', () => {
+  const POST = `at://${DID}/app.bsky.feed.post/3kq2abcdxyz22`;
+  const DELETE = `POST ${new URL(PDS).host}/xrpc/com.atproto.repo.deleteRecord`;
+  const remove = (fetchImpl: Fetch, externalId = POST) => new BlueskyPublisher(fetchImpl).remove({ externalAccountId: DID, secret: SECRET, externalId });
+
+  it('deletes the post record on the account PDS by its record key', async () => {
+    const { fetchImpl, calls } = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()], [DELETE]: [{ body: { commit: { cid: 'bafyreib', rev: '3kq2' } } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    const call = calls.find((c) => c.route === DELETE);
+    expect(call?.json).toEqual({ repo: DID, collection: 'app.bsky.feed.post', rkey: '3kq2abcdxyz22' });
+    expect(call?.auth).toBe('Bearer access-jwt-1');
+  });
+
+  it('counts a record already gone as removed', async () => {
+    const { fetchImpl } = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()], [DELETE]: [{ status: 400, body: { error: 'RecordNotFound', message: 'Could not locate record' } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+  });
+
+  it('maps a refused app password, a rate limit and a server error, and never deletes another account post', async () => {
+    const refused = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [{ status: 401, body: { error: 'AuthenticationRequired', message: 'Invalid identifier or password' } }] });
+    expect(await remove(refused.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'AuthenticationRequired' });
+    const limited = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()], [DELETE]: [{ status: 429, body: { error: 'RateLimitExceeded', message: 'Rate Limit Exceeded' } }] });
+    expect(await remove(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const down = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()], [DELETE]: [{ status: 502, body: { error: 'UpstreamFailure', message: 'Upstream Failure' } }] });
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'UpstreamFailure' });
+    const other = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+    expect(await remove(other.fetchImpl, 'at://did:plc:someoneelse0000000000000/app.bsky.feed.post/3kq2abcdxyz22')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'NOT_OWN_POST' });
+    expect(await remove(other.fetchImpl, 'https://bsky.app/profile/x/post/1')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(other.calls.some((c) => c.route === DELETE)).toBe(false);
+  });
+});
