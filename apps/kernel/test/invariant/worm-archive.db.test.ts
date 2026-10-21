@@ -284,4 +284,18 @@ suite('WORM fact stream: archive and tamper detection on PostgreSQL (#891)', () 
     await expect(writeArchive(worker, refusing, { lagSeconds: 600 })).rejects.toThrow('store unreachable');
     expect(await admin(async (c) => Number((await c.query(`SELECT count(*) AS n FROM crove_kernel.archive_batch`)).rows[0].n))).toBe(before);
   });
+
+  it('lets two runs at once write each batch once, the loser going on from the new head', async () => {
+    await post(users[1] as string, orgs[1] as string, '7');
+    await admin(async (c) => {
+      await c.query(`SET session_replication_role = replica`);
+      await c.query(`UPDATE crove_finance.journal_entry SET created_at = now() - interval '15 minutes' WHERE created_at > now() - interval '5 minutes'`);
+    });
+    const before = await admin(async (c) => Number((await c.query(`SELECT count(*) AS n FROM crove_kernel.archive_batch`)).rows[0].n));
+    const [a, b] = await Promise.all([writeArchive(worker, store, { lagSeconds: 600 }), writeArchive(worker, store, { lagSeconds: 600 })]);
+    const after = await admin(async (c) => (await c.query<{ seq: string; object_key: string }>(`SELECT seq, object_key FROM crove_kernel.archive_batch WHERE seq > $1 ORDER BY seq`, [before])).rows);
+    expect(after.length).toBeGreaterThan(0);
+    expect(a + b).toBe(after.length);
+    for (const row of after) expect(await store.get(row.object_key)).not.toBeNull();
+  });
 });

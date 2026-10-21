@@ -482,15 +482,19 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     });
     await boss.schedule(QUEUES.archiveWrite, ARCHIVE_WRITE_CRON, null, { tz: RETENTION_TZ });
     await boss.work(QUEUES.archiveVerify, { batchSize: 1 }, async () => {
+      // The verifier reads every batch and row, so its time grows with the archive: logged on every run.
+      const started = Date.now();
+      const elapsed = () => `${Math.round((Date.now() - started) / 1000)} s`;
       try {
         const result = await runArchiveVerification(deps.workerDb, store);
-        console.log(`[archive] verified ${result.batches} batch(es), ${result.rows} row(s)`);
+        console.log(`[archive] verified ${result.batches} batch(es), ${result.rows} row(s) in ${elapsed()}`);
       } catch (error) {
-        console.error(`[archive] ALERT ${error instanceof Error ? error.message : 'verification could not run'}`);
+        console.error(`[archive] ALERT after ${elapsed()}: ${error instanceof Error ? error.message : 'verification could not run'}`);
         throw error;
       }
     });
-    await boss.schedule(QUEUES.archiveVerify, ARCHIVE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0 });
+    // An hour before pg-boss counts the run as expired (its default is 15 minutes).
+    await boss.schedule(QUEUES.archiveVerify, ARCHIVE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0, expireInSeconds: 3600 });
   }
 
   // Inbox triage: tasks for the agents whose template subscribes to the event. The command reads the event from the

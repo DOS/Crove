@@ -15,8 +15,8 @@
 //     Lock. This is the store that holds against the database owner.
 //   - local: read-only files under ARCHIVE_DIR, written create-only. It keeps the same chain and catches edits made in
 //     the database, but whoever controls the host can rewrite it; use s3 in production (docs/runbooks/worm-archive.md).
-import { createHash } from 'node:crypto';
-import { chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { link, mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
   GetObjectCommand,
@@ -36,6 +36,8 @@ export const ARCHIVE_VERIFY_CRON = '10 3 * * *';
 export const ARCHIVE_WINDOW_MS = 5 * 60_000;
 // Batches one run writes at most (a long outage catches up over several runs).
 const MAX_BATCHES_PER_RUN = 50;
+// Times one run starts again from the head after another run took its sequence first.
+const MAX_RACE_RESTARTS = 3;
 // Problems one verifier run records at most.
 const MAX_PROBLEMS = 100;
 export const GENESIS_SHA256 = createHash('sha256').update('').digest('hex');
@@ -64,16 +66,21 @@ export class LocalArchiveStore implements ArchiveStore {
     this.dir = dir;
   }
 
+  // Written whole to a temporary file, then linked under its key: a reader never sees half a batch, and link fails
+  // when the key is taken.
   async put(key: string, body: Uint8Array): Promise<void> {
     const path = join(this.dir, key);
     await mkdir(dirname(path), { recursive: true });
+    const temporary = join(this.dir, `.tmp-${randomUUID()}`);
+    await writeFile(temporary, body, { flag: 'wx', mode: 0o444 });
     try {
-      await writeFile(path, body, { flag: 'wx', mode: 0o444 });
+      await link(temporary, path);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new ArchiveObjectExistsError(key);
       throw error;
+    } finally {
+      await unlink(temporary);
     }
-    await chmod(path, 0o444);
   }
 
   async get(key: string): Promise<Uint8Array | null> {
@@ -218,7 +225,12 @@ function parseBatch(bytes: Uint8Array): ArchiveBatch | null {
 // Writes the batches that are due. Returns how many it wrote.
 export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSeconds: number }): Promise<number> {
   let written = 0;
-  for (; written < MAX_BATCHES_PER_RUN; written++) {
+  let restarts = 0;
+  // Two runs can work on the same sequence (a retried job beside the next minute's): the one that loses the store
+  // write or the record reads the head again and goes on from there, a few times at most.
+  const lostRace = (error: unknown) =>
+    (error instanceof ArchiveObjectExistsError || (error as { code?: string }).code === '40001') && restarts++ < MAX_RACE_RESTARTS;
+  while (written < MAX_BATCHES_PER_RUN) {
     const head = (await sql<{ seq: string; window_to: Date; chain_sha256: string }>`SELECT * FROM crove_kernel.archive_head()`.execute(db)).rows[0];
     const next = (
       await sql<{ window_from: Date; horizon: Date; first_row_at: Date | null }>`
@@ -237,6 +249,9 @@ export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSe
     if (existing) {
       const found = parseBatch(existing);
       if (!found || found.seq !== seq || found.prevChainSha256 !== prev || found.window.from !== from) {
+        // Another run may have recorded this sequence between the two reads above: then the head has moved on.
+        const now = (await sql<{ seq: string }>`SELECT seq FROM crove_kernel.archive_head()`.execute(db)).rows[0];
+        if (Number(now?.seq ?? 0) >= seq && restarts++ < MAX_RACE_RESTARTS) continue;
         throw new Error(`archive object ${key} does not continue the chain recorded in the database; run the verifier and see docs/runbooks/worm-archive.md`);
       }
       batch = found;
@@ -255,10 +270,21 @@ export async function writeArchive(db: Db, store: ArchiveStore, options: { lagSe
         batchSha256: batchHash,
         chainSha256: chainSha256(prev, seq, from, to, batchHash),
       };
-      await store.put(key, new TextEncoder().encode(JSON.stringify(batch)));
+      try {
+        await store.put(key, new TextEncoder().encode(JSON.stringify(batch)));
+      } catch (error) {
+        if (lostRace(error)) continue;
+        throw error;
+      }
     }
-    await sql`SELECT crove_kernel.archive_record(${seq}::bigint, ${batch.window.from}::timestamptz, ${batch.window.to}::timestamptz,
-      ${batch.rows.length}::int, ${batch.batchSha256}, ${batch.chainSha256}, ${key})`.execute(db);
+    try {
+      await sql`SELECT crove_kernel.archive_record(${seq}::bigint, ${batch.window.from}::timestamptz, ${batch.window.to}::timestamptz,
+        ${batch.rows.length}::int, ${batch.batchSha256}, ${batch.chainSha256}, ${key})`.execute(db);
+    } catch (error) {
+      if (lostRace(error)) continue;
+      throw error;
+    }
+    written++;
   }
   return written;
 }
