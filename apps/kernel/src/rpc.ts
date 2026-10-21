@@ -568,6 +568,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         cancel: os.social.variants.cancel.handler(socialCommand('social.variant.cancel')),
         retry: os.social.variants.retry.handler(socialCommand('social.variant.retry')),
         resolve: os.social.variants.resolve.handler(socialCommand('social.variant.resolve')),
+        remove: os.social.variants.remove.handler(socialCommand('social.variant.remove')),
       },
       metrics: {
         summary: os.social.metrics.summary.handler(socialQuery('social.metrics.summary')),
