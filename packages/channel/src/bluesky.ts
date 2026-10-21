@@ -37,6 +37,14 @@ const HOST_NAME = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-
 const POST_COLLECTION = 'app.bsky.feed.post';
 // Bluesky's own image limit per blob.
 const MAX_IMAGE_BYTES = 1_000_000;
+// Handles looked up per post for mention facets (#906), and how long each lookup may take before it stays plain text.
+const MAX_MENTION_LOOKUPS = 10;
+const MENTION_LOOKUP_MS = 5000;
+// A DID as a mention facet names it.
+const DID_SYNTAX = /^did:[a-z0-9]+:[A-Za-z0-9._:%-]{1,256}$/;
+// The post's languages (#906) when the variant names none: Crove's first market.
+const DEFAULT_LANGS = ['vi'];
+const LANG_TAG = /^[a-z]{2,3}(?:-[A-Za-z0-9]{1,8}){0,3}$/;
 
 export function isBlueskyHost(host: string): boolean {
   return host === 'bsky.social' || /^[a-z0-9-]+(\.[a-z0-9-]+)*\.bsky\.network$/.test(host);
@@ -159,13 +167,25 @@ class Xrpc {
     return (input, init) => egress(input, { ...init, redirect: 'manual', signal: requestSignal(init?.signal ?? AbortSignal.timeout(30_000)) });
   }
 
-  async call<T>(base: string, method: 'GET' | 'POST', nsid: string, options: { token?: string; params?: Record<string, string>; json?: unknown; bytes?: { data: Uint8Array; type: string } } = {}): Promise<T> {
+  // signal: a shorter limit than the fetch's own timeout, for a lookup that must not hold the post up.
+  async call<T>(base: string, method: 'GET' | 'POST', nsid: string, options: { token?: string; params?: Record<string, string>; json?: unknown; bytes?: { data: Uint8Array; type: string }; signal?: AbortSignal } = {}): Promise<T> {
     const url = new URL(`${base}/xrpc/${nsid}`);
     for (const [k, v] of Object.entries(options.params ?? {})) url.searchParams.set(k, v);
     return this.request<T>(url, method, options);
   }
 
-  private async request<T>(url: URL, method: 'GET' | 'POST', options: { token?: string; json?: unknown; bytes?: { data: Uint8Array; type: string } } = {}): Promise<T> {
+  // The DID a mentioned handle names, from the public AppView; null when it does not resolve, the answer is not a
+  // DID, or the lookup fails or runs past timeoutMs.
+  async handleDid(handle: string, timeoutMs: number): Promise<string | null> {
+    try {
+      const answer = await this.call<{ did?: unknown }>(PUBLIC_APPVIEW, 'GET', 'com.atproto.identity.resolveHandle', { params: { handle }, signal: AbortSignal.timeout(timeoutMs) });
+      return typeof answer.did === 'string' && DID_SYNTAX.test(answer.did) ? answer.did : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async request<T>(url: URL, method: 'GET' | 'POST', options: { token?: string; json?: unknown; bytes?: { data: Uint8Array; type: string }; signal?: AbortSignal } = {}): Promise<T> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (options.token) headers.authorization = `Bearer ${options.token}`;
     let body: string | Uint8Array | undefined;
@@ -176,7 +196,7 @@ class Xrpc {
       headers['content-type'] = options.bytes.type;
       body = options.bytes.data;
     }
-    const response = await this.route(url)(url.toString(), { method, headers, ...(body === undefined ? {} : { body: typeof body === 'string' ? body : new Blob([new Uint8Array(body)]) }) });
+    const response = await this.route(url)(url.toString(), { method, headers, ...(body === undefined ? {} : { body: typeof body === 'string' ? body : new Blob([new Uint8Array(body)]) }), ...(options.signal ? { signal: options.signal } : {}) });
     const json = (await response.json().catch(() => null)) as ({ error?: unknown; message?: unknown } & Record<string, unknown>) | null;
     // A success whose body cannot be read may still have done what was asked: never a refusal.
     if (response.ok && !json) throw new BlueskyError(response.status, 'UnreadableAnswer', 'Bluesky answered without a readable body');
@@ -324,15 +344,85 @@ export async function connectBluesky(input: { handle: string; appPassword: strin
   return { provider: 'bluesky', externalAccountId: session.did, displayName: `@${session.handle}`.slice(0, 200), scopes: ['app_password'], expiresAt: null, secret: JSON.stringify(secret) };
 }
 
+// A rich text facet (app.bsky.richtext.facet): a range of the text in UTF-8 byte offsets and what it is.
+export interface BlueskyFacet {
+  index: { byteStart: number; byteEnd: number };
+  features: ({ $type: 'app.bsky.richtext.facet#link'; uri: string } | { $type: 'app.bsky.richtext.facet#tag'; tag: string } | { $type: 'app.bsky.richtext.facet#mention'; did: string })[];
+}
+
+const encoder = new TextEncoder();
+// The UTF-8 byte offset of a UTF-16 index of text.
+const byteAt = (text: string, index: number) => encoder.encode(text.slice(0, index)).byteLength;
+const range = (text: string, start: number, end: number) => ({ byteStart: byteAt(text, start), byteEnd: byteAt(text, end) });
+const overlaps = (a: BlueskyFacet['index'], b: BlueskyFacet['index']) => a.byteStart < b.byteEnd && b.byteStart < a.byteEnd;
+const graphemes = new Intl.Segmenter('und', { granularity: 'grapheme' });
+
 // Link facets: Bluesky shows a URL as a link only when the post says where it is, in UTF-8 byte offsets.
-export function linkFacets(text: string): { index: { byteStart: number; byteEnd: number }; features: { $type: string; uri: string }[] }[] {
-  const facets = [];
-  const encoder = new TextEncoder();
+export function linkFacets(text: string): BlueskyFacet[] {
+  const facets: BlueskyFacet[] = [];
   for (const match of text.matchAll(/https?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]]/g)) {
-    const start = encoder.encode(text.slice(0, match.index)).byteLength;
-    facets.push({ index: { byteStart: start, byteEnd: start + encoder.encode(match[0]).byteLength }, features: [{ $type: 'app.bsky.richtext.facet#link', uri: match[0] }] });
+    facets.push({ index: range(text, match.index, match.index + match[0].length), features: [{ $type: 'app.bsky.richtext.facet#link', uri: match[0] }] });
   }
   return facets;
+}
+
+// Hashtags as Bluesky's own client finds them (@atproto/api detectFacets): a # or fullwidth # (U+FF03) at the start or after
+// whitespace, running to the next whitespace, with trailing punctuation dropped; not all digits and punctuation, no
+// keycap emoji (# with U+FE0F U+20E3), at most 64 graphemes and 640 bytes (the lexicon's limits). Invisible joiners end a tag.
+const TAG = /(^|\s)[#\uff03]((?!\ufe0f)[^\s\u20e2\u00ad\u2060\u200a\u200b\u200c\u200d]*[^\d\s\p{P}\u20e2\u00ad\u2060\u200a\u200b\u200c\u200d]+[^\s\u20e2\u00ad\u2060\u200a\u200b\u200c\u200d]*)?/gu;
+export function tagFacets(text: string): BlueskyFacet[] {
+  const facets: BlueskyFacet[] = [];
+  for (const match of text.matchAll(TAG)) {
+    const tag = (match[2] ?? '').replace(/\p{P}+$/u, '');
+    if (!tag || [...graphemes.segment(tag)].length > 64 || encoder.encode(tag).byteLength > 640) continue;
+    const start = match.index + (match[1] as string).length;
+    facets.push({ index: range(text, start, start + 1 + tag.length), features: [{ $type: 'app.bsky.richtext.facet#tag', tag }] });
+  }
+  return facets;
+}
+
+// @handle mentions as Bluesky's client finds them: at the start, after whitespace or an opening parenthesis (so an
+// email address is not one), a handle with a dot and a top-level domain of letters. The handle is lowercased, as
+// handles are case-insensitive.
+const MENTION = /(^|\s|\()@([a-zA-Z0-9.-]+)\b/g;
+function mentionsIn(text: string): { start: number; end: number; handle: string }[] {
+  const found = [];
+  for (const match of text.matchAll(MENTION)) {
+    const raw = match[2] as string;
+    const handle = raw.toLowerCase();
+    if (!BLUESKY_HANDLE.test(handle) || !HOST_NAME.test(handle)) continue;
+    const start = match.index + (match[1] as string).length;
+    found.push({ start, end: start + 1 + raw.length, handle });
+  }
+  return found;
+}
+
+// Every facet of the text as it is sent (#906): links, hashtags and the mentions whose handle resolves to a DID. A tag
+// or mention inside a link is left to the link. At most MAX_MENTION_LOOKUPS distinct handles are looked up, in the
+// order they appear; one that does not resolve (or a lookup past the cap) stays plain text and never fails the post.
+export async function blueskyFacets(text: string, didOf: (handle: string) => Promise<string | null>): Promise<BlueskyFacet[]> {
+  const links = linkFacets(text);
+  const free = (index: BlueskyFacet['index']) => !links.some((l) => overlaps(l.index, index));
+  const tags = tagFacets(text).filter((f) => free(f.index));
+  const mentions = mentionsIn(text)
+    .map((m) => ({ ...m, index: range(text, m.start, m.end) }))
+    .filter((m) => free(m.index));
+  const handles = [...new Set(mentions.map((m) => m.handle))].slice(0, MAX_MENTION_LOOKUPS);
+  const dids = new Map(await Promise.all(handles.map(async (h) => [h, await didOf(h).catch(() => null)] as const)));
+  const mentioned: BlueskyFacet[] = [];
+  for (const m of mentions) {
+    const did = dids.get(m.handle);
+    if (did) mentioned.push({ index: m.index, features: [{ $type: 'app.bsky.richtext.facet#mention', did }] });
+  }
+  return [...links, ...tags, ...mentioned].sort((a, b) => a.index.byteStart - b.index.byteStart);
+}
+
+// The post's languages (#906): the variant's `settings.langs` (one BCP-47 tag or up to three), else Vietnamese. The
+// org has no locale of its own yet, so the variant setting is how another language is named.
+export function blueskyLangs(settings: Readonly<Record<string, unknown>> | undefined): string[] {
+  const raw = settings?.langs;
+  const given = (Array.isArray(raw) ? raw : [raw]).filter((l): l is string => typeof l === 'string' && LANG_TAG.test(l));
+  return given.length > 0 ? [...new Set(given)].slice(0, 3) : DEFAULT_LANGS;
 }
 
 const textOf = (content: { body: string; linkUrl: string | null }) => {
@@ -371,13 +461,20 @@ export class BlueskyPublisher implements Publisher {
   private readonly videoWaitMs: number;
   private readonly pollMs: number;
   private readonly budgetMs: number;
+  private readonly mentionMs: number;
 
   // egress: the kernel's guarded fetch, for accounts on their own PDS (#792).
-  constructor(fetchImpl?: Fetch, egress?: Fetch, timing: { videoWaitMs?: number; pollMs?: number; budgetMs?: number } = {}) {
+  constructor(fetchImpl?: Fetch, egress?: Fetch, timing: { videoWaitMs?: number; pollMs?: number; budgetMs?: number; mentionMs?: number } = {}) {
     this.xrpc = new Xrpc(fetchImpl, egress);
     this.videoWaitMs = timing.videoWaitMs ?? VIDEO_WAIT_MS;
     this.pollMs = timing.pollMs ?? 2000;
     this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;
+    this.mentionMs = timing.mentionMs ?? MENTION_LOOKUP_MS;
+  }
+
+  // The text's facets, with mentions looked up on the public AppView (no session, nothing posted).
+  private facets(text: string): Promise<BlueskyFacet[]> {
+    return blueskyFacets(text, (handle) => this.xrpc.handleDid(handle, this.mentionMs));
   }
 
   // One MP4 through the video service: a service-auth token from the account's PDS, the upload, then a wait on the
@@ -480,8 +577,8 @@ export class BlueskyPublisher implements Publisher {
     }
     const text = textOf(input.content);
     if (!text && images.length === 0 && !videoEmbed) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
-    const record: Record<string, unknown> = { $type: POST_COLLECTION, text, createdAt: new Date().toISOString() };
-    const facets = linkFacets(text);
+    const record: Record<string, unknown> = { $type: POST_COLLECTION, text, createdAt: new Date().toISOString(), langs: blueskyLangs(input.settings) };
+    const facets = await this.facets(text);
     if (facets.length > 0) record.facets = facets;
     if (images.length > 0) record.embed = { $type: 'app.bsky.embed.images', images };
     if (videoEmbed) record.embed = videoEmbed;
@@ -563,7 +660,7 @@ export class BlueskyPublisher implements Publisher {
       return commentResult(result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) });
     }
     const record: Record<string, unknown> = { $type: POST_COLLECTION, text: input.text, createdAt: new Date().toISOString(), reply: { root, parent } };
-    const facets = linkFacets(input.text);
+    const facets = await this.facets(input.text);
     if (facets.length > 0) record.facets = facets;
     try {
       const answer = await this.xrpc.call<{ uri?: unknown }>(session.pds, 'POST', 'com.atproto.repo.createRecord', { token: session.accessJwt, json: { repo: session.did, collection: POST_COLLECTION, record } });
