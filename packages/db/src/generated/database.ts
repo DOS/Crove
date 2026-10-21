@@ -901,6 +901,7 @@ export interface SocialLinkPreviewTable {
   requested_at: ColumnType<Date, Date | string, Date | string>;
   fetched_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  text: string | null;
 }
 
 /** crove_social.metric_snapshot */

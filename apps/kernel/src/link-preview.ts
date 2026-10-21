@@ -7,7 +7,7 @@ import { EgressError, guardedFetch, type Runtime } from '@crove/kernel-runtime';
 export const LINK_PREVIEW_TIMEOUT_MS = 8000;
 const HTML_TYPES = new Set(['text/html', 'application/xhtml+xml']);
 
-type Result = { ok: true; title: string | null; description: string | null; siteName: string | null } | { ok: false; error: 'http' | 'not_html' | EgressError['code'] };
+type Result = { ok: true; title: string | null; description: string | null; siteName: string | null; text: string | null } | { ok: false; error: 'http' | 'not_html' | EgressError['code'] };
 
 export interface LinkPreviewDeps {
   runtime: Runtime;

@@ -23,6 +23,8 @@ export interface LinkPreview {
   title: string | null;
   description: string | null;
   siteName: string | null;
+  // The page's main text (#779), for AI drafts only; null when it had none or was read before.
+  text: string | null;
   error: SocialLinkPreviewError | null;
   fetchedAt: string | null;
 }
@@ -44,11 +46,11 @@ export function previewUrl(raw: string): string | null {
 
 const sha256 = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
 
-type Row = { url: string; status: SocialLinkPreviewStatus; title: string | null; description: string | null; site_name: string | null; error: SocialLinkPreviewError | null; fetched_at: Date | null; requested_at: Date };
-const COLUMNS = ['url', 'status', 'title', 'description', 'site_name', 'error', 'fetched_at', 'requested_at'] as const;
+type Row = { url: string; status: SocialLinkPreviewStatus; title: string | null; description: string | null; site_name: string | null; text: string | null; error: SocialLinkPreviewError | null; fetched_at: Date | null; requested_at: Date };
+const COLUMNS = ['url', 'status', 'title', 'description', 'site_name', 'text', 'error', 'fetched_at', 'requested_at'] as const;
 
 function view(r: Row): LinkPreview {
-  return { url: r.url, status: r.status, title: r.title, description: r.description, siteName: r.site_name, error: r.error, fetchedAt: r.fetched_at?.toISOString() ?? null };
+  return { url: r.url, status: r.status, title: r.title, description: r.description, siteName: r.site_name, text: r.text, error: r.error, fetchedAt: r.fetched_at?.toISOString() ?? null };
 }
 
 const zUrl = z.string().min(1).max(2048);
@@ -133,7 +135,8 @@ export const linkPreviewRecord = defineCommand({
   input: z.strictObject({
     previewId: zId,
     result: z.discriminatedUnion('ok', [
-      z.strictObject({ ok: z.literal(true), title: zText(300), description: zText(1000), siteName: zText(200) }),
+      // text: absent from a worker that predates #779.
+      z.strictObject({ ok: z.literal(true), title: zText(300), description: zText(1000), siteName: zText(200), text: zText(4000).optional() }),
       z.strictObject({ ok: z.literal(false), error: z.enum(SOCIAL_LINK_PREVIEW_ERRORS) }),
     ]),
   }),
@@ -143,7 +146,7 @@ export const linkPreviewRecord = defineCommand({
     const r = input.result;
     const done = await ctx.trx
       .updateTable('crove_social.link_preview')
-      .set(r.ok ? { status: 'ready', title: r.title, description: r.description, site_name: r.siteName, error: null, fetched_at: ctx.now } : { status: 'failed', error: r.error, fetched_at: ctx.now })
+      .set(r.ok ? { status: 'ready', title: r.title, description: r.description, site_name: r.siteName, text: r.text ?? null, error: null, fetched_at: ctx.now } : { status: 'failed', error: r.error, fetched_at: ctx.now })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.previewId)
       .where('status', '=', 'pending')

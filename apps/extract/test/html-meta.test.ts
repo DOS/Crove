@@ -1,4 +1,5 @@
-// A web page's head for a link preview (#641): which tags win, decoding, and what is never read.
+// A web page's head for a link preview (#641), and its main text for AI drafts (#779): which tags win, decoding, and
+// what is never read.
 import { describe, expect, it } from 'vitest';
 import { EXTRACT_LIMITS } from '@crove/extract-contract';
 import { parse } from '../src/parse.ts';
@@ -14,8 +15,8 @@ describe('readHtmlMeta', () => {
           '<title>Tiêu đề trang</title><meta name="description" content="Mô tả HTML"><meta name="twitter:title" content="Twitter"><meta property="og:title" content="Khai trương cửa hàng"><meta property="og:description" content="Giảm 20% tuần đầu"><meta property="og:site_name" content="Crove Shop">',
         ),
       ),
-    ).toEqual({ title: 'Khai trương cửa hàng', description: 'Giảm 20% tuần đầu', siteName: 'Crove Shop' });
-    expect(readHtmlMeta(page('<title>Chỉ có tiêu đề</title><meta name=description content=Ngắn>'))).toEqual({ title: 'Chỉ có tiêu đề', description: 'Ngắn', siteName: null });
+    ).toEqual({ title: 'Khai trương cửa hàng', description: 'Giảm 20% tuần đầu', siteName: 'Crove Shop', text: 'body' });
+    expect(readHtmlMeta(page('<title>Chỉ có tiêu đề</title><meta name=description content=Ngắn>'))).toEqual({ title: 'Chỉ có tiêu đề', description: 'Ngắn', siteName: null, text: 'body' });
     expect(readHtmlMeta(page("<meta name='twitter:title' content='Từ Twitter'>"))).toMatchObject({ title: 'Từ Twitter' });
     expect(readHtmlMeta(page('<title>A < B và <b>đậm</b></title>'))).toMatchObject({ title: 'A < B và <b>đậm</b>' });
   });
@@ -32,6 +33,7 @@ describe('readHtmlMeta', () => {
       title: 'Thật',
       description: null,
       siteName: null,
+      text: null,
     });
   });
 
@@ -43,9 +45,25 @@ describe('readHtmlMeta', () => {
   });
 
   it('answers through the contract, and refuses what is not HTML', async () => {
-    expect(await parse('html_meta', page('<title>Trang</title>'))).toEqual({ ok: true, kind: 'html_meta', page: { title: 'Trang', description: null, siteName: null } });
+    expect(await parse('html_meta', page('<title>Trang</title>'))).toEqual({ ok: true, kind: 'html_meta', page: { title: 'Trang', description: null, siteName: null, text: 'body' } });
     expect(await parse('html_meta', new TextEncoder().encode('{"json": true}'))).toEqual({ ok: false, code: 'invalid', message: 'Trang không phải HTML' });
-    expect(await parse('html_meta', page(''))).toEqual({ ok: true, kind: 'html_meta', page: { title: null, description: null, siteName: null } });
+    expect(await parse('html_meta', page(''))).toEqual({ ok: true, kind: 'html_meta', page: { title: null, description: null, siteName: null, text: 'body' } });
+  });
+
+  it('reads the main text from the article, else main, else the body, without the page furniture (#779)', () => {
+    const body = [
+      '<header><nav><a href="/">Trang chủ</a> <a href="/menu">Thực đơn</a></nav></header>',
+      '<article><h1>Khai trương chi nhánh Quận 3</h1><p>Từ <b>1/11</b>, tiệm mở cửa 7 giờ &amp; giảm 20%.</p>',
+      '<script>var leak = "không đọc";</script><form><input value="email"><button>Gửi</button></form>',
+      '<ul><li>Bánh mì</li><li>Cà phê</li></ul></article>',
+      '<aside>Bài liên quan</aside><footer>© 2026 Tiệm</footer>',
+    ].join('');
+    expect(readHtmlMeta(page('<title>Tiệm</title>', body)).text).toBe('Khai trương chi nhánh Quận 3\nTừ 1/11, tiệm mở cửa 7 giờ & giảm 20%.\nBánh mì\nCà phê');
+    expect(readHtmlMeta(page('', '<nav>Menu</nav><main><p>Trong main</p></main><p>Ngoài</p>')).text).toBe('Trong main');
+    expect(readHtmlMeta(page('', '<div>Dòng một<br>Dòng hai</div><footer>Chân trang</footer>')).text).toBe('Dòng một\nDòng hai');
+    expect(readHtmlMeta(page('', '<nav>Chỉ có menu</nav>')).text).toBeNull();
+    const long = `<p>${'ư'.repeat(EXTRACT_LIMITS.maxPageTextChars + 100)}</p>`;
+    expect(Array.from(readHtmlMeta(page('', long)).text ?? '')).toHaveLength(EXTRACT_LIMITS.maxPageTextChars);
   });
 
   it('stays fast on hostile input', () => {
@@ -54,6 +72,10 @@ describe('readHtmlMeta', () => {
     readHtmlMeta(new TextEncoder().encode(`<html><head><title>${'&'.repeat(200_000)}`));
     readHtmlMeta(new TextEncoder().encode(`<html><head>${'<script>'.repeat(50_000)}`));
     readHtmlMeta(new TextEncoder().encode(`<html><head>${'<!-- --><style></style><title'.repeat(15_000)}`));
+    // The body: stray <, unclosed furniture and blocks.
+    readHtmlMeta(new TextEncoder().encode(`<html><body>${'<'.repeat(200_000)}`));
+    readHtmlMeta(new TextEncoder().encode(`<html><body>${'<nav><p>x'.repeat(30_000)}`));
+    readHtmlMeta(new TextEncoder().encode(`<html><body>${'<article><br x'.repeat(30_000)}`));
     expect(Date.now() - started).toBeLessThan(2000);
   });
 });

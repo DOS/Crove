@@ -33,7 +33,8 @@ export interface DraftRequest {
   channelVoices?: Readonly<Record<string, string>>;
   // A web page the post is about (#769), as its link preview read it: tainted text, used for facts, never as
   // instructions.
-  source?: { url: string; title: string | null; description: string | null; siteName: string | null };
+  // text: the page's main text (#779), capped by the reader.
+  source?: { url: string; title: string | null; description: string | null; siteName: string | null; text?: string | null };
 }
 
 export interface DraftResult {
@@ -98,6 +99,7 @@ function sourceLines(source: DraftRequest['source']): string | null {
     source.siteName?.trim() ? `Site: ${oneLine(source.siteName, 120)}` : null,
     source.title?.trim() ? `Title: ${oneLine(source.title, 300)}` : null,
     source.description?.trim() ? `Description: ${source.description.trim().slice(0, 1500)}` : null,
+    source.text?.trim() ? `Text:\n${Array.from(source.text.trim()).slice(0, 4000).join('')}` : null,
   ].filter((l): l is string => l !== null);
   if (lines.length === 0) return null;
   return `Source page:\n<<<\n${fenced(lines.join('\n'))}\n>>>`;
