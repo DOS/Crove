@@ -7,3 +7,5 @@ export * from './domain/utm.ts';
 export * from './domain/occasions.ts';
 export * from './domain/mentions.ts';
 export * from './domain/media-tags.ts';
+// Local clock times in an IANA zone, for moving posts by days in the app (#945) as the queues retime them.
+export { localTime, zonedToEpoch, type LocalTime } from './domain/queue.ts';
