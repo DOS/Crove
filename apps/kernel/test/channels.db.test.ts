@@ -248,9 +248,9 @@ suite('channel connections through the API (ADR-0025)', () => {
 
     it('offers only configured providers in /api/config', async () => {
       const on = (await (await apps.on.request('/api/config')).json()) as { channels: unknown };
-      expect(on.channels).toEqual({ sandbox: true, bluesky: false, telegram: false, mastodon: false, discord: false, oauth: ['facebook_page'] });
+      expect(on.channels).toEqual({ sandbox: true, bluesky: false, telegram: false, mastodon: false, discord: false, wordpress: false, oauth: ['facebook_page'] });
       const off = (await (await apps.sandboxOff.request('/api/config')).json()) as { channels: unknown };
-      expect(off.channels).toEqual({ sandbox: false, bluesky: false, telegram: false, mastodon: false, discord: false, oauth: [] });
+      expect(off.channels).toEqual({ sandbox: false, bluesky: false, telegram: false, mastodon: false, discord: false, wordpress: false, oauth: [] });
     });
 
     it('starts an attempt, then connects every Page the grant covers with its sealed Page token', async () => {
@@ -352,7 +352,7 @@ suite('channel connections through the API (ADR-0025)', () => {
       const noKey = await rpc('channels/oauthStart', await tokenFor(owner), { provider: 'facebook_page' }, { app: 'noKey' });
       expect(noKey).toMatchObject({ status: 503, body: { code: 'BROKER_NOT_CONFIGURED' } });
       const config = (await (await apps.noKey.request('/api/config')).json()) as { channels: unknown };
-      expect(config.channels).toEqual({ sandbox: true, bluesky: false, telegram: false, mastodon: false, discord: false, oauth: [] });
+      expect(config.channels).toEqual({ sandbox: true, bluesky: false, telegram: false, mastodon: false, discord: false, wordpress: false, oauth: [] });
     });
 
     it('answers 404 for a provider the deployment did not configure', async () => {

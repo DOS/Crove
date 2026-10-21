@@ -19,6 +19,7 @@ export * from './tiktok.ts';
 export * from './x.ts';
 export * from './pinterest.ts';
 export * from './discord.ts';
+export * from './wordpress.ts';
 export * from './comment.ts';
 export * from './cover.ts';
 export * from './post-type.ts';
@@ -39,6 +40,7 @@ export const CHANNEL_PROVIDERS = [
   'mastodon',
   'pinterest',
   'discord',
+  'wordpress',
 ] as const;
 export type ChannelProviderId = (typeof CHANNEL_PROVIDERS)[number];
 
