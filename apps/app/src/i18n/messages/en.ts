@@ -2767,6 +2767,12 @@ export const en = {
     signature: { unverified: 'Digitally signed; the signature is not verified against an official source yet', missing: 'No digital signature' },
     source: { ai: 'Read by AI from a photo or PDF; a person must check it' },
     duplicate: { found: 'This invoice is already in the Inbox or in the books' },
+    related: {
+      replaces: 'Replaces invoice {invoice}: approving reverses its entry and voids its document',
+      adjusts: 'Adjusts invoice {invoice}: the difference is recorded and linked to the original',
+      replaces_missing: 'Replacement invoice for invoice {invoice}, but the original is not in the books; check before approving',
+      adjusts_missing: 'Adjustment invoice for invoice {invoice}, but the original is not in the books; check before approving',
+    },
   },
   kernelErrors: {
     codes: {
@@ -2890,6 +2896,7 @@ export const en = {
       CLOSING_EMPTY: 'This year has no revenue or expense balances to close.',
       CLOSING_UNSUPPORTED: 'The closing entry cannot be built automatically (too many accounts, or amounts below 1 dong); close the year with a journal voucher.',
       CLOSING_STALE: "The year's books changed after the closing was proposed; reject this proposal and propose the closing again.",
+      REPLACEMENT_BEFORE_ORIGINAL: "The replacement invoice would post before its original's posting date; choose a posting date on or after the original's.",
       PARTY_NOT_FOUND: 'Party (customer or vendor) not found.',
       BANK_LINE_NOT_FOUND: 'Statement line not found. Reload the bank page.',
       BANK_LINE_MISMATCH: "The voucher must follow its statement line: the same bank account, date, direction and amount.",

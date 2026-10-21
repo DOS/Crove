@@ -8,8 +8,9 @@
 // date (vat.ts).
 // finance.purchase.revise: computes the payload of a new revision when a user edits a pending proposal
 // (kernel.proposal.edit); it writes nothing.
+import { sql } from 'kysely';
 import { z } from 'zod';
-import { BLOCKING_CHECK_IDS, isRevenueAccount, zAccountCode, zLocalDate, zPurchaseProposal, type DocumentDirection, type PurchaseProposal } from '@crove/kernel-contract';
+import { BLOCKING_CHECK_IDS, isRevenueAccount, zAccountCode, zLocalDate, zPurchaseProposal, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import {
   PAYABLE_ACCOUNT,
@@ -24,6 +25,7 @@ import {
 } from '@crove/l10n-vn';
 import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
+import { postReversal } from './reversal.ts';
 import { journalMemo } from './memo.ts';
 import { isOwnTaxCode } from './own-tax-code.ts';
 import { databaseToday, dateLabel, liveOpeningDate } from './period-lock.ts';
@@ -101,6 +103,60 @@ async function replaceableDocument(ctx: CommandContext, direction: DocumentDirec
   if (direction === 'purchase') query = query.where('d.party_id', '=', partyId);
   const row = await query.limit(1).executeTakeFirst();
   return row?.id ?? null;
+}
+
+// The document of the invoice a replacement or an adjustment corrects (#916), read under a transaction-level advisory
+// lock on that invoice, so two corrections of it approved at once take turns (documents are append-only, so their rows
+// cannot be locked); a reversal of it asked for meanwhile still meets the one-reversal-per-entry index. It is the
+// latest document of that invoice (same direction,
+// same supplier for a purchase), with whether it is voided and its entry. A replacement links to it whether it is in
+// force (this approval voids it) or already voided by a reversal and replaced by nothing yet; an adjustment links only
+// to one in force. The database checks the link again (check_document_corrects).
+async function correctedDocument(ctx: CommandContext, direction: DocumentDirection, partyId: string, related: RelatedInvoiceRef) {
+  const key = `crove_finance.invoice_correction:${ctx.orgId}:${direction}:${direction === 'sale' ? '' : partyId}:${related.series}/${related.number}`;
+  await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${key}, 0))`.execute(ctx.trx);
+  let query = ctx.trx
+    .selectFrom('crove_finance.purchase_document as d')
+    .select(['d.id', 'd.invoice_date'])
+    .select((eb) => [
+      eb
+        .exists(eb.selectFrom('crove_finance.purchase_document_void as v').select('v.document_id').whereRef('v.org_id', '=', 'd.org_id').whereRef('v.document_id', '=', 'd.id'))
+        .as('voided'),
+      eb
+        .exists(
+          eb
+            .selectFrom('crove_finance.purchase_document as r')
+            .select('r.id')
+            .whereRef('r.org_id', '=', 'd.org_id')
+            .whereRef('r.corrects_document_id', '=', 'd.id')
+            .where('r.correction_kind', '=', 'replacement'),
+        )
+        .as('replaced'),
+    ])
+    .where('d.org_id', '=', ctx.orgId)
+    .where('d.direction', '=', direction)
+    .where('d.invoice_series', '=', related.series)
+    .where('d.invoice_number', '=', related.number);
+  if (direction === 'purchase') query = query.where('d.party_id', '=', partyId);
+  const document = await query.orderBy('d.created_at', 'desc').orderBy('d.id', 'desc').limit(1).executeTakeFirst();
+  if (!document) return null;
+  if (related.kind === 'adjustment') return document.voided ? null : { id: document.id, inForce: true };
+  if (document.replaced) return null;
+  return { id: document.id, inForce: !document.voided };
+}
+
+// The posted entry of a document in force, which a replacement reverses.
+async function documentEntry(ctx: CommandContext, documentId: string) {
+  const entry = await ctx.trx
+    .selectFrom('crove_finance.journal_entry')
+    .select(['id', 'entry_date', 'description', 'source_type', 'source_id'])
+    .where('org_id', '=', ctx.orgId)
+    .where('source_type', '=', 'finance.purchase_document')
+    .where('source_id', '=', documentId)
+    .where('reverses_entry_id', 'is', null)
+    .executeTakeFirst();
+  if (!entry) throw new DomainError('INTERNAL', 500, 'Không tìm thấy bút toán của hóa đơn gốc');
+  return entry;
 }
 
 // A sale must be the org's own invoice, and a purchase must not be: the org's tax code (kernel.org.set_tax_code) is
@@ -267,6 +323,23 @@ export const recordPurchase = defineCommand({
     // by the database (purchase_document_purchase_invoice_uq, purchase_document_sale_invoice_uq,
     // purchase_document_replaces_uq).
     const replaces = await replaceableDocument(ctx, direction, partyId, invoice.series, invoice.number);
+    // A replacement or an adjustment invoice (#916): link it to the original, and void the original a replacement takes
+    // the place of, reversing its entry on the replacement's posting date, before the replacement is recorded.
+    const related = invoice.related ?? null;
+    const entryDate = lateDate ?? invoice.issueDate;
+    const corrected = related ? await correctedDocument(ctx, direction, partyId, related) : null;
+    let voidedOriginal: string | null = null;
+    if (related?.kind === 'replacement' && corrected?.inForce) {
+      const entry = await documentEntry(ctx, corrected.id);
+      if (entryDate < entry.entry_date) {
+        throw new DomainError('REPLACEMENT_BEFORE_ORIGINAL', 422, `Hóa đơn thay thế ghi sổ ngày ${dateLabel(entryDate)}, trước ngày ghi sổ của hóa đơn gốc ${dateLabel(entry.entry_date)}`, {
+          entryDate,
+          originalDate: entry.entry_date,
+        });
+      }
+      await postReversal(ctx, entry, entryDate, `Thay thế bởi hóa đơn ${invoice.series}/${invoice.number}`.slice(0, 500));
+      voidedOriginal = corrected.id;
+    }
     const document = await ctx.trx
       .insertInto('crove_finance.purchase_document')
       .values({
@@ -286,6 +359,15 @@ export const recordPurchase = defineCommand({
         proposal_id: ctx.proposalId,
         created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
         replaces_document_id: replaces,
+        ...(related
+          ? {
+              correction_kind: related.kind,
+              corrects_document_id: corrected?.id ?? null,
+              corrected_series: related.series,
+              corrected_number: related.number,
+              corrected_date: related.issueDate,
+            }
+          : {}),
       })
       .returning('id')
       .executeTakeFirst()
@@ -380,10 +462,12 @@ export const recordPurchase = defineCommand({
     ctx.audit({
       direction,
       ...(replaces ? { replaces_document_id: replaces } : {}),
+      ...(related ? { correction_kind: related.kind, corrects_document_id: corrected?.id ?? null, voided_document_id: voidedOriginal } : {}),
       ...(lateDate ? { invoice_date: invoice.issueDate, posting_date: lateDate, late_reason: late } : {}),
     });
     const event = sale ? 'sale.recorded' : 'purchase.recorded';
-    const recorded = replaces ? `Ghi sổ lại ${memo} (thay chứng từ đã hủy)` : `Ghi sổ ${memo}`;
+    const correction = related ? ` (${related.kind === 'replacement' ? 'thay thế' : 'điều chỉnh'} hóa đơn ${related.series}/${related.number})` : '';
+    const recorded = replaces ? `Ghi sổ lại ${memo} (thay chứng từ đã hủy)` : `Ghi sổ ${memo}${correction}`;
     await ctx.activity(
       'finance.purchase_document',
       document.id,
@@ -397,8 +481,15 @@ export const recordPurchase = defineCommand({
       journalEntryId,
       direction,
       ...(replaces ? { replacesDocumentId: replaces } : {}),
+      ...(corrected ? { correctsDocumentId: corrected.id } : {}),
       ...(lateDate ? { postingDate: lateDate } : {}),
     });
-    return { documentId: document.id, journalEntryId, ...(lateDate ? { postingDate: lateDate } : {}) };
+    return {
+      documentId: document.id,
+      journalEntryId,
+      ...(lateDate ? { postingDate: lateDate } : {}),
+      ...(corrected ? { correctsDocumentId: corrected.id } : {}),
+      ...(voidedOriginal ? { voidedDocumentId: voidedOriginal } : {}),
+    };
   },
 });

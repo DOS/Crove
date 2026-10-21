@@ -48,6 +48,11 @@ export const INVOICE_CHECK_CODES = [
   'signature.missing',
   'source.ai',
   'duplicate.found',
+  // A replacement or an adjustment invoice (#916): its original in the books, or not found.
+  'related.replaces',
+  'related.adjusts',
+  'related.replaces_missing',
+  'related.adjusts_missing',
 ] as const;
 export type InvoiceCheckCode = (typeof INVOICE_CHECK_CODES)[number];
 
@@ -96,6 +101,17 @@ export const zJournalLineDraft = z.object({
   memo: z.string().max(1000),
 });
 
+export const CORRECTION_KINDS = ['replacement', 'adjustment'] as const;
+export const zRelatedInvoiceRef = z.object({
+  kind: z.enum(CORRECTION_KINDS),
+  template: z.string().max(50).nullable(),
+  series: z.string().min(1).max(50),
+  number: z.string().min(1).max(50),
+  issueDate: zLocalDate.nullable(),
+  documentId: zId.nullable(),
+});
+export type RelatedInvoiceRef = z.infer<typeof zRelatedInvoiceRef>;
+
 // Payload stored on a finance.purchase proposal and executed by finance.purchase.record. direction 'sale' (issue #313):
 // the seller is the org itself (its tax code), the buyer is the customer, and the journal is Dr 131, Cr revenue, Cr
 // 3331. Absent on purchases, including every proposal raised before sales existed.
@@ -120,6 +136,10 @@ export const zPurchaseProposal = z.object({
       .array(z.object({ rate: z.string().max(20), taxableAmount: zMoney, vatAmount: zMoney }))
       .max(100)
       .optional(),
+    // The invoice this one corrects (#916), from the e-invoice's TTHDLQuan: a replacement (thay thế) or an adjustment
+    // (điều chỉnh). documentId is the original's document when extraction found it in force; recording looks it up
+    // again. Absent on every other invoice.
+    related: zRelatedInvoiceRef.optional(),
   }),
   lines: z.array(zProposedLine).min(1).max(1000),
   journal: z.array(zJournalLineDraft).min(2).max(1010),

@@ -151,6 +151,8 @@ export const KERNEL_ERROR_CODES = [
   'CLOSING_EMPTY',
   'CLOSING_UNSUPPORTED',
   'CLOSING_STALE',
+  // A replacement invoice posted before its original (#916).
+  'REPLACEMENT_BEFORE_ORIGINAL',
   'BANK_LINE_NOT_FOUND',
   'BANK_LINE_MISMATCH',
   'BANK_LINE_PROPOSED',
