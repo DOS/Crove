@@ -4,7 +4,8 @@
 import { sql } from 'kysely';
 import type { Runtime } from '@crove/kernel-runtime';
 
-export const CALENDAR_FEED_HITS_PER_MINUTE = 60;
+// Calendar apps fetch from shared provider addresses, so one client address may stand for many subscribers.
+export const CALENDAR_FEED_HITS_PER_MINUTE = 300;
 
 const TOKEN = /^[A-Za-z0-9_-]{43}$/;
 

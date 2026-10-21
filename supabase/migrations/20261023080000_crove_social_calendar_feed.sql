@@ -71,7 +71,8 @@ BEGIN
              ), '\s+', ' ', 'g')), 100)) AS title
       FROM v
       WHERE v.at >= pg_catalog.now() - interval '30 days' AND v.at < pg_catalog.now() + interval '60 days'
-      ORDER BY v.at, v.id
+      -- Past 1000, the ones nearest to now stay (the week at hand matters more than a month ago or two months on).
+      ORDER BY pg_catalog.abs(EXTRACT(EPOCH FROM v.at - pg_catalog.now())), v.id
       LIMIT 1000
     )
     SELECT pg_catalog.jsonb_build_object(
