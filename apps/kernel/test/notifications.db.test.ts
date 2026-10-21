@@ -174,7 +174,8 @@ suite('in-app notifications of the kernel and finance (#671)', () => {
     expect(await kinds(people.viewer)).toEqual([]);
 
     // The admin approves (four-eyes: the member uploaded it): the owner's notice no longer counts as unread.
-    await runtime.execute('kernel.proposal.approve', { id: proposalId, revision: 1 }, { actor: asMfa(people.admin), orgId: org.orgId, idempotencyKey: randomUUID() });
+    // The fixture carries no signature (#674), so the approver confirms that, as for any unverified invoice.
+    await runtime.execute('kernel.proposal.approve', { id: proposalId, revision: 1, acceptUnverifiedSignature: true }, { actor: asMfa(people.admin), orgId: org.orgId, idempotencyKey: randomUUID() });
     expect(await list(people.owner)).toMatchObject({ unread: 0, items: [expect.objectContaining({ subjectId: proposalId, read: true })] });
   });
 
