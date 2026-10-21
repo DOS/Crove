@@ -93,6 +93,9 @@ export async function runYearArchive(
   const { runtime, store } = deps;
   const scope = { actor: YEAR_ARCHIVE_ACTOR, orgId };
   const source = await runtime.query<ArchiveSource>('finance.archive.source', { year }, scope);
+  // A job retried after its record (the worker stopped before finishing the job) builds nothing: a second manifest
+  // would only be an orphan, locked as long as the package.
+  if (source.recorded) return { manifestKey: source.recorded.manifestKey, recorded: false };
   // The lock may have been lifted since the request: build only a year that is still locked through December.
   if (!source.lockedThrough || source.lockedThrough < `${year}-12-31`) {
     throw new DomainError('ARCHIVE_YEAR_OPEN', 422, `Năm ${year} không còn khóa sổ đủ 12 tháng; gói lưu trữ chưa được tạo`);

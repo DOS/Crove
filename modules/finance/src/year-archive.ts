@@ -128,6 +128,8 @@ export interface ArchiveSource {
   vatFilingPeriod: 'month' | 'quarter' | null;
   hasTaxCode: boolean;
   lockedThrough: string | null;
+  // The package already recorded for the year, if any: the worker builds nothing more (a job retried after its record).
+  recorded: RecordedArchive | null;
   // The original file of every document (purchase or sale) whose entry is dated in the year, once each.
   files: ArchiveSourceFile[];
 }
@@ -159,6 +161,7 @@ export const yearArchiveSource = defineQuery({
       vatFilingPeriod: tenant.vat_filing_period,
       hasTaxCode: tenant.tax_code !== null,
       lockedThrough: await lockedThrough(ctx),
+      recorded: (await auditRows(ctx, 'finance.archive.record', input.year)).map(recorded).find((r) => r !== null) ?? null,
       files: files.map((f) => ({ id: f.id, filename: f.filename, contentType: f.content_type, key: f.storage_key, generation: f.generation, sha256: f.sha256 })),
     };
   },
@@ -183,7 +186,7 @@ export const yearArchiveRecord = defineCommand({
       throw new DomainError('INVALID_STORAGE_KEY', 422, 'Khóa lưu trữ của gói không hợp lệ');
     }
     await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.archive:${ctx.orgId}:${input.year}`}, 0))`.execute(ctx.trx);
-    // Written once: a second build of the same year (a retried job) keeps the first record.
+    // Written once: a second build of the same year (two workers at once) keeps the first record.
     if ((await archiveOf(ctx, input.year))?.state === 'built') {
       ctx.audit({ year: input.year, duplicate: true, manifest_key: input.manifestKey });
       return { recorded: false };

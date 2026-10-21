@@ -225,8 +225,10 @@ suite('fiscal year archive packages (#922)', () => {
     const built = await runYearArchive({ runtime: workerRuntime, store }, org.orgId, 2025, { requestCommandId });
     expect(built.recorded).toBe(true);
     expect(built.manifestKey).toMatch(new RegExp(`^archive/${org.orgId}/2025/[0-9a-f]{64}$`));
-    // A retried job builds again but keeps the first record.
-    expect((await runYearArchive({ runtime: workerRuntime, store }, org.orgId, 2025, { requestCommandId })).recorded).toBe(false);
+    // A job retried after the record builds and stores nothing.
+    const stored = store.blobs.size;
+    expect(await runYearArchive({ runtime: workerRuntime, store }, org.orgId, 2025, { requestCommandId })).toEqual({ manifestKey: built.manifestKey, recorded: false });
+    expect(store.blobs.size).toBe(stored);
     expect(await build(2025)).toMatchObject({ status: 409, body: { code: 'ARCHIVE_EXISTS' } });
 
     const list = await rpc('yearArchive/list', await tokenFor(owner), undefined);
@@ -245,11 +247,7 @@ suite('fiscal year archive packages (#922)', () => {
     expect(manifest.documents.map((d) => d.key).sort()).toEqual([...originals].sort());
     // The build's audit row names the manifest and the request.
     const audit = await admin(async (c) => (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.archive.record' ORDER BY occurred_at, id`, [org.orgId])).rows);
-    expect(audit).toEqual([
-      { detail: expect.objectContaining({ year: 2025, manifest_key: built.manifestKey, documents: 2 }) },
-      // The retried job's record is audited as a duplicate and keeps the first.
-      { detail: expect.objectContaining({ year: 2025, duplicate: true }) },
-    ]);
+    expect(audit).toEqual([{ detail: expect.objectContaining({ year: 2025, manifest_key: built.manifestKey, documents: 2 }) }]);
 
     // A part downloads with the bytes the manifest names.
     const journal = manifest.parts.find((p) => p.kind === 'journal');

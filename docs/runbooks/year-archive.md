@@ -20,7 +20,7 @@ The manifest (JSON, format `crove-year-archive-v1`, stored under the same prefix
 
 1. An owner calls `yearArchive/build` (R3: a second factor within the last 5 minutes). It is refused while a month of the year is unlocked (`ARCHIVE_YEAR_OPEN`), once the year is built (`ARCHIVE_EXISTS`), and while an earlier request is less than 60 minutes old (`ARCHIVE_PENDING`).
 2. The request emits `finance.archive_requested`; the outbox relay queues one `finance-year-archive` job per org and year.
-3. The worker checks the lock again, builds every part, stores the manifest and records it. A retried job builds the same bytes again (content addressed, so nothing is duplicated) and its record is audited as a duplicate; the first record stands.
+3. The worker checks the lock again, builds every part, stores the manifest and records it. A job retried after the record exists (the worker stopped before finishing it) builds nothing. Two workers building the same year at once store the same parts (content addressed) and the second record is audited as a duplicate; the first record stands.
 4. Owners list the packages (`yearArchive/list`), download the manifest (`GET /api/finance-archive/<year>/manifest`) or a part (`GET /api/finance-archive/<year>/<sha256>`, only a part the manifest lists), and verify the package (`GET /api/finance-archive/<year>/verify`).
 
 ## Making the store WORM
