@@ -42,6 +42,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_finance.input_vat_check',
   'crove_kernel.org_usage',
   'crove_kernel.usage_deferral',
 ]);
@@ -212,6 +213,12 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         ],
       };
     },
+  },
+  // The accountant's marks on input invoices that need proof of non-cash payment (#917): append-only, the latest mark of
+  // a document wins (paid by bank, optionally with its bank voucher, not deductible, or cleared). Tenant roles read and
+  // insert; nothing updates or deletes a mark.
+  'crove_finance.input_vat_check': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), document_id: o.document, outcome: 'paid_by_bank', marked_by: o.owner } }),
   },
   'crove_finance.journal_entry': {
     make: (o) => {
