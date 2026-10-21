@@ -6,8 +6,8 @@
 -- says whether one more scheduled report may go to an address today: fewer than p_per_day report mails to its inbox
 -- (crove_kernel.invite_cap_key: no +tag, no dots at Gmail) in the last 24 hours, from every org. It takes a lock on the
 -- inbox until the transaction ends, so two runs at once count each other; the caller gates its recipients in one
--- order (sorted by address) so two runs never wait on each other in a cycle, and a wait is bounded at 3 seconds. Only a system context (the worker's run of
--- a schedule) may ask; the answer is a yes or no, never a count or an org.
+-- order (sorted by address) so two runs never wait on each other in a cycle, and a wait is bounded at 3 seconds.
+-- Only a system context (the worker's run of a schedule) may ask; the answer is a yes or no, never a count or an org.
 SET LOCAL lock_timeout = '2s';
 
 CREATE INDEX IF NOT EXISTS mail_message_report_recipient_idx
