@@ -217,7 +217,7 @@ export async function variantPost(trx: Trx, orgId: string, variantIds: readonly 
 }
 
 // Statuses whose queue slot is free again (the post_variant_slot_uq index skips them); every other status holds it.
-export const SLOT_FREED: readonly SocialVariantStatus[] = ['cancelled', 'published', 'failed'];
+export const SLOT_FREED: readonly SocialVariantStatus[] = ['cancelled', 'published', 'failed', 'removed'];
 // Queued variants a queue edit may move: they have not been handed to the publisher.
 export const MOVABLE: readonly SocialVariantStatus[] = ['draft', 'in_review', 'changes_requested', 'rejected', 'approved', 'scheduled', 'paused'];
 
