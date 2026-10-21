@@ -32,6 +32,21 @@ export function sparkline(values: readonly number[], width: number, height: numb
     .join(' ');
 }
 
+export type ChangeDirection = 'up' | 'down' | 'same';
+
+// A count against the same count of the period just before (#947), in percent: a whole number from 10% up, one
+// decimal below, so a small change does not read as 0%. null when the period before has no data or is zero (no
+// percentage of nothing); a count missing now while it had one before is 0 now.
+export function changeOf(current: number | null | undefined, previous: number | null | undefined): { percent: number; direction: ChangeDirection } | null {
+  if (previous === null || previous === undefined || !Number.isFinite(previous) || previous === 0) return null;
+  const now = current === null || current === undefined || !Number.isFinite(current) ? 0 : current;
+  const raw = ((now - previous) / Math.abs(previous)) * 100;
+  // Half away from zero, the same way up and down; no sign on no change.
+  const size = Math.abs(raw) >= 10 ? Math.round(Math.abs(raw)) : Math.round(Math.abs(raw) * 10) / 10;
+  const percent = size === 0 ? 0 : Math.sign(raw) * size;
+  return { percent, direction: percent > 0 ? 'up' : percent < 0 ? 'down' : 'same' };
+}
+
 // Reactions, comments, shares, saves and clicks: what a person did with a post.
 export function engagementOf(metrics: Readonly<Record<string, number | undefined>>): number {
   return ['reactions', 'comments', 'shares', 'saves', 'clicks'].reduce((sum, k) => sum + (metrics[k] ?? 0), 0);

@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { ChangeChip } from '../components/social-growth.tsx';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage } from '../lib/api.ts';
@@ -22,7 +23,9 @@ interface ReportPage {
   expiresAt: string;
   posts: number;
   totals: Counts;
-  channels: { channel: string; provider: string; posts: number; totals: Counts }[];
+  // The period of the same length just before (#947), on the same channels; absent from a server without it.
+  previous?: { periodStart: string; periodEnd: string; posts: number; totals: Counts };
+  channels: { channel: string; provider: string; posts: number; totals: Counts; previous?: { posts: number; totals: Counts } }[];
   top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Counts }[];
 }
 
@@ -49,6 +52,7 @@ export function SocialReportPage() {
   const page = useQuery({ queryKey: ['client-report', token], queryFn: () => load(token as string), enabled: token !== null, retry: false });
   const data = page.data;
   const metrics = data ? shown(data.totals) : [];
+  const against = t('against');
   // A printed report is on paper: the light theme while printing, whatever the screen uses.
   useEffect(() => {
     const root = document.documentElement;
@@ -93,8 +97,14 @@ export function SocialReportPage() {
               <p className="text-sm text-muted-foreground">{data.org}</p>
               <h1 className="text-2xl font-semibold">{data.title ?? t('title')}</h1>
               <p className="text-sm text-muted-foreground">
-                {t('period', { from: f.date(data.periodStart), to: f.date(new Date(Date.parse(data.periodEnd) - 1).toISOString()) })} · {t('posts', { count: data.posts })}
+                {t('period', { from: f.date(data.periodStart), to: f.date(new Date(Date.parse(data.periodEnd) - 1).toISOString()) })} · {t('posts', { count: data.posts })}{' '}
+                <ChangeChip current={data.posts} previous={data.previous?.posts} against={against} />
               </p>
+              {data.previous && (
+                <p className="text-xs text-subtle-foreground">
+                  {t('compared', { from: f.date(data.previous.periodStart), to: f.date(new Date(Date.parse(data.previous.periodEnd) - 1).toISOString()) })}
+                </p>
+              )}
             </header>
             {data.posts === 0 ? (
               <Card className="block p-6 text-sm text-muted-foreground">{t('empty')}</Card>
@@ -106,6 +116,7 @@ export function SocialReportPage() {
                       <Card key={m} className="block p-4 print:break-inside-avoid">
                         <p className="text-xs text-subtle-foreground">{tm(m)}</p>
                         <p className="mt-1 text-xl font-semibold tabular-nums">{f.number(data.totals[m] ?? 0)}</p>
+                        <ChangeChip current={data.totals[m]} previous={data.previous?.totals[m]} against={against} withPrevious className="mt-1" />
                       </Card>
                     ))}
                   </section>
@@ -127,14 +138,18 @@ export function SocialReportPage() {
                       </thead>
                       <tbody>
                         {data.channels.map((c, i) => (
-                          <tr key={`${c.channel}-${i}`} className="border-t">
+                          <tr key={`${c.channel}-${i}`} className="border-t align-top">
                             <td className="px-3 py-2">
                               {c.channel} <span className="text-xs text-subtle-foreground">· {providerName(c.provider)}</span>
                             </td>
-                            <td className="px-3 py-2 text-right tabular-nums">{f.number(c.posts)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">
+                              <span className="block">{f.number(c.posts)}</span>
+                              <ChangeChip current={c.posts} previous={c.previous?.posts} against={against} />
+                            </td>
                             {metrics.map((m) => (
                               <td key={m} className="px-3 py-2 text-right tabular-nums">
-                                {c.totals[m] === undefined ? '-' : f.number(c.totals[m])}
+                                <span className="block">{c.totals[m] === undefined ? '-' : f.number(c.totals[m])}</span>
+                                <ChangeChip current={c.totals[m]} previous={c.previous?.totals[m]} against={against} />
                               </td>
                             ))}
                           </tr>
