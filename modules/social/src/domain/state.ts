@@ -18,6 +18,8 @@ export const VARIANT_STATUSES = [
   'needs_attention',
   'paused',
   'cancelled',
+  // Taken down from its platform after it went out (#860).
+  'removed',
 ] as const;
 export type VariantStatus = (typeof VARIANT_STATUSES)[number];
 
@@ -57,7 +59,11 @@ export type VariantEvent =
   // platform after all (they looked).
   | { type: 'retry' }
   | { type: 'drop' }
-  | { type: 'confirm_published' };
+  | { type: 'confirm_published' }
+  // The platform confirmed a person's removal of the published post (#860). The variant stays published while the
+  // remove call is on its way or unclear: it is still up until the platform says otherwise, so there is no removing
+  // status for a sweep, an edit or the post summary to handle, and a failed or unclear call leaves it as it was.
+  | { type: 'removed' };
 
 export type Refusal = { ok: false; code: 'INVALID_TRANSITION'; from: string; event: string };
 export type Transition<S> = { ok: true; status: S } | Refusal;
@@ -72,7 +78,7 @@ const CANCELLABLE: ReadonlySet<VariantStatus> = new Set(['draft', 'in_review', '
 // In flight, or waiting for a human to say what happened: a base edit that reaches such a variant is refused.
 export const IN_FLIGHT: ReadonlySet<VariantStatus> = new Set(['publishing', 'processing', 'ambiguous', 'needs_attention']);
 // History: their content is frozen (materialized) before base content changes.
-export const FROZEN: ReadonlySet<VariantStatus> = new Set(['published', 'cancelled']);
+export const FROZEN: ReadonlySet<VariantStatus> = new Set(['published', 'cancelled', 'removed']);
 
 const TABLE: Readonly<Record<Exclude<VariantEvent['type'], 'edit' | 'cancel' | 'reconciled'>, Partial<Record<VariantStatus, VariantStatus>>>> = {
   submit: { draft: 'in_review', changes_requested: 'in_review', rejected: 'in_review' },
@@ -94,6 +100,7 @@ const TABLE: Readonly<Record<Exclude<VariantEvent['type'], 'edit' | 'cancel' | '
   retry: { needs_attention: 'scheduled', failed: 'scheduled' },
   drop: { needs_attention: 'cancelled' },
   confirm_published: { needs_attention: 'published' },
+  removed: { published: 'removed' },
 };
 
 export function transitionVariant(from: VariantStatus, event: VariantEvent): Transition<VariantStatus> {
@@ -123,10 +130,12 @@ export function startsNewAttempt(event: VariantEvent): boolean {
 const OUTCOME: ReadonlySet<VariantStatus> = new Set(['published', 'failed']);
 const WAITING: ReadonlySet<VariantStatus> = new Set(['scheduled', 'paused']);
 
-// The post's status from its variants' statuses. Cancelled variants do not count, unless all are cancelled.
+// The post's status from its variants' statuses. Cancelled and removed variants do not count, unless all are: such a
+// post is cancelled. A removed channel is history like a cancelled one (nothing more happens to it, and it is not on
+// the platform), so the post's status keeps describing what is live; the channel itself shows that it was removed.
 export function postStatus(variants: readonly VariantStatus[]): PostStatus {
   if (variants.length === 0) return 'draft';
-  const live = variants.filter((v) => v !== 'cancelled');
+  const live = variants.filter((v) => v !== 'cancelled' && v !== 'removed');
   if (live.length === 0) return 'cancelled';
   if (live.some((v) => IN_FLIGHT.has(v))) return 'publishing';
   const published = live.filter((v) => v === 'published').length;

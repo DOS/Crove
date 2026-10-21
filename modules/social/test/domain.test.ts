@@ -1,6 +1,7 @@
 // Social domain layer (issue #231): channel rules, lifecycles, approval hash, publish decisions.
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import * as channel from '@crove/channel';
 import {
   approvalCovers,
   approvalsInRound,
@@ -17,6 +18,7 @@ import {
   POST_STATUSES,
   postStatus,
   PROVIDERS,
+  REMOVE_READY,
   VIDEO_READY,
   publishCallKey,
   publishJobKey,
@@ -439,6 +441,7 @@ describe('variant lifecycle', () => {
     { type: 'retry' },
     { type: 'drop' },
     { type: 'confirm_published' },
+    { type: 'removed' },
   ];
 
   function run(from: VariantStatus, path: VariantEvent[]): VariantStatus {
@@ -467,7 +470,7 @@ describe('variant lifecycle', () => {
   });
 
   it('never edits or cancels a variant in flight, waiting on a human, or history', () => {
-    for (const s of ['publishing', 'processing', 'ambiguous', 'needs_attention', 'published', 'cancelled'] as const) {
+    for (const s of ['publishing', 'processing', 'ambiguous', 'needs_attention', 'published', 'cancelled', 'removed'] as const) {
       expect(transitionVariant(s, { type: 'edit' }).ok).toBe(false);
       expect(transitionVariant(s, { type: 'cancel' }).ok).toBe(false);
     }
@@ -523,24 +526,40 @@ describe('variant lifecycle', () => {
     expect(startsNewAttempt({ type: 'schedule' })).toBe(false);
   });
 
-  it('never leaves published', () => {
+  it('never leaves published but by a confirmed removal, and never leaves removed (#860)', () => {
     fc.assert(
       fc.property(fc.array(fc.constantFrom(...events), { maxLength: 40 }), (path) => {
         let s: VariantStatus = path.length % 2 === 0 ? 'scheduled' : 'publishing';
-        let published = false;
         for (const e of path) {
           const t = transitionVariant(s, e);
           if (!t.ok) continue;
-          if (published) throw new Error(`left published via ${e.type}`);
+          if (s === 'removed') throw new Error(`left removed via ${e.type}`);
+          if (s === 'published' && !(e.type === 'removed' && t.status === 'removed')) throw new Error(`left published via ${e.type}`);
           s = t.status;
-          if (s === 'published') published = true;
         }
       }),
     );
   });
 
+  it('removes only a published variant, and keeps a removed one as history (#860)', () => {
+    for (const s of VARIANT_STATUSES) expect(transitionVariant(s, { type: 'removed' }).ok).toBe(s === 'published');
+    expect(transitionVariant('removed', { type: 'edit' }).ok).toBe(false);
+    expect(transitionVariant('removed', { type: 'cancel' }).ok).toBe(false);
+    expect(transitionVariant('removed', { type: 'retry' }).ok).toBe(false);
+  });
+
   it('starts a publish only from scheduled', () => {
     for (const s of VARIANT_STATUSES) expect(transitionVariant(s, { type: 'start' }).ok).toBe(s === 'scheduled');
+  });
+});
+
+describe('REMOVE_READY (#860)', () => {
+  it('names exactly the providers whose adapter takes a post down', () => {
+    const exported: unknown[] = Object.values(channel);
+    const adapters = exported.filter((x): x is { name: string; prototype: { remove?: unknown } } => typeof x === 'function' && x.name.endsWith('Publisher'));
+    const removers = adapters.filter((a) => typeof a.prototype.remove === 'function').map((a) => a.name);
+    expect(removers.sort()).toEqual(['BlueskyPublisher', 'DiscordPublisher', 'MastodonPublisher', 'SandboxPublisher', 'TelegramPublisher', 'XPublisher']);
+    expect([...REMOVE_READY].sort()).toEqual(['bluesky', 'discord', 'mastodon', 'sandbox', 'telegram', 'x']);
   });
 });
 
@@ -556,6 +575,11 @@ describe('postStatus', () => {
     expect(postStatus(['published', 'cancelled'])).toBe('published');
     expect(postStatus(['failed', 'cancelled'])).toBe('failed');
     expect(postStatus(['cancelled', 'cancelled'])).toBe('cancelled');
+    // A removed channel counts like a cancelled one (#860): the post says what is still live.
+    expect(postStatus(['published', 'removed'])).toBe('published');
+    expect(postStatus(['failed', 'removed'])).toBe('failed');
+    expect(postStatus(['removed', 'cancelled'])).toBe('cancelled');
+    expect(postStatus(['removed'])).toBe('cancelled');
   });
 
   it('always answers a known status', () => {

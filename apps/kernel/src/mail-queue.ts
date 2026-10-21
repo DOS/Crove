@@ -54,14 +54,24 @@ export interface MailQueueDeps {
   bounceDomain: string | null;
   sleep?: (ms: number) => Promise<void>;
   sendTimeoutMs?: number;
+  // The worker's connection, to read the operator's mail switch (#886) before a send.
+  workerDb?: Db;
 }
 
 interface Sender {
   send(queue: string, data: MailJob, options: Record<string, unknown>): Promise<unknown>;
 }
 
+// Whether the operator holds every org's mail (crove_kernel.global_kill_switch_on('mail'), #886).
+export async function mailHeld(db: Db): Promise<boolean> {
+  const { rows } = await sql<{ on: boolean }>`SELECT crove_kernel.global_kill_switch_on('mail') AS on`.execute(db);
+  return rows[0]?.on === true;
+}
+
 // One pass: queues the mail that is due and records the sends that lost their worker. Returns how many it queued.
 export async function sweepMail(boss: Sender, workerDb: Db, runtime: Runtime, mailer: MailProvider): Promise<number> {
+  // The operator's mail switch (#886): nothing is queued while it is on; the mail stays queued and goes out after.
+  if (await mailHeld(workerDb)) return 0;
   const repeatable = mailer.enabled && (mailer.sendRetrySafety === 'idempotent' || mailer.sendRetrySafety === 'safe');
   const { rows } = await sql<{ org_id: string; message_id: string; stream: string; state: string; attempts: number }>`
     SELECT org_id, message_id, stream, state, attempts FROM crove_kernel.mail_queued_due(${SWEEP_LIMIT}::int, ${MAIL_STALE_SECONDS}::int, ${repeatable}::boolean)`.execute(workerDb);
@@ -92,6 +102,8 @@ type Sent = { outcome: 'sent'; providerMessageId?: string } | { outcome: 'failed
 // One mail: begin, render, send once (a refusal the provider may lift is asked again a few times), record.
 export async function runMailJob(deps: MailQueueDeps, job: MailJob): Promise<MailJobOutcome> {
   const ctx = { actor: ACTOR, orgId: job.orgId };
+  // A job queued before the switch went on leaves its mail queued, untouched; the sweep queues it again once released.
+  if (deps.workerDb && (await mailHeld(deps.workerDb))) return { action: 'none', reason: 'held' };
   const begun = await deps.runtime.execute<QueuedMailBegin>('kernel.mail.queue.begin', { messageId: job.messageId, provider: deps.mailer.name, safety: deps.mailer.sendRetrySafety }, ctx);
   if (begun.action !== 'send') return begun;
   const result = await sendOne(deps, job, begun);

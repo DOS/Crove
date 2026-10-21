@@ -104,5 +104,33 @@ suite('kill switches and AI extraction on PostgreSQL (#886)', () => {
       c.query(`INSERT INTO crove_kernel.kill_switch (org_id, scope, target, engaged_by) VALUES ($1, 'agent', $2, $3)`, [orgId, randomUUID(), owner]),
     );
     expect(await stopped()).toBe(false);
+
+    // The operator's switch for every org (#886 part 2): only the database owner flips it, every runtime role reads it.
+    const set = (engaged: boolean) => admin((c) => c.query(`SELECT crove_kernel.global_kill_switch_set('ai', $1, 'thử', 'ops')`, [engaged]));
+    await set(true);
+    expect(await stopped()).toBe(true);
+    await set(false);
+    expect(await stopped()).toBe(false);
+    for (const [role, password] of [['crove_app', 'test-app-pw'], ['crove_worker', 'test-worker-pw']] as const) {
+      const url = new URL(adminUrl);
+      url.username = role;
+      url.password = password;
+      const c = new pg.Client({ connectionString: url.toString() });
+      await c.connect();
+      try {
+        expect((await c.query(`SELECT crove_kernel.global_kill_switch_on('ai') AS on`)).rows[0]).toEqual({ on: false });
+        await expect(c.query(`SELECT crove_kernel.global_kill_switch_set('ai', true, 'x', 'y')`), role).rejects.toMatchObject({ code: '42501' });
+        await expect(c.query('SELECT * FROM crove_kernel.global_kill_switch'), role).rejects.toMatchObject({ code: '42501' });
+      } finally {
+        await c.end();
+      }
+    }
+    // The history is append-only, for the owner too.
+    await expect(admin((c) => c.query(`UPDATE crove_kernel.global_kill_switch SET engaged = true`))).rejects.toThrow();
+    const history = await admin(async (c) => (await c.query(`SELECT key, engaged, reason, changed_by FROM crove_kernel.global_kill_switch ORDER BY changed_at, id`)).rows);
+    expect(history).toEqual([
+      { key: 'ai', engaged: true, reason: 'thử', changed_by: 'ops' },
+      { key: 'ai', engaged: false, reason: 'thử', changed_by: 'ops' },
+    ]);
   });
 });
