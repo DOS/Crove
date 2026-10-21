@@ -102,6 +102,7 @@ import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-vo
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { zPortalReconciliation } from './portal-list.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
+import { zTimeline } from './timeline.ts';
 
 // Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
 export const zProposalPolicy = z.object({
@@ -562,6 +563,8 @@ export const contract = {
   inbox: {
     list: oc.input(z.object({ status: zProposalStatus.optional() })).output(z.array(zInboxItem)),
     get: oc.input(z.object({ id: zId })).output(zInboxDetail),
+    // Every member who can open the proposal (issue #672): what happened to it, its file and the records it touched.
+    timeline: oc.input(z.object({ id: zId })).output(zTimeline),
     approve: oc
       .input(
         z.object({

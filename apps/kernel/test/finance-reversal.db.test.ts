@@ -319,6 +319,27 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
     expect(audit?.detail).toMatchObject({ reversed_entry_id: firstEntry, reversal_entry_id: reversalEntry, voided_document_id: firstDocument });
   });
 
+  it('shows the document\'s history to every member: received, proposed, approved, recorded and voided (#672)', async () => {
+    const timeline = await rpc('inbox/timeline', await tokenFor(viewer), { id: firstProposal });
+    expect(timeline.status).toBe(200);
+    const items = timeline.body.items as any[];
+    const kinds = items.map((i) => i.kind);
+    // Entries of one transaction share its time, so only the order across transactions is fixed.
+    expect(kinds.slice(0, 2)).toEqual(['file.received', 'proposal.created']);
+    expect(kinds.slice(2, 4).sort()).toEqual(['proposal.approved', 'purchase.recorded']);
+    expect(kinds.slice(4).sort()).toEqual(['journal_entry.reversed', 'purchase.voided']);
+    expect(items.map((i) => i.at)).toEqual(items.map((i) => i.at).sort());
+    expect(items.find((i) => i.kind === 'proposal.approved')).toMatchObject({ recordType: 'kernel.proposal', actorType: 'user', actorName: owner.email });
+    expect(items.find((i) => i.kind === 'purchase.voided')).toMatchObject({ recordType: 'finance.purchase_document', summary: expect.stringContaining('Hủy chứng từ mua') });
+    expect(timeline.body.more).toBe(false);
+    // The copy that was refused as a duplicate shows its rejection.
+    const rejected = await rpc('inbox/list', await tokenFor(owner), { status: 'rejected' });
+    const copy = (rejected.body as any[])[0];
+    const copyTimeline = await rpc('inbox/timeline', await tokenFor(owner), { id: copy.id });
+    expect((copyTimeline.body.items as any[]).map((i) => i.kind)).toEqual(['file.received', 'proposal.created', 'proposal.rejected']);
+    expect(await rpc('inbox/timeline', await tokenFor(owner), { id: randomUUID() })).toMatchObject({ status: 404, body: { code: 'NOT_FOUND' } });
+  });
+
   it('records the same invoice again from its file after the void, with the corrected accounts', async () => {
     expect((await rpc('inbox/get', await tokenFor(owner), { id: firstProposal })).body).toMatchObject({ voided: true, canReextract: true });
     const files = await rpc('files/recent', await tokenFor(owner), undefined);

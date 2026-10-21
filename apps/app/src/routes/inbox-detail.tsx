@@ -748,6 +748,42 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           </div>
         )}
       </div>
+      <ProposalTimeline id={item.id} />
     </>
+  );
+}
+
+// What happened to the document (#672): received, read, proposed, edited, approved or rejected, recorded, reversed,
+// oldest first, with who did it. The stream's proposal hints refresh it with the rest of the Inbox.
+function ProposalTimeline({ id }: { id: string }) {
+  const t = useTranslations('inboxDetail');
+  const f = useFormat();
+  const timeline = useQuery(orpc.inbox.timeline.queryOptions({ input: { id } }));
+  return (
+    <Card className="mt-6 block p-4" data-testid="timeline">
+      <p className="mb-3 text-sm font-medium text-muted-foreground">{t('timeline')}</p>
+      {timeline.isLoading ? (
+        <Spinner />
+      ) : timeline.error ? (
+        <ErrorText>{errorMessage(timeline.error)}</ErrorText>
+      ) : (timeline.data?.items.length ?? 0) === 0 ? (
+        <p className="text-sm text-subtle-foreground">{t('timelineEmpty')}</p>
+      ) : (
+        <>
+          {timeline.data?.more && <p className="mb-2 text-xs text-subtle-foreground">{t('timelineMore')}</p>}
+          <ol className="space-y-2 border-l pl-4">
+            {timeline.data?.items.map((e) => (
+              <li key={e.id} className="text-sm">
+                <p className="text-foreground">{e.summary}</p>
+                <p className="text-xs text-subtle-foreground">
+                  {f.dateTime(e.at)} · {e.actorType === 'system' ? t('timelineSystem') : (e.actorName ?? t('timelineFormer'))}
+                  {e.actorType === 'agent' ? ` (${t('timelineAgent')})` : ''}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+    </Card>
   );
 }
