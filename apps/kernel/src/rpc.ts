@@ -663,6 +663,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       media: {
         list: os.social.media.list.handler(socialQuery('social.media.list')),
         usage: os.social.media.usage.handler(socialQuery('social.media.usage')),
+        tags: os.social.media.tags.handler(socialQuery('social.media.tags')),
+        tag: os.social.media.tag.handler(socialCommand('social.media.tag')),
+        untag: os.social.media.untag.handler(socialCommand('social.media.untag')),
       },
       policies: {
         list: os.social.policies.list.handler(socialQuery('social.channel.policies')),
