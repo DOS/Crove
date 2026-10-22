@@ -2,7 +2,7 @@
 // doing every few hours for 30 days after it went out, and keeps every answer as an append-only snapshot; the
 // analytics screen shows the latest one per variant. Counts are normalized (channel METRIC_NAMES); a count a platform
 // does not report is absent, never zero.
-import { sql } from 'kysely';
+import { sql, type RawBuilder } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
@@ -156,11 +156,22 @@ async function windowTotals(trx: Trx, orgId: string, days: number, before: numbe
   // it, as the client report does; the later clicks belong to the windows after it. A post's clicks all come after it
   // went out, so the start needs no bound.
   const clickedBy = before === 0 ? sql`` : sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' <= ${end}`;
+  return totalsWhere(trx, orgId, sql`v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${ends} ${labelled}`, clickedBy);
+}
+
+/**
+ * The totals of the variants published in [start, end), as the window totals add them up: the goals of a month
+ * (#1056) count with these. Short link clicks up to the end only, on the days (UTC) whose midday is before it.
+ */
+export function periodTotals(trx: Trx, orgId: string, start: Date, end: Date): Promise<WindowTotals> {
+  return totalsWhere(trx, orgId, sql`v.published_at >= ${start} AND v.published_at < ${end}`, sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' < ${end}`);
+}
+
+async function totalsWhere(trx: Trx, orgId: string, published: RawBuilder<unknown>, clickedBy: RawBuilder<unknown>): Promise<WindowTotals> {
   const { rows } = await sql<{ conn: string; provider: string; posts: string; metrics: Record<string, number>; clicks: string | null }>`
     WITH v AS (
       SELECT v.org_id, v.id, v.channel_connection_id AS conn, v.provider FROM crove_social.post_variant v
-      WHERE v.org_id = ${orgId} AND v.status = 'published'
-        AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${ends} ${labelled}
+      WHERE v.org_id = ${orgId} AND v.status = 'published' AND ${published}
     ), latest AS (
       SELECT v.conn, s.metrics FROM v CROSS JOIN LATERAL (
         SELECT m.metrics FROM crove_social.metric_snapshot m

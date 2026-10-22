@@ -1,11 +1,13 @@
 // The client report page (#643): /-/report#<token>, opened from a link the agency sent, with no account. It shows what
 // went out in the period on the link's channels, the totals, the counts per channel and the posts that did best, and
-// prints cleanly to PDF from the browser. The token stays after the # and goes to the API in a POST body only.
+// prints cleanly to PDF from the browser. The token stays after the # and goes to the API in a POST body only. A link may
+// carry the agency's note, shown as plain text, and a report of exactly one month shows the monthly goals (#1056).
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { GoalList } from '../components/social-goals.tsx';
 import { ChangeChip } from '../components/social-growth.tsx';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -13,6 +15,7 @@ import { errorMessage } from '../lib/api.ts';
 import { apiErrorFromResponse } from '../lib/errors.ts';
 import { usePrintInLight } from '../lib/print.ts';
 import { REPORT_METRICS } from '../lib/social-report.ts';
+import { reportGoalGroups, type ReportGoals } from '../lib/social-goals.ts';
 import { providerName } from '../lib/social.ts';
 
 type Counts = Record<string, number>;
@@ -28,6 +31,10 @@ interface ReportPage {
   previous?: { periodStart: string; periodEnd: string; posts: number; totals: Counts };
   channels: { channel: string; provider: string; posts: number; totals: Counts; previous?: { posts: number; totals: Counts } }[];
   top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Counts }[];
+  // The agency's note (#1056), plain text; null or absent when there is none or from a server without notes.
+  note?: string | null;
+  // The monthly goals (#1056), only for a report of exactly one month; null or absent otherwise.
+  goals?: ReportGoals | null;
 }
 
 const tokenOf = () => {
@@ -44,6 +51,43 @@ async function load(token: string): Promise<ReportPage | null> {
 
 // The counts a report has, in the order the page shows them.
 const shown = (counts: Counts) => REPORT_METRICS.filter((m) => typeof counts[m] === 'number');
+
+// The agency's note, as text: React escapes it, and line breaks show as they were typed.
+export function ReportNote({ org, note }: { org: string; note: string }) {
+  const t = useTranslations('social.clientReport');
+  return (
+    <Card className="block space-y-1 p-4 print:break-inside-avoid">
+      <h2 className="text-sm font-medium text-foreground">{t('note', { org })}</h2>
+      <p className="text-sm break-words whitespace-pre-line text-muted-foreground">{note}</p>
+    </Card>
+  );
+}
+
+// The report's monthly goals by scope (the org's, then each channel's), judged now.
+export function ReportGoalsSection({ data, nowMs }: { data: Pick<ReportPage, 'goals' | 'periodStart' | 'periodEnd'>; nowMs: number }) {
+  const t = useTranslations('social.clientReport');
+  const tg = useTranslations('social.goals');
+  const goals = reportGoalGroups(data.goals, data, nowMs);
+  if (!goals) return null;
+  const [year, month] = goals.month.split('-');
+  const over = nowMs >= Date.parse(data.periodEnd);
+  return (
+    <section className="space-y-2 print:break-inside-avoid">
+      <h2 className="text-base font-semibold">{t('goals', { month: month ?? '', year: year ?? '' })}</h2>
+      <div className="grid gap-3 md:grid-cols-2 print:grid-cols-2">
+        {goals.groups.map((g, i) => (
+          <Card key={`${g.channel ?? ''}-${i}`} className="block space-y-2 p-4 print:break-inside-avoid">
+            <h3 className="text-sm font-medium text-foreground">
+              {g.channel === null ? tg('org') : `${g.channel}${g.provider ? ` · ${providerName(g.provider)}` : ''}`}
+              <span className="ml-2 text-xs font-normal text-subtle-foreground">{tg('met', { met: g.progress.filter((p) => p.status === 'met').length, total: g.progress.length })}</span>
+            </h3>
+            <GoalList items={g.progress} over={over} />
+          </Card>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 export function SocialReportPage() {
   const t = useTranslations('social.clientReport');
@@ -91,6 +135,8 @@ export function SocialReportPage() {
                 </p>
               )}
             </header>
+            {typeof data.note === 'string' && data.note.trim() !== '' && <ReportNote org={data.org} note={data.note} />}
+            <ReportGoalsSection data={data} nowMs={Date.now()} />
             {data.posts === 0 ? (
               <Card className="block p-6 text-sm text-muted-foreground">{t('empty')}</Card>
             ) : (

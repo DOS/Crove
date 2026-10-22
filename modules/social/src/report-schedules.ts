@@ -2,7 +2,7 @@
 // sends each client the report of the week or the month without having to remember. Owners and admins set a schedule
 // (weekly on a weekday or monthly on a day, at an hour of their time zone), the period each mail covers, the channels
 // and up to 10 recipients. When it is due the worker runs it: one transactional mail per recipient is queued through
-// the kernel's mail pipeline (Email E1b), with the period's headline numbers as merge data. The link to the full
+// the kernel's mail pipeline (Email E1b), with the period's headline numbers (and its monthly goals, #1056) as merge data. The link to the full
 // report carries a secret token, so it is not in the queue: social.report_schedule.mint_link makes one per recipient
 // when the mail goes out (the mail template calls it). Removing a schedule revokes the links it sent. "Send a test" mails the person
 // who asks, for the latest period.
@@ -15,6 +15,7 @@ import { DomainError, defineCommand, defineQuery, type CommandContext, type Runt
 import { isValidTimeZone } from './domain/queue.ts';
 import { nextReportRun, reportPeriodAt, type ReportScheduleSpec } from './domain/report-schedule.ts';
 import { newReportToken, reportTokenHash } from './report-links.ts';
+import { reportGoals } from './goals.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const REPORT_SCHEDULE_LIMIT = 5;
@@ -23,6 +24,8 @@ export const REPORT_RECIPIENTS_MAX = 10;
 const TEST_SENDS_PER_HOUR = 5;
 const DAY_MS = 86_400_000;
 export const REPORT_MAIL_TEMPLATE = 'social.report';
+// Goals one report mail lists at most; the report link shows them all.
+export const REPORT_MAIL_GOALS_MAX = 20;
 const MAIL_SOURCE = 'social.report_schedule.run';
 
 const zSchedule = z.strictObject({
@@ -193,6 +196,8 @@ async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' |
   const start = new Date(period.start);
   const end = new Date(period.end);
   const numbers = await headline(ctx, start, end, s.connection_ids);
+  // The month's goals (#1056) when the period is exactly one month in the goals' zone, as the report shows them.
+  const goals = await reportGoals(ctx.trx, ctx.orgId, start, end, s.connection_ids, ctx.now.getTime());
   // The sending org, named in the mail's footer.
   const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('name').where('org_id', '=', ctx.orgId).executeTakeFirst();
   const run = await ctx.trx
@@ -218,7 +223,7 @@ async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' |
       templateKey: REPORT_MAIL_TEMPLATE,
       to,
       subject: `Báo cáo mạng xã hội: ${s.name}`,
-      payload: { name: s.name, periodStart: start.toISOString(), periodEnd: end.toISOString(), timeZone: s.time_zone, test: kind === 'test', ...(org?.name ? { orgName: org.name } : {}), ...numbers },
+      payload: { name: s.name, periodStart: start.toISOString(), periodEnd: end.toISOString(), timeZone: s.time_zone, test: kind === 'test', ...(org?.name ? { orgName: org.name } : {}), ...numbers, ...(goals ? { goals: { month: goals.month, items: goals.goals.slice(0, REPORT_MAIL_GOALS_MAX) } } : {}) },
       ...(capped.has(to) ? { status: 'suppressed' as const, errorCode: 'recipient_daily_cap' } : { status: 'queued' as const }),
     });
     if (mail.status === 'suppressed') suppressed++;

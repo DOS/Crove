@@ -2,7 +2,8 @@
 // channels or the ones they choose, for a client without an account: what went out, the totals of the latest counts,
 // the counts per channel and the posts that did best. The token is shown once, to the person who made the link; the
 // database keeps only its SHA-256. The public side is the migration's definer (report_link_view), which the HTTP edge
-// calls with the token. The design is the client review link's (#589).
+// calls with the token. The design is the client review link's (#589). A link may carry the agency's note (#1056), and a
+// report of exactly one month shows the org's monthly goals (goals.ts).
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
@@ -30,6 +31,24 @@ function requireUser(ctx: CommandContext): string {
 
 const zInstant = z.iso.datetime({ offset: true });
 
+export const REPORT_NOTE_MAX = 2000;
+// Control characters other than tab and line feed, and the format characters that can hide or reorder text (zero
+// width marks, bidirectional controls, the byte order mark), by code point.
+const hidden = (c: number) =>
+  c <= 0x08 || (c >= 0x0b && c <= 0x1f) || (c >= 0x7f && c <= 0x9f) || (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0xfeff;
+/** The agency's note (#1056) as it is kept: plain text in NFC, line breaks as LF, without hidden characters, trimmed. */
+export const plainNote = (text: string) =>
+  [...text.normalize('NFC').replace(/\r\n?/g, '\n')]
+    .filter((ch) => !hidden(ch.codePointAt(0) ?? 0))
+    .join('')
+    .trim();
+// The note on a report: plain text the page shows as text; empty is no note.
+export const zReportNote = z
+  .string()
+  .max(REPORT_NOTE_MAX * 2)
+  .transform(plainNote)
+  .pipe(z.string().max(REPORT_NOTE_MAX));
+
 export const reportLinkCreate = defineCommand({
   name: 'social.report_link.create',
   input: z.strictObject({
@@ -38,6 +57,7 @@ export const reportLinkCreate = defineCommand({
     connectionIds: z.array(zId).max(50).optional(),
     title: z.string().trim().min(1).max(120).optional(),
     days: z.number().int().min(1).max(REPORT_LINK_MAX_DAYS).optional(),
+    note: zReportNote.optional(),
   }),
   risk: 'R2',
   access: ADMINS,
@@ -71,6 +91,7 @@ export const reportLinkCreate = defineCommand({
         org_id: ctx.orgId,
         token_sha256: reportTokenHash(token),
         title: input.title ?? null,
+        note: input.note ? input.note : null,
         period_start: start,
         period_end: end,
         connection_ids: ids,
@@ -104,6 +125,7 @@ export const reportLinkRevoke = defineCommand({
 export interface ReportLinkView {
   id: string;
   title: string | null;
+  note: string | null;
   periodStart: string;
   periodEnd: string;
   connectionIds: string[];
@@ -121,7 +143,7 @@ export const reportLinkList = defineQuery({
   handler: async (ctx): Promise<ReportLinkView[]> => {
     const rows = await ctx.trx
       .selectFrom('crove_social.report_link')
-      .select(['id', 'title', 'period_start', 'period_end', 'connection_ids', 'created_by', 'created_at', 'expires_at', 'revoked_at'])
+      .select(['id', 'title', 'note', 'period_start', 'period_end', 'connection_ids', 'created_by', 'created_at', 'expires_at', 'revoked_at'])
       .where('org_id', '=', ctx.orgId)
       .where('schedule_id', 'is', null)
       .orderBy('created_at', 'desc')
@@ -130,6 +152,7 @@ export const reportLinkList = defineQuery({
     return rows.map((r) => ({
       id: r.id,
       title: r.title,
+      note: r.note,
       periodStart: r.period_start.toISOString(),
       periodEnd: r.period_end.toISOString(),
       connectionIds: r.connection_ids,

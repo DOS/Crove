@@ -11,6 +11,8 @@ export * from './domain/media-tags.ts';
 export { localTime, zonedToEpoch, type LocalTime } from './domain/queue.ts';
 // Recurring posts (#979): the rule's next occurrence, for the post page's preview.
 export * from './domain/recurrence.ts';
+// Monthly goals (#1056): the report page judges progress with the rules the Metrics tab uses.
+export * from './domain/goals.ts';
 // The team report (#1058): its rows, the median and the CSV file the Metrics tab saves, with the exports' quoting.
 export * from './domain/team-report.ts';
 export { csvCell } from './domain/csv.ts';
