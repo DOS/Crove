@@ -13,7 +13,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
-import { socialCommands, socialQueries, type ChannelAccessEntry, type MetricsRow, type PostView } from '@crove/mod-social';
+import { socialCommands, socialQueries, type ChannelAccessEntry, type GoalsProgressView, type MetricsRow, type PostView } from '@crove/mod-social';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -264,6 +264,31 @@ suite('social channels per member on PostgreSQL (#1081)', () => {
     expect((await plan(o.member)).csv).not.toContain('Kênh B');
     expect((await plan(o.member)).csv).toContain('Kênh A');
     await expect(plan(o.member, { connectionIds: [o.b] })).rejects.toMatchObject(notAllowed);
+  });
+
+  it('a limited member sees their channels’ goals only, and cannot retime or stop the repeats of a post on other channels', async () => {
+    const o = await org();
+    await limit(o, o.member, [o.a]);
+    const goal = (connectionId: string | null) => exec(o, o.admin, 'social.goal.set', { connectionId, targets: { posts: 3 }, timeZone: 'Asia/Ho_Chi_Minh' });
+    await goal(null);
+    await goal(o.a);
+    await goal(o.b);
+    // The org's own goals count every channel: their progress would give away B's numbers.
+    const seen = await query<GoalsProgressView>(o, o.member, 'social.goal.progress', {});
+    expect(seen.goals.map((g) => g.connectionId)).toEqual([o.a]);
+    expect((await query<GoalsProgressView>(o, o.owner, 'social.goal.progress', {})).goals).toHaveLength(3);
+    // The planned time every open variant follows is not the member's to move on a post that also goes to B.
+    const shared = await post(o, o.owner, [o.a, o.b]);
+    const later = new Date(Date.now() + 5 * HOUR).toISOString();
+    const p = await get(o, o.owner, shared);
+    await expect(exec(o, o.member, 'social.post.update', { postId: shared, revision: p.revision, scheduledAt: later })).rejects.toMatchObject(notAllowed);
+    await expect(exec(o, o.member, 'social.post.set_evergreen', { postId: shared, days: null })).rejects.toMatchObject(notAllowed);
+    await expect(exec(o, o.member, 'social.post.recurrence_clear', { postId: shared })).rejects.toMatchObject(notAllowed);
+    const mine = await post(o, o.member, [o.a]);
+    const m = await get(o, o.member, mine);
+    await exec(o, o.member, 'social.post.update', { postId: mine, revision: m.revision, scheduledAt: later });
+    await exec(o, o.member, 'social.post.set_evergreen', { postId: mine, days: null });
+    await exec(o, o.member, 'social.post.recurrence_clear', { postId: mine });
   });
 
   it('owners and admins are never limited, whatever rows they have', async () => {

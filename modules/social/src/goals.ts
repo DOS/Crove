@@ -253,9 +253,10 @@ export const goalProgressQuery = defineQuery({
     // A query has no clock of its own; the month and its progress are of this moment.
     const now = Date.now();
     const all = await goalsOf(ctx.trx, ctx.orgId);
-    // A member limited to some channels (#1081) sees the org's own goals and the goals of those channels.
+    // A member limited to some channels (#1081) sees the goals of those channels only: the org's own goals count every
+    // channel, so their progress would give away the others' numbers (as a report on some channels leaves them out).
     const scope = await channelScope(ctx);
-    const rows = all.filter((g) => g.connectionId === null || mayUse(scope, g.connectionId));
+    const rows = all.filter((g) => (g.connectionId === null ? scope === null : mayUse(scope, g.connectionId)));
     const stored = all[0]?.timeZone ?? null;
     const timeZone = stored !== null && isValidTimeZone(stored) ? stored : GOAL_DEFAULT_TIME_ZONE;
     const month = input.month ?? monthKeyAt(now, timeZone);

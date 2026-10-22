@@ -423,10 +423,12 @@ async function editPost(ctx: CommandContext, post: PostRow, input: PostEdit): Pr
   // History whose content is not frozen yet is frozen first, whatever changes.
   for (const v of variants.filter((x) => FROZEN.has(x.status) && !x.content_frozen)) await setVariant(ctx, v.id, freezeValues(post, v));
   const changed = variants.filter((v) => !FROZEN.has(v.status) && hashOf(base(next), v) !== v.content_hash);
-  // A member limited to some channels (#1081) changes no variant on another channel through the shared content.
+  // A member limited to some channels (#1081) changes no variant on another channel through the shared content, nor
+  // the planned time every open variant follows (it is not in the content hash).
+  const timing = next.time_zone !== post.time_zone || next.scheduled_at?.getTime() !== post.scheduled_at?.getTime();
   refuseOutside(
     await channelScope(ctx),
-    changed.map((v) => v.channel_connection_id),
+    (timing ? variants.filter((v) => !FROZEN.has(v.status)) : changed).map((v) => v.channel_connection_id),
   );
   const blocked = changed.filter((v) => IN_FLIGHT.has(v.status));
   if (blocked.length > 0) {

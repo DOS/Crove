@@ -19,7 +19,7 @@ import { localDate, nextOccurrence, parseRecurrence, type Recurrence } from './d
 import { repostCopy } from './evergreen.ts';
 import { publishingHeld } from './publish-hold.ts';
 import { lockPost } from './variants.ts';
-import { refusePostOutside, refusePostWholly } from './channel-access.ts';
+import { refusePostWholly } from './channel-access.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const RECURRING_SWEEP_MS = 60 * 60_000;
@@ -97,7 +97,9 @@ export const postRecurrenceClear = defineCommand({
   handler: async (ctx, input) => {
     requireUser(ctx);
     await lockPost(ctx.trx, ctx.orgId, input.postId);
-    await refusePostOutside(ctx, input.postId);
+    // A member limited to some channels (#1081) stops a series only when it is wholly on those: its copies go to every
+    // channel of the post.
+    await refusePostWholly(ctx, input.postId);
     // A copy already made stays as it is, for a person to approve or cancel.
     await ctx.trx
       .updateTable('crove_social.post')
