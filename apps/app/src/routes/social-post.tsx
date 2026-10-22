@@ -24,6 +24,8 @@ import { PostActivity } from '../components/social-activity.tsx';
 import { ReviewChanges } from '../components/social-review-diff.tsx';
 import { PostVersions } from '../components/social-post-versions.tsx';
 import { BannedWordHints, BannedWordReview, useBannedWords } from '../components/social-banned-words.tsx';
+import { ReviewChecklistTicks } from '../components/social-review-checklist.tsx';
+import { checksFor, fullyTicked } from '../lib/social-review-checklist.ts';
 import { LabelPicker } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
 import { BestTimeButton } from '../components/social-best-time.tsx';
@@ -2075,7 +2077,10 @@ export function SocialComposePage() {
   // Not where four-eyes (#740) asks for another reviewer: the author's approval would be refused.
   const policies = useQuery({ ...orpc.social.policies.list.queryOptions({ input: {} }), enabled: canDecide });
   const fourEyes = new Set((policies.data ?? []).filter((p) => p.fourEyes).map((p) => p.connectionId));
-  const oneStep = canDecide && !aiUsed && policies.isSuccess && !selected.some((c) => fourEyes.has(c.id));
+  // Nor where the review checklist (#1105) has items to tick: those are ticked in the review panel.
+  const checklist = useQuery({ ...orpc.social.reviewChecklist.list.queryOptions({ input: {} }), enabled: canDecide });
+  const toTick = (id: string) => (checklist.data?.items ?? []).some((c) => c.connectionId === null || c.connectionId === id);
+  const oneStep = canDecide && !aiUsed && policies.isSuccess && checklist.isSuccess && !selected.some((c) => fourEyes.has(c.id) || toTick(c.id));
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
       e.preventDefault();
@@ -2317,6 +2322,8 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
   const [unticked, setUnticked] = useState<string[]>([]);
   const picked = waiting.map((v) => v.id).filter((id) => !unticked.includes(id));
   const [comment, setComment] = useState('');
+  // The review checklist items this reviewer ticked (#1105); an approval sends each channel the ticks of its own list.
+  const [checked, setChecked] = useState<Set<string>>(() => new Set());
   const decide = useMutation({
     mutationFn: (decision: 'approved' | 'changes_requested' | 'rejected') =>
       client.social.variants.decide({
@@ -2324,18 +2331,27 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
         decision,
         ...(comment.trim() ? { comment: comment.trim() } : {}),
         // What this reviewer sees: a newer revision is refused, never approved by mistake.
-        variants: waiting.filter((v) => picked.includes(v.id) && (decision !== 'approved' || (!mine(v) && !barred(v)))).map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })),
+        variants: waiting
+          .filter((v) => picked.includes(v.id) && (decision !== 'approved' || (!mine(v) && !barred(v))))
+          .map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash, ...(decision === 'approved' && v.checklist.length > 0 ? { checks: checksFor(v, checked) } : {}) })),
       }),
     onSuccess: () => {
       setComment('');
       setUnticked([]);
+      setChecked(new Set());
       onDone();
+    },
+    // A checklist changed since the page loaded: show the list as it is now.
+    onError: (error) => {
+      const code = (error as { code?: unknown }).code;
+      if (code === 'CHECKLIST_CHANGED' || code === 'CHECKLIST_INCOMPLETE') onDone();
     },
   });
   if (inReview.length === 0) return null;
   const done = inReview.filter(mine);
   const approvable = waiting.filter((v) => picked.includes(v.id) && !mine(v) && !barred(v));
   const others = inReview.filter(barred);
+  const ticksMissing = !fullyTicked(approvable, checked);
 
   return (
     <Card className="block space-y-3 border-warning/40 p-4">
@@ -2361,12 +2377,14 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
       {waiting.map((v) => (
         <BannedWordReview key={`banned-${v.id}`} channel={names.get(v.connectionId) ?? providerName(v.provider)} matches={v.bannedWords} status={v.bannedWordsStatus} content={v.effective} settings={v.settings} />
       ))}
+      {/* The review checklist (#1105): every item of the channels being approved, which the Approve button needs. */}
+      <ReviewChecklistTicks variants={approvable} names={names} ticked={checked} onChange={setChecked} />
       {/* What changed since each channel's last decision (#944); nothing on a first review. */}
       <ReviewChanges postId={post.id} variants={waiting.map((v) => ({ id: v.id, name: names.get(v.connectionId) ?? providerName(v.provider), revision: v.revision, contentHash: v.contentHash }))} />
       <Textarea value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
       {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
       <div className="flex flex-wrap gap-2">
-        <Button size="lg" disabled={self === undefined || approvable.length === 0 || decide.isPending} onClick={() => decide.mutate('approved')}>
+        <Button size="lg" disabled={self === undefined || approvable.length === 0 || ticksMissing || decide.isPending} onClick={() => decide.mutate('approved')}>
           {t('approve')}
         </Button>
         <Button variant="outline" size="lg" disabled={picked.length === 0 || decide.isPending || !comment.trim()} onClick={() => decide.mutate('changes_requested')}>

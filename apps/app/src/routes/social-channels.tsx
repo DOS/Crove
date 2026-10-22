@@ -18,6 +18,7 @@ import { ReportBrandingCard } from '../components/social-report-branding.tsx';
 import { ChatAlertCard } from '../components/social-chat-alert.tsx';
 import { PublishHoldCard } from '../components/social-publish-hold.tsx';
 import { BannedWordsCard } from '../components/social-banned-words.tsx';
+import { ReviewChecklistCard } from '../components/social-review-checklist.tsx';
 import { ChannelAccessCard, useChannelScope } from '../components/social-channel-access.tsx';
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
@@ -510,6 +511,7 @@ export function SocialChannelsPage() {
             <PublishHoldCard key={slug} />
           </Card>
           <BannedWordsCard channels={(channels.data ?? []).filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />
+          <ReviewChecklistCard channels={(channels.data ?? []).filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />
           {channels.data && <ChannelAccessCard channels={channels.data} canEdit={isAdmin} />}
           <Card className="block space-y-2 p-4">
             <div>

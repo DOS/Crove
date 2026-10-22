@@ -110,6 +110,7 @@ export interface CroveSocialSchema {
   'crove_social.report_link': SocialReportLinkTable;
   'crove_social.report_schedule': SocialReportScheduleTable;
   'crove_social.report_schedule_run': SocialReportScheduleRunTable;
+  'crove_social.review_check': SocialReviewCheckTable;
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.review_link': SocialReviewLinkTable;
   'crove_social.review_link_post': SocialReviewLinkPostTable;
@@ -1245,6 +1246,7 @@ export interface SocialPostApprovalTable {
   actor_origin: ColumnType<string, string | undefined, NotGranted>;
   snapshot: ColumnType<unknown, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  checklist: ColumnType<unknown, string | null | undefined, NotGranted>;
 }
 
 /** crove_social.post_comment */
@@ -1468,6 +1470,17 @@ export interface SocialReportScheduleTable {
   created_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.review_check */
+export interface SocialReviewCheckTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  channel_connection_id: ColumnType<string | null, string | null, NotGranted>;
+  position: ColumnType<number, number, NotGranted>;
+  label: ColumnType<string, string, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.review_feedback */
