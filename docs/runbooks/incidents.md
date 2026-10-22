@@ -290,7 +290,7 @@ What the law requires is not settled in this repository yet. Plan section 7.9 li
 2. **Keep the evidence:** do not delete logs or rows. Save `docker compose logs --since 72h > incident-<date>.log` and a backup ([backup-and-restore.md](backup-and-restore.md)), and write down what happened when, with times.
 3. **Tell the owner at once**, whatever the hour: the 72 hours run from when the breach was found, not from when the owner heard of it.
 4. **Find the scope:** which orgs, which kinds of data (names, tax codes, invoices, bank details), how many people, since when.
-5. **The owner calls the lawyer** (issue #62), who decides what must be notified, to which authority and to whom, and drafts it. Send the notice within the deadline the lawyer confirms.
+5. **The owner calls the lawyer** (issue #62), who decides what must be notified, to which authority and to whom. The notice drafts, to the authority and to the affected org, are in [breach-notice.vi.md](../legal/pdpl/breach-notice.vi.md). Send the notice within the deadline the lawyer confirms.
 6. **Tell the affected orgs** as the lawyer advises.
 7. **Afterwards:** an issue with the timeline, the cause and the fix.
 

@@ -575,7 +575,9 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                     ? t('executedAt', { at: f.dateTime(item.decidedAt) })
                     : item.status === 'rejected'
                       ? t('rejected')
-                      : item.status}
+                      : item.status === 'expired'
+                        ? t('expired')
+                        : item.status}
                 </Badge>
                 {item.voided && <Badge variant="destructive">{t('voidedBadge')}</Badge>}
               </>

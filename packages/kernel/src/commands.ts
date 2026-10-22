@@ -462,6 +462,10 @@ async function lockPendingProposal(ctx: CommandContext, id: string, revision?: n
     .forUpdate()
     .executeTakeFirst();
   if (!proposal) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy đề xuất');
+  // An expired proposal (#876) is terminal: nobody approves, edits or rejects it any more.
+  if (proposal.status === 'expired') {
+    throw new DomainError('PROPOSAL_EXPIRED', 409, 'Đề xuất này đã quá hạn chờ duyệt nên không duyệt, sửa hay từ chối được nữa');
+  }
   if (proposal.status !== 'pending') throw new DomainError('PROPOSAL_DECIDED', 409, 'Đề xuất này đã được xử lý');
   if (revision !== undefined && proposal.revision !== revision) {
     throw new DomainError('STALE_REVISION', 409, 'Đề xuất đã thay đổi, hãy tải lại');
@@ -634,6 +638,8 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   // The proposal (lockPendingProposal, refuseWhileReextracting): another org's id reads like one that does not exist.
   'NOT_FOUND',
   'PROPOSAL_DECIDED',
+  // A proposal that expired while the batch was prepared (#876).
+  'PROPOSAL_EXPIRED',
   'STALE_REVISION',
   'EXTRACTION_PENDING',
   // The approval policy (decideApproval): P10 and P12.

@@ -173,7 +173,9 @@ export type ExtractionTable = Refine<
 
 // 'approved' exists only inside the transaction of kernel.proposal.approve today: it marks the proposal approved for
 // its command while that command runs (the runtime's proposal state gate), and the same transaction ends 'executed'.
-export const PROPOSAL_STATUSES = ['pending', 'approved', 'executed', 'rejected', 'failed'] as const;
+// 'expired' (#876) is terminal like 'rejected': a proposal left pending past its org's expiry, which nobody decides
+// any more; its author may ask for it again as a new proposal.
+export const PROPOSAL_STATUSES = ['pending', 'approved', 'executed', 'rejected', 'failed', 'expired'] as const;
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
 // eligible_approvers is set on every new proposal; NULL only on proposals decided before the approval policy existed.

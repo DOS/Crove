@@ -1149,6 +1149,7 @@ export const vi = {
       pending: 'Chờ duyệt',
       executed: 'Đã ghi sổ',
       rejected: 'Đã từ chối',
+      expired: 'Hết hạn',
     },
     fileStatus: {
       processing: 'Đang đọc',
@@ -1265,6 +1266,7 @@ export const vi = {
     shortcuts: 'Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · K hoặc P về đề xuất trước · A duyệt · E sửa tài khoản · Ctrl K mở bảng lệnh',
     executedAt: 'Đã ghi sổ {at}',
     rejected: 'Đã từ chối',
+    expired: 'Đã hết hạn',
     reading:
       'Đang đọc lại chứng từ (lần đọc {version}). Đề xuất sẽ được cập nhật khi đọc xong; trong lúc này chưa duyệt, sửa hay từ chối được.',
     lastRunFailed: 'Lần đọc lại gần nhất (lần {version}) không thành công: {error}.',
@@ -3246,6 +3248,7 @@ export const vi = {
       NOT_SUPPRESSED: 'Địa chỉ này không bị chặn',
       MAIL_COMPLAINT_LIFT: 'Người nhận đã báo thư là spam; chỉ chính họ đăng ký lại mới bỏ chặn được',
       PROPOSAL_DECIDED: 'Đề xuất này đã được xử lý',
+      PROPOSAL_EXPIRED: 'Đề xuất này đã quá hạn chờ duyệt nên không xử lý được nữa',
       STALE_REVISION: 'Đề xuất đã thay đổi, hãy tải lại',
       NOT_EDITABLE: 'Đề xuất này không chỉnh sửa được',
       NOT_ELIGIBLE: 'Bạn không có quyền duyệt đề xuất này',
