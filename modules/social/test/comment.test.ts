@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { COMMENT_STALE_MS, commentStatus, type CommentCall } from '../src/comments.ts';
 import { pinStatus, wantsPin } from '../src/pin.ts';
+import { gateStatus, wantsGate } from '../src/gate.ts';
 import { playlistIndexOf, playlistStatus, playlistsOf } from '../src/playlists.ts';
 import { threadStatus } from '../src/thread.ts';
 import { autoReplyOf, repostRuleOf, type Provider } from '../src/domain/channels.ts';
@@ -139,6 +140,25 @@ describe('first comments (#587)', () => {
     expect(wantsPin({ provider: 'telegram', settings: { telegram: { silent: true } } })).toBe(false);
     expect(wantsPin({ provider: 'telegram', settings: { telegram: { pin: 'yes' } } })).toBe(false);
     expect(wantsPin({ provider: 'mastodon', settings: { telegram: { pin: true } } })).toBe(false);
+  });
+
+  it('shows the reply and quote gates of a Bluesky post like a pin (#1102)', () => {
+    const now = new Date('2026-10-23T10:00:00Z');
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    const call = (state: CommentCall['state'], startedMs: number, error_code: string | null = null): CommentCall => ({ key: 'k', state, external_ref: null, error_code, started_at: ago(startedMs) });
+    const old = COMMENT_STALE_MS + 1;
+    expect(gateStatus(undefined, now, ago(60_000))).toBe('pending');
+    expect(gateStatus(undefined, now, ago(old))).toBe('failed');
+    expect(gateStatus(call('started', 60_000), now, ago(old))).toBe('pending');
+    expect(gateStatus(call('started', old), now, ago(old))).toBe('unknown');
+    expect(gateStatus(call('succeeded', 60_000), now, ago(old))).toBe('applied');
+    expect(gateStatus(call('failed', 60_000, 'threadgate:InvalidRequest'), now, ago(old))).toBe('failed');
+    expect(gateStatus(call('ambiguous', 60_000), now, ago(old))).toBe('unknown');
+    expect(wantsGate({ provider: 'bluesky', settings: { replySettings: ['followers'] } })).toBe(true);
+    expect(wantsGate({ provider: 'bluesky', settings: { quotes: false } })).toBe(true);
+    expect(wantsGate({ provider: 'bluesky', settings: { replySettings: 'everyone' } })).toBe(false);
+    expect(wantsGate({ provider: 'bluesky', settings: null })).toBe(false);
+    expect(wantsGate({ provider: 'x', settings: { replySettings: 'following' } })).toBe(false);
   });
 
   it('shows how many playlists took a YouTube video, and a deleted playlist as its own warning (#1018)', () => {

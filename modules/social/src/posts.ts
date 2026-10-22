@@ -62,6 +62,7 @@ import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
 import { repostCommands } from './repost.ts';
 import { pinCallsOf, pinCommands, pinStatus, wantsPin, type PinStatus } from './pin.ts';
+import { gateCallsOf, gateCommands, gateStatus, wantsGate, type GateStatus } from './gate.ts';
 import { playlistCallsOf, playlistCommands, playlistsOf, playlistStatus, type PlaylistStatus } from './playlists.ts';
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
@@ -1109,6 +1110,8 @@ export interface VariantView {
   commentStatus: CommentStatus | null;
   // The pin of a published Telegram channel that asks for one (#982); null without one.
   pinStatus: PinStatus | null;
+  // Who may reply to and quote a published Bluesky post that limits either (#1102); null without a limit.
+  gateStatus: GateStatus | null;
   // The playlists of a published YouTube video that names some (#1018): how many took it, of how many; null without any.
   playlistStatus: PlaylistStatus | null;
   // The thread of a published channel (#742): how many parts are out (the post counts as one) and the next one's state.
@@ -1239,6 +1242,10 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
   const pinned = variants.filter((v) => v.status === 'published' && v.external_post_id && wantsPin(v));
   const pinCalls = await pinCallsOf(ctx.trx, ctx.orgId, pinned);
   const pins = new Map<string, PinStatus>(pinned.map((v) => [v.id, pinStatus(pinCalls.get(v.id), now, v.published_at)]));
+  // The reply and quote gates of each published channel that asks for them (#1102).
+  const gated = variants.filter((v) => v.status === 'published' && v.external_post_id && wantsGate(v));
+  const gateCalls = await gateCallsOf(ctx.trx, ctx.orgId, gated);
+  const gates = new Map<string, GateStatus>(gated.map((v) => [v.id, gateStatus(gateCalls.get(v.id), now, v.published_at)]));
   // The playlists of each published channel that names some (#1018).
   const listed = variants.filter((v) => v.status === 'published' && v.external_post_id && playlistsOf(v));
   const listCalls = await playlistCallsOf(ctx.trx, ctx.orgId, listed);
@@ -1324,6 +1331,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
               queueSlotAt: iso(v.queue_slot_at),
               commentStatus: comments.get(v.id) ?? null,
               pinStatus: pins.get(v.id) ?? null,
+              gateStatus: gates.get(v.id) ?? null,
               playlistStatus: lists.get(v.id) ?? null,
               threadStatus: threads.get(v.id) ?? null,
               // As the publisher decides it (queuePaused in publishing.ts): a retry time goes out whatever the queue does.
@@ -1688,6 +1696,7 @@ export const socialCommands = [
   ...autoReplyCommands,
   ...repostCommands,
   ...pinCommands,
+  ...gateCommands,
   ...playlistCommands,
   ...removeCommands,
   ...policyCommands,

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isProvider, LINK_PLACEMENT, sentText, type Cover } from '@crove/mod-social/contract';
-import { useTranslations } from 'use-intl';
+import { useFormatter, useTranslations } from 'use-intl';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, type MediaItem } from './social-media.tsx';
 import { client } from '../lib/api.ts';
@@ -25,6 +25,9 @@ export interface PreviewContent {
   topicTag?: string;
   // Who may reply to an X or Threads post, when not everyone (#948, #983).
   replySettings?: 'following' | 'mentionedUsers' | 'followers';
+  // Who may reply to a Bluesky post when not everyone (#1102): nobody, or one or several groups; and quotes off.
+  replyRules?: 'nobody' | readonly ('mentionedUsers' | 'following' | 'followers')[];
+  quotesOff?: boolean;
   // Who sees a LinkedIn post, when not anyone (#983).
   visibility?: 'connections' | 'loggedIn';
   // The link buttons under a Telegram post (#1017), in rows.
@@ -110,8 +113,16 @@ function useLinkPreview(url: string, enabled: boolean) {
 
 export function PlatformPreview({ channel, provider, content, readLink = false }: { channel: string; provider: string; content: PreviewContent; readLink?: boolean }) {
   const t = useTranslations('social');
+  const format = useFormatter();
   const rule = previewRule(provider);
   const [open, setOpen] = useState(false);
+  // Who may reply to a Bluesky post (#1102): one group as X and Threads say it, several joined as the locale lists them.
+  const replyRulesLine = (rules: NonNullable<PreviewContent['replyRules']>) => {
+    if (rules === 'nobody') return t('previewReplySettings.nobody');
+    const [only] = rules;
+    if (rules.length === 1 && only) return t(`previewReplySettings.${only}`);
+    return t('previewReplyRules', { who: format.list(rules.map((r) => t(`previewReplyWho.${r}`)), { type: 'conjunction' }) });
+  };
   // An edit shows the cut again, as the feed would.
   useEffect(() => setOpen(false), [content.body]);
   const host = hostOf(content.linkUrl);
@@ -252,6 +263,8 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
       <Media media={content.media} layout="feed" max={rule.gridMax} />
       {content.replySettings && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewReplySettings.${content.replySettings}`)}</p>}
       {content.visibility && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewVisibility.${content.visibility}`)}</p>}
+      {content.replyRules && <p className="mt-2 text-xs text-subtle-foreground">{replyRulesLine(content.replyRules)}</p>}
+      {content.quotesOff && <p className="mt-2 text-xs text-subtle-foreground">{t('previewQuotesOff')}</p>}
       {card}
       {content.buttons && content.buttons.length > 0 && (
         // As Telegram lays out an inline keyboard: each row under the message, its buttons sharing the width.

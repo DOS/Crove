@@ -9,7 +9,7 @@
 // kernel hands in (public addresses only, the connection pinned to the checked address, no redirects). Without one,
 // such accounts are refused (UnsupportedPds). The resolution is kept 10 minutes, so an account that moves PDS is
 // followed on a later call.
-import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, GateInput, RepostInput, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { requestSignal, type Fetch } from './oauth.ts';
@@ -425,6 +425,40 @@ export function blueskyLangs(settings: Readonly<Record<string, unknown>> | undef
   return given.length > 0 ? [...new Set(given)].slice(0, 3) : DEFAULT_LANGS;
 }
 
+// Who may reply to and quote a post (#1102), from the variant's settings: `replySettings` is everyone (the default,
+// nothing sent), nobody, or the people the post mentions, the accounts it follows, its followers, one of them or several
+// as a list; `quotes: false` turns quote posts off. Bluesky keeps these as records of their own next to the post, with
+// its record key (app.bsky.feed.threadgate and app.bsky.feed.postgate): a threadgate on a thread's first post gates
+// every reply in the thread, and a postgate covers the post it names.
+export const BLUESKY_REPLY_RULES = ['mentionedUsers', 'following', 'followers'] as const;
+export type BlueskyReplyRule = (typeof BLUESKY_REPLY_RULES)[number];
+export interface BlueskyGates {
+  // null: everyone may reply (no threadgate); [] : nobody; else the rules, in BLUESKY_REPLY_RULES order.
+  allow: BlueskyReplyRule[] | null;
+  quotes: boolean;
+}
+const THREADGATE_RULE: Record<BlueskyReplyRule, string> = {
+  mentionedUsers: 'app.bsky.feed.threadgate#mentionRule',
+  following: 'app.bsky.feed.threadgate#followingRule',
+  followers: 'app.bsky.feed.threadgate#followerRule',
+};
+const isReplyRule = (v: unknown): v is BlueskyReplyRule => typeof v === 'string' && (BLUESKY_REPLY_RULES as readonly string[]).includes(v);
+
+// The gates a variant asks for; null when it asks for none (everyone may reply and quote, as before), 'invalid' when
+// a value is not one of the above (a list must hold distinct rules).
+export function blueskyGatesOf(settings: Readonly<Record<string, unknown>> | undefined): BlueskyGates | null | 'invalid' {
+  const replies = settings?.replySettings;
+  const quotes = settings?.quotes;
+  if (quotes !== undefined && typeof quotes !== 'boolean') return 'invalid';
+  let allow: BlueskyReplyRule[] | null;
+  if (replies === undefined || replies === 'everyone') allow = null;
+  else if (replies === 'nobody') allow = [];
+  else if (isReplyRule(replies)) allow = [replies];
+  else if (Array.isArray(replies) && replies.length > 0 && replies.every(isReplyRule) && new Set(replies).size === replies.length) allow = BLUESKY_REPLY_RULES.filter((r) => replies.includes(r));
+  else return 'invalid';
+  return allow === null && quotes !== false ? null : { allow, quotes: quotes !== false };
+}
+
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
   return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
@@ -530,6 +564,8 @@ export class BlueskyPublisher implements Publisher {
   async publish(input: PublishInput): Promise<PublishResult> {
     const s = secretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' };
+    // Gates the gate step could not write (#1102) are refused before any call, so the post never goes out ungated.
+    if (blueskyGatesOf(input.settings) === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'GATES_INVALID' };
     let session: Session;
     try {
       session = await this.xrpc.session(s.identifier, s.appPassword);
@@ -623,6 +659,46 @@ export class BlueskyPublisher implements Publisher {
     } catch (error) {
       return commentResult(blueskyResult(error));
     }
+  }
+
+  // Who may reply to and quote the account's own post (#1102), once it is out: an app.bsky.feed.threadgate record when
+  // replies are limited (allow [] for nobody), then an app.bsky.feed.postgate record with a disableRule when quotes are
+  // off, each with the post's record key and naming the post by its URI, as the lexicons require and Bluesky's own app
+  // writes them. A gate that fails leaves the post up as it is: the answer says which gate (threadgate: or postgate:).
+  async gate(input: GateInput): Promise<CommentResult> {
+    const s = secretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' };
+    const gates = blueskyGatesOf(input.settings);
+    if (gates === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'GATES_INVALID' };
+    if (gates === null) return { kind: 'rejected', error: 'bad_request', code: 'NO_GATES' };
+    const parts = /^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/([A-Za-z0-9._:~-]{1,512})$/.exec(input.externalId);
+    if (!parts) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    let session: Session;
+    try {
+      session = await this.xrpc.session(s.identifier, s.appPassword);
+    } catch (error) {
+      // Opening a session writes nothing, so an unclear answer is a failure.
+      const result = blueskyResult(error);
+      return commentResult(result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) });
+    }
+    if (parts[1] !== session.did) return { kind: 'rejected', error: 'bad_request', code: 'NOT_OWN_POST' };
+    const rkey = parts[2] as string;
+    const createdAt = new Date().toISOString();
+    const writes: { gate: 'threadgate' | 'postgate'; record: Record<string, unknown> }[] = [];
+    if (gates.allow !== null) writes.push({ gate: 'threadgate', record: { $type: 'app.bsky.feed.threadgate', post: input.externalId, allow: gates.allow.map((r) => ({ $type: THREADGATE_RULE[r] })), createdAt } });
+    if (!gates.quotes) writes.push({ gate: 'postgate', record: { $type: 'app.bsky.feed.postgate', post: input.externalId, embeddingRules: [{ $type: 'app.bsky.feed.postgate#disableRule' }], createdAt } });
+    let made = '';
+    for (const { gate, record } of writes) {
+      try {
+        const answer = await this.xrpc.call<{ uri?: unknown }>(session.pds, 'POST', 'com.atproto.repo.createRecord', { token: session.accessJwt, json: { repo: session.did, collection: record.$type, rkey, record } });
+        if (typeof answer.uri !== 'string' || !answer.uri.startsWith('at://')) return { kind: 'unknown', code: `${gate}:NO_URI` };
+        made ||= answer.uri;
+      } catch (error) {
+        const result = commentResult(blueskyResult(error));
+        return result.kind === 'accepted' ? result : { ...result, code: `${gate}:${result.code ?? 'FAILED'}` };
+      }
+    }
+    return { kind: 'accepted', externalId: made };
   }
 
   // Takes the account's own post down (#860): com.atproto.repo.deleteRecord on its PDS, by the record key in its at://
