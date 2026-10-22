@@ -172,7 +172,7 @@ export const postVersions = defineQuery({
       .limit(APPROVALS_SHOWN)
       .execute();
     const approvalsOf = new Map<string, Array<{ key: string; decidedBy: string; at: string; checklist: TickedCheck[] | null }>>();
-    for (const a of approvalRows.reverse()) {
+    for (const a of [...approvalRows].reverse()) {
       if (shown !== null && !shown.has(a.variant_id)) continue;
       const list = approvalsOf.get(a.variant_id) ?? [];
       list.push({ key: snapshotContentKey(a.snapshot), decidedBy: a.decided_by, at: a.created_at.toISOString(), checklist: tickedOf(a.checklist) });
