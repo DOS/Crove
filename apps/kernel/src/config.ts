@@ -5,6 +5,10 @@ import { SIGNUP_POLICIES, parseAllowedDomains } from './auth-signup-policy.ts';
 import { WEBHOOK_ENV } from './alert.ts';
 import { exportSealer } from './export-seal.ts';
 
+// The product name when BRAND_NAME is unset (#1040).
+export const DEFAULT_BRAND_NAME = 'Crove';
+const BRAND_NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{M}\p{N} .,&'+_!()-]*$/u;
+
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
 const optional = z
@@ -348,6 +352,17 @@ const schema = z.object({
         message: 'a mailto: link needs an address',
       })
       .optional(),
+  ),
+  // The product name users see (#1040): in the app, the page title and Crove's own mails (sender name and texts). Code,
+  // schemas, logs and the AGPL source notice keep "Crove". Plain text of 1 to 40 characters (letters, digits, spaces
+  // and . , & ' + _ ! ( ) -), so it needs no escaping in HTML, ICU messages or a mail's From header. Browsers read it
+  // from /api/config.
+  BRAND_NAME: optional.pipe(
+    z
+      .string()
+      .transform((value) => value.normalize('NFC'))
+      .pipe(z.string().max(40, 'BRAND_NAME is at most 40 characters').regex(BRAND_NAME_PATTERN, "BRAND_NAME is plain text: letters, digits, spaces and . , & ' + _ ! ( ) -"))
+      .default(DEFAULT_BRAND_NAME),
   ),
   // The terms of service and the privacy notice that sign-up and invite acceptance link to (#688, plan M3-6): https:
   // pages the deployment publishes. Unset hides the line. Browsers read them from /api/config.

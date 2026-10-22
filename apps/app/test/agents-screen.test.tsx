@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { en } from '../src/i18n/messages/en.ts';
+import { catalog } from '../src/i18n/runtime.ts';
 
 const client = vi.hoisted(() => ({ current: null as unknown as import('@tanstack/react-query').QueryClient }));
 
@@ -59,7 +60,7 @@ function page(role: string | null): string {
   qc.setQueryData(['agents', 'budgets'], []);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <IntlProvider locale="en" messages={en as never}>
+      <IntlProvider locale="en" messages={catalog('en')}>
         <AgentsPage />
       </IntlProvider>
     </QueryClientProvider>,

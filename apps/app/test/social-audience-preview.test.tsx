@@ -4,8 +4,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { vi as viMessages } from '../src/i18n/messages/vi.ts';
 import type { PreviewContent } from '../src/components/social-preview.tsx';
+import { catalog } from '../src/i18n/runtime.ts';
 
 vi.mock('../src/lib/api.ts', () => ({
   client: {},
@@ -21,7 +21,7 @@ const { PlatformPreview } = await import('../src/components/social-preview.tsx')
 function render(provider: string, extra: Partial<PreviewContent> = {}): string {
   return renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient()}>
-      <IntlProvider locale="vi" messages={viMessages} timeZone="Asia/Ho_Chi_Minh">
+      <IntlProvider locale="vi" messages={catalog('vi')} timeZone="Asia/Ho_Chi_Minh">
         <PlatformPreview channel="Tiệm Bánh B" provider={provider} content={{ body: 'Khai trương chi nhánh mới.', title: '', linkUrl: '', media: [], ...extra }} />
       </IntlProvider>
     </QueryClientProvider>,

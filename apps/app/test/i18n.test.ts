@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_LOCALE, LOCALES, resolveLocale } from '../src/i18n/locale.ts';
 import { en } from '../src/i18n/messages/en.ts';
 import { vi } from '../src/i18n/messages/vi.ts';
-import { CATALOGS, translatorFor } from '../src/i18n/runtime.ts';
+import { SOURCE_CATALOGS, catalog, translatorFor } from '../src/i18n/runtime.ts';
 import { authErrorText, authFailure } from '../src/lib/auth.ts';
 
 type Tree = { [key: string]: string | Tree };
@@ -30,7 +30,7 @@ const catalogs = { vi: flatten(vi), en: flatten(en) };
 
 describe('message catalogs', () => {
   it('has a catalog for every locale', () => {
-    expect(Object.keys(CATALOGS).sort()).toEqual([...LOCALES].sort());
+    expect(Object.keys(SOURCE_CATALOGS).sort()).toEqual([...LOCALES].sort());
   });
 
   it('vi and en have the same keys', () => {
@@ -46,7 +46,7 @@ describe('message catalogs', () => {
   it('every message is valid ICU and formats without errors', () => {
     for (const locale of LOCALES) {
       const errors: string[] = [];
-      const t = createTranslator({ locale, messages: CATALOGS[locale], onError: (error) => errors.push(`${locale}: ${error.message}`) });
+      const t = createTranslator({ locale, messages: catalog(locale), onError: (error) => errors.push(`${locale}: ${error.message}`) });
       for (const [key, message] of catalogs[locale]) {
         const values: Record<string, string | number | ((chunks: string[]) => string)> = {};
         for (const arg of argumentsOf(message)) {

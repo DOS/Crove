@@ -1,6 +1,7 @@
 // Opening balances from Excel (issue #320): the template and reading a filled one back into the rows the kernel
 // checks. The kernel decides every rule (accounts, amounts, totals, dates); this only moves cells into text.
 import { OPENING_BALANCE_MAX_ROWS, normalizeAmountText, type OpeningBalanceRow } from '@crove/kernel-contract';
+import { withBrand } from '../i18n/brand.ts';
 import { writeWorkbook, type SheetCell, type SheetRows } from './xlsx.ts';
 
 export const OPENING_BALANCE_SOURCE = 'finance.opening_balance';
@@ -17,6 +18,7 @@ export const TEMPLATE_HEADERS = ['Mã tài khoản', 'Tên tài khoản', 'Dư N
 export const PARTY_HEADERS = ['MST đối tượng', 'Tên đối tượng'] as const;
 export const TEMPLATE_SHEET = 'Số dư đầu kỳ';
 const GUIDE_SHEET = 'Hướng dẫn';
+// {brand}: the product name users see (BRAND_NAME, issue #1040), filled in when the template is built.
 const GUIDE = [
   'Cách điền bảng số dư đầu kỳ',
   '1. Điền số dư cuối ngày của từng tài khoản vào cột "Dư Nợ" hoặc "Dư Có", bằng số nguyên đồng (không có phần thập phân).',
@@ -24,8 +26,8 @@ const GUIDE = [
   '3. Tài khoản vừa có dư Nợ vừa có dư Có (ví dụ 131, 331 theo từng khách hàng) thì điền cả hai cột.',
   '4. Mỗi tài khoản chỉ xuất hiện một lần. Không đổi tên hoặc thứ tự các cột ở dòng đầu tiên.',
   '   Riêng 131 và 331 (và tài khoản chi tiết của chúng) có thể tách theo từng khách hàng, nhà cung cấp: mỗi đối tượng một dòng, ghi mã số thuế ở cột "MST đối tượng" (hoặc tên ở cột "Tên đối tượng" nếu không có mã số thuế).',
-  '   Phần không tách được để ở một dòng không ghi đối tượng; Crove hiện phần đó là "Chưa gắn đối tượng".',
-  '5. Tổng dư Nợ phải bằng tổng dư Có. Crove kiểm tra và hiện lỗi từng dòng trước khi ghi sổ.',
+  '   Phần không tách được để ở một dòng không ghi đối tượng; {brand} hiện phần đó là "Chưa gắn đối tượng".',
+  '5. Tổng dư Nợ phải bằng tổng dư Có. {brand} kiểm tra và hiện lỗi từng dòng trước khi ghi sổ.',
 ];
 
 // Column widths: code, name, debit, credit, party tax code, party name.
@@ -43,7 +45,7 @@ export function buildTemplate(accounts: ReadonlyArray<{ code: string; name: stri
       amountColumns: [2, 3],
       formattedBlankRows: 20,
     },
-    { name: GUIDE_SHEET, widths: [120], headerRows: 1, rows: GUIDE.map((line) => [line]) },
+    { name: GUIDE_SHEET, widths: [120], headerRows: 1, rows: GUIDE.map((line) => [withBrand(line)]) },
   ]);
 }
 
