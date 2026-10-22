@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -34,6 +34,7 @@ import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { clearDraft, loadDraft, saveDraft, type StoredDraft } from '../lib/social-draft.ts';
 import { canMoveToFront } from '../lib/social-queue-order.ts';
+import { STORY_METRICS } from '../lib/social-insights.ts';
 import {
   CANCELLABLE,
   EDITABLE,
@@ -258,6 +259,14 @@ function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<st
         </NativeSelect>
         <p className="text-xs text-subtle-foreground">{t('ytAudienceHint')}</p>
       </div>
+      {/* Realistic altered or synthetic content (#1078), sent as status.containsSyntheticMedia; only on is stored. */}
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox checked={settings.syntheticMedia === true} disabled={disabled} onCheckedChange={(on) => onChange(on === true ? { ...settings, syntheticMedia: true } : without('syntheticMedia'))} />
+          {t('ytSynthetic')}
+        </label>
+        <p className="text-xs text-subtle-foreground">{t('ytSyntheticHint')}</p>
+      </div>
       <div className="space-y-1.5">
         <Label htmlFor={`${id}-category`} className="text-xs">
           {t('ytCategory')}
@@ -408,10 +417,74 @@ function ReelFeedField({ settings, onChange, disabled }: { settings: Record<stri
   );
 }
 
+// TikTok's commercial content disclosure and AI label (#1078), laid out as TikTok's content sharing guidelines ask: a
+// disclosure switch, off by default, that opens "Your brand" and "Branded content"; the label TikTok will show; a
+// warning while neither is chosen (the post is refused until one is); branded content greyed out while the post is
+// "only me". Only what is on is stored, so a variant left as it was keeps its content hash and its init body.
+function TikTokDisclosureField({ settings, photo, disabled, onChange }: { settings: Record<string, unknown>; photo: boolean; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const read = tiktokDisclosureOf(settings);
+  const current: TikTokDisclosure = read && read !== 'invalid' ? read : { commercial: false, yourBrand: false, brandedContent: false, aiGenerated: false };
+  const isPrivate = settings.privacyLevel === 'SELF_ONLY';
+  const save = (next: TikTokDisclosure) => {
+    const { tiktok: _old, ...rest } = settings;
+    const kept = {
+      ...(next.commercial ? { commercial: true } : {}),
+      ...(next.commercial && next.yourBrand ? { yourBrand: true } : {}),
+      ...(next.commercial && next.brandedContent ? { brandedContent: true } : {}),
+      ...(next.aiGenerated ? { aiGenerated: true } : {}),
+    };
+    onChange(Object.keys(kept).length > 0 ? { ...rest, tiktok: kept } : rest);
+  };
+  // Both chosen is labelled as a paid partnership, as TikTok does.
+  const label = current.brandedContent ? 'paidPartnership' : current.yourBrand ? 'promotional' : null;
+  const brandedBlocked = isPrivate && !current.brandedContent;
+  return (
+    <div className="space-y-2 border-t pt-2">
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox checked={current.commercial} disabled={disabled} onCheckedChange={(on) => save({ ...current, commercial: on === true })} />
+          {t('ttDisclose')}
+        </label>
+        <p className="text-xs text-subtle-foreground">{t('ttDiscloseHint')}</p>
+      </div>
+      {current.commercial && (
+        <div className="space-y-2 pl-6">
+          <div className="space-y-0.5">
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Checkbox checked={current.yourBrand} disabled={disabled} onCheckedChange={(on) => save({ ...current, yourBrand: on === true })} />
+              {t('ttYourBrand')}
+            </label>
+            <p className="pl-6 text-xs text-subtle-foreground">{t('ttYourBrandHint')}</p>
+          </div>
+          <div className="space-y-0.5">
+            {/* Greyed out while the post is only me; branded content already on can still be turned off. */}
+            <label className={cn('flex items-center gap-2 text-sm text-muted-foreground', brandedBlocked && 'opacity-60')} title={brandedBlocked ? t('ttBrandedPrivate') : undefined}>
+              <Checkbox checked={current.brandedContent} disabled={disabled || brandedBlocked} onCheckedChange={(on) => save({ ...current, brandedContent: on === true })} />
+              {t('ttBrandedContent')}
+            </label>
+            <p className="pl-6 text-xs text-subtle-foreground">{t('ttBrandedContentHint')}</p>
+            {brandedBlocked && <p className="pl-6 text-xs text-subtle-foreground">{t('ttBrandedPrivate')}</p>}
+          </div>
+          {label ? <p className="text-xs text-foreground">{t(photo ? 'ttDiscloseLabel.photo' : 'ttDiscloseLabel.video', { label: t(`ttDiscloseLabelName.${label}`) })}</p> : <p className="text-xs text-warning">{t('ttDiscloseChoose')}</p>}
+        </div>
+      )}
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox checked={current.aiGenerated} disabled={disabled} onCheckedChange={(on) => save({ ...current, aiGenerated: on === true })} />
+          {t('ttAiGenerated')}
+        </label>
+        <p className="text-xs text-subtle-foreground">{t('ttAiGeneratedHint')}</p>
+      </div>
+    </div>
+  );
+}
+
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
 // inboxOffered: the channel's connection was granted video.upload, which Crove asks for only where the deployment turns
 // TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903). pinAllowed: the Telegram bot may pin in the channel, as read at
-// connect (#982). reel: the post goes out as an Instagram Reel (#1019).
+// connect (#982). reel: the post goes out as an Instagram Reel (#1019). photo: the post is photos only (TikTok's
+// disclosure label names a photo or a video, #1078).
 function ProviderSettings({
   provider,
   settings,
@@ -420,6 +493,7 @@ function ProviderSettings({
   inboxOffered = false,
   pinAllowed = false,
   reel = false,
+  photo = false,
 }: {
   provider: string;
   settings: Record<string, unknown>;
@@ -428,6 +502,7 @@ function ProviderSettings({
   inboxOffered?: boolean;
   pinAllowed?: boolean;
   reel?: boolean;
+  photo?: boolean;
 }) {
   const t = useTranslations('social');
   // Telegram (#982): a silent post, and a pin to the top of the channel once it is out; link buttons under it (#1017).
@@ -584,14 +659,17 @@ function ProviderSettings({
       {t(`ttToggle.${key}`)}
     </label>
   );
-  // Posted now, or sent to the TikTok app as a draft (#903). The draft takes no privacy level, interactions or cover
-  // (the creator picks them in TikTok), so they are dropped on the switch; direct is the default and is not stored.
+  // Posted now, or sent to the TikTok app as a draft (#903). The draft takes no privacy level, interactions, cover or
+  // disclosure (#1078; the creator picks them in TikTok), so they are dropped on the switch; direct is the default and
+  // is not stored.
   const inbox = tiktokModeOf(settings) === 'inbox';
+  const disclosure = tiktokDisclosureOf(settings);
+  const branded = disclosure !== null && disclosure !== 'invalid' && disclosure.brandedContent;
   // Offered where the connection can send drafts; a variant already in inbox mode keeps the choice, to switch back.
   const offered = inboxOffered || inbox;
   const setMode = (next: 'direct' | 'inbox') => {
     if (next === 'inbox') {
-      const { privacyLevel: _privacy, allowComments: _comments, allowDuet: _duet, allowStitch: _stitch, autoAddMusic: _music, cover: _cover, ...rest } = settings;
+      const { privacyLevel: _privacy, allowComments: _comments, allowDuet: _duet, allowStitch: _stitch, autoAddMusic: _music, cover: _cover, tiktok: _disclosure, ...rest } = settings;
       onChange({ ...rest, tiktokMode: 'inbox' });
     } else {
       const { tiktokMode: _mode, ...rest } = settings;
@@ -619,17 +697,22 @@ function ProviderSettings({
             <Label className="text-xs">{t('ttPrivacy')}</Label>
             <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacyLevel === 'string' ? settings.privacyLevel : ''} disabled={disabled} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
               <NativeSelectOption value="">{t('ttPrivacyChoose')}</NativeSelectOption>
-              {(['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const).map((p) => (
-                <NativeSelectOption key={p} value={p}>
-                  {t(`ttPrivacyOption.${p}`)}
-                </NativeSelectOption>
-              ))}
+              {(['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const).map((p) => {
+                // Branded content cannot be private (TikTok's content sharing guidelines, #1078).
+                const blocked = p === 'SELF_ONLY' && branded && settings.privacyLevel !== 'SELF_ONLY';
+                return (
+                  <NativeSelectOption key={p} value={p} disabled={blocked} title={blocked ? t('ttBrandedPrivate') : undefined}>
+                    {t(`ttPrivacyOption.${p}`)}
+                  </NativeSelectOption>
+                );
+              })}
             </NativeSelect>
           </div>
           {toggle('allowComments')}
           {toggle('allowDuet')}
           {toggle('allowStitch')}
-          <p className="text-xs text-subtle-foreground">{t('ttConsent')}</p>
+          <TikTokDisclosureField settings={settings} photo={photo} disabled={disabled} onChange={onChange} />
+          <p className="text-xs text-subtle-foreground">{t(branded ? 'ttConsentBranded' : 'ttConsent')}</p>
         </>
       )}
     </div>
@@ -1513,6 +1596,7 @@ function ChannelEditor({
         inboxOffered={scopes?.includes('video.upload') ?? false}
         pinAllowed={scopes?.includes(TELEGRAM_PIN_SCOPE) ?? false}
         reel={provider === 'instagram' && isInstagramReel(content.media.map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const) })), own.settings)}
+        photo={content.media.length > 0 && content.media.every((m) => m.mime.startsWith('image/'))}
         onChange={(settings) => onChange({ ...own, settings })}
       />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
@@ -2568,7 +2652,8 @@ function MoveToFront({ variantId, queueSlotAt, onDone }: { variantId: string; qu
   );
 }
 
-const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks'] as const;
+// Then a Story's own counts (#1082).
+const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks', ...STORY_METRICS] as const;
 
 // A published channel's latest counts, as the platform reported them; a count it does not report is left out.
 function VariantMetrics({ row }: { row: { metrics: Record<string, number>; capturedAt: string | null } | undefined }) {

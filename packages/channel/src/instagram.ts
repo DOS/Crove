@@ -37,7 +37,8 @@ import { postTypeOf } from './post-type.ts';
 import { Graph, GraphError, graphPublishResult, MetaLogin, type MetaAppConfig } from './meta.ts';
 import type { AuthorizeInput, ExchangeInput, Fetch, OAuthConnector } from './oauth.ts';
 
-// instagram_manage_insights: reach, saves, shares and views of the account's posts (S8 metrics);
+// instagram_manage_insights: reach, saves, shares and views of the account's posts (S8 metrics) and its Stories'
+// counts (#1082);
 // instagram_manage_comments: the first comment under the account's own post (#609).
 export const INSTAGRAM_SCOPES = ['pages_show_list', 'pages_read_engagement', 'instagram_basic', 'instagram_content_publish', 'instagram_manage_insights'] as const;
 // Asked for, not required: first comments (#609); an account connects without it and its comments fail with permission.
@@ -418,6 +419,7 @@ export class InstagramPublisher implements Publisher {
     const s = secretOf(input.secret);
     if (!s) return { refused: 'token_expired' };
     if (!NUMERIC_ID.test(input.externalId)) return { refused: 'gone' };
+    if (input.postType === 'story') return this.storyMetrics(input.externalId, s.accessToken);
     const metrics: Partial<Record<MetricName, number>> = {};
     try {
       const answer = await this.graph.call<{ like_count?: unknown; comments_count?: unknown }>('GET', input.externalId, { token: s.accessToken, params: { fields: 'like_count,comments_count' } });
@@ -440,6 +442,44 @@ export class InstagramPublisher implements Publisher {
       }
     } catch {
       // No insights for this post or this connection: the plain counts stand.
+    }
+    return { metrics };
+  }
+
+  // A Story (#1082) has no likes or comments and refuses the feed metrics (saved among them): it is asked for the Story
+  // metrics alone, then for its navigation broken down by action (a breakdown works with navigation only, so it is a
+  // call of its own). Meta keeps a Story's insights for 24 hours, and answers error 10 while fewer than five accounts
+  // saw it; the sweep takes its last capture before the day is over.
+  private async storyMetrics(id: string, token: string): Promise<MetricsResult> {
+    const metrics: Partial<Record<MetricName, number>> = {};
+    try {
+      const insights = await this.graph.call<InsightsAnswer>('GET', `${id}/insights`, { token, params: { metric: STORY_METRICS } });
+      for (const row of insights.data ?? []) {
+        const name = typeof row.name === 'string' && Object.hasOwn(STORY_INSIGHT_NAMES, row.name) ? STORY_INSIGHT_NAMES[row.name] : undefined;
+        const value = count(row.values?.[0]?.value ?? row.total_value?.value);
+        if (name && value !== undefined) metrics[name] = value;
+      }
+    } catch (error) {
+      const result = graphPublishResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+      if (error instanceof GraphError && error.code === 100 && error.subcode === 33) return { refused: 'gone' };
+      // Too few viewers yet: nothing to count, asked again at the next capture.
+      if (error instanceof GraphError && error.code === 10 && /not enough viewers/i.test(error.message)) return { metrics: {}, extra: { story: 'not_enough_viewers' } };
+      return null;
+    }
+    try {
+      const navigation = await this.graph.call<InsightsAnswer>('GET', `${id}/insights`, { token, params: { metric: 'navigation', breakdown: 'story_navigation_action_type' } });
+      const row = navigation.data?.find((r) => r.name === 'navigation');
+      for (const b of row?.total_value?.breakdowns ?? []) {
+        for (const r of b.results ?? []) {
+          const key = r.dimension_values?.[0];
+          const action = typeof key === 'string' && Object.hasOwn(NAVIGATION_NAMES, key.toLowerCase()) ? NAVIGATION_NAMES[key.toLowerCase()] : undefined;
+          const value = count(r.value);
+          if (action && value !== undefined) metrics[action] = value;
+        }
+      }
+    } catch {
+      // No navigation for this Story: the other counts stand.
     }
     return { metrics };
   }
@@ -512,7 +552,12 @@ export class InstagramPublisher implements Publisher {
 class NoUrl extends Error {}
 
 interface InsightsAnswer {
-  data?: { name?: unknown; values?: { value?: unknown }[]; total_value?: { value?: unknown } }[];
+  data?: { name?: unknown; values?: { value?: unknown }[]; total_value?: { value?: unknown; breakdowns?: { results?: { dimension_values?: unknown[]; value?: unknown }[] }[] } }[];
 }
 const INSIGHT_NAMES: Record<string, MetricName> = { reach: 'reach', saved: 'saves', shares: 'shares', views: 'views' };
+// The Story metrics of Meta's media insights reference (#1082); impressions is deprecated and saved is not a Story's.
+const STORY_METRICS = 'reach,views,replies,shares,follows,profile_visits';
+const STORY_INSIGHT_NAMES: Record<string, MetricName> = { reach: 'reach', views: 'views', replies: 'replies', shares: 'shares', follows: 'follows', profile_visits: 'profileVisits' };
+// story_navigation_action_type, which the reference writes in capitals and its sample answer in lower case.
+const NAVIGATION_NAMES: Record<string, MetricName> = { tap_forward: 'tapsForward', tap_back: 'tapsBack', tap_exit: 'exits', swipe_forward: 'nextStory' };
 const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);

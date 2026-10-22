@@ -2,6 +2,7 @@
 // provider knows how to connect an account and, from later steps on, how to publish, reconcile and read metrics.
 // Each capability is its own small interface, added by the step that first needs it.
 import { randomBytes } from 'node:crypto';
+import type { PostType } from './post-type.ts';
 
 export * from './oauth.ts';
 export * from './text.ts';
@@ -177,12 +178,18 @@ export interface Refresher {
 
 // What a platform reports for a published post (Social plan S8). Counts use these names whatever the platform calls
 // them; a count the platform does not report is left out, never zero. Anything else goes in extra.
-export const METRIC_NAMES = ['impressions', 'reach', 'reactions', 'comments', 'shares', 'saves', 'clicks', 'views'] as const;
+export const POST_METRIC_NAMES = ['impressions', 'reach', 'reactions', 'comments', 'shares', 'saves', 'clicks', 'views'] as const;
+// What a Story reports besides (#1082, Instagram's Story insights): replies, the taps forward and back, the exits and the
+// swipes to the next story (its navigation), the follows it brought and the profile visits from it.
+export const STORY_METRIC_NAMES = ['replies', 'tapsForward', 'tapsBack', 'exits', 'nextStory', 'follows', 'profileVisits'] as const;
+export const METRIC_NAMES = [...POST_METRIC_NAMES, ...STORY_METRIC_NAMES] as const;
 export type MetricName = (typeof METRIC_NAMES)[number];
 export interface MetricsInput {
   externalAccountId: string;
   secret: string;
   externalId: string;
+  // The variant's post type when it is not a feed post (#1082): a Story is asked for the Story metrics.
+  postType?: PostType;
 }
 export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extra?: Record<string, unknown> } | { refused: 'token_expired' | 'gone' } | null;
 

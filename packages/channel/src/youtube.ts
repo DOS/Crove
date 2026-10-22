@@ -4,7 +4,9 @@
 // Connect: Google's consent screen for youtube.upload and youtube.readonly with offline access, so a refresh token
 // comes back; the access token lives an hour and the refresh schedule renews it. One grant is one YouTube channel.
 // Publish: a resumable upload session (the video's title, description, privacy, and since #905 its category, tags and
-// audience), then one PUT of the bytes; the answer names the video. The project's quota allows about 100 uploads a day; a quota refusal waits, never fails.
+// audience, and since #1078 the altered or synthetic content disclosure), then one PUT of the bytes. Paid product
+// placement (paidProductPlacementDetails.hasPaidProductPlacement) is not among the properties videos.insert lets an
+// app set, so it is declared in YouTube Studio; the answer names the video. The project's quota allows about 100 uploads a day; a quota refusal waits, never fails.
 // An unclear answer is checked by listing the channel's latest uploads (one quota unit), matched by title and time.
 // Metrics: views, likes and comments from videos.list (one quota unit each).
 // First comment (#791): commentThreads.insert on the video, with the force-ssl scope (50 quota units).
@@ -318,7 +320,9 @@ export class YouTubePublisher implements Publisher {
         ...(tags.length > 0 ? { tags } : {}),
       },
       // A variant saved before the audience could be chosen (#905) goes out as not made for kids, as it always did.
-      status: { privacyStatus: privacy, selfDeclaredMadeForKids: input.settings.madeForKids === true, embeddable: true },
+      // Realistic altered or synthetic content (#1078, settings.syntheticMedia) is disclosed as containsSyntheticMedia,
+      // sent only when on, so a variant without it sends what it always did.
+      status: { privacyStatus: privacy, selfDeclaredMadeForKids: input.settings.madeForKids === true, embeddable: true, ...(input.settings.syntheticMedia === true ? { containsSyntheticMedia: true } : {}) },
     };
     let session: string;
     try {

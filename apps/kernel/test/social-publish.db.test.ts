@@ -11,7 +11,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
-import { captureKey, runCommentJob, runPinJob, runPlaylistJob, runPublishJob, runThreadJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
+import { captureKey, runCommentJob, runPinJob, runPlaylistJob, runPublishJob, runThreadJob, socialCommands, socialQueries, STORY_EXPIRED_KEY, STORY_FINAL_KEY, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
 import { shortLinkTarget } from '../src/short-link.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -1391,7 +1391,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(await api.query<MetricsRow[]>('social.metrics.summary', { postId: randomUUID() }, { actor: asUser(o.owner), orgId: o.orgId })).toEqual([]);
     const file = await api.execute<{ filename: string; csv: string; truncated: boolean }>('social.metrics.export', { days: 30 }, { actor: asUser(o.owner), orgId: o.orgId });
     const lines = file.csv.replace(/^﻿/, '').trim().split('\r\n');
-    expect(lines[0]).toBe('post_id,channel,provider,published_at,url,text,labels,impressions,reach,reactions,comments,shares,saves,clicks,views,captured_at');
+    expect(lines[0]).toBe('post_id,channel,provider,published_at,url,text,labels,impressions,reach,reactions,comments,shares,saves,clicks,views,captured_at,replies,tapsForward,tapsBack,exits,nextStory,follows,profileVisits');
     expect(lines[1]).toContain(`${postId},Trang thử,sandbox,`);
     const audits = await admin(async (c) => (await c.query<{ detail: Record<string, unknown> }>("SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'social.metrics.export' AND outcome = 'ok'", [o.orgId])).rows);
     expect(audits).toHaveLength(1);
@@ -1530,5 +1530,84 @@ suite('social publishing on PostgreSQL (S4)', () => {
     await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: gone }, now: () => new Date(Date.now() + 14 * 3_600_000) });
     const due = await admin(async (c) => (await c.query<{ variant_id: string }>("SELECT variant_id FROM crove_social.metrics_due(1000, ARRAY['sandbox'], 600)")).rows);
     expect(due.map((r) => r.variant_id)).not.toContain(id);
+  });
+
+  // #1082: Meta keeps a Story's insights for 24 hours, so the sweep asks a Story for its own metrics, waits rather than
+  // take a capture that would push the next one past the end, takes a final capture in its last hours (again on the
+  // next pass when the platform did not answer), then marks it expired without asking. A feed post is asked as before.
+  it("asks a Story for its own metrics and takes its last capture before it expires, leaving feed posts as they were (#1082)", async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    const { variants } = await duePost(o, 2);
+    const story = variants[0] as string;
+    const feed = variants[1] as string;
+    for (const id of [story, feed]) expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, id, 'sandbox')).toMatchObject({ status: 'published' });
+    await admin((c) => c.query(`UPDATE crove_social.post_variant SET settings = coalesce(settings, '{}'::jsonb) || '{"postType":"story"}'::jsonb WHERE id = $1`, [story]));
+    const external = async (id: string) => (await admin(async (c) => (await c.query<{ external_post_id: string }>('SELECT external_post_id FROM crove_social.post_variant WHERE id = $1', [id])).rows))[0]?.external_post_id as string;
+    const storyPost = await external(story);
+    const feedPost = await external(feed);
+    // Every question the platform gets about these two posts.
+    const asked: { externalId: string; postType?: string }[] = [];
+    let answer: 'yes' | 'no' = 'yes';
+    const watching = Object.assign(Object.create(SandboxPublisher.prototype) as SandboxPublisher, platform, {
+      metrics: async (input: Parameters<SandboxPublisher['metrics']>[0]) => {
+        if (input.externalId === storyPost || input.externalId === feedPost) asked.push({ externalId: input.externalId, ...(input.postType ? { postType: input.postType } : {}) });
+        return answer === 'yes' ? platform.metrics(input) : null;
+      },
+    });
+    const sweep = () => sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: watching } });
+    const goneBy = (id: string, hours: number) => admin((c) => c.query(`UPDATE crove_social.post_variant SET published_at = now() - make_interval(mins => $2::int) WHERE id = $1`, [id, Math.round(hours * 60)]));
+    const snapshots = async (id: string) =>
+      (await admin(async (c) => (await c.query<{ capture_key: string; metrics: Record<string, number>; extra: Record<string, unknown> | null }>('SELECT capture_key, metrics, extra FROM crove_social.metric_snapshot WHERE variant_id = $1 ORDER BY captured_at, capture_key', [id])).rows));
+
+    // Ten hours in: a regular capture, the Story asked as a Story and the feed post exactly as before.
+    await goneBy(story, 10);
+    await goneBy(feed, 10);
+    await sweep();
+    expect(asked).toEqual(expect.arrayContaining([{ externalId: storyPost, postType: 'story' }, { externalId: feedPost }]));
+    expect(asked).toHaveLength(2);
+    expect((await snapshots(story)).map((r) => r.capture_key)).toEqual([captureKey(new Date())]);
+    expect((await snapshots(feed)).map((r) => r.capture_key)).toEqual([captureKey(new Date())]);
+
+    // Nineteen hours in and due again: the next regular capture would come after the end, so the Story waits (nothing
+    // asked, nothing kept) while the feed post is captured as usual.
+    asked.length = 0;
+    await ageCaptures(story);
+    await ageCaptures(feed);
+    await goneBy(story, 19);
+    await goneBy(feed, 19);
+    await sweep();
+    expect(asked).toEqual([{ externalId: feedPost }]);
+    expect(await snapshots(story)).toHaveLength(1);
+    expect(await snapshots(feed)).toHaveLength(2);
+
+    // Twenty-two and a half hours in: the final capture. The platform does not answer, so nothing is kept and the next
+    // pass asks again.
+    asked.length = 0;
+    await goneBy(story, 22.5);
+    answer = 'no';
+    await sweep();
+    expect(asked).toEqual([{ externalId: storyPost, postType: 'story' }]);
+    expect(await snapshots(story)).toHaveLength(1);
+    answer = 'yes';
+    await sweep();
+    const final = (await snapshots(story)).find((r) => r.capture_key === STORY_FINAL_KEY);
+    expect(final?.metrics).toMatchObject({ reach: expect.any(Number) });
+    // Captured, it is not due again before its end.
+    asked.length = 0;
+    await sweep();
+    expect(asked).toEqual([]);
+
+    // Past its 24 hours: marked expired and gone without asking the platform, never due again, and the summary keeps the
+    // final counts.
+    await ageCaptures(story);
+    await goneBy(story, 25);
+    await sweep();
+    expect(asked).toEqual([]);
+    expect((await snapshots(story)).find((r) => r.capture_key === STORY_EXPIRED_KEY)).toMatchObject({ metrics: {}, extra: { gone: true, expired: true } });
+    const due = await admin(async (c) => (await c.query<{ variant_id: string }>("SELECT variant_id FROM crove_social.metrics_due(1000, ARRAY['sandbox'], 600)")).rows);
+    expect(due.map((r) => r.variant_id)).not.toContain(story);
+    const summary = await api.query<MetricsRow[]>('social.metrics.summary', {}, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(summary.find((r) => r.variantId === story)?.metrics).toEqual(final?.metrics);
   });
 });

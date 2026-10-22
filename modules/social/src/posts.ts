@@ -29,6 +29,7 @@ import { reminderCommands } from './reminders.ts';
 import { QUEUE_LOW_DAYS_MAX, QUEUE_LOW_DAYS_MIN, queueLowCommands } from './queue-low.ts';
 import { assignCommands } from './assign.ts';
 import { bulkEditCommands } from './bulk-edit.ts';
+import { bulkDraftCommands } from './bulk-drafts.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
 import { labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
@@ -65,7 +66,7 @@ import { playlistCallsOf, playlistCommands, playlistsOf, playlistStatus, type Pl
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { clientReviewCommands } from './client-review.ts';
-import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, variantPost, type PostRow, type QueueState, type VariantRow, type Trx } from './variants.ts';
+import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, takenSlots, variantPost, type PostRow, type QueueState, type VariantRow } from './variants.ts';
 import { queueOrderCommands } from './queue-order.ts';
 import { versionQueries, withVersion } from './versions.ts';
 import { bannedChecker, bannedCheckerOf, bannedCommandBudget, bannedForView, bannedWordsOf, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords, type BannedWordsStatus } from './banned-words.ts';
@@ -729,19 +730,6 @@ export const variantDecide = defineCommand({
     return { postId: post.id, decision: input.decision, variants: chosen.map((v) => v.id), waiting };
   },
 });
-
-async function takenSlots(trx: Trx, orgId: string, connectionId: string, exceptId?: string): Promise<Set<number>> {
-  let q = trx
-    .selectFrom('crove_social.post_variant')
-    .select('queue_slot_at')
-    .where('org_id', '=', orgId)
-    .where('channel_connection_id', '=', connectionId)
-    .where('queue_slot_at', 'is not', null)
-    .where('status', 'not in', [...SLOT_FREED]);
-  if (exceptId) q = q.where('id', '<>', exceptId);
-  const rows = await q.execute();
-  return new Set(rows.map((r) => (r.queue_slot_at as Date).getTime()));
-}
 
 // Schedules approved variants: at a time (`at`, else the post's default time), or in the next free slot of each
 // connection's queue (`queue: true`).
@@ -1644,6 +1632,7 @@ export const socialCommands = [
   ...snippetCommands,
   ...labelCommands,
   ...bulkEditCommands,
+  ...bulkDraftCommands,
   ...mediaTagCommands,
   ...ideaCommands,
   ...bioCommands,

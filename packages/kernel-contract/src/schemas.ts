@@ -1487,6 +1487,38 @@ export const zSocialBulkLabels = z
 // The assignee (null: nobody) of every post; dueAt null clears the due date, left out keeps each post's own.
 export const zSocialBulkAssign = z.strictObject({ postIds: zBulkPostIds, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable().optional() });
 export const zSocialBulkResult = z.object({ done: z.array(zId), skipped: z.array(z.object({ postId: zId, reason: z.enum(SOCIAL_BULK_SKIP_REASONS) })) });
+// One draft per library file (#1080): at most SOCIAL_DRAFTS_FROM_MEDIA_MAX files, each once and in the order given,
+// for the channels named or a saved channel set; the caption is nothing, the file's name or a snippet's text; with
+// queue, each draft holds the next free slot of each channel's queue, in file order.
+export const SOCIAL_DRAFTS_FROM_MEDIA_MAX = 50;
+export const SOCIAL_DRAFT_CAPTIONS = ['none', 'filename', 'snippet'] as const;
+export const zSocialDraftCaption = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('none') }),
+  z.strictObject({ kind: z.literal('filename') }),
+  z.strictObject({ kind: z.literal('snippet'), snippetId: zId }),
+]);
+// The fields without the check that ties them, so the RPC can add its idempotency key.
+export const zSocialDraftsFromMediaFields = z.strictObject({
+  fileIds: z.array(zId).min(1).max(SOCIAL_DRAFTS_FROM_MEDIA_MAX).refine(unique, 'each file once'),
+  connectionIds: z.array(zId).min(1).max(20).refine(unique, 'each channel once').optional(),
+  channelSetId: zId.optional(),
+  caption: zSocialDraftCaption.optional(),
+  queue: z.boolean().optional(),
+});
+// Channels or a channel set, exactly one of them.
+export const channelsOrSet = (v: { connectionIds?: readonly string[] | undefined; channelSetId?: string | undefined }) => (v.connectionIds === undefined) !== (v.channelSetId === undefined);
+export const zSocialDraftsFromMedia = zSocialDraftsFromMediaFields.refine(channelsOrSet, 'channels or a channel set');
+// What a channel's rules say about one file (the issue codes of validateVariant, on the media fields).
+export const zSocialDraftIssue = z.object({ connectionId: zId, provider: z.string(), code: z.string(), field: z.string(), limit: z.number().nullable(), actual: z.number().nullable() });
+// created: one draft per file, in the order given. invalid: a file does not fit a channel, nothing was saved, and
+// every file with a problem is listed with each one.
+export const zSocialDraftsFromMediaResult = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('created'),
+    posts: z.array(z.object({ fileId: zId, postId: zId, variants: z.array(z.object({ variantId: zId, connectionId: zId, queueSlotAt: z.string().nullable() })) })),
+  }),
+  z.object({ status: z.literal('invalid'), files: z.array(z.object({ fileId: zId, issues: z.array(zSocialDraftIssue) })) }),
+]);
 // Client review links (#589): the team's view of a post's links and what clients said through them.
 // A plan link (#902) the post is in is listed too, with the posts it covers and its own cap of answers per post.
 export const zSocialReviewLinks = z.object({
