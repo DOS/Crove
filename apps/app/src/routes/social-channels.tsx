@@ -510,7 +510,7 @@ export function SocialChannelsPage() {
             <PublishHoldCard key={slug} />
           </Card>
           <BannedWordsCard channels={(channels.data ?? []).filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />
-          {channels.data && <ChannelAccessCard channels={channels.data.filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />}
+          {channels.data && <ChannelAccessCard channels={channels.data} canEdit={isAdmin} />}
           <Card className="block space-y-2 p-4">
             <div>
               <p className="text-sm font-medium text-foreground">{t('chatAlert.title')}</p>

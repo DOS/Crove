@@ -14,7 +14,7 @@ import { ErrorText } from './ui.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName } from '../lib/social.ts';
 
-type Channel = { id: string; provider: string; displayName: string };
+type Channel = { id: string; provider: string; displayName: string; status?: string };
 type Member = { userId: string; email: string; displayName: string | null; role: string };
 
 export interface ChannelScope {
@@ -29,7 +29,8 @@ export function useChannelScope(): ChannelScope {
   const mine = useQuery({ ...orpc.social.channelAccess.mine.queryOptions({ input: {} }), staleTime: 60_000 });
   const ids = new Set(mine.data?.connectionIds ?? []);
   const limited = mine.data?.limited ?? false;
-  return { loading: mine.isLoading, limited, allows: (id) => !mine.isLoading && (!limited || ids.has(id)) };
+  // Until the limit is read, and if it cannot be, nothing is offered.
+  return { loading: mine.isLoading, limited, allows: (id) => mine.isSuccess && (!limited || ids.has(id)) };
 }
 
 const refresh = () => {
@@ -47,8 +48,10 @@ function MemberRow({ member, channels, current }: { member: Member; channels: re
     onSuccess: refresh,
   });
   const names = new Map(channels.map((c) => [c.id, `${providerName(c.provider)} · ${c.displayName}`]));
-  // A channel disconnected since still limits the member, so it stays on the list until it is unticked.
-  const gone = current.filter((id) => !names.has(id));
+  // Only a connected channel can be given; one disconnected since still limits the member, so it stays on the list,
+  // under its name while the channels page still knows it, until it is unticked.
+  const live = channels.filter((c) => c.status !== 'revoked');
+  const gone = current.filter((id) => !live.some((c) => c.id === id));
   const wanted = mode === 'all' ? [] : [...picked].sort();
   const changed = wanted.join(',') !== [...current].sort().join(',');
   const name = member.displayName ?? member.email;
@@ -74,7 +77,7 @@ function MemberRow({ member, channels, current }: { member: Member; channels: re
         <fieldset className="space-y-1.5">
           <legend className="sr-only">{t('pickLegend', { name })}</legend>
           <div className="flex flex-wrap gap-3">
-            {channels.map((c) => (
+            {live.map((c) => (
               <label key={c.id} className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Checkbox checked={picked.includes(c.id)} onCheckedChange={(on) => setPicked(on === true ? [...picked, c.id] : picked.filter((id) => id !== c.id))} />
                 {names.get(c.id)}
@@ -83,7 +86,7 @@ function MemberRow({ member, channels, current }: { member: Member; channels: re
             {gone.map((id) => (
               <label key={id} className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Checkbox checked={picked.includes(id)} onCheckedChange={(on) => setPicked(on === true ? [...picked, id] : picked.filter((x) => x !== id))} />
-                {t('goneChannel')}
+                {names.has(id) ? t('goneNamed', { name: names.get(id) ?? '' }) : t('goneChannel')}
               </label>
             ))}
           </div>

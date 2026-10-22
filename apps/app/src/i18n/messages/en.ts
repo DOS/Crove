@@ -2303,6 +2303,7 @@ export const en = {
       pickLegend: 'The channels {name} may use',
       pickOne: 'Choose at least one channel',
       goneChannel: 'Disconnected channel',
+      goneNamed: '{name} (disconnected)',
       save: 'Save',
       noMembers: 'The organization has no members or viewers to give channels to.',
       alwaysAll: 'Always every channel',

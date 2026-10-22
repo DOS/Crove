@@ -2302,6 +2302,7 @@ export const vi = {
       pickLegend: 'Các kênh {name} được dùng',
       pickOne: 'Hãy chọn ít nhất một kênh',
       goneChannel: 'Kênh đã ngắt kết nối',
+      goneNamed: '{name} (đã ngắt kết nối)',
       save: 'Lưu',
       noMembers: 'Tổ chức chưa có thành viên hay người xem nào để giao kênh.',
       alwaysAll: 'Luôn dùng mọi kênh',
