@@ -223,9 +223,13 @@ describe.skipIf(!URL_ENV)('S3BlobStore against a real S3-compatible server', () 
     const later = new Date(until.getTime() + 86_400_000);
     await expect(store.holds.hold({ key, generation, sha256 }, later)).resolves.toEqual(later);
 
-    // Deleting the held version is refused; a plain delete only adds a delete marker, and the recorded version still
-    // reads.
-    await expect(client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key, VersionId: versionId }))).rejects.toMatchObject({ $metadata: { httpStatusCode: 403 } });
+    // Deleting the held version is refused (AWS answers 403 AccessDenied, MinIO 400 InvalidRequest "Object is WORM
+    // protected"); a plain delete only adds a delete marker, and the recorded version still reads.
+    const refused = await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key, VersionId: versionId })).then(
+      () => null,
+      (error: { name?: string }) => error.name,
+    );
+    expect(['AccessDenied', 'InvalidRequest']).toContain(refused);
     await store.delete(key);
     expect(await readVerified(store, { key, generation, sha256 })).toEqual(original);
 
