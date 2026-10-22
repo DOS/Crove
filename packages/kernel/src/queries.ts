@@ -37,6 +37,7 @@ import { offboardingQueries } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
 import { orgOverview, RECENT_FILES } from './overview.ts';
 import { proposalReminderQueries } from './proposal-reminders.ts';
+import { mayResubmit, resubmitSource } from './proposal-resubmit.ts';
 import { taxCalendarQueries } from './tax-calendar.ts';
 import { partyQueries } from './parties.ts';
 import { usageQueries } from './usage-limits.ts';
@@ -143,6 +144,7 @@ function toInboxItem(row: {
   payload: unknown;
   duplicate_of: string | null;
   created_at: Date;
+  decided_at: Date | null;
   extraction_id: string | null;
   requested_by_agent: string | null;
 }, agentName: string | null) {
@@ -169,8 +171,15 @@ function toInboxItem(row: {
       : null,
     duplicateOf: row.duplicate_of,
     createdAt: row.created_at.toISOString(),
+    expiredAfterDays: expiredAfterDays(row),
     ...agentFields(row, agentName),
   };
+}
+
+// How many whole days an expired proposal waited before it expired (#876), the reason the Inbox shows; null otherwise.
+function expiredAfterDays(row: { status: string; created_at: Date; decided_at: Date | null }): number | null {
+  if (row.status !== 'expired' || !row.decided_at) return null;
+  return Math.max(0, Math.floor((row.decided_at.getTime() - row.created_at.getTime()) / 86_400_000));
 }
 
 // Whether an AI agent asked for the proposal and whether an extraction run read it (#435). An agent's proposal has no
@@ -191,7 +200,7 @@ export const inboxList = defineQuery({
       sql<string>`(SELECT count(*) FROM jsonb_array_elements(CASE WHEN jsonb_typeof(payload -> 'checks') = 'array' THEN payload -> 'checks' ELSE '[]'::jsonb END) c WHERE c ->> 'status' = ${status})`;
     let query = ctx.trx
       .selectFrom('crove_kernel.proposal')
-      .select(['id', 'kind', 'status', 'title', 'revision', 'duplicate_of', 'created_at', 'extraction_id', 'requested_by_agent'])
+      .select(['id', 'kind', 'status', 'title', 'revision', 'duplicate_of', 'created_at', 'decided_at', 'extraction_id', 'requested_by_agent'])
       .select([
         sql<string | null>`left(payload #>> '{seller,name}', 500)`.as('seller_name'),
         sql<boolean>`coalesce(payload ->> 'direction' = 'sale', false)`.as('is_sale'),
@@ -228,6 +237,7 @@ export const inboxList = defineQuery({
       signatureStatus: row.kind === PURCHASE_KIND ? signatureStatusOf(row.signature_status) : null,
       duplicateOf: row.duplicate_of,
       createdAt: row.created_at.toISOString(),
+      expiredAfterDays: expiredAfterDays(row),
       ...agentFields(row, row.agent_name),
     }));
   },
@@ -294,6 +304,21 @@ export const inboxGet = defineQuery({
       ? await ctx.trx.selectFrom('crove_kernel.agent').select('display_name').where('org_id', '=', ctx.orgId).where('id', '=', row.requested_by_agent).executeTakeFirst()
       : undefined;
     const canChange = row.status === 'pending' && editor && !reading;
+    // An expired proposal (#876): the one asked for again from it, if any, and whether the caller may ask for it again,
+    // by the same checks kernel.proposal.resubmit makes.
+    const resubmittedAs =
+      row.status === 'expired'
+        ? ((await ctx.trx.selectFrom('crove_kernel.proposal').select('id').where('org_id', '=', ctx.orgId).where('resubmitted_from', '=', row.id).executeTakeFirst())?.id ?? null)
+        : null;
+    const source = resubmitSource(row);
+    const canResubmit =
+      row.status === 'expired' &&
+      editor &&
+      ctx.actor.type === 'user' &&
+      resubmittedAs === null &&
+      source !== null &&
+      mayResubmit(row, ctx.actor.userId) &&
+      (source === 'request' || (newest?.id === row.id && !reading));
     // The purchase this proposal recorded was voided by a reversal (#165); its file may then be read again.
     const voided = await executedButVoided(ctx, row);
     const newestReopened = newest?.id === row.id ? voided : await executedButVoided(ctx, newest);
@@ -330,6 +355,9 @@ export const inboxGet = defineQuery({
       // The same checks kernel.proposal.edit makes before it edits (NOT_EDITABLE otherwise).
       canEdit: canChange && proposalEditable(ctx, row),
       canReject: canChange,
+      canResubmit,
+      resubmittedAs,
+      resubmittedFrom: row.resubmitted_from,
       extraction: latest
         ? { version: latest.version, status: latest.status, error: latest.error, inFlight: reading, proposalVersion: own?.version ?? null }
         : null,

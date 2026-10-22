@@ -772,6 +772,7 @@ export interface KernelProposalPolicyTable {
   updated_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  expire_after_days: number | null;
 }
 
 /** crove_kernel.proposal */
@@ -804,6 +805,8 @@ export interface KernelProposalTable {
   decided_by_agent: string | null;
   reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   escalated_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  request_input: ColumnType<unknown, string | null | undefined, string | null>;
+  resubmitted_from: string | null;
 }
 
 /** crove_kernel.task_comment */

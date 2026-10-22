@@ -762,7 +762,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     nudging = true;
     try {
       const done = await sweepProposalNudges({ runtime: deps.runtime, workerDb: deps.workerDb });
-      if (done > 0) console.log(`[proposal-reminders] nudged ${done}`);
+      if (done > 0) console.log(`[proposal-reminders] expired or nudged ${done}`);
     } catch (error) {
       console.error('[proposal-reminders] sweep', error);
     } finally {
