@@ -457,6 +457,8 @@ export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as c
 export const SOCIAL_REPORT_CADENCES = ['weekly', 'monthly'] as const;
 export const SOCIAL_REPORT_PERIODS = ['previous_week', 'previous_month', 'last_7_days', 'last_30_days'] as const;
 export const SOCIAL_REPORT_RUN_KINDS = ['scheduled', 'test'] as const;
+// A banned or sensitive word (#1055): shown as a warning, or blocking submit, approval and scheduling.
+export const SOCIAL_BANNED_WORD_LEVELS = ['warn', 'block'] as const;
 export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
@@ -473,6 +475,7 @@ export type SocialChatAlertKind = (typeof SOCIAL_CHAT_ALERT_KINDS)[number];
 export type SocialReportCadence = (typeof SOCIAL_REPORT_CADENCES)[number];
 export type SocialReportPeriod = (typeof SOCIAL_REPORT_PERIODS)[number];
 export type SocialReportRunKind = (typeof SOCIAL_REPORT_RUN_KINDS)[number];
+export type SocialBannedWordLevel = (typeof SOCIAL_BANNED_WORD_LEVELS)[number];
 
 export type SocialPostTable = Refine<
   G.SocialPostTable,
@@ -509,6 +512,7 @@ export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<Soc
 export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<SocialIdeaStage> }>;
 export type SocialReportScheduleTable = Refine<G.SocialReportScheduleTable, { cadence: SocialReportCadence; period: SocialReportPeriod }>;
 export type SocialReportScheduleRunTable = Refine<G.SocialReportScheduleRunTable, { kind: SocialReportRunKind }>;
+export type SocialBannedWordTable = Refine<G.SocialBannedWordTable, { level: SocialBannedWordLevel }>;
 
 export type SocialPostApprovalTable = Refine<
   G.SocialPostApprovalTable,
@@ -571,6 +575,7 @@ type Refined = Tables<{
   'crove_social.idea': SocialIdeaTable;
   'crove_social.report_schedule': SocialReportScheduleTable;
   'crove_social.report_schedule_run': SocialReportScheduleRunTable;
+  'crove_social.banned_word': SocialBannedWordTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.

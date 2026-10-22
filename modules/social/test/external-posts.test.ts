@@ -12,6 +12,10 @@ describe('excerptOf', () => {
     expect(excerptOf('')).toBe('');
   });
 
+  it('drops the Arabic letter mark and the soft hyphen too', () => {
+    expect(excerptOf(`a${String.fromCodePoint(0x061c)}b${String.fromCodePoint(0x00ad)}c`)).toBe('a b c');
+  });
+
   it('cuts at 500 code points without splitting a character', () => {
     expect(Array.from(excerptOf('x'.repeat(800)))).toHaveLength(EXTERNAL_EXCERPT_MAX);
     const emoji = excerptOf('🎉'.repeat(600));

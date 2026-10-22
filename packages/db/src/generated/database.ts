@@ -72,6 +72,7 @@ export interface CroveKernelSchema {
 
 export interface CroveSocialSchema {
   'crove_social.account_snapshot': SocialAccountSnapshotTable;
+  'crove_social.banned_word': SocialBannedWordTable;
   'crove_social.bio_click': SocialBioClickTable;
   'crove_social.bio_page': SocialBioPageTable;
   'crove_social.brand_voice': SocialBrandVoiceTable;
@@ -84,6 +85,7 @@ export interface CroveSocialSchema {
   'crove_social.external_post': SocialExternalPostTable;
   'crove_social.feed': SocialFeedTable;
   'crove_social.feed_item': SocialFeedItemTable;
+  'crove_social.goal': SocialGoalTable;
   'crove_social.idea': SocialIdeaTable;
   'crove_social.idea_label': SocialIdeaLabelTable;
   'crove_social.label': SocialLabelTable;
@@ -927,6 +929,19 @@ export interface SocialAccountSnapshotTable {
   captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
+/** crove_social.banned_word */
+export interface SocialBannedWordTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  phrase: ColumnType<string, string, NotGranted>;
+  normalized: ColumnType<string, string, NotGranted>;
+  level: ColumnType<string, string, NotGranted>;
+  reason: ColumnType<string | null, string | null, NotGranted>;
+  connection_ids: ColumnType<string[], string[] | undefined, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
 /** crove_social.bio_click */
 export interface SocialBioClickTable {
   org_id: ColumnType<string, NotGranted, NotGranted>;
@@ -1082,6 +1097,23 @@ export interface SocialFeedTable {
   last_error: string | null;
   created_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.goal */
+export interface SocialGoalTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  connection_id: ColumnType<string | null, string | null, NotGranted>;
+  time_zone: Generated<string>;
+  posts: string | null;
+  reach: string | null;
+  impressions: string | null;
+  engagement: string | null;
+  followers_gained: string | null;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_by: string;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
@@ -1386,6 +1418,7 @@ export interface SocialReportLinkTable {
   revoked_by: string | null;
   schedule_id: ColumnType<string | null, string | null, NotGranted>;
   mail_message_id: ColumnType<string | null, string | null, NotGranted>;
+  note: ColumnType<string | null, string | null, NotGranted>;
   include_external: ColumnType<boolean, boolean | undefined, NotGranted>;
 }
 

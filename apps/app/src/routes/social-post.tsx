@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -23,6 +23,7 @@ import { ReviewLinks } from '../components/social-review-links.tsx';
 import { PostActivity } from '../components/social-activity.tsx';
 import { ReviewChanges } from '../components/social-review-diff.tsx';
 import { PostVersions } from '../components/social-post-versions.tsx';
+import { BannedWordHints, BannedWordReview, useBannedWords } from '../components/social-banned-words.tsx';
 import { LabelPicker } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
 import { BestTimeButton } from '../components/social-best-time.tsx';
@@ -1435,6 +1436,10 @@ function ChannelEditor({
     ...(Array.isArray(telegramButtons) ? { buttons: telegramButtons } : {}),
   };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
+  // The channel's own texts against its banned words (#1055); the shared text is marked under the shared fields.
+  const allWords = useBannedWords();
+  const banned = connectionId ? wordsForChannel(allWords, connectionId) : allWords;
+  const ownTexts = variantTexts({ body: own.custom ? content.body : '', title: own.custom && hasTitle(provider) ? content.title || null : null }, own.settings).filter((x) => x.text !== '');
   return (
     <Card className="block space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1512,6 +1517,7 @@ function ChannelEditor({
       />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
+      {!disabled && <BannedWordHints texts={ownTexts} words={banned} />}
       <PlatformPreview channel={channel} provider={provider} content={content} readLink />
       {footer}
     </Card>
@@ -1580,8 +1586,28 @@ function HashtagSuggestions({ text, connectionId, onPick, onAiUsed }: { text: st
   );
 }
 
-function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false, onAiUsed, slug }: { base: Base; onChange: (base: Base) => void; disabled: boolean; needsTitle: boolean; autoFocus?: boolean; onAiUsed?: () => void; slug?: string }) {
+function SharedFields({
+  base,
+  onChange,
+  disabled,
+  needsTitle,
+  autoFocus = false,
+  onAiUsed,
+  slug,
+  connectionIds = [],
+}: {
+  base: Base;
+  onChange: (base: Base) => void;
+  disabled: boolean;
+  needsTitle: boolean;
+  autoFocus?: boolean;
+  onAiUsed?: () => void;
+  slug?: string;
+  // The post's channels: the shared text is checked against the banned words of any of them (#1055).
+  connectionIds?: readonly string[];
+}) {
   const t = useTranslations('social');
+  const banned = wordsForChannels(useBannedWords(), connectionIds);
   return (
     <Card className="block space-y-3 p-4">
       <div className="space-y-1.5">
@@ -1591,6 +1617,7 @@ function SharedFields({ base, onChange, disabled, needsTitle, autoFocus = false,
           <EmojiPicker targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />
           {slug && <SnippetPicker slug={slug} targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />}
         </div>
+        <BannedWordHints texts={[{ field: 'body', text: base.body }, ...(needsTitle && base.title ? [{ field: 'title', text: base.title }] : [])]} words={banned} />
         {!disabled && <HashtagSuggestions text={base.body} connectionId={null} onAiUsed={onAiUsed} onPick={(tag) => onChange({ ...base, body: withHashtag(base.body, tag) })} />}
         {!disabled && onAiUsed && (
           <AiRewrite
@@ -1857,7 +1884,16 @@ export function SocialComposePage() {
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
-          <SharedFields base={base} onChange={setBase} disabled={create.isPending} autoFocus needsTitle={selected.some((c) => hasTitle(c.provider))} onAiUsed={() => setAiUsed(true)} slug={slug} />
+          <SharedFields
+            base={base}
+            onChange={setBase}
+            disabled={create.isPending}
+            autoFocus
+            needsTitle={selected.some((c) => hasTitle(c.provider))}
+            onAiUsed={() => setAiUsed(true)}
+            slug={slug}
+            connectionIds={selected.map((c) => c.id)}
+          />
           {base.linkUrl.trim() && (
             <Card className="block p-4">
               <UtmFields utm={utm} onChange={setUtm} disabled={create.isPending} />
@@ -2053,6 +2089,10 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
           ))}
         </div>
       )}
+      {/* The org's banned or sensitive words each channel holds (#1055): a warning to weigh, a block that refuses approval. */}
+      {waiting.map((v) => (
+        <BannedWordReview key={`banned-${v.id}`} channel={names.get(v.connectionId) ?? providerName(v.provider)} matches={v.bannedWords} status={v.bannedWordsStatus} content={v.effective} settings={v.settings} />
+      ))}
       {/* What changed since each channel's last decision (#944); nothing on a first review. */}
       <ReviewChanges postId={post.id} variants={waiting.map((v) => ({ id: v.id, name: names.get(v.connectionId) ?? providerName(v.provider), revision: v.revision, contentHash: v.contentHash }))} />
       <Textarea value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
@@ -2846,7 +2886,15 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
       )}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-4">
-          <SharedFields base={base} onChange={setBase} disabled={!editable || save.isPending} needsTitle={p.variants.some((v) => hasTitle(v.provider))} onAiUsed={() => setAiUsed(true)} slug={slug} />
+          <SharedFields
+            base={base}
+            onChange={setBase}
+            disabled={!editable || save.isPending}
+            needsTitle={p.variants.some((v) => hasTitle(v.provider))}
+            onAiUsed={() => setAiUsed(true)}
+            slug={slug}
+            connectionIds={p.variants.map((v) => v.connectionId)}
+          />
           {base.linkUrl.trim() && editable && (
             <Card className="block p-4">
               <UtmFields utm={shownUtm} onChange={setUtm} disabled={save.isPending} />

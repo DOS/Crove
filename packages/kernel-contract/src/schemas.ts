@@ -1206,6 +1206,26 @@ export const zSocialQueueReorder = z.object({
 
 export const zSocialIssue = z.object({ code: z.string(), field: z.string(), limit: z.number().nullable(), actual: z.number().nullable() });
 
+// A banned or sensitive word of the org (#1055): warn shows it, block refuses submit, approval and scheduling.
+// connectionIds: the channels it applies to, every channel when empty.
+export const zSocialBannedWord = z.object({
+  id: zId,
+  phrase: z.string(),
+  level: z.enum(['warn', 'block']),
+  reason: z.string().nullable(),
+  connectionIds: z.array(zId),
+  createdBy: zId,
+  createdAt: z.string(),
+});
+// One of them in a variant's content: the field it is in and where (UTF-16 offsets, end exclusive).
+export const zSocialBannedMatch = z.object({ wordId: zId, phrase: z.string(), level: z.enum(['warn', 'block']), reason: z.string().nullable(), field: z.string(), start: z.number().int(), end: z.number().int() });
+export const zSocialBannedWordAdd = z.strictObject({
+  phrase: z.string().trim().min(1).max(100),
+  level: z.enum(['warn', 'block']),
+  reason: z.string().trim().max(200).nullable().optional(),
+  connectionIds: z.array(zId).max(50).optional(),
+});
+
 const zContent = z.object({ body: z.string(), title: z.string().nullable(), linkUrl: z.string().nullable() });
 
 export const zSocialVariant = z.object({
@@ -1247,6 +1267,10 @@ export const zSocialVariant = z.object({
     .object({ kind: z.string().nullable(), code: z.string().nullable(), action: z.string().nullable(), message: z.string().nullable(), retryAt: z.string().nullable() })
     .nullable(),
   issues: z.array(zSocialIssue),
+  // The org's banned or sensitive words in its effective content (#1055), one per word and field.
+  bannedWords: z.array(zSocialBannedMatch),
+  // checked; not_checked (lists do not check them); too_complex (over the check's budget, so bannedWords is empty).
+  bannedWordsStatus: z.enum(['checked', 'not_checked', 'too_complex']),
   latestDecision: z
     .object({ decision: z.enum(SOCIAL_DECISIONS), comment: z.string().nullable(), decidedBy: zId, at: z.string(), revision: z.number().int(), current: z.boolean() })
     .nullable(),
@@ -1602,6 +1626,7 @@ export const zSocialQueue = z.object({
 export const zSocialReportLink = z.object({
   id: zId,
   title: z.string().nullable(),
+  note: z.string().nullable(),
   periodStart: z.string(),
   periodEnd: z.string(),
   connectionIds: z.array(zId),
@@ -1619,6 +1644,56 @@ export const zSocialReportLinkCreate = z.strictObject({
   title: z.string().trim().min(1).max(120).optional(),
   days: z.number().int().min(1).max(90).optional(),
   includeExternal: z.boolean().optional(),
+  // The agency's note on the report (#1056), plain text.
+  note: z.string().max(2000).optional(),
+});
+
+// Monthly goals (#1056): a scope's targets (the org's when connectionId is null), and how the month stands.
+const GOAL_METRIC_NAMES = ['posts', 'reach', 'impressions', 'engagement', 'followersGained'] as const;
+const zGoalTarget = z.number().int().min(1).max(1_000_000_000_000).nullable();
+export const zSocialGoalTargets = z.object({
+  posts: zGoalTarget,
+  reach: zGoalTarget,
+  impressions: zGoalTarget,
+  engagement: zGoalTarget,
+  followersGained: zGoalTarget,
+});
+export const zSocialGoalSet = z.strictObject({
+  connectionId: zId.nullable(),
+  targets: z.strictObject({
+    posts: zGoalTarget.optional(),
+    reach: zGoalTarget.optional(),
+    impressions: zGoalTarget.optional(),
+    engagement: zGoalTarget.optional(),
+    followersGained: zGoalTarget.optional(),
+  }),
+  timeZone: z.string().min(1).max(64),
+});
+export const zSocialGoalProgress = z.object({
+  metric: z.enum(GOAL_METRIC_NAMES),
+  target: z.number(),
+  actual: z.number().nullable(),
+  projected: z.number().nullable(),
+  ratio: z.number().nullable(),
+  status: z.enum(['met', 'missed', 'on_track', 'behind', 'no_data']),
+});
+export const zSocialGoals = z.object({
+  // null until an owner or admin sets a goal.
+  timeZone: z.string().nullable(),
+  month: z.string(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  goals: z.array(
+    z.object({
+      id: zId,
+      connectionId: zId.nullable(),
+      timeZone: z.string(),
+      targets: zSocialGoalTargets,
+      updatedBy: zId,
+      updatedAt: z.string(),
+      progress: z.array(zSocialGoalProgress),
+    }),
+  ),
 });
 
 // A schedule that mails the client report (#704), with its latest sends and each mail's delivery status.

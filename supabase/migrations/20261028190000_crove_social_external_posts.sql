@@ -5,15 +5,24 @@
 --                               the worker (at most 30 days back): the platform's id, a bounded excerpt of its text,
 --                               its permalink (https only), when it went out, and the latest real counts the platform
 --                               reported (metrics, read at captured_at; checked_at is the last try, gone once the
---                               platform no longer has the post). One row per connection and platform id. A post that is
---                               also a variant's external_post_id on the same connection (Crove published it) is never
---                               brought in, and every read leaves it out again, so no post is counted twice. Written by
+--                               platform no longer has the post). One row per connection and platform id. A post
+--                               that is Crove's own (crove_social.external_post_is_crove) is never brought in, and every
+--                               read leaves it out again, so no post is counted twice. Written by
 --                               the worker's system commands only (they check the actor); every member reads it. It
 --                               goes with its channel.
 -- crove_social.external_import  the worker's last bring-in per connection: when, how many posts the platform listed,
 --                               and why nothing came (no answer, token refused, permission refused).
 -- crove_social.report_link.include_external  whether a client report link counts such posts (off by default, and
 --                               fixed when the link is made); the report view reads it in its own migration.
+-- crove_social.post_link_key   a post's page address as a comparable key: the host in lower case without www., m. or
+--                               web., the path without a trailing slash, the query kept, the fragment dropped; a
+--                               Facebook video or Reel address (/videos/<id>, /reel/<id>, under any Page name) keys on
+--                               its video id. NULL for anything that is not an http(s) address.
+-- crove_social.external_post_is_crove  whether a listed post is one Crove published on that channel: a published
+--                               variant of the channel with the same platform id, or with the same page address by
+--                               post_link_key (a Facebook video or Reel Crove stored as <page>_<video> may be listed
+--                               under another post id). Only published variants count, as Crove's own posts count only
+--                               once published. SECURITY INVOKER: a tenant caller sees its own org's variants only.
 -- crove_social.external_import_due, crove_social.external_metrics_due  the worker's scans, across orgs, of the
 --                               connections due a bring-in and of the brought-in posts due their counts; ids only,
 --                               for crove_worker alone.
@@ -61,9 +70,41 @@ SELECT crove_kernel.apply_tenant_rls('crove_social.external_import');
 REVOKE UPDATE, DELETE ON crove_social.external_import FROM crove_tenant;
 GRANT UPDATE (ran_at, found, error) ON crove_social.external_import TO crove_tenant;
 
--- What every read of brought-in posts checks: is this platform id a variant's on the same channel?
+CREATE OR REPLACE FUNCTION crove_social.post_link_key(p_url text)
+RETURNS text
+LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path = pg_catalog, pg_temp AS $$
+  SELECT CASE
+    WHEN m IS NULL THEN NULL
+    WHEN pg_catalog.lower(m[1]) = 'facebook.com' AND pg_catalog.substring(coalesce(m[2], ''), '/(?:videos|reel)/(?:[^/]+/)?([0-9]{1,32})/?$') IS NOT NULL
+      THEN 'facebook.com/video/' || pg_catalog.substring(coalesce(m[2], ''), '/(?:videos|reel)/(?:[^/]+/)?([0-9]{1,32})/?$')
+    ELSE pg_catalog.lower(m[1]) || pg_catalog.rtrim(coalesce(m[2], ''), '/') || coalesce('?' || nullif(m[3], ''), '')
+  END
+  FROM (SELECT pg_catalog.regexp_match(pg_catalog.left(p_url, 2000), '^https?://(?:www\.|m\.|web\.)?([^/?#:@]+)(/[^?#]*)?(?:\?([^#]*))?', 'i') AS m) k
+$$;
+REVOKE ALL ON FUNCTION crove_social.post_link_key(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION crove_social.post_link_key(text) TO crove_tenant;
+
+CREATE OR REPLACE FUNCTION crove_social.external_post_is_crove(p_org uuid, p_connection uuid, p_external_id text, p_permalink text)
+RETURNS boolean
+LANGUAGE sql STABLE PARALLEL SAFE SET search_path = pg_catalog, pg_temp AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM crove_social.post_variant v
+    WHERE v.org_id = p_org AND v.channel_connection_id = p_connection AND v.status = 'published'
+      AND (
+        v.external_post_id = p_external_id
+        OR (p_permalink IS NOT NULL AND v.external_url IS NOT NULL
+            AND crove_social.post_link_key(v.external_url) = crove_social.post_link_key(p_permalink))
+      )
+  )
+$$;
+REVOKE ALL ON FUNCTION crove_social.external_post_is_crove(uuid, uuid, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION crove_social.external_post_is_crove(uuid, uuid, text, text) TO crove_tenant;
+
+-- What every read of brought-in posts checks: is this post a published variant's on the same channel, by id or address?
 CREATE INDEX IF NOT EXISTS post_variant_external_id_idx ON crove_social.post_variant (org_id, channel_connection_id, external_post_id)
   WHERE external_post_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS post_variant_external_link_idx ON crove_social.post_variant (org_id, channel_connection_id, (crove_social.post_link_key(external_url)))
+  WHERE external_url IS NOT NULL AND status = 'published';
 
 ALTER TABLE crove_social.report_link ADD COLUMN IF NOT EXISTS include_external boolean NOT NULL DEFAULT false;
 
@@ -98,10 +139,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
     AND c.provider = ANY (p_providers)
     AND e.published_at > pg_catalog.now() - interval '30 days'
     AND (e.checked_at IS NULL OR e.checked_at < pg_catalog.now() - pg_catalog.make_interval(secs => GREATEST(p_interval_seconds, 600)))
-    AND NOT EXISTS (
-      SELECT 1 FROM crove_social.post_variant v
-      WHERE v.org_id = e.org_id AND v.channel_connection_id = e.channel_connection_id AND v.external_post_id = e.external_post_id
-    )
+    AND NOT crove_social.external_post_is_crove(e.org_id, e.channel_connection_id, e.external_post_id, e.permalink)
   ORDER BY e.checked_at NULLS FIRST, e.published_at DESC
   LIMIT LEAST(GREATEST(p_limit, 1), 1000)
 $$;
@@ -109,7 +147,7 @@ REVOKE ALL ON FUNCTION crove_social.external_metrics_due(int, text[], int) FROM 
 GRANT EXECUTE ON FUNCTION crove_social.external_metrics_due(int, text[], int) TO crove_worker;
 
 -- The org purge (#1024) deletes crove_social.external_import, crove_social.external_post with the org's other Social rows (#1054). The function
--- is copied verbatim from 20261028150000_crove_social_report_branding.sql, with only these tables added to v_social;
+-- is copied verbatim from 20261028183000_crove_social_banned_words.sql, with only these tables added to v_social;
 -- the runbook's deletion map already says every crove_social table but post_approval is deleted.
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
 RETURNS TABLE (outcome text, counts jsonb, blob_keys text[])
@@ -155,7 +193,7 @@ DECLARE
     'crove_social.post_comment', 'crove_social.post_media', 'crove_social.post_version', 'crove_social.publish_hold', 'crove_social.report_link',
     'crove_social.report_schedule_run', 'crove_social.report_schedule', 'crove_social.review_feedback',
     'crove_social.review_link_post', 'crove_social.review_link', 'crove_social.short_link_click',
-    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.external_import', 'crove_social.external_post'];
+    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.goal', 'crove_social.banned_word', 'crove_social.external_import', 'crove_social.external_post'];
 BEGIN
   -- Also refuses a definer owner or another role reached through a mistaken grant: only the worker login, in the
   -- sealed system context of the org it purges (execute() of kernel.org.purge).

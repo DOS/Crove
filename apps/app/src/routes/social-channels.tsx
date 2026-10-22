@@ -17,6 +17,7 @@ import { WatermarkCard } from '../components/social-watermark.tsx';
 import { ReportBrandingCard } from '../components/social-report-branding.tsx';
 import { ChatAlertCard } from '../components/social-chat-alert.tsx';
 import { PublishHoldCard } from '../components/social-publish-hold.tsx';
+import { BannedWordsCard } from '../components/social-banned-words.tsx';
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -469,6 +470,7 @@ export function SocialChannelsPage() {
           <Card className="block p-4">
             <PublishHoldCard key={slug} />
           </Card>
+          <BannedWordsCard channels={(channels.data ?? []).filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />
           <Card className="block space-y-2 p-4">
             <div>
               <p className="text-sm font-medium text-foreground">{t('chatAlert.title')}</p>

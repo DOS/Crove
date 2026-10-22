@@ -10,6 +10,7 @@ import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
+import { Textarea } from '@crove/ui/components/textarea';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -29,6 +30,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
   const list = useQuery({ ...orpc.social.reportLinks.list.queryOptions({ input: {} }), enabled: canMake });
   const [period, setPeriod] = useState(() => lastMonth(new Date()));
   const [title, setTitle] = useState('');
+  const [note, setNote] = useState('');
   const [days, setDays] = useState<number>(30);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [outside, setOutside] = useState(false);
@@ -44,6 +46,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
         days,
         ...(picked.size > 0 ? { connectionIds: [...picked] } : {}),
         ...(title.trim() ? { title: title.trim() } : {}),
+        ...(note.trim() ? { note } : {}),
         ...(outside ? { includeExternal: true } : {}),
       });
     },
@@ -103,6 +106,11 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
           </NativeSelect>
         </div>
       </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="report-note">{t('note')}</Label>
+        <Textarea id="report-note" value={note} maxLength={2000} rows={3} placeholder={t('notePlaceholder')} onChange={(e) => setNote(e.target.value)} />
+        <p className="text-xs text-subtle-foreground">{t('noteHint', { used: note.length })}</p>
+      </div>
       {channels.length > 1 && (
         <fieldset className="space-y-1.5">
           <legend className="text-sm font-medium text-foreground">{t('channels')}</legend>
@@ -157,6 +165,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
                     {l.connectionIds.length === 0 ? t('allChannels') : l.connectionIds.map((id) => names.get(id) ?? t('goneChannel')).join(', ')}
                     {l.includeExternal ? ` · ${t('withExternal')}` : ''}
                   </span>
+                  {l.note && <span className="block truncate text-xs text-subtle-foreground">{l.note}</span>}
                 </span>
                 {live ? <Badge variant="secondary">{t('liveUntil', { until: f.date(l.expiresAt) })}</Badge> : <Badge variant="outline">{l.revokedAt ? t('revoked') : t('expired')}</Badge>}
                 {live && (

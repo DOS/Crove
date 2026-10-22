@@ -2,7 +2,7 @@
 // doing every few hours for 30 days after it went out, and keeps every answer as an append-only snapshot; the
 // analytics screen shows the latest one per variant. Counts are normalized (channel METRIC_NAMES); a count a platform
 // does not report is absent, never zero.
-import { sql } from 'kysely';
+import { sql, type RawBuilder } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
@@ -150,7 +150,7 @@ export const metricsTotals = defineQuery({
 
 // The totals of the variants published in the days-long window that ends `before` days ago (0: now, open-ended);
 // external: with the channels' posts published outside Crove in the same window (their latest real counts, no clicks),
-// leaving out any whose id is a variant's on the same channel.
+// leaving out the ones that are Crove's own (crove_social.external_post_is_crove).
 async function windowTotals(trx: Trx, orgId: string, days: number, before: number, labelId: string | undefined, external = false): Promise<WindowTotals> {
   const labelled = labelId
     ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${labelId}::uuid)`
@@ -162,24 +162,36 @@ async function windowTotals(trx: Trx, orgId: string, days: number, before: numbe
   // went out, so the start needs no bound.
   const clickedBy = before === 0 ? sql`` : sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' <= ${end}`;
   const outside = external
+    ? sql`e.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${before === 0 ? sql`` : sql`AND e.published_at <= ${end}`}`
+    : undefined;
+  return totalsWhere(trx, orgId, sql`v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${ends} ${labelled}`, clickedBy, outside);
+}
+
+/**
+ * The totals of the variants published in [start, end), as the window totals add them up: the goals of a month
+ * (#1056) count with these. Short link clicks up to the end only, on the days (UTC) whose midday is before it.
+ */
+export function periodTotals(trx: Trx, orgId: string, start: Date, end: Date): Promise<WindowTotals> {
+  return totalsWhere(trx, orgId, sql`v.published_at >= ${start} AND v.published_at < ${end}`, sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' < ${end}`);
+}
+
+// outsidePublished (#1054): when given, the channels' posts published outside Crove whose time it takes (as e) count
+// too, with their latest real counts and no clicks; without it the SQL is Crove's posts alone, as before.
+async function totalsWhere(trx: Trx, orgId: string, published: RawBuilder<unknown>, clickedBy: RawBuilder<unknown>, outsidePublished?: RawBuilder<unknown>): Promise<WindowTotals> {
+  const outside = outsidePublished
     ? sql`, x AS (
       SELECT e.channel_connection_id AS conn, c.provider, e.metrics FROM crove_social.external_post e
       JOIN crove_kernel.channel_connection c ON c.org_id = e.org_id AND c.id = e.channel_connection_id
-      WHERE e.org_id = ${orgId}
-        AND e.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${before === 0 ? sql`` : sql`AND e.published_at <= ${end}`}
-        AND NOT EXISTS (
-          SELECT 1 FROM crove_social.post_variant pv
-          WHERE pv.org_id = e.org_id AND pv.channel_connection_id = e.channel_connection_id AND pv.external_post_id = e.external_post_id
-        )
+      WHERE e.org_id = ${orgId} AND ${outsidePublished}
+        AND NOT crove_social.external_post_is_crove(e.org_id, e.channel_connection_id, e.external_post_id, e.permalink)
     )`
     : sql``;
-  const outsideCounts = external ? sql`UNION ALL SELECT x.conn, x.metrics FROM x WHERE x.metrics <> '{}'::jsonb` : sql``;
-  const posted = external ? sql`(SELECT v.conn, v.provider FROM v UNION ALL SELECT x.conn, x.provider FROM x) v` : sql`v`;
+  const outsideCounts = outsidePublished ? sql`UNION ALL SELECT x.conn, x.metrics FROM x WHERE x.metrics <> '{}'::jsonb` : sql``;
+  const posted = outsidePublished ? sql`(SELECT v.conn, v.provider FROM v UNION ALL SELECT x.conn, x.provider FROM x) v` : sql`v`;
   const { rows } = await sql<{ conn: string; provider: string; posts: string; metrics: Record<string, number>; clicks: string | null }>`
     WITH v AS (
       SELECT v.org_id, v.id, v.channel_connection_id AS conn, v.provider FROM crove_social.post_variant v
-      WHERE v.org_id = ${orgId} AND v.status = 'published'
-        AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${ends} ${labelled}
+      WHERE v.org_id = ${orgId} AND v.status = 'published' AND ${published}
     )${outside}, latest AS (
       SELECT v.conn, s.metrics FROM v CROSS JOIN LATERAL (
         SELECT m.metrics FROM crove_social.metric_snapshot m

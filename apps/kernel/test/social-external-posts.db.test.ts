@@ -91,13 +91,13 @@ suite('social posts published outside Crove (#1054)', () => {
     return connectionId;
   }
 
-  // A post Crove published on a channel some days ago, as the platform's id, with its latest counts.
-  async function published(o: Org, conn: string, externalId: string, daysAgo: number, metrics: Record<string, number>) {
+  // A post Crove published on a channel some days ago, as the platform's id (and its address), with its latest counts.
+  async function published(o: Org, conn: string, externalId: string, daysAgo: number, metrics: Record<string, number>, url: string | null = null) {
     const { postId } = await api.execute<{ postId: string }>('social.post.create', { body: `Bài của Crove ${externalId}`, channels: [{ connectionId: conn }] }, { actor: asUser(o.owner), orgId: o.orgId });
     await admin(async (c) => {
       const { rows } = await c.query<{ id: string }>(
-        "UPDATE crove_social.post_variant SET status = 'published', published_at = now() - make_interval(secs => $2), external_post_id = $3 WHERE post_id = $1 RETURNING id",
-        [postId, daysAgo * 86_400, externalId],
+        "UPDATE crove_social.post_variant SET status = 'published', published_at = now() - make_interval(secs => $2), external_post_id = $3, external_url = $4 WHERE post_id = $1 RETURNING id",
+        [postId, daysAgo * 86_400, externalId, url],
       );
       await c.query("INSERT INTO crove_social.metric_snapshot (org_id, variant_id, capture_key, metrics) VALUES ($1, $2, 'k', $3)", [o.orgId, rows[0]?.id, JSON.stringify(metrics)]);
     });
@@ -287,6 +287,12 @@ suite('social posts published outside Crove (#1054)', () => {
       worker.execute('social.external_post.import', { connectionId: mine, posts: [{ externalId: 'p-1', excerpt: '', permalink: 'javascript:alert(1)', publishedAt: new Date().toISOString() }] }, { actor: system, orgId: o.orgId }),
     ).rejects.toMatchObject({ code: 'VALIDATION' });
     await expect(admin((c) => c.query("UPDATE crove_social.external_post SET permalink = 'http://x.example/' WHERE external_post_id = 'mine-1'"))).rejects.toMatchObject({ code: '23514' });
+    // No control, zero-width or direction marks in an excerpt (U+061C, U+202E), whoever sends it.
+    for (const mark of ['\u061C', '\u202E', '\u0007']) {
+      await expect(
+        worker.execute('social.external_post.import', { connectionId: mine, posts: [{ externalId: 'p-2', excerpt: `a${mark}b`, permalink: null, publishedAt: new Date().toISOString() }] }, { actor: system, orgId: o.orgId }),
+      ).rejects.toMatchObject({ code: 'VALIDATION' });
+    }
     // Tenant roles change only the text, link and counts, and delete nothing.
     const grants = await admin(async (c) => ({
       table: (await c.query<{ privilege_type: string }>("SELECT privilege_type FROM information_schema.role_table_grants WHERE grantee = 'crove_tenant' AND table_schema = 'crove_social' AND table_name = 'external_post' ORDER BY 1")).rows.map((r) => r.privilege_type),
@@ -300,6 +306,53 @@ suite('social posts published outside Crove (#1054)', () => {
     // The channel's removal takes its outside posts with it.
     await admin((c) => c.query('DELETE FROM crove_kernel.channel_connection WHERE id = $1', [theirs]));
     expect(await listed(stranger)).toEqual([]);
+  });
+
+  it("takes a listed post for Crove's by its page address (a Facebook video or Reel under another post id), and only a published variant as Crove's", async () => {
+    const o = await org();
+    const conn = await connect(o, 'acct-video');
+    // A video and a Reel Crove published: kept as <page>_<video> with the address Crove recorded.
+    await published(o, conn, '111_777', 2, { reach: 300 }, 'https://www.facebook.com/111/videos/777');
+    await published(o, conn, '111_888', 2, { reach: 200 }, 'https://www.facebook.com/reel/888');
+    // A variant that failed after an id was noted: not a post Crove counts, so not Crove's here either.
+    const failed = await published(o, conn, 'out-failed', 2, { reach: 1 });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET status = 'failed' WHERE post_id = $1", [failed]));
+    const platform = new FakePlatform();
+    platform.listings.set('acct-video', {
+      posts: [
+        // Meta lists Crove's video and Reel under other post ids, on the Page's name and the mobile host.
+        { externalId: '111_9001', text: 'Video của Crove', permalink: 'https://www.facebook.com/SomePage/videos/777/', publishedAt: ago(2) },
+        { externalId: '111_9002', text: 'Reel của Crove', permalink: 'https://m.facebook.com/reel/888', publishedAt: ago(2) },
+        { externalId: 'out-failed', text: 'Đăng lại tay', permalink: null, publishedAt: ago(2) },
+        { externalId: '111_9003', text: 'Video đăng thẳng', permalink: 'https://www.facebook.com/SomePage/videos/555/', publishedAt: ago(1) },
+      ],
+    });
+    await sweep(platform);
+    const kept = await admin(async (c) => (await c.query<{ external_post_id: string }>('SELECT external_post_id FROM crove_social.external_post WHERE org_id = $1 ORDER BY 1', [o.orgId])).rows.map((r) => r.external_post_id));
+    expect(kept).toEqual(['111_9003', 'out-failed']);
+
+    // One brought in before Crove recorded its own address is left out of every read, and never measured.
+    await admin((c) =>
+      c.query("INSERT INTO crove_social.external_post (org_id, channel_connection_id, external_post_id, permalink, published_at, metrics) VALUES ($1, $2, '111_9100', 'https://www.facebook.com/SomePage/videos/777/', now() - interval '2 days', '{\"reach\": 999}')", [o.orgId, conn]),
+    );
+    expect((await listed(o)).map((r) => r.excerpt).sort()).toEqual(['Video đăng thẳng', 'Đăng lại tay']);
+    expect(await totals(o, { days: 30, includeExternal: true })).toMatchObject({ posts: 4, metrics: { reach: 500 } });
+    const due = await workerPool.query<{ external_id: string }>("SELECT d.external_id FROM crove_social.external_metrics_due(1000, ARRAY['sandbox'], 3600) d WHERE d.org_id = $1", [o.orgId]);
+    const hidden = await admin(async (c) => (await c.query<{ id: string }>("SELECT id FROM crove_social.external_post WHERE external_post_id = '111_9100'")).rows[0]?.id);
+    expect(due.rows.map((r) => r.external_id)).not.toContain(hidden);
+    const period = { periodStart: new Date(Date.now() - 30 * DAY).toISOString(), periodEnd: new Date(Date.now() + 60_000).toISOString() };
+    const { token } = await api.execute<{ token: string }>('social.report_link.create', { ...period, includeExternal: true }, { actor: asUser(o.owner), orgId: o.orgId });
+    expect((await reportView(api, { token })) as ReportPage).toMatchObject({ posts: 4, totals: { reach: 500 } });
+
+    // How addresses compare.
+    const key = async (url: string | null) => admin(async (c) => (await c.query<{ k: string | null }>('SELECT crove_social.post_link_key($1) AS k', [url])).rows[0]?.k);
+    expect(await key('https://www.facebook.com/111/videos/777')).toBe('facebook.com/video/777');
+    expect(await key('https://web.facebook.com/SomePage/videos/a-title/777/')).toBe('facebook.com/video/777');
+    expect(await key('https://www.facebook.com/reel/888?s=1')).toBe('facebook.com/video/888');
+    expect(await key('https://WWW.Instagram.com/p/AbC123/')).toBe('instagram.com/p/AbC123');
+    expect(await key('https://www.facebook.com/photo.php?fbid=42#x')).toBe('facebook.com/photo.php?fbid=42');
+    expect(await key('javascript:alert(1)')).toBeNull();
+    expect(await key(null)).toBeNull();
   });
 
   it('counts the outside posts in a client report only for a link made with the option, of its own org and channels', async () => {

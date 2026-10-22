@@ -47,18 +47,27 @@ const zPermalink = z
   }, 'https only');
 const zBroughtPost = z.strictObject({
   externalId: z.string().regex(EXTERNAL_POST_ID),
-  excerpt: z.string().max(EXTERNAL_EXCERPT_MAX),
+  excerpt: z
+    .string()
+    .max(EXTERNAL_EXCERPT_MAX)
+    .refine((v) => !INVISIBLE.test(v), 'no control, zero-width or direction marks'),
   permalink: zPermalink.nullable(),
   publishedAt: z.iso.datetime({ offset: true }),
 });
+
+// Control characters, the soft hyphen, zero-width and direction marks (U+061C, U+200B-U+200F, U+202A-U+202E,
+// U+2060-U+2064, U+2066-U+2069) and the byte order mark: what an excerpt never keeps, so a post's text cannot hide or
+// reorder what the screens and a client report show.
+// oxlint-disable-next-line no-control-regex
+const INVISIBLE = /[\u0000-\u001F\u007F-\u009F\u00AD\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/;
+const INVISIBLE_ALL = new RegExp(INVISIBLE.source, 'g');
 
 // A post's text as the excerpt keeps it: one line, without control, zero-width or direction marks, at most
 // EXTERNAL_EXCERPT_MAX characters (code points, as PostgreSQL counts them).
 export function excerptOf(text: string): string {
   const clean = text
     .normalize('NFC')
-    // oxlint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u001F\u007F-\u009F­​-‏‪-‮⁠-⁤⁦-⁩﻿]/g, ' ')
+    .replace(INVISIBLE_ALL, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   return Array.from(clean).slice(0, EXTERNAL_EXCERPT_MAX).join('').trim();
@@ -85,18 +94,19 @@ export const externalPostImport = defineCommand({
     const connection = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).executeTakeFirst();
     if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
     const byId = new Map(input.posts.map((p) => [p.externalId, p] as const));
-    const ids = [...byId.keys()];
-    // What Crove published on this channel is counted as the variant, never again as an outside post.
-    const crove = ids.length === 0
-      ? []
-      : await ctx.trx
-          .selectFrom('crove_social.post_variant')
-          .select('external_post_id')
-          .where('org_id', '=', ctx.orgId)
-          .where('channel_connection_id', '=', connection.id)
-          .where('external_post_id', 'in', ids)
-          .execute();
-    for (const v of crove) if (v.external_post_id) byId.delete(v.external_post_id);
+    const listed = [...byId.values()];
+    // What Crove published on this channel (a published variant with the platform id, or with the same page address:
+    // a Facebook video or Reel Crove stored as <page>_<video> may be listed under another post id) is counted as the
+    // variant, never again as an outside post. The same check every read makes (crove_social.external_post_is_crove).
+    const crove =
+      listed.length === 0
+        ? []
+        : (
+            await sql<{ id: string }>`
+              SELECT p.id FROM ROWS FROM (pg_catalog.unnest(${listed.map((p) => p.externalId)}::text[]), pg_catalog.unnest(${listed.map((p) => p.permalink)}::text[])) AS p(id, link)
+              WHERE crove_social.external_post_is_crove(${ctx.orgId}::uuid, ${connection.id}::uuid, p.id, p.link)`.execute(ctx.trx)
+          ).rows;
+    for (const v of crove) byId.delete(v.id);
     const fresh = [...byId.values()];
     if (fresh.length > 0) {
       await ctx.trx
@@ -185,8 +195,8 @@ export interface ExternalPostRow {
 }
 
 // The posts published outside Crove in the window, newest first, with their latest counts (#1054): what the Metrics
-// tab lists beside Crove's own when its switch is on. A post that is (by now) a variant's on the same channel is left
-// out, so it shows once, as Crove's.
+// tab lists beside Crove's own when its switch is on. A post that is (by now) Crove's own (external_post_is_crove) is
+// left out, so it shows once, as Crove's.
 export const metricsExternal = defineQuery({
   name: 'social.metrics.external',
   input: z.object({ days: z.number().int().min(1).max(365).optional() }),
@@ -207,10 +217,7 @@ export const metricsExternal = defineQuery({
       JOIN crove_kernel.channel_connection c ON c.org_id = e.org_id AND c.id = e.channel_connection_id
       WHERE e.org_id = ${ctx.orgId}
         AND e.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${input.days ?? 30}::int)
-        AND NOT EXISTS (
-          SELECT 1 FROM crove_social.post_variant v
-          WHERE v.org_id = e.org_id AND v.channel_connection_id = e.channel_connection_id AND v.external_post_id = e.external_post_id
-        )
+        AND NOT crove_social.external_post_is_crove(e.org_id, e.channel_connection_id, e.external_post_id, e.permalink)
       ORDER BY e.published_at DESC, e.id
       LIMIT ${EXTERNAL_LIST_LIMIT}`.execute(ctx.trx);
     return rows.map((r) => {
