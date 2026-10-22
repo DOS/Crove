@@ -609,6 +609,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       plan: {
         export: os.social.plan.export.handler(socialCommand('social.plan.export')),
       },
+      team: {
+        report: os.social.team.report.handler(socialQuery('social.team.report')),
+      },
       labels: {
         list: os.social.labels.list.handler(socialQuery('social.label.list')),
         create: os.social.labels.create.handler(socialCommand('social.label.create')),

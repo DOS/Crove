@@ -35,6 +35,7 @@ import {
   zSocialQueue,
   zSocialMetricsRow,
   zSocialPlanRow,
+  zSocialTeamReport,
   zSocialWindowTotals,
   zSocialChannelInsights,
   zSocialBioPage,
@@ -455,6 +456,12 @@ export const contract = {
           }),
         )
         .output(z.object({ filename: z.string(), csv: z.string().nullable(), rows: z.array(zSocialPlanRow).nullable(), truncated: z.boolean() })),
+    },
+    // The team report (#1058), owners and admins only, over [from, to) of at most 366 days: per member, posts created,
+    // sent to review, approved, published, assigned with a due date and overdue, and review decisions with the median
+    // time from submission to decision; for client review links, the median time to the client's answer.
+    team: {
+      report: oc.input(z.strictObject({ from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }) })).output(zSocialTeamReport),
     },
     // Labels for posts (#639): members create them and put them on posts; owners and admins rename and delete them.
     labels: {

@@ -16,6 +16,7 @@ import { isValidTimeZone } from './domain/queue.ts';
 import { runAutoReply } from './auto-reply.ts';
 import { runRepost } from './repost.ts';
 import { autoReplyOf, repostRuleOf } from './domain/channels.ts';
+import { csvCell } from './domain/csv.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -248,14 +249,8 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
   }));
 }
 
-// A cell as a spreadsheet reads it: quoted when it holds a comma, quote or line break, and a leading =, +, - or @
-// (which a spreadsheet would run as a formula) taken as text.
-export function csvCell(value: string | number | null): string {
-  if (value === null) return '';
-  let s = String(value);
-  if (typeof value === 'string' && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
+// A cell as a spreadsheet reads it (domain/csv.ts, which the app shares through the contract).
+export { csvCell };
 
 // labelNames: each post's label names (#639), written as one cell joined by "; ".
 export function metricsCsv(rows: readonly (MetricsRow & { text?: string })[], channelNames: ReadonlyMap<string, string>, labelNames: ReadonlyMap<string, readonly string[]> = new Map()): string {
