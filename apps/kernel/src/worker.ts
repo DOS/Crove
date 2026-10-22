@@ -29,6 +29,7 @@ import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { runLinkPreviewJob } from './link-preview.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
+import { archiveOutbox } from './outbox-retention.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
 import { runYearArchive } from './year-archive.ts';
 import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
@@ -554,6 +555,15 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       await sweepStaging(deps.store);
       await sweepInboundBlobs(deps.store, deps.workerDb);
       await expireExports(deps.store, deps.runtime, exportRetentionDays);
+      // Outbox events past their keep period (#997): archived to the WORM store, then deleted. Needs the archive.
+      if (deps.archive) {
+        try {
+          const outbox = await archiveOutbox(deps.workerDb, deps.archive.store);
+          console.log(`[retention] outbox archived=${outbox.archived} purged=${outbox.purged}${outbox.deferred ? ` deferred=${outbox.deferred}` : ''}`);
+        } catch (error) {
+          console.error(`[retention] ALERT outbox archive failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+        }
+      }
     }
   }));
   await boss.schedule(QUEUES.retention, RETENTION_CRON, null, { tz: RETENTION_TZ, missed: 'once' });
