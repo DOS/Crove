@@ -11,6 +11,7 @@ import { COMMENT_RULES, firstCommentOf, isProvider } from './domain/channels.ts'
 import { publishCallKey } from './domain/publish.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
 import { publishingHeld } from './publish-hold.ts';
+import { refuseChannels } from './channel-access.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const COMMENT_STEP = 'comment';
@@ -169,6 +170,8 @@ export const commentRetry = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const v = await lockVariant(ctx, input.variantId);
+    // Only on a channel the caller may use (#1081).
+    await refuseChannels(ctx, [v.channel_connection_id]);
     const calls = await commentCalls(ctx.trx, ctx.orgId, v);
     const status = commentStatus(calls, ctx.now, v.published_at);
     if (v.status !== 'published' || !v.external_post_id || !firstCommentOf(settingsOf(v)) || (status !== 'failed' && status !== 'reconnect' && status !== 'unknown')) {

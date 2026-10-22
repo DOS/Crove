@@ -13,6 +13,7 @@ import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
 import { mentionsOf } from './domain/mentions.ts';
 import { NOT_PUBLIC_NOTES } from './domain/channels.ts';
 import { QUEUE_ORDER_COMMANDS, reorderCode } from './queue-order.ts';
+import { channelScope, connectionInScope, postsInScope, refuseChannels, refusePostOutside } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -46,15 +47,18 @@ export const commentAdd = defineCommand({
     const userId = requireUser(ctx);
     const post = await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.postId).executeTakeFirst();
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
+    // A member limited to some channels (#1081) comments on the posts and the channels they may use.
+    await refusePostOutside(ctx, post.id);
     if (input.variantId) {
       const v = await ctx.trx
         .selectFrom('crove_social.post_variant')
-        .select('id')
+        .select(['id', 'channel_connection_id'])
         .where('org_id', '=', ctx.orgId)
         .where('id', '=', input.variantId)
         .where('post_id', '=', input.postId)
         .executeTakeFirst();
       if (!v) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
+      await refuseChannels(ctx, [v.channel_connection_id]);
     }
     const row = await ctx.trx
       .insertInto('crove_social.post_comment')
@@ -79,13 +83,19 @@ export const commentEdit = defineCommand({
     const userId = requireUser(ctx);
     const c = await ctx.trx
       .selectFrom('crove_social.post_comment')
-      .select(['id', 'post_id', 'author_user_id', 'created_at', 'body'])
+      .select(['id', 'post_id', 'variant_id', 'author_user_id', 'created_at', 'body'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.commentId)
       .forUpdate()
       .executeTakeFirst();
     if (!c) throw new DomainError('COMMENT_NOT_FOUND', 404, 'Không tìm thấy bình luận này');
     if (c.author_user_id !== userId) throw new DomainError('FORBIDDEN', 403, 'Chỉ người viết mới sửa được bình luận này');
+    // Not on a post or a channel the author may no longer use (#1081).
+    await refusePostOutside(ctx, c.post_id);
+    if (c.variant_id) {
+      const v = await ctx.trx.selectFrom('crove_social.post_variant').select('channel_connection_id').where('org_id', '=', ctx.orgId).where('id', '=', c.variant_id).executeTakeFirst();
+      if (v) await refuseChannels(ctx, [v.channel_connection_id]);
+    }
     if (ctx.now.getTime() - c.created_at.getTime() > COMMENT_EDIT_MS) throw new DomainError('COMMENT_EDIT_CLOSED', 409, 'Đã quá thời gian sửa bình luận này');
     if (c.body !== input.body) {
       await ctx.trx.updateTable('crove_social.post_comment').set({ body: input.body, edited_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', c.id).execute();
@@ -187,11 +197,15 @@ export const postActivity = defineQuery({
       .where('id', '=', input.postId)
       .executeTakeFirst();
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
+    // A member limited to some channels (#1081) reads the timeline of a post they may see, without the other channels.
+    const scope = await channelScope(ctx);
+    if ((await postsInScope(ctx, scope, [post.id])).length === 0) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
     const variants = await ctx.trx
       .selectFrom('crove_social.post_variant')
       .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at', 'removed_at', 'removed_by', 'remove_reason'])
       .where('org_id', '=', ctx.orgId)
       .where('post_id', '=', post.id)
+      .where(connectionInScope(scope, 'channel_connection_id'))
       .execute();
     const variantIds = variants.map((v) => v.id);
     const [comments, decisions, audited, reorders] = await Promise.all([
@@ -227,7 +241,7 @@ export const postActivity = defineQuery({
           AND detail -> 'post_ids' @> pg_catalog.jsonb_build_array(${post.id}::text)
         ORDER BY occurred_at DESC LIMIT ${ACTIVITY_LIMIT}`.execute(ctx.trx),
     ]);
-    const keyed = await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'revision', 'attempt']).where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).execute();
+    const keyed = await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'revision', 'attempt']).where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).where(connectionInScope(scope, 'channel_connection_id')).execute();
     const replies = await autoReplyCallsOf(ctx.trx, ctx.orgId, keyed);
     const reposts = await repostCallsOf(ctx.trx, ctx.orgId, keyed);
     const viewer = ctx.actor.type === 'user' ? ctx.actor.userId : null;
@@ -285,8 +299,11 @@ export const postActivity = defineQuery({
           : [{ ...none, id: `auto_reply:${variantId}`, kind: call.state === 'succeeded' ? 'auto_replied' : 'auto_reply_failed', at: (call.finished_at ?? call.started_at).toISOString(), variantId, code: call.state === 'succeeded' ? null : call.state === 'started' ? 'OUTCOME_UNKNOWN' : (call.error_code ?? 'OUTCOME_UNKNOWN') }],
       ),
     ];
-    items.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
-    const shown = items.slice(0, ACTIVITY_LIMIT);
+    // Entries about a channel the caller may not use are left out; the whole post's stay.
+    const visible = new Set(variantIds);
+    const kept = scope === null ? items : items.filter((i) => i.variantId === null || visible.has(i.variantId));
+    kept.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
+    const shown = kept.slice(0, ACTIVITY_LIMIT);
     // Names of the people, while they are members (crove_kernel.member_profiles answers only members of the org).
     const ids = [...new Set(shown.map((i) => i.userId).filter((u): u is string => u !== null))];
     const names = new Map<string, string>();
@@ -297,7 +314,7 @@ export const postActivity = defineQuery({
     }
     return {
       items: shown.map((i) => ({ ...i, name: i.userId ? (names.get(i.userId) ?? null) : null })),
-      more: items.length > ACTIVITY_LIMIT || comments.length === ACTIVITY_LIMIT || decisions.length === ACTIVITY_LIMIT || audited.rows.length === ACTIVITY_LIMIT || reorders.rows.length === ACTIVITY_LIMIT,
+      more: kept.length > ACTIVITY_LIMIT || comments.length === ACTIVITY_LIMIT || decisions.length === ACTIVITY_LIMIT || audited.rows.length === ACTIVITY_LIMIT || reorders.rows.length === ACTIVITY_LIMIT,
     };
   },
 });

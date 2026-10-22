@@ -16,6 +16,7 @@ import { captionFromFilename, fileIssues } from './domain/bulk-drafts.ts';
 import { nextFreeSlot } from './domain/queue.ts';
 import { validateVariant, type MediaItem } from './domain/validate.ts';
 import { lockQueue, mediaKind, providerOf, setVariant, takenSlots, type QueueState } from './variants.ts';
+import { refuseChannels } from './channel-access.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
@@ -88,6 +89,12 @@ export const postCreateFromMedia = defineCommand({
   handler: async (ctx, input): Promise<DraftsFromMediaResult> => {
     requireUser(ctx);
     const channels = await liveChannels(ctx, input.channelSetId ? await setChannels(ctx, input.channelSetId) : (input.connectionIds ?? []), input.channelSetId !== undefined);
+    // A member limited to some channels (#1081) makes drafts for those only, a channel set's included; refused before
+    // any queue is locked or post made.
+    await refuseChannels(
+      ctx,
+      channels.map((c) => c.id),
+    );
     // The queues first, before any post: social.variant.schedule and social.queue.set take them in the same order.
     const queues = new Map<string, QueueState>();
     if (input.queue) {

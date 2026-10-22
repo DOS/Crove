@@ -8,6 +8,7 @@ import { zId } from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import type { Publisher } from '@crove/channel';
 import { DomainError, defineCommand, defineQuery, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
+import { channelScope, connectionInScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ACTOR: SystemActor = { type: 'system', component: 'social.accounts' };
@@ -77,6 +78,8 @@ export const accountTrends = defineQuery({
       WHERE s.org_id = ${ctx.orgId}
         AND s.captured_on >= (pg_catalog.now() AT TIME ZONE 'UTC')::date - ${input.days}::int
         AND (s.followers IS NOT NULL OR s.reach IS NOT NULL)
+        -- A member limited to some channels (#1081) sees those only.
+        AND ${connectionInScope(await channelScope(ctx), 's.channel_connection_id')}
       ORDER BY s.channel_connection_id, s.captured_on
       LIMIT 60000`.execute(ctx.trx);
     const byChannel = new Map<string, AccountTrend>();

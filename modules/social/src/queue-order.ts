@@ -23,6 +23,7 @@ import { moveToFront, shuffleTimes, slotLabel, type Holder } from './domain/queu
 import { labelsOfPosts } from './labels.ts';
 import { publishingHeld } from './publish-hold.ts';
 import { SLOT_FREED, lockQueue, setVariant, settingsOf, type QueueState } from './variants.ts';
+import { refuseChannels } from './channel-access.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 // The most posts one reorder moves; a longer queue is reordered a date range at a time.
@@ -179,6 +180,8 @@ export const queueShuffle = defineCommand({
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
     requireUser(ctx);
+    // Only a queue of a channel the caller may use (#1081).
+    await refuseChannels(ctx, [input.connectionId]);
     const { queue, rows } = await lockHolders(ctx, input.connectionId);
     const from = input.from ? Date.parse(input.from) : -Infinity;
     const to = input.to ? Date.parse(input.to) : Infinity;
@@ -207,6 +210,7 @@ export const queueMoveToFront = defineCommand({
     requireUser(ctx);
     const found = await ctx.trx.selectFrom('crove_social.post_variant').select('channel_connection_id').where('org_id', '=', ctx.orgId).where('id', '=', input.variantId).executeTakeFirst();
     if (!found) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
+    await refuseChannels(ctx, [found.channel_connection_id]);
     const { queue, rows } = await lockHolders(ctx, found.channel_connection_id);
     const row = rows.find((r) => r.id === input.variantId);
     if (input.expectedAt !== undefined && row?.queue_slot_at?.getTime() !== Date.parse(input.expectedAt)) {

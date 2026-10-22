@@ -19,6 +19,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName } from '../lib/social.ts';
 import { draftsRequest, mediaNumber, type CaptionKind } from '../lib/social-bulk-drafts.ts';
+import { useChannelScope } from './social-channel-access.tsx';
 
 type Result = Awaited<ReturnType<typeof client.social.posts.createFromMedia>>;
 
@@ -32,7 +33,9 @@ export function DraftsFromMediaPanel({ slug, files, onClose, onCreated }: { slug
   const [caption, setCaption] = useState<CaptionKind>('none');
   const [snippetId, setSnippetId] = useState<string | null>(null);
   const [queue, setQueue] = useState(false);
-  const live = (channels.data ?? []).filter((c) => c.status !== 'revoked');
+  // A member limited to some channels (#1081) makes drafts for those only.
+  const scope = useChannelScope();
+  const live = (channels.data ?? []).filter((c) => c.status !== 'revoked' && scope.allows(c.id));
   const byChannel = new Map(live.map((c) => [c.id, c]));
   const byFile = new Map(files.map((x) => [x.fileId, x]));
   const request = draftsRequest({ fileIds: files.map((x) => x.fileId), connectionIds: picked, caption, snippetId, queue });

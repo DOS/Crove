@@ -18,6 +18,7 @@ import { runRepost } from './repost.ts';
 import { autoReplyOf, repostRuleOf } from './domain/channels.ts';
 import { csvCell } from './domain/csv.ts';
 import { STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture } from './domain/story-metrics.ts';
+import { channelScope, connectionInScope, type ChannelScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -105,12 +106,13 @@ export interface MetricsRow {
 }
 
 // The latest snapshot of each variant published in the window, newest first; or of one post's published channels,
-// whenever they went out (#578, the post screen). labelId: only posts with that label (#639).
+// whenever they went out (#578, the post screen). labelId: only posts with that label (#639). A member limited to some
+// channels (#1081) sees those only, here and in the totals, the export and the insights.
 export const metricsSummary = defineQuery({
   name: 'social.metrics.summary',
   input: z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional(), labelId: zId.optional() }),
   access: ALL,
-  handler: async (ctx, input): Promise<MetricsRow[]> => (await latestMetrics(ctx.trx, ctx.orgId, input, SUMMARY_LIMIT)).map(({ text: _text, ...row }) => row),
+  handler: async (ctx, input): Promise<MetricsRow[]> => (await latestMetrics(ctx.trx, ctx.orgId, input, SUMMARY_LIMIT, await channelScope(ctx))).map(({ text: _text, ...row }) => row),
 });
 
 // What the screens show at most, and what one export holds at most (it says when it was cut).
@@ -145,8 +147,9 @@ export const metricsTotals = defineQuery({
   handler: async (ctx, input): Promise<WindowTotals & { previous: WindowTotals }> => {
     const days = input.days ?? 30;
     const external = input.includeExternal === true && !input.labelId;
-    const current = await windowTotals(ctx.trx, ctx.orgId, days, 0, input.labelId, external);
-    const previous = await windowTotals(ctx.trx, ctx.orgId, days, days, input.labelId, external);
+    const scope = await channelScope(ctx);
+    const current = await windowTotals(ctx.trx, ctx.orgId, days, 0, input.labelId, external, scope);
+    const previous = await windowTotals(ctx.trx, ctx.orgId, days, days, input.labelId, external, scope);
     const now = new Map(current.channels.map((c) => [c.connectionId, c] as const));
     const before = new Map(previous.channels.map((c) => [c.connectionId, c] as const));
     const none = (c: ChannelTotals): ChannelTotals => ({ connectionId: c.connectionId, provider: c.provider, posts: 0, metrics: {}, clicks: null });
@@ -161,7 +164,7 @@ export const metricsTotals = defineQuery({
 // The totals of the variants published in the days-long window that ends `before` days ago (0: now, open-ended);
 // external: with the channels' posts published outside Crove in the same window (their latest real counts, no clicks),
 // leaving out the ones that are Crove's own (crove_social.external_post_is_crove).
-async function windowTotals(trx: Trx, orgId: string, days: number, before: number, labelId: string | undefined, external = false): Promise<WindowTotals> {
+async function windowTotals(trx: Trx, orgId: string, days: number, before: number, labelId: string | undefined, external = false, scope: ChannelScope = null): Promise<WindowTotals> {
   const labelled = labelId
     ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${labelId}::uuid)`
     : sql``;
@@ -172,9 +175,9 @@ async function windowTotals(trx: Trx, orgId: string, days: number, before: numbe
   // went out, so the start needs no bound.
   const clickedBy = before === 0 ? sql`` : sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' <= ${end}`;
   const outside = external
-    ? sql`e.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${before === 0 ? sql`` : sql`AND e.published_at <= ${end}`}`
+    ? sql`e.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${before === 0 ? sql`` : sql`AND e.published_at <= ${end}`} AND ${connectionInScope(scope, 'e.channel_connection_id')}`
     : undefined;
-  return totalsWhere(trx, orgId, sql`v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${ends} ${labelled}`, clickedBy, outside);
+  return totalsWhere(trx, orgId, sql`v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${ends} ${labelled} AND ${connectionInScope(scope, 'v.channel_connection_id')}`, clickedBy, outside);
 }
 
 /**
@@ -242,7 +245,7 @@ interface MetricsFilter {
   labelId?: string | undefined;
 }
 
-async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limit: number): Promise<(MetricsRow & { text: string })[]> {
+async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limit: number, scope: ChannelScope): Promise<(MetricsRow & { text: string })[]> {
   const days = input.days ?? 30;
   const window = input.postId ? sql`v.post_id = ${input.postId}::uuid` : sql`v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days}::int)`;
   const labelled = input.labelId
@@ -273,7 +276,7 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
       -- The last real answer; an empty snapshot (a failed try, a gone post) only when there is nothing else.
       ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
     ) s ON true
-    WHERE v.org_id = ${orgId} AND v.status = 'published' AND ${window} ${labelled}
+    WHERE v.org_id = ${orgId} AND v.status = 'published' AND ${window} ${labelled} AND ${connectionInScope(scope, 'v.channel_connection_id')}
     ORDER BY v.published_at DESC
     LIMIT ${limit}`.execute(trx);
   return rows.map((r) => ({
@@ -316,7 +319,7 @@ export const metricsExport = defineCommand({
   access: ALL,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
-    const rows = await latestMetrics(ctx.trx, ctx.orgId, { days: input.days, labelId: input.labelId }, EXPORT_LIMIT + 1);
+    const rows = await latestMetrics(ctx.trx, ctx.orgId, { days: input.days, labelId: input.labelId }, EXPORT_LIMIT + 1, await channelScope(ctx));
     const truncated = rows.length > EXPORT_LIMIT;
     if (truncated) rows.length = EXPORT_LIMIT;
     const ids = [...new Set(rows.map((r) => r.connectionId))];
@@ -391,6 +394,7 @@ export const metricsInsights = defineQuery({
       ) s ON true
       WHERE v.org_id = ${ctx.orgId} AND v.status = 'published'
         AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${input.days}::int) ${labelled}
+        AND ${connectionInScope(await channelScope(ctx), 'v.channel_connection_id')}
       ORDER BY v.published_at DESC
       LIMIT ${INSIGHT_LIMIT + 1}`.execute(ctx.trx);
     const kept = rows.slice(0, INSIGHT_LIMIT);

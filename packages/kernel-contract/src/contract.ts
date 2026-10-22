@@ -65,6 +65,8 @@ import {
   zSocialSnippetCreate,
   zSocialBannedWord,
   zSocialBannedWordAdd,
+  zSocialChannelAccess,
+  zSocialChannelAccessSet,
   zSocialSnippetUpdate,
   zSocialReportBrand,
   zSocialReportBrandingSave,
@@ -520,6 +522,13 @@ export const contract = {
       list: oc.input(z.object({})).output(z.array(zSocialBannedWord)),
       add: oc.input(zSocialBannedWordAdd).output(z.object({ wordId: zId })),
       remove: oc.input(z.strictObject({ wordId: zId })).output(z.object({ wordId: zId })),
+    },
+    // Channels a member may use (#1081): owners and admins read every member's list and replace one (an empty list
+    // lifts the limit; owners and admins are never limited); every member reads their own.
+    channelAccess: {
+      list: oc.input(z.object({})).output(z.array(zSocialChannelAccess)),
+      mine: oc.input(z.object({})).output(z.object({ limited: z.boolean(), connectionIds: z.array(zId) })),
+      set: oc.input(zSocialChannelAccessSet).output(z.object({ userId: zId, limited: z.boolean(), connectionIds: z.array(zId) })),
     },
     // Client report links (#643): owners and admins make and revoke them; the token is in the create answer only.
     // Monthly goals (#1056): every member sees the month's progress; owners and admins set and remove goals.

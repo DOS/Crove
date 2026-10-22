@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
+import { refusePostOutside } from './channel-access.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 
@@ -25,6 +26,8 @@ export const postAssign = defineCommand({
       .forUpdate()
       .executeTakeFirst();
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
+    // Only a post the caller may see (#1081).
+    await refusePostOutside(ctx, post.id);
     if (ctx.role !== 'owner' && ctx.role !== 'admin' && post.author_user_id !== userId) {
       throw new DomainError('FORBIDDEN', 403, 'Chỉ người viết bài, chủ sở hữu hoặc quản trị viên mới giao được bài này');
     }

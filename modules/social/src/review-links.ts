@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
+import { channelScope, postsInScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
@@ -287,6 +288,8 @@ export const reviewLinkList = defineQuery({
   input: z.object({ postId: zId }),
   access: ALL,
   handler: async (ctx, input): Promise<{ links: ReviewLinkView[]; feedback: ReviewFeedbackView[] }> => {
+    // Nothing of a post a member limited to some channels may not see (#1081).
+    if ((await postsInScope(ctx, await channelScope(ctx), [input.postId])).length === 0) return { links: [], feedback: [] };
     const [links, feedback, key, counts] = await Promise.all([
       // The post's own links and the plan links it is in (#902), with the content key each was made for.
       ctx.trx

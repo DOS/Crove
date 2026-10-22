@@ -15,6 +15,7 @@ import { DomainError, defineCommand } from '@crove/kernel-runtime';
 import { isValidTimeZone, localTime } from './domain/queue.ts';
 import { labelsOfPosts } from './labels.ts';
 import { csvCell } from './metrics.ts';
+import { connectionInScope, refuseChannels } from './channel-access.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const PLAN_EXPORT_MAX_ROWS = 500;
@@ -86,6 +87,9 @@ export const planExport = defineCommand({
     }
     const connections = [...new Set(input.connectionIds ?? [])];
     const labels = [...new Set(input.labelIds ?? [])];
+    // A member limited to some channels (#1081) exports those only: a channel named outside them is refused, and
+    // without a choice the others are left out.
+    const scope = await refuseChannels(ctx, connections);
     // Every channel not cancelled with a time in the range, at the time the calendar shows it (social.post.list).
     const { rows } = await sql<{
       variant_id: string;
@@ -110,6 +114,7 @@ export const planExport = defineCommand({
         JOIN crove_social.post p ON p.org_id = v.org_id AND p.id = v.post_id
         WHERE v.org_id = ${ctx.orgId}::uuid AND v.status <> 'cancelled'
           ${connections.length > 0 ? sql`AND v.channel_connection_id = ANY(${connections}::uuid[])` : sql``}
+          AND ${connectionInScope(scope, 'v.channel_connection_id')}
           ${labels.length > 0 ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ANY(${labels}::uuid[]))` : sql``}
       )
       SELECT v.id AS variant_id, v.post_id, v.channel_connection_id, v.provider, v.status, c.display_name, v.body, v.title,

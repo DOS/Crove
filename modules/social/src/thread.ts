@@ -13,6 +13,7 @@ import { publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
 import { publishingHeld } from './publish-hold.ts';
+import { refuseChannels } from './channel-access.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const THREAD_STEP = 'part';
@@ -189,6 +190,8 @@ export const threadRetry = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const v = await lockVariant(ctx, input.variantId);
+    // Only on a channel the caller may use (#1081).
+    await refuseChannels(ctx, [v.channel_connection_id]);
     const parts = threadPartsOf(settingsOf(v));
     const calls = (await threadCallsOf(ctx.trx, ctx.orgId, [v])).get(v.id) ?? [];
     const status = parts ? threadStatus(parts.length, calls, ctx.now, v.published_at) : null;

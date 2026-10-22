@@ -31,6 +31,7 @@ import {
 import { isValidTimeZone } from './domain/queue.ts';
 import { periodTotals } from './metrics.ts';
 import type { Trx } from './variants.ts';
+import { channelScope, mayUse } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
@@ -251,8 +252,11 @@ export const goalProgressQuery = defineQuery({
   handler: async (ctx, input): Promise<GoalsProgressView> => {
     // A query has no clock of its own; the month and its progress are of this moment.
     const now = Date.now();
-    const rows = await goalsOf(ctx.trx, ctx.orgId);
-    const stored = rows[0]?.timeZone ?? null;
+    const all = await goalsOf(ctx.trx, ctx.orgId);
+    // A member limited to some channels (#1081) sees the org's own goals and the goals of those channels.
+    const scope = await channelScope(ctx);
+    const rows = all.filter((g) => g.connectionId === null || mayUse(scope, g.connectionId));
+    const stored = all[0]?.timeZone ?? null;
     const timeZone = stored !== null && isValidTimeZone(stored) ? stored : GOAL_DEFAULT_TIME_ZONE;
     const month = input.month ?? monthKeyAt(now, timeZone);
     const bounds = monthBounds(month, timeZone);

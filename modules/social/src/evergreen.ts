@@ -13,6 +13,7 @@ import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor,
 import { agentTaskOf } from './agent.ts';
 import { publishingHeld } from './publish-hold.ts';
 import { bannedCheckerOf, isBlocked } from './banned-words.ts';
+import { refusePostOutside, refusePostWholly } from './channel-access.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const EVERGREEN_SWEEP_MS = 60 * 60_000;
@@ -230,6 +231,10 @@ export const postSetEvergreen = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     await lockPost(ctx.trx, ctx.orgId, input.postId);
+    // A member limited to some channels (#1081) turns reposts on only for a post wholly on those (the worker reposts
+    // every channel it went out on), and off for any post they may see.
+    if (input.days !== null) await refusePostWholly(ctx, input.postId);
+    else await refusePostOutside(ctx, input.postId);
     // One kind of repeat per post (#979): a series' copies would hold its evergreen reposts back, and the other way round.
     if (input.days !== null) {
       const series = await ctx.trx.selectFrom('crove_social.post').select('recurrence').where('org_id', '=', ctx.orgId).where('id', '=', input.postId).executeTakeFirstOrThrow();
