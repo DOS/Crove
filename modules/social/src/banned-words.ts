@@ -25,6 +25,7 @@ import {
   BANNED_WORD_CHANNELS_MAX,
   BANNED_WORD_LEVELS,
   BANNED_COMMAND_OPS_MAX,
+  BANNED_COMMAND_PREPARE_MAX,
   BANNED_WORDS_MAX,
   BannedWordsTooComplex,
   bannedBudget,
@@ -203,8 +204,8 @@ export async function bannedCheckerOf(trx: Trx, orgId: string): Promise<BannedCh
   return bannedChecker(await bannedWordsOf(trx, orgId));
 }
 
-/** The one budget a command that checks many posts shares across all of them (BANNED_COMMAND_OPS_MAX). */
-export const bannedCommandBudget = (): BannedBudget => bannedBudget(BANNED_COMMAND_OPS_MAX);
+/** The one budget a command that checks many posts shares across all of them (BANNED_COMMAND_OPS_MAX steps, BANNED_COMMAND_PREPARE_MAX characters). */
+export const bannedCommandBudget = (): BannedBudget => bannedBudget(BANNED_COMMAND_OPS_MAX, BANNED_COMMAND_PREPARE_MAX);
 
 /** Matches as a variant view lists them: one per word and field (the first place), at most BANNED_VIEW_MAX. */
 export function bannedSummary(matches: readonly BannedFieldMatch[]): BannedFieldMatch[] {

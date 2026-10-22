@@ -19,7 +19,8 @@
 //
 // Cost: the words are compiled into a trie over base letters, so a text is scanned in at most (text units) x (longest
 // phrase) steps whatever the number of words, and the marks are checked only on a phrase that matched by its base
-// letters. Every step counts against a budget (BANNED_OPS_MAX by default); past it the scan throws
+// letters. Every step counts against a budget (BANNED_OPS_MAX by default), and preparing text against its own cap in
+// characters (BANNED_PREPARE_MAX, what a valid post may hold); past either the scan throws
 // BannedWordsTooComplex, which a command turns into a refusal and a view into "not checked".
 
 // The level of a word; the table's CHECK and SOCIAL_BANNED_WORD_LEVELS in @crove/db hold the same two (this module
@@ -32,16 +33,25 @@ export const BANNED_REASON_MAX = 200;
 export const BANNED_WORDS_MAX = 500;
 // The most channels one word may be limited to.
 export const BANNED_WORD_CHANNELS_MAX = 50;
-// The steps one check (one view, one composer field, one command on one post) may take. A scan step costs about 12 ns
-// and cutting a UTF-16 unit of text into units about 16 times that, so the worst case stops within about 30 ms: a
-// post's text at its longest (100,000 characters, 1,600,000 steps to prepare) still fits with its scan.
+// The scan steps one check (one view, one composer field, one command on one post) may take: the part a crafted word
+// list can amplify. A step costs about 12 ns, so the worst case stops within about 25 ms.
 export const BANNED_OPS_MAX = 2_000_000;
+// Cutting text into units is linear in its length, so it has its own cap in characters instead of sharing the scan's
+// steps: what one post may hold once validated (the post's text, and on each of its 20 channels its own text, title
+// and settings), so no valid post is refused for its length. About 0.25 us a character, the cap is about 0.6 s of
+// work, which only the largest valid post reaches.
+const POST_TEXT_MAX = 100_000;
+const TITLE_MAX = 500;
+const SETTINGS_BYTES_MAX = 16_384;
+const CHANNELS_MAX = 20;
+export const BANNED_PREPARE_MAX = POST_TEXT_MAX + TITLE_MAX + CHANNELS_MAX * (POST_TEXT_MAX + TITLE_MAX + SETTINGS_BYTES_MAX);
 // A command that checks many posts (an import, a policy change over a channel's posts, the client step turned off)
-// shares one budget of this many steps across all of them, so the rows or posts do not multiply it. Past it, the rest
-// fail closed: an import row stays a draft, a post stays in review.
+// shares one budget across all of them, so the rows or posts do not multiply it: twice the scan steps, and text to
+// prepare for a few posts at their longest (about 0.1 s). Past it, the rest fail closed: an import row stays a draft,
+// a post stays in review.
 export const BANNED_COMMAND_OPS_MAX = 2 * BANNED_OPS_MAX;
-// What cutting one UTF-16 unit of text costs, and what reporting a match (once per word and text) costs, in steps.
-export const PREPARE_STEPS = 16;
+export const BANNED_COMMAND_PREPARE_MAX = 500_000;
+// What reporting a match (once per word and text) costs, in scan steps.
 export const MATCH_STEPS = 20;
 
 export interface BannedWord {
@@ -77,11 +87,12 @@ export class BannedWordsTooComplex extends Error {
   }
 }
 
-/** The steps a check may still take, shared by every text one command or view checks. */
+/** The scan steps and the characters to prepare a check may still use, shared by every text one command or view checks. */
 export interface BannedBudget {
   left: number;
+  prepareLeft: number;
 }
-export const bannedBudget = (ops: number = BANNED_OPS_MAX): BannedBudget => ({ left: ops });
+export const bannedBudget = (ops: number = BANNED_OPS_MAX, prepare: number = BANNED_PREPARE_MAX): BannedBudget => ({ left: ops, prepareLeft: prepare });
 
 function spend(budget: BannedBudget, n: number): void {
   budget.left -= n;
@@ -142,9 +153,12 @@ export interface BannedText {
   readonly wordBefore: Uint8Array;
 }
 
-/** Cuts a text into units; with a budget, the work is charged to it first (PREPARE_STEPS per UTF-16 unit). */
+/** Cuts a text into units; with a budget, its length is charged to the budget's preparation cap first. */
 export function prepareBannedText(text: string, budget?: BannedBudget): BannedText {
-  if (budget) spend(budget, text.length * PREPARE_STEPS);
+  if (budget) {
+    budget.prepareLeft -= text.length;
+    if (budget.prepareLeft < 0) throw new BannedWordsTooComplex();
+  }
   const list = units(text);
   const n = list.length;
   const solid = new Int32Array(n + 1);

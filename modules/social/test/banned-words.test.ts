@@ -2,7 +2,7 @@
 // the texts of a variant that are checked.
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { BANNED_COMMAND_OPS_MAX, BANNED_OPS_MAX, BannedWordsTooComplex, MATCH_STEPS, PREPARE_STEPS, bannedBudget, compileBannedWords, findBannedInTexts, findBannedWords, normalizePhrase, prepareBannedText, variantTexts, wordsForChannel, wordsForChannels, type BannedBudget, type BannedWord } from '../src/domain/banned-words.ts';
+import { BANNED_COMMAND_OPS_MAX, BANNED_COMMAND_PREPARE_MAX, BANNED_OPS_MAX, BANNED_PREPARE_MAX, BannedWordsTooComplex, MATCH_STEPS, bannedBudget, compileBannedWords, findBannedInTexts, findBannedWords, normalizePhrase, prepareBannedText, variantTexts, wordsForChannel, wordsForChannels, type BannedBudget, type BannedWord } from '../src/domain/banned-words.ts';
 import { bannedChecker, bannedCommandBudget, isBlocked } from '../src/banned-words.ts';
 
 let n = 0;
@@ -225,8 +225,8 @@ describe('cost (#1055 security review)', () => {
     const words = endings(500).map((e) => word(`${'a'.repeat(98)}${e}`));
     const r = run((b) => findBannedWords('a'.repeat(100_000), words, b));
     expect(r.gaveUp).toBe(false);
-    // Preparing the text, and one walk of the prefix.
-    expect(r.spent).toBeLessThan(100_000 * PREPARE_STEPS + 1_000);
+    // One walk of the prefix, at the only word boundary.
+    expect(r.spent).toBeLessThan(1_000);
     expect(r.ms).toBeLessThan(LOOSE_MS);
   });
 
@@ -266,15 +266,28 @@ describe('cost (#1055 security review)', () => {
     const r = run((b) => (found = findBannedWords(text, words, b).length));
     expect(r.gaveUp).toBe(false);
     expect(found).toBe(500);
-    // The preparation, then the first 500 places at most a few steps each and one report per word.
-    expect(r.spent).toBeLessThan(text.length * PREPARE_STEPS + 500 * (MATCH_STEPS + 10));
+    // The first 500 places at most a few steps each and one report per word, then nothing.
+    expect(r.spent).toBeLessThan(500 * (MATCH_STEPS + 10));
   });
 
   it('a budget is shared by every text checked with it and refuses past it', () => {
-    const words = [word('ab')];
-    const budget = bannedBudget(100_000);
+    // A second word the text never holds, so the scan goes on to the end.
+    const words = [word('ab'), word('zz')];
+    const budget = bannedBudget(1_000);
     findBannedWords('ab '.repeat(100), words, budget);
-    expect(() => findBannedWords('ab '.repeat(3_000), words, budget)).toThrow(BannedWordsTooComplex);
+    expect(() => findBannedWords('ab '.repeat(1_000), words, budget)).toThrow(BannedWordsTooComplex);
+  });
+
+  it('preparing text has its own cap in characters, apart from the scan steps', () => {
+    const words = [word('ab')];
+    const budget = bannedBudget(BANNED_OPS_MAX, 1_000);
+    findBannedWords('x'.repeat(900), words, budget);
+    // The scan itself took a step or two: only the start of the text is a word boundary.
+    expect(budget.left).toBeGreaterThan(BANNED_OPS_MAX - 10);
+    expect(budget.prepareLeft).toBe(100);
+    expect(() => findBannedWords('x'.repeat(200), words, budget)).toThrow(BannedWordsTooComplex);
+    // What one valid post may hold: its text, and on each of its 20 channels its own text, title and settings.
+    expect(BANNED_PREPARE_MAX).toBe(100_500 + 20 * (100_500 + 16_384));
   });
 
   it('a prepared text gives the same matches as the plain one', () => {
@@ -304,8 +317,27 @@ describe('bannedChecker', () => {
     expect(check(post('Sản phẩm tốt nhất'), variant('c2'))).toEqual([]);
   });
 
+  it('one word and two channels with their own text of 100,000 characters: checked, not refused', () => {
+    const check = bannedChecker([word('tốt nhất')]);
+    const base = post('Bài chung');
+    const own = (n: number) => `${'Khai trương cửa hàng mới, ưu đãi lớn. '.repeat(3_000)}${n}`.slice(-100_000);
+    const a = variant('c1', { body: own(1) });
+    const b = variant('c2', { body: own(2) });
+    expect(isBlocked(check, base, a)).toBe(false);
+    expect(isBlocked(check, base, b)).toBe(false);
+    expect(check(base, variant('c3', { body: `${own(3).slice(0, 99_990)} tốt nhất` })).map((m) => m.phrase)).toEqual(['tốt nhất']);
+  });
+
+  it('500 words, a 100,000-character text and 16 KiB of settings texts: checked, not refused', () => {
+    const words = Array.from({ length: 500 }, (_, i) => word(`từ cấm ${i}`, { level: 'warn' }));
+    const check = bannedChecker(words);
+    const body = `${'Chương trình khuyến mãi tháng mười, áp dụng cho mọi chi nhánh. '.repeat(2_000)}`.slice(0, 100_000);
+    const settings = { firstComment: 'Bình luận đầu tiên. '.repeat(400), threadParts: ['Phần hai. '.repeat(300), 'từ cấm 7'] };
+    const found = check(post(body), variant('c1', { settings }));
+    expect(found.map((m) => [m.phrase, m.field])).toEqual([['từ cấm 7', 'settings.threadParts.1']]);
+  });
   it('a check over its budget counts as blocked', () => {
-    const check = bannedChecker([word('zzz', { level: 'warn' })], bannedBudget(5));
+    const check = bannedChecker([word('zzz', { level: 'warn' })], bannedBudget(1));
     expect(isBlocked(check, post('Sản phẩm tốt nhất'), variant('c1'))).toBe(true);
     expect(isBlocked(bannedChecker([word('zzz', { level: 'warn' })]), post('Sản phẩm tốt nhất'), variant('c1'))).toBe(false);
   });
@@ -319,9 +351,10 @@ describe('bannedChecker', () => {
       const body = `${row} ${'á à ả ã ạ bản tin '.repeat(270)}`.slice(0, 5_000);
       if (isBlocked(check, post(body), variant('c1'))) held += 1;
     }
-    // 200 x 5,000 characters cost 16,000,000 steps to prepare alone, four times the command's budget.
-    expect(budget.left).toBeLessThan(0);
-    expect(held).toBeGreaterThan(100);
+    // 200 x 5,000 characters are twice the text the command may prepare: the second half is held back at once.
+    expect(budget.prepareLeft < 0 || budget.left < 0).toBe(true);
+    expect(held).toBeGreaterThan(90);
+    expect(BANNED_COMMAND_PREPARE_MAX).toBe(500_000);
     expect(BANNED_COMMAND_OPS_MAX).toBe(2 * BANNED_OPS_MAX);
   });
 
@@ -336,6 +369,6 @@ describe('bannedChecker', () => {
     // The words are warnings: only the budget holds posts back, and from the first one held on, every later one is.
     expect(firstHeld).toBeGreaterThan(0);
     expect(outcome.slice(firstHeld).every(Boolean)).toBe(true);
-    expect(budget.left).toBeLessThan(0);
+    expect(budget.prepareLeft < 0 || budget.left < 0).toBe(true);
   });
 });
