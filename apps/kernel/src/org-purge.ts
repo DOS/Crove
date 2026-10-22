@@ -52,6 +52,7 @@ export interface OrgPurgeCounts {
   anonymized: Record<string, number>;
   keptFiles: number;
   keptParties: number;
+  keptProposals: number;
 }
 
 export interface OrgPurgeResult {
@@ -205,7 +206,9 @@ export async function runOrgPurge(deps: OrgPurgeDeps, argv: readonly string[]): 
     }
     const { counts, blobs } = outcome.result;
     log(`[org-purge] org ${outcome.orgId} is now closed; deleted ${sum(counts.deleted)} row(s): ${nonZero(counts.deleted)}`);
-    log(`[org-purge] kept ${counts.keptFiles} file(s) and ${counts.keptParties} part(ies) of the books (${nonZero(counts.anonymized)} anonymized); pinned by append-only rows: ${nonZero(counts.pinned)}`);
+    log(
+      `[org-purge] kept ${counts.keptFiles} file(s), ${counts.keptParties} part(ies) and ${counts.keptProposals} proposal(s) the books reference (${nonZero(counts.anonymized)} anonymized); pinned by append-only rows: ${nonZero(counts.pinned)}`,
+    );
     log(`[org-purge] blobs deleted ${blobs.deleted}, held ${blobs.held}${blobs.held > 0 ? ' (under a retention hold, left in place)' : ''}`);
     return ORG_PURGE_EXIT.ok;
   } catch (e) {

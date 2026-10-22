@@ -23,8 +23,9 @@
 --   * Kept: the books (every crove_finance table but vendor_account_rule), audit_event, outbox_event, the tenant row,
 --     inbound addresses (tombstones), org_usage, outbox_archive (the outbox days the daily job archived, #997),
 --     external_call (the ledger of calls to social platforms), the files a purchase document or a portal list
---     references, and the parties a purchase document or a cash voucher names (anonymized: address, email, phone,
---     verifier and duplicate link cleared; kind, name and tax code stay, as on the voucher).
+--     references, the proposals behind booked entries (the approval trail), and the parties a purchase document, a
+--     cash voucher or a ledger line names (anonymized: address, email, phone, verifier and duplicate link cleared;
+--     kind, name and tax code stay, as on the voucher).
 --   * Append-only working rows cannot be deleted (task_comment, Social's post_approval) and are kept with the rows
 --     they reference (their tasks with their parents, the assignee positions with their managers, those positions'
 --     agents and the tasks' checkout runs; the approved variants, their posts with their sources, and the variants'
@@ -37,6 +38,11 @@
 -- tenant_close_requires_purge (deferred to commit): a non-staff close commits only together with the 'ok' audit row
 --   of kernel.org.purge, by the system, written in the same transaction (as tenant_offboarding_requires_audit).
 -- tenant_member_keeps_owner: an org keeps at least one owner unless it is closed, so the purge deletes the members.
+-- enter_context, enter_system_context: the write fence. Entering an offboarding org takes the advisory lock
+--   'kernel.org.purge:<org>' shared for the transaction; the purge takes it exclusive, so it waits for transactions
+--   already in the org and holds new ones back until it commits, when they see the org closed and are refused. An
+--   advisory lock, not FOR SHARE on the tenant row: queries and the export run READ ONLY, where row locks are refused.
+--   Active orgs take no lock; agents enter active orgs only.
 SET LOCAL lock_timeout = '2s';
 
 -- ---------------------------------------------------------------------------
@@ -129,6 +135,7 @@ DECLARE
   v_deleted jsonb := '{}'::jsonb;
   v_pinned jsonb := '{}'::jsonb;
   v_anonymized bigint;
+  v_keep_proposal uuid[];
   v_keep_task uuid[];
   v_keep_position uuid[];
   v_keep_run uuid[];
@@ -141,7 +148,7 @@ DECLARE
   v_keys text[];
   -- Rows of these tables are deleted whole, in this order (children before the rows they reference).
   v_kernel_first text[] := ARRAY[
-    'crove_kernel.proposal', 'crove_kernel.activity', 'crove_kernel.agent_wakeup', 'crove_kernel.extraction',
+    'crove_kernel.activity', 'crove_kernel.agent_wakeup', 'crove_kernel.extraction',
     'crove_kernel.inbound_message', 'crove_kernel.notification', 'crove_kernel.notification_mute',
     'crove_kernel.mail_event', 'crove_kernel.mail_suppression', 'crove_kernel.mail_message',
     'crove_kernel.member_invite', 'crove_kernel.auth_session_org', 'crove_kernel.inbound_drop',
@@ -171,6 +178,11 @@ BEGIN
   IF v_org IS NULL OR crove_kernel.ctx_actor_type() IS DISTINCT FROM 'system' THEN
     RAISE EXCEPTION 'ORG_PURGE_SYSTEM_CONTEXT' USING ERRCODE = '42501';
   END IF;
+  -- The write fence: every other transaction inside an offboarding org holds this lock shared (enter_context,
+  -- enter_system_context), so taking it exclusive waits for those in flight and holds new ones back until the purge
+  -- commits; they then see the org closed and are refused. Taken before the tenant row, so an in-flight transaction
+  -- that updates the tenant row cannot deadlock with the purge. This transaction's own shared hold does not conflict.
+  PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('kernel.org.purge:' || v_org::text, 0));
   -- Serializes purges of one org and holds the status still while the map runs.
   PERFORM 1 FROM crove_kernel.tenant t WHERE t.org_id = v_org FOR UPDATE;
   v_refusal := crove_kernel.org_purge_refusal(v_org, p_min_days);
@@ -180,16 +192,34 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Rows that append-only rows reference, with what they reference in turn.
+  -- The proposals behind kept books: the approval and four-eyes trail of booked entries (purchase documents, cash and
+  -- journal vouchers, and reversals, whose entry names the proposal).
+  v_keep_proposal := ARRAY(
+    SELECT d.proposal_id FROM crove_finance.purchase_document d WHERE d.org_id = v_org AND d.proposal_id IS NOT NULL
+    UNION
+    SELECT c.proposal_id FROM crove_finance.cash_voucher c WHERE c.org_id = v_org AND c.proposal_id IS NOT NULL
+    UNION
+    SELECT j.proposal_id FROM crove_finance.journal_voucher j WHERE j.org_id = v_org AND j.proposal_id IS NOT NULL
+    UNION
+    SELECT e.source_id FROM crove_finance.journal_entry e
+    WHERE e.org_id = v_org AND e.source_type = 'kernel.proposal' AND e.source_id IS NOT NULL);
+
+  -- Rows that append-only rows and kept proposals reference, with what they reference in turn.
   v_keep_task := ARRAY(
     WITH RECURSIVE k(id) AS (
       SELECT c.task_id FROM crove_kernel.task_comment c WHERE c.org_id = v_org
       UNION
+      SELECT r.source_task_id FROM crove_kernel.proposal r
+      WHERE r.org_id = v_org AND r.id = ANY (v_keep_proposal) AND r.source_task_id IS NOT NULL
+      UNION
       SELECT t.parent_task_id FROM crove_kernel.task t JOIN k ON t.org_id = v_org AND t.id = k.id WHERE t.parent_task_id IS NOT NULL
     ) SELECT id FROM k);
   v_keep_run := ARRAY(
-    SELECT DISTINCT t.checkout_run_id FROM crove_kernel.task t
-    WHERE t.org_id = v_org AND t.id = ANY (v_keep_task) AND t.checkout_run_id IS NOT NULL);
+    SELECT t.checkout_run_id FROM crove_kernel.task t
+    WHERE t.org_id = v_org AND t.id = ANY (v_keep_task) AND t.checkout_run_id IS NOT NULL
+    UNION
+    SELECT r.requested_by_run FROM crove_kernel.proposal r
+    WHERE r.org_id = v_org AND r.id = ANY (v_keep_proposal) AND r.requested_by_run IS NOT NULL);
   v_keep_position := ARRAY(
     WITH RECURSIVE k(id) AS (
       SELECT t.assignee_position_id FROM crove_kernel.task t
@@ -201,7 +231,11 @@ BEGIN
     SELECT p.holder_agent_id FROM crove_kernel.position p
     WHERE p.org_id = v_org AND p.id = ANY (v_keep_position) AND p.holder_agent_id IS NOT NULL
     UNION
-    SELECT r.agent_id FROM crove_kernel.ai_run r WHERE r.org_id = v_org AND r.id = ANY (v_keep_run) AND r.agent_id IS NOT NULL);
+    SELECT r.agent_id FROM crove_kernel.ai_run r WHERE r.org_id = v_org AND r.id = ANY (v_keep_run) AND r.agent_id IS NOT NULL
+    UNION
+    SELECT a.agent FROM crove_kernel.proposal r
+    CROSS JOIN LATERAL (VALUES (r.requested_by_agent), (r.decided_by_agent)) a(agent)
+    WHERE r.org_id = v_org AND r.id = ANY (v_keep_proposal) AND a.agent IS NOT NULL);
   v_keep_variant := ARRAY(SELECT DISTINCT a.variant_id FROM crove_social.post_approval a WHERE a.org_id = v_org);
   v_keep_post := ARRAY(
     WITH RECURSIVE k(id) AS (
@@ -216,11 +250,18 @@ BEGIN
   v_keep_party := ARRAY(
     SELECT d.party_id FROM crove_finance.purchase_document d WHERE d.org_id = v_org AND d.party_id IS NOT NULL
     UNION
-    SELECT c.party_id FROM crove_finance.cash_voucher c WHERE c.org_id = v_org AND c.party_id IS NOT NULL);
+    SELECT c.party_id FROM crove_finance.cash_voucher c WHERE c.org_id = v_org AND c.party_id IS NOT NULL
+    UNION
+    -- Ledger lines name parties without a foreign key (sales, opening balances, bank matching on 131 and 331).
+    SELECT l.party_id FROM crove_finance.journal_line l WHERE l.org_id = v_org AND l.party_id IS NOT NULL);
   v_keep_file := ARRAY(
     SELECT d.source_file_id FROM crove_finance.purchase_document d WHERE d.org_id = v_org AND d.source_file_id IS NOT NULL
     UNION
     SELECT l.file_id FROM crove_finance.portal_invoice_list l WHERE l.org_id = v_org AND l.file_id IS NOT NULL);
+
+  DELETE FROM crove_kernel.proposal r WHERE r.org_id = v_org AND r.id <> ALL (v_keep_proposal);
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  v_deleted := v_deleted || pg_catalog.jsonb_build_object('crove_kernel.proposal', v_n);
 
   FOREACH v_t IN ARRAY v_kernel_first || v_social LOOP
     EXECUTE pg_catalog.format('DELETE FROM %s WHERE org_id = $1', v_t::regclass) USING v_org;
@@ -269,13 +310,16 @@ BEGIN
   GET DIAGNOSTICS v_n = ROW_COUNT;
   v_deleted := v_deleted || pg_catalog.jsonb_build_object('crove_kernel.party', v_n);
 
-  -- Files: those the books reference stay. The blobs of the others go, unless a kept row has the same content.
+  -- Files: those the books reference stay. The blobs of the others go, unless a kept row has the same content. Only
+  -- keys under the org's own documents prefix are returned (the content-address check is NOT VALID for old rows), so
+  -- no archive/ or export/ key, nor another org's, can ever be deleted from here.
   WITH gone AS (
     DELETE FROM crove_kernel.file f WHERE f.org_id = v_org AND f.id <> ALL (v_keep_file) RETURNING f.storage_key
   )
   SELECT pg_catalog.count(*), ARRAY(
     SELECT DISTINCT g.storage_key FROM gone g
-    WHERE NOT EXISTS (SELECT 1 FROM crove_kernel.file k WHERE k.org_id = v_org AND k.id = ANY (v_keep_file) AND k.storage_key = g.storage_key)
+    WHERE g.storage_key LIKE 'org/' || v_org::text || '/%'
+      AND NOT EXISTS (SELECT 1 FROM crove_kernel.file k WHERE k.org_id = v_org AND k.id = ANY (v_keep_file) AND k.storage_key = g.storage_key)
     ORDER BY 1)
   INTO v_n, v_keys FROM gone;
   v_deleted := v_deleted || pg_catalog.jsonb_build_object('crove_kernel.file', v_n);
@@ -299,7 +343,8 @@ BEGIN
     'pinned', v_pinned,
     'anonymized', pg_catalog.jsonb_build_object('crove_kernel.party', v_anonymized),
     'keptFiles', pg_catalog.cardinality(v_keep_file),
-    'keptParties', pg_catalog.cardinality(v_keep_party));
+    'keptParties', pg_catalog.cardinality(v_keep_party),
+    'keptProposals', pg_catalog.cardinality(v_keep_proposal));
   blob_keys := v_keys;
   RETURN NEXT;
 END $$;
@@ -392,6 +437,62 @@ BEGIN
       DETAIL = 'an org keeps at least one owner';
   END IF;
   RETURN NULL;
+END $$;
+
+-- ---------------------------------------------------------------------------
+-- The write fence: the entry points of an org's transactions. Same signatures, contracts and checks as
+-- 20261017020100; CREATE OR REPLACE keeps owner and ACL.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION crove_kernel.enter_context(p_user_id uuid, p_org_id uuid)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v_role text;
+BEGIN
+  PERFORM crove_kernel.context_reentry_guard();
+  IF EXISTS (SELECT 1 FROM crove_kernel.tenant t WHERE t.org_id = p_org_id AND t.status = 'offboarding') THEN
+    PERFORM pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtextextended('kernel.org.purge:' || p_org_id::text, 0));
+  END IF;
+  -- A new statement: after waiting on a purge it sees the org closed.
+  SELECT m.role INTO v_role
+  FROM crove_kernel.tenant_member m
+  JOIN crove_kernel.tenant t ON t.org_id = m.org_id
+  WHERE m.org_id = p_org_id AND m.user_id = p_user_id
+    AND (t.status = 'active' OR (t.status = 'offboarding' AND m.role = 'owner'));
+  IF v_role IS NULL THEN
+    RAISE EXCEPTION 'NOT_A_MEMBER' USING ERRCODE = '42501';
+  END IF;
+  PERFORM crove_kernel.ctx_write(pg_catalog.jsonb_build_object(
+    'v', 1,
+    'org', p_org_id,
+    'actor', 'user',
+    'user', p_user_id,
+    'role', v_role,
+    'le_scope', pg_catalog.jsonb_build_array('*'),
+    'flags', '[]'::jsonb));
+  RETURN v_role;
+END $$;
+
+CREATE OR REPLACE FUNCTION crove_kernel.enter_system_context(p_org_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+  PERFORM crove_kernel.context_reentry_guard();
+  IF NOT pg_catalog.pg_has_role(SESSION_USER, 'crove_worker', 'MEMBER') THEN
+    RAISE EXCEPTION 'SYSTEM_CONTEXT_WORKER_ONLY' USING ERRCODE = '42501';
+  END IF;
+  IF EXISTS (SELECT 1 FROM crove_kernel.tenant t WHERE t.org_id = p_org_id AND t.status = 'offboarding') THEN
+    PERFORM pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtextextended('kernel.org.purge:' || p_org_id::text, 0));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM crove_kernel.tenant WHERE org_id = p_org_id AND status IN ('active', 'offboarding')) THEN
+    RAISE EXCEPTION 'TENANT_NOT_ACTIVE' USING ERRCODE = '42501';
+  END IF;
+  PERFORM crove_kernel.ctx_write(pg_catalog.jsonb_build_object(
+    'v', 1,
+    'org', p_org_id,
+    'actor', 'system',
+    'user', NULL,
+    'role', NULL,
+    'le_scope', pg_catalog.jsonb_build_array('*'),
+    'flags', '[]'::jsonb));
 END $$;
 
 -- ---------------------------------------------------------------------------

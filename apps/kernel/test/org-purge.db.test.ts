@@ -118,9 +118,28 @@ suite('org purge on PostgreSQL (#1024)', () => {
       ).rows[0]?.id;
       await c.query(`INSERT INTO crove_kernel.task_comment (org_id, task_id, body, author_type) VALUES ($1, $2, 'Đã xem', 'system')`, [org.orgId, pinned]);
       const free = (await c.query<{ id: string }>(`INSERT INTO crove_kernel.task (org_id, title, source, created_by_type) VALUES ($1, 'Free', 'human', 'system') RETURNING id`, [org.orgId])).rows[0]?.id;
-      return { stray, position, parent, pinned, free };
+      // A customer only a ledger line names (a sale on 131): no foreign key points at it.
+      const ledgerParty = (await c.query<{ id: string }>(`INSERT INTO crove_kernel.party (org_id, kind, name, email) VALUES ($1, 'organization', 'Khách nợ', $2) RETURNING id`, [org.orgId, `ledger-${tag}@purge.test`])).rows[0]?.id;
+      await c.query('BEGIN');
+      const entry = (
+        await c.query<{ id: string }>(
+          `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id) VALUES ($1, current_date, 'Bán hàng', 'test.sale', $2) RETURNING id`,
+          [org.orgId, randomUUID()],
+        )
+      ).rows[0]?.id;
+      await c.query(
+        `INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit, party_id) VALUES ($1, $2, 1, '131', 500000, 0, $3), ($1, $2, 2, '511', 0, 500000, NULL)`,
+        [org.orgId, entry, ledgerParty],
+      );
+      await c.query('COMMIT');
+      // A proposal nothing booked: deleted. The booked invoice's proposal is the approval trail and stays.
+      await c.query(
+        `INSERT INTO crove_kernel.proposal (org_id, kind, command, title, payload, status) VALUES ($1, 'finance.purchase', 'finance.purchase.record', 'Stray', '{}', 'rejected')`,
+        [org.orgId],
+      );
+      return { stray, position, parent, pinned, free, ledgerParty };
     });
-    return { org, owner, ownerEmail, member, booked, loose, partyEmail, ...ids };
+    return { org, owner, ownerEmail, member, booked, loose, partyEmail, proposalId, ...ids };
   }
 
   // Moves the org to offboarding as staff, with the owner's request and the export recorded at the given ages.
@@ -293,14 +312,17 @@ suite('org purge on PostgreSQL (#1024)', () => {
     expect(await one('SELECT id FROM crove_kernel.file WHERE org_id = $1', [s.org.orgId])).toEqual({ id: s.booked.fileId });
     expect(store.blobs.has(s.booked.storageKey)).toBe(true);
     expect(store.blobs.has(s.loose.storageKey)).toBe(false);
-    // The booked party stays, anonymized; the stray one is deleted.
-    expect(after['crove_kernel.party']).toBe(1);
-    expect(await one('SELECT name IS NOT NULL AS named, email, phone, address FROM crove_kernel.party WHERE org_id = $1', [s.org.orgId])).toEqual({
-      named: true,
-      email: null,
-      phone: null,
-      address: null,
-    });
+    // The booked party and the one only a ledger line names stay, anonymized; the stray one is deleted.
+    expect(after['crove_kernel.party']).toBe(2);
+    expect(
+      await admin(async (c) => (await c.query('SELECT name IS NOT NULL AS named, email, phone, address FROM crove_kernel.party WHERE org_id = $1', [s.org.orgId])).rows),
+    ).toEqual([
+      { named: true, email: null, phone: null, address: null },
+      { named: true, email: null, phone: null, address: null },
+    ]);
+    expect(await one('SELECT id FROM crove_kernel.party WHERE org_id = $1 AND id = $2', [s.org.orgId, s.ledgerParty])).toEqual({ id: s.ledgerParty });
+    // The booked invoice's proposal stays (the approval trail); the stray one is deleted.
+    expect(await admin(async (c) => (await c.query('SELECT id FROM crove_kernel.proposal WHERE org_id = $1', [s.org.orgId])).rows)).toEqual([{ id: s.proposalId }]);
     // The comment pins its task, the parent and the assignee position; the free task is gone.
     expect(await admin(async (c) => (await c.query('SELECT id FROM crove_kernel.task WHERE org_id = $1 ORDER BY id', [s.org.orgId])).rows.map((r) => r.id).sort())).toEqual(
       [s.parent, s.pinned].sort(),
@@ -318,6 +340,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
       'crove_kernel.external_call',
       'crove_kernel.file',
       'crove_kernel.party',
+      'crove_kernel.proposal',
       'crove_kernel.task',
       'crove_kernel.task_comment',
       'crove_kernel.position',
@@ -325,7 +348,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
     const leftovers = Object.entries(after).filter(([t, n]) => n > 0 && !keptTables.has(t) && !(t.startsWith('crove_finance.') && t !== 'crove_finance.vendor_account_rule'));
     expect(leftovers).toEqual([]);
     expect(before['crove_kernel.tenant_member']).toBe(2);
-    expect(before['crove_kernel.proposal']).toBe(1);
+    expect(before['crove_kernel.proposal']).toBe(2);
 
     // One audit row: by the system, with counts and the reason, and no personal data.
     const audits = await purgeAudits(s.org.orgId);
@@ -338,11 +361,12 @@ suite('org purge on PostgreSQL (#1024)', () => {
         minDays: 30,
         blobs: { deleted: 1, held: 0 },
         counts: {
-          deleted: expect.objectContaining({ 'crove_kernel.tenant_member': 2, 'crove_kernel.file': 1, 'crove_kernel.party': 1, 'crove_kernel.task': 1 }),
+          deleted: expect.objectContaining({ 'crove_kernel.tenant_member': 2, 'crove_kernel.file': 1, 'crove_kernel.party': 1, 'crove_kernel.task': 1, 'crove_kernel.proposal': 1 }),
           pinned: expect.objectContaining({ 'crove_kernel.task_comment': 1, 'crove_kernel.task': 2, 'crove_kernel.position': 1 }),
-          anonymized: { 'crove_kernel.party': 1 },
+          anonymized: { 'crove_kernel.party': 2 },
           keptFiles: 1,
-          keptParties: 1,
+          keptParties: 2,
+          keptProposals: 1,
         },
       },
     });
@@ -378,6 +402,57 @@ suite('org purge on PostgreSQL (#1024)', () => {
     expect(await run(s.org.slug)).toMatchObject({ code: 0 });
     expect(await status(s.org.orgId)).toBe('closed');
     expect(store.blobs.has(s.loose.storageKey)).toBe(false);
+  });
+
+  // The write fence (enter_context and enter_system_context hold the org's purge lock shared while it offboards): the
+  // purge waits for a transaction already in the org, holds back one that enters meanwhile, and that one then finds
+  // the org closed.
+  it('waits for transactions already in the org and refuses those that enter while it runs', async () => {
+    const s = await seed('Công ty Đang ghi');
+    await offboard(s.org.orgId);
+    const login = new URL(adminUrl);
+    login.username = 'crove_worker';
+    login.password = 'test-worker-pw';
+    const inFlight = new pg.Client({ connectionString: login.toString() });
+    const late = new pg.Client({ connectionString: login.toString() });
+    await inFlight.connect();
+    await late.connect();
+    try {
+      await inFlight.query('BEGIN');
+      await inFlight.query('SELECT crove_kernel.enter_system_context($1)', [s.org.orgId]);
+      let settled = false;
+      const purge = run(s.org.slug).finally(() => {
+        settled = true;
+      });
+      const purgeWaiting = async () => {
+        for (let i = 0; i < 100; i++) {
+          const waiting = await one<{ n: string }>(
+            `SELECT count(*) AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%org_purge(%'`,
+          );
+          if (Number(waiting.n) > 0) return true;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        return false;
+      };
+      expect(await purgeWaiting()).toBe(true);
+      // A transaction that enters now waits too.
+      await late.query('BEGIN');
+      const entered = late.query('SELECT crove_kernel.enter_system_context($1)', [s.org.orgId]).then(
+        () => 'entered',
+        (e: Error) => e.message,
+      );
+      await new Promise((r) => setTimeout(r, 300));
+      expect(settled).toBe(false);
+      expect(await status(s.org.orgId)).toBe('offboarding');
+      await inFlight.query('COMMIT');
+      expect(await purge).toMatchObject({ code: 0 });
+      expect(await entered).toBe('TENANT_NOT_ACTIVE');
+      await late.query('ROLLBACK');
+      expect(await status(s.org.orgId)).toBe('closed');
+    } finally {
+      await inFlight.end();
+      await late.end();
+    }
   });
 
   it('leaves a held blob in place and reports it', async () => {
