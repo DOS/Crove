@@ -112,10 +112,11 @@ suite('proposal expiry on PostgreSQL (#876)', () => {
   const row = (id: string) =>
     admin(async (c) => (await c.query<Record<string, unknown>>('SELECT * FROM crove_kernel.proposal WHERE id = $1', [id])).rows[0] as Record<string, unknown>);
 
+  type Counts = { mail: number; events: number; proposals: number; activity: number; audit: number };
   // What the org holds that the expiry must not touch, and what it must write.
   async function counts(orgId: string) {
     return admin(async (c) => {
-      const { rows } = await c.query<Record<string, number>>(
+      const { rows } = await c.query<Counts>(
         `SELECT (SELECT count(*)::int FROM crove_kernel.mail_message WHERE org_id = $1) AS mail,
                 (SELECT count(*)::int FROM crove_kernel.outbox_event WHERE org_id = $1) AS events,
                 (SELECT count(*)::int FROM crove_kernel.proposal WHERE org_id = $1) AS proposals,
@@ -123,7 +124,7 @@ suite('proposal expiry on PostgreSQL (#876)', () => {
                 (SELECT count(*)::int FROM crove_kernel.audit_event WHERE org_id = $1) AS audit`,
         [orgId],
       );
-      return rows[0] as Record<string, number>;
+      return rows[0] as Counts;
     });
   }
 
