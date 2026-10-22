@@ -325,8 +325,8 @@ test('shows the latest metrics of a published channel on the post and in the Met
 
   // A client report link of today (#643), opened without an account: the totals, the channel and the post.
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date());
-  await panel.getByLabel('Từ ngày').fill(today);
-  await panel.getByLabel('Đến ngày').fill(today);
+  await panel.getByLabel('Từ ngày', { exact: true }).fill(today);
+  await panel.getByLabel('Đến ngày', { exact: true }).fill(today);
   await panel.getByLabel('Tên báo cáo').fill('Báo cáo hôm nay');
   await panel.getByRole('button', { name: 'Tạo liên kết báo cáo' }).click();
   const link = await panel.getByLabel('Liên kết báo cáo').inputValue();

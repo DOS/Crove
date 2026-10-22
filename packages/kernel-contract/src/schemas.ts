@@ -1545,6 +1545,28 @@ export const zSocialPlanRow = z.object({
   assignee: z.string().nullable(),
 });
 
+// The team report (#1058): a row per member (name null and left true once they left the org), and the client review
+// links' answers. Times are in seconds.
+export const zSocialTeamMember = z.object({
+  userId: zId,
+  name: z.string().nullable(),
+  left: z.boolean(),
+  created: z.number().int(),
+  submitted: z.number().int(),
+  approved: z.number().int(),
+  published: z.number().int(),
+  assigned: z.number().int(),
+  overdue: z.number().int(),
+  decisions: z.number().int(),
+  decisionSeconds: z.number().nullable(),
+});
+export const zSocialTeamReport = z.object({
+  from: z.string(),
+  to: z.string(),
+  members: z.array(zSocialTeamMember),
+  client: z.object({ answers: z.number().int(), approved: z.number().int(), changesRequested: z.number().int(), medianSeconds: z.number().nullable() }),
+});
+
 // A window's totals of published posts (#397): variants out, the sum of each count, and the clicks on their short
 // links (null when none went out with one); and the same per channel, most posts first (#947).
 const zSocialTotals = z.object({ posts: z.number().int(), metrics: z.record(z.string(), z.number()), clicks: z.number().nullable() });
