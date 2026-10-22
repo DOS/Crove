@@ -3008,6 +3008,7 @@ export const en = {
       endNever: 'Never',
       endDate: 'On a date',
       endTimes: 'After a number of times',
+      endBoth: 'A date or a number of times, whichever first',
       untilLabel: 'End date',
       timesLabel: 'Number of times',
       save: 'Save repeat',

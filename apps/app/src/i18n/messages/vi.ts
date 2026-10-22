@@ -3007,6 +3007,7 @@ export const vi = {
       endNever: 'Không kết thúc',
       endDate: 'Vào một ngày',
       endTimes: 'Sau một số lần',
+      endBoth: 'Đến ngày hoặc đủ số lần',
       untilLabel: 'Ngày kết thúc',
       timesLabel: 'Số lần lặp',
       save: 'Lưu lịch lặp',

@@ -1985,7 +1985,8 @@ function EvergreenPanel({ post, onDone }: { post: Post; onDone: () => void }) {
 // Recurring posts (#979): weekdays in the Vietnamese week order, T2 to CN (0 = Sunday, as the rule stores them).
 const RECURRENCE_DAYS = [1, 2, 3, 4, 5, 6, 0] as const;
 const DAY_KEY = { 0: 'sun', 1: 'mon', 2: 'tue', 3: 'wed', 4: 'thu', 5: 'fri', 6: 'sat' } as const;
-type RecurrenceEnd = 'never' | 'date' | 'times';
+// 'both' ends at the date or after the count, whichever comes first (a rule may set both).
+type RecurrenceEnd = 'never' | 'date' | 'times' | 'both';
 
 // Where a new rule starts: the weekday and local time the post is planned or went out at, else Monday 09:00.
 function recurrenceStart(post: Post): { weekday: number; time: string } {
@@ -2005,20 +2006,22 @@ function RecurrencePanel({ post, published, onDone }: { post: Post; published: b
   const [everyWeeks, setEveryWeeks] = useState(rule?.everyWeeks ?? 1);
   const [weekdays, setWeekdays] = useState<number[]>(rule?.weekdays ?? [start.weekday]);
   const [time, setTime] = useState(rule?.time ?? start.time);
-  const [end, setEnd] = useState<RecurrenceEnd>(rule?.until ? 'date' : rule?.times ? 'times' : 'never');
+  const [end, setEnd] = useState<RecurrenceEnd>(rule?.until && rule.times ? 'both' : rule?.until ? 'date' : rule?.times ? 'times' : 'never');
+  const byDate = end === 'date' || end === 'both';
+  const byTimes = end === 'times' || end === 'both';
   const [until, setUntil] = useState(rule?.until ?? '');
   const [times, setTimes] = useState(String(rule?.times ?? 4));
   const count = Number(times);
   const valid =
     weekdays.length > 0 &&
     /^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(time) &&
-    (end !== 'date' || /^\d{4}-\d{2}-\d{2}$/.test(until)) &&
-    (end !== 'times' || (Number.isInteger(count) && count >= 1 && count <= SOCIAL_RECURRENCE_TIMES_MAX));
+    (!byDate || /^\d{4}-\d{2}-\d{2}$/.test(until)) &&
+    (!byTimes || (Number.isInteger(count) && count >= 1 && count <= SOCIAL_RECURRENCE_TIMES_MAX));
   const save = useMutation({
     mutationFn: () =>
       client.social.posts.setRecurrence({
         postId: post.id,
-        recurrence: { everyWeeks, weekdays, time, until: end === 'date' ? until : null, times: end === 'times' ? count : null },
+        recurrence: { everyWeeks, weekdays, time, until: byDate ? until : null, times: byTimes ? count : null },
       }),
     onSuccess: onDone,
   });
@@ -2066,13 +2069,14 @@ function RecurrencePanel({ post, published, onDone }: { post: Post; published: b
           {t('recurrence.end')}
         </Label>
         <div className="flex flex-wrap items-center gap-2">
-          <NativeSelect id={`${id}-end`} size="sm" className="w-48" value={end} disabled={busy} onChange={(e) => setEnd(e.target.value as RecurrenceEnd)}>
+          <NativeSelect id={`${id}-end`} size="sm" className="w-56" value={end} disabled={busy} onChange={(e) => setEnd(e.target.value as RecurrenceEnd)}>
             <NativeSelectOption value="never">{t('recurrence.endNever')}</NativeSelectOption>
             <NativeSelectOption value="date">{t('recurrence.endDate')}</NativeSelectOption>
             <NativeSelectOption value="times">{t('recurrence.endTimes')}</NativeSelectOption>
+            <NativeSelectOption value="both">{t('recurrence.endBoth')}</NativeSelectOption>
           </NativeSelect>
-          {end === 'date' && <Input type="date" aria-label={t('recurrence.untilLabel')} className="w-40" value={until} disabled={busy} onChange={(e) => setUntil(e.target.value)} />}
-          {end === 'times' && (
+          {byDate && <Input type="date" aria-label={t('recurrence.untilLabel')} className="w-40" value={until} disabled={busy} onChange={(e) => setUntil(e.target.value)} />}
+          {byTimes && (
             <Input type="number" aria-label={t('recurrence.timesLabel')} min={1} max={SOCIAL_RECURRENCE_TIMES_MAX} className="w-24" value={times} disabled={busy} onChange={(e) => setTimes(e.target.value)} />
           )}
         </div>

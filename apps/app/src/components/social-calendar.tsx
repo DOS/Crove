@@ -9,6 +9,7 @@ import { occasionsBetween, type Occasion } from '@crove/mod-social/contract';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
+import { RepeatIcon } from '@crove/ui/components/repeat-icon';
 import { cn } from '@crove/ui/lib/utils';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -48,9 +49,7 @@ function Chip({ item, slug, name, draggable }: { item: CalendarItem; slug: strin
       <span className="font-mono tabular-nums">{f.time(item.at.toISOString())}</span>{' '}
       {recurring && (
         <>
-          <span aria-hidden="true" className="text-primary">
-            ↻
-          </span>
+          <RepeatIcon className="text-primary" />
           <span className="sr-only">{t('calendar.recurring')}</span>{' '}
         </>
       )}
