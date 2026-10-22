@@ -59,6 +59,7 @@ export const KERNEL_ERROR_CODES = [
   'MAIL_COMPLAINT_LIFT',
   // Proposals and extraction.
   'PROPOSAL_DECIDED',
+  'PROPOSAL_EXPIRED',
   'STALE_REVISION',
   'NOT_EDITABLE',
   'NOT_ELIGIBLE',

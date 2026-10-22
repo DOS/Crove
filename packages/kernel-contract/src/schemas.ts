@@ -362,8 +362,9 @@ export const zSessionRevoke = z
   });
 
 // 'approved' is not committed today: kernel.proposal.approve moves a proposal through it and ends 'executed' in the
-// same transaction (plan §8.3 states; P13 will keep approved proposals for system execution).
-export const zProposalStatus = z.enum(['pending', 'approved', 'executed', 'rejected', 'failed']);
+// same transaction (plan §8.3 states; P13 will keep approved proposals for system execution). 'expired' (#876) is
+// terminal: the proposal waited past its org's expiry and nobody may decide it any more.
+export const zProposalStatus = z.enum(['pending', 'approved', 'executed', 'rejected', 'failed', 'expired']);
 
 export const zExtractionStatus = z.enum(['pending', 'done', 'failed']);
 
