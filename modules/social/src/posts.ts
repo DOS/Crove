@@ -64,7 +64,7 @@ import { clientReviewCommands } from './client-review.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, variantPost, type PostRow, type QueueState, type VariantRow, type Trx } from './variants.ts';
 import { queueOrderCommands } from './queue-order.ts';
 import { versionQueries, withVersion } from './versions.ts';
-import { bannedChecker, bannedCheckerOf, bannedForView, bannedWordsOf, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords, type BannedWordsStatus } from './banned-words.ts';
+import { bannedChecker, bannedCheckerOf, bannedCommandBudget, bannedForView, bannedWordsOf, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords, type BannedWordsStatus } from './banned-words.ts';
 import type { BannedFieldMatch } from './domain/banned-words.ts';
 import { teamReportQueries } from './team-report.ts';
 
@@ -317,8 +317,9 @@ export const postImport = defineCommand({
     requireUser(ctx);
     const created: { postId: string; submitted: number }[] = [];
     // A channel whose text holds a blocked word (#1055) stays a draft, like one that breaks its channel's rules.
-    // A check over its budget counts as blocked; each row gets its own budget.
-    const words = input.submit ? await bannedWordsOf(ctx.trx, ctx.orgId) : null;
+    // One checker and one budget for the whole import, so the rows do not multiply it; past it a row's channels stay
+    // drafts.
+    const banned = input.submit ? bannedChecker(await bannedWordsOf(ctx.trx, ctx.orgId), bannedCommandBudget()) : null;
     for (const row of input.posts) {
       const { post, variants } = await createPost(ctx, {
         body: row.body,
@@ -329,8 +330,7 @@ export const postImport = defineCommand({
         channels: row.connectionIds.map((connectionId) => ({ connectionId })),
       });
       let submitted = 0;
-      if (words) {
-        const banned = bannedChecker(words);
+      if (banned) {
         const ready = (await lockVariants(ctx.trx, ctx.orgId, post.id)).filter(
           (v) => variants.some((c) => c.variantId === v.id) && issuesOf(base(post), v).length === 0 && !isBlocked(banned, base(post), v),
         );

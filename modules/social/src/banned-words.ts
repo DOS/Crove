@@ -9,8 +9,9 @@
 // lowered approval count, the client's yes, the client step turned off) leaves such a channel in review; RSS feeds only
 // make drafts, which are submitted like any post. A 'warn' word never refuses: social.post.get lists it for the writer
 // and the reviewer. A channel already scheduled, queued, retried or resumed is not checked again before it goes out.
-// Every check has a budget (BANNED_OPS_MAX): past it a command refuses (BANNED_WORDS_TOO_COMPLEX), a copy or an
-// automatic approval holds the channel back, and a view says too_complex.
+// Every check has a budget (BANNED_OPS_MAX; a command over many posts shares one BANNED_COMMAND_OPS_MAX across them):
+// past it a command refuses (BANNED_WORDS_TOO_COMPLEX), an import row or a copy stays a draft, an automatic approval
+// leaves the channel in review, and a view says too_complex.
 // Matching is the pure domain/banned-words.ts, the same in the app. Crove ships no list of its own.
 import { sql } from 'kysely';
 import { z } from 'zod';
@@ -23,6 +24,7 @@ import {
   BANNED_REASON_MAX,
   BANNED_WORD_CHANNELS_MAX,
   BANNED_WORD_LEVELS,
+  BANNED_COMMAND_OPS_MAX,
   BANNED_WORDS_MAX,
   BannedWordsTooComplex,
   bannedBudget,
@@ -146,15 +148,18 @@ export type BannedCheck = (post: PostContent, v: Pick<VariantRow, 'channel_conne
 
 /**
  * The org's words and the matches in a variant's effective content of the words for its channel. One budget covers
- * every check made with it (one command or one view); past it a check throws BannedWordsTooComplex. Channels with the
- * same words share one compiled matcher, and a text (the post's shared body, say) is cut into units once and scanned
- * once per word set, however many variants show it.
+ * every check made with it: make one checker per command or view, and share it across the command's rows or posts;
+ * past the budget a check throws BannedWordsTooComplex. Channels with the same words share one compiled matcher, and
+ * a text (the post's shared body, say) is cut into units once and scanned once per word set, however many variants
+ * show it.
  */
 export function bannedChecker(words: readonly BannedWord[], budget: BannedBudget = bannedBudget()): BannedCheck {
   const keyOf = new Map<string, string>();
   const matchers = new Map<string, BannedMatcher>();
+  // Prepared texts are kept for a second word set up to PREPARED_KEPT units in all; matches by word set, then text.
   const prepared = new Map<string, BannedText>();
-  const found = new Map<string, BannedMatch[]>();
+  let kept = 0;
+  const found = new Map<string, Map<string, BannedMatch[]>>();
   return (post, v) => {
     if (words.length === 0) return [];
     let key = keyOf.get(v.channel_connection_id);
@@ -165,34 +170,41 @@ export function bannedChecker(words: readonly BannedWord[], budget: BannedBudget
       if (!matchers.has(key)) matchers.set(key, compileBannedWords(mine));
     }
     const matcher = matchers.get(key) as BannedMatcher;
+    let byText = found.get(key);
+    if (!byText) {
+      byText = new Map();
+      found.set(key, byText);
+    }
+    const memo = byText;
     const content = effectiveContent(post, overrides(v), v.content_frozen);
     return variantTexts(content, settingsOf(v)).flatMap(({ field, text }) => {
-      const memo = `${key}\u0000${text}`;
-      let list = found.get(memo);
+      let list = memo.get(text);
       if (!list) {
         let t = prepared.get(text);
         if (!t) {
           // Cutting a text into units is linear in it; it counts against the budget like the scan.
-          spendText(budget, text.length);
-          t = prepareBannedText(text);
-          prepared.set(text, t);
+          t = prepareBannedText(text, budget);
+          if (kept + t.units.length <= PREPARED_KEPT) {
+            prepared.set(text, t);
+            kept += t.units.length;
+          }
         }
         list = findBannedWords(t, matcher, budget);
-        found.set(memo, list);
+        memo.set(text, list);
       }
+      // At most one match per word and text, so this copy is bounded by the list.
       return list.map((m) => ({ ...m, field }));
     });
   };
 }
 
-function spendText(budget: BannedBudget, n: number): void {
-  budget.left -= n;
-  if (budget.left < 0) throw new BannedWordsTooComplex();
-}
-
+const PREPARED_KEPT = 200_000;
 export async function bannedCheckerOf(trx: Trx, orgId: string): Promise<BannedCheck> {
   return bannedChecker(await bannedWordsOf(trx, orgId));
 }
+
+/** The one budget a command that checks many posts shares across all of them (BANNED_COMMAND_OPS_MAX). */
+export const bannedCommandBudget = (): BannedBudget => bannedBudget(BANNED_COMMAND_OPS_MAX);
 
 /** Matches as a variant view lists them: one per word and field (the first place), at most BANNED_VIEW_MAX. */
 export function bannedSummary(matches: readonly BannedFieldMatch[]): BannedFieldMatch[] {

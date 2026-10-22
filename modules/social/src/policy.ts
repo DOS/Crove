@@ -8,7 +8,7 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
 import { approvalsInRound } from './domain/approval.ts';
 import { approvedValues, base, lockPost, lockVariants, refreshPostStatus, regateValues, setVariant, type Trx, type VariantRow } from './variants.ts';
-import { bannedChecker, bannedWordsOf, isBlocked } from './banned-words.ts';
+import { bannedChecker, bannedCommandBudget, bannedWordsOf, isBlocked } from './banned-words.ts';
 import { agentTaskOf } from './agent.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -137,11 +137,10 @@ export const policySet = defineCommand({
     const resubmitted: { postId: string; variantIds: string[] }[] = [];
     const backOnSchedule: { postId: string; variantIds: string[] }[] = [];
     // A lowered count approves nothing that holds a blocked word (#1055): it stays in review.
-    const words = touched.length > 0 ? await bannedWordsOf(ctx.trx, ctx.orgId) : [];
+    // One checker and one budget for the whole command, shared by every post; past it the rest stay in review.
+    const banned = bannedChecker(touched.length > 0 ? await bannedWordsOf(ctx.trx, ctx.orgId) : [], bannedCommandBudget());
     for (const { post_id } of touched) {
       const post = await lockPost(ctx.trx, ctx.orgId, post_id);
-      // A budget per post, so a channel with many posts is not held back by their sum.
-      const banned = bannedChecker(words);
       const variants = (await lockVariants(ctx.trx, ctx.orgId, post_id)).filter((v) => v.channel_connection_id === input.connectionId && GATED.includes(v.status));
       const decisions = await decisionsOf(
         ctx.trx,
@@ -344,11 +343,10 @@ export const clientApprovalSet = defineCommand({
         .execute();
       const required = (await approvalsRequired(ctx.trx, ctx.orgId, [input.connectionId])).get(input.connectionId) ?? 1;
       // Nothing that holds a blocked word (#1055) is approved this way: it stays in review.
-      const words = touched.length > 0 ? await bannedWordsOf(ctx.trx, ctx.orgId) : [];
+      // One checker and one budget for the whole command, shared by every post; past it the rest stay in review.
+      const banned = bannedChecker(touched.length > 0 ? await bannedWordsOf(ctx.trx, ctx.orgId) : [], bannedCommandBudget());
       for (const { post_id } of touched) {
         const post = await lockPost(ctx.trx, ctx.orgId, post_id);
-        // A budget per post, so a channel with many posts is not held back by their sum.
-        const banned = bannedChecker(words);
         const variants = (await lockVariants(ctx.trx, ctx.orgId, post_id)).filter((v) => v.channel_connection_id === input.connectionId && v.status === 'in_review');
         const decisions = await decisionsOf(ctx.trx, ctx.orgId, variants.map((v) => v.id));
         const up: string[] = [];

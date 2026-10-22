@@ -32,10 +32,17 @@ export const BANNED_REASON_MAX = 200;
 export const BANNED_WORDS_MAX = 500;
 // The most channels one word may be limited to.
 export const BANNED_WORD_CHANNELS_MAX = 50;
-// The steps one check (one command, one view, one composer field) may take: a text unit costs about one step and its
-// preparation one more, so a few texts of a post at their longest fit against a full list, and the worst case stops
-// within tens of milliseconds.
-export const BANNED_OPS_MAX = 4_000_000;
+// The steps one check (one view, one composer field, one command on one post) may take. A scan step costs about 12 ns
+// and cutting a UTF-16 unit of text into units about 16 times that, so the worst case stops within about 30 ms: a
+// post's text at its longest (100,000 characters, 1,600,000 steps to prepare) still fits with its scan.
+export const BANNED_OPS_MAX = 2_000_000;
+// A command that checks many posts (an import, a policy change over a channel's posts, the client step turned off)
+// shares one budget of this many steps across all of them, so the rows or posts do not multiply it. Past it, the rest
+// fail closed: an import row stays a draft, a post stays in review.
+export const BANNED_COMMAND_OPS_MAX = 2 * BANNED_OPS_MAX;
+// What cutting one UTF-16 unit of text costs, and what reporting a match (once per word and text) costs, in steps.
+export const PREPARE_STEPS = 16;
+export const MATCH_STEPS = 20;
 
 export interface BannedWord {
   id: string;
@@ -135,7 +142,9 @@ export interface BannedText {
   readonly wordBefore: Uint8Array;
 }
 
-export function prepareBannedText(text: string): BannedText {
+/** Cuts a text into units; with a budget, the work is charged to it first (PREPARE_STEPS per UTF-16 unit). */
+export function prepareBannedText(text: string, budget?: BannedBudget): BannedText {
+  if (budget) spend(budget, text.length * PREPARE_STEPS);
   const list = units(text);
   const n = list.length;
   const solid = new Int32Array(n + 1);
@@ -220,7 +229,7 @@ const isMatcher = (x: readonly BannedWord[] | BannedMatcher): x is BannedMatcher
 
 // Walks the trie from text unit i, recording the text unit each phrase unit matched (-1 for a space), and checks the
 // marks of every phrase that ends on the way.
-function walk(t: BannedText, i: number, root: TrieNode, budget: BannedBudget, path: number[], out: BannedMatch[]): void {
+function walk(t: BannedText, i: number, root: TrieNode, budget: BannedBudget, path: number[], out: BannedMatch[], seen: Set<Compiled>): void {
   const list = t.units;
   const n = list.length;
   let at = root;
@@ -228,6 +237,9 @@ function walk(t: BannedText, i: number, root: TrieNode, budget: BannedBudget, pa
   path.length = 0;
   for (;;) {
     for (const c of at.ends) {
+      // A word is reported once per text, at its first place: what every caller needs, and bounded by the list.
+      spend(budget, 1);
+      if (seen.has(c)) continue;
       spend(budget, c.units.length);
       let ok = true;
       for (const [k, p] of c.units.entries()) {
@@ -241,7 +253,8 @@ function walk(t: BannedText, i: number, root: TrieNode, budget: BannedBudget, pa
       const next = list[t.solid[j] as number];
       if (!ok || (c.wordEnd && next !== undefined && next.word)) continue;
       const { id, phrase, level, reason } = c.word;
-      spend(budget, 1);
+      spend(budget, MATCH_STEPS);
+      seen.add(c);
       out.push({ wordId: id, phrase, level, reason, start: (list[i] as Unit).start, end: (list[path[path.length - 1] as number] as Unit).end });
     }
     if (j > i) j = t.solid[j] as number;
@@ -263,17 +276,24 @@ function walk(t: BannedText, i: number, root: TrieNode, budget: BannedBudget, pa
   }
 }
 
-/** Every match of the words in the text, by position (a longer match first where two start together). Throws BannedWordsTooComplex past the budget. */
+/**
+ * The first place of each word in the text, by position (a longer match first where two start together): a word found
+ * once is not looked for again, so the answer holds at most one match per word. Throws BannedWordsTooComplex past the
+ * budget.
+ */
 export function findBannedWords(text: string | BannedText, words: readonly BannedWord[] | BannedMatcher, budget: BannedBudget = bannedBudget()): BannedMatch[] {
   const matcher = isMatcher(words) ? words : compileBannedWords(words);
   if (matcher.size === 0) return [];
-  const t = typeof text === 'string' ? prepareBannedText(text) : text;
+  const t = typeof text === 'string' ? prepareBannedText(text, budget) : text;
   const matches: BannedMatch[] = [];
   const path: number[] = [];
+  const seen = new Set<Compiled>();
   for (const [i, unit] of t.units.entries()) {
+    // Every word found: nothing is left to look for.
+    if (seen.size === matcher.size) break;
     if (unit.format || unit.space) continue;
-    if (matcher.otherStart.next.size > 0) walk(t, i, matcher.otherStart, budget, path, matches);
-    if (!t.wordBefore[i] && matcher.wordStart.next.size > 0) walk(t, i, matcher.wordStart, budget, path, matches);
+    if (matcher.otherStart.next.size > 0) walk(t, i, matcher.otherStart, budget, path, matches, seen);
+    if (!t.wordBefore[i] && matcher.wordStart.next.size > 0) walk(t, i, matcher.wordStart, budget, path, matches, seen);
   }
   return matches.sort((a, b) => a.start - b.start || b.end - a.end);
 }

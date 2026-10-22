@@ -257,15 +257,16 @@ suite('social banned words on PostgreSQL (#1055)', () => {
   it('a check too large for its budget refuses the command and leaves the view unchecked', async () => {
     const o = await org();
     const conn = await connection(o);
-    // 500 words of 50 letters with the same letters and one mark each, against a text of those letters: at each place
-    // every word matches by its letters and must have its marks checked, far past the budget.
-    const marks = ['á', 'à', 'ả', 'ã', 'ạ', 'â', 'ấ', 'ầ', 'ẩ', 'ẫ'];
+    // 500 words of 50 letters "à à ... à", each with one letter marked otherwise at its own place, against a text of
+    // "à": at each place every word matches by its letters and must have its marks checked, and none matches, far past
+    // the budget.
+    const marks = ['á', 'ả', 'ã', 'ạ', 'â', 'ấ', 'ầ', 'ẩ', 'ẫ', 'ậ'];
     for (let i = 0; i < 500; i += 1) {
-      const letters = Array.from({ length: 50 }, () => 'a');
+      const letters = Array.from({ length: 50 }, () => 'à');
       letters[i % 50] = marks[Math.floor(i / 50)] as string;
       await add(o, letters.join(' '), 'warn');
     }
-    const postId = await post(o, 'a '.repeat(500), [conn]);
+    const postId = await post(o, 'à '.repeat(500), [conn]);
     const view = await get(o, postId);
     expect(view.variants[0]).toMatchObject({ bannedWords: [], bannedWordsStatus: 'too_complex' });
     await expect(submit(o, postId)).rejects.toMatchObject({ code: 'BANNED_WORDS_TOO_COMPLEX', status: 422 });
