@@ -1219,6 +1219,11 @@ export interface SocialPostTable {
   repost_of: string | null;
   assignee_user_id: string | null;
   due_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  recurrence: ColumnType<unknown, string | null | undefined, string | null>;
+  recurrence_count: Generated<number>;
+  recurrence_last_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  recurrence_next_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  recurrence_source_id: string | null;
 }
 
 /** crove_social.post_variant */

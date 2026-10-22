@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { ChatAlertSender } from './chat-alerts.ts';
@@ -738,6 +738,24 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const evergreenTimer = deps.runtime.installed('social') ? setInterval(() => void evergreenSweep(), EVERGREEN_SWEEP_MS) : null;
   void evergreenSweep();
 
+  // Recurring posts (#979): every hour, the next copy of each series that is due, planned for its occurrence and sent
+  // to review. The log names counts only; a failing post is logged by id and code in sweepRecurring.
+  let recurring = false;
+  const recurringSweep = async () => {
+    if (recurring || !deps.runtime.installed('social')) return;
+    recurring = true;
+    try {
+      const made = await sweepRecurring({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (made > 0) console.log(`[social-recurring] made ${made}`);
+    } catch (error) {
+      console.error('[social-recurring] sweep', error instanceof Error ? error.name : 'error');
+    } finally {
+      recurring = false;
+    }
+  };
+  const recurringTimer = deps.runtime.installed('social') ? setInterval(() => void recurringSweep(), RECURRING_SWEEP_MS) : null;
+  void recurringSweep();
+
   // Review reminders (#703): every 15 minutes, the posts whose review has waited a day or whose time is close.
   let reminding = false;
   const reminderSweep = async () => {
@@ -1198,6 +1216,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (removeTimer) clearInterval(removeTimer);
     if (mailTimer) clearInterval(mailTimer);
     if (evergreenTimer) clearInterval(evergreenTimer);
+    if (recurringTimer) clearInterval(recurringTimer);
     if (reminderTimer) clearInterval(reminderTimer);
     if (missingInvoiceTimer) clearInterval(missingInvoiceTimer);
     clearInterval(proposalNudgeTimer);

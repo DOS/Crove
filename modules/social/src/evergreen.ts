@@ -19,8 +19,17 @@ const ACTOR: SystemActor = { type: 'system', component: 'social.evergreen' };
 // A repost in one of these is no longer on its way; any other status holds the next evergreen repost back.
 const REPOST_DONE = ['published', 'partially_published', 'failed', 'cancelled'] as const;
 
+// What a copy made by the repost path carries besides its content: whether it goes to review at once, the time it is
+// planned for (a recurring copy's occurrence, #979), and the series it belongs to.
+export interface RepostOptions {
+  submit: boolean;
+  scheduledAt?: Date;
+  recurrenceSourceId?: string;
+}
+
 // gone: every channel it went out on is disconnected for good; waiting: some are only expired or failing for now.
-async function repost(ctx: CommandContext, sourceId: string, submit: boolean): Promise<{ postId: string; submitted: number } | 'gone' | 'waiting'> {
+// Locks the source, then its variants.
+export async function repostCopy(ctx: CommandContext, sourceId: string, options: RepostOptions): Promise<{ postId: string; submitted: number } | 'gone' | 'waiting'> {
   const source = await lockPost(ctx.trx, ctx.orgId, sourceId);
   const variants = await lockVariants(ctx.trx, ctx.orgId, source.id);
   // The channels it went out on that are still connected.
@@ -39,7 +48,7 @@ async function repost(ctx: CommandContext, sourceId: string, submit: boolean): P
   const liveIds = new Set(live.filter((c) => c.status === 'active').map((c) => c.id));
   const targets = published.filter((v) => liveIds.has(v.channel_connection_id));
   if (targets.length === 0) return live.some((c) => c.status !== 'revoked') ? 'waiting' : 'gone';
-  return copyPost(ctx, source, targets, { repostOf: source.id, submit });
+  return copyPost(ctx, source, targets, { ...options, repostOf: source.id });
 }
 
 const withoutRemoveAt = (settings: Record<string, unknown>): Record<string, unknown> => {
@@ -50,7 +59,7 @@ const withoutRemoveAt = (settings: Record<string, unknown>): Record<string, unkn
 // A new post with the content of `source`'s channels `targets` (#393, #575). A repost's base is what the channels
 // went out with; a duplicate's is the source's own base. Either way a channel whose content or images differ from the
 // copy's base keeps them as its own, with its settings.
-async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRow[], options: { repostOf: string | null; submit: boolean }): Promise<{ postId: string; submitted: number }> {
+async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRow[], options: RepostOptions & { repostOf: string | null }): Promise<{ postId: string; submitted: number }> {
   const { submit } = options;
   const meta = await ctx.trx.selectFrom('crove_social.post').select(['tainted', 'author_user_id', 'origin']).where('org_id', '=', ctx.orgId).where('id', '=', source.id).executeTakeFirstOrThrow();
   const author = ctx.actor.type === 'user' ? ctx.actor.userId : meta.author_user_id;
@@ -86,6 +95,9 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
       actor_origin: ctx.actor.type === 'user' ? 'ui' : 'system',
       author_user_id: author,
       repost_of: options.repostOf,
+      // The copy's planned time, which a person schedules its channels at once they approve them.
+      scheduled_at: options.scheduledAt ?? null,
+      recurrence_source_id: options.recurrenceSourceId ?? null,
     })
     .returning(POST_COLUMNS)
     .executeTakeFirstOrThrow();
@@ -154,7 +166,7 @@ export const postRepost = defineCommand({
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
-    const done = await repost(ctx, input.postId, false);
+    const done = await repostCopy(ctx, input.postId, { submit: false });
     if (typeof done === 'string') throw new DomainError('NOTHING_TO_REPOST', 409, 'Các kênh của bài này không còn kết nối');
     return { postId: done.postId };
   },
@@ -192,7 +204,7 @@ export const postRepostEvergreen = defineCommand({
       )
       .executeTakeFirst();
     if (!still) return { postId: null };
-    const done = await repost(ctx, input.postId, true);
+    const done = await repostCopy(ctx, input.postId, { submit: true });
     // A channel that is only expired may be reconnected: try again on a later sweep.
     if (done === 'waiting') return { postId: null };
     // No channel left for good: the post stops being evergreen rather than being tried every hour.
@@ -214,6 +226,11 @@ export const postSetEvergreen = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     await lockPost(ctx.trx, ctx.orgId, input.postId);
+    // One kind of repeat per post (#979): a series' copies would hold its evergreen reposts back, and the other way round.
+    if (input.days !== null) {
+      const series = await ctx.trx.selectFrom('crove_social.post').select('recurrence').where('org_id', '=', ctx.orgId).where('id', '=', input.postId).executeTakeFirstOrThrow();
+      if (series.recurrence !== null) throw new DomainError('RECURRENCE_WITH_EVERGREEN', 409, 'Bài này đang lặp lại theo lịch; hãy tắt lặp lại trước khi bật tự đăng lại');
+    }
     await ctx.trx.updateTable('crove_social.post').set({ evergreen_days: input.days, updated_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', input.postId).execute();
     ctx.audit({ post_id: input.postId, evergreen_days: input.days });
     return { postId: input.postId, evergreenDays: input.days };
