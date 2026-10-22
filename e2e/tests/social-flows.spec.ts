@@ -509,3 +509,87 @@ test('turns an idea on the board into a draft, which moves it to Drafted (#701)'
   await page.getByRole('link', { name: 'Món mới mùa thu' }).click();
   await expect(page.getByRole('region', { name: 'Đã có bài nháp' }).getByRole('link', { name: 'Mở bài nháp' })).toBeVisible();
 });
+
+test('moves a draft to review on the board and approves it with four-eyes; an illegal drop sends nothing (#1022)', async ({ page, browser }) => {
+  await signUp(page, newEmail('social-board'));
+  const slug = await createOrg(page, 'Công ty Bảng Bài');
+  await connectSandbox(page, 'Trang Bảng Bài');
+  // Four-eyes on the channel (#740): the author approves nothing of their own post there.
+  const fourEyes = () => page.getByRole('checkbox', { name: /Người viết bài không tự duyệt bài của mình/ });
+  await fourEyes().click();
+  await expect(fourEyes()).toBeChecked();
+  await page.reload();
+  await expect(fourEyes()).toBeChecked();
+
+  await compose(page, 'Bài chuyển trên bảng');
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  const postId = postIdOf(page);
+  const statuses = () => sql<{ status: string }>(`SELECT status FROM crove_social.post_variant WHERE post_id = :'post'`, { post: postId }).map((r) => r.status);
+  const approvals = () => sql<{ n: number }>(`SELECT count(*)::int AS n FROM crove_social.post_approval WHERE post_id = :'post'`, { post: postId })[0]?.n;
+
+  // The board's moves that reach the server, so a refused drop can be shown to send nothing.
+  const moves: string[] = [];
+  page.on('request', (r) => {
+    if (/\/api\/rpc\/social\/(posts\/submit|variants\/(decide|schedule|unschedule))/.test(r.url())) moves.push(r.url());
+  });
+  await page.getByRole('link', { name: 'Quay lại' }).click();
+  await page.getByRole('tab', { name: 'Bảng' }).click();
+  await expect(page).toHaveURL(/tab=board/);
+  const column = (name: string) => page.getByRole('region', { name, exact: true });
+  const card = page.getByTestId('board-card').filter({ hasText: 'Bài chuyển trên bảng' });
+  await expect(column('Nháp').getByTestId('board-card')).toHaveCount(1);
+
+  // Dragged from Drafts to In review: sent for review.
+  await card.dragTo(column('Chờ duyệt'));
+  await expect(page.getByText('Đã gửi duyệt bài.')).toBeVisible();
+  await expect(column('Chờ duyệt').getByTestId('board-card')).toHaveCount(1);
+  expect(statuses()).toEqual(['in_review']);
+  expect(moves).toHaveLength(1);
+
+  // Dropped on Published: refused with the reason, nothing sent, nothing changed.
+  await card.dragTo(column('Đã đăng'));
+  await expect(page.getByText('Crove tự đăng bài vào giờ đã hẹn, không chuyển tay sang Đã đăng được.')).toBeVisible();
+  await expect(column('Chờ duyệt').getByTestId('board-card')).toHaveCount(1);
+  expect(moves).toHaveLength(1);
+  expect(statuses()).toEqual(['in_review']);
+  expect(approvals()).toBe(0);
+
+  // The author moves it on by keyboard, to Approved: the server refuses under four-eyes and the card stays.
+  await card.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(page.getByText('Kênh này cần người khác duyệt bài của bạn')).toBeVisible();
+  expect(moves).toHaveLength(2);
+  await expect(column('Chờ duyệt').getByTestId('board-card')).toHaveCount(1);
+  expect(statuses()).toEqual(['in_review']);
+  expect(approvals()).toBe(0);
+
+  // A second person, made an admin of the org, approves it from the same board.
+  const reviewer = newEmail('social-board-reviewer');
+  const reviewerContext = await browser.newContext({ baseURL: new URL(page.url()).origin, locale: 'vi-VN', timezoneId: TIME_ZONE });
+  const reviewerPage = await reviewerContext.newPage();
+  await signUp(reviewerPage, reviewer);
+  await expect
+    .poll(() => sql<{ id: string }>(`SELECT id FROM crove_kernel.user_account WHERE lower(email) = lower(:'email')`, { email: reviewer }).length)
+    .toBe(1);
+  exec(
+    `INSERT INTO crove_kernel.tenant_member (org_id, user_id, role)
+     SELECT t.org_id, u.id, 'admin' FROM crove_kernel.tenant t, crove_kernel.user_account u
+      WHERE t.slug = :'slug' AND lower(u.email) = lower(:'email')`,
+    { slug, email: reviewer },
+  );
+  await reviewerPage.goto(`/o/${slug}/social?tab=board`);
+  const reviewerColumn = (name: string) => reviewerPage.getByRole('region', { name, exact: true });
+  const reviewerCard = reviewerPage.getByTestId('board-card').filter({ hasText: 'Bài chuyển trên bảng' });
+  await expect(reviewerColumn('Chờ duyệt').getByTestId('board-card')).toHaveCount(1);
+  await reviewerCard.dragTo(reviewerColumn('Đã duyệt'));
+  await expect(reviewerPage.getByText('Đã duyệt bài.')).toBeVisible();
+  await expect(reviewerColumn('Đã duyệt').getByTestId('board-card')).toHaveCount(1);
+  expect(statuses()).toEqual(['approved']);
+  const decided = sql<{ email: string; decision: string }>(
+    `SELECT u.email, a.decision FROM crove_social.post_approval a JOIN crove_kernel.user_account u ON u.id = a.decided_by WHERE a.post_id = :'post'`,
+    { post: postId },
+  );
+  expect(decided).toEqual([{ email: reviewer.toLowerCase(), decision: 'approved' }]);
+  await reviewerContext.close();
+});
