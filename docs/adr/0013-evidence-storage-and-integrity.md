@@ -4,7 +4,7 @@
 - Date: 2026-10-16
 - Deciders: owner (JOY), through issue #109
 - Builds on: plan §7.6 (file upload), §4.11 (surfaces: presigned URLs with S3, streaming with local disk), red-team S25 ("evidence swapped after approval"), External-tenant gate T7 (the S3 adapter, #110, #133)
-- Tracking: issue #109; plan "External-tenant gate" row T7
+- Tracking: issue #109; plan "External-tenant gate" row T7. Amended 2026-10-22 by issue #1009 (section 6, retention holds), on the owner's decision there
 
 ## Context and problem statement
 
@@ -65,8 +65,8 @@ Not a hard production refusal: a production deployment on R2 is legitimate, and 
 Operator requirements for an evidence bucket (S3 terms; GCS and others have equivalents):
 
 - Versioning enabled before the first write.
-- A retention hold on `org/` objects (S3 Object Lock in governance or compliance mode, or a GCS retention policy) for the legal retention period of plan §7.9. Crove does not set it per object today; the bucket default applies.
-- IAM: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`, `s3:DeleteObject` on objects, `s3:ListBucket` on the bucket.
+- Object Lock enabled on the bucket, so that Crove can hold the original file of every posted invoice for the legal retention period of plan §7.9 (section 6). Without it the worker reports that files wait for their hold and posting goes on; a GCS retention policy or an R2 bucket lock rule on `org/` is the substitute on stores without per-object retention.
+- IAM: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`, `s3:DeleteObject`, `s3:GetObjectRetention`, `s3:PutObjectRetention` on objects, `s3:ListBucket` and `s3:GetBucketObjectLockConfiguration` on the bucket. Never `s3:BypassGovernanceRetention`.
 - A lifecycle rule that expires `staging/` objects, their noncurrent versions and delete markers after one day. Without one, the worker's daily retention job deletes `staging/` objects older than an hour (issue #223, section 4); on a versioned bucket those deletes leave noncurrent versions behind, which only the lifecycle rule removes, because Crove holds no `s3:DeleteObjectVersion`.
 - With presigned transfers, a CORS rule allowing `POST` and `GET` from `PUBLIC_URL`.
 
@@ -114,6 +114,19 @@ Cloudflare R2 does not accept POST policy uploads, so with presigned transfers o
 
 The SPA adds the bucket's origin to `connect-src` in its Content-Security-Policy only when presigned transfers are on. On a public `PUBLIC_URL` that origin must be `https`: the kernel refuses to start when the endpoint browsers reach (`S3_PUBLIC_ENDPOINT`, else `S3_ENDPOINT`) is plain `http` and presigned transfers are on (issue #223), because the files would cross the network unencrypted and the CSP would allow an `http` origin.
 
+### 6. Retention holds on evidence files (issue #1009)
+
+Owner decision (2026-10-22, issue #1009): a file that backs a posted journal entry or a filed return is held for 10 years in GOVERNANCE mode, from the posting; other files keep the bucket default; offboarding and personal-data erasure skip held files and say so. The accountant (#61) is asked which files need 10 years and whether the period starts at the posting or at the end of the fiscal year, so the period is a setting.
+
+- **Which files:** the original file of every invoice posted to the journal (`crove_finance.purchase_document.source_file_id` of a document whose journal entry exists; purchases and sales). That is the only link from a stored file to the books today: cash, bank and general journal vouchers have no file, and Crove stores no filed return file yet (the VAT declaration XML is built on demand; the year's 01/GTGT is held as part of the year archive package under `archive/`, issue #922). A future link joins `crove_kernel.evidence_hold_due`.
+- **How long:** `EVIDENCE_LOCK_DAYS` (default 3650; 0 turns holds off) from the posting time (the journal entry's `created_at`), rounded up to the whole second because S3 keeps whole seconds. A file posted more than once is held from its latest posting. A longer setting lengthens existing holds on the next run; a shorter one never shortens a hold.
+- **How:** `PutObjectRetention` in GOVERNANCE mode on the exact version the row records (`VersionId` of its `s3:` generation), after `GetObjectRetention` showed a shorter retention or none. A longer retention, or a COMPLIANCE one, is kept (a COMPLIANCE hold is lengthened in COMPLIANCE: S3 refuses a change of mode on a locked version, and it is the stronger mode). A row without a pinned version holds the current version only after its bytes match the recorded sha256, so a swapped object is never the one kept. Only `org/` keys are held. The credentials never hold `s3:BypassGovernanceRetention`, so Crove can lengthen a hold and never shorten or lift one; lifting one (a court order, a mistake) is an operator step with that permission (`docs/runbooks/evidence-holds.md`).
+- **Outside the transaction:** posting writes nothing for the hold. A worker job every 5 minutes reads the files whose hold is missing or too short (`crove_kernel.evidence_hold_due`, a definer the worker alone may call, across orgs that are not closed), checks once per run that the bucket has Object Lock, sets each hold and records the outcome with the system command `kernel.file.hold.record` on four columns of the file row: `held_until` (the retention the store confirmed), `hold_attempted_at`, `hold_attempts` and `hold_error`. `file_guard` lets those columns change only in a system context and refuses clearing or shortening `held_until`; the file reference itself still never changes.
+- **Failures never reach the posting:** a refused hold (the version is gone, the bytes of an unpinned row changed, a permission is missing) is recorded in `hold_error` as a code (`BLOB_NOT_FOUND`, `BLOB_INTEGRITY`, `STORE_ERROR:<name>`; members of the org can read file rows, so the store's message goes to the worker log only) with an `ALERT` log and retried after 5 minutes, then 10, 20 and so on, at least daily; the posting has already committed. A bucket without Object Lock records nothing per file (each file would fail the same way, and an audit row per file per day would only be noise): the job logs one `ALERT` a day while files wait, and holds them on the first run after Object Lock is on. Local disk has no per-object retention: the store has no `holds`, and the worker says so once at start. GCS interoperability has no Object Lock API and counts as a bucket without it.
+- **Offboarding and erasure:** the deletion map keeps every posted file until `held_until` (and a posted file not yet held as well), and the export carries `held_until`; the erasure result lists the original files of posted invoices that name the person's party under "kept", with the date their hold runs to. Neither deletes a stored file.
+
+Why columns on the file row, not a table of holds: a hold is a property of the stored object, one per file, and its state is what offboarding and erasure read; the posting stays untouched, and the files that need a hold are derived from the books, so files posted before this change are held by the first run without a backfill. A queue table filled by a trigger on `journal_entry` would add a write to every posting and a second source of truth. Why GOVERNANCE: the owner's decision (an operator can still correct a mistake or obey a court order); the year archive package uses `ARCHIVE_LOCK_MODE` and may be COMPLIANCE.
+
 ## Considered options
 
 - **Rely on create-only writes alone.** Rejected: it stops Crove from overwriting, not anyone else with bucket access, and reads still took the current object.
@@ -131,7 +144,8 @@ The SPA adds the bucket's origin to `connect-src` in its Content-Security-Policy
 - Two new dependencies in `@crove/kernel-runtime`: `@aws-sdk/s3-presigned-post` and `@aws-sdk/s3-request-presigner`, the same release as `@aws-sdk/client-s3`.
 - With presigned transfers the kernel no longer carries download bodies; uploads are still read back once by the API to hash them (bounded at 25 MB).
 - Done in issue #223: a per-process cap on concurrent completions, a per-user rate on grants, a daily sweep of `staging/` objects for stores without lifecycle rules, pruning of old `file_upload` rows, the R2 and plain-`http` endpoint refusals at startup.
-- Not done, follow-ups: setting a per-object retention or legal hold from Crove (S3 Object Lock legal hold, GCS event-based hold; bucket defaults apply today); running the presigned and generation paths against GCS and R2 (T7 lists them as not yet run).
+- Done in issue #1009: per-object retention holds on the original files of posted invoices (section 6).
+- Not done, follow-ups: holds on GCS (event-based hold) and R2 (bucket lock rules only); running the presigned and generation paths against GCS and R2 (T7 lists them as not yet run).
 
 ## Tests
 
@@ -141,6 +155,8 @@ The SPA adds the bucket's origin to `connect-src` in its Content-Security-Policy
 - Invariant suite (`apps/kernel/test/invariant/file-upload.db.test.ts`): the triple required and checked, file rows immutable for every role, grant columns set by the database, single use under concurrency, expiry, creator-only claims, no delete; plus the generated RLS matrix row factory for `crove_kernel.file_upload`.
 - Local disk (`apps/kernel/test/storage.test.ts`): `content:` generations, a file replaced on disk is refused.
 - Issue #223: the completion cap (`apps/kernel/test/concurrency.test.ts`; through the HTTP API in `upload.db.test.ts`, a busy completion answers 503 with `Retry-After` and its grant stays usable), the per-minute grant rate per user (`upload.db.test.ts`), the staging sweep (mocked client in `s3-store.test.ts`, MinIO in `s3-store.integration.test.ts`, the job in `apps/kernel/test/staging-sweep.test.ts`), the grant purge (`apps/kernel/test/retention.db.test.ts`), the R2 and `http` endpoint refusals (`apps/kernel/test/storage.test.ts`) and the app's retry (`apps/app/test/errors.test.ts`).
+
+- Issue #1009 (section 6): the store's holds with a mocked client (`packages/kernel-runtime/test/s3-store.test.ts`: GOVERNANCE on the recorded version, a longer or COMPLIANCE retention kept, the current version of an unpinned row only when its sha256 matches, a missing version, org/ keys only, Object Lock detection and GCS), against MinIO with an Object Lock bucket (`s3-store.integration.test.ts`: the retention set, never shortened, lengthened, a held version refused deletion, a plain delete still leaving the recorded version readable), the job on PostgreSQL through a real posting (`apps/kernel/test/evidence-hold.db.test.ts`: posted files held from the posting and unposted files never, a refusal recorded and retried after the backoff with the posting untouched, nothing recorded without Object Lock or on local disk, a longer period lengthening and a shorter one never shortening), the erasure result (`apps/kernel/test/personal-data.db.test.ts`) and the guard in the invariant suite (`apps/kernel/test/invariant/file-upload.db.test.ts`: only the system records a hold, never cleared or shortened).
 
 ## References
 

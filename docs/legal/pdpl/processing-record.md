@@ -76,7 +76,7 @@ Daily job `kernel-retention-purge`, 02:30 Asia/Ho_Chi_Minh (`apps/kernel/src/ret
 
 ### 3.2 Kept on purpose, with no automatic deletion
 
-- The books (every `crove_finance` table), the files behind recorded entries, and `audit_event`: at least 10 years after the org leaves (`docs/runbooks/org-offboarding.md`, Accounting Law 88/2015 Art. 41).
+- The books (every `crove_finance` table), the files behind recorded entries, and `audit_event`: at least 10 years after the org leaves (`docs/runbooks/org-offboarding.md`, Accounting Law 88/2015 Art. 41). On S3 with Object Lock, the original file of every posted invoice is also held in the bucket for `EVIDENCE_LOCK_DAYS` (default 10 years) from its posting, in GOVERNANCE mode; erasure and offboarding leave held files in place and say so (#1009, `docs/runbooks/evidence-holds.md`).
 - The WORM archive of the books and the audit log: `ARCHIVE_RETENTION_DAYS`, default 3650 days, under S3 Object Lock (`docs/runbooks/worm-archive.md`).
 - Sessions (`auth_session`), inbound addresses and context keys.
 
@@ -150,4 +150,4 @@ These are stated here and in the questions for the lawyer ([README.md](README.md
 - Final deletion after offboarding is run by hand.
 - No crypto-shredding yet: data inside append-only records stays as long as the records do (ADR-0017).
 - Document content goes to the AI endpoint without redaction.
-- No retention hold is set per evidence file; bucket defaults apply (#1009).
+- Retention holds on evidence files need an S3 bucket with Object Lock; on local disk, or a bucket without it, posted files are not held (#1009). Which files and from when awaits the accountant's confirmation; today the default is 10 years from the posting.

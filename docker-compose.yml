@@ -197,6 +197,8 @@ services:
       EXPORT_RETENTION_DAYS: ${EXPORT_RETENTION_DAYS:-35}
       EXPORT_ENCRYPTION_KEY: ${EXPORT_ENCRYPTION_KEY:-}
       EXPORT_ENCRYPTION_KEY_PREVIOUS: ${EXPORT_ENCRYPTION_KEY_PREVIOUS:-}
+      # Days after an org's newest export before the operator's org-purge may close it (issue #1024, 30 at least).
+      ORG_PURGE_MIN_DAYS: ${ORG_PURGE_MIN_DAYS:-30}
       # Files stay on the `files` volume unless STORAGE=s3 (see .env.example).
       STORAGE: ${STORAGE:-local}
       S3_ENDPOINT: ${S3_ENDPOINT:-}
@@ -213,6 +215,8 @@ services:
       ARCHIVE_RETENTION_DAYS: ${ARCHIVE_RETENTION_DAYS:-3650}
       ARCHIVE_LAG_SECONDS: ${ARCHIVE_LAG_SECONDS:-600}
       S3_VERSIONING: ${S3_VERSIONING:-required}
+      # Retention holds on posted invoice files with STORAGE=s3 (#1009, docs/runbooks/evidence-holds.md); 0: none.
+      EVIDENCE_LOCK_DAYS: ${EVIDENCE_LOCK_DAYS:-3650}
       S3_PRESIGNED_URLS: ${S3_PRESIGNED_URLS:-true}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
       UPLOAD_COMPLETE_CONCURRENCY: ${UPLOAD_COMPLETE_CONCURRENCY:-4}

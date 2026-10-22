@@ -36,6 +36,22 @@ export interface BlobStore {
   // #212); keys outside the prefix's pattern (temporary files, foreign objects) are never returned. Absent on a store
   // that cannot list.
   list?(prefix: ListPrefix, after: string | null, limit: number): Promise<BlobListing>;
+  // Per-object retention holds on evidence files (issue #1009). Absent on a store without per-object retention (local
+  // disk); the worker then sets no holds and says so at start.
+  holds?: EvidenceHolds | undefined;
+}
+
+// Retention holds on the object versions that back posted journal entries (issue #1009, ADR-0013). Set by the worker
+// after the posting committed, never inside a command's transaction.
+export interface EvidenceHolds {
+  // Whether the store can hold objects at all (S3: Object Lock enabled on the bucket). Asked once per run, so a bucket
+  // without Object Lock is reported once rather than file by file.
+  available(): Promise<boolean>;
+  // Holds the version the reference records until at least retainUntil, in GOVERNANCE mode, and returns the
+  // retention that version has afterwards. A longer retention, or a COMPLIANCE one, is kept as it is: a hold is
+  // never shortened or weakened. A reference without a pinned version holds the current version once its bytes match
+  // the recorded sha256 (BlobIntegrityError otherwise). Only org/ keys; a missing version raises BlobNotFoundError.
+  hold(ref: BlobRef, retainUntil: Date): Promise<Date>;
 }
 
 // The prefixes the retention job sweeps: raw inbound mail and org exports. Never org/ (evidence) or staging/ (its own
