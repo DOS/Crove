@@ -231,6 +231,19 @@ export interface PinInput {
   callKey: string;
 }
 
+// Adding the account's own published video to one of its playlists (#1018, YouTube). It answers like a comment: the
+// playlist item's id when accepted.
+export interface PlaylistInput {
+  externalAccountId: string;
+  secret: string;
+  // The published video's id, as publish returned it.
+  externalId: string;
+  // The channel's own playlist the video goes into.
+  playlistId: string;
+  // The external_call key of this insert.
+  callKey: string;
+}
+
 export type CommentResult =
   | { kind: 'accepted'; externalId: string }
   | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string }
@@ -278,6 +291,8 @@ export interface Publisher {
   repost?(input: RepostInput): Promise<CommentResult>;
   // Providers that pin a published post (#982). Never retried by itself, like a comment.
   pin?(input: PinInput): Promise<CommentResult>;
+  // Providers that add a published video to playlists (#1018), one call a playlist. Never retried by itself, like a comment.
+  playlist?(input: PlaylistInput): Promise<CommentResult>;
   // Providers that take a published post down (#860), when a person asks.
   remove?(input: RemoveInput): Promise<RemoveResult>;
 }

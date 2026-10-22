@@ -10,10 +10,11 @@
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
 import { withCallSignal, type Publisher, type PublishResult, type ReconcileResult } from '@crove/channel';
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { COVER_RULES, THREAD_PARTS_MAX, VIDEO_READY, coverKind, coverOf, isProvider, scopeNeeded, type Provider } from './domain/channels.ts';
+import { COVER_RULES, THREAD_PARTS_MAX, VIDEO_READY, YOUTUBE_PLAYLISTS_MAX, coverKind, coverOf, isProvider, scopeNeeded, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 import type { CommentWork } from './comments.ts';
 import type { PinWork } from './pin.ts';
+import type { PlaylistWork } from './playlists.ts';
 import type { RemoveRecord, RemoveWork } from './remove.ts';
 import type { ThreadWork } from './thread.ts';import { shortened, shortUrl } from './short-links.ts';
 
@@ -232,6 +233,8 @@ export async function runPublishJob(deps: PublishDeps, orgId: string, variantId:
     await runThreadJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-thread] variant ${variantId.slice(0, 8)}`, (error as Error).message));
     // And its pin (#982), after the rest so it pins the post itself. A refused pin never touches the post either.
     await runPinJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-pin] variant ${variantId.slice(0, 8)}`, (error as Error).message));
+    // And its playlists (#1018). A refused insert never touches the post either.
+    await runPlaylistJob(deps, orgId, variantId, provider).catch((error: unknown) => console.error(`[social-playlist] variant ${variantId.slice(0, 8)}`, (error as Error).message));
   }
   return { action: begun.action, status: recorded.status ?? recorded.reason ?? 'not_recorded' };
 }
@@ -278,6 +281,36 @@ export async function runPinJob(deps: PublishDeps, orgId: string, variantId: str
   }
   const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.pin.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
   return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
+}
+
+/** The playlists of a published variant (#1018): for each, begin, one call, record, once per publish. */
+export async function runPlaylistJob(deps: PublishDeps, orgId: string, variantId: string, provider: string): Promise<{ action: string; reason?: string; states?: string[] }> {
+  const publisher = deps.publishers[provider];
+  if (!publisher?.playlist) return { action: 'none', reason: 'provider_not_configured' };
+  const states: string[] = [];
+  let credential: Awaited<ReturnType<typeof openCredential>> | null = null;
+  // One begin per playlist at most; begin says when none is left.
+  for (let i = 0; i < YOUTUBE_PLAYLISTS_MAX; i += 1) {
+    const begun = await deps.runtime.execute<PlaylistWork>('social.playlist.begin', { variantId, provider }, { actor: ACTOR, orgId });
+    if (begun.action === 'none') return states.length === 0 ? { action: 'none', reason: begun.reason } : { action: 'call', states };
+    credential ??= await openCredential(deps, orgId, begun.connectionId);
+    let result: Awaited<ReturnType<NonNullable<Publisher['playlist']>>> | { kind: 'blocked'; code: string };
+    if ('blocked' in credential) result = { kind: 'blocked', code: credential.blocked };
+    else {
+      const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+      const open = credential;
+      try {
+        const r = await withTimeout(timeout, () => publisher.playlist!({ ...open, externalId: begun.externalId, playlistId: begun.playlistId, callKey: begun.callKey }));
+        // What the record takes: an adapter's long code or message is cut, so the answer is always recorded.
+        result = r.kind === 'accepted' ? { kind: 'accepted', externalId: r.externalId.slice(0, 500) } : { ...r, ...(r.code !== undefined ? { code: r.code.slice(0, 200) } : {}), ...(r.message !== undefined ? { message: r.message.slice(0, 2000) } : {}) };
+      } catch (error) {
+        result = { kind: 'unknown', code: error instanceof Timeout ? 'TIMEOUT' : 'ADAPTER_ERROR' };
+      }
+    }
+    const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.playlist.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
+    states.push(recorded.state ?? 'not_recorded');
+  }
+  return { action: 'call', states };
 }
 
 /** The removal of a published variant a person asked for (#860): begin, one call, record. after: the last remove call the ask saw. */

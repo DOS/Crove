@@ -803,6 +803,46 @@ export function youtubeTagsOf(settings: Readonly<Record<string, unknown>> | unde
   return value.length > 0 ? (value as string[]) : null;
 }
 
+// YouTube playlists (#1018), in `settings.youtube`: { playlistIds: [...] }, the channel's own playlists the video goes
+// into once it is out, each as its own step after the post (playlists.ts), so a refused insert leaves the video
+// published. At most YOUTUBE_PLAYLISTS_MAX. Not stored when empty, so a variant saved before keeps its content hash.
+export const YOUTUBE_PLAYLISTS_MAX = 5;
+// A playlist a channel made itself (YOUTUBE_PLAYLIST_ID in @crove/channel, which sends it): PL and 16 or 32 more characters.
+export const YOUTUBE_PLAYLIST_ID = /^PL[A-Za-z0-9_-]{16,32}$/;
+
+// The playlist ids in a variant's settings: null when there are none, 'invalid' when settings.youtube is not an object
+// holding only playlistIds, a list of distinct playlist ids. More than the maximum is returned as is, for validation to
+// count.
+export function youtubePlaylistsOf(settings: Readonly<Record<string, unknown>> | undefined): string[] | 'invalid' | null {
+  const raw = settings?.youtube;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== 'playlistIds')) return 'invalid';
+  const ids = r.playlistIds;
+  if (ids === undefined) return null;
+  if (!Array.isArray(ids) || ids.length > 50 || !ids.every((id) => typeof id === 'string' && YOUTUBE_PLAYLIST_ID.test(id))) return 'invalid';
+  if (new Set(ids).size !== ids.length) return 'invalid';
+  return ids.length > 0 ? (ids as string[]) : null;
+}
+
+// The playlist id in what a person pastes: the id itself, or a YouTube link that names it (youtube.com/playlist?list=,
+// a watch link with &list=, youtu.be or m.youtube.com). null when it names no playlist a channel made.
+export function youtubePlaylistIdFrom(text: string): string | null {
+  const t = text.trim();
+  if (YOUTUBE_PLAYLIST_ID.test(t)) return t;
+  let url: URL;
+  try {
+    url = new URL(/^https?:\/\//i.test(t) ? t : `https://${t}`);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase().replace(/^(www|m|music)\./, '');
+  if (host !== 'youtube.com' && host !== 'youtu.be') return null;
+  const list = url.searchParams.get('list');
+  return list && YOUTUBE_PLAYLIST_ID.test(list) ? list : null;
+}
+
 // Instagram people (#796): up to 3 collaborators (`settings.collaborators`, on feed posts and Reels; each must accept
 // the invitation in Instagram) and up to 20 people tagged on the first image (`settings.userTags`, image posts only).
 // Usernames as Instagram writes them, without the @. The adapter reads the same shapes.

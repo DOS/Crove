@@ -8,7 +8,11 @@
 // An unclear answer is checked by listing the channel's latest uploads (one quota unit), matched by title and time.
 // Metrics: views, likes and comments from videos.list (one quota unit each).
 // First comment (#791): commentThreads.insert on the video, with the force-ssl scope (50 quota units).
-import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+// Playlists (#1018): once the video is out, playlistItems.insert puts it into each of the channel's playlists the
+// variant names (settings.youtube.playlistIds, at most 5), one call each (50 quota units), with the force-ssl scope too.
+// A refused insert (a playlist deleted since) never touches the video. playlists() lists the channel's own playlists
+// (playlists.list mine=true, one quota unit) for the composer.
+import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, PlaylistInput, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
 import { coverImageType, videoCoverOf } from './cover.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
@@ -22,6 +26,11 @@ export const YOUTUBE_COMMENT_SCOPE = 'https://www.googleapis.com/auth/youtube.fo
 const API = 'https://www.googleapis.com/youtube/v3';
 const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+// A playlist a channel made itself: PL and 16 or 32 more characters. modules/social checks the same shape
+// (YOUTUBE_PLAYLIST_ID) when a variant is saved.
+export const YOUTUBE_PLAYLIST_ID = /^PL[A-Za-z0-9_-]{16,32}$/;
+// Playlists one lookup reads: one page, as playlists.list pages them.
+const PLAYLISTS_PAGE = 50;
 const PRIVACY = ['public', 'unlisted', 'private'] as const;
 // YouTube's own limits on a video's metadata.
 const TITLE_MAX = 100;
@@ -350,6 +359,54 @@ export class YouTubePublisher implements Publisher {
       }
       if (error instanceof YouTubeError && error.reason === 'commentsDisabled') return { kind: 'rejected', error: 'bad_request', code: 'COMMENTS_DISABLED', message: error.message };
       return commentResult(publishResult(error));
+    }
+  }
+
+  // Puts the channel's own published video into one of its playlists. Like a comment, a grant without the force-ssl
+  // scope is told apart (RECONNECT_FOR_PLAYLISTS), and a playlist that is gone (deleted since the post was written)
+  // answers 404 playlistNotFound: PLAYLIST_NOT_FOUND, for the post page to say so. Nothing here touches the video.
+  async playlist(input: PlaylistInput): Promise<CommentResult> {
+    const s = youtubeSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!VIDEO_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    if (!YOUTUBE_PLAYLIST_ID.test(input.playlistId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_PLAYLIST_ID' };
+    const item = { snippet: { playlistId: input.playlistId, resourceId: { kind: 'youtube#video', videoId: input.externalId } } };
+    try {
+      const answer = await this.client.call<{ id?: unknown }>('POST', `${API}/playlistItems?part=snippet`, s.accessToken, { json: item });
+      const id = answer.body?.id;
+      if (typeof id !== 'string' || !id || id.length > 200) return { kind: 'unknown', code: 'NO_PLAYLIST_ITEM_ID' };
+      return { kind: 'accepted', externalId: id };
+    } catch (error) {
+      if (error instanceof YouTubeError && error.status === 403 && (error.reason === 'insufficientPermissions' || error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT')) {
+        return { kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_PLAYLISTS', message: error.message };
+      }
+      if (error instanceof YouTubeError && error.status === 404 && error.reason === 'playlistNotFound') return { kind: 'rejected', error: 'bad_request', code: 'PLAYLIST_NOT_FOUND', message: error.message };
+      // Another channel's playlist, or one the channel may not add to.
+      if (error instanceof YouTubeError && error.status === 403 && (error.reason === 'playlistItemsNotAccessible' || error.reason === 'forbidden')) {
+        return { kind: 'rejected', error: 'permission', code: 'PLAYLIST_NOT_ALLOWED', message: error.message };
+      }
+      return commentResult(publishResult(error));
+    }
+  }
+
+  // The channel's own playlists, the first page of 50 (playlists.list mine=true, one quota unit), for the composer's
+  // picker; it only reads. null: Google did not answer (try again later).
+  async playlists(input: { secret: string }): Promise<{ playlists: { id: string; title: string }[] } | { refused: 'token_expired' | 'permission' } | null> {
+    const s = youtubeSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    try {
+      const answer = await this.client.call<{ items?: { id?: unknown; snippet?: { title?: unknown } }[] }>('GET', `${API}/playlists?part=snippet&mine=true&maxResults=${PLAYLISTS_PAGE}`, s.accessToken);
+      const playlists: { id: string; title: string }[] = [];
+      for (const item of answer.body?.items ?? []) {
+        if (typeof item.id !== 'string' || !YOUTUBE_PLAYLIST_ID.test(item.id)) continue;
+        const title = typeof item.snippet?.title === 'string' && item.snippet.title.trim() ? item.snippet.title.trim() : item.id;
+        playlists.push({ id: item.id, title: clipCodepoints(title, 150) });
+      }
+      return { playlists };
+    } catch (error) {
+      if (error instanceof YouTubeError && error.status === 401) return { refused: 'token_expired' };
+      if (error instanceof YouTubeError && error.status === 403) return { refused: 'permission' };
+      return null;
     }
   }
 

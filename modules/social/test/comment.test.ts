@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { COMMENT_STALE_MS, commentStatus, type CommentCall } from '../src/comments.ts';
 import { pinStatus, wantsPin } from '../src/pin.ts';
+import { playlistIndexOf, playlistStatus, playlistsOf } from '../src/playlists.ts';
 import { threadStatus } from '../src/thread.ts';
 import { autoReplyOf, repostRuleOf, type Provider } from '../src/domain/channels.ts';
 import { validateVariant } from '../src/domain/validate.ts';
@@ -138,5 +139,31 @@ describe('first comments (#587)', () => {
     expect(wantsPin({ provider: 'telegram', settings: { telegram: { silent: true } } })).toBe(false);
     expect(wantsPin({ provider: 'telegram', settings: { telegram: { pin: 'yes' } } })).toBe(false);
     expect(wantsPin({ provider: 'mastodon', settings: { telegram: { pin: true } } })).toBe(false);
+  });
+
+  it('shows how many playlists took a YouTube video, and a deleted playlist as its own warning (#1018)', () => {
+    const now = new Date('2026-10-20T10:00:00Z');
+    const ago = (ms: number) => new Date(now.getTime() - ms);
+    const call = (n: number, state: CommentCall['state'], startedMs: number, error_code: string | null = null): CommentCall => ({ key: `social.publish:v:1:1:playlist_${n}`, state, external_ref: null, error_code, started_at: ago(startedMs) });
+    const old = COMMENT_STALE_MS + 1;
+    expect(playlistStatus(2, [], now, ago(60_000))).toEqual({ state: 'pending', added: 0, total: 2 });
+    expect(playlistStatus(2, [], now, ago(old))).toEqual({ state: 'failed', added: 0, total: 2 });
+    expect(playlistStatus(2, [call(1, 'succeeded', 60_000)], now, ago(60_000))).toEqual({ state: 'pending', added: 1, total: 2 });
+    expect(playlistStatus(2, [call(1, 'succeeded', 60_000), call(2, 'succeeded', 50_000)], now, ago(old))).toEqual({ state: 'added', added: 2, total: 2 });
+    expect(playlistStatus(2, [call(1, 'succeeded', 60_000), call(2, 'failed', 50_000, 'PLAYLIST_NOT_FOUND')], now, ago(old))).toEqual({ state: 'missing', added: 1, total: 2 });
+    expect(playlistStatus(1, [call(1, 'failed', 50_000, 'RECONNECT_FOR_PLAYLISTS')], now, ago(old))).toEqual({ state: 'reconnect', added: 0, total: 1 });
+    expect(playlistStatus(2, [call(1, 'failed', 60_000, 'HTTP_400'), call(2, 'ambiguous', 50_000)], now, ago(old))).toEqual({ state: 'failed', added: 0, total: 2 });
+    expect(playlistStatus(1, [call(1, 'ambiguous', 50_000)], now, ago(old))).toEqual({ state: 'unknown', added: 0, total: 1 });
+    expect(playlistStatus(1, [call(1, 'started', old)], now, ago(old))).toEqual({ state: 'unknown', added: 0, total: 1 });
+    // Another step's key is not an insert.
+    expect(playlistIndexOf('social.publish:v:1:1:pin')).toBeNull();
+    expect(playlistIndexOf('social.publish:v:1:1:playlist_3')).toBe(3);
+    // Only a YouTube variant that names playlists, never more than five.
+    const SALE = 'PLabcdefghijklmnopqrstuvwxyz012345';
+    expect(playlistsOf({ provider: 'youtube', settings: { youtube: { playlistIds: [SALE] } } })).toEqual([SALE]);
+    expect(playlistsOf({ provider: 'youtube', settings: { youtube: { playlistIds: Array.from({ length: 6 }, (_, i) => `PL${String(i).repeat(16)}`) } } })).toHaveLength(5);
+    expect(playlistsOf({ provider: 'youtube', settings: {} })).toBeNull();
+    expect(playlistsOf({ provider: 'youtube', settings: { youtube: { playlistIds: ['bad'] } } })).toBeNull();
+    expect(playlistsOf({ provider: 'tiktok', settings: { youtube: { playlistIds: [SALE] } } })).toBeNull();
   });
 });
