@@ -6,7 +6,8 @@
 // in their zone, without a marker for that week) and runs social.digest.send for each in the org's system context.
 // The command works the zone and the ISO week out again from its own clock, in its transaction, with the same rule as
 // the scan (the org-wide goal's zone, else a report schedule's, else Asia/Ho_Chi_Minh; only a zone PostgreSQL knows),
-// checks it is past Monday 08:00, and claims the week with INSERT ... ON CONFLICT (org_id, iso_week) DO NOTHING: only
+// checks it is past Monday 08:00 and that the database's clock is in the same ISO week (so a skew between the two
+// clocks can never send last week after this one, or claim next week early: it only delays), and claims the week with INSERT ... ON CONFLICT (org_id, iso_week) DO NOTHING: only
 // the command whose row went in queues the mails, so two sweeps at once send one digest. One mail per recipient
 // through the kernel's queued mail (the suppression list, the mail log), source social.digest.week and source_id the
 // marker's id.
@@ -63,9 +64,10 @@ interface DigestWeek {
   lastMonday: string;
 }
 
-// The org's digest zone and week at `now`, by the scan's rule.
+// The org's digest zone and week at the command's clock, by the scan's rule. Due only past Monday 08:00 local and when
+// the database's now(), the scan's clock, falls in the same ISO week of that zone.
 async function weekOf(ctx: CommandContext): Promise<DigestWeek> {
-  const { rows } = await sql<{ zone: string; iso_week: string; due: boolean; last_start: Date; this_start: Date; next_start: Date; this_monday: string; last_monday: string }>`
+  const { rows } = await sql<{ zone: string; iso_week: string; db_week: string; due: boolean; last_start: Date; this_start: Date; next_start: Date; this_monday: string; last_monday: string }>`
     WITH zones AS MATERIALIZED (SELECT z.name FROM pg_catalog.pg_timezone_names z),
     picked AS (
       SELECT coalesce(
@@ -76,6 +78,7 @@ async function weekOf(ctx: CommandContext): Promise<DigestWeek> {
     here AS (SELECT p.zone, pg_catalog.timezone(p.zone, ${ctx.now}::timestamptz) AS local_at FROM picked p)
     SELECT h.zone,
            pg_catalog.to_char(h.local_at, 'IYYY-"W"IW') AS iso_week,
+           pg_catalog.to_char(pg_catalog.timezone(h.zone, pg_catalog.now()), 'IYYY-"W"IW') AS db_week,
            h.local_at >= pg_catalog.date_trunc('week', h.local_at) + interval '8 hours' AS due,
            pg_catalog.timezone(h.zone, pg_catalog.date_trunc('week', h.local_at) - interval '7 days') AS last_start,
            pg_catalog.timezone(h.zone, pg_catalog.date_trunc('week', h.local_at)) AS this_start,
@@ -88,7 +91,7 @@ async function weekOf(ctx: CommandContext): Promise<DigestWeek> {
   if (!row) throw new Error('digest week not resolved');
   const monday = Date.UTC(Number(row.this_monday.slice(0, 4)), Number(row.this_monday.slice(5, 7)) - 1, Number(row.this_monday.slice(8, 10)));
   const days = Array.from({ length: 7 }, (_, i) => new Date(monday + i * 86_400_000).toISOString().slice(0, 10));
-  return { zone: row.zone, isoWeek: row.iso_week, due: row.due, lastStart: row.last_start, thisStart: row.this_start, nextStart: row.next_start, days, lastMonday: row.last_monday };
+  return { zone: row.zone, isoWeek: row.iso_week, due: row.due && row.iso_week === row.db_week, lastStart: row.last_start, thisStart: row.this_start, nextStart: row.next_start, days, lastMonday: row.last_monday };
 }
 
 // What happened last week and what is planned this week, on every channel of the org.

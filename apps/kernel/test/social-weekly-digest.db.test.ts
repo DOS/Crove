@@ -338,10 +338,10 @@ suite('social weekly digest on PostgreSQL (#1104)', () => {
   it('sends nothing before Monday 08:00 local, and the scan follows each zone', async () => {
     const o = await org();
     await inReview(o, await connection(o, 'Trang'), 'Chờ duyệt', o.member);
-    // A Monday three weeks ago, a minute before and after 08:00 in the org's zone.
+    // This week's Monday (the database's week), a minute before and after 08:00 in the org's zone.
     const [at] = await one<{ before: Date; after: Date; iso_week: string }>(
       `SELECT timezone($1, m + interval '7 hours 59 minutes') AS before, timezone($1, m + interval '8 hours 1 minute') AS after, to_char(m, 'IYYY-"W"IW') AS iso_week
-       FROM (SELECT date_trunc('week', timezone($1, now())) - interval '21 days' AS m) w`,
+       FROM (SELECT date_trunc('week', timezone($1, now())) AS m) w`,
       [ZONE],
     );
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -376,6 +376,33 @@ suite('social weekly digest on PostgreSQL (#1104)', () => {
       checked += 1;
     }
     expect(checked).toBeGreaterThan(20);
+  });
+
+  it("claims no week while the command's clock and the database's are in different ISO weeks", async () => {
+    const o = await org();
+    await inReview(o, await connection(o, 'Trang'), 'Chờ duyệt', o.member);
+    // Monday 10:00 local three weeks back and one week ahead: past 08:00 by the command's clock, but not the database's
+    // week, so a skewed clock neither sends an old week nor claims the next one early.
+    const [at] = await one<{ past: Date; ahead: Date; past_week: string; ahead_week: string }>(
+      `SELECT timezone($1, m - interval '21 days' + interval '10 hours') AS past, timezone($1, m + interval '7 days' + interval '10 hours') AS ahead,
+              to_char(m - interval '21 days', 'IYYY-"W"IW') AS past_week, to_char(m + interval '7 days', 'IYYY-"W"IW') AS ahead_week
+       FROM (SELECT date_trunc('week', timezone($1, now())) AS m) w`,
+      [ZONE],
+    );
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(at?.past as Date);
+      expect(await worker.execute('social.digest.send', {}, { actor: system, orgId: o.orgId })).toMatchObject({ state: 'not_due', week: at?.past_week, mails: 0 });
+      vi.setSystemTime(at?.ahead as Date);
+      expect(await worker.execute('social.digest.send', {}, { actor: system, orgId: o.orgId })).toMatchObject({ state: 'not_due', week: at?.ahead_week, mails: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await markers(o)).toEqual([]);
+    expect(await digests(o)).toEqual([]);
+    // With both clocks in the same week, the week goes out once.
+    expect(await worker.execute('social.digest.send', {}, { actor: system, orgId: o.orgId })).toMatchObject({ state: 'sent', week: (await weekIn(ZONE)).iso_week });
+    expect(await markers(o)).toHaveLength(1);
   });
 
   it('keeps the scan for the worker login, the command for the system, and pages with a clamped limit', async () => {
