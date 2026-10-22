@@ -37,6 +37,7 @@ import {
   TELEGRAM_PIN_SCOPE,
   telegramButtonsOf,
   telegramOptionsOf,
+  tiktokDisclosureOf,
   transitionVariant,
   validateVariant,
   VARIANT_STATUSES,
@@ -48,6 +49,7 @@ import {
   type CallState,
   type HashedVariant,
   type MediaItem,
+  type Provider,
   type RetrySafety,
   type VariantEvent,
   type VariantStatus,
@@ -554,6 +556,38 @@ describe('validateVariant', () => {
     expect(codes({ tags: [`${'ệ'.repeat(248)} ${'ệ'.repeat(249)}`] })).toEqual([]);
     expect(yt({ tags: [`${'ệ'.repeat(249)} ${'ệ'.repeat(249)}`] })[0]).toMatchObject({ code: 'YT_TAGS_TOO_LONG', actual: 501 });
     expect(yt({ tags: Array.from({ length: 100 }, () => 'ẩmthực') })[0]).toMatchObject({ code: 'YT_TAGS_TOO_LONG', actual: 100 * 6 + 99 });
+  });
+
+  it('takes the altered or synthetic content disclosure on a YouTube video as true or false (#1078)', () => {
+    const codes = (settings: Record<string, unknown>) => validateVariant({ provider: 'youtube', body: '', title: 'Khai trương', media: [mp4()], settings }).map((i) => i.code);
+    expect(codes({ syntheticMedia: true })).toEqual([]);
+    expect(codes({ syntheticMedia: false })).toEqual([]);
+    expect(codes({ syntheticMedia: 'yes' })).toEqual(['YT_SYNTHETIC_INVALID']);
+  });
+
+  it("checks TikTok's commercial content and AI labels: a choice when on, never branded and private, none on a draft (#1078)", () => {
+    const tt = (settings: Record<string, unknown>, provider: Provider = 'tiktok') =>
+      validateVariant({ provider, body: 'Khai trương', title: null, media: [mp4()], settings }).filter((i) => i.field.startsWith('settings.tiktok'));
+    const pub = { privacyLevel: 'PUBLIC_TO_EVERYONE' };
+    // A variant saved before #1078 has none and is fine as it is.
+    expect(tt(pub)).toEqual([]);
+    expect(tt({ ...pub, tiktok: { commercial: true, yourBrand: true } })).toEqual([]);
+    expect(tt({ ...pub, tiktok: { commercial: true, brandedContent: true, yourBrand: true, aiGenerated: true } })).toEqual([]);
+    expect(tt({ privacyLevel: 'SELF_ONLY', tiktok: { aiGenerated: true, commercial: true, yourBrand: true } })).toEqual([]);
+    expect(tt({ ...pub, tiktok: { commercial: true } })).toEqual([{ code: 'TIKTOK_COMMERCIAL_CHOOSE', field: 'settings.tiktok.commercial', limit: null, actual: null }]);
+    expect(tt({ privacyLevel: 'SELF_ONLY', tiktok: { commercial: true, brandedContent: true } })).toEqual([{ code: 'TIKTOK_BRANDED_PRIVATE', field: 'settings.tiktok.brandedContent', limit: null, actual: null }]);
+    const invalid = [{ code: 'TIKTOK_DISCLOSURE_INVALID', field: 'settings.tiktok', limit: null, actual: null }];
+    expect(tt({ ...pub, tiktok: { brandedContent: 'yes' } })).toEqual(invalid);
+    expect(tt({ ...pub, tiktok: { paidPartnership: true } })).toEqual(invalid);
+    expect(tt({ ...pub, tiktok: null })).toEqual(invalid);
+    expect(tt({ tiktokMode: 'inbox', tiktok: { aiGenerated: true } })).toEqual([{ code: 'TIKTOK_DISCLOSURE_INBOX', field: 'settings.tiktok', limit: null, actual: null }]);
+    expect(tt({ tiktok: { aiGenerated: true } }, 'youtube')).toEqual([{ code: 'TIKTOK_NOT_SUPPORTED', field: 'settings.tiktok', limit: null, actual: null }]);
+    expect(tiktokDisclosureOf({ tiktok: { brandedContent: true } })).toEqual({ commercial: true, yourBrand: false, brandedContent: true, aiGenerated: false });
+    expect(tiktokDisclosureOf({})).toBeNull();
+    // The adapter reads the same shapes the same way.
+    for (const tiktok of [{ commercial: true }, { yourBrand: true }, { brandedContent: true, aiGenerated: true }, { aiGenerated: false }, { paid: true }, { yourBrand: 1 }, [], null]) {
+      expect(channel.tiktokDisclosureOf({ tiktok })).toEqual(tiktokDisclosureOf({ tiktok }));
+    }
   });
 
   it('counts YouTube tags as YouTube does: quotes around a tag with a space, commas between tags (#905)', () => {

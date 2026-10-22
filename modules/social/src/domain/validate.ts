@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, LINKEDIN_VISIBILITY, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, LINKEDIN_VISIBILITY, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -66,6 +66,15 @@ export type IssueCode =
   | 'PRIVACY_REQUIRED'
   // TikTok (#903): settings.tiktokMode is neither 'direct' nor 'inbox'.
   | 'TIKTOK_MODE_INVALID'
+  // TikTok's commercial content and AI labels (#1078), settings.tiktok: set on another channel; not an object of
+  // true-or-false keys commercial, yourBrand, brandedContent and aiGenerated; the disclosure turned on with neither
+  // your brand nor branded content chosen; branded content with the privacy level "only me" (SELF_ONLY), which TikTok
+  // forbids; any of them on a draft sent to the TikTok app (#903), where the creator sets them in TikTok.
+  | 'TIKTOK_NOT_SUPPORTED'
+  | 'TIKTOK_DISCLOSURE_INVALID'
+  | 'TIKTOK_COMMERCIAL_CHOOSE'
+  | 'TIKTOK_BRANDED_PRIVATE'
+  | 'TIKTOK_DISCLOSURE_INBOX'
   // The platform takes photos, Crove's adapter for it posts only video.
   | 'IMAGES_NOT_SUPPORTED_YET'
   | 'TOO_MANY_LINKS'
@@ -133,6 +142,8 @@ export type IssueCode =
   | 'YT_CATEGORY_INVALID'
   | 'YT_TAG_INVALID'
   | 'YT_TAGS_TOO_LONG'
+  // YouTube's altered or synthetic content disclosure (#1078): settings.syntheticMedia is set and is not true or false.
+  | 'YT_SYNTHETIC_INVALID'
   // YouTube playlists (#1018): settings.youtube on another channel; not { playlistIds } with distinct playlist ids;
   // more than YOUTUBE_PLAYLISTS_MAX playlists (limit, actual).
   | 'YOUTUBE_NOT_SUPPORTED'
@@ -195,6 +206,7 @@ function checkText(issues: Issue[], field: 'body' | 'title', text: string, rule:
 function checkYouTube(issues: Issue[], variant: VariantDraft): void {
   const s = variant.settings;
   if (s?.madeForKids !== undefined && typeof s.madeForKids !== 'boolean') issues.push({ code: 'YT_AUDIENCE_INVALID', field: 'settings.madeForKids', limit: null, actual: null });
+  if (s?.syntheticMedia !== undefined && typeof s.syntheticMedia !== 'boolean') issues.push({ code: 'YT_SYNTHETIC_INVALID', field: 'settings.syntheticMedia', limit: null, actual: null });
   if (s?.categoryId !== undefined && !(YOUTUBE_CATEGORIES as readonly unknown[]).includes(s.categoryId)) issues.push({ code: 'YT_CATEGORY_INVALID', field: 'settings.categoryId', limit: null, actual: null });
   const tags = youtubeTagsOf(s);
   if (tags === 'invalid') {
@@ -410,11 +422,26 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
       issues.push({ code: 'PRIVACY_REQUIRED', field: 'settings.privacyLevel', limit: null, actual: null });
     }
   }
+  checkTikTokDisclosure(issues, variant);
   if (caps.maxLinks !== null) {
     const links = countLinks(sent);
     if (links > caps.maxLinks) issues.push({ code: 'TOO_MANY_LINKS', field: 'body', limit: caps.maxLinks, actual: links });
   }
   return issues;
+}
+
+// TikTok's commercial content and AI labels (#1078). Absent, the adapter sends what it always did (no disclosure).
+function checkTikTokDisclosure(issues: Issue[], variant: VariantDraft): void {
+  const disclosure = tiktokDisclosureOf(variant.settings);
+  if (disclosure === null) return;
+  const field = 'settings.tiktok';
+  if (variant.provider !== 'tiktok') issues.push({ code: 'TIKTOK_NOT_SUPPORTED', field, limit: null, actual: null });
+  else if (disclosure === 'invalid') issues.push({ code: 'TIKTOK_DISCLOSURE_INVALID', field, limit: null, actual: null });
+  else if (tiktokModeOf(variant.settings) === 'inbox') issues.push({ code: 'TIKTOK_DISCLOSURE_INBOX', field, limit: null, actual: null });
+  else {
+    if (disclosure.commercial && !disclosure.yourBrand && !disclosure.brandedContent) issues.push({ code: 'TIKTOK_COMMERCIAL_CHOOSE', field: 'settings.tiktok.commercial', limit: null, actual: null });
+    if (disclosure.brandedContent && variant.settings?.privacyLevel === 'SELF_ONLY') issues.push({ code: 'TIKTOK_BRANDED_PRIVATE', field: 'settings.tiktok.brandedContent', limit: null, actual: null });
+  }
 }
 
 function checkPollAndTag(issues: Issue[], variant: VariantDraft, caps: ChannelCapabilities): void {
