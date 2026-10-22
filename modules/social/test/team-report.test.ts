@@ -26,7 +26,7 @@ const report = (members: TeamMemberRow[], client: Partial<TeamReport['client']> 
   client: { answers: 0, approved: 0, changesRequested: 0, medianSeconds: null, ...client },
 });
 
-const lines = (csv: string) => csv.replace(/^﻿/, '').split('\r\n');
+const lines = (csv: string) => csv.replace(/^\uFEFF/, '').split('\r\n');
 
 describe('team report median (#1058)', () => {
   it('is the middle value, or the mean of the two middle ones, whatever the order', () => {
@@ -61,7 +61,7 @@ describe('team report CSV (#1058)', () => {
       ),
       'Khách hàng (liên kết duyệt)',
     );
-    expect(csv.startsWith('﻿')).toBe(true);
+    expect(csv.startsWith('\uFEFF')).toBe(true);
     expect(csv.endsWith('\r\n')).toBe(true);
     expect(lines(csv)).toEqual([
       TEAM_CSV_COLUMNS.join(','),

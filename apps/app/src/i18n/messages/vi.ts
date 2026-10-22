@@ -2407,8 +2407,8 @@ export const vi = {
     team: {
       title: 'Nhóm',
       hint: 'Mỗi thành viên đã làm gì trong khoảng ngày đã chọn và duyệt bài mất bao lâu. Chỉ chủ sở hữu và quản trị viên xem được.',
-      from: 'Từ ngày',
-      to: 'Đến ngày',
+      from: 'Báo cáo nhóm từ ngày',
+      to: 'Báo cáo nhóm đến ngày',
       download: 'Tải CSV',
       rangeInvalid: 'Ngày kết thúc không được trước ngày bắt đầu, và khoảng ngày dài tối đa {max, number} ngày.',
       caption: 'Hoạt động của nhóm từ {from} đến {to}',

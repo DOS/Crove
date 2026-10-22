@@ -714,7 +714,7 @@ export function SocialPage() {
         <TabsContent value="metrics">
           <div className="space-y-4">
             <Metrics slug={slug} names={names} labelId={search.label} />
-            <TeamReport />
+            <TeamReport key={slug} />
             <ReportLinks channels={channels.data ?? []} />
             <ReportSchedules channels={channels.data ?? []} />
           </div>

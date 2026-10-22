@@ -81,5 +81,5 @@ export function teamReportCsv(report: TeamReport, clientLabel = 'Client review l
   );
   const c = report.client;
   lines.push([clientLabel, 'client', null, null, c.approved, null, null, null, c.answers, hoursOf(c.medianSeconds), null].map(csvCell).join(','));
-  return `﻿${[TEAM_CSV_COLUMNS.join(','), ...lines].join('\r\n')}\r\n`;
+  return `\uFEFF${[TEAM_CSV_COLUMNS.join(','), ...lines].join('\r\n')}\r\n`;
 }

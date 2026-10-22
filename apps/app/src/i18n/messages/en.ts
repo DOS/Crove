@@ -2408,8 +2408,8 @@ export const en = {
     team: {
       title: 'Team',
       hint: 'What each member did in the days picked and how long reviews took. Only owners and admins see it.',
-      from: 'From',
-      to: 'To',
+      from: 'Team report from',
+      to: 'Team report to',
       download: 'Download CSV',
       rangeInvalid: 'The end date cannot be before the start date, and the range lasts at most {max, number} days.',
       caption: 'Team activity from {from} to {to}',
