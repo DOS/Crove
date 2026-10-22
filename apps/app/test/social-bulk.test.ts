@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { localTime } from '@crove/mod-social/contract';
-import { bulkRequest, moveSummary, planMove, runBulk, runMove, shiftTime, validMove, type BulkPost, type BulkVariant } from '../src/lib/social-bulk.ts';
+import {
+  BULK_EDIT_MAX,
+  assignInput,
+  bulkRequest,
+  editBatches,
+  moveSummary,
+  planMove,
+  runBulk,
+  runEdit,
+  runMove,
+  shiftTime,
+  toggleEditLabel,
+  validLabelEdit,
+  validMove,
+  type BulkPost,
+  type BulkVariant,
+  type EditAnswer,
+} from '../src/lib/social-bulk.ts';
 
 const v = (id: string, status: string, at: string | null = null, queueSlotAt: string | null = null): BulkVariant => ({
   id,
@@ -157,5 +174,63 @@ describe('moving posts by days or hours (#945)', () => {
   it('counts a post whose every channel was refused as refused, not as done', () => {
     expect(moveSummary([{ postId: 'p', moved: [], skipped: [], refused: [{ variantId: 'a', error: new Error('SCHEDULE_IN_PAST') }] }])).toEqual({ done: 0, skipped: 0, refused: 1, channels: 0 });
     expect(moveSummary([])).toEqual({ done: 0, skipped: 0, refused: 0, channels: 0 });
+  });
+});
+
+describe('labels and the assignee on many posts (#1057)', () => {
+  it('picks a label to add or to take off, never both, and unpicks it on a second click', () => {
+    let edit = { add: [] as string[], remove: [] as string[] };
+    edit = toggleEditLabel(edit, 'add', 'spring');
+    expect(edit).toEqual({ add: ['spring'], remove: [] });
+    edit = toggleEditLabel(edit, 'remove', 'spring');
+    expect(edit).toEqual({ add: [], remove: ['spring'] });
+    edit = toggleEditLabel(toggleEditLabel(edit, 'add', 'sale'), 'remove', 'spring');
+    expect(edit).toEqual({ add: ['sale'], remove: [] });
+  });
+
+  it('sends a label edit only when it changes something, within the ten labels a post carries', () => {
+    expect(validLabelEdit({ add: [], remove: [] })).toBe(false);
+    expect(validLabelEdit({ add: ['a'], remove: [] })).toBe(true);
+    expect(validLabelEdit({ add: [], remove: ['a'] })).toBe(true);
+    expect(validLabelEdit({ add: ['a'], remove: ['a'] })).toBe(false);
+    expect(validLabelEdit({ add: Array.from({ length: 11 }, (_, i) => `l${i}`), remove: [] })).toBe(false);
+  });
+
+  it('keeps, clears or sets the due date, and waits for a date to set', () => {
+    expect(assignInput({ assigneeUserId: 'u', due: { mode: 'keep' } })).toEqual({ assigneeUserId: 'u' });
+    expect(assignInput({ assigneeUserId: null, due: { mode: 'clear' } })).toEqual({ assigneeUserId: null, dueAt: null });
+    expect(assignInput({ assigneeUserId: 'u', due: { mode: 'set', at: '2026-11-02T02:00:00.000Z' } })).toEqual({ assigneeUserId: 'u', dueAt: '2026-11-02T02:00:00.000Z' });
+    expect(assignInput({ assigneeUserId: 'u', due: { mode: 'set', at: null } })).toBeNull();
+  });
+
+  it('sends the selection in batches the server takes, in the order shown', () => {
+    const ids = Array.from({ length: 250 }, (_, i) => `p${i}`);
+    const batches = editBatches(ids);
+    expect(BULK_EDIT_MAX).toBe(100);
+    expect(batches.map((b) => b.length)).toEqual([100, 100, 50]);
+    expect(batches.flat()).toEqual(ids);
+    expect(editBatches([])).toEqual([]);
+  });
+
+  it("merges each batch's answer, and a batch refused as a whole does not stop the next", async () => {
+    const ids = Array.from({ length: 205 }, (_, i) => `p${i}`);
+    const progress: number[] = [];
+    const sent: number[] = [];
+    const result = await runEdit(
+      ids,
+      async (batch): Promise<EditAnswer> => {
+        sent.push(batch.length);
+        if (batch[0] === 'p100') throw new Error('ASSIGNEE_NOT_MEMBER');
+        return { done: batch.filter((id) => id !== 'p3'), skipped: batch.includes('p3') ? [{ postId: 'p3', reason: 'published' }] : [] };
+      },
+      (done) => progress.push(done),
+    );
+    expect(sent).toEqual([100, 100, 5]);
+    expect(progress).toEqual([100, 200, 205]);
+    expect(result.done).toHaveLength(104);
+    expect(result.skipped).toEqual([{ postId: 'p3', reason: 'published' }]);
+    expect(result.refused).toHaveLength(100);
+    expect(result.refused[0]).toMatchObject({ postId: 'p100' });
+    expect(result.refused.map((r) => (r.error as Error).message)[0]).toBe('ASSIGNEE_NOT_MEMBER');
   });
 });

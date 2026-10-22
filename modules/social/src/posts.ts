@@ -26,6 +26,7 @@ import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
 import { reminderCommands } from './reminders.ts';
 import { assignCommands } from './assign.ts';
+import { bulkEditCommands } from './bulk-edit.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
 import { labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
@@ -1596,6 +1597,7 @@ export const socialCommands = [
   ...assignCommands,
   ...snippetCommands,
   ...labelCommands,
+  ...bulkEditCommands,
   ...mediaTagCommands,
   ...ideaCommands,
   ...bioCommands,

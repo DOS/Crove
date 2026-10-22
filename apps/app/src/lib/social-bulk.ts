@@ -1,12 +1,16 @@
 // Acting on many posts at once from the Social home lists (#635). Each post still goes through its own command, on
 // what the list shows: one refused post does not stop the others, and the result says what was done and what was
 // refused, with the reason.
+import { SOCIAL_BULK_EDIT_MAX, type SocialBulkSkipReason } from '@crove/kernel-contract';
 import { localTime, zonedToEpoch } from '@crove/mod-social/contract';
 import { CANCELLABLE } from './social.ts';
+import { MAX_LABELS_PER_POST } from './social-labels.ts';
 
-export type BulkAction = 'approve' | 'queue' | 'cancel' | 'move';
+export type BulkAction = 'approve' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign';
+// The edits the server makes for many posts in one command (#1057): labels and the assignee.
+export type EditAction = 'labels' | 'assign';
 // The actions that send one command per post; a move sends one per channel (runMove).
-export type PostAction = Exclude<BulkAction, 'move'>;
+export type PostAction = Exclude<BulkAction, 'move' | EditAction>;
 
 export interface BulkVariant {
   id: string;
@@ -168,4 +172,77 @@ export function moveSummary(results: readonly MovePostResult[]): { done: number;
     refused: results.filter((r) => r.refused.length > 0).length,
     channels: results.reduce((n, r) => n + r.moved.length, 0),
   };
+}
+
+// Labels and the assignee on many posts at once (#1057): one command per batch of up to SOCIAL_BULK_EDIT_MAX posts,
+// each batch one transaction on the server, which answers with the posts it changed and each post it left out and why.
+export const BULK_EDIT_MAX = SOCIAL_BULK_EDIT_MAX;
+
+export interface LabelEdit {
+  add: string[];
+  remove: string[];
+}
+
+// A label picked to add, or to take off: picking it on one side drops it from the other, and picking it again unpicks it.
+export function toggleEditLabel(edit: LabelEdit, side: keyof LabelEdit, labelId: string): LabelEdit {
+  const drop = (ids: readonly string[]) => ids.filter((id) => id !== labelId);
+  const flip = (ids: readonly string[]) => (ids.includes(labelId) ? drop(ids) : [...ids, labelId]);
+  return side === 'add' ? { add: flip(edit.add), remove: drop(edit.remove) } : { add: drop(edit.add), remove: flip(edit.remove) };
+}
+
+// Something to do, each label once on one side, and no more than a post may carry.
+export function validLabelEdit(edit: LabelEdit): boolean {
+  if (edit.add.length + edit.remove.length === 0) return false;
+  if (edit.add.length > MAX_LABELS_PER_POST || edit.remove.length > MAX_LABELS_PER_POST) return false;
+  const all = [...edit.add, ...edit.remove];
+  return new Set(all).size === all.length;
+}
+
+// The due date of an assignment: each post keeps its own, all get none, or all get this one.
+export type DueEdit = { mode: 'keep' } | { mode: 'clear' } | { mode: 'set'; at: string | null };
+export interface AssignEdit {
+  assigneeUserId: string | null;
+  due: DueEdit;
+}
+
+// The command's input apart from the posts, or null while a due date to set is missing.
+export function assignInput(edit: AssignEdit): { assigneeUserId: string | null; dueAt?: string | null } | null {
+  if (edit.due.mode === 'keep') return { assigneeUserId: edit.assigneeUserId };
+  if (edit.due.mode === 'clear') return { assigneeUserId: edit.assigneeUserId, dueAt: null };
+  return edit.due.at ? { assigneeUserId: edit.assigneeUserId, dueAt: edit.due.at } : null;
+}
+
+// The selection in batches the server takes, in the order shown.
+export function editBatches(postIds: readonly string[], size = BULK_EDIT_MAX): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < postIds.length; i += size) out.push(postIds.slice(i, i + size));
+  return out;
+}
+
+export interface EditAnswer {
+  done: string[];
+  skipped: { postId: string; reason: SocialBulkSkipReason }[];
+}
+export interface EditResult extends EditAnswer {
+  // The posts of a batch the server refused as a whole (an assignee who left, a label deleted meanwhile), with why.
+  refused: { postId: string; error: unknown }[];
+}
+
+// One batch after another; a batch refused as a whole does not stop the next, as runBulk goes on past a refusal.
+// progress counts the posts sent.
+export async function runEdit(postIds: readonly string[], send: (postIds: string[]) => Promise<EditAnswer>, progress?: (done: number, total: number) => void): Promise<EditResult> {
+  const result: EditResult = { done: [], skipped: [], refused: [] };
+  let sent = 0;
+  for (const batch of editBatches(postIds)) {
+    try {
+      const answer = await send(batch);
+      result.done.push(...answer.done);
+      result.skipped.push(...answer.skipped);
+    } catch (error) {
+      result.refused.push(...batch.map((postId) => ({ postId, error })));
+    }
+    sent += batch.length;
+    progress?.(sent, postIds.length);
+  }
+  return result;
 }
