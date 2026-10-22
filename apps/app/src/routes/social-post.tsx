@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -532,6 +532,61 @@ function ProviderSettings({
         </label>
         {!pinAllowed && <p className="text-xs text-subtle-foreground">{t('telegramPinHint')}</p>}
         <TelegramButtonsField rows={rows} disabled={disabled} onChange={(next) => save({ ...current, rows: next })} />
+      </div>
+    );
+  }
+  // Bluesky (#1102): who may reply (everyone, nobody, or one or several groups together, as Bluesky allows) and whether
+  // others may quote the post. Everyone and quotes on are the defaults and are not stored, so a variant left as it was
+  // keeps its content hash.
+  if (provider === 'bluesky') {
+    const replies = blueskyRepliesOf(settings);
+    const mode = replies === null ? 'everyone' : replies === 'nobody' ? 'nobody' : replies === 'invalid' ? 'invalid' : 'some';
+    const rules = Array.isArray(replies) ? replies : [];
+    const { replySettings: _replies, quotes: _quotes, ...rest } = settings;
+    // replies: what replySettings holds, undefined for everyone (a value it cannot read is kept as it is).
+    const save = (next: { replies: unknown; quotes: boolean }) => onChange({ ...rest, ...(next.replies === undefined ? {} : { replySettings: next.replies }), ...(next.quotes ? {} : { quotes: false }) });
+    const quotes = !blueskyQuotesOff(settings);
+    const setRule = (rule: BlueskyReplyRule, on: boolean) => {
+      const chosen = BLUESKY_REPLY_RULES.filter((r) => (r === rule ? on : rules.includes(r)));
+      // The last group cannot be cleared: no group at all is "Nobody", a choice of its own.
+      if (chosen.length > 0) save({ replies: chosen, quotes });
+    };
+    return (
+      <div className="space-y-1.5">
+        <Label htmlFor="bluesky-replies" className="text-xs">
+          {t('replySettings')}
+        </Label>
+        <NativeSelect
+          id="bluesky-replies"
+          size="sm"
+          className="w-full max-w-xs"
+          value={mode}
+          disabled={disabled}
+          onChange={(e) => save({ replies: e.target.value === 'nobody' ? 'nobody' : e.target.value === 'some' ? (rules.length > 0 ? rules : ['following']) : undefined, quotes })}
+        >
+          {mode === 'invalid' && <NativeSelectOption value="invalid">{String(settings.replySettings)}</NativeSelectOption>}
+          {(['everyone', 'nobody', 'some'] as const).map((v) => (
+            <NativeSelectOption key={v} value={v}>
+              {t(`blueskyReplies.${v}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        {mode === 'some' && (
+          <div className="space-y-1.5 ps-1" role="group" aria-label={t('blueskyReplies.some')}>
+            {BLUESKY_REPLY_RULES.map((r) => (
+              <label key={r} className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Checkbox checked={rules.includes(r)} disabled={disabled || (rules.length === 1 && rules.includes(r))} onCheckedChange={(on) => setRule(r, on === true)} />
+                {t(`blueskyReplyRule.${r}`)}
+              </label>
+            ))}
+            <p className="text-xs text-subtle-foreground">{t('blueskyReplyRulesHint')}</p>
+          </div>
+        )}
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox checked={quotes} disabled={disabled} onCheckedChange={(on) => save({ replies: settings.replySettings, quotes: on === true })} />
+          {t('blueskyQuotes')}
+        </label>
+        {!quotes && threadPartsOf(settings) && <p className="text-xs text-subtle-foreground">{t('blueskyQuotesHint')}</p>}
       </div>
     );
   }
@@ -1503,6 +1558,9 @@ function ChannelEditor({
   const pollRule = isProvider(provider) ? POLL_RULES[provider] : undefined;
   const pollMinutes = pollDurationOf(own.settings);
   const replySettings = replySettingOf(provider, own.settings);
+  // Who may reply to and quote a Bluesky post (#1102).
+  const blueskyReplies = provider === 'bluesky' ? blueskyRepliesOf(own.settings) : null;
+  const quotesOff = provider === 'bluesky' && blueskyQuotesOff(own.settings);
   const linkedinVisibility =
     (own.settings.visibility === 'connections' || own.settings.visibility === 'loggedIn') && (linkedinVisibilities(provider) as readonly string[] | null)?.includes(own.settings.visibility) ? (own.settings.visibility as 'connections' | 'loggedIn') : null;
   const tag = topicTagOf(own.settings);
@@ -1518,6 +1576,8 @@ function ChannelEditor({
     ...(Array.isArray(poll) && pollRule?.duration ? { pollMinutes: typeof pollMinutes === 'number' ? pollMinutes : pollRule.duration.default } : {}),
     ...(typeof tag === 'string' && tag ? { topicTag: tag } : {}),
     ...(replySettings ? { replySettings } : {}),
+    ...(blueskyReplies !== null && blueskyReplies !== 'invalid' ? { replyRules: blueskyReplies } : {}),
+    ...(quotesOff ? { quotesOff } : {}),
     ...(linkedinVisibility ? { visibility: linkedinVisibility } : {}),
     ...(Array.isArray(telegramButtons) ? { buttons: telegramButtons } : {}),
   };
@@ -3066,6 +3126,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                       </div>
                     )}
                     {v.pinStatus && <p className={v.pinStatus === 'failed' || v.pinStatus === 'not_allowed' || v.pinStatus === 'unknown' ? 'text-warning' : ''}>{t(`pinStatus.${v.pinStatus}`)}</p>}
+                    {v.gateStatus && <p className={v.gateStatus === 'failed' || v.gateStatus === 'unknown' ? 'text-warning' : ''}>{t(`gateStatus.${v.gateStatus}`)}</p>}
                     {v.playlistStatus && (
                       <p className={v.playlistStatus.state === 'pending' || v.playlistStatus.state === 'added' ? '' : 'text-warning'}>
                         {t(`playlistStatus.${v.playlistStatus.state}`, { added: v.playlistStatus.added, total: v.playlistStatus.total })}

@@ -1261,6 +1261,9 @@ export const zSocialVariant = z.object({
   commentStatus: z.enum(['pending', 'posted', 'failed', 'reconnect', 'unknown']).nullable(),
   // The pin of a published Telegram channel (#982): not_allowed when the bot may not pin there; null without one.
   pinStatus: z.enum(['pending', 'pinned', 'failed', 'not_allowed', 'unknown']).nullable(),
+  // Who may reply to and quote a published Bluesky post that limits either (#1102): applied, or failed or unknown (the
+  // post is out either way); null without a limit.
+  gateStatus: z.enum(['pending', 'applied', 'failed', 'unknown']).nullable(),
   // The playlists of a published YouTube video (#1018): how many took it, of how many, and the state of the rest
   // (missing: a playlist is gone; reconnect: the channel lacks the scope); null without any.
   playlistStatus: z.object({ state: z.enum(['pending', 'added', 'failed', 'missing', 'reconnect', 'unknown']), added: z.number().int().min(0), total: z.number().int().min(1) }).nullable(),

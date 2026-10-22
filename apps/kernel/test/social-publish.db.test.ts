@@ -6,12 +6,12 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { FacebookPagePublisher, SandboxPublisher, TelegramPublisher, TikTokPublisher, YouTubePublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
+import { BlueskyPublisher, FacebookPagePublisher, SandboxPublisher, TelegramPublisher, TikTokPublisher, YouTubePublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
-import { captureKey, runCommentJob, runPinJob, runPlaylistJob, runPublishJob, runThreadJob, METRICS_INTERVAL_SECONDS, socialCommands, socialQueries, STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
+import { captureKey, runCommentJob, runGateJob, runPinJob, runPlaylistJob, runPublishJob, runThreadJob, METRICS_INTERVAL_SECONDS, socialCommands, socialQueries, STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
 import { shortLinkTarget } from '../src/short-link.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -1054,6 +1054,110 @@ suite('social publishing on PostgreSQL (S4)', () => {
       expect(await runOn(o, id, publisher)).toEqual({ action: 'call', status: 'published' });
       expect(asked).toEqual([{ method: 'sendMessage', json: { chat_id: CHAT, text: 'Khai trương' } }]);
       expect((await variant(o, postId)).pinStatus).toBeNull();
+      expect(await calls(id)).toEqual([{ key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 }]);
+    });
+  });
+
+  // #1102: the Bluesky publisher through the same pipeline, against recorded XRPC answers: the post as before, then its
+  // reply and quote gates as their own step, before the thread's parts.
+  describe('Bluesky reply and quote gates', () => {
+    const DID = 'did:plc:abc123def456ghi789jkl012';
+    const PDS = 'morel.us-east.host.bsky.network';
+    const POST = `at://${DID}/app.bsky.feed.post/3kgate`;
+    function xrpc(answers: Record<string, { status?: number; body: unknown }[]>) {
+      const asked: { route: string; json: Record<string, unknown> | null }[] = [];
+      const fetchImpl = async (input: string, init?: RequestInit) => {
+        const url = new URL(input);
+        const route = `${url.host}${url.pathname.replace('/xrpc/', ' ')}`;
+        asked.push({ route, json: typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : null });
+        const hosted = url.host === 'plc.directory' ? { body: { id: DID, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: `https://${PDS}` }] } } : null;
+        const answer = answers[route]?.shift() ?? hosted ?? { status: 500, body: { error: 'InternalServerError', message: `no answer for ${route}` } };
+        return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
+      };
+      return { asked, publisher: new BlueskyPublisher(fetchImpl) };
+    }
+    const signIn = { body: { did: DID, handle: 'quan-a.bsky.social', accessJwt: 'access-jwt-1', refreshJwt: 'refresh-jwt-1', didDoc: { service: [{ id: '#atproto_pds', serviceEndpoint: `https://${PDS}` }] } } };
+    const created = (uri: string) => ({ body: { uri, cid: 'bafy' } });
+
+    async function dueBluesky(o: { orgId: string; owner: string }, settings: Record<string, unknown>) {
+      const sealed = vault.seal(JSON.stringify({ identifier: DID, appPassword: 'abcd-efgh-ijkl-mnop' }), { orgId: o.orgId, provider: 'bluesky', externalAccountId: DID });
+      const { connectionId } = await exec<{ connectionId: string }>(o, 'kernel.channel.connect', {
+        provider: 'bluesky',
+        externalAccountId: DID,
+        displayName: '@quan-a.bsky.social',
+        scopes: ['app_password'],
+        expiresAt: null,
+        credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+      });
+      const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', channels: [{ connectionId, settings }] });
+      await exec(o, 'social.post.submit', { postId });
+      const post = await get(o, postId);
+      await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+      await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+      await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+      return { postId, id: post.variants[0]?.id as string };
+    }
+    const runOn = (o: { orgId: string }, id: string, bluesky: Publisher) => runPublishJob({ runtime: worker, broker: vault, publishers: { bluesky }, callTimeoutMs: 2_000 }, o.orgId, id, 'bluesky');
+    const writes = (asked: { route: string; json: Record<string, unknown> | null }[]) => asked.filter((a) => a.route.endsWith('com.atproto.repo.createRecord')).map((a) => a.json?.collection);
+
+    it('posts as before, then writes the threadgate and the postgate on the post, before the thread goes on', async () => {
+      const o = await org();
+      const { asked, publisher } = xrpc({
+        'bsky.social com.atproto.server.createSession': [signIn, signIn, signIn],
+        [`${PDS} com.atproto.repo.createRecord`]: [created(POST), created(`at://${DID}/app.bsky.feed.threadgate/3kgate`), created(`at://${DID}/app.bsky.feed.postgate/3kgate`), created(`at://${DID}/app.bsky.feed.post/3kpart`)],
+        [`${PDS} com.atproto.repo.getRecord`]: [{ body: { uri: POST, cid: 'bafy' } }],
+      });
+      const { postId, id } = await dueBluesky(o, { replySettings: ['followers', 'mentionedUsers'], quotes: false, threadParts: ['Phần hai'] });
+      expect(await runOn(o, id, publisher)).toEqual({ action: 'call', status: 'published' });
+      expect(writes(asked)).toEqual(['app.bsky.feed.post', 'app.bsky.feed.threadgate', 'app.bsky.feed.postgate', 'app.bsky.feed.post']);
+      const [post, threadgate, postgate] = asked.filter((a) => a.route.endsWith('com.atproto.repo.createRecord')).map((a) => a.json);
+      // The post itself carries no gate.
+      expect(post).toEqual({ repo: DID, collection: 'app.bsky.feed.post', record: { $type: 'app.bsky.feed.post', text: 'Khai trương', createdAt: expect.any(String), langs: ['vi'] } });
+      expect(threadgate).toEqual({ repo: DID, collection: 'app.bsky.feed.threadgate', rkey: '3kgate', record: { $type: 'app.bsky.feed.threadgate', post: POST, allow: [{ $type: 'app.bsky.feed.threadgate#mentionRule' }, { $type: 'app.bsky.feed.threadgate#followerRule' }], createdAt: expect.any(String) } });
+      expect(postgate).toEqual({ repo: DID, collection: 'app.bsky.feed.postgate', rkey: '3kgate', record: { $type: 'app.bsky.feed.postgate', post: POST, embeddingRules: [{ $type: 'app.bsky.feed.postgate#disableRule' }], createdAt: expect.any(String) } });
+      const v = await variant(o, postId);
+      expect([v.status, v.gateStatus]).toEqual(['published', 'applied']);
+      expect(await calls(id)).toEqual([
+        { key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 },
+        { key: `social.publish:${id}:1:1:gate`, state: 'succeeded', calls: 1 },
+        { key: `social.publish:${id}:1:1:part_2`, state: 'succeeded', calls: 1 },
+      ]);
+    });
+
+    it('leaves the post published with a warning when a gate is refused, and never posts or gates again', async () => {
+      const o = await org();
+      const { asked, publisher } = xrpc({
+        'bsky.social com.atproto.server.createSession': [signIn, signIn],
+        [`${PDS} com.atproto.repo.createRecord`]: [created(POST), { status: 400, body: { error: 'InvalidRequest', message: 'Invalid threadgate' } }],
+      });
+      const { postId, id } = await dueBluesky(o, { replySettings: 'nobody', quotes: false });
+      expect(await runOn(o, id, publisher)).toEqual({ action: 'call', status: 'published' });
+      const v = await variant(o, postId);
+      expect([v.status, v.error, v.gateStatus]).toEqual(['published', null, 'failed']);
+      expect((await get(o, postId)).status).toBe('published');
+      // The refused threadgate stops the step: no postgate after it, and nothing deleted.
+      expect(writes(asked)).toEqual(['app.bsky.feed.post', 'app.bsky.feed.threadgate']);
+      expect(await calls(id)).toEqual([
+        { key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 },
+        { key: `social.publish:${id}:1:1:gate`, state: 'failed', calls: 1 },
+      ]);
+      const events = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.variant.gate_failed'", [o.orgId])).rows);
+      expect(events.map((e) => e.payload)).toEqual([{ post_id: postId, variant_id: id, code: 'threadgate:InvalidRequest' }]);
+      // Another run, or another gate job, sends nothing more.
+      expect(await runOn(o, id, publisher)).toEqual({ action: 'none', reason: 'published' });
+      expect(await runGateJob({ runtime: worker, broker: vault, publishers: { bluesky: publisher }, callTimeoutMs: 2_000 }, o.orgId, id, 'bluesky')).toEqual({ action: 'none', reason: 'done' });
+      expect(writes(asked)).toHaveLength(2);
+      // The worker alone begins a gate.
+      await expect(exec(o, 'social.gate.begin', { variantId: id, provider: 'bluesky' })).rejects.toMatchObject({ status: 403 });
+    });
+
+    it('sends a post as usual without these settings, with no gate', async () => {
+      const o = await org();
+      const { asked, publisher } = xrpc({ 'bsky.social com.atproto.server.createSession': [signIn], [`${PDS} com.atproto.repo.createRecord`]: [created(POST)] });
+      const { postId, id } = await dueBluesky(o, {});
+      expect(await runOn(o, id, publisher)).toEqual({ action: 'call', status: 'published' });
+      expect(asked.map((a) => a.route)).toEqual([`plc.directory/${DID}`, 'bsky.social com.atproto.server.createSession', `${PDS} com.atproto.repo.createRecord`]);
+      expect((await variant(o, postId)).gateStatus).toBeNull();
       expect(await calls(id)).toEqual([{ key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 }]);
     });
   });

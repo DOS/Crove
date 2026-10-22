@@ -16,6 +16,10 @@ import {
   LINKEDIN_VISIBILITY,
   replySettingOf,
   THREADS_REPLY_SETTINGS,
+  BLUESKY_REPLY_RULES,
+  BLUESKY_REPLY_SETTINGS,
+  blueskyRepliesOf,
+  wantsBlueskyGate,
   sentText,
   effectiveContent,
   needsPublicUrls,
@@ -457,6 +461,42 @@ describe('validateVariant', () => {
     // The adapters take every value the composer offers.
     for (const replySettings of THREADS_REPLY_SETTINGS) expect(channel.threadsReplyControlOf({ replySettings })).not.toBe('invalid');
     for (const visibility of LINKEDIN_VISIBILITY) expect(channel.linkedinVisibilityOf({ visibility })).not.toBe('invalid');
+  });
+
+  it('checks who may reply to and quote a Bluesky post, several groups together, and refuses quotes elsewhere (#1102)', () => {
+    const check = (provider: 'bluesky' | 'threads' | 'x', settings: Record<string, unknown>) => validateVariant({ provider, body: 'Khai trương', title: null, media: [], settings });
+    for (const replySettings of [...BLUESKY_REPLY_SETTINGS, ['followers', 'mentionedUsers'], [...BLUESKY_REPLY_RULES]]) expect(check('bluesky', { replySettings })).toEqual([]);
+    expect(check('bluesky', { quotes: false })).toEqual([]);
+    expect(check('bluesky', { replySettings: 'nobody', quotes: true })).toEqual([]);
+    expect(check('bluesky', {})).toEqual([]);
+    for (const replySettings of ['mentioned_only', [], ['following', 'following'], ['nobody'], 'everyone,following', 3]) {
+      expect(check('bluesky', { replySettings })).toEqual([{ code: 'REPLY_SETTINGS_INVALID', field: 'settings.replySettings', limit: null, actual: null }]);
+    }
+    expect(check('bluesky', { quotes: 'no' })).toEqual([{ code: 'QUOTES_INVALID', field: 'settings.quotes', limit: null, actual: null }]);
+    expect(check('threads', { quotes: false })).toEqual([{ code: 'QUOTES_NOT_SUPPORTED', field: 'settings.quotes', limit: null, actual: null }]);
+    // Nobody and a list are Bluesky's alone.
+    expect(check('threads', { replySettings: 'nobody' }).map((i) => i.code)).toEqual(['REPLY_SETTINGS_INVALID']);
+    expect(check('x', { replySettings: ['following'] }).map((i) => i.code)).toEqual(['REPLY_SETTINGS_INVALID']);
+    expect(blueskyRepliesOf({ replySettings: ['followers', 'mentionedUsers'] })).toEqual(['mentionedUsers', 'followers']);
+    expect(blueskyRepliesOf({ replySettings: 'following' })).toEqual(['following']);
+    expect(blueskyRepliesOf({ replySettings: 'everyone' })).toBeNull();
+    expect(blueskyRepliesOf({ replySettings: 'nobody' })).toBe('nobody');
+    // A gate is asked for only when something is limited, on Bluesky, with readable settings.
+    expect(wantsBlueskyGate('bluesky', {})).toBe(false);
+    expect(wantsBlueskyGate('bluesky', { replySettings: 'everyone', quotes: true })).toBe(false);
+    expect(wantsBlueskyGate('bluesky', { quotes: false })).toBe(true);
+    expect(wantsBlueskyGate('bluesky', { replySettings: 'nobody' })).toBe(true);
+    expect(wantsBlueskyGate('bluesky', { replySettings: 'nobody', quotes: 'no' })).toBe(false);
+    expect(wantsBlueskyGate('threads', { replySettings: 'following' })).toBe(false);
+    // The adapter reads every value the composer offers the same way, and refuses what validation refuses.
+    for (const replySettings of [...BLUESKY_REPLY_SETTINGS, ['followers', 'mentionedUsers']]) {
+      const replies = blueskyRepliesOf({ replySettings });
+      const gates = channel.blueskyGatesOf({ replySettings });
+      expect(gates === null ? null : gates === 'invalid' ? 'invalid' : gates.allow?.length === 0 ? 'nobody' : gates.allow).toEqual(replies);
+    }
+    for (const replySettings of ['mentioned_only', [], ['following', 'following']]) expect(channel.blueskyGatesOf({ replySettings })).toBe('invalid');
+    expect(channel.blueskyGatesOf({ quotes: 'no' })).toBe('invalid');
+    expect([...channel.BLUESKY_REPLY_RULES]).toEqual([...BLUESKY_REPLY_RULES]);
   });
 
   it('checks Google Business Profile posts, and refuses their settings elsewhere (#709)', () => {
