@@ -4,6 +4,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { useTranslations } from 'use-intl';
+import { brandName, setBrandName } from './i18n/brand.ts';
 import { I18nProvider } from './i18n/provider.tsx';
 import { startLocaleSync } from './i18n/runtime.ts';
 import { startThemeSync } from './lib/theme-runtime.ts';
@@ -22,7 +23,9 @@ function ServerUnreachable() {
 
 async function start() {
   try {
-    await loadConfig();
+    // The product name (issue #1040) fills every message from the first render on; index.html says "Crove" until then.
+    setBrandName((await loadConfig()).brandName);
+    document.title = brandName();
   } catch {
     root.render(
       <I18nProvider>

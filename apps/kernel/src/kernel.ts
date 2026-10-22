@@ -406,7 +406,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config) },
             publicUrl: config.PUBLIC_URL,
             // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).
-            mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
+            mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, brand: config.BRAND_NAME, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
             archive: { store: archiveStore, lagSeconds: config.ARCHIVE_LAG_SECONDS },
             usageLimits: usageLimits(config),
             securityAlerts: securityAlerts(config),

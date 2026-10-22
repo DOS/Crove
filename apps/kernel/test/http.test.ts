@@ -185,6 +185,33 @@ describe('configuration guards', () => {
       privacyUrl: 'https://crove.example.com/privacy',
     });
   });
+
+  // #1040: the product name users see is one setting, "Crove" when unset, plain text only.
+  it('validates BRAND_NAME and hands it to the app, "Crove" when unset', async () => {
+    expect(loadConfig(base).BRAND_NAME).toBe('Crove');
+    expect(loadConfig({ ...base, BRAND_NAME: ' ' }).BRAND_NAME).toBe('Crove');
+    expect(loadConfig({ ...base, BRAND_NAME: ' Tên Mới ' }).BRAND_NAME).toBe('Tên Mới');
+    expect(loadConfig({ ...base, BRAND_NAME: "Sổ Xanh & Co's (VN)" }).BRAND_NAME).toBe("Sổ Xanh & Co's (VN)");
+    expect(loadConfig({ ...base, BRAND_NAME: 'x'.repeat(40) }).BRAND_NAME).toHaveLength(40);
+    for (const name of ['x'.repeat(41), '<b>Crove</b>', '{brand}', 'A "quoted" name', 'Line\nbreak', '-dash first', 'a/b', 'mail@example.com']) {
+      expect(() => loadConfig({ ...base, BRAND_NAME: name }), name).toThrow(/BRAND_NAME/);
+    }
+    const read = async (env: Record<string, string>) => {
+      const app = createHttpApp({
+        config: loadConfig({ ...base, WEB_DIST: '/nonexistent', ...env }),
+        runtime: { installed: () => true, modules: () => ['kernel'] } as unknown as Runtime,
+        store: {} as BlobStore,
+        authenticate: async () => {
+          throw new Error('not used');
+        },
+        pool: {} as pg.Pool,
+        aiEnabled: false,
+      });
+      return ((await (await app.request('/api/config')).json()) as { brandName: unknown }).brandName;
+    };
+    expect(await read({})).toBe('Crove');
+    expect(await read({ BRAND_NAME: 'Tên Mới' })).toBe('Tên Mới');
+  });
 });
 
 // #892: the deploy's smoke test reads the build and the migrations missing from the ledger.

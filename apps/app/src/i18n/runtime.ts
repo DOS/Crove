@@ -2,14 +2,32 @@
 // translates too, and React follows it through useSyncExternalStore (provider.tsx). The preference is stored in this
 // browser only; it is a display setting, not account data.
 import { createTranslator } from 'use-intl/core';
+import { brandCatalog, brandName, subscribeBrand, type Branded } from './brand.ts';
 import type { CatalogShape } from './catalog.ts';
 import { LOCALE_STORAGE_KEY, isLocale, resolveLocale, type Locale } from './locale.ts';
 import { en } from './messages/en.ts';
-import { vi, type Messages } from './messages/vi.ts';
+import { vi, type Messages as SourceMessages } from './messages/vi.ts';
 
 // en.ts is checked against vi.ts key by key and argument by argument (catalog.ts), so it stands in for the Vietnamese
-// message types use-intl is configured with.
-export const CATALOGS: Record<Locale, Messages> = { vi, en: en satisfies CatalogShape<Messages> as unknown as Messages };
+// message types use-intl is configured with. These are the catalogs as written, with `{brand}` where they name the
+// product (issue #1040); catalog() gives them with the name filled in.
+export const SOURCE_CATALOGS: Record<Locale, SourceMessages> = { vi, en: en satisfies CatalogShape<SourceMessages> as unknown as SourceMessages };
+
+// The messages use-intl is given: the source catalog with the product name filled in (brand.ts).
+export type Messages = Branded<SourceMessages>;
+
+const filled = new Map<Locale, { brand: string; messages: Messages }>();
+
+// The catalog of a locale with the current product name, made once per locale and name.
+export function catalog(locale: Locale): Messages {
+  const brand = brandName();
+  let entry = filled.get(locale);
+  if (entry?.brand !== brand) {
+    entry = { brand, messages: brandCatalog(SOURCE_CATALOGS[locale], brand) };
+    filled.set(locale, entry);
+  }
+  return entry.messages;
+}
 
 function localStorageOrNull(): Storage | null {
   try {
@@ -86,13 +104,15 @@ export function startLocaleSync(target: Pick<Window, 'addEventListener' | 'remov
 }
 
 export function translatorFor(locale: Locale) {
-  return createTranslator({ locale, messages: CATALOGS[locale] });
+  return createTranslator({ locale, messages: catalog(locale) });
 }
 
 // A translator over the whole catalog, as useTranslations() returns it; pure helpers take one as an argument.
 export type Translate = ReturnType<typeof translatorFor>;
 
 const translators = new Map<Locale, Translate>();
+// A new product name makes new translators.
+subscribeBrand(() => translators.clear());
 
 // A translator for the active locale, for code outside React components. One per locale, made on first use.
 export function translator(): Translate {

@@ -3,7 +3,8 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { IntlProvider, useTranslations } from 'use-intl';
 import { formatDate, formatDateTime, formatTime, formatDecimal, formatMoney, formatMonthYear, formatNumber, formatWeekdayShort } from '../lib/format.ts';
 import { LOCALES, LOCALE_NAMES, type Locale } from './locale.ts';
-import { CATALOGS, activeLocale, setActiveLocale, subscribeLocale } from './runtime.ts';
+import { brandName, subscribeBrand } from './brand.ts';
+import { activeLocale, catalog, setActiveLocale, subscribeLocale } from './runtime.ts';
 
 const LocaleContext = createContext<{ locale: Locale; setLocale: (locale: Locale) => void }>({
   locale: activeLocale(),
@@ -17,10 +18,13 @@ const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 // it. Translated text is never kept in state, so everything on screen switches with it (issue #215).
 export function I18nProvider({ children }: { children: ReactNode }) {
   const locale = useSyncExternalStore(subscribeLocale, activeLocale, activeLocale);
+  // The product name is set once at start (issue #1040); following it keeps the tree right if it is set later.
+  const brand = useSyncExternalStore(subscribeBrand, brandName, brandName);
+  const messages = useMemo(() => catalog(locale), [locale, brand]);
   const value = useMemo(() => ({ locale, setLocale: setActiveLocale }), [locale]);
   return (
     <LocaleContext.Provider value={value}>
-      <IntlProvider locale={locale} messages={CATALOGS[locale]} timeZone={timeZone}>
+      <IntlProvider locale={locale} messages={messages} timeZone={timeZone}>
         {children}
       </IntlProvider>
     </LocaleContext.Provider>

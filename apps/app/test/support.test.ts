@@ -1,8 +1,11 @@
 // The feedback and support link and the quick guide (issue #310).
 import { describe, expect, it } from 'vitest';
 import { vi } from '../src/i18n/messages/vi.ts';
-import { FIRM_GUIDE, fill } from '../src/lib/firm-guide.ts';
-import { QUICK_GUIDE } from '../src/lib/quick-guide.ts';
+import { firmGuide, fill } from '../src/lib/firm-guide.ts';
+import { quickGuide } from '../src/lib/quick-guide.ts';
+
+const QUICK_GUIDE = quickGuide();
+const FIRM_GUIDE = firmGuide();
 import { supportLink } from '../src/lib/support.ts';
 
 describe('support link', () => {
@@ -95,13 +98,22 @@ describe('firm guide (#661)', () => {
     // Every string of the vi catalog, with its placeholders filled as the guide fills them.
     const catalog = new Set<string>();
     const walk = (node: unknown) => {
-      if (typeof node === 'string') catalog.add(fill(node, { count: 'N', month: 'MM/YYYY' }));
+      if (typeof node === 'string') catalog.add(fill(node, { count: 'N', month: 'MM/YYYY', brand: 'Crove' }));
       else if (node && typeof node === 'object') Object.values(node).forEach(walk);
     };
     walk(vi);
     const quoted = [...text.matchAll(/"([^"]+)"/g)].map((match) => match[1] ?? '');
     expect(quoted.length).toBeGreaterThan(40);
     expect(quoted.filter((label) => !catalog.has(label))).toEqual([]);
+  });
+
+  // #1040: both guides name the product by BRAND_NAME, in their own text and in the labels they quote.
+  it('names the product by the brand it is given', () => {
+    const renamed = [...quickGuide('Tên Mới'), ...firmGuide('Tên Mới')].flatMap((step) => [step.title, ...step.items]).join('\n');
+    expect(renamed).toContain('Tên Mới');
+    expect(renamed).not.toContain('Crove');
+    expect(renamed).not.toMatch(/[{}]/);
+    expect(text).toContain('trong Crove');
   });
 
   it('fills ICU placeholders and leaves unknown ones', () => {

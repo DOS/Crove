@@ -20,14 +20,14 @@ export interface DeliveryResult {
   providerMessageId?: string;
 }
 
-type MailConfig = Pick<Config, 'MAIL_PROVIDER' | 'SMTP_HOST' | 'SMTP_PORT' | 'SMTP_USER' | 'SMTP_PASS' | 'SMTP_FROM' | 'RESEND_API_KEY' | 'RESEND_WEBHOOK_SECRET'>;
+type MailConfig = Pick<Config, 'MAIL_PROVIDER' | 'SMTP_HOST' | 'SMTP_PORT' | 'SMTP_USER' | 'SMTP_PASS' | 'SMTP_FROM' | 'RESEND_API_KEY' | 'RESEND_WEBHOOK_SECRET'> & Partial<Pick<Config, 'BRAND_NAME'>>;
 
 export function createMailer(config: MailConfig): MailProvider {
   if (config.MAIL_PROVIDER === 'resend' && config.RESEND_API_KEY && config.SMTP_FROM) {
     return createResendProvider({ apiKey: config.RESEND_API_KEY, from: config.SMTP_FROM, webhookSecret: config.RESEND_WEBHOOK_SECRET });
   }
   if (!config.SMTP_HOST || !config.SMTP_FROM) return createLogProvider();
-  return createSmtpProvider({ host: config.SMTP_HOST, port: config.SMTP_PORT, user: config.SMTP_USER, pass: config.SMTP_PASS, from: config.SMTP_FROM });
+  return createSmtpProvider({ host: config.SMTP_HOST, port: config.SMTP_PORT, user: config.SMTP_USER, pass: config.SMTP_PASS, from: config.SMTP_FROM, senderName: config.BRAND_NAME });
 }
 
 // The right-hand side of the Message-ID of the mail Crove sends (#538): the domain of SMTP_FROM, else the host of
