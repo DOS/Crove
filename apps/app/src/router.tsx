@@ -252,16 +252,18 @@ const socialRoute = createRoute({
   ),
 });
 const socialIndexRoute = createRoute({ getParentRoute: () => socialRoute, path: '/', validateSearch: parseSocialSearch, component: SocialPage });
-// ?at=<ISO time>: the calendar starts a post planned for that time (#580); ?idea=<id>: a draft made from an idea (#701).
+// ?at=<ISO time>: the calendar starts a post planned for that time (#580); ?idea=<id>: a draft made from an idea (#701);
+// ?channel=<id>: a post for that channel, from the notice of its queue running low (#1079).
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const socialNewRoute = createRoute({
   getParentRoute: () => socialRoute,
   path: 'new',
-  validateSearch: (search: Record<string, unknown>): { at?: string; idea?: string; occasion?: string; on?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { at?: string; idea?: string; occasion?: string; on?: string; channel?: string } => ({
     ...(typeof search.at === 'string' && !Number.isNaN(Date.parse(search.at)) ? { at: new Date(search.at).toISOString() } : {}),
     // ?occasion=<id>&on=<YYYY-MM-DD>: a post for an occasion of the calendar (#702).
     ...(typeof search.occasion === 'string' && OCCASION_IDS.has(search.occasion) && typeof search.on === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(search.on) ? { occasion: search.occasion, on: search.on } : {}),
     ...(typeof search.idea === 'string' && UUID.test(search.idea) ? { idea: search.idea.toLowerCase() } : {}),
+    ...(typeof search.channel === 'string' && UUID.test(search.channel) ? { channel: search.channel.toLowerCase() } : {}),
   }),
   component: SocialComposePage,
 });

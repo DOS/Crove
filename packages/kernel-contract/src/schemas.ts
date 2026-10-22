@@ -334,7 +334,7 @@ export const zChannelConnection = z.object({
 });
 
 // Providers connected through an OAuth dialog (Social plan S6), and the attempt's state: 32 random bytes, base64url.
-export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x', 'google_business', 'pinterest'] as const;
+export const OAUTH_CHANNEL_PROVIDERS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x', 'google_business', 'pinterest', 'linkedin_page'] as const;
 // Accounts one OAuth grant connects in a request, one command each (#375): a Meta user may manage hundreds of Pages.
 export const OAUTH_MAX_ACCOUNTS_PER_GRANT = 100;
 export const zOAuthProvider = z.enum(OAUTH_CHANNEL_PROVIDERS);
@@ -1188,6 +1188,8 @@ export const zSocialQueueSet = z.strictObject({
   connectionId: zId,
   timeZone: z.string().min(1).max(64),
   paused: z.boolean().optional(),
+  // Warn the team when a posting day in the next N days has no post (#1079); null turns it off, left out keeps it.
+  lowDays: z.number().int().min(1).max(30).nullable().optional(),
   slots: z
     .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional(), labelId: zId.nullable().optional() }))
     .max(100),
@@ -1663,6 +1665,9 @@ export const zSocialQueue = z.object({
   paused: z.boolean(),
   slots: z.array(z.object({ weekday: z.number().int(), minute: z.number().int(), label: z.string().nullable(), labelId: zId.nullable(), active: z.boolean() })),
   nextFree: z.array(z.string()),
+  // The low-queue warning (#1079): its number of days, and whether the queue is low by it now.
+  lowDays: z.number().int().nullable(),
+  low: z.boolean(),
 });
 
 // A client report link of a period (#643); its token is in the create answer only.
@@ -1791,7 +1796,7 @@ export const zSocialLinkPreview = z.object({
 });
 
 // In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold'] as const;
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold', 'queue_low'] as const;
 export const zSocialNotificationKind = z.enum(SOCIAL_NOTIFICATION_KINDS);
 export const zSocialNotifications = z.object({
   items: z.array(

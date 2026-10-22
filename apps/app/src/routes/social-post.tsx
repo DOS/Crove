@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -592,10 +592,11 @@ function ProviderSettings({
       </div>
     );
   }
-  // LinkedIn (#983): who sees the post; anyone unless chosen.
-  if (provider === 'linkedin') {
+  // LinkedIn (#983): who sees the post; anyone unless chosen. A Company Page (#1077) has no connections to choose.
+  const linkedinValues = linkedinVisibilities(provider);
+  if (linkedinValues) {
     const current = typeof settings.visibility === 'string' ? settings.visibility : 'public';
-    const known = (LINKEDIN_VISIBILITY as readonly string[]).includes(current);
+    const known = (linkedinValues as readonly string[]).includes(current);
     return (
       <div className="space-y-1.5">
         <Label htmlFor="linkedin-visibility" className="text-xs">
@@ -613,7 +614,7 @@ function ProviderSettings({
           }}
         >
           {!known && <NativeSelectOption value={current}>{current}</NativeSelectOption>}
-          {LINKEDIN_VISIBILITY.map((v) => (
+          {linkedinValues.map((v) => (
             <NativeSelectOption key={v} value={v}>
               {t(`linkedinVisibilityOption.${v}`)}
             </NativeSelectOption>
@@ -1502,7 +1503,8 @@ function ChannelEditor({
   const pollRule = isProvider(provider) ? POLL_RULES[provider] : undefined;
   const pollMinutes = pollDurationOf(own.settings);
   const replySettings = replySettingOf(provider, own.settings);
-  const linkedinVisibility = provider === 'linkedin' && (own.settings.visibility === 'connections' || own.settings.visibility === 'loggedIn') ? (own.settings.visibility as 'connections' | 'loggedIn') : null;
+  const linkedinVisibility =
+    (own.settings.visibility === 'connections' || own.settings.visibility === 'loggedIn') && (linkedinVisibilities(provider) as readonly string[] | null)?.includes(own.settings.visibility) ? (own.settings.visibility as 'connections' | 'loggedIn') : null;
   const tag = topicTagOf(own.settings);
   const telegramButtons = provider === 'telegram' ? telegramButtonsOf(own.settings) : null;
   const content = {
@@ -1772,7 +1774,7 @@ export function SocialComposePage() {
   const scope = useChannelScope();
   const live = (channels.data ?? []).filter((c) => c.status === 'active' && scope.allows(c.id));
   // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
-  const search: { at?: string; idea?: string; occasion?: string; on?: string } = useSearch({ strict: false });
+  const search: { at?: string; idea?: string; occasion?: string; on?: string; channel?: string } = useSearch({ strict: false });
   // A post for an occasion of the calendar (#702): named above the form, and the AI brief starts from it.
   const tOcc = useTranslations('social.occasions');
   const occasion = search.occasion && search.on ? { name: tOcc(`names.${search.occasion as 'tet'}`), date: f.date(search.on) } : null;
@@ -1794,9 +1796,11 @@ export function SocialComposePage() {
   }, [idea.data]);
   const ideaId = idea.data && !idea.data.postId && idea.data.stage !== 'archived' ? idea.data.id : null;
   useEffect(() => {
-    // The only channel is chosen for you.
-    if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
-  }, [live.length]); // eslint-disable-line react-hooks/exhaustive-deps
+    // The only channel is chosen for you, and so is the channel a link names (a queue running low, #1079).
+    if (chosen.length > 0) return;
+    if (search.channel && live.some((c) => c.id === search.channel)) setChosen([search.channel]);
+    else if (live.length === 1 && live[0]) setChosen([live[0].id]);
+  }, [live.length, search.channel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Unsaved work is kept in this browser as it is typed (#634) and offered back after a reload; leaving asks first.
   const [restore, setRestore] = useState(() => loadDraft<ComposeDraft>(slug, 'new'));

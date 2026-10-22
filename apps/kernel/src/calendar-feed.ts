@@ -52,6 +52,7 @@ const PROVIDERS: Record<string, string> = {
   pinterest: 'Pinterest',
   discord: 'Discord',
   wordpress: 'WordPress',
+  linkedin_page: 'LinkedIn Page',
 };
 const STATUS: Record<CalendarFeedEvent['status'], string> = { scheduled: 'Đã lên lịch', published: 'Đã đăng' };
 

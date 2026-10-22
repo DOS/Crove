@@ -43,6 +43,8 @@ export const CHANNEL_PROVIDERS = [
   'pinterest',
   'discord',
   'wordpress',
+  // LinkedIn Company Pages (#1077), with the LinkedIn app once it has the Community Management API.
+  'linkedin_page',
 ] as const;
 export type ChannelProviderId = (typeof CHANNEL_PROVIDERS)[number];
 

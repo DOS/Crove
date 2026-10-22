@@ -1398,6 +1398,8 @@ export interface SocialQueueTable {
   paused: Generated<boolean>;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  low_days: number | null;
+  low_alerted_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.report_branding */
