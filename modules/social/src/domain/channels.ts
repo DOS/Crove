@@ -420,6 +420,33 @@ export function scopeNeeded(provider: Provider, settings: Readonly<Record<string
   return provider === 'tiktok' && tiktokModeOf(settings) === 'inbox' ? 'video.upload' : null;
 }
 
+// TikTok's commercial content and AI labels (#1078), in `settings.tiktok`: { commercial?, yourBrand?, brandedContent?,
+// aiGenerated? }, each true when on and not stored when off, so a variant saved before keeps its content hash and the
+// init body it always sent. commercial is the disclosure turned on, which needs yourBrand (promoting yourself or your
+// own business, labelled "Promotional content"), brandedContent (promoting another brand or a third party, labelled
+// "Paid partnership"), or both; aiGenerated asks TikTok for its AI-generated label. Branded content cannot be "only
+// me" (SELF_ONLY), and a draft sent to the TikTok app takes none of them. The adapter's tiktokDisclosureOf in
+// @crove/channel reads the same value.
+export interface TikTokDisclosure {
+  commercial: boolean;
+  yourBrand: boolean;
+  brandedContent: boolean;
+  aiGenerated: boolean;
+}
+export const TIKTOK_DISCLOSURE_KEYS = ['commercial', 'yourBrand', 'brandedContent', 'aiGenerated'] as const;
+// The disclosure in a variant's settings: null when there is none, 'invalid' when settings.tiktok is not an object of
+// those true-or-false keys. yourBrand or brandedContent counts as the disclosure turned on.
+export function tiktokDisclosureOf(settings: Readonly<Record<string, unknown>> | undefined): TikTokDisclosure | 'invalid' | null {
+  const raw = settings?.tiktok;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.entries(r).some(([k, v]) => !(TIKTOK_DISCLOSURE_KEYS as readonly string[]).includes(k) || typeof v !== 'boolean')) return 'invalid';
+  const yourBrand = r.yourBrand === true;
+  const brandedContent = r.brandedContent === true;
+  return { commercial: r.commercial === true || yourBrand || brandedContent, yourBrand, brandedContent, aiGenerated: r.aiGenerated === true };
+}
+
 // Telegram's silent and pinned posts (#982), in `settings.telegram`: { silent?: true, pin?: true, buttons? }. silent
 // sends the post without a sound (the adapter reads the same value); pin pins it to the top of the channel once it is
 // out, as a step of its own (pin.ts). Neither is stored when off, so a variant saved before keeps its content hash.
@@ -842,7 +869,9 @@ export const CONTENT_WARNING_MAX = 500;
 // YouTube video details (#905), read by the adapter in the same shapes: the audience (`settings.madeForKids`, a
 // boolean; absent is not made for kids, as for every variant saved before it could be chosen), the category
 // (`settings.categoryId`, one of YouTube's assignable video categories, absent is 22, People & Blogs) and the tags
-// (`settings.tags`, a list of strings). The categories are the ones videoCategories.list marks assignable; YouTube
+// (`settings.tags`, a list of strings), and since #1078 whether it holds realistic altered or synthetic content
+// (`settings.syntheticMedia`, true when on and not stored when off; sent as status.containsSyntheticMedia). Paid product
+// placement is not settable through the Data API's videos.insert, so it is declared in YouTube Studio. The categories are the ones videoCategories.list marks assignable; YouTube
 // has kept them unchanged for years, so they are a fixed list rather than a call.
 export const YOUTUBE_CATEGORIES = ['1', '2', '10', '15', '17', '19', '20', '22', '23', '24', '25', '26', '27', '28', '29'] as const;
 export type YouTubeCategory = (typeof YOUTUBE_CATEGORIES)[number];

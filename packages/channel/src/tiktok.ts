@@ -41,6 +41,40 @@ export function tiktokModeOf(settings: Readonly<Record<string, unknown>> | undef
   if (value === undefined || value === null) return 'direct';
   return TIKTOK_MODES.find((m) => m === value) ?? null;
 }
+// Commercial content and AI labels (#1078), in settings.tiktok: { commercial?, yourBrand?, brandedContent?,
+// aiGenerated? }, each true when on and absent otherwise. yourBrand (promoting yourself or your own business) goes as
+// brand_organic_toggle and TikTok labels the post "Promotional content"; brandedContent (promoting another brand or a
+// third party) goes as brand_content_toggle and TikTok labels it "Paid partnership"; aiGenerated goes as is_aigc and
+// TikTok labels it as AI-generated. commercial is the disclosure turned on: it needs yourBrand or brandedContent, or
+// the post is refused, as TikTok's sharing guidelines require. Branded content cannot be SELF_ONLY. A variant without
+// settings.tiktok sends none of these fields, exactly as before. Inbox mode takes none: the creator sets them in TikTok.
+// The domain's tiktokDisclosureOf in @crove/mod-social reads the same value.
+export interface TikTokDisclosure {
+  commercial: boolean;
+  yourBrand: boolean;
+  brandedContent: boolean;
+  aiGenerated: boolean;
+}
+const DISCLOSURE_KEYS: readonly string[] = ['commercial', 'yourBrand', 'brandedContent', 'aiGenerated'];
+// The disclosure in a variant's settings: null when there is none, 'invalid' when settings.tiktok is not an object of
+// those true-or-false keys.
+export function tiktokDisclosureOf(settings: Readonly<Record<string, unknown>> | undefined): TikTokDisclosure | 'invalid' | null {
+  const raw = settings?.tiktok;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.entries(r).some(([k, v]) => !DISCLOSURE_KEYS.includes(k) || typeof v !== 'boolean')) return 'invalid';
+  const yourBrand = r.yourBrand === true;
+  const brandedContent = r.brandedContent === true;
+  return { commercial: r.commercial === true || yourBrand || brandedContent, yourBrand, brandedContent, aiGenerated: r.aiGenerated === true };
+}
+// What the adapter refuses in a disclosure, with nothing sent (#1078).
+export const TIKTOK_DISCLOSURE_INVALID = 'TIKTOK_DISCLOSURE_INVALID';
+export const TIKTOK_COMMERCIAL_CHOOSE = 'TIKTOK_COMMERCIAL_CHOOSE';
+export const TIKTOK_BRANDED_PRIVATE = 'TIKTOK_BRANDED_PRIVATE';
+export const TIKTOK_DISCLOSURE_INBOX = 'TIKTOK_DISCLOSURE_INBOX';
+// The disclosure's fields of post_info (is_aigc goes in post_info for a video, beside it for photos).
+const brandFields = (d: TikTokDisclosure) => ({ brand_content_toggle: d.brandedContent, brand_organic_toggle: d.yourBrand });
 // Asked for only when the deployment's app has the Display API (CHANNEL_TIKTOK_VIDEO_LIST): it reads a video's counts
 // (#744). An app without it would refuse the whole sign-in, so it is never asked for by default.
 export const TIKTOK_METRICS_SCOPE = 'video.list';
@@ -369,11 +403,19 @@ export class TikTokPublisher implements Publisher {
     const inbox = mode === 'inbox';
     // Inbox mode takes no privacy level: the creator picks who sees the post in TikTok.
     const privacy = TIKTOK_PRIVACY_LEVELS.find((p) => p === input.settings.privacyLevel);
+    // The commercial content and AI labels (#1078), checked before anything is sent.
+    const disclosure = tiktokDisclosureOf(input.settings);
+    if (disclosure === 'invalid') return { kind: 'rejected', error: 'bad_request', code: TIKTOK_DISCLOSURE_INVALID };
+    if (disclosure && inbox) return { kind: 'rejected', error: 'bad_request', code: TIKTOK_DISCLOSURE_INBOX, message: 'A draft sent to the TikTok app takes no disclosure; set it in TikTok' };
+    if (disclosure?.commercial && !disclosure.yourBrand && !disclosure.brandedContent) {
+      return { kind: 'rejected', error: 'bad_request', code: TIKTOK_COMMERCIAL_CHOOSE, message: 'Choose whether the post promotes your own brand, another brand, or both' };
+    }
+    if (disclosure?.brandedContent && privacy === 'SELF_ONLY') return { kind: 'rejected', error: 'bad_request', code: TIKTOK_BRANDED_PRIVATE, message: 'Branded content visibility cannot be set to private' };
     const media = input.content.media;
     if (media.length > 0 && media.every((m) => m.mime.startsWith('image/'))) {
-      if (inbox) return this.publishPhotos(input, s.accessToken, null);
+      if (inbox) return this.publishPhotos(input, s.accessToken, null, null);
       if (!privacy) return { kind: 'rejected', error: 'bad_request', code: 'PRIVACY_REQUIRED' };
-      return this.publishPhotos(input, s.accessToken, privacy);
+      return this.publishPhotos(input, s.accessToken, privacy, disclosure);
     }
     const video = media[0];
     if (!video || !video.mime.startsWith('video/') || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
@@ -431,6 +473,8 @@ export class TikTokPublisher implements Publisher {
             disable_duet: creator.duet_disabled === true || input.settings.allowDuet !== true,
             disable_stitch: creator.stitch_disabled === true || input.settings.allowStitch !== true,
             ...(cover && 'atMs' in cover ? { video_cover_timestamp_ms: cover.atMs } : {}),
+            ...(disclosure ? brandFields(disclosure) : {}),
+            ...(disclosure?.aiGenerated ? { is_aigc: true } : {}),
           },
           source_info: source,
         });
@@ -457,7 +501,8 @@ export class TikTokPublisher implements Publisher {
 
   // A photo post: every image's URL first (nothing is sent without all of them), the creator's options, then one init.
   // privacy null: inbox mode (#903), an upload to the creator's TikTok inbox (MEDIA_UPLOAD) with its description only.
-  private async publishPhotos(input: PublishInput, token: string, privacy: TikTokPrivacy | null): Promise<PublishResult> {
+  // disclosure: the commercial content and AI labels of a direct post (#1078), already checked.
+  private async publishPhotos(input: PublishInput, token: string, privacy: TikTokPrivacy | null, disclosure: TikTokDisclosure | null): Promise<PublishResult> {
     const images = input.content.media;
     if (images.length > PHOTO_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_MEDIA' };
     if (images.some((m) => !PHOTO_TYPES.includes(m.mime.toLowerCase()))) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TYPE_NOT_ALLOWED', message: 'TikTok takes JPEG or WebP photos' };
@@ -482,6 +527,7 @@ export class TikTokPublisher implements Publisher {
         privacy_level: privacy,
         disable_comment: creator.comment_disabled === true || input.settings.allowComments !== true,
         auto_add_music: input.settings.autoAddMusic === true,
+        ...(disclosure ? brandFields(disclosure) : {}),
       };
     }
     let init: { publish_id?: unknown };
@@ -491,6 +537,8 @@ export class TikTokPublisher implements Publisher {
         source_info: { source: 'PULL_FROM_URL', photo_cover_index: 0, photo_images: urls },
         post_mode: inbox ? 'MEDIA_UPLOAD' : 'DIRECT_POST',
         media_type: 'PHOTO',
+        // The photo endpoint takes is_aigc beside post_info, not in it.
+        ...(disclosure?.aiGenerated ? { is_aigc: true } : {}),
       });
     } catch (error) {
       // An init TikTok refused posted nothing; an unclear answer did not either, since no publish_id came back.

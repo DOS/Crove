@@ -239,6 +239,69 @@ describe('TikTokPublisher', () => {
   });
 });
 
+// Commercial content and AI labels (#1078): post_info.brand_content_toggle, brand_organic_toggle and is_aigc from TikTok's
+// Content Posting API reference ("Direct Post", "Photo Post": is_aigc beside post_info), and the content sharing
+// guidelines' rule that branded content cannot be private.
+describe('TikTokPublisher content disclosure', () => {
+  const init = (id: string) => ({ body: { data: { publish_id: id, upload_url: UPLOAD }, error: ok } });
+
+  it('sends your brand, branded content and the AI label in the video init', async () => {
+    const { fetchImpl, calls } = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator(), creator(), creator()],
+      'POST open.tiktokapis.com/v2/post/publish/video/init/': [init('v_pub_file~v2-1.201'), init('v_pub_file~v2-1.202'), init('v_pub_file~v2-1.203')],
+      'PUT open-upload.tiktokapis.com/video/': [{ status: 201 }, { status: 201 }, { status: 201 }],
+    });
+    const publisher = new TikTokPublisher(APP, fetchImpl);
+    const base = { title: 'Khai trương #banh', privacy_level: 'PUBLIC_TO_EVERYONE', disable_comment: false, disable_duet: true, disable_stitch: true };
+    const source = { source: 'FILE_UPLOAD', video_size: 4, chunk_size: 4, total_chunk_count: 1 };
+    const inits = () => calls.filter((c) => c.route.endsWith('/video/init/'));
+
+    expect(await publisher.publish(input({ settings: { privacyLevel: 'PUBLIC_TO_EVERYONE', allowComments: true, tiktok: { commercial: true, brandedContent: true, aiGenerated: true } } }))).toMatchObject({ kind: 'pending', externalRef: 'v_pub_file~v2-1.201' });
+    expect(inits()[0]?.body).toEqual({ post_info: { ...base, brand_content_toggle: true, brand_organic_toggle: false, is_aigc: true }, source_info: source });
+
+    await publisher.publish(input({ settings: { privacyLevel: 'PUBLIC_TO_EVERYONE', allowComments: true, tiktok: { commercial: true, yourBrand: true } } }));
+    expect(inits()[1]?.body).toEqual({ post_info: { ...base, brand_content_toggle: false, brand_organic_toggle: true }, source_info: source });
+
+    // The AI label alone, on a private post (only branded content may not be private).
+    await publisher.publish(input({ settings: { privacyLevel: 'SELF_ONLY', allowComments: true, tiktok: { aiGenerated: true } } }));
+    expect(inits()[2]?.body).toEqual({ post_info: { ...base, privacy_level: 'SELF_ONLY', brand_content_toggle: false, brand_organic_toggle: false, is_aigc: true }, source_info: source });
+  });
+
+  it('sends the brand toggles in post_info and is_aigc beside it for photos', async () => {
+    const { fetchImpl, calls } = tiktok({
+      'POST open.tiktokapis.com/v2/post/publish/creator_info/query/': [creator(['MUTUAL_FOLLOW_FRIENDS', 'SELF_ONLY'])],
+      'POST open.tiktokapis.com/v2/post/publish/content/init/': [{ body: { data: { publish_id: 'p_pub_url~v2.201' }, error: ok } }],
+    });
+    const content = { body: 'Bộ ảnh bánh mới', title: null, linkUrl: null, media: [{ fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 4, altText: null }] };
+    const settings = { privacyLevel: 'MUTUAL_FOLLOW_FRIENDS', tiktok: { commercial: true, yourBrand: true, brandedContent: true, aiGenerated: true } };
+    expect(await new TikTokPublisher(APP, fetchImpl).publish(input({ content, settings, mediaUrl: async (id) => `https://media.crove.example/${id}` }))).toMatchObject({ kind: 'pending', externalRef: 'p_pub_url~v2.201' });
+    expect(calls[1]?.body).toEqual({
+      post_info: { description: 'Bộ ảnh bánh mới', privacy_level: 'MUTUAL_FOLLOW_FRIENDS', disable_comment: true, auto_add_music: false, brand_content_toggle: true, brand_organic_toggle: true },
+      source_info: { source: 'PULL_FROM_URL', photo_cover_index: 0, photo_images: ['https://media.crove.example/f-1'] },
+      post_mode: 'DIRECT_POST',
+      media_type: 'PHOTO',
+      is_aigc: true,
+    });
+  });
+
+  it('refuses branded content that is private, a disclosure with no choice, a bad shape and a draft for the app, with nothing sent', async () => {
+    const none = tiktok({});
+    const publisher = new TikTokPublisher({ ...APP, inbox: true }, none.fetchImpl);
+    const code = async (settings: Record<string, unknown>) => {
+      const result = await publisher.publish(input({ settings }));
+      return result.kind === 'rejected' ? result.code : result.kind;
+    };
+    expect(await code({ privacyLevel: 'SELF_ONLY', tiktok: { commercial: true, brandedContent: true } })).toBe('TIKTOK_BRANDED_PRIVATE');
+    expect(await code({ privacyLevel: 'SELF_ONLY', tiktok: { brandedContent: true, yourBrand: true } })).toBe('TIKTOK_BRANDED_PRIVATE');
+    expect(await code({ privacyLevel: 'PUBLIC_TO_EVERYONE', tiktok: { commercial: true } })).toBe('TIKTOK_COMMERCIAL_CHOOSE');
+    expect(await code({ privacyLevel: 'PUBLIC_TO_EVERYONE', tiktok: { brandedContent: 'yes' } })).toBe('TIKTOK_DISCLOSURE_INVALID');
+    expect(await code({ privacyLevel: 'PUBLIC_TO_EVERYONE', tiktok: { paid: true } })).toBe('TIKTOK_DISCLOSURE_INVALID');
+    expect(await code({ privacyLevel: 'PUBLIC_TO_EVERYONE', tiktok: [] })).toBe('TIKTOK_DISCLOSURE_INVALID');
+    expect(await code({ tiktokMode: 'inbox', tiktok: { aiGenerated: true } })).toBe('TIKTOK_DISCLOSURE_INBOX');
+    expect(none.calls).toHaveLength(0);
+  });
+});
+
 // Inbox mode (#903): shapes from TikTok's Content Posting API reference, "Upload" (post/publish/inbox/video/init,
 // scope video.upload) and "Get Post Status" (SEND_TO_USER_INBOX).
 describe('TikTokPublisher in inbox mode', () => {

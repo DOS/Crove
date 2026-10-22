@@ -6,7 +6,7 @@ import { sql, type RawBuilder } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { METRIC_NAMES, type Publisher } from '@crove/channel';
+import { METRIC_NAMES, POST_METRIC_NAMES, STORY_METRIC_NAMES, postTypeOf, type PostType, type Publisher } from '@crove/channel';
 import type { Db } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import type { Trx } from './variants.ts';
@@ -17,6 +17,7 @@ import { runAutoReply } from './auto-reply.ts';
 import { runRepost } from './repost.ts';
 import { autoReplyOf, repostRuleOf } from './domain/channels.ts';
 import { csvCell } from './domain/csv.ts';
+import { STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture } from './domain/story-metrics.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -65,7 +66,7 @@ export const metricsTarget = defineQuery({
   handler: async (ctx, input) => {
     const row = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['channel_connection_id', 'external_post_id', 'provider', 'status', 'settings'])
+      .select(['channel_connection_id', 'external_post_id', 'provider', 'status', 'settings', 'published_at'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.variantId)
       .executeTakeFirst();
@@ -75,8 +76,17 @@ export const metricsTarget = defineQuery({
       const rule = repostRuleOf((s ?? {}) as Record<string, unknown>);
       return rule && rule !== 'invalid' ? rule : null;
     };
-    // The like count that sets off the variant's auto-reply (#746), so the sweep begins one only when it is reached.
-    return { connectionId: row.channel_connection_id, externalPostId: row.external_post_id, provider: row.provider, autoReplyLikes: reply && reply !== 'invalid' ? reply.likes : null, repost: repostOf(row.settings) };
+    // The like count that sets off the variant's auto-reply (#746), so the sweep begins one only when it is reached; its
+    // post type and publish time, so a Story is asked for its own metrics and captured before it expires (#1082).
+    return {
+      connectionId: row.channel_connection_id,
+      externalPostId: row.external_post_id,
+      provider: row.provider,
+      autoReplyLikes: reply && reply !== 'invalid' ? reply.likes : null,
+      repost: repostOf(row.settings),
+      postType: postTypeOf((row.settings ?? {}) as Record<string, unknown>),
+      publishedAt: row.published_at ? row.published_at.toISOString() : null,
+    };
   },
 });
 
@@ -284,11 +294,12 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
 // A cell as a spreadsheet reads it (domain/csv.ts, which the app shares through the contract).
 export { csvCell };
 
-// labelNames: each post's label names (#639), written as one cell joined by "; ".
+// labelNames: each post's label names (#639), written as one cell joined by "; ". The Story counts (#1082) come last,
+// so the columns a sheet already reads keep their places.
 export function metricsCsv(rows: readonly (MetricsRow & { text?: string })[], channelNames: ReadonlyMap<string, string>, labelNames: ReadonlyMap<string, readonly string[]> = new Map()): string {
-  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', 'labels', ...METRIC_NAMES, 'captured_at'];
+  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', 'labels', ...POST_METRIC_NAMES, 'captured_at', ...STORY_METRIC_NAMES];
   const lines = rows.map((r) =>
-    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, (labelNames.get(r.postId) ?? []).join('; '), ...METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt]
+    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, (labelNames.get(r.postId) ?? []).join('; '), ...POST_METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt, ...STORY_METRIC_NAMES.map((m) => r.metrics[m] ?? null)]
       .map(csvCell)
       .join(','),
   );
@@ -413,6 +424,15 @@ export const metricsInsights = defineQuery({
 export const metricsCommands = [metricsRecord, metricsExport];
 export const metricsQueries = [metricsTarget, metricsSummary, metricsTotals, metricsInsights];
 
+interface MetricsTarget {
+  connectionId: string;
+  externalPostId: string;
+  autoReplyLikes: number | null;
+  repost: { likes: number | null; afterHours: number | null } | null;
+  postType: PostType | null;
+  publishedAt: string | null;
+}
+
 interface SealedChannelCredential {
   provider: string;
   externalAccountId: string;
@@ -430,22 +450,39 @@ export interface MetricsDeps {
 
 // One pass over the variants due for a capture. Every try leaves a snapshot of its capture: the answer, an empty one
 // for a platform that did not answer or refused the token (asked again next capture), or one marked gone for a post
-// the platform no longer has (never asked again).
+// the platform no longer has (never asked again). A Story (#1082) follows storyCapture: it waits rather than take a
+// capture that would push the next one past its end, takes a final capture in its last hours (a try with no answer
+// is not kept, so the next pass tries again while there is time), and is marked gone and expired once its insights
+// are over, without asking the platform.
 export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: number; skipped: number }> {
   const providers = Object.entries(deps.publishers).filter(([, p]) => typeof p.metrics === 'function').map(([id]) => id);
   const out = { recorded: 0, skipped: 0 };
   if (providers.length === 0) return out;
   const { rows } = await sql<{ org_id: string; variant_id: string; provider: string }>`
     SELECT org_id, variant_id, provider FROM crove_social.metrics_due(${METRICS_LIMIT}::int, ${providers}::text[], ${METRICS_INTERVAL_SECONDS}::int)`.execute(deps.workerDb);
-  const key = captureKey(deps.now?.() ?? new Date());
+  const now = deps.now?.() ?? new Date();
+  const key = captureKey(now);
   await eachBounded(rows, async (row) => {
     const publisher = deps.publishers[row.provider];
     try {
       const options = { actor: ACTOR, orgId: row.org_id };
-      const target = await deps.runtime.query<{ connectionId: string; externalPostId: string; autoReplyLikes: number | null; repost: { likes: number | null; afterHours: number | null } | null }>('social.metrics.target', { variantId: row.variant_id }, options);
+      const target = await deps.runtime.query<MetricsTarget>('social.metrics.target', { variantId: row.variant_id }, options);
+      const story = target.postType === 'story' && target.publishedAt ? storyCapture(new Date(target.publishedAt), now, METRICS_INTERVAL_SECONDS * 1000) : null;
+      if (story === 'wait') return;
+      if (story === 'expired') {
+        await deps.runtime.execute('social.metrics.record', { variantId: row.variant_id, captureKey: STORY_EXPIRED_KEY, metrics: {}, extra: { gone: true, expired: true } }, options);
+        out.skipped += 1;
+        return;
+      }
+      const captureKeyOf = story === 'final' ? STORY_FINAL_KEY : key;
       const sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: target.connectionId }, options);
       const secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: row.org_id, provider: sealed.provider, externalAccountId: sealed.externalAccountId });
-      const result = await publisher?.metrics?.({ externalAccountId: sealed.externalAccountId, secret, externalId: target.externalPostId });
+      const asked = { externalAccountId: sealed.externalAccountId, secret, externalId: target.externalPostId };
+      const result = await publisher?.metrics?.(target.postType && target.postType !== 'feed' ? { ...asked, postType: target.postType } : asked);
+      if (story === 'final' && !result) {
+        out.skipped += 1;
+        return;
+      }
       // A failed try is kept as an empty snapshot of this capture, so the variant waits for the next capture like the
       // others instead of being asked again every pass; the summary shows the last real answer.
       const input = !result
@@ -454,7 +491,7 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
           ? { metrics: {}, extra: result.refused === 'gone' ? { gone: true } : { error: result.refused } }
           : { metrics: result.metrics, ...(result.extra ? { extra: result.extra } : {}) };
       if (!result || 'refused' in result) out.skipped += 1;
-      const done = await deps.runtime.execute<{ recorded: boolean }>('social.metrics.record', { variantId: row.variant_id, captureKey: key, ...input }, options);
+      const done = await deps.runtime.execute<{ recorded: boolean }>('social.metrics.record', { variantId: row.variant_id, captureKey: captureKeyOf, ...input }, options);
       if (done.recorded && result && !('refused' in result)) out.recorded += 1;
       // The count may set off the variant's auto-reply (#746); its failure never touches the metrics.
       const likes = result && !('refused' in result) ? result.metrics.reactions : undefined;

@@ -147,6 +147,29 @@ describe('YouTubePublisher', () => {
     });
   });
 
+  it('discloses altered or synthetic content as status.containsSyntheticMedia, only when on (#1078)', async () => {
+    const { fetchImpl, calls } = google({
+      'POST www.googleapis.com/upload/youtube/v3/videos': [
+        { status: 200, headers: { location: SESSION } },
+        { status: 200, headers: { location: SESSION } },
+      ],
+      'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, body: { id: 'dQw4w9WgXcQ' } }, { status: 200, body: { id: 'dQw4w9WgXcR' } }],
+    });
+    const publisher = new YouTubePublisher(APP, fetchImpl);
+    expect(await publisher.publish(input({ settings: { privacy: 'public', syntheticMedia: true } }))).toMatchObject({ kind: 'accepted' });
+    expect(calls[0]?.url.searchParams.get('part')).toBe('snippet,status');
+    expect(calls[0]?.body).toEqual({
+      snippet: { title: 'Khai trương chi nhánh', description: 'Video khai trương mới\n\nhttps://example.com/a', categoryId: '22' },
+      status: { privacyStatus: 'public', selfDeclaredMadeForKids: false, embeddable: true, containsSyntheticMedia: true },
+    });
+    // Off, or not true or false, sends no disclosure: the body a variant saved before #1078 always sent.
+    await publisher.publish(input({ settings: { privacy: 'public', syntheticMedia: 'yes' } }));
+    expect(calls[2]?.body).toEqual({
+      snippet: { title: 'Khai trương chi nhánh', description: 'Video khai trương mới\n\nhttps://example.com/a', categoryId: '22' },
+      status: { privacyStatus: 'public', selfDeclaredMadeForKids: false, embeddable: true },
+    });
+  });
+
   it('keeps the old defaults for a variant saved without the video details: category 22, not made for kids, no tags', async () => {
     const { fetchImpl, calls } = google({
       'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
