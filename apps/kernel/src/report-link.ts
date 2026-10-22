@@ -31,6 +31,14 @@ export interface ReportPage {
   previous: { periodStart: string; periodEnd: string; posts: number; totals: Record<string, number> };
   channels: { channel: string; provider: string; posts: number; totals: Record<string, number>; previous: { posts: number; totals: Record<string, number> } }[];
   top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Record<string, number> }[];
+  // The agency's note (#1056), plain text, or null.
+  note: string | null;
+  // The monthly goals (#1056), only for a period of exactly one month in the goals' zone; null otherwise.
+  goals: {
+    month: string;
+    timeZone: string;
+    groups: { channel: string | null; provider: string | null; items: { metric: string; target: number; actual: number | null }[] }[];
+  } | null;
 }
 
 // null: a malformed body, or a token that names no live link (the same answer either way).
