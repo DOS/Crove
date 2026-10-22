@@ -103,6 +103,7 @@ import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
 import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
+import type { PortalSync } from './portal-sync.ts';
 import { hasVideoTrack, imageSize, sniffVideo, videoDurationMs, type ImageSize } from './media-probe.ts';
 import { safeFilename, sniffType } from './sniff.ts';
 import { directTransferOrigin } from './storage.ts';
@@ -162,6 +163,8 @@ export interface HttpDeps {
   socialWriter?: SocialDrafter;
   // The public tax registry lookup for onboarding (issue #324); unset: off (TAX_CODE_LOOKUP_URL).
   taxLookup?: TaxCodeLookup;
+  // The assisted purchase-invoice sync from the tax portal (issue #325); unset: off (TAX_PORTAL_SYNC).
+  portalSync?: PortalSync;
   // Realtime invalidation (issue #69). Unset: /api/stream answers 404 and the app keeps polling.
   stream?: StreamDeps;
 }
@@ -350,7 +353,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL, {}, config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null, config.BRAND_NAME) : undefined, deps.channels, deps.socialWriter, deps.taxLookup);
+  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL, {}, config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null, config.BRAND_NAME) : undefined, deps.channels, deps.socialWriter, deps.taxLookup, undefined, undefined, deps.portalSync);
   const perMinute = config.API_RATE_LIMIT_PER_MINUTE;
   const limiter = deps.rateLimiter !== undefined ? deps.rateLimiter : perMinute > 0 ? new RateLimiter({ perMinute }) : null;
 
@@ -414,6 +417,8 @@ export function createHttpApp(deps: HttpDeps) {
       statusPage: Boolean(config.STATUS_FILE),
       // Onboarding offers "look up" next to the tax code only when the server has a registry to ask (issue #324).
       taxCodeLookup: Boolean(deps.taxLookup),
+      // The reconciliation screen offers "Lấy danh sách từ cổng thuế" only when the deployment turned it on (issue #325).
+      taxPortalSync: Boolean(deps.portalSync),
       // The SPA shows the menus of these modules only (plan Decision 12).
       modules: runtime.modules(),
       // The app subscribes to /api/stream and polls only while it is down (issue #69).

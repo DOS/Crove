@@ -31,6 +31,7 @@ import { ConcurrencyLimiter } from './concurrency.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 import type { Delivery, DeliveryResult } from './mail.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
+import type { PortalSync } from './portal-sync.ts';
 
 export interface RpcContext {
   user: AuthUser;
@@ -194,7 +195,8 @@ function connectorFailure(error: unknown): DomainError {
 // sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
 // connected through the API (the list and disconnect still work).
 // taxLookup unset: the public tax registry lookup is off (issue #324, TAX_CODE_LOOKUP_URL).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, taxLookup?: TaxCodeLookup, drafts: DraftBudget = new DraftBudget(), blueskyLogins: BlueskyLoginBudget = new BlueskyLoginBudget()) {
+// portalSync unset: the assisted sync from the tax portal is off (issue #325, TAX_PORTAL_SYNC).
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, taxLookup?: TaxCodeLookup, drafts: DraftBudget = new DraftBudget(), blueskyLogins: BlueskyLoginBudget = new BlueskyLoginBudget(), portalSync?: PortalSync) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -219,6 +221,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     if (!finance) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun tài chính chưa được bật' });
     return inOrg(context, fn);
   };
+  // The assisted tax portal sync (issue #325): the steps check the member's role again in their commands; the password
+  // in login's input goes to the portal and nowhere else.
+  const inPortalSync = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor, sync: PortalSync) => Promise<T>) =>
+    inFinance(context, (orgId, actor) => {
+      if (!portalSync) throw new DomainError('PORTAL_SYNC_DISABLED', 404, 'Chức năng lấy dữ liệu từ cổng thuế chưa được bật trên máy chủ này');
+      return fn(orgId, actor, portalSync);
+    });
 
   // The multi-client home screen reads up to four orgs at once, a transaction each, on the API's pool of ten
   // connections (#495): one screen per user at a time and two per process; another is refused at once (OVERLOADED).
@@ -1235,6 +1244,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       remove: os.portalList.remove.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.portal_list.remove', input, { actor, orgId })),
       ),
+    },
+    portalSync: {
+      captcha: os.portalSync.captcha.handler(({ context, input }) => inPortalSync(context, (orgId, actor, sync) => sync.captcha(orgId, actor, input.period))),
+      login: os.portalSync.login.handler(({ context, input }) => inPortalSync(context, (orgId, actor, sync) => sync.login(orgId, actor, input))),
+      // The request's signal: a browser that went away stops the step before its next portal request.
+      fetchList: os.portalSync.fetchList.handler(({ context, input, signal }) => inPortalSync(context, (orgId, actor, sync) => sync.fetchList(orgId, actor, input, signal ? { signal } : {}))),
+      fetchXml: os.portalSync.fetchXml.handler(({ context, input, signal }) => inPortalSync(context, (orgId, actor, sync) => sync.fetchXml(orgId, actor, input, signal ? { signal } : {}))),
     },
     missingInvoices: {
       status: os.missingInvoices.status.handler(({ context }) =>

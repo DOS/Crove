@@ -35,6 +35,7 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, readVerified, type BlobStore, type QueryContext, type Runtime } from '@crove/kernel-runtime';
 import { isCalendarDate, parseTaxCode, toMoney, money } from '@crove/l10n-vn';
 import { portalStatus } from './domain/portal-status.ts';
+import { PORTAL_SYNC_CONTENT_TYPE, readSyncedList } from './domain/portal-api.ts';
 import { reconcilePortalList, type CroveInvoice, type PortalRow, type Reconciliation } from './domain/portal-reconcile.ts';
 import { vatPeriod, type VatPeriod } from './domain/vat-return.ts';
 
@@ -145,7 +146,7 @@ export const portalListSource = defineQuery({
       .selectFrom('crove_finance.portal_invoice_list as l')
       .innerJoin('crove_kernel.file as f', (join) => join.onRef('f.org_id', '=', 'l.org_id').onRef('f.id', '=', 'l.file_id'))
       .innerJoin('crove_kernel.tenant as t', 't.org_id', 'l.org_id')
-      .select(['l.id', 'l.status', 'l.period', 'f.storage_key', 'f.generation', 'f.sha256', 't.tax_code'])
+      .select(['l.id', 'l.status', 'l.period', 'f.storage_key', 'f.generation', 'f.sha256', 'f.content_type', 't.tax_code'])
       .where('l.org_id', '=', ctx.orgId)
       .where('l.id', '=', input.listId)
       .executeTakeFirst();
@@ -156,6 +157,8 @@ export const portalListSource = defineQuery({
       period: row.period,
       orgTaxCode: row.tax_code,
       file: { key: row.storage_key, generation: row.generation, sha256: row.sha256 },
+      // An uploaded workbook, or the portal answer a sync stored (#325).
+      contentType: row.content_type,
     };
   },
 });
@@ -504,6 +507,7 @@ interface ListSource {
   period: string;
   orgTaxCode: string | null;
   file: { key: string; generation: string | null; sha256: string };
+  contentType: string;
 }
 
 function unreadable(result: ExtractFailure): string {
@@ -615,14 +619,28 @@ export async function importPortalList(deps: PortalListDeps, orgId: string, list
   const source = await deps.runtime.query<ListSource | null>('finance.portal_list.source', { listId }, { actor: PORTAL_LIST_ACTOR, orgId });
   if (!source || !source.pending) return null;
   const bytes = await readVerified(deps.store, source.file);
-  const result = await deps.extract.extract('portal_invoice_list', bytes);
-  if (!result.ok) {
-    const limitHit = result.code === 'timeout' || result.code === 'memory';
-    if (limitHit && attempt < EXTRACT_LIMIT_RETRIES) throw new Error(`crove-extract stopped at a limit: ${result.code}`);
-    await recordPortalListFailure(deps.runtime, orgId, listId, unreadable(result));
-    return null;
+  let list: ExtractedPortalList;
+  if (source.contentType === PORTAL_SYNC_CONTENT_TYPE) {
+    // A list the assisted sync fetched from the portal's API (#325): JSON the API already checked and stored, read
+    // here with the same rules (domain/portal-api.ts); no file format to parse, so no sandbox round trip.
+    const range = vatPeriod(source.period);
+    const synced = readSyncedList(bytes, range);
+    if (!synced.ok) {
+      await recordPortalListFailure(deps.runtime, orgId, listId, synced.error);
+      return null;
+    }
+    list = synced.list;
+  } else {
+    const result = await deps.extract.extract('portal_invoice_list', bytes);
+    if (!result.ok) {
+      const limitHit = result.code === 'timeout' || result.code === 'memory';
+      if (limitHit && attempt < EXTRACT_LIMIT_RETRIES) throw new Error(`crove-extract stopped at a limit: ${result.code}`);
+      await recordPortalListFailure(deps.runtime, orgId, listId, unreadable(result));
+      return null;
+    }
+    list = result.list;
   }
-  const checked = checkPortalList(result.list, source.orgTaxCode);
+  const checked = checkPortalList(list, source.orgTaxCode);
   if (!checked.ok) {
     await recordPortalListFailure(deps.runtime, orgId, listId, checked.error);
     return null;
@@ -634,10 +652,10 @@ export async function importPortalList(deps: PortalListDeps, orgId: string, list
       status: 'done',
       listFrom: checked.listFrom,
       listTo: checked.listTo,
-      buyerTaxCode: parseTaxCode(result.list.buyerTaxCode)?.normalized ?? null,
+      buyerTaxCode: parseTaxCode(list.buyerTaxCode)?.normalized ?? null,
       rows: checked.rows,
-      skippedCount: result.list.skippedCount,
-      skipped: result.list.skipped,
+      skippedCount: list.skippedCount,
+      skipped: list.skipped,
       ownSalesCount: checked.ownSales,
       otherBuyerCount: checked.otherBuyers,
     },

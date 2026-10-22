@@ -389,6 +389,18 @@ const schema = z.object({
       })
       .optional(),
   ),
+  // The assisted purchase-invoice sync from the tax portal (issue #325, ADR-0036): the accountant types the client's
+  // portal password and solves the portal's CAPTCHA in Crove, and the API fetches the period's purchase list and invoice
+  // XML from hoadondientu.gdt.gov.vn. Off unless true: it logs in to a government portal on a client's behalf, which
+  // the deployment opts into (docs/integrations/tax-portal-sync.md). Needs the credential key (CREDENTIAL_KEY).
+  TAX_PORTAL_SYNC: z.enum(['true', 'false']).default('false'),
+  // Where the portal's API is; unset: https://hoadondientu.gdt.gov.vn/api. Only for pointing a test deployment at a
+  // fake portal (the end-to-end tests do); the API refuses it unless PUBLIC_URL is local (localhost or a .test name),
+  // since any other address would receive the client's portal password.
+  // One deadline, in seconds, for each list or XML step of a sync, all its portal requests together; past it the step
+  // stops and the screen offers to go on.
+  TAX_PORTAL_STEP_SECONDS: z.coerce.number().int().min(30).max(300).default(90),
+  TAX_PORTAL_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,
   INBOUND_SECRET: optional,
