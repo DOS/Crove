@@ -4,7 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
-import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
@@ -17,9 +17,9 @@ const ORG_NAME = 'Công ty Tờ khai XML E2E';
 const valueOf = (xml: string, tag: string) => new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(xml)?.[1];
 
 test('export the VAT return of a month as the HTKK XML of form 01/GTGT', async ({ page }) => {
-  await test.step('sign up and create the org', async () => {
+  await test.step('sign in and create the org', async () => {
     await page.goto('/');
-    await signUp(page, newEmail('vatxml'));
+    await signInNewUser(page, newEmail('vatxml'));
   });
   const slug = await createOrg(page, ORG_NAME);
   const nav = page.getByRole('navigation');

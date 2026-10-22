@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { sql } from '../lib/db.ts';
-import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 
 const HEADER = 'SAO KÊ TÀI KHOẢN\nSố tài khoản: 0011000000000\n\nNgày giao dịch;Số tham chiếu;Nội dung;Số tiền ghi nợ;Số tiền ghi có;Số dư';
 const LINES = [
@@ -19,7 +19,7 @@ const LINES = [
 
 test('import a bank statement, then an overlapping one, and find each line once', async ({ page }) => {
   await page.goto('/');
-  await signUp(page, newEmail('bank'));
+  await signInNewUser(page, newEmail('bank'));
   const slug = await createOrg(page, 'Công ty Ngân hàng');
   const dir = mkdtempSync(join(tmpdir(), 'crove-bank-'));
   const write = (name: string, lines: string[]) => {
