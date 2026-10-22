@@ -272,3 +272,69 @@ describe('YouTubePublisher metrics', () => {
     expect(await new YouTubePublisher(APP, down.fetchImpl).metrics({ ...at, externalId: 'not a video id' })).toEqual({ refused: 'gone' });
   });
 });
+describe('YouTubePublisher playlists (#1018)', () => {
+  const SALE = 'PLabcdefghijklmnopqrstuvwxyz012345';
+  const GONE = 'PL0123456789abcdef';
+  const item = (playlistId: string) => ({ externalAccountId: CHANNEL, secret: SECRET, externalId: 'dQw4w9WgXcQ', playlistId, callKey: `call-${playlistId}` });
+  const notFound = { status: 404, body: { error: { code: 404, message: 'Playlist not found.', errors: [{ reason: 'playlistNotFound' }] } } };
+
+  it('uploads the video, then puts it into each playlist with its own insert', async () => {
+    const { fetchImpl, calls } = google({
+      'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, headers: { location: SESSION } }],
+      'PUT www.googleapis.com/upload/youtube/v3/videos': [{ status: 200, body: { id: 'dQw4w9WgXcQ', status: { uploadStatus: 'uploaded' } } }],
+      'POST www.googleapis.com/youtube/v3/playlistItems': [{ body: { kind: 'youtube#playlistItem', id: 'UExpdGVtMQ' } }, { body: { kind: 'youtube#playlistItem', id: 'UExpdGVtMg' } }],
+    });
+    const publisher = new YouTubePublisher(APP, fetchImpl);
+    // The playlists are not part of the upload: its metadata is what it always was.
+    expect(await publisher.publish(input({ settings: { youtube: { playlistIds: [SALE, GONE] } } }))).toMatchObject({ kind: 'accepted', externalId: 'dQw4w9WgXcQ' });
+    expect(calls[0]?.body).toEqual({
+      snippet: { title: 'Khai trương chi nhánh', description: 'Video khai trương mới\n\nhttps://example.com/a', categoryId: '22' },
+      status: { privacyStatus: 'public', selfDeclaredMadeForKids: false, embeddable: true },
+    });
+    expect(await publisher.playlist(item(SALE))).toEqual({ kind: 'accepted', externalId: 'UExpdGVtMQ' });
+    expect(await publisher.playlist(item(GONE))).toEqual({ kind: 'accepted', externalId: 'UExpdGVtMg' });
+    expect(calls.map((c) => c.route)).toEqual([
+      'POST www.googleapis.com/upload/youtube/v3/videos',
+      'PUT www.googleapis.com/upload/youtube/v3/videos',
+      'POST www.googleapis.com/youtube/v3/playlistItems',
+      'POST www.googleapis.com/youtube/v3/playlistItems',
+    ]);
+    expect(calls[2]?.url.searchParams.get('part')).toBe('snippet');
+    expect(calls[2]?.body).toEqual({ snippet: { playlistId: SALE, resourceId: { kind: 'youtube#video', videoId: 'dQw4w9WgXcQ' } } });
+    expect(calls[3]?.body).toEqual({ snippet: { playlistId: GONE, resourceId: { kind: 'youtube#video', videoId: 'dQw4w9WgXcQ' } } });
+    expect(calls[2]?.headers.get('authorization')).toBe('Bearer ya29.token-1');
+  });
+
+  it("tells a deleted playlist, a grant without the scope, another channel's playlist and a lost answer apart", async () => {
+    const gone = google({ 'POST www.googleapis.com/youtube/v3/playlistItems': [notFound] });
+    expect(await new YouTubePublisher(APP, gone.fetchImpl).playlist(item(GONE))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'PLAYLIST_NOT_FOUND' });
+    const scope = google({ 'POST www.googleapis.com/youtube/v3/playlistItems': [{ status: 403, body: { error: { code: 403, message: 'Request had insufficient authentication scopes.', errors: [{ reason: 'insufficientPermissions' }] } } }] });
+    expect(await new YouTubePublisher(APP, scope.fetchImpl).playlist(item(SALE))).toMatchObject({ kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_PLAYLISTS' });
+    const theirs = google({ 'POST www.googleapis.com/youtube/v3/playlistItems': [{ status: 403, body: { error: { code: 403, message: 'Forbidden', errors: [{ reason: 'playlistItemsNotAccessible' }] } } }] });
+    expect(await new YouTubePublisher(APP, theirs.fetchImpl).playlist(item(SALE))).toMatchObject({ kind: 'rejected', error: 'permission', code: 'PLAYLIST_NOT_ALLOWED' });
+    const quota = google({ 'POST www.googleapis.com/youtube/v3/playlistItems': [{ status: 403, body: { error: { code: 403, message: 'quota', errors: [{ reason: 'quotaExceeded' }] } } }] });
+    expect(await new YouTubePublisher(APP, quota.fetchImpl).playlist(item(SALE))).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const lost = google({ 'POST www.googleapis.com/youtube/v3/playlistItems': [{ status: 503, body: { error: { message: 'Backend Error', errors: [{ reason: 'backendError' }] } } }] });
+    expect(await new YouTubePublisher(APP, lost.fetchImpl).playlist(item(SALE))).toMatchObject({ kind: 'unknown' });
+    // Nothing is sent for a video or a playlist id that is not one, or without a token.
+    const none = google({});
+    expect(await new YouTubePublisher(APP, none.fetchImpl).playlist({ ...item(SALE), externalId: 'not a video' })).toMatchObject({ kind: 'rejected', code: 'BAD_POST_ID' });
+    expect(await new YouTubePublisher(APP, none.fetchImpl).playlist(item('UUabcdefghijklmnopqrstuv'))).toMatchObject({ kind: 'rejected', code: 'BAD_PLAYLIST_ID' });
+    expect(await new YouTubePublisher(APP, none.fetchImpl).playlist({ ...item(SALE), secret: 'nope' })).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    expect(none.calls).toEqual([]);
+  });
+
+  it("lists the channel's own playlists for the composer, one page, and tells a dead token from an outage", async () => {
+    const { fetchImpl, calls } = google({
+      'GET www.googleapis.com/youtube/v3/playlists': [
+        { body: { items: [{ id: SALE, snippet: { title: ' Khuyến mãi tháng 10 ' } }, { id: GONE, snippet: {} }, { id: 'not a playlist', snippet: { title: 'x' } }], nextPageToken: 'CDIQAA' } },
+      ],
+    });
+    expect(await new YouTubePublisher(APP, fetchImpl).playlists({ secret: SECRET })).toEqual({ playlists: [{ id: SALE, title: 'Khuyến mãi tháng 10' }, { id: GONE, title: GONE }] });
+    expect(Object.fromEntries(calls[0]?.url.searchParams ?? [])).toEqual({ part: 'snippet', mine: 'true', maxResults: '50' });
+    const dead = google({ 'GET www.googleapis.com/youtube/v3/playlists': [{ status: 401, body: { error: { message: 'Invalid Credentials', errors: [{ reason: 'authError' }] } } }] });
+    expect(await new YouTubePublisher(APP, dead.fetchImpl).playlists({ secret: SECRET })).toEqual({ refused: 'token_expired' });
+    const down = google({ 'GET www.googleapis.com/youtube/v3/playlists': [{ status: 503, body: {} }] });
+    expect(await new YouTubePublisher(APP, down.fetchImpl).playlists({ secret: SECRET })).toBeNull();
+  });
+});

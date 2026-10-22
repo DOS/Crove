@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -139,6 +139,77 @@ function TagsField({ tags, onChange, disabled }: { tags: readonly string[]; onCh
   );
 }
 
+// The playlists a YouTube video goes into once it is out (#1018): the channel's own, pasted as a playlist link or id
+// and kept as ids in settings.youtube.playlistIds, at most YOUTUBE_PLAYLISTS_MAX. A playlist that is gone by then
+// leaves the video published, with a warning on the post.
+function PlaylistsField({ ids, onChange, disabled }: { ids: readonly string[]; onChange: (ids: string[]) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const [text, setText] = useState('');
+  const [wrong, setWrong] = useState(false);
+  const full = ids.length >= YOUTUBE_PLAYLISTS_MAX;
+  const add = () => {
+    const playlist = youtubePlaylistIdFrom(text);
+    if (!playlist) {
+      setWrong(true);
+      return;
+    }
+    if (!ids.includes(playlist)) onChange([...ids, playlist]);
+    setText('');
+    setWrong(false);
+  };
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={id} className="text-xs">
+          {t('ytPlaylists')}
+        </Label>
+        <span className={cn('font-mono text-xs tabular-nums', ids.length > YOUTUBE_PLAYLISTS_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+          {ids.length}/{YOUTUBE_PLAYLISTS_MAX}
+        </span>
+      </div>
+      {ids.length > 0 && (
+        <ul className="space-y-1">
+          {ids.map((playlist) => (
+            <li key={playlist} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1">
+              <a href={`https://www.youtube.com/playlist?list=${playlist}`} target="_blank" rel="noopener noreferrer" className="truncate font-mono text-xs text-link hover:underline">
+                {playlist}
+              </a>
+              <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onChange(ids.filter((x) => x !== playlist))}>
+                {t('ytPlaylistRemove')}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <Input
+          id={id}
+          value={text}
+          placeholder={t('ytPlaylistPlaceholder')}
+          disabled={disabled || full}
+          aria-invalid={wrong || undefined}
+          onChange={(e) => {
+            setText(e.target.value);
+            setWrong(false);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              add();
+            }
+          }}
+        />
+        <Button variant="outline" size="sm" disabled={disabled || full || text.trim() === ''} onClick={add}>
+          {t('ytPlaylistAdd')}
+        </Button>
+      </div>
+      {wrong && <p className="text-xs text-destructive">{t('ytPlaylistNotRecognized')}</p>}
+      <p className="text-xs text-subtle-foreground">{t('ytPlaylistsHint')}</p>
+    </div>
+  );
+}
+
 // YouTube (#905): who can watch, whether the video is made for kids (YouTube requires the answer; absent is no, as for
 // every video Crove posted before), its category from YouTube's fixed list, and its tags.
 function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
@@ -155,6 +226,8 @@ function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<st
   const collator = new Intl.Collator(locale);
   const categories = [...YOUTUBE_CATEGORIES].sort((a, b) => collator.compare(t(`ytCategoryOption.${a}`), t(`ytCategoryOption.${b}`)));
   const tags = Array.isArray(settings.tags) ? (settings.tags as unknown[]).filter((v): v is string => typeof v === 'string') : [];
+  const listed = youtubePlaylistsOf(settings);
+  const playlists = Array.isArray(listed) ? listed : [];
   return (
     <div className="space-y-2">
       <div className="space-y-1.5">
@@ -196,6 +269,7 @@ function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<st
         </NativeSelect>
       </div>
       <TagsField tags={tags} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, tags: next } : without('tags'))} />
+      <PlaylistsField ids={playlists} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, youtube: { playlistIds: next } } : without('youtube'))} />
     </div>
   );
 }
@@ -836,6 +910,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TOO_MANY_LINKS', { limit, actual });
       case 'YT_TAGS_TOO_LONG':
         return t('YT_TAGS_TOO_LONG', { limit, actual });
+      case 'YT_PLAYLISTS_TOO_MANY':
+        return t('YT_PLAYLISTS_TOO_MANY', { limit, actual });
       case 'CONTENT_WARNING_TOO_LONG':
         return t('CONTENT_WARNING_TOO_LONG', { limit, actual });
       case 'IG_COLLABORATORS_INVALID':
@@ -2760,6 +2836,11 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                       </div>
                     )}
                     {v.pinStatus && <p className={v.pinStatus === 'failed' || v.pinStatus === 'not_allowed' || v.pinStatus === 'unknown' ? 'text-warning' : ''}>{t(`pinStatus.${v.pinStatus}`)}</p>}
+                    {v.playlistStatus && (
+                      <p className={v.playlistStatus.state === 'pending' || v.playlistStatus.state === 'added' ? '' : 'text-warning'}>
+                        {t(`playlistStatus.${v.playlistStatus.state}`, { added: v.playlistStatus.added, total: v.playlistStatus.total })}
+                      </p>
+                    )}
                     {v.threadStatus && (
                       <div className="flex flex-wrap items-center gap-2">
                         <span className={v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown' ? 'text-warning' : ''}>

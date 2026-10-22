@@ -21,3 +21,4 @@ export { decideAgentApproval, decideApproval, eligibleApprovers, HUMAN_REVIEW_RU
 export * from './archives.ts';
 export { PARTY_NAME_MAX_LENGTH, duplicateHints, nameCore, nameSimilarity, phoneKey, type DuplicateHint, type HintParty } from './parties.ts';
 export { isArchiveType } from './files.ts';
+export * from './proposal-resubmit.ts';

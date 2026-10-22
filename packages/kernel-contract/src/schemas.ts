@@ -403,6 +403,8 @@ export const zInboxItem = z.object({
   requestedByAgent: z.object({ id: zId, name: z.string() }).nullable(),
   // Whether an extraction run read the proposal's source (so its invoice checks ran); an agent's proposal has none.
   extracted: z.boolean(),
+  // An expired proposal (#876): the whole days it waited for approval before it expired, its reason; null otherwise.
+  expiredAfterDays: z.number().int().nonnegative().nullable(),
 });
 
 // Cash and bank vouchers (issue #327; cash-voucher.ts has the rest).
@@ -518,6 +520,11 @@ export const zInboxDetail = zInboxItem.extend({
   approveReason: z.enum(['ok', 'not_pending', 'not_eligible', 'four_eyes']),
   canEdit: z.boolean(),
   canReject: z.boolean(),
+  // An expired proposal (#876): whether the caller may ask for it again (inbox.resubmit), the proposal asked for again
+  // from it, and for a proposal asked for again, the expired one it came from.
+  canResubmit: z.boolean(),
+  resubmittedAs: zId.nullable(),
+  resubmittedFrom: zId.nullable(),
   // The source file's newest extraction run (issue #40). inFlight: a re-extraction is running, so approve, edit and
   // reject wait for it. proposalVersion: the run this revision was read from; a newer failed run left it unchanged.
   extraction: z
@@ -1196,6 +1203,9 @@ export const zSocialVariant = z.object({
   commentStatus: z.enum(['pending', 'posted', 'failed', 'reconnect', 'unknown']).nullable(),
   // The pin of a published Telegram channel (#982): not_allowed when the bot may not pin there; null without one.
   pinStatus: z.enum(['pending', 'pinned', 'failed', 'not_allowed', 'unknown']).nullable(),
+  // The playlists of a published YouTube video (#1018): how many took it, of how many, and the state of the rest
+  // (missing: a playlist is gone; reconnect: the channel lacks the scope); null without any.
+  playlistStatus: z.object({ state: z.enum(['pending', 'added', 'failed', 'missing', 'reconnect', 'unknown']), added: z.number().int().min(0), total: z.number().int().min(1) }).nullable(),
   // The thread of a published channel (#742): parts out (the post is one) of the total, and the next part's state.
   threadStatus: z.object({ state: z.enum(['pending', 'posted', 'failed', 'unknown']), posted: z.number().int().min(1), total: z.number().int().min(2) }).nullable(),
   // Waiting on a slot of a queue a person paused.

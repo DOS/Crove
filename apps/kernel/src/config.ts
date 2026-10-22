@@ -199,6 +199,9 @@ const schema = z.object({
   SECURITY_ALERT_ORG_THRESHOLD: z.coerce.number().int().min(1).max(1_000_000).default(20),
   SECURITY_ALERT_REFUSAL_THRESHOLD: z.coerce.number().int().min(1).max(1_000_000).default(500),
   SECURITY_ALERT_REPEAT_MINUTES: z.coerce.number().int().min(5).max(10_080).default(60),
+  // Back-pressure (#894, plan §4.9): while the oldest unpublished outbox event is older than this, the worker stops
+  // fetching agent, bulk mail, archive and retention jobs; interactive work keeps running.
+  OUTBOX_LAG_PAUSE_SECONDS: z.coerce.number().int().min(5).max(3600).default(30),
   ALERT_WEBHOOK_URL: WEBHOOK_ENV.ALERT_WEBHOOK_URL,
   ALERT_WEBHOOK_FORMAT: WEBHOOK_ENV.ALERT_WEBHOOK_FORMAT,
   ALERT_TELEGRAM_CHAT_ID: WEBHOOK_ENV.ALERT_TELEGRAM_CHAT_ID,

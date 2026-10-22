@@ -6,12 +6,12 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { FacebookPagePublisher, SandboxPublisher, TelegramPublisher, TikTokPublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
+import { FacebookPagePublisher, SandboxPublisher, TelegramPublisher, TikTokPublisher, YouTubePublisher, type Publisher, type PublishInput, type PublishResult, type ReconcileInput, type ReconcileResult, type RetrySafety } from '@crove/channel';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
-import { captureKey, runCommentJob, runPinJob, runPublishJob, runThreadJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
+import { captureKey, runCommentJob, runPinJob, runPlaylistJob, runPublishJob, runThreadJob, socialCommands, socialQueries, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
 import { shortLinkTarget } from '../src/short-link.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -1054,6 +1054,124 @@ suite('social publishing on PostgreSQL (S4)', () => {
       expect(await runOn(o, id, publisher)).toEqual({ action: 'call', status: 'published' });
       expect(asked).toEqual([{ method: 'sendMessage', json: { chat_id: CHAT, text: 'Khai trương' } }]);
       expect((await variant(o, postId)).pinStatus).toBeNull();
+      expect(await calls(id)).toEqual([{ key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 }]);
+    });
+  });
+
+  // #1018: the YouTube publisher through the same pipeline, against recorded Data API answers: the upload, then an
+  // insert into each playlist the variant names, each its own step, and a deleted playlist that leaves the video
+  // published with a warning.
+  describe('YouTube playlists', () => {
+    const GOOGLE = { clientId: '123456789012-abcdefgh12345678.apps.googleusercontent.com', clientSecret: 'test-google-secret-not-real' };
+    const CHANNEL = 'UCabcdefghijklmnopqrstuv';
+    const SALE = 'PLabcdefghijklmnopqrstuvwxyz012345';
+    const GONE = 'PL0123456789abcdef';
+    const SESSION = 'https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&upload_id=db';
+    function dataApi(answers: Record<string, { status?: number; body?: unknown; headers?: Record<string, string> }[]>) {
+      const asked: { route: string; json: unknown }[] = [];
+      const fetchImpl = async (input: string, init?: RequestInit) => {
+        const url = new URL(input);
+        const route = `${init?.method ?? 'GET'} ${url.pathname}`;
+        asked.push({ route, json: typeof init?.body === 'string' ? JSON.parse(init.body) : null });
+        const answer = answers[route]?.shift() ?? { status: 500, body: { error: { message: `no answer for ${route}`, errors: [{ reason: 'backendError' }] } } };
+        return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json', ...answer.headers } });
+      };
+      return { asked, publisher: new YouTubePublisher(GOOGLE, fetchImpl) };
+    }
+    // A fresh copy each time: the fake answers by taking them off its lists.
+    const upload = () => ({
+      'POST /upload/youtube/v3/videos': [{ headers: { location: SESSION } }],
+      'PUT /upload/youtube/v3/videos': [{ body: { id: 'dQw4w9WgXcQ', status: { uploadStatus: 'uploaded' } } }],
+    });
+    const inserted = (playlistId: string) => ({ route: 'POST /youtube/v3/playlistItems', json: { snippet: { playlistId, resourceId: { kind: 'youtube#video', videoId: 'dQw4w9WgXcQ' } } } });
+
+    // A YouTube video with these settings, approved and due on a fresh channel; its bytes are in the store.
+    async function dueYouTube(o: { orgId: string; owner: string }, settings: Record<string, unknown>) {
+      const sealed = vault.seal(JSON.stringify({ accessToken: 'ya29.db-token', refreshToken: '1//db-refresh' }), { orgId: o.orgId, provider: 'youtube', externalAccountId: CHANNEL });
+      const { connectionId } = await exec<{ connectionId: string }>(o, 'kernel.channel.connect', {
+        provider: 'youtube',
+        externalAccountId: CHANNEL,
+        displayName: 'Tiệm Bánh B',
+        scopes: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly', 'https://www.googleapis.com/auth/youtube.force-ssl'],
+        expiresAt: null,
+        credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+      });
+      const bytes = new Uint8Array(Buffer.from(`clip-${randomUUID()}`));
+      const sha = createHash('sha256').update(bytes).digest('hex');
+      const clip = randomUUID();
+      await admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source, duration_ms)
+           VALUES ($1, $2, $3, $4, $5, 'khai-truong.mp4', 'video/mp4', $6, 'social', 12000)`,
+          [o.orgId, clip, sha, `org/${o.orgId}/${sha}`, `content:${sha}`, bytes.byteLength],
+        ),
+      );
+      const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Video khai trương', title: 'Khai trương chi nhánh', media: [{ fileId: clip }], channels: [{ connectionId, settings }] });
+      expect((await get(o, postId)).variants[0]?.issues).toEqual([]);
+      await exec(o, 'social.post.submit', { postId });
+      const post = await get(o, postId);
+      await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+      await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+      await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+      const store = { get: async (key: string) => (key === `org/${o.orgId}/${sha}` ? bytes : undefined) } as unknown as BlobStore;
+      return { postId, id: post.variants[0]?.id as string, store };
+    }
+    const runOn = (o: { orgId: string }, id: string, youtube: Publisher, store: BlobStore) => runPublishJob({ runtime: worker, broker: vault, publishers: { youtube }, store, callTimeoutMs: 2_000 }, o.orgId, id, 'youtube');
+
+    it('uploads the video, then puts it into each playlist as its own step', async () => {
+      const o = await org();
+      const { asked, publisher } = dataApi({ ...upload(), 'POST /youtube/v3/playlistItems': [{ body: { id: 'UExpdGVtMQ' } }, { body: { id: 'UExpdGVtMg' } }] });
+      const { postId, id, store } = await dueYouTube(o, { youtube: { playlistIds: [SALE, GONE] } });
+      expect(await runOn(o, id, publisher, store)).toEqual({ action: 'call', status: 'published' });
+      expect(asked.map((a) => a.route)).toEqual(['POST /upload/youtube/v3/videos', 'PUT /upload/youtube/v3/videos', 'POST /youtube/v3/playlistItems', 'POST /youtube/v3/playlistItems']);
+      expect(asked.slice(2)).toEqual([inserted(SALE), inserted(GONE)]);
+      const v = await variant(o, postId);
+      expect([v.status, v.externalUrl, v.playlistStatus]).toEqual(['published', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', { state: 'added', added: 2, total: 2 }]);
+      expect(await calls(id)).toEqual([
+        { key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 },
+        { key: `social.publish:${id}:1:1:playlist_1`, state: 'succeeded', calls: 1 },
+        { key: `social.publish:${id}:1:1:playlist_2`, state: 'succeeded', calls: 1 },
+      ]);
+    });
+
+    it('keeps the video published with a warning when a playlist was deleted, adds it to the others, and never tries again', async () => {
+      const o = await org();
+      const { asked, publisher } = dataApi({
+        ...upload(),
+        'POST /youtube/v3/playlistItems': [{ status: 404, body: { error: { code: 404, message: 'Playlist not found.', errors: [{ reason: 'playlistNotFound' }] } } }, { body: { id: 'UExpdGVtMw' } }],
+      });
+      const { postId, id, store } = await dueYouTube(o, { youtube: { playlistIds: [GONE, SALE] } });
+      expect(await runOn(o, id, publisher, store)).toEqual({ action: 'call', status: 'published' });
+      expect(asked.slice(2)).toEqual([inserted(GONE), inserted(SALE)]);
+      const v = await variant(o, postId);
+      expect([v.status, v.error, v.playlistStatus]).toEqual(['published', null, { state: 'missing', added: 1, total: 2 }]);
+      expect((await get(o, postId)).status).toBe('published');
+      expect(await calls(id)).toEqual([
+        { key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 },
+        { key: `social.publish:${id}:1:1:playlist_1`, state: 'failed', calls: 1 },
+        { key: `social.publish:${id}:1:1:playlist_2`, state: 'succeeded', calls: 1 },
+      ]);
+      const events = await admin(async (c) => (await c.query<{ type: string; payload: Record<string, unknown> }>("SELECT type, payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type LIKE 'social.variant.playlist%' ORDER BY id", [o.orgId])).rows);
+      expect(events).toEqual([
+        { type: 'social.variant.playlist_failed', payload: { post_id: postId, variant_id: id, playlist_id: GONE, code: 'PLAYLIST_NOT_FOUND' } },
+        { type: 'social.variant.playlist_added', payload: { post_id: postId, variant_id: id, playlist_id: SALE } },
+      ]);
+      // Another run, or another playlist job, sends nothing more.
+      expect(await runOn(o, id, publisher, store)).toEqual({ action: 'none', reason: 'published' });
+      expect(await runPlaylistJob({ runtime: worker, broker: vault, publishers: { youtube: publisher }, callTimeoutMs: 2_000 }, o.orgId, id, 'youtube')).toEqual({ action: 'none', reason: 'done' });
+      expect(asked).toHaveLength(4);
+      // The worker alone begins and records an insert.
+      await expect(exec(o, 'social.playlist.begin', { variantId: id, provider: 'youtube' })).rejects.toMatchObject({ status: 403 });
+      await expect(exec(o, 'social.playlist.record', { variantId: id, callKey: `social.publish:${id}:1:1:playlist_1`, result: { kind: 'accepted', externalId: 'x' } })).rejects.toMatchObject({ status: 403 });
+    });
+
+    it('uploads a video as usual without playlists, with no insert', async () => {
+      const o = await org();
+      const { asked, publisher } = dataApi(upload());
+      const { postId, id, store } = await dueYouTube(o, {});
+      expect(await runOn(o, id, publisher, store)).toEqual({ action: 'call', status: 'published' });
+      expect(asked).toHaveLength(2);
+      expect((await variant(o, postId)).playlistStatus).toBeNull();
       expect(await calls(id)).toEqual([{ key: `social.publish:${id}:1:1:publish`, state: 'succeeded', calls: 1 }]);
     });
   });

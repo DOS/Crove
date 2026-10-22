@@ -131,10 +131,12 @@ import { zTimeline } from './timeline.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
 import { zPersonalDataErasure, zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
 
-// Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told.
+// Proposal reminders (issue #676): days before the approvers are reminded and before the owners are told; and expiry
+// (#876): days after which a proposal still pending expires. Expiry needs the escalation and comes after it.
 export const zProposalPolicy = z.object({
   remindAfterDays: z.number().int().min(1).max(30).nullable(),
   escalateAfterDays: z.number().int().min(1).max(60).nullable(),
+  expireAfterDays: z.number().int().min(2).max(90).nullable(),
 });
 
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
@@ -766,6 +768,9 @@ export const contract = {
       )
       .output(z.object({ revision: z.number().int(), changed: z.boolean() })),
     reject: oc.input(z.object({ id: zId, reason: z.string().max(500).optional() })).output(z.object({ ok: z.literal(true) })),
+    // Asks again for a proposal that expired (#876; owners, admins and members who wrote it): a new pending proposal from
+    // the same source, approved like any other. A retry with the same idempotencyKey returns the first one.
+    resubmit: oc.input(z.object({ id: zId, idempotencyKey: zId })).output(z.object({ proposalId: zId })),
     // Asks for a proposal that no file produced (kernel.proposal.request; owners, admins and members): reversing a
     // posted journal entry (#138, #165), or a cash or bank voucher entered by hand (#327). It posts nothing; the
     // proposal is approved like any other (R3, P10 four-eyes, P11 step-up). Reversing a purchase entry also voids

@@ -43,6 +43,7 @@ export * from './attention-inbox.ts';
 export * from './auto-reply.ts';
 export * from './repost.ts';
 export * from './pin.ts';
+export * from './playlists.ts';
 export * from './remove.ts';
 export * from './accounts.ts';
 export * from './link-preview.ts';

@@ -837,7 +837,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
 - **Job I/O:** goes through the `external_call` ledger with deterministic keys. An `ambiguous` state spawns a reconciliation job that asks the provider before retrying.
 - **CPU-heavy work:**
   - Extraction runs in `crove-extract`; archive zipping and hashing run in `worker_threads`.
-  - Watchdog: event-loop lag > 5 s sustained for 30 s -> `exit(1)`.
+  - Watchdog: event-loop lag > 5 s sustained for 30 s -> `exit(1)`. On `main` since #894 (`apps/kernel/src/back-pressure.ts`, a `perf_hooks` delay histogram read every second, with an `[alert]` line).
   - A heartbeat is written to the DB for the prober.
 - **`perOrg` schedules:** jitter by `hash(org_id)`.
 - **Second worker:** enabled before the first paying Finance tenant. The relay stays exclusive; consumers use SKIP LOCKED.
@@ -859,7 +859,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
 
 **Processes:** transitions are pure functions; state lives in `process_instance`; timers are job intents; waiting on a human is a proposal.
 
-**Back-pressure:** outbox lag > 30 s pauses background, agent and bulk jobs. Interactive work keeps running.
+**Back-pressure:** outbox lag > 30 s pauses background, agent and bulk jobs. Interactive work keeps running. On `main` since #894: every 10 s the worker reads `crove_kernel.outbox_lag_seconds()` (worker only); over `OUTBOX_LAG_PAUSE_SECONDS` (default 30) it stops fetching the agent, bulk mail, archive and retention queues (pg-boss `offWork`) and works them again once the lag is under half of it. Each change is logged and posted to the alert webhook ([incidents.md](../runbooks/incidents.md), section 2).
 
 **Event versioning:**
 - Adding an optional field: same version.
@@ -1423,6 +1423,7 @@ Data residency requirements are handled with a legal opinion plus a copy in Viet
 - **After approval:**
   - Continuing the run: `kernel.agent_run.continue` opens a new turn.
   - Expiry, reminders and escalation are delayed jobs.
+  - On `main` (#676, #876): one worker sweep every 30 minutes instead of a delayed job per proposal. `proposal_policy` sets the days before the approvers are reminded, before the owners are told and, optionally, before a still pending proposal expires (off by default; it needs the escalation and comes after it). `kernel.proposal.expire` (system only) moves the proposal to `expired` under its lock, only once its owners were told and had the days between escalation and expiry (an old backlog is escalated first), with an audit row and an activity entry and nothing else, so nobody is mailed again. Approve, edit and reject refuse an expired proposal (`PROPOSAL_EXPIRED`). Its author asks for it again with `kernel.proposal.resubmit`: a new pending proposal from the same request (the preparer runs again on the kept request) or the same file reading, at most once per expired proposal.
   - Agent R1 actions get a 24 h Undo via `reversibleBy`.
 
 ### 8.4 Evidence and extraction

@@ -32,6 +32,7 @@ const MACHINERY = new Set([
   'crove_kernel.credential',
   'crove_kernel.oauth_state',
   'crove_kernel.inbound_drop',
+  'crove_kernel.outbox_archive',
   'crove_kernel.outbox_pending',
   'crove_kernel.refusal_tally',
   'crove_social.chat_alert_target',
@@ -42,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.outbox_archive',
   'crove_social.publish_hold',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -559,6 +561,9 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // What an org used of its daily abuse limits (#675), recorded by the worker: append-only, tenants read and insert.
   'crove_kernel.org_usage': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), metric: 'inbound_emails', amount: '1' } }) },
+  'crove_kernel.outbox_archive': {
+    make: (o) => ({ row: { org_id: o.id, day: '2020-01-01', object_key: `outbox/v1/${o.id}/2020-01-01.jsonl`, sha256: 'a'.repeat(64), row_count: 1 } }),
+  },
   'crove_kernel.outbox_event': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), type: 'rls.matrix', payload: '{}' } }) },
   'crove_kernel.outbox_pending': { make: (o) => ({ row: { org_id: o.id, event_id: randomUUID() } }) },
   'crove_kernel.party': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: 'RLS matrix party' } }) },

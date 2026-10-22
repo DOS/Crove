@@ -365,8 +365,17 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
       },
     }),
   );
+  // Asking again for an expired proposal (#876) makes a new pending proposal from the same source; the page opens it.
+  const resubmit = useMutation(
+    orpc.inbox.resubmit.mutationOptions({
+      onSuccess: async (created) => {
+        await queryClient.invalidateQueries();
+        await navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: created.proposalId } });
+      },
+    }),
+  );
   const dirty = (payload?.lines ?? []).some((l) => (lineAccounts[l.lineNo] ?? l.debitAccount) !== l.debitAccount);
-  const busy = approve.isPending || reject.isPending || edit.isPending || reextract.isPending;
+  const busy = approve.isPending || reject.isPending || edit.isPending || reextract.isPending || resubmit.isPending;
 
   const item = detail.data;
   const pending = item?.status === 'pending';
@@ -459,7 +468,13 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         size="lg"
         disabled={busy}
         onClick={() => {
-          const ask = pending ? t('confirmRereadPending') : item.voided ? t('confirmRereadVoided') : t('confirmRereadOther');
+          const ask = pending
+            ? t('confirmRereadPending')
+            : item.voided
+              ? t('confirmRereadVoided')
+              : item.status === 'expired'
+                ? t('confirmRereadExpired')
+                : t('confirmRereadOther');
           if (!window.confirm(ask)) return;
           reextract.mutate({ fileId, idempotencyKey: crypto.randomUUID() });
         }}
@@ -570,7 +585,20 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
               <>
                 {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
                 {reextractButton}
-                <Badge variant={item.status === 'executed' ? 'success' : 'secondary'}>
+                {item.canResubmit && (
+                  <Button
+                    size="lg"
+                    disabled={busy}
+                    onClick={() => {
+                      if (!window.confirm(t('confirmResubmit'))) return;
+                      resubmit.mutate({ id, idempotencyKey: crypto.randomUUID() });
+                    }}
+                  >
+                    {resubmit.isPending ? <Spinner className="text-current" /> : null}
+                    {t('resubmit')}
+                  </Button>
+                )}
+                <Badge variant={item.status === 'executed' ? 'success' : item.status === 'expired' ? 'warning' : 'secondary'}>
                   {item.status === 'executed'
                     ? t('executedAt', { at: f.dateTime(item.decidedAt) })
                     : item.status === 'rejected'
@@ -590,7 +618,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           <StepUpPrompt action={reversal ? t('stepUpApproveReversal') : voucher ? t('stepUpApproveVoucher') : journalVoucher ? t('stepUpApproveJournalVoucher') : t('stepUpApprove')} onVerified={retryApproval} onCancel={() => approve.reset()} />
         </div>
       )}
-      {((approve.error && !stepUp) || reject.error || edit.error || reextract.error) && (
+      {((approve.error && !stepUp) || reject.error || edit.error || reextract.error || resubmit.error) && (
         <div className="mb-4">
           <ErrorText>
             {reversal && approve.error && !stepUp
@@ -599,9 +627,33 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                 ? root(`vouchers.problems.${refusedVoucher}`)
               : journalVoucher && approve.error && !stepUp && refusedJournalVoucher
                 ? root(`journalVoucher.problems.${refusedJournalVoucher}`)
-              : errorMessage((stepUp ? null : approve.error) ?? reject.error ?? edit.error ?? reextract.error)}
+              : errorMessage((stepUp ? null : approve.error) ?? reject.error ?? edit.error ?? reextract.error ?? resubmit.error)}
           </ErrorText>
         </div>
+      )}
+      {/* An expired proposal (#876): why it expired, and what can be done with it. */}
+      {item.status === 'expired' && (
+        <div className="mb-4 space-y-1 text-sm text-muted-foreground" role="status">
+          <p>{t('expiredNotice', { days: item.expiredAfterDays ?? 0, at: f.dateTime(item.decidedAt) })}</p>
+          {item.resubmittedAs ? (
+            <p>
+              {t('resubmittedAs')}{' '}
+              <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.resubmittedAs }} className="text-link underline">
+                {t('openResubmitted')}
+              </Link>
+            </p>
+          ) : (
+            <p>{item.canResubmit ? t('expiredResubmitHint') : t('expiredAuthorHint')}</p>
+          )}
+        </div>
+      )}
+      {item.resubmittedFrom && (
+        <p className="mb-4 text-sm text-muted-foreground">
+          {t('resubmittedFrom')}{' '}
+          <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.resubmittedFrom }} className="text-link underline">
+            {t('openExpired')}
+          </Link>
+        </p>
       )}
       {/* An executed purchase whose document was voided by reversing its entry (#165). */}
       {item.voided && (

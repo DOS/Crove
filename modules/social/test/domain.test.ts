@@ -37,6 +37,9 @@ import {
   validateVariant,
   VARIANT_STATUSES,
   YOUTUBE_CATEGORIES,
+  YOUTUBE_PLAYLIST_ID,
+  youtubePlaylistIdFrom,
+  youtubePlaylistsOf,
   youtubeTagsLength,
   type CallState,
   type HashedVariant,
@@ -230,6 +233,43 @@ describe('validateVariant', () => {
     it('names the limits the Telegram adapter sends within', () => {
       expect([TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX]).toEqual([channel.TELEGRAM_BUTTON_ROWS_MAX, channel.TELEGRAM_BUTTONS_PER_ROW_MAX, channel.TELEGRAM_BUTTON_TEXT_MAX]);
     });
+  });
+
+  it('takes up to 5 distinct playlists on YouTube only, in settings.youtube (#1018)', () => {
+    const SALE = 'PLabcdefghijklmnopqrstuvwxyz012345';
+    const on = (provider: 'youtube' | 'tiktok', settings: Record<string, unknown>) =>
+      validateVariant({ provider, body: '', title: 'Khai trương', media: [{ kind: 'video', mime: 'video/mp4', sizeBytes: 1_000_000, durationSeconds: 30 }], settings }).filter((i) => i.field.startsWith('settings.youtube'));
+    const five = Array.from({ length: 5 }, (_, i) => `PL${String(i).repeat(16)}`);
+    expect(on('youtube', {})).toEqual([]);
+    expect(on('youtube', { youtube: { playlistIds: [SALE] } })).toEqual([]);
+    expect(on('youtube', { youtube: { playlistIds: five } })).toEqual([]);
+    expect(on('youtube', { youtube: { playlistIds: [...five, SALE] } })).toEqual([{ code: 'YT_PLAYLISTS_TOO_MANY', field: 'settings.youtube.playlistIds', limit: 5, actual: 6 }]);
+    const invalid = [{ code: 'YT_PLAYLISTS_INVALID', field: 'settings.youtube.playlistIds', limit: null, actual: null }];
+    expect(on('youtube', { youtube: { playlistIds: [SALE, SALE] } })).toEqual(invalid);
+    // The uploads playlist (UU...) and liked videos are YouTube's own, never one a video is added to.
+    expect(on('youtube', { youtube: { playlistIds: ['UUabcdefghijklmnopqrstuv'] } })).toEqual(invalid);
+    expect(on('youtube', { youtube: { playlistIds: SALE } })).toEqual(invalid);
+    expect(on('youtube', { youtube: { playlistIds: [SALE], notify: true } })).toEqual(invalid);
+    expect(on('youtube', { youtube: [SALE] })).toEqual(invalid);
+    expect(on('youtube', { youtube: null })).toEqual(invalid);
+    expect(on('tiktok', { youtube: { playlistIds: [SALE] } })).toEqual([{ code: 'YOUTUBE_NOT_SUPPORTED', field: 'settings.youtube', limit: null, actual: null }]);
+    expect(youtubePlaylistsOf({ youtube: { playlistIds: [] } })).toBeNull();
+    expect(youtubePlaylistsOf({})).toBeNull();
+    // The same shape the adapter sends.
+    expect(YOUTUBE_PLAYLIST_ID.source).toBe(channel.YOUTUBE_PLAYLIST_ID.source);
+  });
+
+  it('reads the playlist id from what a person pastes (#1018)', () => {
+    const SALE = 'PLabcdefghijklmnopqrstuvwxyz012345';
+    expect(youtubePlaylistIdFrom(` ${SALE} `)).toBe(SALE);
+    expect(youtubePlaylistIdFrom(`https://www.youtube.com/playlist?list=${SALE}`)).toBe(SALE);
+    expect(youtubePlaylistIdFrom(`youtube.com/playlist?list=${SALE}&si=abc`)).toBe(SALE);
+    expect(youtubePlaylistIdFrom(`https://m.youtube.com/watch?v=dQw4w9WgXcQ&list=${SALE}&index=2`)).toBe(SALE);
+    expect(youtubePlaylistIdFrom(`https://youtu.be/dQw4w9WgXcQ?list=${SALE}`)).toBe(SALE);
+    expect(youtubePlaylistIdFrom('https://www.youtube.com/watch?v=dQw4w9WgXcQ')).toBeNull();
+    expect(youtubePlaylistIdFrom(`https://example.com/playlist?list=${SALE}`)).toBeNull();
+    expect(youtubePlaylistIdFrom('https://www.youtube.com/playlist?list=UUabcdefghijklmnopqrstuv')).toBeNull();
+    expect(youtubePlaylistIdFrom('khuyến mãi')).toBeNull();
   });
 
   it('requires media on Instagram and accepts only JPEG images', () => {

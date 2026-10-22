@@ -1,6 +1,6 @@
-// Proposal reminders (#676): which stages are due, and the reminder mail.
+// Proposal reminders (#676): which stages are due, when a proposal expires (#876), and the reminder mail.
 import { describe, expect, it } from 'vitest';
-import { nudgesDue } from '@crove/kernel';
+import { expiryDue, mayResubmit, nudgesDue, resubmitSource } from '@crove/kernel';
 import { renderProposalReminderMail } from '../src/proposal-reminder-mail.ts';
 
 const DAY = 86_400_000;
@@ -8,7 +8,7 @@ const now = new Date('2026-10-21T08:00:00Z');
 const ago = (days: number) => new Date(now.getTime() - days * DAY);
 
 describe('nudgesDue', () => {
-  const policy = { remindAfterDays: 2, escalateAfterDays: 5 };
+  const policy = { remindAfterDays: 2, escalateAfterDays: 5, expireAfterDays: null };
   it('reminds after the first threshold and escalates after the second, each once', () => {
     expect(nudgesDue({ status: 'pending', createdAt: ago(1), remindedAt: null, escalatedAt: null }, policy, now)).toEqual([]);
     expect(nudgesDue({ status: 'pending', createdAt: ago(2), remindedAt: null, escalatedAt: null }, policy, now)).toEqual(['remind']);
@@ -22,8 +22,52 @@ describe('nudgesDue', () => {
     for (const status of ['approved', 'executed', 'rejected', 'failed']) {
       expect(nudgesDue({ status, createdAt: ago(30), remindedAt: null, escalatedAt: null }, policy, now), status).toEqual([]);
     }
-    expect(nudgesDue({ status: 'pending', createdAt: ago(30), remindedAt: null, escalatedAt: null }, { remindAfterDays: null, escalateAfterDays: null }, now)).toEqual([]);
-    expect(nudgesDue({ status: 'pending', createdAt: ago(30), remindedAt: null, escalatedAt: null }, { remindAfterDays: null, escalateAfterDays: 7 }, now)).toEqual(['escalate']);
+    expect(nudgesDue({ status: 'pending', createdAt: ago(30), remindedAt: null, escalatedAt: null }, { remindAfterDays: null, escalateAfterDays: null, expireAfterDays: null }, now)).toEqual([]);
+    expect(nudgesDue({ status: 'pending', createdAt: ago(30), remindedAt: null, escalatedAt: null }, { remindAfterDays: null, escalateAfterDays: 7, expireAfterDays: null }, now)).toEqual(['escalate']);
+  });
+});
+
+describe('expiryDue (#876)', () => {
+  const policy = { remindAfterDays: 2, escalateAfterDays: 5, expireAfterDays: 14 };
+  it('expires a pending proposal once it waited the days the org set, and not before', () => {
+    expect(expiryDue({ status: 'pending', createdAt: ago(13), escalatedAt: ago(8) }, policy, now)).toBe(false);
+    expect(expiryDue({ status: 'pending', createdAt: new Date(now.getTime() - 14 * DAY + 1), escalatedAt: ago(9) }, policy, now)).toBe(false);
+    expect(expiryDue({ status: 'pending', createdAt: ago(14), escalatedAt: ago(9) }, policy, now)).toBe(true);
+    expect(expiryDue({ status: 'pending', createdAt: ago(40), escalatedAt: ago(35) }, policy, now)).toBe(true);
+  });
+
+  it('expires only after the owners were told and had the days between escalation and expiry', () => {
+    expect(expiryDue({ status: 'pending', createdAt: ago(40), escalatedAt: null }, policy, now)).toBe(false);
+    expect(expiryDue({ status: 'pending', createdAt: ago(40), escalatedAt: ago(8) }, policy, now)).toBe(false);
+    expect(expiryDue({ status: 'pending', createdAt: ago(40), escalatedAt: ago(9) }, policy, now)).toBe(true);
+  });
+
+  it('never expires a proposal that is not pending, nor anything while expiry is off', () => {
+    for (const status of ['approved', 'executed', 'rejected', 'failed', 'expired']) {
+      expect(expiryDue({ status, createdAt: ago(90), escalatedAt: ago(80) }, policy, now), status).toBe(false);
+    }
+    expect(expiryDue({ status: 'pending', createdAt: ago(90), escalatedAt: ago(80) }, { ...policy, expireAfterDays: null }, now)).toBe(false);
+  });
+});
+
+describe('resubmitSource and mayResubmit (#876)', () => {
+  const me = '0f6c3a52-8d3b-4c1e-9a77-5b2f0e9d1c01';
+  const base = { status: 'expired', command: 'finance.purchase.record', authors: [{ type: 'user', id: me }], requested_by_agent: null, request_input: null, source_file_id: 'f', extraction_id: 'e' };
+  it('never offers an agent proposal, or one whose authors cannot be read', () => {
+    expect(resubmitSource(base)).toBe('file');
+    expect(mayResubmit(base, me)).toBe(true);
+    expect(resubmitSource({ ...base, requested_by_agent: 'agent' })).toBeNull();
+    expect(resubmitSource({ ...base, authors: [{ type: 'robot', id: me }] })).toBeNull();
+    expect(mayResubmit({ ...base, authors: null }, me)).toBe(false);
+    expect(mayResubmit({ ...base, authors: 'not a list' }, me)).toBe(false);
+  });
+
+  it('lets any editor ask again for a file nobody uploaded by hand, and only the authors otherwise', () => {
+    expect(mayResubmit({ ...base, authors: [{ type: 'system', component: 'kernel.extraction' }] }, me)).toBe(true);
+    expect(mayResubmit({ ...base, authors: [{ type: 'user', id: '0f6c3a52-8d3b-4c1e-9a77-5b2f0e9d1c02' }] }, me)).toBe(false);
+    const requested = { ...base, command: 'finance.journal_voucher.record', source_file_id: null, extraction_id: null, request_input: {}, authors: [] };
+    expect(resubmitSource(requested)).toBe('request');
+    expect(mayResubmit(requested, me)).toBe(false);
   });
 });
 
