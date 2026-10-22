@@ -1,7 +1,7 @@
 // Outbox retention (issue #997, plan §4.9): events older than OUTBOX_KEEP_DAYS are archived to the WORM archive store
 // as one JSONL object per org and UTC day, with a manifest, and only then deleted from crove_kernel.outbox_event. The
 // daily retention run calls archiveOutbox; the database decides what may be deleted (migration
-// 20261028020000_crove_kernel_outbox_retention.sql), so a bug here can fail a run but never delete an event that the
+// 20261028100000_crove_kernel_outbox_retention.sql), so a bug here can fail a run but never delete an event that the
 // archive does not hold.
 //
 // Keys: outbox/v1/<org_id>/<day>.jsonl (one canonical JSON line per event, in created_at, id order) and

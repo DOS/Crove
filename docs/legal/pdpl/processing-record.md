@@ -72,7 +72,7 @@ Daily job `kernel-retention-purge`, 02:30 Asia/Ho_Chi_Minh (`apps/kernel/src/ret
 | Sign-in email budget rows | 1 hour | `20261017030000_crove_kernel_auth_email_limit.sql` |
 | Notifications | read ones 30 days, all at most 90 days | `packages/kernel/src/notifications.ts` |
 | Background job rows | 7 days after completion | `20261019034500_crove_jobs_pgboss_v46.sql` |
-| Outbox events (business facts: ids and codes) | 30 days in the database, then 13 months in the WORM archive store | `20261028020000_crove_kernel_outbox_retention.sql`, `apps/kernel/src/outbox-retention.ts` |
+| Outbox events (business facts: ids and codes) | 30 days in the database, then 13 months in the WORM archive store | `20261028100000_crove_kernel_outbox_retention.sql`, `apps/kernel/src/outbox-retention.ts` |
 
 ### 3.2 Kept on purpose, with no automatic deletion
 
