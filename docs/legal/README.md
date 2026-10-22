@@ -7,6 +7,7 @@
 | [terms.vi.md](terms.vi.md) | Điều khoản sử dụng (Vietnamese, the version the partner signs) |
 | [privacy.vi.md](privacy.vi.md) | Chính sách quyền riêng tư (Vietnamese) |
 | [terms.md](terms.md), [privacy.md](privacy.md) | English working copies, for review only; the Vietnamese text prevails |
+| [pdpl/](pdpl/README.md) | The PDPL package for gate T16: record of processing, impact and transfer assessments, processing agreement annex, sub-processors, breach notices (#1012) |
 
 ## How a deployment uses them
 
