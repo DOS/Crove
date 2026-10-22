@@ -34,6 +34,7 @@ import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { clearDraft, loadDraft, saveDraft, type StoredDraft } from '../lib/social-draft.ts';
 import { canMoveToFront } from '../lib/social-queue-order.ts';
+import { STORY_METRICS } from '../lib/social-insights.ts';
 import {
   CANCELLABLE,
   EDITABLE,
@@ -2566,7 +2567,8 @@ function MoveToFront({ variantId, queueSlotAt, onDone }: { variantId: string; qu
   );
 }
 
-const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks'] as const;
+// Then a Story's own counts (#1082).
+const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks', ...STORY_METRICS] as const;
 
 // A published channel's latest counts, as the platform reported them; a count it does not report is left out.
 function VariantMetrics({ row }: { row: { metrics: Record<string, number>; capturedAt: string | null } | undefined }) {

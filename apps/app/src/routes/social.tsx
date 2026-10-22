@@ -32,6 +32,7 @@ import { AccountGrowth, ChangeChip, ChannelTotals, TopPosts } from '../component
 import { WhatWorks } from '../components/social-insights.tsx';
 import { OutsidePostCell, OutsideSwitch } from '../components/social-external-posts.tsx';
 import { mergePublished } from '../lib/social-external.ts';
+import { StoryLine, StoryTotals } from '../components/social-story-metrics.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { dayKey, dayRange, providerName, SOCIAL_TABS, variantStatusKey, variantTone, type SocialSearch, type SocialTab } from '../lib/social.ts';
@@ -180,6 +181,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
               </Card>
             )}
           </div>
+          {totals.data && <StoryTotals metrics={totals.data.metrics} />}
           {totals.data && totals.data.channels.length > 0 && <ChannelTotals current={totals.data.channels} previous={previous?.channels ?? []} days={days} names={names} />}
           {data.length >= 500 && <p className="text-xs text-subtle-foreground">{t(totals.data ? 'metricsCapped' : 'metricsCappedPartial')}</p>}
           <BestTimes rows={data} names={names} />
@@ -213,6 +215,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
                               {item.row.excerpt || t('emptyText')}
                             </Link>
                             <p className="text-xs text-subtle-foreground">{meta}</p>
+                            <StoryLine metrics={r.metrics} />
                           </>
                         ) : (
                           <OutsidePostCell excerpt={item.row.excerpt} url={item.row.url} meta={meta} />
