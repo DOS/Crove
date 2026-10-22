@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { sentLink, sentSettings } from '../src/domain/utm.ts';
 import { SHORT_CODE_LENGTH, shortCode, shortened, shortenedSettings, shortUrl } from '../src/short-links.ts';
 
 describe('short links (#706)', () => {
@@ -18,6 +19,18 @@ describe('short links (#706)', () => {
     expect(shortenedSettings(settings, link)).toEqual({ telegram: { pin: true, buttons: [[{ text: 'Mua ngay', url: link.url }], [{ text: 'Zalo', url: 'https://zalo.me/0901234567' }]] } });
     const plain = { telegram: { silent: true } };
     expect(shortenedSettings(plain, link)).toBe(plain);
+  });
+
+  it('matches a tagged button to the short link made from the link the post sends (#1017)', () => {
+    // The short link's target is the link as sent (withShortLink stores the work's linkUrl, which withSentLink made).
+    const post = 'https://shop.example/pho';
+    const settings = { utm: { campaign: 'he' }, telegram: { buttons: [[{ text: 'Xem', url: post }]] } };
+    const url = 'https://crove.example/l/AbCdEfGhIjKl';
+    for (const body of ['Phở mới', `Phở mới ${post}`]) {
+      const sent = sentLink('telegram', post, settings, body) as string;
+      const out = shortenedSettings(sentSettings('telegram', settings, { plain: post, sent }), { target: sent, url });
+      expect((out.telegram as { buttons: { url: string }[][] }).buttons[0]?.[0]?.url).toBe(url);
+    }
   });
 
   it('sends the short link in place of the link, in the text too', () => {
