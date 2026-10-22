@@ -211,6 +211,70 @@ suite('social banned words on PostgreSQL (#1055)', () => {
     expect(await statuses(o, second)).toEqual(['scheduled']);
   });
 
+  it('a lowered approval count leaves a channel with a blocked word in review, and approves the others', async () => {
+    const o = await org();
+    const conn = await connection(o);
+    await exec(o, o.owner, 'social.channel.set_policy', { connectionId: conn, approvalsRequired: 2 });
+    const blocked = await post(o, 'Cam kết khỏi bệnh sau 7 ngày', [conn]);
+    const clean = await post(o, 'Lịch khai giảng tháng sau', [conn]);
+    for (const p of [blocked, clean]) {
+      await submit(o, p);
+      await approve(o, p);
+    }
+    expect([...(await statuses(o, blocked)), ...(await statuses(o, clean))]).toEqual(['in_review', 'in_review']);
+    await add(o, 'cam kết', 'block');
+    await exec(o, o.owner, 'social.channel.set_policy', { connectionId: conn, approvalsRequired: 1 });
+    expect(await statuses(o, blocked)).toEqual(['in_review']);
+    expect(await statuses(o, clean)).toEqual(['approved']);
+  });
+
+  it("the client's yes, and turning the client step off, leave a channel with a blocked word in review", async () => {
+    const o = await org();
+    const conn = await connection(o);
+    await exec(o, o.owner, 'social.channel.set_client_approval', { connectionId: conn, clientApproval: true });
+    const viaClient = await post(o, 'Liệu trình chữa khỏi mụn', [conn]);
+    const viaToggle = await post(o, 'Chữa khỏi đau lưng', [conn]);
+    for (const p of [viaClient, viaToggle]) {
+      await submit(o, p);
+      await approve(o, p);
+    }
+    expect([...(await statuses(o, viaClient)), ...(await statuses(o, viaToggle))]).toEqual(['in_review', 'in_review']);
+    await add(o, 'chữa khỏi', 'block');
+    // The client answers on a review link, as the HTTP edge calls the public definer with the link's token.
+    const { token } = await exec<{ token: string }>(o, o.owner, 'social.review_link.create', { postId: viaClient });
+    await appPool.query('SELECT crove_social.review_feedback_add($1, $2, $3, $4)', [token, 'Chị Lan (khách)', 'approved', null]);
+    const event = await admin(
+      async (c) => (await c.query<{ id: string }>("SELECT id FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.review.answered' ORDER BY created_at DESC, id DESC LIMIT 1", [o.orgId])).rows[0]?.id,
+    );
+    const settled = await worker.execute<{ settled: string[] }>('social.review.client_settle', { eventId: event as string }, { actor: { type: 'system', component: 'social-banned-words-test' }, orgId: o.orgId });
+    expect(settled.settled).toEqual([]);
+    expect(await statuses(o, viaClient)).toEqual(['in_review']);
+    const off = await exec<{ approved: string[] }>(o, o.owner, 'social.channel.set_client_approval', { connectionId: conn, clientApproval: false });
+    expect(off.approved).toEqual([]);
+    expect([...(await statuses(o, viaClient)), ...(await statuses(o, viaToggle))]).toEqual(['in_review', 'in_review']);
+  });
+
+  it('a check too large for its budget refuses the command and leaves the view unchecked', async () => {
+    const o = await org();
+    const conn = await connection(o);
+    // 500 words of 50 letters with the same letters and one mark each, against a text of those letters: at each place
+    // every word matches by its letters and must have its marks checked, far past the budget.
+    const marks = ['á', 'à', 'ả', 'ã', 'ạ', 'â', 'ấ', 'ầ', 'ẩ', 'ẫ'];
+    for (let i = 0; i < 500; i += 1) {
+      const letters = Array.from({ length: 50 }, () => 'a');
+      letters[i % 50] = marks[Math.floor(i / 50)] as string;
+      await add(o, letters.join(' '), 'warn');
+    }
+    const postId = await post(o, 'a '.repeat(500), [conn]);
+    const view = await get(o, postId);
+    expect(view.variants[0]).toMatchObject({ bannedWords: [], bannedWordsStatus: 'too_complex' });
+    await expect(submit(o, postId)).rejects.toMatchObject({ code: 'BANNED_WORDS_TOO_COMPLEX', status: 422 });
+    expect(await statuses(o, postId)).toEqual(['draft']);
+    // The post list does not check the words at all.
+    const listed = await rt.query<PostView[]>('social.post.list', {}, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(listed.flatMap((p) => p.variants.map((v) => v.bannedWordsStatus))).toEqual(['not_checked']);
+  });
+
   it('a word limited to a channel holds only there', async () => {
     const o = await org();
     const zalo = await connection(o);

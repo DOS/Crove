@@ -5,13 +5,17 @@
 //
 // The check runs where content moves on: social.post.submit (and import with submit), the approval in
 // social.variant.decide and social.variant.schedule refuse a channel whose effective content holds a 'block' word with
-// 422 BANNED_WORDS; evergreen and recurring copies with one stay drafts; RSS feeds only make drafts, which are
-// submitted like any post. A 'warn' word never refuses: the post view lists it for the writer and the reviewer.
+// 422 BANNED_WORDS; evergreen and recurring copies with one stay drafts; an approval that completes on its own (a
+// lowered approval count, the client's yes, the client step turned off) leaves such a channel in review; RSS feeds only
+// make drafts, which are submitted like any post. A 'warn' word never refuses: social.post.get lists it for the writer
+// and the reviewer. A channel already scheduled, queued, retried or resumed is not checked again before it goes out.
+// Every check has a budget (BANNED_OPS_MAX): past it a command refuses (BANNED_WORDS_TOO_COMPLEX), a copy or an
+// automatic approval holds the channel back, and a view says too_complex.
 // Matching is the pure domain/banned-words.ts, the same in the app. Crove ships no list of its own.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
-import type { MemberRole } from '@crove/db';
+import type { MemberRole, SocialBannedWordLevel } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { effectiveContent } from './domain/approval.ts';
 import {
@@ -20,13 +24,21 @@ import {
   BANNED_WORD_CHANNELS_MAX,
   BANNED_WORD_LEVELS,
   BANNED_WORDS_MAX,
+  BannedWordsTooComplex,
+  bannedBudget,
   compileBannedWords,
-  findBannedInTexts,
+  findBannedWords,
   normalizePhrase,
+  prepareBannedText,
   variantTexts,
   wordsForChannel,
+  type BannedBudget,
   type BannedFieldMatch,
+  type BannedMatch,
+  type BannedMatcher,
+  type BannedText,
   type BannedWord,
+  type BannedWordLevel,
 } from './domain/banned-words.ts';
 import { overrides, settingsOf, type PostContent, type Trx, type VariantRow } from './variants.ts';
 
@@ -130,22 +142,55 @@ export const bannedWordList = defineQuery({
   handler: async (ctx): Promise<BannedWordView[]> => bannedWordsOf(ctx.trx, ctx.orgId),
 });
 
-/** The org's words, compiled once, and the matches in a variant's effective content of the words for its channel. */
-export function bannedChecker(words: readonly BannedWord[]): (post: PostContent, v: Pick<VariantRow, 'channel_connection_id' | 'body' | 'title' | 'link_url' | 'settings' | 'content_frozen'>) => BannedFieldMatch[] {
-  const byChannel = new Map<string, ReturnType<typeof compileBannedWords>>();
+export type BannedCheck = (post: PostContent, v: Pick<VariantRow, 'channel_connection_id' | 'body' | 'title' | 'link_url' | 'settings' | 'content_frozen'>) => BannedFieldMatch[];
+
+/**
+ * The org's words and the matches in a variant's effective content of the words for its channel. One budget covers
+ * every check made with it (one command or one view); past it a check throws BannedWordsTooComplex. Channels with the
+ * same words share one compiled matcher, and a text (the post's shared body, say) is cut into units once and scanned
+ * once per word set, however many variants show it.
+ */
+export function bannedChecker(words: readonly BannedWord[], budget: BannedBudget = bannedBudget()): BannedCheck {
+  const keyOf = new Map<string, string>();
+  const matchers = new Map<string, BannedMatcher>();
+  const prepared = new Map<string, BannedText>();
+  const found = new Map<string, BannedMatch[]>();
   return (post, v) => {
     if (words.length === 0) return [];
-    let matcher = byChannel.get(v.channel_connection_id);
-    if (!matcher) {
-      matcher = compileBannedWords(wordsForChannel(words, v.channel_connection_id));
-      byChannel.set(v.channel_connection_id, matcher);
+    let key = keyOf.get(v.channel_connection_id);
+    if (key === undefined) {
+      const mine = wordsForChannel(words, v.channel_connection_id);
+      key = mine.map((w) => w.id).join(',');
+      keyOf.set(v.channel_connection_id, key);
+      if (!matchers.has(key)) matchers.set(key, compileBannedWords(mine));
     }
+    const matcher = matchers.get(key) as BannedMatcher;
     const content = effectiveContent(post, overrides(v), v.content_frozen);
-    return findBannedInTexts(variantTexts(content, settingsOf(v)), matcher);
+    return variantTexts(content, settingsOf(v)).flatMap(({ field, text }) => {
+      const memo = `${key}\u0000${text}`;
+      let list = found.get(memo);
+      if (!list) {
+        let t = prepared.get(text);
+        if (!t) {
+          // Cutting a text into units is linear in it; it counts against the budget like the scan.
+          spendText(budget, text.length);
+          t = prepareBannedText(text);
+          prepared.set(text, t);
+        }
+        list = findBannedWords(t, matcher, budget);
+        found.set(memo, list);
+      }
+      return list.map((m) => ({ ...m, field }));
+    });
   };
 }
 
-export async function bannedCheckerOf(trx: Trx, orgId: string): Promise<ReturnType<typeof bannedChecker>> {
+function spendText(budget: BannedBudget, n: number): void {
+  budget.left -= n;
+  if (budget.left < 0) throw new BannedWordsTooComplex();
+}
+
+export async function bannedCheckerOf(trx: Trx, orgId: string): Promise<BannedCheck> {
   return bannedChecker(await bannedWordsOf(trx, orgId));
 }
 
@@ -165,19 +210,58 @@ export function bannedSummary(matches: readonly BannedFieldMatch[]): BannedField
 
 const blocking = (matches: readonly BannedFieldMatch[]) => matches.filter((m) => m.level === 'block');
 
-/** Refuses with 422 BANNED_WORDS when any of the variants holds a 'block' word for its channel; warnings pass. */
+const tooComplex = () =>
+  new DomainError('BANNED_WORDS_TOO_COMPLEX', 422, 'Bài quá dài hoặc danh sách từ cấm quá lớn để kiểm tra; hãy rút gọn bài hoặc danh sách từ cấm rồi thử lại');
+
+/**
+ * Refuses with 422 BANNED_WORDS when any of the variants holds a 'block' word for its channel; warnings pass. A check
+ * that runs out of its budget refuses too (BANNED_WORDS_TOO_COMPLEX): nothing goes on unchecked.
+ */
 export async function refuseBannedWords(ctx: Pick<CommandContext, 'trx' | 'orgId'>, post: PostContent, variants: readonly VariantRow[]): Promise<void> {
   const check = await bannedCheckerOf(ctx.trx, ctx.orgId);
-  const blocked = variants
-    .map((v) => ({ variantId: v.id, words: bannedSummary(blocking(check(post, v))).map((m) => ({ wordId: m.wordId, phrase: m.phrase, field: m.field, reason: m.reason })) }))
-    .filter((x) => x.words.length > 0);
+  let blocked: Array<{ variantId: string; words: Array<{ wordId: string; phrase: string; field: string; reason: string | null }> }>;
+  try {
+    blocked = variants
+      .map((v) => ({ variantId: v.id, words: bannedSummary(blocking(check(post, v))).map((m) => ({ wordId: m.wordId, phrase: m.phrase, field: m.field, reason: m.reason })) }))
+      .filter((x) => x.words.length > 0);
+  } catch (error) {
+    if (error instanceof BannedWordsTooComplex) throw tooComplex();
+    throw error;
+  }
   if (blocked.length === 0) return;
   const phrases = [...new Set(blocked.flatMap((b) => b.words.map((w) => w.phrase)))];
   throw new DomainError('BANNED_WORDS', 422, `Bài có từ bị cấm: ${phrases.map((p) => `«${p}»`).join(', ')}`, { variants: blocked });
 }
 
-/** Whether a variant holds a 'block' word for its channel, for the paths that leave such a copy as a draft. */
-export const isBlocked = (check: ReturnType<typeof bannedChecker>, post: PostContent, v: VariantRow): boolean => check(post, v).some((m) => m.level === 'block');
+/**
+ * Whether a variant holds a 'block' word for its channel, for the paths that hold such a variant back (a copy stays a
+ * draft, an approval by policy or by the client leaves it in review). A check over its budget counts as blocked.
+ */
+export function isBlocked(check: BannedCheck, post: PostContent, v: VariantRow): boolean {
+  try {
+    return check(post, v).some((m) => m.level === 'block');
+  } catch (error) {
+    if (error instanceof BannedWordsTooComplex) return true;
+    throw error;
+  }
+}
+
+export type BannedWordsStatus = 'checked' | 'not_checked' | 'too_complex';
+
+/** A view's matches of one variant: none and 'too_complex' when the view's budget ran out. */
+export function bannedForView(check: BannedCheck, post: PostContent, v: VariantRow): { bannedWords: BannedFieldMatch[]; bannedWordsStatus: BannedWordsStatus } {
+  try {
+    return { bannedWords: bannedSummary(check(post, v)), bannedWordsStatus: 'checked' };
+  } catch (error) {
+    if (error instanceof BannedWordsTooComplex) return { bannedWords: [], bannedWordsStatus: 'too_complex' };
+    throw error;
+  }
+}
+
+// The level lists of this module and of the table's refinement in @crove/db must stay the same.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const levelsAgree: Same<BannedWordLevel, SocialBannedWordLevel> = true;
+void levelsAgree;
 
 export const bannedWordCommands = [bannedWordAdd, bannedWordRemove];
 export const bannedWordQueries = [bannedWordList];

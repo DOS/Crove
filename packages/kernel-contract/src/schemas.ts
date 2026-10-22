@@ -1255,6 +1255,8 @@ export const zSocialVariant = z.object({
   issues: z.array(zSocialIssue),
   // The org's banned or sensitive words in its effective content (#1055), one per word and field.
   bannedWords: z.array(zSocialBannedMatch),
+  // checked; not_checked (lists do not check them); too_complex (over the check's budget, so bannedWords is empty).
+  bannedWordsStatus: z.enum(['checked', 'not_checked', 'too_complex']),
   latestDecision: z
     .object({ decision: z.enum(SOCIAL_DECISIONS), comment: z.string().nullable(), decidedBy: zId, at: z.string(), revision: z.number().int(), current: z.boolean() })
     .nullable(),

@@ -2,9 +2,9 @@
 // as a warning or a block, for every channel or some; the composer's marks under a text that holds one; and the words
 // a channel in review holds. The list starts empty: Crove ships no words of its own.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import { findBannedInTexts, variantTexts, type BannedWord } from '@crove/mod-social/contract';
+import { BannedWordsTooComplex, compileBannedWords, findBannedInTexts, variantTexts, type BannedWord } from '@crove/mod-social/contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -75,7 +75,9 @@ export function BannedWordsCard({ channels, canEdit }: { channels: readonly Chan
                 <span className="block text-xs text-subtle-foreground">
                   {w.connectionIds.length === 0
                     ? t('allChannels')
-                    : t('someChannels', { channels: w.connectionIds.map((id) => names.get(id) ?? t('goneChannel')).join(', ') })}
+                    : w.connectionIds.every((id) => !names.has(id))
+                      ? t('noLiveChannel')
+                      : t('someChannels', { channels: w.connectionIds.map((id) => names.get(id) ?? t('goneChannel')).join(', ') })}
                 </span>
               </span>
               {canEdit && (
@@ -95,7 +97,7 @@ export function BannedWordsCard({ channels, canEdit }: { channels: readonly Chan
           className="space-y-2 border-t pt-3"
           onSubmit={(e) => {
             e.preventDefault();
-            if (phrase.trim()) add.mutate();
+            if (phrase.trim() && !add.isPending) add.mutate();
           }}
         >
           <div className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
@@ -191,14 +193,26 @@ const fieldKey = (field: string): 'title' | 'firstComment' | 'threadPart' | 'aut
 
 /** The composer's marks: each word the texts hold, underlined in a short excerpt, with the owner's reason. */
 export function BannedWordHints({ texts, words }: { texts: ReadonlyArray<{ field: string; text: string }>; words: readonly BannedWord[] }) {
+  const t = useTranslations('social.bannedWords');
+  // Compiled once per list, not on every keystroke; the key is what the matcher reads of each word.
+  const key = words.map((w) => `${w.id}\u0001${w.phrase}\u0001${w.level}\u0001${w.reason ?? ''}`).join('\u0002');
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the key stands for the words
+  const matcher = useMemo(() => compileBannedWords(words), [key]);
   if (words.length === 0) return null;
   const byField = new Map(texts.map((x) => [x.field, x.text]));
+  let found: ReturnType<typeof findBannedInTexts>;
+  try {
+    found = findBannedInTexts(texts, matcher);
+  } catch (error) {
+    if (error instanceof BannedWordsTooComplex) return <p className="text-xs text-warning">{t('tooComplex')}</p>;
+    throw error;
+  }
   const seen = new Set<string>();
   const hits: BannedHit[] = [];
-  for (const m of findBannedInTexts(texts, words)) {
-    const key = `${m.wordId}:${m.field}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
+  for (const m of found) {
+    const id = `${m.wordId}:${m.field}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
     hits.push(bannedSnippet(byField.get(m.field) ?? '', m));
   }
   return <HitList hits={hits} />;
@@ -208,15 +222,18 @@ export function BannedWordHints({ texts, words }: { texts: ReadonlyArray<{ field
 export function BannedWordReview({
   channel,
   matches,
+  status,
   content,
   settings,
 }: {
   channel: string;
   matches: ReadonlyArray<Parameters<typeof bannedSnippet>[1]>;
+  status: 'checked' | 'not_checked' | 'too_complex';
   content: { body: string; title: string | null };
   settings: Readonly<Record<string, unknown>>;
 }) {
   const t = useTranslations('social.bannedWords');
+  if (status === 'too_complex') return <p className="text-xs text-warning">{t('reviewTooComplex', { channel })}</p>;
   if (matches.length === 0) return null;
   const texts = new Map(variantTexts(content, settings).map((x) => [x.field, x.text]));
   return (

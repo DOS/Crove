@@ -2091,7 +2091,7 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
       )}
       {/* The org's banned or sensitive words each channel holds (#1055): a warning to weigh, a block that refuses approval. */}
       {waiting.map((v) => (
-        <BannedWordReview key={`banned-${v.id}`} channel={names.get(v.connectionId) ?? providerName(v.provider)} matches={v.bannedWords} content={v.effective} settings={v.settings} />
+        <BannedWordReview key={`banned-${v.id}`} channel={names.get(v.connectionId) ?? providerName(v.provider)} matches={v.bannedWords} status={v.bannedWordsStatus} content={v.effective} settings={v.settings} />
       ))}
       {/* What changed since each channel's last decision (#944); nothing on a first review. */}
       <ReviewChanges postId={post.id} variants={waiting.map((v) => ({ id: v.id, name: names.get(v.connectionId) ?? providerName(v.provider), revision: v.revision, contentHash: v.contentHash }))} />

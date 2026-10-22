@@ -12,7 +12,18 @@
 // the unit before and after it is not a letter or digit (Unicode letters and digits, so Vietnamese, Thai or CJK
 // letters count, and emoji or punctuation do not). Ranges are UTF-16 offsets into the text as given, never inside a
 // surrogate pair or between a letter and its marks.
+//
+// What it does not catch: look-alike letters from other scripts (a Cyrillic "о" for "o"), punctuation or symbols put
+// inside a word ("t.ố.t"), letters spaced out ("t ố t"), and misspellings. It is a help for honest writers and their
+// reviewers, not a filter against someone set on getting a word through.
+//
+// Cost: the words are compiled into a trie over base letters, so a text is scanned in at most (text units) x (longest
+// phrase) steps whatever the number of words, and the marks are checked only on a phrase that matched by its base
+// letters. Every step counts against a budget (BANNED_OPS_MAX by default); past it the scan throws
+// BannedWordsTooComplex, which a command turns into a refusal and a view into "not checked".
 
+// The level of a word; the table's CHECK and SOCIAL_BANNED_WORD_LEVELS in @crove/db hold the same two (this module
+// stays free of the database package, as the app imports it; banned-words.ts checks the two agree at compile time).
 export const BANNED_WORD_LEVELS = ['warn', 'block'] as const;
 export type BannedWordLevel = (typeof BANNED_WORD_LEVELS)[number];
 // The longest phrase and reason the table takes, and how many words an org may list.
@@ -21,6 +32,10 @@ export const BANNED_REASON_MAX = 200;
 export const BANNED_WORDS_MAX = 500;
 // The most channels one word may be limited to.
 export const BANNED_WORD_CHANNELS_MAX = 50;
+// The steps one check (one command, one view, one composer field) may take: a text unit costs about one step and its
+// preparation one more, so a few texts of a post at their longest fit against a full list, and the worst case stops
+// within tens of milliseconds.
+export const BANNED_OPS_MAX = 4_000_000;
 
 export interface BannedWord {
   id: string;
@@ -45,6 +60,25 @@ export interface BannedMatch {
 // 'settings.autoReply.text' or 'settings.poll.<index>'.
 export interface BannedFieldMatch extends BannedMatch {
   field: string;
+}
+
+/** The scan ran out of its budget: the text or the list is too large to check. */
+export class BannedWordsTooComplex extends Error {
+  constructor() {
+    super('banned words check over budget');
+    this.name = 'BannedWordsTooComplex';
+  }
+}
+
+/** The steps a check may still take, shared by every text one command or view checks. */
+export interface BannedBudget {
+  left: number;
+}
+export const bannedBudget = (ops: number = BANNED_OPS_MAX): BannedBudget => ({ left: ops });
+
+function spend(budget: BannedBudget, n: number): void {
+  budget.left -= n;
+  if (budget.left < 0) throw new BannedWordsTooComplex();
 }
 
 const MARK = /^\p{M}$/u;
@@ -89,6 +123,40 @@ function units(text: string): Unit[] {
   return out;
 }
 
+/** A text cut into units once, with the lookups a scan needs, to check it against several word lists. */
+export interface BannedText {
+  readonly text: string;
+  readonly units: readonly Unit[];
+  // The first unit at or after i that is not a format character (units.length when none).
+  readonly solid: Int32Array;
+  // The first unit after the run of white space and format characters that starts at i.
+  readonly afterSpace: Int32Array;
+  // Whether the nearest unit before i, format characters skipped, is a letter or digit.
+  readonly wordBefore: Uint8Array;
+}
+
+export function prepareBannedText(text: string): BannedText {
+  const list = units(text);
+  const n = list.length;
+  const solid = new Int32Array(n + 1);
+  const afterSpace = new Int32Array(n + 1);
+  solid[n] = n;
+  afterSpace[n] = n;
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const u = list[i] as Unit;
+    solid[i] = u.format ? (solid[i + 1] as number) : i;
+    afterSpace[i] = u.space || u.format ? (afterSpace[i + 1] as number) : i;
+  }
+  const wordBefore = new Uint8Array(n + 1);
+  let last = 0;
+  for (let i = 0; i <= n; i += 1) {
+    wordBefore[i] = last;
+    const u = list[i];
+    if (u && !u.format) last = u.word ? 1 : 0;
+  }
+  return { text, units: list, solid, afterSpace, wordBefore };
+}
+
 /** The phrase as the matcher compares it, and as the table keeps it unique: NFC, format characters dropped, white space collapsed to one space, trimmed, lower case. */
 export function normalizePhrase(phrase: string): string {
   return phrase.normalize('NFC').replace(FORMATS, '').replace(/\s+/gu, ' ').trim().toLowerCase();
@@ -97,76 +165,115 @@ export function normalizePhrase(phrase: string): string {
 // A unit of the text against one of the phrase: the same letter, or the same base letter where one side has no mark.
 const same = (t: Unit, p: Unit): boolean => t.base === p.base && (t.exact === p.exact || !t.marked || !p.marked);
 
-// Where the phrase's units end when they match from text unit i, or null.
-function matchAt(text: readonly Unit[], i: number, phrase: readonly Unit[]): number | null {
-  let j = i;
-  for (const [k, p] of phrase.entries()) {
-    if (k > 0) while (j < text.length && (text[j] as Unit).format) j += 1;
-    const t = text[j];
-    if (!t) return null;
-    if (p.space) {
-      if (!t.space) return null;
-      while (j < text.length && ((text[j] as Unit).space || (text[j] as Unit).format)) j += 1;
-      continue;
-    }
-    if (!same(t, p)) return null;
-    j += 1;
-  }
-  return j;
-}
-
-// Whether the nearest unit before i (or from i on), format characters skipped, is a letter or digit.
-function wordBefore(text: readonly Unit[], i: number): boolean {
-  for (let k = i - 1; k >= 0; k -= 1) if (!(text[k] as Unit).format) return (text[k] as Unit).word;
-  return false;
-}
-function wordFrom(text: readonly Unit[], i: number): boolean {
-  for (let k = i; k < text.length; k += 1) if (!(text[k] as Unit).format) return (text[k] as Unit).word;
-  return false;
-}
-
 interface Compiled {
   word: BannedWord;
   units: Unit[];
+  // Its last unit is a letter or digit, so the match must end at a word boundary.
+  wordEnd: boolean;
 }
 
-/** The words, ready to match many texts: indexed by the base of their first letter. */
+interface TrieNode {
+  next: Map<string, TrieNode>;
+  space: TrieNode | null;
+  ends: Compiled[];
+}
+
+const node = (): TrieNode => ({ next: new Map(), space: null, ends: [] });
+
+/** The words, ready to match many texts: a trie of their base letters, one for phrases that start with a letter or digit (which need a word boundary there) and one for the others. */
 export interface BannedMatcher {
-  readonly byFirst: ReadonlyMap<string, readonly Compiled[]>;
+  readonly wordStart: TrieNode;
+  readonly otherStart: TrieNode;
+  readonly size: number;
 }
 
 export function compileBannedWords(words: readonly BannedWord[]): BannedMatcher {
-  const byFirst = new Map<string, Compiled[]>();
+  const wordStart = node();
+  const otherStart = node();
+  let size = 0;
   for (const word of words) {
     const list = units(normalizePhrase(word.phrase));
     const first = list[0];
-    if (!first) continue;
-    const bucket = byFirst.get(first.base) ?? [];
-    bucket.push({ word, units: list });
-    byFirst.set(first.base, bucket);
+    const last = list[list.length - 1];
+    if (!first || !last) continue;
+    let at = first.word ? wordStart : otherStart;
+    for (const u of list) {
+      if (u.space) {
+        at.space ??= node();
+        at = at.space;
+      } else {
+        let child = at.next.get(u.base);
+        if (!child) {
+          child = node();
+          at.next.set(u.base, child);
+        }
+        at = child;
+      }
+    }
+    at.ends.push({ word, units: list, wordEnd: last.word });
+    size += 1;
   }
-  return { byFirst };
+  return { wordStart, otherStart, size };
 }
 
 const isMatcher = (x: readonly BannedWord[] | BannedMatcher): x is BannedMatcher => !Array.isArray(x);
 
-/** Every match of the words in the text, by position (a longer match first where two start together). */
-export function findBannedWords(text: string, words: readonly BannedWord[] | BannedMatcher): BannedMatch[] {
-  const matcher = isMatcher(words) ? words : compileBannedWords(words);
-  if (matcher.byFirst.size === 0 || text === '') return [];
-  const list = units(text);
-  const matches: BannedMatch[] = [];
-  for (const [i, unit] of list.entries()) {
-    const candidates = matcher.byFirst.get(unit.base);
-    if (!candidates || unit.format) continue;
-    for (const c of candidates) {
-      const end = matchAt(list, i, c.units);
-      if (end === null) continue;
-      if ((c.units[0] as Unit).word && wordBefore(list, i)) continue;
-      if ((c.units[c.units.length - 1] as Unit).word && wordFrom(list, end)) continue;
+// Walks the trie from text unit i, recording the text unit each phrase unit matched (-1 for a space), and checks the
+// marks of every phrase that ends on the way.
+function walk(t: BannedText, i: number, root: TrieNode, budget: BannedBudget, path: number[], out: BannedMatch[]): void {
+  const list = t.units;
+  const n = list.length;
+  let at = root;
+  let j = i;
+  path.length = 0;
+  for (;;) {
+    for (const c of at.ends) {
+      spend(budget, c.units.length);
+      let ok = true;
+      for (const [k, p] of c.units.entries()) {
+        if (p.space) continue;
+        if (!same(list[path[k] as number] as Unit, p)) {
+          ok = false;
+          break;
+        }
+      }
+      // The unit after the match, format characters skipped, must not be a letter or digit when the phrase ends with one.
+      const next = list[t.solid[j] as number];
+      if (!ok || (c.wordEnd && next !== undefined && next.word)) continue;
       const { id, phrase, level, reason } = c.word;
-      matches.push({ wordId: id, phrase, level, reason, start: unit.start, end: (list[end - 1] as Unit).end });
+      spend(budget, 1);
+      out.push({ wordId: id, phrase, level, reason, start: (list[i] as Unit).start, end: (list[path[path.length - 1] as number] as Unit).end });
     }
+    if (j > i) j = t.solid[j] as number;
+    if (j >= n) return;
+    const u = list[j] as Unit;
+    spend(budget, 1);
+    if (u.space) {
+      if (!at.space) return;
+      at = at.space;
+      path.push(-1);
+      j = t.afterSpace[j] as number;
+      continue;
+    }
+    const child = at.next.get(u.base);
+    if (!child) return;
+    at = child;
+    path.push(j);
+    j += 1;
+  }
+}
+
+/** Every match of the words in the text, by position (a longer match first where two start together). Throws BannedWordsTooComplex past the budget. */
+export function findBannedWords(text: string | BannedText, words: readonly BannedWord[] | BannedMatcher, budget: BannedBudget = bannedBudget()): BannedMatch[] {
+  const matcher = isMatcher(words) ? words : compileBannedWords(words);
+  if (matcher.size === 0) return [];
+  const t = typeof text === 'string' ? prepareBannedText(text) : text;
+  const matches: BannedMatch[] = [];
+  const path: number[] = [];
+  for (const [i, unit] of t.units.entries()) {
+    if (unit.format || unit.space) continue;
+    if (matcher.otherStart.next.size > 0) walk(t, i, matcher.otherStart, budget, path, matches);
+    if (!t.wordBefore[i] && matcher.wordStart.next.size > 0) walk(t, i, matcher.wordStart, budget, path, matches);
   }
   return matches.sort((a, b) => a.start - b.start || b.end - a.end);
 }
@@ -197,8 +304,8 @@ export function variantTexts(content: { body: string; title: string | null }, se
   return out;
 }
 
-/** The matches in each of the texts. */
-export function findBannedInTexts(texts: ReadonlyArray<{ field: string; text: string }>, words: readonly BannedWord[] | BannedMatcher): BannedFieldMatch[] {
+/** The matches in each of the texts, within one budget. */
+export function findBannedInTexts(texts: ReadonlyArray<{ field: string; text: string }>, words: readonly BannedWord[] | BannedMatcher, budget: BannedBudget = bannedBudget()): BannedFieldMatch[] {
   const matcher = isMatcher(words) ? words : compileBannedWords(words);
-  return texts.flatMap(({ field, text }) => findBannedWords(text, matcher).map((m) => ({ ...m, field })));
+  return texts.flatMap(({ field, text }) => findBannedWords(text, matcher, budget).map((m) => ({ ...m, field })));
 }

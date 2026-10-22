@@ -2,7 +2,8 @@
 // the texts of a variant that are checked.
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { compileBannedWords, findBannedInTexts, findBannedWords, normalizePhrase, variantTexts, wordsForChannel, wordsForChannels, type BannedWord } from '../src/domain/banned-words.ts';
+import { BANNED_OPS_MAX, BannedWordsTooComplex, bannedBudget, compileBannedWords, findBannedInTexts, findBannedWords, normalizePhrase, prepareBannedText, variantTexts, wordsForChannel, wordsForChannels, type BannedWord } from '../src/domain/banned-words.ts';
+import { bannedChecker, isBlocked } from '../src/banned-words.ts';
 
 let n = 0;
 const word = (phrase: string, over: Partial<BannedWord> = {}): BannedWord => ({ id: `w${(n += 1)}`, phrase, level: 'block', reason: null, connectionIds: [], ...over });
@@ -197,5 +198,94 @@ describe('variantTexts', () => {
     const w = word('mua ngay');
     const list = findBannedInTexts(variantTexts({ body: 'ok', title: null }, { firstComment: 'Mua ngay!' }), [w]);
     expect(list).toEqual([{ wordId: w.id, phrase: 'mua ngay', level: 'block', reason: null, start: 0, end: 8, field: 'settings.firstComment' }]);
+  });
+});
+
+describe('cost (#1055 security review)', () => {
+  // Distinct two-letter endings for up to 500 words.
+  const endings = (n: number) => Array.from({ length: n }, (_, i) => String.fromCharCode(98 + (i % 25)) + String.fromCharCode(98 + Math.floor(i / 25)));
+  // Runs fn, which may finish or give up with BannedWordsTooComplex, and returns how long it took.
+  const timed = (fn: () => unknown): { ms: number; gaveUp: boolean } => {
+    const t0 = performance.now();
+    let gaveUp = false;
+    try {
+      fn();
+    } catch (error) {
+      if (!(error instanceof BannedWordsTooComplex)) throw error;
+      gaveUp = true;
+    }
+    return { ms: performance.now() - t0, gaveUp };
+  };
+
+  it('500 words sharing a 98-letter prefix against a 100k text: linear, under 200 ms', () => {
+    const words = endings(500).map((e) => word(`${'a'.repeat(98)}${e}`));
+    const r = timed(() => findBannedWords('a'.repeat(100_000), words));
+    expect(r.gaveUp).toBe(false);
+    expect(r.ms).toBeLessThan(200);
+  });
+
+  it('500 spaced phrases of 100 characters against 100k of spaced letters: under 200 ms', () => {
+    const words = endings(500).map((e) => word(`${'a '.repeat(49)}${e}`));
+    const r = timed(() => findBannedWords('a '.repeat(50_000), words));
+    expect(r.ms).toBeLessThan(200);
+  });
+
+  it('500 phrases of symbols, which need no word boundary, against 100k of the same symbol: bounded by the budget', () => {
+    const words = endings(500).map((e) => word(`${'.'.repeat(98)}${e}`));
+    const r = timed(() => findBannedWords('.'.repeat(100_000), words));
+    expect(r.ms).toBeLessThan(200);
+  });
+
+  it('500 words with the same letters and different marks: the mark checks stop at the budget', () => {
+    // Each word is "a a a ... a" with one letter marked at its own place, so every one matches the bare text by its
+    // letters and must have its marks checked.
+    const marks = ['á', 'à', 'ả', 'ã', 'ạ', 'â', 'ấ', 'ầ', 'ẩ', 'ẫ', 'ậ'];
+    const words = Array.from({ length: 500 }, (_, i) => {
+      const letters = Array.from({ length: 50 }, () => 'a');
+      letters[i % 50] = marks[Math.floor(i / 50) % marks.length] as string;
+      return word(letters.join(' '));
+    });
+    const r = timed(() => findBannedWords('a '.repeat(50_000), words));
+    expect(r.gaveUp).toBe(true);
+    expect(r.ms).toBeLessThan(200);
+  });
+
+  it('a budget is shared by every text checked with it and refuses past it', () => {
+    const words = [word('ab')];
+    const budget = bannedBudget(1_000);
+    findBannedWords('ab '.repeat(100), words, budget);
+    expect(() => findBannedWords('ab '.repeat(1_000), words, budget)).toThrow(BannedWordsTooComplex);
+    expect(BANNED_OPS_MAX).toBeGreaterThan(1_000_000);
+  });
+
+  it('a prepared text gives the same matches as the plain one', () => {
+    const words = [word('tốt nhất'), word('số 1')];
+    const text = 'Số 1 và tot nhat, tốt\u200B nhất';
+    expect(findBannedWords(prepareBannedText(text), words)).toEqual(findBannedWords(text, words));
+    expect(findBannedWords(text, words).map((m) => text.slice(m.start, m.end))).toEqual(['Số 1', 'tot nhat', 'tốt\u200B nhất']);
+  });
+});
+
+describe('bannedChecker', () => {
+  const post = { body: 'Sản phẩm tốt nhất', title: null, linkUrl: null, media: [] };
+  const variant = (connection: string, over: Record<string, unknown> = {}) =>
+    ({ channel_connection_id: connection, body: null, title: null, link_url: null, settings: {}, content_frozen: false, ...over }) as never;
+
+  it('checks each channel with its words and scans a shared text once per word set', () => {
+    const scoped = word('tốt nhất', { connectionIds: ['c1'] });
+    const budget = bannedBudget(10_000);
+    const check = bannedChecker([scoped], budget);
+    expect(check(post, variant('c1')).map((m) => m.field)).toEqual(['body']);
+    const after = budget.left;
+    expect(check(post, variant('c1'))).toHaveLength(1);
+    // The same text against the same words again costs nothing.
+    expect(budget.left).toBe(after);
+    expect(check(post, variant('c2'))).toEqual([]);
+  });
+
+  it('a check over its budget counts as blocked', () => {
+    const check = bannedChecker([word('zzz', { level: 'warn' })], bannedBudget(5));
+    expect(isBlocked(check, post, variant('c1'))).toBe(true);
+    expect(isBlocked(bannedChecker([word('zzz', { level: 'warn' })]), post, variant('c1'))).toBe(false);
   });
 });
