@@ -3693,7 +3693,7 @@ export const en = {
       PORTAL_WRONG_CAPTCHA: 'The CAPTCHA is wrong or has expired. Get a new one and try again.',
       PORTAL_WRONG_PASSWORD: 'The tax portal did not accept this password. Check it with the client: after several wrong tries the portal locks the account.',
       PORTAL_ACCOUNT_LOCKED: "The client's tax portal account is locked. The client needs to unlock it on hoadondientu.gdt.gov.vn.",
-      PORTAL_PASSWORD_GUARD: "A wrong tax portal password was typed several times in the last hour. Crove pauses so the client's account is not locked; check the password and try again later.",
+      PORTAL_PASSWORD_GUARD: "Several sign-ins to the tax portal failed for this client since its last successful one. Crove pauses so the client's account is not locked; check the password with the client (or try it on hoadondientu.gdt.gov.vn) and try again in a day.",
       PORTAL_RATE_LIMITED: 'The tax portal is limiting requests. Try again in a few minutes.',
       PORTAL_BLOCKED: 'The tax portal is blocking this server. Try again later, or export the Excel list from the portal and upload it.',
       PORTAL_UNAVAILABLE: 'The tax portal cannot be reached. Try again later.',

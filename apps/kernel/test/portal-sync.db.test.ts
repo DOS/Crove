@@ -156,7 +156,7 @@ suite('assisted tax portal sync (#325)', () => {
     const config = loadConfig({ DATABASE_URL: appUrl, AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: ISSUER, AUTH_SESSION_CHECK: 'off', MIGRATIONS_DIR: MIGRATIONS, WEB_DIST: '/nonexistent' });
     const client = createTaxPortalClient({ baseUrl: portal.url, gapMs: 0, sleep: async () => {} });
     // Generous in-process limits, so the database's own guard is what the wrong-password test meets.
-    const portalSync = createPortalSync({ runtime, store, broker: vault, client, limits: { loginPerUser: 50, loginPerOrg: 50, captchaPerUser: 100, captchaPerOrg: 100 } });
+    const portalSync = createPortalSync({ runtime, store, broker: vault, client, limits: { loginPerUser: 50, loginPerOrg: 50, captchaPerUser: 100, captchaPerOrg: 100, listPerOrg: 100, perProcess: 1000 } });
     const authenticate = createAuthenticator(config, db);
     app = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: false, portalSync });
     appOff = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: false });
@@ -373,6 +373,26 @@ suite('assisted tax portal sync (#325)', () => {
       ['succeeded', 1],
       ['succeeded', 1],
     ]);
+  });
+
+  it('counts logins whose outcome it could not read toward the guard (fails closed)', async () => {
+    const created = await rpc('org/create', owner, { name: 'Công ty Cổng Lỗi', idempotencyKey: randomUUID() }, null);
+    const flaky = { slug: String(created.body?.slug), orgId: String(created.body?.orgId) };
+    expect((await rpc('org/setTaxCode', owner, { taxCode: '0100109108' }, flaky.slug)).status).toBe(200);
+    portal.options.outage = { status: 503, body: 'down', contentType: 'text/plain', path: '/api/security-taxpayer/authenticate' };
+    try {
+      for (let i = 0; i < PORTAL_WRONG_PASSWORD_LIMIT; i++) {
+        const unknown = await login(owner, flaky.slug);
+        expect(unknown.body.code).toBe('PORTAL_UNAVAILABLE');
+      }
+    } finally {
+      portal.options.outage = null;
+    }
+    const logins = portal.state.loginBodies.length;
+    const refused = await login(owner, flaky.slug);
+    expect(refused.status).toBe(429);
+    expect(refused.body.code).toBe('PORTAL_PASSWORD_GUARD');
+    expect(portal.state.loginBodies.length).toBe(logins);
   });
 
   it('says the portal is down, without its words', async () => {

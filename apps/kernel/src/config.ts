@@ -373,7 +373,8 @@ const schema = z.object({
   // the deployment opts into (docs/integrations/tax-portal-sync.md). Needs the credential key (CREDENTIAL_KEY).
   TAX_PORTAL_SYNC: z.enum(['true', 'false']).default('false'),
   // Where the portal's API is; unset: https://hoadondientu.gdt.gov.vn/api. Only for pointing a test deployment at a
-  // fake portal (the end-to-end tests do): any other address receives the client's portal password.
+  // fake portal (the end-to-end tests do); the API refuses it unless PUBLIC_URL is local (localhost or a .test name),
+  // since any other address would receive the client's portal password.
   TAX_PORTAL_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,

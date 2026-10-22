@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { PORTAL_CAPTCHA_MAX, PORTAL_PASSWORD_MAX, type PortalCaptchaView } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
@@ -34,7 +34,7 @@ export function PortalSyncPanel({ period, periodLabel, onChanged, onClose }: { p
   const [error, setError] = useState<unknown>(null);
   const session = useRef<string | null>(null);
 
-  const loadCaptcha = async () => {
+  const loadCaptcha = useCallback(async () => {
     setLoadingCaptcha(true);
     setAnswer('');
     try {
@@ -45,15 +45,15 @@ export function PortalSyncPanel({ period, periodLabel, onChanged, onClose }: { p
     } finally {
       setLoadingCaptcha(false);
     }
-  };
+  }, [period]);
 
+  // A new period starts over with a CAPTCHA of its own, and drops any session of the previous one.
   useEffect(() => {
     void loadCaptcha();
     return () => {
       session.current = null;
     };
-    // A new period starts over with a CAPTCHA of its own.
-  }, [period]);
+  }, [loadCaptcha]);
 
   const submit = async () => {
     if (!captcha) return;

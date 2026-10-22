@@ -25,8 +25,9 @@ import { vatPeriod } from './domain/vat-return.ts';
 const EDITORS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const PORTAL_SYNC_TARGET = 'gdt_einvoice';
 const KEY_PREFIX = 'finance.portal_sync:';
-// Wrong passwords for one org within an hour before the login step is refused (the portal locks an account after a
-// few wrong passwords; Crove stops first), and logins of any outcome per org per hour.
+// Logins of one org that did not succeed (other than a refused CAPTCHA) since its last successful login, within a day,
+// before the login step is refused (the portal locks an account after a few wrong passwords; Crove stops first), and
+// logins of any outcome per org per hour.
 export const PORTAL_WRONG_PASSWORD_LIMIT = 3;
 export const PORTAL_LOGINS_PER_HOUR = 20;
 
@@ -92,20 +93,33 @@ export const portalSyncCall = defineCommand({
     if (input.step === 'login') {
       // Serializes the org's logins, so two at once cannot both pass the count below.
       await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.portal_sync.login:${ctx.orgId}`}, 0))`.execute(ctx.trx);
+      // Fails closed: every login since the client's last successful one (within a day) that did not succeed counts,
+      // unless the portal clearly refused only the CAPTCHA: a wrong password, a locked account, an answer Crove could not
+      // read, an outage, and a login still in flight may all have reached the password check.
       const recent = await ctx.trx
         .selectFrom('crove_kernel.external_call')
-        .select([sql<string>`count(*)::text`.as('logins'), sql<string>`count(*) FILTER (WHERE error_code = 'WRONG_PASSWORD')::text`.as('wrong')])
+        .select([
+          sql<string>`count(*) FILTER (WHERE started_at > pg_catalog.now() - interval '1 hour')::text`.as('logins'),
+          sql<string>`count(*) FILTER (WHERE state <> 'succeeded' AND coalesce(error_code, '') <> 'WRONG_CAPTCHA'
+            AND started_at > coalesce((SELECT max(s.started_at) FROM crove_kernel.external_call s
+              WHERE s.org_id = ${ctx.orgId} AND s.target = ${PORTAL_SYNC_TARGET} AND s.step = 'login' AND s.state = 'succeeded'), '-infinity'))::text`.as('failed'),
+          sql<string>`count(*) FILTER (WHERE state = 'started' AND started_at > pg_catalog.now() - interval '1 minute')::text`.as('inflight'),
+        ])
         .where('org_id', '=', ctx.orgId)
         .where('target', '=', PORTAL_SYNC_TARGET)
         .where('step', '=', 'login')
-        .where('started_at', '>', sql<Date>`pg_catalog.now() - interval '1 hour'`)
+        .where('started_at', '>', sql<Date>`pg_catalog.now() - interval '1 day'`)
         .executeTakeFirstOrThrow();
-      if (Number(recent.wrong) >= PORTAL_WRONG_PASSWORD_LIMIT) {
+      if (Number(recent.failed) >= PORTAL_WRONG_PASSWORD_LIMIT) {
         throw new DomainError(
           'PORTAL_PASSWORD_GUARD',
           429,
-          `Đã nhập sai mật khẩu cổng thuế ${PORTAL_WRONG_PASSWORD_LIMIT} lần trong một giờ qua. Crove tạm dừng đăng nhập để tài khoản của khách hàng không bị khóa; hãy kiểm tra lại mật khẩu với khách hàng rồi thử lại sau`,
+          `Đã có ${PORTAL_WRONG_PASSWORD_LIMIT} lần đăng nhập cổng thuế không thành công cho khách hàng này kể từ lần đăng nhập được gần nhất. Crove tạm dừng đăng nhập để tài khoản của khách hàng không bị khóa; hãy kiểm tra lại mật khẩu với khách hàng (hoặc đăng nhập thử trên hoadondientu.gdt.gov.vn) rồi thử lại sau một ngày`,
         );
+      }
+      // Another login for this client is still waiting for the portal (perhaps on another API instance).
+      if (Number(recent.inflight) > 0) {
+        throw new DomainError('PORTAL_SYNC_BUSY', 409, 'Đang có một lượt đăng nhập cổng thuế khác cho khách hàng này; hãy đợi lượt đó xong');
       }
       if (Number(recent.logins) >= PORTAL_LOGINS_PER_HOUR) {
         throw new DomainError('RATE_LIMITED', 429, 'Đã đăng nhập cổng thuế cho khách hàng này nhiều lần trong một giờ qua; hãy thử lại sau');
@@ -197,7 +211,7 @@ export const portalSyncList = defineCommand({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.fileId)
       .executeTakeFirst();
-    if (!file || file.source !== 'import' || file.content_type !== PORTAL_SYNC_CONTENT_TYPE) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy dữ liệu đã lấy từ cổng thuế');
+    if (!file || file.source !== 'import' || file.content_type !== PORTAL_SYNC_CONTENT_TYPE || file.created_by !== ctx.actor.userId) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy dữ liệu đã lấy từ cổng thuế');
     await periodLock(ctx.orgId, input.period).execute(ctx.trx);
     const active = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')

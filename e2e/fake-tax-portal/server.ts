@@ -20,8 +20,8 @@ export interface FakePortalOptions {
   host?: string;
   captchaAnswer?: string;
   password?: string;
-  // Answer every request with this status (a portal that rate limits, blocks or is down).
-  outage?: { status: number; body: string; contentType: string } | null;
+  // Answer every request (or only those to `path`) with this status: a portal that rate limits, blocks or is down.
+  outage?: { status: number; body: string; contentType: string; path?: string } | null;
 }
 
 export interface FakePortalState {
@@ -167,7 +167,7 @@ export function startFakeTaxPortal(options: FakePortalOptions = {}): Promise<Fak
   const handler = async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? '/', 'http://fake');
     state.requests.push({ method: req.method ?? 'GET', path: url.pathname });
-    if (options.outage) {
+    if (options.outage && (!options.outage.path || options.outage.path === url.pathname)) {
       res.writeHead(options.outage.status, { 'content-type': options.outage.contentType });
       res.end(options.outage.body);
       return;

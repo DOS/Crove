@@ -3693,7 +3693,7 @@ export const vi = {
       PORTAL_WRONG_CAPTCHA: 'Mã xác nhận chưa đúng hoặc đã hết hạn; hãy lấy mã mới và nhập lại.',
       PORTAL_WRONG_PASSWORD: 'Cổng thuế không chấp nhận mật khẩu này. Hãy kiểm tra lại với khách hàng: nhập sai nhiều lần, cổng thuế sẽ khóa tài khoản.',
       PORTAL_ACCOUNT_LOCKED: 'Tài khoản cổng thuế của khách hàng đang bị khóa; khách hàng cần mở khóa trên hoadondientu.gdt.gov.vn.',
-      PORTAL_PASSWORD_GUARD: 'Đã nhập sai mật khẩu cổng thuế nhiều lần trong một giờ qua. Crove tạm dừng để tài khoản của khách hàng không bị khóa; hãy kiểm tra mật khẩu rồi thử lại sau.',
+      PORTAL_PASSWORD_GUARD: 'Đã có nhiều lần đăng nhập cổng thuế không thành công cho khách hàng này kể từ lần đăng nhập được gần nhất. Crove tạm dừng để tài khoản của khách hàng không bị khóa; hãy kiểm tra lại mật khẩu với khách hàng (hoặc thử trên hoadondientu.gdt.gov.vn) rồi thử lại sau một ngày.',
       PORTAL_RATE_LIMITED: 'Cổng thuế đang giới hạn số lần truy cập; hãy thử lại sau ít phút.',
       PORTAL_BLOCKED: 'Cổng thuế đang chặn truy cập từ máy chủ này; hãy thử lại sau, hoặc xuất danh sách Excel từ cổng thuế rồi tải lên.',
       PORTAL_UNAVAILABLE: 'Không kết nối được tới cổng thuế; hãy thử lại sau.',

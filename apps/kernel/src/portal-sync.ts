@@ -45,7 +45,7 @@ export interface PortalSyncDeps {
   client: TaxPortalClient;
   now?: () => number;
   // Per minute in this process: CAPTCHA images and logins, per person and per client (tests lower or raise them).
-  limits?: { captchaPerUser?: number; captchaPerOrg?: number; loginPerUser?: number; loginPerOrg?: number };
+  limits?: { captchaPerUser?: number; captchaPerOrg?: number; loginPerUser?: number; loginPerOrg?: number; listPerOrg?: number; perProcess?: number };
 }
 
 export interface PortalSync {
@@ -99,20 +99,29 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
   // In this process (rate-limit.ts): CAPTCHA images and logins per person and per client, and one step at a time per
   // client, so two accountants never drive the same client's portal account at once from this server.
   const limits = deps.limits ?? {};
-  const captchas = { user: new RateLimiter({ perMinute: limits.captchaPerUser ?? 10, now }), org: new RateLimiter({ perMinute: limits.captchaPerOrg ?? 20, now }) };
-  const logins = { user: new RateLimiter({ perMinute: limits.loginPerUser ?? 3, now }), org: new RateLimiter({ perMinute: limits.loginPerOrg ?? 5, now }) };
+  // Per person in one org, per person across every org (one account with many orgs), per client, and for the whole
+  // process: every portal request leaves from this server's address, and a block there stops the feature for everyone.
+  const limiter = (perMinute: number) => new RateLimiter({ perMinute, now });
+  const captchas = { user: limiter(limits.captchaPerUser ?? 10), person: limiter((limits.captchaPerUser ?? 10) * 2), org: limiter(limits.captchaPerOrg ?? 20) };
+  const logins = { user: limiter(limits.loginPerUser ?? 3), person: limiter((limits.loginPerUser ?? 3) * 2), org: limiter(limits.loginPerOrg ?? 5) };
+  const lists = { user: limiter(limits.listPerOrg ?? 4), person: limiter((limits.listPerOrg ?? 4) * 2), org: limiter(limits.listPerOrg ?? 4) };
+  const processWide = limiter(limits.perProcess ?? 60);
   const busy = new ConcurrencyLimiter({ total: 8, perKey: 1 });
 
-  const take = (limits: { user: RateLimiter; org: RateLimiter }, orgId: string, userId: string) => {
-    for (const [limiter, key] of [
-      [limits.user, `${orgId}:${userId}`],
-      [limits.org, orgId],
-    ] as const) {
+  type Limits = { user: RateLimiter; person: RateLimiter; org: RateLimiter };
+  const take = (group: Limits, orgId: string, userId: string) => {
+    const checks: Array<[RateLimiter, string]> = [
+      [group.user, `${orgId}:${userId}`],
+      [group.person, userId],
+      [group.org, orgId],
+      [processWide, 'all'],
+    ];
+    // Every budget is looked at before any is spent.
+    for (const [limiter, key] of checks) {
       const seen = limiter.peek(key);
       if (!seen.allowed) throw new DomainError('RATE_LIMITED', 429, 'Đã thử nhiều lần trong phút này; hãy đợi một lát rồi thử lại', { retryAfterSeconds: seen.retryAfterSeconds });
     }
-    limits.user.take(`${orgId}:${userId}`);
-    limits.org.take(orgId);
+    for (const [limiter, key] of checks) limiter.take(key);
   };
 
   async function exclusive<T>(orgId: string, fn: () => Promise<T>): Promise<T> {
@@ -222,6 +231,7 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
     async fetchList(orgId, actor, input) {
       const range = vatPeriodRange(input.period);
       const { token } = openSession(input.session, orgId, actor, input.period);
+      take(lists, orgId, actor.userId);
       return exclusive(orgId, async () => {
         const opts = { actor, orgId };
         let orgTaxCode = '';
@@ -284,7 +294,10 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
             // The session or the portal stopped answering: stop here, the next sync goes on from this invoice.
             if (error instanceof DomainError && ['PORTAL_SESSION_EXPIRED', 'PORTAL_RATE_LIMITED', 'PORTAL_BLOCKED', 'PORTAL_UNAVAILABLE'].includes(error.code)) throw error;
             if (error instanceof DomainError && error.code === 'PORTAL_CALL_DONE') continue;
-            if (error instanceof DomainError && error.code.startsWith('PORTAL_')) {
+            // The member lost the right to do this (removed or made a viewer): stop.
+            if (error instanceof DomainError && (error.status === 403 || error.code === 'NOT_A_MEMBER')) throw error;
+            // Anything else is this invoice's failure (an unreadable answer, a file Crove refuses): the others go on.
+            if (error instanceof DomainError) {
               failed += 1;
               continue;
             }

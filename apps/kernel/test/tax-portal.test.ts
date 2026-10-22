@@ -5,7 +5,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { EgressOptions, EgressResponse, GuardedRequest } from '@crove/kernel-runtime';
 import { FAKE_CAPTCHA_ANSWER, FAKE_PORTAL_PASSWORD, startFakeTaxPortal, type FakePortal } from '../../../e2e/fake-tax-portal/server.ts';
-import { TAX_PORTAL_DEFAULT_URL, TaxPortalError, createTaxPortalClient, monthRanges, parsePortalJson } from '../src/tax-portal.ts';
+import { TAX_PORTAL_DEFAULT_URL, TaxPortalError, createTaxPortalClient, isOfficialPortal, monthRanges, parsePortalJson, portalBase, testPortalAllowed } from '../src/tax-portal.ts';
 
 const BUYER = '0309876546';
 const noWait = async () => {};
@@ -118,7 +118,38 @@ describe('tax portal client', () => {
     expect(seen).not.toBeNull();
     // No address override: the egress guard keeps the official origin on public addresses.
     expect((seen as unknown as EgressOptions).allowed).toBeUndefined();
-    expect(TAX_PORTAL_DEFAULT_URL.startsWith('https://hoadondientu.gdt.gov.vn')).toBe(true);
+    expect(new URL(TAX_PORTAL_DEFAULT_URL).host).toBe('hoadondientu.gdt.gov.vn');
+    expect(new URL(TAX_PORTAL_DEFAULT_URL).protocol).toBe('https:');
+  });
+
+  it('tells the real portal by its exact host, and keeps look-alikes and other addresses to local test deployments', () => {
+    expect(isOfficialPortal(new URL('https://hoadondientu.gdt.gov.vn/api'))).toBe(true);
+    expect(isOfficialPortal(new URL('https://HOADONDIENTU.gdt.gov.vn:30000/api'))).toBe(true);
+    expect(isOfficialPortal(new URL('https://hoadondientu.gdt.gov.vn.evil.test/api'))).toBe(false);
+    expect(isOfficialPortal(new URL('https://evil.test/hoadondientu.gdt.gov.vn/api'))).toBe(false);
+    expect(isOfficialPortal(new URL('https://hoadondientu.gdt.gov.vn@evil.test/api'))).toBe(false);
+    // Credentials, a query or a fragment in the configured URL are refused outright.
+    expect(() => portalBase('https://hoadondientu.gdt.gov.vn@evil.test/api')).toThrow(/credentials/);
+    expect(() => portalBase('https://user:pass@hoadondientu.gdt.gov.vn/api')).toThrow(/credentials/);
+    expect(() => portalBase('https://hoadondientu.gdt.gov.vn/api?next=https://evil.test')).toThrow();
+    expect(() => portalBase('ftp://hoadondientu.gdt.gov.vn/api')).toThrow();
+    // The real portal over plain http is refused; a look-alike is a test portal, never trusted as the real one.
+    expect(() => createTaxPortalClient({ baseUrl: 'http://hoadondientu.gdt.gov.vn/api' })).toThrow(/https/);
+    // A test portal only on a deployment served locally.
+    expect(testPortalAllowed('https://hoadondientu.gdt.gov.vn/api', 'https://crove.example.vn')).toBe(true);
+    expect(testPortalAllowed('http://tax-portal:30000/api', 'http://localhost:8080')).toBe(true);
+    expect(testPortalAllowed('http://tax-portal:30000/api', 'https://crove.example.vn')).toBe(false);
+    expect(testPortalAllowed('https://hoadondientu.gdt.gov.vn.evil.test/api', 'https://crove.example.vn')).toBe(false);
+    expect(testPortalAllowed('https://hoadondientu.gdt.gov.vn.evil.test/api', 'https://localhost.evil.example')).toBe(false);
+  });
+
+  it('counts a refusal that names the password as a wrong password, even when it asks for a new CAPTCHA', async () => {
+    const answer = (body: string) => async (): Promise<EgressResponse> => ({ url: 'x', status: 400, contentType: 'application/json', body: Buffer.from(body), truncated: false });
+    const login = (body: string) => createTaxPortalClient({ baseUrl: portal.url, request: answer(body), sleep: noWait }).login(BUYER, 'x', { key: 'k', answer: 'a' });
+    expect(await kindOf(login('{"message":"Tên đăng nhập hoặc mật khẩu không đúng, vui lòng nhập lại mã captcha"}'))).toBe('WRONG_PASSWORD');
+    expect(await kindOf(login('{"message":"Mã captcha không đúng."}'))).toBe('WRONG_CAPTCHA');
+    expect(await kindOf(login('{"message":"Tài khoản đã bị khóa"}'))).toBe('ACCOUNT_LOCKED');
+    expect(await kindOf(login('{"message":"Lỗi"}'))).toBe('WRONG_PASSWORD');
   });
 
   it('parses JSON with numbers as text and refuses what is not JSON', () => {

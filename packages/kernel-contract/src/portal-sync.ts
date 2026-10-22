@@ -23,12 +23,13 @@ export const PORTAL_PASSWORD_MAX = 128;
 export const PORTAL_CAPTCHA_MAX = 16;
 
 // A sealed value the server made and only the server can open: base64url, a key id and an envelope.
-const zSealed = z.string().min(16).max(8192).regex(/^[A-Za-z0-9_.-]+$/);
+// Room for a portal token of up to 8 KB sealed and base64url-encoded.
+const zSealed = z.string().min(16).max(16_384).regex(/^[A-Za-z0-9_.-]+$/);
 
 export const zPortalCaptcha = z.object({
   challenge: zSealed,
   // The portal's CAPTCHA as a data: URL of an SVG image, shown in an <img> (scripts in an image never run).
-  image: z.string().startsWith('data:image/svg+xml;base64,').max(200_000),
+  image: z.string().startsWith('data:image/svg+xml;base64,').max(300_000),
   // The portal user name: the org's tax code. The login uses it; the browser only shows it.
   username: z.string(),
   expiresInSeconds: z.number().int().positive(),

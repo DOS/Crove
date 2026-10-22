@@ -31,8 +31,9 @@ hoadondientu.gdt.gov.vn without leaving Crove. The design and its reasons are in
 5. Running it again for the same period replaces the synced list; an unchanged portal answer files nothing new, and an
    invoice already downloaded for the list is not downloaded again.
 
-Errors are shown in words: wrong CAPTCHA (get a new one), wrong password (check with the client: after 3 wrong
-passwords in an hour Crove stops logging in for that client, before the portal locks the account), account locked,
+Errors are shown in words: wrong CAPTCHA (get a new one), wrong password (check with the client: after 3 logins that
+did not succeed since the last good one, Crove stops logging in for that client for a day, before the portal locks the
+account; only a refused CAPTCHA does not count), account locked,
 the portal limiting or blocking requests, the portal down, a session expired after 20 minutes.
 
 ## What Crove keeps

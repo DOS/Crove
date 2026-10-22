@@ -19,6 +19,30 @@ import { z } from 'zod';
 // The portal's API origin. The 2026 redesign serves it under /api on the default port (older tools used port 30000).
 export const TAX_PORTAL_DEFAULT_URL = 'https://hoadondientu.gdt.gov.vn/api';
 
+const OFFICIAL_HOST = new URL(TAX_PORTAL_DEFAULT_URL).hostname;
+
+// The portal's API base from configuration: an absolute http(s) URL without user name, password, query or fragment.
+export function portalBase(raw: string): URL {
+  const url = new URL(raw);
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('the tax portal URL must be http or https');
+  if (url.username || url.password || url.search || url.hash) throw new Error('the tax portal URL takes no credentials, query or fragment');
+  return url;
+}
+
+// The real portal, by its parsed host name (a look-alike such as hoadondientu.gdt.gov.vn.example is not it).
+export function isOfficialPortal(url: URL): boolean {
+  return url.hostname.toLowerCase() === OFFICIAL_HOST;
+}
+
+// A test portal (TAX_PORTAL_URL other than the real one) only on a deployment that serves itself locally: the client's
+// real portal password goes to whatever address is set, so a public deployment may not point it elsewhere.
+export function testPortalAllowed(portalUrl: string, publicUrl: string): boolean {
+  const portal = portalBase(portalUrl);
+  if (isOfficialPortal(portal)) return portal.protocol === 'https:';
+  const host = new URL(publicUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost') || host.endsWith('.test');
+}
+
 export class TaxPortalError extends Error {
   readonly kind: PortalCallError;
   constructor(kind: PortalCallError) {
@@ -125,10 +149,11 @@ export function monthRanges(from: string, to: string): Array<{ from: string; to:
 }
 
 export function createTaxPortalClient(options: TaxPortalOptions = {}): TaxPortalClient {
-  const base = new URL(options.baseUrl ?? TAX_PORTAL_DEFAULT_URL);
-  const official = base.toString().replace(/\/$/, '') === TAX_PORTAL_DEFAULT_URL;
+  const base = portalBase(options.baseUrl ?? TAX_PORTAL_DEFAULT_URL);
+  // The real portal is told apart by its parsed host name, exactly, never by a prefix of the URL text.
+  const official = isOfficialPortal(base);
   if (official && base.protocol !== 'https:') throw new Error('the tax portal is reached over https only');
-  const prefix = base.toString().replace(/\/$/, '');
+  const prefix = `${base.origin}${base.pathname.replace(/\/$/, '')}`;
   const timeoutMs = options.timeoutMs ?? 20_000;
   const pageSize = options.pageSize ?? 50;
   const maxPages = options.maxPages ?? 40;
@@ -172,8 +197,11 @@ export function createTaxPortalClient(options: TaxPortalOptions = {}): TaxPortal
       if ((r.status === 400 || r.status === 401) && !isHtml(r)) {
         // The refusal's words decide its class; they are read here and dropped.
         const words = fold(r.body.subarray(0, 4096).toString('utf8'));
-        if (/captcha|ma xac (nhan|thuc)|ma kiem tra|ma bao ve/.test(words)) throw new TaxPortalError('WRONG_CAPTCHA');
+        // A refusal that names the account or the password is a wrong password even when it also asks for a new CAPTCHA:
+        // Crove's guard counts it then (fails closed).
         if (/bi khoa|tam khoa|locked/.test(words)) throw new TaxPortalError('ACCOUNT_LOCKED');
+        if (/mat khau|password|ten dang nhap|tai khoan|username/.test(words)) throw new TaxPortalError('WRONG_PASSWORD');
+        if (/captcha|ma xac (nhan|thuc)|ma kiem tra|ma bao ve/.test(words)) throw new TaxPortalError('WRONG_CAPTCHA');
         throw new TaxPortalError('WRONG_PASSWORD');
       }
       throw failure(r);
