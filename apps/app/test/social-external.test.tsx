@@ -4,13 +4,16 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
 import { describe, expect, it } from 'vitest';
 import { OutsideChip, OutsidePostCell, OutsideSwitch } from '../src/components/social-external-posts.tsx';
-import { en as enMessages } from '../src/i18n/messages/en.ts';
-import { vi as viMessages } from '../src/i18n/messages/vi.ts';
+import { catalog } from '../src/i18n/runtime.ts';
 import { mergePublished, outsideUrl } from '../src/lib/social-external.ts';
+
+// The catalogs as the app shows them, the product name (#1040) filled in.
+const viMessages = catalog('vi');
+const enMessages = catalog('en');
 
 const render = (node: React.ReactNode, locale: 'vi' | 'en' = 'vi') =>
   renderToStaticMarkup(
-    <IntlProvider locale={locale} messages={(locale === 'vi' ? viMessages : enMessages) as never} timeZone="Asia/Ho_Chi_Minh">
+    <IntlProvider locale={locale} messages={locale === 'vi' ? viMessages : enMessages} timeZone="Asia/Ho_Chi_Minh">
       {node}
     </IntlProvider>,
   );

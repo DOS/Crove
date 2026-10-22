@@ -5,7 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { vi as viMessages } from '../src/i18n/messages/vi.ts';
+import { catalog } from '../src/i18n/runtime.ts';
 
 const client = vi.hoisted(() => ({ current: null as unknown as import('@tanstack/react-query').QueryClient }));
 
@@ -29,6 +29,8 @@ const { SocialReportPage } = await import('../src/routes/social-report.tsx');
 const { SocialPlanPrintPage } = await import('../src/routes/social-plan-print.tsx');
 const { SocialReviewPage } = await import('../src/routes/social-review.tsx');
 const { pageBrand, accentStyle } = await import('../src/lib/social-report-branding.ts');
+// The catalog as the app shows it, the product name (#1040) filled in.
+const viMessages = catalog('vi');
 const t = viMessages.social.reportBranding;
 
 const TOKEN = 'a'.repeat(43);
@@ -65,7 +67,7 @@ function render(page: 'report' | 'review', data: unknown): string {
   qc.setQueryData([page === 'report' ? 'client-report' : 'client-review', TOKEN], data);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <IntlProvider locale="vi" messages={viMessages as never} timeZone="Asia/Ho_Chi_Minh">
+      <IntlProvider locale="vi" messages={viMessages} timeZone="Asia/Ho_Chi_Minh">
         {page === 'report' ? <SocialReportPage /> : <SocialReviewPage />}
       </IntlProvider>
     </QueryClientProvider>,
@@ -129,7 +131,7 @@ describe('white-label client pages (#1053)', () => {
       qc.setQueryData(['social', 'reportBranding', 'get'], brand);
       return renderToStaticMarkup(
         <QueryClientProvider client={qc}>
-          <IntlProvider locale="vi" messages={viMessages as never} timeZone="Asia/Ho_Chi_Minh">
+          <IntlProvider locale="vi" messages={viMessages} timeZone="Asia/Ho_Chi_Minh">
             <SocialPlanPrintPage />
           </IntlProvider>
         </QueryClientProvider>,
