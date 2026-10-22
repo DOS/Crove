@@ -98,6 +98,11 @@ const schema = z.object({
   // Fiscal year archive packages (issue #922) in the STORAGE=s3 bucket: lock each part in ARCHIVE_LOCK_MODE for this
   // many days (the bucket needs Object Lock). 0: the bucket's default retention, if any. Local disk has no lock.
   S3_ARCHIVE_LOCK_DAYS: z.coerce.number().int().min(0).max(36_500).default(0),
+  // Retention holds on evidence files (issue #1009): the original file of every posted invoice is held in the STORAGE=s3
+  // bucket for this many days from its posting, in GOVERNANCE mode (the bucket needs Object Lock). 3650 (10 years,
+  // Accounting Law 88/2015 Art. 41) until the accountant says otherwise; raising it lengthens existing holds, lowering
+  // it never shortens one. 0: no holds. Local disk has no holds.
+  EVIDENCE_LOCK_DAYS: z.coerce.number().int().min(0).max(36_500).default(3650),
   // Staged upload completions one API process runs at once (issue #223): each buffers the staged file (up to 25 MB)
   // while it hashes and writes it. Past it, and past half of it for one user, completions answer 503 UPLOAD_BUSY with
   // Retry-After and their grant stays unused. Uploads through POST /api/files (#432) get twice as many slots, on the

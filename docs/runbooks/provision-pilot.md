@@ -68,15 +68,17 @@ Then the deploy user, its SSH key for the workflow, the stack directory `/opt/cr
 
 ## 4. The files bucket
 
-Create the bucket in the region of the server, private, with versioning on **before the first write** (ADR-0013: Crove refuses a write that comes back without an object version). Give Crove its own access key, limited to this bucket:
+Create the bucket in the region of the server, private, with versioning on **before the first write** (ADR-0013: Crove refuses a write that comes back without an object version) and **Object Lock enabled**, so that the worker can hold the original file of every posted invoice for 10 years (`EVIDENCE_LOCK_DAYS`, [evidence-holds.md](evidence-holds.md)). Do not set a default retention on the bucket: Crove holds only posted files. Give Crove its own access key, limited to this bucket:
 
-- on the objects: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`, `s3:DeleteObject`;
-- on the bucket: `s3:ListBucket`.
+- on the objects: `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`, `s3:DeleteObject`, `s3:GetObjectRetention`, `s3:PutObjectRetention` (never `s3:BypassGovernanceRetention`);
+- on the bucket: `s3:ListBucket`, `s3:GetBucketObjectLockConfiguration`.
 
 Crove never deletes object versions, so two lifecycle rules free the space its deletes leave behind, and a third removes abandoned browser uploads. With the AWS CLI (any S3-compatible store: add `--endpoint-url https://<endpoint>`), as an account that may configure the bucket, not with Crove's key:
 
 ```bash
 aws s3api put-bucket-versioning --bucket <bucket> --versioning-configuration Status=Enabled
+# Object Lock for the evidence holds (a new bucket: create-bucket ... --object-lock-enabled-for-bucket; MinIO: mc mb --with-lock).
+aws s3api put-object-lock-configuration --bucket <bucket> --object-lock-configuration '{"ObjectLockEnabled":"Enabled"}'
 
 cat > lifecycle.json <<'EOF'
 {
@@ -104,7 +106,7 @@ aws s3api put-bucket-cors --bucket <bucket> --cors-configuration file://cors.jso
 
 | Prefix | What it holds | The rule |
 |---|---|---|
-| `org/` | documents and attachments, the evidence | none: Crove never deletes them, and their versions are the record. Add a retention hold here (Object Lock or a retention policy) once the retention period of plan §7.9 is decided |
+| `org/` | documents and attachments, the evidence | none: Crove never deletes them, and their versions are the record. The worker holds the original file of every posted invoice with Object Lock in GOVERNANCE mode for `EVIDENCE_LOCK_DAYS` from its posting (#1009, [evidence-holds.md](evidence-holds.md)) |
 | `staging/` | browser uploads before the server checks them (5 minutes) | expire after a day, with their old versions and delete markers |
 | `inbound/` | raw inbound mail until it is filed (the worker deletes it after 30 days at most) | delete old versions 7 days after Crove deleted the object |
 | `export/` | sealed org exports (`EXPORT_RETENTION_DAYS`, then the worker deletes them) | the same, 7 days |

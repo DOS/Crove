@@ -393,6 +393,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             agentPrograms: { ...financeAgentPrograms, ...socialAgentPrograms },
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
+            evidenceLockDays: config.EVIDENCE_LOCK_DAYS,
             channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config) },
             publicUrl: config.PUBLIC_URL,
             // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).

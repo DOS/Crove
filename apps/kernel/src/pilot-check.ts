@@ -326,6 +326,16 @@ export function checkEnv(env: Env): CheckResult[] {
       status: 'manual',
       message: 'confirm a restore onto a scratch stack passed this month (restore.sh ends with "restore of <run> passed") and note the RPO and RTO it shows (docs/runbooks/backup-and-restore.md)',
     },
+    // Evidence holds (#1009): the worker can hold posted invoice files only on an S3 bucket with Object Lock, which
+    // nothing here can see; without it, it logs one ALERT a day and posting goes on.
+    {
+      item: 'Evidence holds',
+      status: 'manual',
+      message:
+        value(env, 'STORAGE') === 's3' && Number(value(env, 'EVIDENCE_LOCK_DAYS') ?? '3650') > 0
+          ? 'confirm the files bucket has Object Lock enabled and the worker log shows no "[evidence-hold] ALERT" (docs/runbooks/evidence-holds.md)'
+          : 'posted invoice files get no retention hold (STORAGE is not s3, or EVIDENCE_LOCK_DAYS=0): confirm the owner accepts that (docs/runbooks/evidence-holds.md)',
+    },
     { item: 'Owner sign-off', status: 'manual', message: 'the owner records the sign-off in issue #308' },
   );
   return results;

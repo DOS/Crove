@@ -72,6 +72,7 @@ Nightly backups and a timed restore drill are M1-7 (issue #307); setting them up
 - Checked by `pilot:check`: `BACKUP_S3_ENDPOINT` is set, https and not on this server, with `BACKUP_S3_BUCKET` and its keys, and the bucket is not the files bucket itself; `BACKUP_ENCRYPTION_KEY`, when set, is a valid 32-byte key of its own (not `EXPORT_ENCRYPTION_KEY`); `BACKUP_HEARTBEAT_URL`, when set, is https.
 - `MANUAL`: without `BACKUP_ENCRYPTION_KEY`, that the owner accepts a backup bucket that holds the books unsealed; without `BACKUP_HEARTBEAT_URL`, that nothing pages when the nightly backup stops running.
 - `MANUAL`: a restore onto a scratch stack passed this month (`restore.sh` ends with `restore of <run> passed`), with the RPO and RTO it measured, before sign-off.
+- `MANUAL` (item "Evidence holds", #1009): with `STORAGE=s3` and `EVIDENCE_LOCK_DAYS` above 0, that the files bucket has Object Lock enabled and the worker log shows no `[evidence-hold] ALERT`; otherwise, that the owner accepts posted invoice files without a retention hold ([evidence-holds.md](evidence-holds.md)).
 
 ## 5. Sign-up limited to invited users or an allowlisted domain
 

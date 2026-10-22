@@ -7,6 +7,7 @@ import {
   ChecksumMode,
   CreateBucketCommand,
   DeleteObjectCommand,
+  GetObjectRetentionCommand,
   HeadObjectCommand,
   PutBucketVersioningCommand,
   PutObjectCommand,
@@ -193,6 +194,47 @@ describe.skipIf(!URL_ENV)('S3BlobStore against a real S3-compatible server', () 
     const key = fileKey(orgId, sha256Hex(bytes));
     await expect(S3BlobStore.connect({ ...options, bucket }).put(key, bytes, 'application/xml')).rejects.toBeInstanceOf(BlobStoreVersioningError);
     await expect(S3BlobStore.connect({ ...options, bucket, versioning: 'off' }).put(key, bytes, 'application/xml')).resolves.toBe(`content:${sha256Hex(bytes)}`);
+  });
+
+  // Evidence holds (issue #1009): a bucket created with Object Lock (which turns versioning on), as an evidence bucket
+  // with holds must be. The holds here last a day; the CI server is thrown away after the run.
+  it('holds the recorded version of an evidence file in GOVERNANCE mode, which a plain client cannot delete', async () => {
+    const bucket = `crove-locked-${randomUUID().slice(0, 8)}`;
+    await client.send(new CreateBucketCommand({ Bucket: bucket, ObjectLockEnabledForBucket: true }));
+    const store = S3BlobStore.connect({ ...options, bucket });
+    await expect(store.holds.available()).resolves.toBe(true);
+    // The test bucket has no Object Lock: the worker reports it and sets nothing.
+    await expect(S3BlobStore.connect(options).holds.available()).resolves.toBe(false);
+
+    const original = encode(`<HDon>${randomUUID()}</HDon>`);
+    const sha256 = sha256Hex(original);
+    const key = fileKey(orgId, sha256);
+    const generation = await store.put(key, original, 'application/xml');
+    const versionId = generation.slice('s3:'.length);
+    const until = new Date(Math.ceil(Date.now() / 1000) * 1000 + 86_400_000);
+    await expect(store.holds.hold({ key, generation, sha256 }, until)).resolves.toEqual(until);
+    const retention = await client.send(new GetObjectRetentionCommand({ Bucket: bucket, Key: key, VersionId: versionId }));
+    expect(retention.Retention?.Mode).toBe('GOVERNANCE');
+    expect(retention.Retention?.RetainUntilDate?.getTime()).toBe(until.getTime());
+
+    // Holding again for a shorter time keeps the longer hold (no bypass permission is ever used).
+    await expect(store.holds.hold({ key, generation, sha256 }, new Date(until.getTime() - 3_600_000))).resolves.toEqual(until);
+    // A longer one lengthens it.
+    const later = new Date(until.getTime() + 86_400_000);
+    await expect(store.holds.hold({ key, generation, sha256 }, later)).resolves.toEqual(later);
+
+    // Deleting the held version is refused (AWS answers 403 AccessDenied, MinIO 400 InvalidRequest "Object is WORM
+    // protected"); a plain delete only adds a delete marker, and the recorded version still reads.
+    const refused = await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key, VersionId: versionId })).then(
+      () => null,
+      (error: { name?: string }) => error.name,
+    );
+    expect(['AccessDenied', 'InvalidRequest']).toContain(refused);
+    await store.delete(key);
+    expect(await readVerified(store, { key, generation, sha256 })).toEqual(original);
+
+    // A version that does not exist is a missing blob.
+    await expect(store.holds.hold({ key, generation: 's3:00000000-0000-0000-0000-000000000000', sha256 }, until)).rejects.toBeInstanceOf(BlobNotFoundError);
   });
 
   // The browser side of a presigned POST: the form fields, then the file last.
