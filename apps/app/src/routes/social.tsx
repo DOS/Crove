@@ -13,6 +13,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
+import { SocialBoard } from '../components/social-board.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
 import { CalendarFeedCard } from '../components/social-calendar-feed.tsx';
 import { InstagramGrid } from '../components/social-instagram-grid.tsx';
@@ -491,14 +492,15 @@ export function SocialPage() {
   // The server filters and pages (#574); a page at a time, newest change first.
   const list = useInfiniteQuery({
     ...orpc.social.posts.list.infiniteOptions({
-      input: (before: PostCursor | undefined) => ({ stage: listTab ?? 'review', ...filters, ...dayRange(search.from, search.to), limit: PAGE, ...(before ? { before } : {}) }),
+      // The board (#1022) is the same list without a stage: every post, in a column per status.
+      input: (before: PostCursor | undefined) => ({ ...(listTab ? { stage: listTab } : {}), ...filters, ...dayRange(search.from, search.to), limit: PAGE, ...(before ? { before } : {}) }),
       initialPageParam: undefined as PostCursor | undefined,
       getNextPageParam: (page: Post[]) => {
         const last = page.at(-1);
         return page.length === PAGE && last ? { updatedAt: last.updatedAt, postId: last.id } : undefined;
       },
     }),
-    enabled: listTab !== null,
+    enabled: listTab !== null || tab === 'board',
     refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS),
   });
   // The Review tab's count, whatever list is open.
@@ -512,9 +514,10 @@ export function SocialPage() {
   const reviewCount = review.data?.length ?? 0;
   const attentionCount = attention.data?.length ?? 0;
   const filtered = Boolean(search.channel || search.label || search.q || search.from || search.to || search.mine);
-  // The label filter applies to the lists, the calendar and the metrics; the other filters to the lists only.
-  const postFilters = tab === 'upcoming' || listTab !== null;
-  const labelFilter = (postFilters || tab === 'calendar' || tab === 'metrics') && (labelList.length > 0 || Boolean(search.label));
+  // The post filters (label, channel, search, mine) are the same in the lists, the board and the calendar (#1022): one
+  // state, in the address. The metrics take the label only; the calendar's own month or week is its date range.
+  const postFilters = tab === 'upcoming' || listTab !== null || tab === 'board' || tab === 'calendar';
+  const labelFilter = (postFilters || tab === 'metrics') && (labelList.length > 0 || Boolean(search.label));
   // Posts picked for a bulk action (#635), in the list on screen; a new tab or filter starts afresh.
   const [picked, setPicked] = useState<Set<string>>(new Set());
   useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.mine]);
@@ -629,7 +632,7 @@ export function SocialPage() {
                   <span className="text-subtle-foreground">{t('filters.search')}</span>
                   <Input type="search" className="mt-1" value={text} placeholder={t('filters.searchPlaceholder')} onChange={(e) => setText(e.target.value)} />
                 </label>
-                {(listTab === 'review' || listTab === 'done') && (
+                {(listTab === 'review' || listTab === 'done' || tab === 'board') && (
                   <>
                     <label className="text-xs">
                       <span className="text-subtle-foreground">{t('filters.from')}</span>
@@ -680,11 +683,31 @@ export function SocialPage() {
         <TabsContent value="calendar">
           {tab === 'calendar' && (
             <div className="space-y-4">
-              <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} canWrite={canWrite} labelId={search.label} />
+              <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} canWrite={canWrite} filters={filters} />
               <InstagramGrid slug={slug} channels={(channels.data ?? []).filter((c) => c.provider === 'instagram' && c.status !== 'revoked')} canDecide={role === 'owner' || role === 'admin'} />
               <PlanReviewCard channels={channels.data ?? []} canManage={canDecide} />
               <CalendarFeedCard canManage={role === 'owner' || role === 'admin'} />
             </div>
+          )}
+        </TabsContent>
+        <TabsContent value="board">
+          {tab === 'board' && (
+            <>
+              {list.isLoading ? (
+                <Spinner />
+              ) : list.error && rows.length === 0 ? (
+                <ErrorText>{errorMessage(list.error)}</ErrorText>
+              ) : (
+                <SocialBoard posts={rows} slug={slug} names={names} labels={labelList} canWrite={canWrite} canDecide={canDecide} />
+              )}
+              {list.hasNextPage && (
+                <div className="mt-4 flex justify-center">
+                  <Button variant="outline" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>
+                    {t('filters.loadMore')}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </TabsContent>
         <TabsContent value="metrics">

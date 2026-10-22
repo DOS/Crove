@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.post_version',
   'crove_social.publish_hold',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -771,6 +772,17 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => {
       const { setup, variant } = socialVariantRows(o);
       return { setup, row: variant };
+    },
+  },
+  // A saved version of a post's content (#1021), numbered per post. Each row gets its own post, so the per-post unique
+  // number never collides however many rows an org gets.
+  'crove_social.post_version': {
+    make: (o) => {
+      const post = socialPostRow(o);
+      return {
+        setup: [{ table: 'crove_social.post', values: post }],
+        row: { org_id: o.id, id: randomUUID(), post_id: post.id, number: 1, revision: 1, body: 'RLS matrix version', created_by: o.owner },
+      };
     },
   },
   // A hold on all of an org's publishing (#946), by an owner or admin with a reason. The commands keep one live hold per

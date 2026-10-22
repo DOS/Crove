@@ -81,8 +81,10 @@ function OccasionChip({ occasion, onStart }: { occasion: Occasion; onStart: (o: 
   );
 }
 
-// labelId: only posts with that label (#639). canWrite: may add and change notes on dates (#794).
-export function SocialCalendar({ slug, names, canDecide, canWrite, labelId }: { slug: string; names: Map<string, string>; canDecide: boolean; canWrite: boolean; labelId?: string | undefined }) {
+// filters: the Social home's post filters (label #639, channel, text, mine #640), the same as the lists and the board
+// (#1022). canWrite: may add and change notes on dates (#794).
+export type CalendarFilters = { connectionId?: string; labelId?: string; search?: string; assignee?: 'me' };
+export function SocialCalendar({ slug, names, canDecide, canWrite, filters = {} }: { slug: string; names: Map<string, string>; canDecide: boolean; canWrite: boolean; filters?: CalendarFilters }) {
   const t = useTranslations('social');
   const f = useFormat();
   const navigate = useNavigate();
@@ -90,7 +92,7 @@ export function SocialCalendar({ slug, names, canDecide, canWrite, labelId }: { 
   const [anchor, setAnchor] = useState(() => startOfDay(new Date()));
   const days = useMemo(() => viewDays(view, anchor), [view, anchor]);
   const range = useMemo(() => ({ from: (days[0] as Date).toISOString(), to: addDays(days.at(-1) as Date, 1).toISOString() }), [days]);
-  const posts = useQuery(orpc.social.posts.list.queryOptions({ input: { ...range, ...(labelId ? { labelId } : {}), limit: 200 } }));
+  const posts = useQuery(orpc.social.posts.list.queryOptions({ input: { ...range, ...filters, limit: 200 } }));
   const items = useMemo(() => calendarItems(posts.data ?? []), [posts.data]);
   const notes = useQuery(orpc.social.calendarNotes.list.queryOptions({ input: { from: dayId(days[0] as Date), to: dayId(days.at(-1) as Date) } }));
   const notesOn = useMemo(() => notesByDay(notes.data ?? [], days), [notes.data, days]);
