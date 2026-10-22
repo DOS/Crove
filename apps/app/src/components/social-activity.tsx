@@ -40,7 +40,10 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
           ? t('sentToApp')
           : item.kind === 'published' && (item.code === WORDPRESS_DRAFT || item.code === WORDPRESS_PENDING)
             ? t(item.code === WORDPRESS_DRAFT ? 'wordpressDraft' : 'wordpressPending')
-            : t(`kind.${item.kind}`);
+            : // How a queue reorder (#1020) moved it: shuffled, put first, or one place later behind a post put first.
+              item.kind === 'queue_moved' && (item.code === 'shuffle' || item.code === 'front' || item.code === 'shifted')
+              ? t(`queueMoved.${item.code}`)
+              : t(`kind.${item.kind}`);
   return (
     <li className={cn('space-y-1 border-l-2 py-1 pl-3 text-sm', item.kind === 'comment' ? 'border-primary' : 'border-border')}>
       <p className="text-xs text-muted-foreground">

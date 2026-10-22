@@ -736,6 +736,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       queues: {
         get: os.social.queues.get.handler(socialQuery('social.queue.get')),
         set: os.social.queues.set.handler(socialCommand('social.queue.set')),
+        shuffle: os.social.queues.shuffle.handler(socialCommand('social.queue.shuffle')),
+        moveToFront: os.social.queues.moveToFront.handler(socialCommand('social.queue.move_to_front')),
       },
     },
     channels: {

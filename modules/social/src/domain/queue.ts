@@ -5,7 +5,9 @@
 // - posts waiting for approval hold their slots, so the caller counts them as taken;
 // - after a time-zone change a post keeps the same local clock time (retime);
 // - a slot may belong to a content category, a post label (#745): it is kept for posts with that label, which take
-//   the next free slot of their labels first and then an open one (no label); other posts take open slots only.
+//   the next free slot of their labels first and then an open one (no label); other posts take open slots only;
+// - reordering a queue (shuffle, move to the front, #1020) only trades the times posts already hold: no slot is made or
+//   dropped, and a post takes another's time only when it may use that slot.
 
 export interface Slot {
   // ISO weekday: 1 = Monday ... 7 = Sunday.
@@ -175,7 +177,7 @@ export function nextFreeSlot(queue: QueueSpec, afterMs: number, taken: ReadonlyS
 }
 
 // The label of the slot an instant is (null: open, undefined: not a slot).
-function slotLabel(queue: QueueSpec, epochMs: number): string | null | undefined {
+export function slotLabel(queue: QueueSpec, epochMs: number): string | null | undefined {
   if (epochMs % MINUTE !== 0) return undefined;
   const e = slotEntriesBetween(queue, epochMs - MINUTE, epochMs).find((x) => x.at === epochMs);
   return e ? e.labelId : undefined;
@@ -215,6 +217,55 @@ export function placeQueued(queue: QueueSpec, posts: readonly QueuedPost[], nowM
     placed.set(p.id, at);
   }
   return posts.map((p) => ({ id: p.id, slotAt: kept.get(p.id) ?? placed.get(p.id) ?? null }));
+}
+
+// Reordering (#1020). A holder is a post that may move, at the slot time it holds now; `fits` says whether it may take
+// a time (the slot's label, the post's planned takedown). Both functions return each holder's new time; the times
+// handed out are exactly the times the holders held, each once.
+export interface Holder {
+  id: string;
+  at: number;
+}
+
+const inTimeOrder = <T extends Holder>(holders: readonly T[]) => [...holders].sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+
+// Shuffles the holders' times (Sattolo's algorithm over the holders in time order): each holder in turn trades times with
+// one before it, picked by `random` (in [0, 1), as Math.random; tests pass their own), when both may take the other's
+// time. With no kept slots in the way every post ends at another time; a post nobody may trade with keeps its own.
+export function shuffleTimes<T extends Holder>(holders: readonly T[], fits: (holder: T, at: number) => boolean, random: () => number = Math.random): Map<string, number> {
+  const order = inTimeOrder(holders);
+  const times = order.map((h) => h.at);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.min(i - 1, Math.floor(random() * i));
+    const a = order[i] as T;
+    const b = order[j] as T;
+    const [ta, tb] = [times[i] as number, times[j] as number];
+    if (fits(a, tb) && fits(b, ta)) {
+      times[i] = tb;
+      times[j] = ta;
+    }
+  }
+  return new Map(order.map((h, k) => [h.id, times[k] as number]));
+}
+
+// Moves one holder to the front: it takes the earliest time it can reach, and each holder it passes moves one place
+// later, to the time the moving post had just left. A holder that may not take that time stays where it is and the
+// moving post passes it by; so with no kept slots in the way the post takes the first time and the others shift by one.
+export function moveToFront<T extends Holder>(holders: readonly T[], targetId: string, fits: (holder: T, at: number) => boolean): Map<string, number> {
+  const order = inTimeOrder(holders);
+  const result = new Map(order.map((h) => [h.id, h.at]));
+  let cur = order.findIndex((h) => h.id === targetId);
+  const target = order[cur];
+  if (!target) return result;
+  for (let i = cur - 1; i >= 0; i--) {
+    const other = order[i] as T;
+    if (fits(target, other.at) && fits(other, (order[cur] as T).at)) {
+      result.set(other.id, (order[cur] as T).at);
+      cur = i;
+    }
+  }
+  result.set(target.id, (order[cur] as T).at);
+  return result;
 }
 
 // The same local clock time in another zone, for a post when its queue's time zone changes.

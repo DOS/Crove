@@ -31,6 +31,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { clearDraft, loadDraft, saveDraft, type StoredDraft } from '../lib/social-draft.ts';
+import { canMoveToFront } from '../lib/social-queue-order.ts';
 import {
   CANCELLABLE,
   EDITABLE,
@@ -2450,6 +2451,25 @@ function MoveTime({ variantId, connectionId, timeZone, at, onDone }: { variantId
   );
 }
 
+// A channel waiting in its queue goes first (#1020): it takes the earliest slot it may use and the posts it passes move
+// one place later. Sent with the slot time shown, so a queue changed meanwhile is refused rather than reordered blind.
+function MoveToFront({ variantId, queueSlotAt, onDone }: { variantId: string; queueSlotAt: string; onDone: () => void }) {
+  const t = useTranslations('social');
+  const move = useMutation({
+    mutationFn: () => client.social.queues.moveToFront({ variantId, expectedAt: queueSlotAt }),
+    onSuccess: onDone,
+  });
+  return (
+    <>
+      <Button variant="outline" size="sm" disabled={move.isPending} onClick={() => move.mutate()}>
+        {t('moveToFront')}
+      </Button>
+      {move.data && move.data.moved.length === 0 && <span role="status">{t('alreadyFront')}</span>}
+      {move.error && <ErrorText>{errorMessage(move.error)}</ErrorText>}
+    </>
+  );
+}
+
 const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks'] as const;
 
 // A published channel's latest counts, as the platform reported them; a count it does not report is left out.
@@ -2871,6 +2891,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                         </>
                       )}
                       {canDecide && v.status === 'scheduled' && !v.queuePaused && <MoveTime variantId={v.id} connectionId={v.connectionId} timeZone={p.timeZone} at={v.effectiveAt} onDone={refresh} />}
+                      {canDecide && canMoveToFront(v) && <MoveToFront variantId={v.id} queueSlotAt={v.queueSlotAt as string} onDone={refresh} />}
                       {canDecide && ['scheduled', 'paused'].includes(v.status) && (
                         <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
                           {t('unschedule')}
