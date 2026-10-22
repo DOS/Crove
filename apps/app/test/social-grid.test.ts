@@ -33,6 +33,20 @@ describe('Instagram grid preview (#795)', () => {
     ]);
   });
 
+  it('leaves out Reels kept to the Reels tab and trial Reels, and keeps Reels in the feed (#1019)', () => {
+    const video = [{ fileId: 'v', mime: 'video/mp4', durationMs: 30_000 }];
+    const items = gridItems(
+      [
+        post('p1', [variant('feed', 'scheduled', '2026-10-25T02:00:00.000Z', { media: video })]),
+        post('p2', [variant('feed-said', 'published', '2026-10-20T02:00:00.000Z', { media: video, settings: { instagram: { reelFeed: 'feed' } } })]),
+        post('p3', [variant('reels-only', 'scheduled', '2026-10-26T02:00:00.000Z', { media: video, settings: { instagram: { reelFeed: 'reels_only' } } })]),
+        post('p4', [variant('trial', 'published', '2026-10-21T02:00:00.000Z', { media: video, settings: { instagram: { reelFeed: 'trial', trialGraduation: 'performance' } } })]),
+      ],
+      IG,
+    );
+    expect(items.map((i) => i.v.id)).toEqual(['feed', 'feed-said']);
+  });
+
   it('swaps the times of two scheduled posts only', () => {
     const [a, b, draft, out] = gridItems(
       [

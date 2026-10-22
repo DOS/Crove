@@ -108,6 +108,31 @@ const userTagsForm = (names: readonly string[]) =>
   names.length === 0 ? {} : { user_tags: JSON.stringify(names.map((username, i) => ({ username, x: Number(((i + 1) / (names.length + 1)).toFixed(3)), y: 0.9 }))) };
 const collaboratorsForm = (names: readonly string[]) => (names.length === 0 ? {} : { collaborators: JSON.stringify(names) });
 const altOf = (m: { mime: string; altText?: string | null }) => (m.altText && !isVideo(m) ? { alt_text: m.altText.slice(0, 1000) } : {});
+// Where a Reel shows (#1019), in `settings.instagram`: { reelFeed, trialGraduation? }, as the composer stores it (the
+// Social module's instagramReelOf). feed (the default) sends share_to_feed true, as before: the Reel shows in the feed
+// and on the profile grid. reels_only sends share_to_feed false: the Reels tab only. trial sends trial_params with its
+// graduation_strategy (MANUAL, the default: graduated by hand in the Instagram app; SS_PERFORMANCE: by Instagram when
+// it does well) and no share_to_feed, as Meta's trial Reel example does: shown to non-followers first. null when the
+// variant has none, 'invalid' for any other shape.
+const GRADUATION: Readonly<Record<string, string>> = { manual: 'MANUAL', performance: 'SS_PERFORMANCE' };
+export function instagramReelFormOf(settings: Readonly<Record<string, unknown>>): Record<string, string> | null | 'invalid' {
+  const raw = settings.instagram;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== 'reelFeed' && k !== 'trialGraduation')) return 'invalid';
+  const feed = r.reelFeed === undefined ? 'feed' : r.reelFeed;
+  const graduation = r.trialGraduation;
+  if (feed === 'trial') {
+    const strategy = graduation === undefined ? 'MANUAL' : typeof graduation === 'string' && Object.hasOwn(GRADUATION, graduation) ? GRADUATION[graduation] : undefined;
+    return strategy ? { trial_params: JSON.stringify({ graduation_strategy: strategy }) } : 'invalid';
+  }
+  if (graduation !== undefined) return 'invalid';
+  if (feed === 'feed') return { share_to_feed: 'true' };
+  if (feed === 'reels_only') return { share_to_feed: 'false' };
+  return 'invalid';
+}
+
 // A pending post's reference: the container and a short hash of its caption, so a later status check can recognise the
 // post the container became without the content.
 const captionKey = (caption: string) => createHash('sha256').update(caption).digest('hex').slice(0, 16);
@@ -173,6 +198,10 @@ export class InstagramPublisher implements Publisher {
     if (story && media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'STORY_ONE_MEDIA' };
     if (type === 'reel' && !reel) return { kind: 'rejected', error: 'bad_request', code: 'REEL_ONE_VIDEO' };
     if (cover && (!reel || story)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
+    // Where the Reel shows (#1019): only a Reel takes it.
+    const reelForm = instagramReelFormOf(input.settings);
+    if (reelForm === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'IG_REEL_FEED_INVALID' };
+    if (reelForm && (!reel || story)) return { kind: 'rejected', error: 'bad_request', code: 'IG_REEL_FEED_NOT_REEL' };
     // Read before anything is created; a read that fails does not hold the post.
     const quota = await this.graph
       .call<Parameters<typeof quotaExhausted>[0]>('GET', `${input.externalAccountId}/content_publishing_limit`, { token: s.accessToken, params: { fields: 'quota_usage,config' } })
@@ -197,9 +226,10 @@ export class InstagramPublisher implements Publisher {
         // A Story: Meta fetches the image or video from the URL; it takes no caption.
         container = await this.create(input.externalAccountId, s.accessToken, { media_type: 'STORIES', ...source(reel) });
       } else if (media.length === 1) {
-        // One video is a Reel, shown in the feed too; Meta fetches it from the URL and processes it before publishing.
+        // One video is a Reel, shown in the feed too unless the variant keeps it to the Reels tab or makes it a trial
+        // (#1019); Meta fetches it from the URL and processes it before publishing.
         const coverForm = !cover ? {} : 'atMs' in cover ? { thumb_offset: String(cover.atMs) } : { cover_url: await urlOf(cover.fileId) };
-        const single = reel ? { media_type: 'REELS', ...source(true), share_to_feed: 'true', ...coverForm } : { ...source(false), ...altOf(media[0] as { mime: string; altText?: string | null }), ...userTagsForm(tagged) };
+        const single = reel ? { media_type: 'REELS', ...source(true), ...(reelForm ?? { share_to_feed: 'true' }), ...coverForm } : { ...source(false), ...altOf(media[0] as { mime: string; altText?: string | null }), ...userTagsForm(tagged) };
         container = await this.create(input.externalAccountId, s.accessToken, { ...single, caption, ...collaboratorsForm(collaborators) });
       } else {
         // A carousel may mix images and videos.

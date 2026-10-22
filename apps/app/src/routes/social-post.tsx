@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -363,10 +363,53 @@ function WordPressSettings({ settings, onChange, disabled }: { settings: Record<
   );
 }
 
+// Where an Instagram Reel shows (#1019): in the feed too (the default, not stored), on the Reels tab only, or as a trial
+// Reel shown to non-followers first, which reaches followers by hand in the Instagram app (the default) or by Instagram
+// when it does well. Offered on a Reel, and kept on another post while it holds a choice, so it can be set back.
+function ReelFeedField({ settings, onChange, disabled }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const options = instagramReelOf(settings);
+  const feed = options && options !== 'invalid' ? options.reelFeed : 'feed';
+  const graduation = options && options !== 'invalid' ? (options.trialGraduation ?? 'manual') : 'manual';
+  const { instagram: _old, ...rest } = settings;
+  const set = (reelFeed: string, trialGraduation: string) =>
+    onChange(reelFeed === 'feed' ? rest : { ...rest, instagram: reelFeed === 'trial' && trialGraduation !== 'manual' ? { reelFeed, trialGraduation } : { reelFeed } });
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={`${id}-feed`} className="text-xs">
+        {t('igReelFeed')}
+      </Label>
+      <NativeSelect id={`${id}-feed`} size="sm" className="w-full max-w-xs" value={feed} disabled={disabled} onChange={(e) => set(e.target.value, graduation)}>
+        {IG_REEL_FEEDS.map((v) => (
+          <NativeSelectOption key={v} value={v}>
+            {t(`igReelFeedOption.${v}`)}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      <p className="text-xs text-subtle-foreground">{t(`igReelFeedHint.${feed}`)}</p>
+      {feed === 'trial' && (
+        <>
+          <Label htmlFor={`${id}-graduation`} className="text-xs">
+            {t('igTrialGraduation')}
+          </Label>
+          <NativeSelect id={`${id}-graduation`} size="sm" className="w-full max-w-xs" value={graduation} disabled={disabled} onChange={(e) => set('trial', e.target.value)}>
+            {IG_TRIAL_GRADUATIONS.map((v) => (
+              <NativeSelectOption key={v} value={v}>
+                {t(`igTrialGraduationOption.${v}`)}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+        </>
+      )}
+    </div>
+  );
+}
+
 // The settings a channel asks the person posting to choose (TikTok's posting rules), or that it offers (YouTube).
 // inboxOffered: the channel's connection was granted video.upload, which Crove asks for only where the deployment turns
 // TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903). pinAllowed: the Telegram bot may pin in the channel, as read at
-// connect (#982).
+// connect (#982). reel: the post goes out as an Instagram Reel (#1019).
 function ProviderSettings({
   provider,
   settings,
@@ -374,6 +417,7 @@ function ProviderSettings({
   disabled,
   inboxOffered = false,
   pinAllowed = false,
+  reel = false,
 }: {
   provider: string;
   settings: Record<string, unknown>;
@@ -381,6 +425,7 @@ function ProviderSettings({
   disabled: boolean;
   inboxOffered?: boolean;
   pinAllowed?: boolean;
+  reel?: boolean;
 }) {
   const t = useTranslations('social');
   // Telegram (#982): a silent post, and a pin to the top of the channel once it is out; link buttons under it (#1017).
@@ -499,7 +544,7 @@ function ProviderSettings({
       </div>
     );
   }
-  // Instagram (#796): collaborators on feed posts and Reels, people tagged on the first image.
+  // Instagram (#796): collaborators on feed posts and Reels, people tagged on the first image; where a Reel shows (#1019).
   if (provider === 'instagram') {
     const names = (key: string) => (Array.isArray(settings[key]) ? (settings[key] as unknown[]).filter((v): v is string => typeof v === 'string') : []);
     const set = (key: string, value: string[]) => {
@@ -508,6 +553,7 @@ function ProviderSettings({
     };
     return (
       <div className="space-y-2">
+        {(reel || settings.instagram !== undefined) && <ReelFeedField settings={settings} disabled={disabled} onChange={onChange} />}
         <PeopleField id="ig-collaborators" label={t('igCollaborators')} hint={t('igCollaboratorsHint')} names={names('collaborators')} disabled={disabled} onChange={(v) => set('collaborators', v)} />
         <PeopleField id="ig-user-tags" label={t('igUserTags')} hint={t('igUserTagsHint')} names={names('userTags')} disabled={disabled} onChange={(v) => set('userTags', v)} />
       </div>
@@ -1105,6 +1151,7 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
               delete rest.repost;
               delete rest.removeAt;
               delete rest.cover;
+              delete rest.instagram;
             }
             onChange(e.target.value === 'feed' ? rest : { ...rest, postType: e.target.value });
           }}
@@ -1453,7 +1500,15 @@ function ChannelEditor({
           />
         </div>
       )}
-      <ProviderSettings provider={provider} settings={own.settings} disabled={disabled} inboxOffered={scopes?.includes('video.upload') ?? false} pinAllowed={scopes?.includes(TELEGRAM_PIN_SCOPE) ?? false} onChange={(settings) => onChange({ ...own, settings })} />
+      <ProviderSettings
+        provider={provider}
+        settings={own.settings}
+        disabled={disabled}
+        inboxOffered={scopes?.includes('video.upload') ?? false}
+        pinAllowed={scopes?.includes(TELEGRAM_PIN_SCOPE) ?? false}
+        reel={provider === 'instagram' && isInstagramReel(content.media.map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const) })), own.settings)}
+        onChange={(settings) => onChange({ ...own, settings })}
+      />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       <PlatformPreview channel={channel} provider={provider} content={content} readLink />

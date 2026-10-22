@@ -1,7 +1,7 @@
 // The Instagram grid preview (#795): the profile grid of one Instagram channel as it will look, the posts to come
 // (dashed) ahead of the latest ones out, newest first, three to a row. Owners and admins drag a scheduled post onto
-// another scheduled one to swap their times, with the same reschedule the calendar uses. Stories are left out; a Reel
-// shows its cover.
+// another scheduled one to swap their times, with the same reschedule the calendar uses. Stories are left out, and so
+// are Reels kept off the grid (#1019); a Reel shows its cover.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useMemo, useState, type DragEvent } from 'react';

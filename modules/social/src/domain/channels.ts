@@ -923,6 +923,49 @@ export function instagramPeopleOf(settings: Readonly<Record<string, unknown>> | 
   return names.length > 0 ? names : null;
 }
 
+// Where an Instagram Reel shows (#1019), in `settings.instagram`: { reelFeed, trialGraduation? }. feed (the default, not
+// stored) shows it in the feed and on the profile grid as before (share_to_feed true); reels_only keeps it to the Reels
+// tab, off the grid (share_to_feed false); trial makes it a trial Reel, shown to people who do not follow the account
+// first (trial_params), which goes to followers once graduated: by hand in the Instagram app (manual, the default) or by
+// Instagram when it does well (performance). Only a Reel takes it, never a Story, an image or a carousel. The adapter's
+// instagramReelFormOf in @crove/channel reads the same shape.
+export const IG_REEL_FEEDS = ['feed', 'reels_only', 'trial'] as const;
+export type InstagramReelFeed = (typeof IG_REEL_FEEDS)[number];
+export const IG_TRIAL_GRADUATIONS = ['manual', 'performance'] as const;
+export type InstagramTrialGraduation = (typeof IG_TRIAL_GRADUATIONS)[number];
+export interface InstagramReelOptions {
+  reelFeed: InstagramReelFeed;
+  // Set only on a trial Reel.
+  trialGraduation: InstagramTrialGraduation | null;
+}
+
+// The Reel options in a variant's settings: null when there are none, 'invalid' when settings.instagram is not an
+// object of those two keys with known values, or names a graduation on a Reel that is not a trial.
+export function instagramReelOf(settings: Readonly<Record<string, unknown>> | undefined): InstagramReelOptions | 'invalid' | null {
+  const raw = settings?.instagram;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== 'reelFeed' && k !== 'trialGraduation')) return 'invalid';
+  const feed = r.reelFeed === undefined ? 'feed' : r.reelFeed;
+  if (!(IG_REEL_FEEDS as readonly unknown[]).includes(feed)) return 'invalid';
+  const graduation = r.trialGraduation;
+  if (graduation !== undefined && (feed !== 'trial' || !(IG_TRIAL_GRADUATIONS as readonly unknown[]).includes(graduation))) return 'invalid';
+  return { reelFeed: feed as InstagramReelFeed, trialGraduation: feed === 'trial' ? ((graduation as InstagramTrialGraduation | undefined) ?? 'manual') : null };
+}
+
+// Whether a variant's post is an Instagram Reel: one video, not a Story (a feed post of one video goes out as a Reel).
+export function isInstagramReel(media: readonly { kind: 'image' | 'video' }[], settings: Readonly<Record<string, unknown>> | undefined): boolean {
+  return media.length === 1 && media[0]?.kind === 'video' && postTypeOf(settings) !== 'story';
+}
+
+// Whether a Reel stays off the profile grid (#1019): kept to the Reels tab, or a trial Reel (which reaches followers
+// only once graduated, and Crove does not learn when). The grid preview leaves these out.
+export function instagramReelOffGrid(settings: Readonly<Record<string, unknown>> | undefined): boolean {
+  const options = instagramReelOf(settings);
+  return options !== null && options !== 'invalid' && options.reelFeed !== 'feed';
+}
+
 // Publishing limits Crove counts itself (#775, plan §3.6: "Rate limits and quotas tracked per app and per account"),
 // for the channels whose API has no quota endpoint: how many posts one account may make in a window. Instagram and
 // Threads read their own quota from the platform (#743). The numbers are the platforms' documented per-account limits,

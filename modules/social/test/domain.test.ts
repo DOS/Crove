@@ -9,6 +9,10 @@ import {
   contentHash,
   countLinks,
   countText,
+  IG_REEL_FEEDS,
+  IG_TRIAL_GRADUATIONS,
+  instagramReelOf,
+  instagramReelOffGrid,
   LINKEDIN_VISIBILITY,
   replySettingOf,
   THREADS_REPLY_SETTINGS,
@@ -400,6 +404,37 @@ describe('validateVariant', () => {
     expect(validateVariant({ provider: 'threads', body: 'x', title: null, media: [], settings: { poll: { options: ['a', 'b'], durationMinutes: 1 } } })).toEqual([]);
     // Followers is a Threads choice, not an X one.
     expect(codes({ replySettings: 'followers' })).toEqual(['REPLY_SETTINGS_INVALID']);
+  });
+
+  it('takes where a Reel shows on Instagram Reels only, and refuses it on other posts and channels (#1019)', () => {
+    const check = (provider: 'instagram' | 'facebook_page', media: MediaItem[], settings: Record<string, unknown>) =>
+      validateVariant({ provider, body: 'Khai trương', title: null, media, settings }).filter((i) => i.field.startsWith('settings.instagram'));
+    for (const reelFeed of IG_REEL_FEEDS) expect(check('instagram', [mp4()], { instagram: { reelFeed } })).toEqual([]);
+    for (const trialGraduation of IG_TRIAL_GRADUATIONS) expect(check('instagram', [mp4()], { instagram: { reelFeed: 'trial', trialGraduation } })).toEqual([]);
+    expect(check('instagram', [mp4()], { postType: 'reel', instagram: { reelFeed: 'reels_only' } })).toEqual([]);
+    expect(check('instagram', [mp4()], {})).toEqual([]);
+    const notReel = [{ code: 'IG_REEL_FEED_NOT_REEL', field: 'settings.instagram.reelFeed', limit: null, actual: null }];
+    expect(check('instagram', [jpeg()], { instagram: { reelFeed: 'reels_only' } })).toEqual(notReel);
+    expect(check('instagram', [mp4(), jpeg()], { instagram: { reelFeed: 'trial' } })).toEqual(notReel);
+    expect(check('instagram', [mp4()], { postType: 'story', instagram: { reelFeed: 'reels_only' } })).toEqual(notReel);
+    expect(check('instagram', [], { instagram: { reelFeed: 'trial' } })).toEqual(notReel);
+    const invalid = [{ code: 'IG_REEL_FEED_INVALID', field: 'settings.instagram', limit: null, actual: null }];
+    for (const instagram of [{ reelFeed: 'grid' }, { reelFeed: null }, { reelFeed: 'reels_only', trialGraduation: 'manual' }, { reelFeed: 'trial', trialGraduation: 'SS_PERFORMANCE' }, { reelFeed: 'trial', notify: true }, 'trial', null, ['trial']]) {
+      expect(check('instagram', [mp4()], { instagram })).toEqual(invalid);
+    }
+    expect(check('facebook_page', [mp4()], { instagram: { reelFeed: 'reels_only' } })).toEqual([{ code: 'INSTAGRAM_NOT_SUPPORTED', field: 'settings.instagram', limit: null, actual: null }]);
+    expect(instagramReelOf({})).toBeNull();
+    expect(instagramReelOf({ instagram: { reelFeed: 'trial' } })).toEqual({ reelFeed: 'trial', trialGraduation: 'manual' });
+    expect(instagramReelOf({ instagram: {} })).toEqual({ reelFeed: 'feed', trialGraduation: null });
+    expect(instagramReelOffGrid({ instagram: { reelFeed: 'reels_only' } })).toBe(true);
+    expect(instagramReelOffGrid({ instagram: { reelFeed: 'trial' } })).toBe(true);
+    expect(instagramReelOffGrid({ instagram: { reelFeed: 'feed' } })).toBe(false);
+    expect(instagramReelOffGrid({ instagram: 'trial' })).toBe(false);
+    expect(instagramReelOffGrid({})).toBe(false);
+    // The adapter sends every value the composer offers, and refuses what validation refuses.
+    for (const reelFeed of IG_REEL_FEEDS) expect(channel.instagramReelFormOf({ instagram: { reelFeed } })).not.toBe('invalid');
+    for (const trialGraduation of IG_TRIAL_GRADUATIONS) expect(channel.instagramReelFormOf({ instagram: { reelFeed: 'trial', trialGraduation } })).not.toBe('invalid');
+    expect(channel.instagramReelFormOf({ instagram: { reelFeed: 'reels_only', trialGraduation: 'manual' } })).toBe('invalid');
   });
 
   it('checks who may reply to a Threads post and who sees a LinkedIn post (#983)', () => {
