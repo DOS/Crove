@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.banned_word',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -615,6 +616,14 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
         row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, captured_on: '2026-10-20', followers: 120 },
       };
+    },
+  },
+  // A banned or sensitive phrase of the org (#1055), warned or blocked before approval. One per normalized phrase and
+  // org, so each row gets its own phrase however many rows an org gets.
+  'crove_social.banned_word': {
+    make: (o) => {
+      const phrase = `rls matrix ${tag()}`;
+      return { row: { org_id: o.id, id: randomUUID(), phrase, normalized: phrase, level: 'warn', created_by: o.owner } };
     },
   },
   // An org's link-in-bio page (#707), and a day's clicks on one of its links; only the page's definer counts clicks.
