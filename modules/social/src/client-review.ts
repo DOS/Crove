@@ -8,7 +8,8 @@ import { zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
 import { approvalsInRound } from './domain/approval.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf } from './policy.ts';
-import { CLEAR_ERROR, POLICY_RAISED, approvedValues, lockPost, lockVariants, refreshPostStatus, setVariant, step } from './variants.ts';
+import { CLEAR_ERROR, POLICY_RAISED, approvedValues, base, lockPost, lockVariants, refreshPostStatus, setVariant, step } from './variants.ts';
+import { bannedCheckerOf, isBlocked } from './banned-words.ts';
 
 export const clientSettle = defineCommand({
   name: 'social.review.client_settle',
@@ -32,6 +33,9 @@ export const clientSettle = defineCommand({
     const decisions = await decisionsOf(ctx.trx, ctx.orgId, waiting.map((v) => v.id));
     const settled: string[] = [];
     const scheduled: string[] = [];
+    // The client's yes approves nothing that holds a blocked word (#1055), added since the team approved: it stays in
+    // review, where the team sees the word.
+    const banned = verdict === 'approved' ? await bannedCheckerOf(ctx.trx, ctx.orgId) : null;
     for (const v of waiting) {
       if (verdict === 'changes_requested') {
         // As a reviewer's request for changes does: it also ends a raised policy's hold on the variant.
@@ -42,6 +46,7 @@ export const clientSettle = defineCommand({
       // The client's yes completes a variant only once the team's approvals of this content are all in.
       const given = approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash });
       if (given.length < (required.get(v.channel_connection_id) ?? 1)) continue;
+      if (banned && isBlocked(banned, base(post), v)) continue;
       const values = approvedValues(v, ctx.now);
       await setVariant(ctx, v.id, values);
       settled.push(v.id);

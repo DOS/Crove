@@ -1206,6 +1206,26 @@ export const zSocialQueueReorder = z.object({
 
 export const zSocialIssue = z.object({ code: z.string(), field: z.string(), limit: z.number().nullable(), actual: z.number().nullable() });
 
+// A banned or sensitive word of the org (#1055): warn shows it, block refuses submit, approval and scheduling.
+// connectionIds: the channels it applies to, every channel when empty.
+export const zSocialBannedWord = z.object({
+  id: zId,
+  phrase: z.string(),
+  level: z.enum(['warn', 'block']),
+  reason: z.string().nullable(),
+  connectionIds: z.array(zId),
+  createdBy: zId,
+  createdAt: z.string(),
+});
+// One of them in a variant's content: the field it is in and where (UTF-16 offsets, end exclusive).
+export const zSocialBannedMatch = z.object({ wordId: zId, phrase: z.string(), level: z.enum(['warn', 'block']), reason: z.string().nullable(), field: z.string(), start: z.number().int(), end: z.number().int() });
+export const zSocialBannedWordAdd = z.strictObject({
+  phrase: z.string().trim().min(1).max(100),
+  level: z.enum(['warn', 'block']),
+  reason: z.string().trim().max(200).nullable().optional(),
+  connectionIds: z.array(zId).max(50).optional(),
+});
+
 const zContent = z.object({ body: z.string(), title: z.string().nullable(), linkUrl: z.string().nullable() });
 
 export const zSocialVariant = z.object({
@@ -1247,6 +1267,10 @@ export const zSocialVariant = z.object({
     .object({ kind: z.string().nullable(), code: z.string().nullable(), action: z.string().nullable(), message: z.string().nullable(), retryAt: z.string().nullable() })
     .nullable(),
   issues: z.array(zSocialIssue),
+  // The org's banned or sensitive words in its effective content (#1055), one per word and field.
+  bannedWords: z.array(zSocialBannedMatch),
+  // checked; not_checked (lists do not check them); too_complex (over the check's budget, so bannedWords is empty).
+  bannedWordsStatus: z.enum(['checked', 'not_checked', 'too_complex']),
   latestDecision: z
     .object({ decision: z.enum(SOCIAL_DECISIONS), comment: z.string().nullable(), decidedBy: zId, at: z.string(), revision: z.number().int(), current: z.boolean() })
     .nullable(),

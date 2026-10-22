@@ -59,6 +59,8 @@ import {
   zSocialAccountTrend,
   zSocialSnippet,
   zSocialSnippetCreate,
+  zSocialBannedWord,
+  zSocialBannedWordAdd,
   zSocialSnippetUpdate,
   zSocialReportBrand,
   zSocialReportBrandingSave,
@@ -500,6 +502,12 @@ export const contract = {
       create: oc.input(zSocialSnippetCreate).output(z.object({ snippetId: zId })),
       update: oc.input(zSocialSnippetUpdate).output(z.object({ snippetId: zId })),
       remove: oc.input(z.strictObject({ snippetId: zId })).output(z.object({ snippetId: zId })),
+    },
+    // Banned and sensitive words (#1055): every member reads the list; owners and admins add and remove words.
+    bannedWords: {
+      list: oc.input(z.object({})).output(z.array(zSocialBannedWord)),
+      add: oc.input(zSocialBannedWordAdd).output(z.object({ wordId: zId })),
+      remove: oc.input(z.strictObject({ wordId: zId })).output(z.object({ wordId: zId })),
     },
     // Client report links (#643): owners and admins make and revoke them; the token is in the create answer only.
     // Monthly goals (#1056): every member sees the month's progress; owners and admins set and remove goals.

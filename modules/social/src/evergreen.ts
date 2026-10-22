@@ -12,6 +12,7 @@ import { insertVariants, writePostMedia } from './posts.ts';
 import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
 import { publishingHeld } from './publish-hold.ts';
+import { bannedCheckerOf, isBlocked } from './banned-words.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const EVERGREEN_SWEEP_MS = 60 * 60_000;
@@ -144,9 +145,12 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
   }
   const submitted: string[] = [];
   if (submit) {
+    // An evergreen or recurring copy goes through the org's banned words as a submit does (#1055).
+    const banned = await bannedCheckerOf(ctx.trx, ctx.orgId);
     for (const v of fresh) {
-      // One that no longer fits its channel (a rule changed) stays a draft for a person to fix.
-      if (issuesOf(base(post), v).length > 0) continue;
+      // One that no longer fits its channel (a rule changed), or holds a word blocked since, stays a draft for a person
+      // to fix.
+      if (issuesOf(base(post), v).length > 0 || isBlocked(banned, base(post), v)) continue;
       await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
       submitted.push(v.id);
     }
