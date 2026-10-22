@@ -1,7 +1,7 @@
 // UTM tags on a post's link (#585): each channel sends the link with its own utm_source, so the business sees in its
 // analytics which channel brought a visit. The tags live in the variant's settings (settings.utm), so they are part of
 // its content hash and its approval. Links written inside the text are left as they are.
-import { holdsLink, type Provider } from './channels.ts';
+import { holdsLink, mapTelegramButtonUrls, type Provider } from './channels.ts';
 
 export interface Utm {
   campaign: string;
@@ -82,4 +82,14 @@ export function tagLink(link: string | null, provider: Provider, utm: Utm | null
 export function sentLink(provider: Provider, link: string | null, settings: Readonly<Record<string, unknown>> | undefined, body?: string): string | null {
   if (link && body && holdsLink(body.trim(), link.trim())) return link;
   return tagLink(link, provider, utmOf(settings));
+}
+
+// The settings as the channel sends them: the links of a Telegram post's buttons (#1017) with the variant's UTM tags,
+// like the post's link. A button to the post's own link sends exactly the link the post sends (`postLink.sent`, which
+// may be left untagged), so the post's short link replaces both. Everything else, and a variant without tags or
+// buttons, as it is.
+export function sentSettings(provider: Provider, settings: Record<string, unknown>, postLink?: { plain: string | null; sent: string | null }): Record<string, unknown> {
+  const utm = provider === 'telegram' ? utmOf(settings) : null;
+  if (!utm) return settings;
+  return mapTelegramButtonUrls(settings, (url) => (postLink?.plain && postLink.sent && url === postLink.plain ? postLink.sent : (tagLink(url, provider, utm) ?? url)));
 }

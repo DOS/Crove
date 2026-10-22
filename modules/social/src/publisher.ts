@@ -16,7 +16,7 @@ import type { CommentWork } from './comments.ts';
 import type { PinWork } from './pin.ts';
 import type { PlaylistWork } from './playlists.ts';
 import type { RemoveRecord, RemoveWork } from './remove.ts';
-import type { ThreadWork } from './thread.ts';import { shortened, shortUrl } from './short-links.ts';
+import type { ThreadWork } from './thread.ts';import { shortened, shortenedSettings, shortUrl } from './short-links.ts';
 
 
 export interface PublishDeps {
@@ -139,7 +139,10 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
     return readVerified(deps.store, { key: file.storageKey, generation: file.generation, sha256: file.sha256 });
   };
   // The content as it goes out: with its short link (#706) when it has one.
-  const content = work.shortLink && deps.publicUrl ? shortened(work.content, { target: work.shortLink.target, url: shortUrl(deps.publicUrl, work.shortLink.code) }) : work.content;
+  const short = work.shortLink && deps.publicUrl ? { target: work.shortLink.target, url: shortUrl(deps.publicUrl, work.shortLink.code) } : null;
+  const content = short ? shortened(work.content, short) : work.content;
+  // A Telegram button to the post's link goes out through the same short link (#1017).
+  const settings = short ? shortenedSettings(work.settings, short) : work.settings;
   try {
     switch (work.action) {
       case 'call': {
@@ -161,7 +164,7 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         if (scope && !work.scopes.includes(scope)) return { kind: 'blocked', code: 'CHANNEL_SCOPE_MISSING' };
         return fromPublish(
           await withTimeout(timeout, () =>
-            publisher.publish({ ...credential, content, readMedia, mediaUrl, settings: work.settings, callKey: work.callKey, contentHash: work.contentHash }),
+            publisher.publish({ ...credential, content, readMedia, mediaUrl, settings, callKey: work.callKey, contentHash: work.contentHash }),
           ),
         );
       }
@@ -174,7 +177,7 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         const after = new Date(Date.parse(work.callStartedAt) - 60_000);
         return fromReconcile(
           await withTimeout(timeout, () =>
-            publisher.reconcile!({ ...credential, callKey: work.callKey, contentHash: work.contentHash, content, settings: work.settings, after, before: new Date() }),
+            publisher.reconcile!({ ...credential, callKey: work.callKey, contentHash: work.contentHash, content, settings, after, before: new Date() }),
           ),
         );
       }

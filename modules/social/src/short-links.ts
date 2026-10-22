@@ -3,6 +3,7 @@
 // code is made when the variant first goes out and kept for its revision, so a retry, a status check or a reconcile
 // sends the same link; the target is fixed then and never taken from a request.
 import type { CommandContext } from '@crove/kernel-runtime';
+import { mapTelegramButtonUrls } from './domain/channels.ts';
 import type { PublishWork } from './publishing.ts';
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -53,6 +54,13 @@ function replaceWhole(text: string, target: string, replacement: string): string
 export function shortened<T extends { body: string; linkUrl: string | null }>(content: T, link: { target: string; url: string }): T {
   if (!content.linkUrl) return content;
   return { ...content, linkUrl: link.url, body: replaceWhole(content.body, link.target, link.url) };
+}
+
+// The settings as they go out with the post's short link: a Telegram button (#1017) to the post's link goes through it
+// too. A button to another page keeps its own link (with its UTM tags), as a link written in the text does: a variant
+// has one short link per revision.
+export function shortenedSettings(settings: Record<string, unknown>, link: { target: string; url: string }): Record<string, unknown> {
+  return mapTelegramButtonUrls(settings, (url) => (url === link.target ? link.url : url));
 }
 
 // The short link of a publish step: the variant's for its revision when it has one; on a first call, a new one when its
