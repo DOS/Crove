@@ -21,13 +21,15 @@ ALTER TABLE crove_kernel.file ADD COLUMN IF NOT EXISTS held_until timestamptz;
 ALTER TABLE crove_kernel.file ADD COLUMN IF NOT EXISTS hold_attempted_at timestamptz;
 ALTER TABLE crove_kernel.file ADD COLUMN IF NOT EXISTS hold_attempts int NOT NULL DEFAULT 0;
 ALTER TABLE crove_kernel.file ADD COLUMN IF NOT EXISTS hold_error text;
+-- NOT VALID: no scan of the file table under its lock. Existing rows hold the defaults (0 and null), which satisfy
+-- both checks, and every insert and update is checked.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conname = 'file_hold_attempts_check' AND conrelid = 'crove_kernel.file'::regclass) THEN
-    ALTER TABLE crove_kernel.file ADD CONSTRAINT file_hold_attempts_check CHECK (hold_attempts >= 0);
+    ALTER TABLE crove_kernel.file ADD CONSTRAINT file_hold_attempts_check CHECK (hold_attempts >= 0) NOT VALID;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conname = 'file_hold_error_check' AND conrelid = 'crove_kernel.file'::regclass) THEN
-    ALTER TABLE crove_kernel.file ADD CONSTRAINT file_hold_error_check CHECK (pg_catalog.char_length(hold_error) <= 500);
+    ALTER TABLE crove_kernel.file ADD CONSTRAINT file_hold_error_check CHECK (pg_catalog.char_length(hold_error) <= 500) NOT VALID;
   END IF;
 END $$;
 

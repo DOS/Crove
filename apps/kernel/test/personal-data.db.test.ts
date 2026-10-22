@@ -215,6 +215,32 @@ suite('finding a person in the org (#923)', () => {
     expect(result.kept).toContainEqual({ column: 'crove_kernel.file', rows: 1, reason: expect.stringContaining('held in storage until 2036-10-20') });
     const file = (await admin((c) => c.query('SELECT held_until FROM crove_kernel.file WHERE id = $1', [fileId]))).rows[0];
     expect(file).toEqual({ held_until: new Date(until) });
+
+    // A second posted file of the party with no hold recorded yet: no date is claimed for the group.
+    const sha2 = randomUUID().replaceAll('-', '').padEnd(64, '1');
+    await admin(async (c) => {
+      await c.query('BEGIN');
+      await c.query("SET LOCAL session_replication_role = 'replica'");
+      const party = await c.query<{ id: string }>(`SELECT party_id AS id FROM crove_finance.purchase_document WHERE source_file_id = $1`, [fileId]);
+      const second = randomUUID();
+      await c.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source)
+         VALUES ($1, $2, $3, $4, 's3:v2', 'hd2.xml', 'application/xml', 1, 'upload')`,
+        [org.orgId, second, sha2, `org/${org.orgId}/${sha2}`],
+      );
+      const doc = await c.query<{ id: string }>(
+        `INSERT INTO crove_finance.purchase_document (org_id, party_id, invoice_series, invoice_number, invoice_date, subtotal, vat_amount, total, source_file_id)
+         VALUES ($1, $2, 'C26TAA', '78', '2026-09-03', 100, 10, 110, $3) RETURNING id`,
+        [org.orgId, party.rows[0]?.id, second],
+      );
+      await c.query(
+        `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id) VALUES ($1, '2026-09-03', 'HĐ 78', 'finance.purchase_document', $2)`,
+        [org.orgId, doc.rows[0]?.id],
+      );
+      await c.query('COMMIT');
+    });
+    const again = await erase('0312345678');
+    expect(again.kept).toContainEqual({ column: 'crove_kernel.file', rows: 2, reason: expect.stringContaining('kept for the legal period') });
   });
 
   it('forgets a party the books do not name, drops the mail recipient but keeps its hash, and audits counts only', async () => {

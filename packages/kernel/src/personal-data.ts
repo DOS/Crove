@@ -300,7 +300,9 @@ export const personalDataErase = defineCommand({
     const partyIds = parties.map((p) => p.id);
     if (partyIds.length > 0) {
       const { rows: held } = await sql<{ files: string; until: Date | null }>`
-        SELECT count(DISTINCT f.id) AS files, max(f.held_until) AS until
+        SELECT count(DISTINCT f.id) AS files,
+               -- A date only when every file has a recorded hold, and then the earliest: never a date one file lacks.
+               CASE WHEN bool_and(f.held_until IS NOT NULL) THEN min(f.held_until) END AS until
           FROM crove_finance.purchase_document d
           JOIN crove_finance.journal_entry e ON e.org_id = d.org_id AND e.source_type = 'finance.purchase_document' AND e.source_id = d.id
           JOIN crove_kernel.file f ON f.org_id = d.org_id AND f.id = d.source_file_id
