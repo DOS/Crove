@@ -44,6 +44,7 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.banned_word',
+  'crove_social.report_branding',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -814,6 +815,12 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         row: { org_id: o.id, queue_id: queue.id, weekday: 1, minute: 540 },
       };
     },
+  },
+  // An org's white-label branding of its client reports (#1053): a display name, the logo as a small inline data URL
+  // (here the eight bytes of a PNG signature), an accent colour. The commands keep one per org under an advisory lock;
+  // the table has no unique index, so an org may get several rows.
+  'crove_social.report_branding': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), display_name: `RLS agency ${tag()}`, logo: 'data:image/png;base64,iVBORw0KGgo=', accent: '#1d4ed8', updated_by: o.owner } }),
   },
   // A client report link of a period (#643): the SHA-256 of its token, the period, the channels (none: all), an expiry.
   'crove_social.report_link': {
