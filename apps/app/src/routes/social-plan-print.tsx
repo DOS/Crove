@@ -54,12 +54,21 @@ export function SocialPlanPrintPage() {
       <div className="mx-auto max-w-4xl space-y-5">
         <div className="flex min-h-7 items-center justify-between gap-2">
           {branding.isLoading ? <span aria-hidden="true" /> : brand ? <BrandMark brand={brand} org={org} /> : <Logo />}
-          {plan.data && (
+          {/* Printing waits for the branding too: a PDF made meanwhile would carry Crove's mark, not the agency's. */}
+          {plan.data && branding.isSuccess && (
             <Button variant="outline" size="sm" className="print:hidden" onClick={() => window.print()}>
               {tp('print')}
             </Button>
           )}
         </div>
+        {branding.error && (
+          <div className="flex flex-wrap items-center gap-2 print:hidden">
+            <ErrorText>{tp('brandingError')}</ErrorText>
+            <Button variant="outline" size="sm" onClick={() => void branding.refetch()}>
+              {tp('brandingRetry')}
+            </Button>
+          </div>
+        )}
         {range === null ? (
           <Card className="block p-6">
             <h1 className="text-lg font-semibold">{tp('invalidTitle')}</h1>

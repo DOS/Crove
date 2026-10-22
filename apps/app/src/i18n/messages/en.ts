@@ -2421,6 +2421,8 @@ export const en = {
       labelsHint: 'With no label picked, every post is included.',
       download: 'Download CSV',
       print: 'Print / Save PDF',
+      brandingError: 'The agency logo and colour did not load, so the plan cannot be printed yet. Try again.',
+      brandingRetry: 'Try again',
       close: 'Close',
       rangeInvalid: 'The end cannot be before the start, and the range is at most {max, number} days.',
       truncated: 'The file holds the first {max, number} posts only; choose a shorter range or fewer channels to get them all.',

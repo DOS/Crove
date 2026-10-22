@@ -11,7 +11,7 @@ import { Label } from '@crove/ui/components/label';
 import { accentReadable, BRAND_ACCENT_START, BRAND_LOGO_TYPES, BRAND_MIN_CONTRAST, BRAND_NAME_MAX, accentContrast, normalizeAccent } from '@crove/mod-social/contract';
 import { ErrorText, Logo, Spinner } from './ui.tsx';
 import { LibraryPicker } from './social-media.tsx';
-import { client, errorMessage, fetchFile, orpc, queryClient, uploadFiles } from '../lib/api.ts';
+import { client, ClientError, errorMessage, fetchFile, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { accentStyle, makeLogoDataUrl, type ReportBrand } from '../lib/social-report-branding.ts';
 
 /** The page's mark: the agency's logo and name when the org has a brand, else Crove's logo. */
@@ -85,13 +85,13 @@ export function ReportBrandingCard({ canEdit }: { canEdit: boolean }) {
   const pick = useMutation({
     mutationFn: async (from: { fileId: string; mime: string } | { file: File }) => {
       if ('file' in from) {
-        if (!LIBRARY_TYPES.includes(from.file.type)) throw new Error(t('logoType'));
+        if (!LIBRARY_TYPES.includes(from.file.type)) throw new ClientError('social.reportBranding.logoType', (tt) => tt('social.reportBranding.logoType'));
         const stored = (await uploadFiles([from.file], 'social')).files[0];
-        if (!stored) throw new Error(t('uploadFailed'));
+        if (!stored) throw new ClientError('social.reportBranding.uploadFailed', (tt) => tt('social.reportBranding.uploadFailed'));
         void queryClient.invalidateQueries({ queryKey: ['social-library'] });
         return makeLogoDataUrl(from.file, from.file.type);
       }
-      if (!LIBRARY_TYPES.includes(from.mime)) throw new Error(t('logoType'));
+      if (!LIBRARY_TYPES.includes(from.mime)) throw new ClientError('social.reportBranding.logoType', (tt) => tt('social.reportBranding.logoType'));
       return makeLogoDataUrl(await fetchFile(from.fileId), from.mime);
     },
     onSuccess: (url) => {

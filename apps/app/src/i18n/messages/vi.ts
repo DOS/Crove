@@ -2420,6 +2420,8 @@ export const vi = {
       labelsHint: 'Không chọn nhãn nào thì lấy mọi bài.',
       download: 'Tải CSV',
       print: 'In / Lưu PDF',
+      brandingError: 'Chưa tải được logo và màu của agency, nên chưa in được. Hãy thử lại.',
+      brandingRetry: 'Thử lại',
       close: 'Đóng',
       rangeInvalid: 'Ngày kết thúc không được trước ngày bắt đầu, và khoảng ngày dài tối đa {max, number} ngày.',
       truncated: 'Tệp chỉ có {max, number} bài đầu tiên; hãy chọn khoảng ngày ngắn hơn hoặc ít kênh hơn để có đủ.',
