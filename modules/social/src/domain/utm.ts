@@ -18,6 +18,7 @@ export const UTM_SOURCE: Readonly<Record<Provider, string>> = {
   zalo_oa: 'zalo',
   threads: 'threads',
   linkedin: 'linkedin',
+  linkedin_page: 'linkedin',
   youtube: 'youtube',
   tiktok: 'tiktok',
   x: 'x',

@@ -3512,6 +3512,7 @@ export const en = {
     policyTitle: 'Review before posting',
     policyApprovals: '{count} approvers',
     gbpConnectHint: 'Google Business Profile: each location you manage becomes a channel of its own.',
+    linkedinPageHint: "LinkedIn Page: each Company Page you administer becomes a channel of its own, and posts go out under the page's name.",
     gbpSetupHint: "Google Business Profile opens only once Google approves {brand}'s Google project for the API (a verified profile, active for 60 days, with a website) and the administrator sets CHANNEL_GOOGLE_BUSINESS.",
     shortLinksLabel: 'Shorten links and count clicks',
     queueCategory: "The slot's content category",
