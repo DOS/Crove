@@ -1,14 +1,14 @@
 -- The client report's agency note and monthly goals (issue #1056). Idempotent; applied files stay untouched.
 --
--- crove_social.report_link_view  as before (20261026053000), with the same signature, RETURNS and grants, and two more
---                                keys: note (the link's note, plain text, or null) and goals (null unless the link's
---                                period is exactly one calendar month in the zone of the org's goals, 20261028170000):
---                                the month, the zone and the goals by scope, the org's own first (only when the report
---                                covers every channel), then each channel's it covers, each with its targets and the
---                                period's counts: posts, reach, impressions and engagement (reactions, comments, shares,
---                                saves, clicks) as the report adds them up, and followers gained from the daily account
---                                counts. The page judges met or missed and projects the month itself. Nothing else of
---                                the org: the goals of channels outside the link are not in it.
+-- crove_social.report_link_view  as before (20261028150000, its brand included), with the same signature, RETURNS and
+--                                grants, and two more keys: note (the link's note, plain text, or null) and goals (null
+--                                unless the link's period is exactly one calendar month in the zone of the org's goals,
+--                                20261028170000): the month, the zone and the goals by scope, the org's own first (only
+--                                when the report covers every channel), then each channel's it covers, each with its
+--                                targets and the period's counts: posts, reach, impressions and engagement (reactions,
+--                                comments, shares, saves, clicks) as the report adds them up, and followers gained from
+--                                the daily account counts. The page judges met or missed and projects the month itself.
+--                                Nothing else of the org: the goals of channels outside the link are not in it.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_social.report_link_view(p_token text)
@@ -137,18 +137,35 @@ BEGIN
         ORDER BY fs.conn, fs.captured_on DESC
       ) b ON b.conn = l.conn
     ),
+    pc AS (
+      -- Posts and counts of the period per channel, once, for the goals.
+      SELECT v.conn, pg_catalog.count(*) AS posts FROM v WHERE v.cur GROUP BY v.conn
+    ),
+    nc AS (
+      SELECT n.conn,
+             pg_catalog.sum(n.value) FILTER (WHERE n.key = 'reach') AS reach,
+             pg_catalog.sum(n.value) FILTER (WHERE n.key = 'impressions') AS impressions,
+             pg_catalog.sum(n.value) FILTER (WHERE n.key IN ('reactions', 'comments', 'shares', 'saves', 'clicks')) AS engagement
+      FROM n WHERE n.cur GROUP BY n.conn
+    ),
     ga AS (
       -- Each goal's counts in the period, as the report adds them up: a count no post reported is null when something
       -- went out and 0 when nothing did; engagement is reactions, comments, shares, saves and clicks.
-      SELECT gs.*, p.posts AS a_posts,
-             CASE WHEN p.posts = 0 THEN 0 ELSE (SELECT pg_catalog.sum(n.value) FROM n WHERE n.cur AND n.key = 'reach' AND (gs.conn IS NULL OR n.conn = gs.conn)) END AS a_reach,
-             CASE WHEN p.posts = 0 THEN 0 ELSE (SELECT pg_catalog.sum(n.value) FROM n WHERE n.cur AND n.key = 'impressions' AND (gs.conn IS NULL OR n.conn = gs.conn)) END AS a_impressions,
-             CASE WHEN p.posts = 0 THEN 0 ELSE (SELECT pg_catalog.sum(n.value) FROM n WHERE n.cur AND n.key IN ('reactions', 'comments', 'shares', 'saves', 'clicks') AND (gs.conn IS NULL OR n.conn = gs.conn)) END AS a_engagement,
+      SELECT gs.*, coalesce(a.posts, 0) AS a_posts,
+             CASE WHEN coalesce(a.posts, 0) = 0 THEN 0 ELSE a.reach END AS a_reach,
+             CASE WHEN coalesce(a.posts, 0) = 0 THEN 0 ELSE a.impressions END AS a_impressions,
+             CASE WHEN coalesce(a.posts, 0) = 0 THEN 0 ELSE a.engagement END AS a_engagement,
              CASE WHEN gs.conn IS NULL THEN (SELECT pg_catalog.sum(x.gained) FROM gained x) ELSE (SELECT x.gained FROM gained x WHERE x.conn = gs.conn) END AS a_followers
-      FROM gs CROSS JOIN LATERAL (SELECT pg_catalog.count(*) AS posts FROM v WHERE v.cur AND (gs.conn IS NULL OR v.conn = gs.conn)) p
+      FROM gs CROSS JOIN LATERAL (
+        SELECT pg_catalog.sum(pc.posts) AS posts, pg_catalog.sum(nc.reach) AS reach, pg_catalog.sum(nc.impressions) AS impressions, pg_catalog.sum(nc.engagement) AS engagement
+        FROM pc LEFT JOIN nc ON nc.conn = pc.conn
+        WHERE gs.conn IS NULL OR pc.conn = gs.conn
+      ) a
     )
     SELECT pg_catalog.jsonb_build_object(
       'org', (SELECT t.name FROM crove_kernel.tenant t WHERE t.org_id = v_link.org_id),
+      -- The white-label branding of the link's own org (#1053), or null.
+      'brand', crove_social.report_brand(v_link.org_id),
       'title', v_link.title,
       'periodStart', v_link.period_start,
       'periodEnd', v_link.period_end,

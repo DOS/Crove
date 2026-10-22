@@ -44,9 +44,14 @@ describe('storage configuration', () => {
     });
     expect(createBlobStore(config)).toBeInstanceOf(S3BlobStore);
     const line = describeStorage(config);
-    expect(line).toBe('s3 bucket crove-files-prod at acc0unt.r2.cloudflarestorage.com, versions required, transfers through the kernel');
+    expect(line).toBe('s3 bucket crove-files-prod at acc0unt.r2.cloudflarestorage.com, versions required, transfers through the kernel, posted files held 3650 days');
     expect(line).not.toMatch(/AKIA|secret/);
     expect(loadConfig({ ...BASE, STORAGE: 's3', S3_BUCKET: 'b-1' }).S3_REGION).toBe('us-east-1');
+    // Evidence holds (#1009): 10 years unless set; 0 turns them off; never negative or past 100 years.
+    expect(describeStorage(loadConfig({ ...BASE, STORAGE: 's3', S3_BUCKET: 'b-1', EVIDENCE_LOCK_DAYS: '0' }))).toMatch(/no holds on posted files$/);
+    expect(loadConfig({ ...BASE, EVIDENCE_LOCK_DAYS: '4015' }).EVIDENCE_LOCK_DAYS).toBe(4015);
+    expect(() => loadConfig({ ...BASE, EVIDENCE_LOCK_DAYS: '-1' })).toThrow();
+    expect(() => loadConfig({ ...BASE, EVIDENCE_LOCK_DAYS: '36501' })).toThrow();
   });
 
   it('names the origin browsers reach for presigned transfers, for the CSP', () => {

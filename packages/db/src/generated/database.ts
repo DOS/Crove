@@ -102,6 +102,7 @@ export interface CroveSocialSchema {
   'crove_social.publish_hold': SocialPublishHoldTable;
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
+  'crove_social.report_branding': SocialReportBrandingTable;
   'crove_social.report_link': SocialReportLinkTable;
   'crove_social.report_schedule': SocialReportScheduleTable;
   'crove_social.report_schedule_run': SocialReportScheduleRunTable;
@@ -562,6 +563,10 @@ export interface KernelFileTable {
   duration_ms: string | null;
   image_width: number | null;
   image_height: number | null;
+  held_until: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  hold_attempted_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  hold_attempts: Generated<number>;
+  hold_error: string | null;
 }
 
 /** crove_kernel.file_upload */
@@ -1337,6 +1342,19 @@ export interface SocialQueueTable {
   channel_connection_id: string;
   time_zone: Generated<string>;
   paused: Generated<boolean>;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_social.report_branding */
+export interface SocialReportBrandingTable {
+  org_id: string;
+  id: Generated<string>;
+  display_name: string | null;
+  logo: string | null;
+  accent: string | null;
+  hide_crove: Generated<boolean>;
+  updated_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }

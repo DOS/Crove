@@ -32,10 +32,26 @@ function requireUser(ctx: CommandContext): string {
 const zInstant = z.iso.datetime({ offset: true });
 
 export const REPORT_NOTE_MAX = 2000;
-// Control characters other than tab and line feed, and the format characters that can hide or reorder text (zero
-// width marks, bidirectional controls, the byte order mark), by code point.
+// Control characters other than tab and line feed, the line and paragraph separators, and the format characters that
+// can hide or reorder text (zero width space and marks, bidirectional controls and isolates, the Arabic letter mark,
+// the word joiner and invisible operators, tag characters, the byte order mark), by code point. The zero width joiner
+// (U+200D) stays: emoji sequences need it.
 const hidden = (c: number) =>
-  c <= 0x08 || (c >= 0x0b && c <= 0x1f) || (c >= 0x7f && c <= 0x9f) || (c >= 0x200b && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069) || c === 0xfeff;
+  c <= 0x08 ||
+  (c >= 0x0b && c <= 0x1f) ||
+  (c >= 0x7f && c <= 0x9f) ||
+  c === 0x061c ||
+  c === 0x200b ||
+  c === 0x200c ||
+  c === 0x200e ||
+  c === 0x200f ||
+  c === 0x2028 ||
+  c === 0x2029 ||
+  (c >= 0x202a && c <= 0x202e) ||
+  (c >= 0x2060 && c <= 0x2064) ||
+  (c >= 0x2066 && c <= 0x2069) ||
+  c === 0xfeff ||
+  (c >= 0xe0000 && c <= 0xe007f);
 /** The agency's note (#1056) as it is kept: plain text in NFC, line breaks as LF, without hidden characters, trimmed. */
 export const plainNote = (text: string) =>
   [...text.normalize('NFC').replace(/\r\n?/g, '\n')]

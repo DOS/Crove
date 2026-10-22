@@ -31,6 +31,7 @@ import { channelCommands } from './channels.ts';
 import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
 import { archiveCommands } from './archives.ts';
 import { imageSizeCommands } from './image-sizes.ts';
+import { fileHoldCommands } from './evidence-holds.ts';
 import { extractionCommands, refuseWhileReextracting } from './extraction.ts';
 import { ingestFileRow, zIngestFile } from './files.ts';
 import { createOrgCommand, myOrgs, orgCreateCommand, type OrgCreateLimits, type OrgSummary } from './identity.ts';
@@ -887,6 +888,7 @@ const otherKernelCommands = [
   ...extractionCommands,
   ...archiveCommands,
   ...imageSizeCommands,
+  ...fileHoldCommands,
   ...notificationCommands,
   requestProposal,
   editProposal,

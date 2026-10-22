@@ -91,6 +91,7 @@ export const PERSONAL_DATA_COLUMNS = {
   'crove_finance.portal_invoice_row.seller_tax_code': { kind: 'tax_code', handling: 'keep_legal', reason: "The tax portal's invoice list, kept like the books" },
   'crove_finance.portal_invoice_row.seller_name': { kind: 'name', handling: 'keep_legal', reason: "The tax portal's invoice list, kept like the books" },
   // Social.
+  'crove_social.report_branding.display_name': { kind: 'name', handling: 'keep_org', reason: "The agency's name on its white-label client reports (#1053), the business itself" },
   'crove_social.report_schedule.recipients': { kind: 'email_list', handling: 'erase', reason: 'Addresses a scheduled client report is mailed to' },
   'crove_social.review_feedback.reviewer_name': {
     kind: 'name',
@@ -187,6 +188,12 @@ export const personalDataFind = defineQuery({
   handler: (ctx, input): Promise<PersonalDataResult> => findPersonalData(ctx.trx, ctx.orgId, requireProbe(input.value)),
 });
 
+// Why an erasure keeps the original files of posted invoices (issue #1009), with the end of their retention hold.
+export function heldFilesReason(until: Date | null): string {
+  const kept = until ? `held in storage until ${new Date(until).toISOString().slice(0, 10)}` : 'kept for the legal period';
+  return `Original files behind posted entries that name this party: accounting evidence, ${kept} and never deleted by Crove (Accounting Law 88/2015, Art. 41)`;
+}
+
 // The name an erased party keeps: a party row cannot lose its name, and nothing in the books names it.
 export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
 
@@ -199,7 +206,8 @@ export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
 // - the org's contact email;
 // - the address in Social report schedules (a schedule left with nobody to mail is deleted).
 // What the law or an append-only record keeps (the names and tax codes of parties in the books, cash vouchers, the tax
-// portal's lists, invites, review feedback) is left as it is and listed with its reason. The audit row holds counts
+// portal's lists, invites, review feedback, and the original files of posted invoices naming the party, under their
+// retention hold, #1009) is left as it is and listed with its reason. The audit row holds counts
 // only, never the value or the rows.
 export const personalDataErase = defineCommand({
   name: 'kernel.personal_data.erase',
@@ -287,6 +295,21 @@ export const personalDataErase = defineCommand({
       const k = kept.get(m.column) ?? { rows: 0, reason: m.reason };
       k.rows += 1;
       kept.set(m.column, k);
+    }
+    // The original files behind posted entries that name these parties (issue #1009): accounting evidence the erasure
+    // never deletes, held in the bucket for the legal period. Reported with the date the hold runs to, when it is set.
+    const partyIds = parties.map((p) => p.id);
+    if (partyIds.length > 0) {
+      const { rows: held } = await sql<{ files: string; until: Date | null }>`
+        SELECT count(DISTINCT f.id) AS files,
+               -- A date only when every file has a recorded hold, and then the earliest: never a date one file lacks.
+               CASE WHEN bool_and(f.held_until IS NOT NULL) THEN min(f.held_until) END AS until
+          FROM crove_finance.purchase_document d
+          JOIN crove_finance.journal_entry e ON e.org_id = d.org_id AND e.source_type = 'finance.purchase_document' AND e.source_id = d.id
+          JOIN crove_kernel.file f ON f.org_id = d.org_id AND f.id = d.source_file_id
+         WHERE d.org_id = ${ctx.orgId}::uuid AND d.party_id = ANY(${partyIds}::uuid[])`.execute(ctx.trx);
+      const files = Number(held[0]?.files ?? 0);
+      if (files > 0) kept.set('crove_kernel.file', { rows: files, reason: heldFilesReason(held[0]?.until ?? null) });
     }
     const result: PersonalDataErasure = {
       erased: [...erased].map(([column, rows]) => ({ column, rows })),

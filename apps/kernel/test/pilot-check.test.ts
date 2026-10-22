@@ -49,7 +49,13 @@ describe('pilot-check settings', () => {
   it('passes a ready deployment and leaves the human items as manual', () => {
     const results = checkEnv(READY);
     expect(failures(results)).toEqual([]);
-    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Owner sign-off']);
+    expect(results.filter((r) => r.status === 'manual').map((r) => r.item)).toEqual(['Alerts', 'Extraction sandbox', 'RLS matrix', 'Backups', 'Evidence holds', 'Owner sign-off']);
+    // Evidence holds (#1009): the bucket's Object Lock is confirmed by hand; without S3 or with holds off, the owner
+    // accepts that posted files are not held.
+    const holds = (env: Record<string, string | undefined>) => checkEnv(env).find((r) => r.item === 'Evidence holds')?.message;
+    expect(holds(READY)).toMatch(/^posted invoice files get no retention hold/);
+    expect(holds({ ...READY, STORAGE: 's3' })).toMatch(/^confirm the files bucket has Object Lock/);
+    expect(holds({ ...READY, STORAGE: 's3', EVIDENCE_LOCK_DAYS: '0' })).toMatch(/^posted invoice files get no retention hold/);
     expect(results.find((r) => r.item === 'Alerts' && r.status === 'pass')?.message).toBe('alerts go to alerts.example.com, from the prober the compose profile starts');
   });
 
@@ -353,7 +359,7 @@ describe('pilot-check command', () => {
     const lines: string[] = [];
     const print = (line: string) => lines.push(line);
     expect(await runPilotCheck([], READY, fakeFetch({}), print)).toBe(PILOT_EXIT.ok);
-    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 5 manual item(s)');
+    expect(lines.join('\n')).toContain('Automatic checks passed. Confirm the 6 manual item(s)');
     expect(await runPilotCheck(['--url', 'https://crove.example.com'], READY, fakeFetch(healthy), print)).toBe(PILOT_EXIT.ok);
     lines.length = 0;
     expect(await runPilotCheck([], { ...READY, AUTH_DISABLE_SIGNUP: 'false' }, fakeFetch({}), print)).toBe(PILOT_EXIT.failed);

@@ -16,6 +16,7 @@ import { isValidTimeZone } from './domain/queue.ts';
 import { nextReportRun, reportPeriodAt, type ReportScheduleSpec } from './domain/report-schedule.ts';
 import { newReportToken, reportTokenHash } from './report-links.ts';
 import { reportGoals } from './goals.ts';
+import { reportBrandingOf } from './report-branding.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const REPORT_SCHEDULE_LIMIT = 5;
@@ -350,7 +351,10 @@ export const reportScheduleMintLink = defineCommand({
         mail_message_id: input.messageId,
       })
       .execute();
-    return { token, expiresAt: expiresAt.toISOString() };
+    // The org's white-label branding (#1053) for the mail's header and footer, read when it goes out; the logo stays on
+    // the report page (the mailer sends no inline images).
+    const brand = await reportBrandingOf(ctx.trx, ctx.orgId);
+    return { token, expiresAt: expiresAt.toISOString(), brand: brand ? { name: brand.name, accent: brand.accent, hideCrove: brand.hideCrove } : null };
   },
 });
 

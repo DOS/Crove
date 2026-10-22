@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, PutObjectRetentionCommand } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  GetObjectLockConfigurationCommand,
+  GetObjectRetentionCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  PutObjectRetentionCommand,
+} from '@aws-sdk/client-s3';
 import { describe, expect, it } from 'vitest';
 import {
   BlobConflictError,
@@ -23,7 +31,14 @@ import {
   type S3Sender,
 } from '../src/index.ts';
 
-type Command = PutObjectCommand | GetObjectCommand | DeleteObjectCommand | ListObjectsV2Command | PutObjectRetentionCommand;
+type Command =
+  | PutObjectCommand
+  | GetObjectCommand
+  | DeleteObjectCommand
+  | ListObjectsV2Command
+  | PutObjectRetentionCommand
+  | GetObjectRetentionCommand
+  | GetObjectLockConfigurationCommand;
 
 // An S3 failure the way the SDK reports it: a named error with the HTTP status in $metadata.
 function s3Error(name: string, status: number): Error {
@@ -59,6 +74,82 @@ const bytes = new TextEncoder().encode('<HDon>evidence</HDon>');
 const sha256 = sha256Hex(bytes);
 const key = fileKey(orgId, sha256);
 const checksum = createHash('sha256').update(bytes).digest('base64');
+
+describe('evidence holds with a mocked client (#1009)', () => {
+  const until = new Date('2036-10-20T00:00:00Z');
+  const ref = { key, generation: 's3:v1', sha256 };
+
+  it('holds the recorded version in GOVERNANCE mode when it has no retention yet', async () => {
+    const { store, sent } = fakeStore((c) => {
+      if (c instanceof GetObjectRetentionCommand) throw s3Error('NoSuchObjectLockConfiguration', 404);
+      return {};
+    });
+    await expect(store.holds.hold(ref, until)).resolves.toEqual(until);
+    expect(sent.map((c) => c.constructor.name)).toEqual(['GetObjectRetentionCommand', 'PutObjectRetentionCommand']);
+    expect(sent[0]?.input).toEqual({ Bucket: 'crove-files', Key: key, VersionId: 'v1' });
+    expect(sent[1]?.input).toEqual({ Bucket: 'crove-files', Key: key, VersionId: 'v1', Retention: { Mode: 'GOVERNANCE', RetainUntilDate: until } });
+  });
+
+  it('keeps a retention at least as long, and lengthens a shorter one without weakening COMPLIANCE', async () => {
+    const longer = new Date('2040-01-01T00:00:00Z');
+    const kept = fakeStore(() => ({ Retention: { Mode: 'GOVERNANCE', RetainUntilDate: longer } }));
+    await expect(kept.store.holds.hold(ref, until)).resolves.toEqual(longer);
+    expect(kept.sent.map((c) => c.constructor.name)).toEqual(['GetObjectRetentionCommand']);
+    const compliance = fakeStore((c) => (c instanceof GetObjectRetentionCommand ? { Retention: { Mode: 'COMPLIANCE', RetainUntilDate: new Date('2030-01-01T00:00:00Z') } } : {}));
+    await expect(compliance.store.holds.hold(ref, until)).resolves.toEqual(until);
+    expect(compliance.sent[1]?.input).toMatchObject({ VersionId: 'v1', Retention: { Mode: 'COMPLIANCE', RetainUntilDate: until } });
+  });
+
+  it('holds the current version of a reference without one only when its bytes match', async () => {
+    const legacy = fakeStore((c) => {
+      if (c instanceof GetObjectCommand) return { Body: body(bytes), VersionId: 'v-current' };
+      if (c instanceof GetObjectRetentionCommand) throw s3Error('NoSuchObjectLockConfiguration', 404);
+      return {};
+    });
+    await legacy.store.holds.hold({ key, generation: null, sha256 }, until);
+    expect(legacy.sent.map((c) => c.constructor.name)).toEqual(['GetObjectCommand', 'GetObjectRetentionCommand', 'PutObjectRetentionCommand']);
+    expect(legacy.sent[2]?.input).toMatchObject({ VersionId: 'v-current' });
+    const swapped = fakeStore(() => ({ Body: body(new TextEncoder().encode('swapped')), VersionId: 'v-current' }));
+    await expect(swapped.store.holds.hold({ key, generation: `content:${sha256}`, sha256 }, until)).rejects.toBeInstanceOf(BlobIntegrityError);
+    expect(swapped.sent.map((c) => c.constructor.name)).toEqual(['GetObjectCommand']);
+  });
+
+  it('reports a missing version as a missing blob, and holds nothing but org/ keys', async () => {
+    const gone = fakeStore((c) => {
+      if (c instanceof GetObjectRetentionCommand) throw s3Error('NoSuchObjectLockConfiguration', 404);
+      throw s3Error('NoSuchVersion', 404);
+    });
+    await expect(gone.store.holds.hold(ref, until)).rejects.toBeInstanceOf(BlobNotFoundError);
+    const { store, sent } = fakeStore(() => ({}));
+    await expect(store.holds.hold({ key: archiveKey(orgId, 2025, sha256), generation: 's3:v1', sha256 }, until)).rejects.toThrow(/only evidence files/);
+    await expect(store.holds.hold({ key: 'org/../x', generation: 's3:v1', sha256 }, until)).rejects.toThrow(/invalid storage key/);
+    expect(sent).toEqual([]);
+  });
+
+  it('is available only on a bucket with Object Lock, never on GCS', async () => {
+    const on = fakeStore(() => ({ ObjectLockConfiguration: { ObjectLockEnabled: 'Enabled' } }));
+    await expect(on.store.holds.available()).resolves.toBe(true);
+    expect(on.sent[0]).toBeInstanceOf(GetObjectLockConfigurationCommand);
+    expect(on.sent[0]?.input).toEqual({ Bucket: 'crove-files' });
+    await expect(fakeStore(() => ({ ObjectLockConfiguration: {} })).store.holds.available()).resolves.toBe(false);
+    const off = fakeStore(() => {
+      throw s3Error('ObjectLockConfigurationNotFoundError', 404);
+    });
+    await expect(off.store.holds.available()).resolves.toBe(false);
+    // A missing bucket or a refused call is a configuration error, not "no Object Lock".
+    const missing = fakeStore(() => {
+      throw s3Error('NoSuchBucket', 404);
+    });
+    await expect(missing.store.holds.available()).rejects.toThrow(/NoSuchBucket/);
+    const denied = fakeStore(() => {
+      throw s3Error('AccessDenied', 403);
+    });
+    await expect(denied.store.holds.available()).rejects.toThrow(/AccessDenied/);
+    const gcs = fakeStore(() => ({ ObjectLockConfiguration: { ObjectLockEnabled: 'Enabled' } }), { flavor: 'gcs' });
+    await expect(gcs.store.holds.available()).resolves.toBe(false);
+    expect(gcs.sent).toEqual([]);
+  });
+});
 
 describe('S3BlobStore with a mocked client', () => {
   it('writes create-only, with the content type and the sha256 the server verifies', async () => {

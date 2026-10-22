@@ -41,7 +41,8 @@ export function describeStorage(config: Config): string {
   const where = config.S3_ENDPOINT ? new URL(config.S3_ENDPOINT).host : `AWS ${config.S3_REGION}`;
   const versioning = config.S3_VERSIONING === 'required' ? 'versions required' : 'versioning off (sha256 checks only)';
   const transfers = config.S3_PRESIGNED_URLS === 'true' ? 'presigned transfers' : 'transfers through the kernel';
-  return `s3 bucket ${config.S3_BUCKET} at ${where}, ${versioning}, ${transfers}`;
+  const holds = config.EVIDENCE_LOCK_DAYS > 0 ? `posted files held ${config.EVIDENCE_LOCK_DAYS} days` : 'no holds on posted files';
+  return `s3 bucket ${config.S3_BUCKET} at ${where}, ${versioning}, ${transfers}, ${holds}`;
 }
 
 // The WORM archive (worm.ts). An S3 archive must have Object Lock; the worker checks it before it writes.

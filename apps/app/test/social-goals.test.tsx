@@ -20,7 +20,7 @@ vi.mock('../src/lib/api.ts', async () => {
         return node([...path, prop]);
       },
     });
-  return { orpc: node([]), client: {}, queryClient: client.current, errorMessage: (e: unknown) => String(e) };
+  return { orpc: node([]), client: {}, queryClient: client.current, errorMessage: (e: unknown) => String(e), fetchFile: () => Promise.reject(new Error('not fetched')) };
 });
 vi.mock('@tanstack/react-router', () => ({ useParams: () => ({ slug: 'tiem-banh' }) }));
 
