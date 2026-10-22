@@ -283,6 +283,33 @@ export function replySettingOf(provider: string, settings: Readonly<Record<strin
   const value = settings?.replySettings;
   return allowed && value !== 'everyone' && (allowed as readonly unknown[]).includes(value) ? (value as Exclude<ReplySetting, 'everyone'>) : null;
 }
+// Bluesky (#1102) reads the same field with the same names, plus nobody, and several of mentionedUsers, following and
+// followers may combine as a list (Bluesky's threadgate allows any of its rules together). `settings.quotes: false`
+// turns quote posts off (a postgate); on is the default and is not stored. Both are written after the post, by the
+// gate step, on the thread's first post: its threadgate covers every reply of the thread, its postgate that post.
+export const BLUESKY_REPLY_RULES = ['mentionedUsers', 'following', 'followers'] as const;
+export type BlueskyReplyRule = (typeof BLUESKY_REPLY_RULES)[number];
+// The choices the composer offers, everyone first (the default); the rules may also be picked together.
+export const BLUESKY_REPLY_SETTINGS = ['everyone', 'nobody', ...BLUESKY_REPLY_RULES] as const;
+const isBlueskyRule = (v: unknown): v is BlueskyReplyRule => typeof v === 'string' && (BLUESKY_REPLY_RULES as readonly string[]).includes(v);
+// Who may reply to a Bluesky post: null for everyone (unsaid or 'everyone'), 'nobody', the rules (in
+// BLUESKY_REPLY_RULES order) from one name or a list of distinct names, 'invalid' for anything else.
+export function blueskyRepliesOf(settings: Readonly<Record<string, unknown>> | undefined): BlueskyReplyRule[] | 'nobody' | null | 'invalid' {
+  const value = settings?.replySettings;
+  if (value === undefined || value === 'everyone') return null;
+  if (value === 'nobody') return 'nobody';
+  if (isBlueskyRule(value)) return [value];
+  if (Array.isArray(value) && value.length > 0 && value.every(isBlueskyRule) && new Set(value).size === value.length) return BLUESKY_REPLY_RULES.filter((r) => value.includes(r));
+  return 'invalid';
+}
+// Whether a variant turns quote posts off; anything but false leaves them on (validation refuses a non-boolean).
+export const blueskyQuotesOff = (settings: Readonly<Record<string, unknown>> | undefined): boolean => settings?.quotes === false;
+// Whether a Bluesky variant asks for a gate the gate step writes after the post: replies limited or quotes off.
+export function wantsBlueskyGate(provider: string, settings: Readonly<Record<string, unknown>> | undefined): boolean {
+  if (provider !== 'bluesky' || (settings?.quotes !== undefined && typeof settings.quotes !== 'boolean')) return false;
+  const replies = blueskyRepliesOf(settings);
+  return replies !== 'invalid' && (replies !== null || blueskyQuotesOff(settings));
+}
 export const TOPIC_TAG_RULES: Readonly<Partial<Record<Provider, { maxChars: number }>>> = { threads: { maxChars: 50 } };
 
 // The poll's options, trimmed; null when there is none, 'invalid' when it is not { options: string[] }.

@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -125,9 +125,13 @@ export type IssueCode =
   | 'POLL_WITH_MEDIA'
   // A poll's length (#948, X): not whole minutes from the channel's least to its most (limit: the most, actual: minutes).
   | 'POLL_DURATION'
-  // Who may reply (#948 X, #983 Threads): a value the channel does not take (everyone, following or mentionedUsers;
-  // Threads also followers).
+  // Who may reply (#948 X, #983 Threads, #1102 Bluesky): a value the channel does not take (everyone, following or
+  // mentionedUsers; Threads also followers; Bluesky also nobody, or a list of distinct mentionedUsers, following and
+  // followers).
   | 'REPLY_SETTINGS_INVALID'
+  // Quote posts (#1102, Bluesky): settings.quotes is set and is not true or false, or is set on another channel.
+  | 'QUOTES_INVALID'
+  | 'QUOTES_NOT_SUPPORTED'
   | 'TOPIC_TAG_NOT_SUPPORTED'
   | 'TOPIC_TAG_INVALID'
   // Google Business Profile (#709): settings on another channel, or ones Google would refuse (an unknown topic or call to
@@ -508,6 +512,12 @@ function checkPollAndTag(issues: Issue[], variant: VariantDraft, caps: ChannelCa
   const replyAllowed = REPLY_SETTINGS[variant.provider];
   if (replyAllowed && variant.settings?.replySettings !== undefined && !(replyAllowed as readonly unknown[]).includes(variant.settings.replySettings)) {
     issues.push({ code: 'REPLY_SETTINGS_INVALID', field: 'settings.replySettings', limit: null, actual: null });
+  }
+  // Bluesky (#1102): who may reply, one choice or several rules together, and whether others may quote the post.
+  if (variant.provider === 'bluesky' && blueskyRepliesOf(variant.settings) === 'invalid') issues.push({ code: 'REPLY_SETTINGS_INVALID', field: 'settings.replySettings', limit: null, actual: null });
+  if (variant.settings?.quotes !== undefined) {
+    if (variant.provider !== 'bluesky') issues.push({ code: 'QUOTES_NOT_SUPPORTED', field: 'settings.quotes', limit: null, actual: null });
+    else if (typeof variant.settings.quotes !== 'boolean') issues.push({ code: 'QUOTES_INVALID', field: 'settings.quotes', limit: null, actual: null });
   }
   const tag = topicTagOf(variant.settings);
   if (tag !== null) {
