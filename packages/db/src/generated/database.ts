@@ -97,6 +97,7 @@ export interface CroveSocialSchema {
   'crove_social.post_label': SocialPostLabelTable;
   'crove_social.post_media': SocialPostMediaTable;
   'crove_social.post_variant': SocialPostVariantTable;
+  'crove_social.post_version': SocialPostVersionTable;
   'crove_social.publish_hold': SocialPublishHoldTable;
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
@@ -1269,6 +1270,22 @@ export interface SocialPostVariantTable {
   removed_by: string | null;
   remove_reason: string | null;
   remove_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_social.post_version */
+export interface SocialPostVersionTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  post_id: ColumnType<string, string, NotGranted>;
+  number: ColumnType<number, number, NotGranted>;
+  revision: ColumnType<number, number, NotGranted>;
+  body: ColumnType<string, string, NotGranted>;
+  title: ColumnType<string | null, string | null, NotGranted>;
+  link_url: ColumnType<string | null, string | null, NotGranted>;
+  media: ColumnType<unknown, string | undefined, NotGranted>;
+  variants: ColumnType<unknown, string | undefined, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.publish_hold */

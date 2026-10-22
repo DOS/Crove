@@ -62,6 +62,8 @@ import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEy
 import { clientReviewCommands } from './client-review.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, variantPost, type PostRow, type QueueState, type VariantRow, type Trx } from './variants.ts';
 import { queueOrderCommands } from './queue-order.ts';
+import { versionMedia, versionVariants } from './domain/versions.ts';
+import { versionQueries, withVersion } from './versions.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -358,24 +360,70 @@ export const postAddChannels = defineCommand({
   },
 });
 
+const zPostUpdate = z.strictObject({
+  postId: zId,
+  revision: z.number().int().positive(),
+  body: zBody.optional(),
+  title: zTitle.nullable().optional(),
+  linkUrl: zLink.nullable().optional(),
+  timeZone: zTimeZone.optional(),
+  // The planned time of variants not yet scheduled; a scheduled variant keeps the time it was scheduled at.
+  scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
+  // The whole list of images, replacing the post's; omitted leaves them as they are.
+  media: zMedia.optional(),
+  // The member accepted an AI rewrite into the text (#583).
+  aiAssisted: z.literal(true).optional(),
+});
+type PostEdit = Omit<z.infer<typeof zPostUpdate>, 'postId' | 'revision'>;
+
+// The edit of a post's base content, on the post its caller locked and checked the revision of (social.post.update, and
+// social.post.restore_version for a saved version).
+async function editPost(ctx: CommandContext, post: PostRow, input: PostEdit): Promise<{ postId: string; revision: number; changedVariants: string[] }> {
+  const next: PostRow = {
+    ...post,
+    body: input.body ?? post.body,
+    title: input.title === undefined ? post.title : input.title,
+    link_url: input.linkUrl === undefined ? post.link_url : input.linkUrl,
+    time_zone: input.timeZone ?? post.time_zone,
+    scheduled_at: input.scheduledAt === undefined ? post.scheduled_at : input.scheduledAt === null ? null : new Date(Date.parse(input.scheduledAt)),
+    media: input.media === undefined ? post.media : await resolveMedia(ctx, input.media),
+  };
+  const mediaChanged = !sameMedia(post.media, next.media);
+  const same =
+    !mediaChanged &&
+    next.body === post.body &&
+    next.title === post.title &&
+    next.link_url === post.link_url &&
+    next.time_zone === post.time_zone &&
+    next.scheduled_at?.getTime() === post.scheduled_at?.getTime();
+  if (same) return { postId: post.id, revision: post.revision, changedVariants: [] as string[] };
+  const variants = await lockVariants(ctx.trx, ctx.orgId, post.id);
+  // History whose content is not frozen yet is frozen first, whatever changes.
+  for (const v of variants.filter((x) => FROZEN.has(x.status) && !x.content_frozen)) await setVariant(ctx, v.id, freezeValues(post, v));
+  const changed = variants.filter((v) => !FROZEN.has(v.status) && hashOf(base(next), v) !== v.content_hash);
+  const blocked = changed.filter((v) => IN_FLIGHT.has(v.status));
+  if (blocked.length > 0) {
+    throw new DomainError('VARIANT_IN_FLIGHT', 409, 'Có kênh đang đăng: chờ kết quả rồi mới sửa nội dung chung', { variantIds: blocked.map((v) => v.id) });
+  }
+  for (const v of changed) await setVariant(ctx, v.id, { content_hash: hashOf(base(next), v), revision: v.revision + 1, ...editValues(v) });
+  if (mediaChanged) await writePostMedia(ctx, post.id, next.media);
+  const revision = post.revision + 1;
+  await ctx.trx
+    .updateTable('crove_social.post')
+    .set({ body: next.body, title: next.title, link_url: next.link_url, time_zone: next.time_zone, scheduled_at: next.scheduled_at, revision, updated_at: ctx.now, ...(input.aiAssisted ? { tainted: true } : {}) })
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', post.id)
+    .execute();
+  await refreshPostStatus(ctx, post.id);
+  return { postId: post.id, revision, changedVariants: changed.map((v) => v.id) };
+}
+
 // Base content of a post. Every variant that inherits a changed field gets a new hash and revision and goes back to
-// draft; a variant in flight refuses the whole edit; a published or cancelled one keeps what it had.
+// draft; a variant in flight refuses the whole edit; a published or cancelled one keeps what it had. A change of the
+// content appends a version (#1021).
 export const postUpdate = defineCommand({
   name: 'social.post.update',
-  input: z.strictObject({
-    postId: zId,
-    revision: z.number().int().positive(),
-    body: zBody.optional(),
-    title: zTitle.nullable().optional(),
-    linkUrl: zLink.nullable().optional(),
-    timeZone: zTimeZone.optional(),
-    // The planned time of variants not yet scheduled; a scheduled variant keeps the time it was scheduled at.
-    scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
-    // The whole list of images, replacing the post's; omitted leaves them as they are.
-    media: zMedia.optional(),
-    // The member accepted an AI rewrite into the text (#583).
-    aiAssisted: z.literal(true).optional(),
-  }),
+  input: zPostUpdate,
   risk: 'R1',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
@@ -383,47 +431,48 @@ export const postUpdate = defineCommand({
     requireUser(ctx);
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     if (post.revision !== input.revision) throw new DomainError('STALE_REVISION', 409, 'Bài đăng đã được sửa ở nơi khác, hãy tải lại', { revision: post.revision });
-    const next: PostRow = {
-      ...post,
-      body: input.body ?? post.body,
-      title: input.title === undefined ? post.title : input.title,
-      link_url: input.linkUrl === undefined ? post.link_url : input.linkUrl,
-      time_zone: input.timeZone ?? post.time_zone,
-      scheduled_at: input.scheduledAt === undefined ? post.scheduled_at : input.scheduledAt === null ? null : new Date(Date.parse(input.scheduledAt)),
-      media: input.media === undefined ? post.media : await resolveMedia(ctx, input.media),
-    };
-    const mediaChanged = !sameMedia(post.media, next.media);
-    const same =
-      !mediaChanged &&
-      next.body === post.body &&
-      next.title === post.title &&
-      next.link_url === post.link_url &&
-      next.time_zone === post.time_zone &&
-      next.scheduled_at?.getTime() === post.scheduled_at?.getTime();
-    if (same) return { postId: post.id, revision: post.revision, changedVariants: [] as string[] };
-    const variants = await lockVariants(ctx.trx, ctx.orgId, post.id);
-    // History whose content is not frozen yet is frozen first, whatever changes.
-    for (const v of variants.filter((x) => FROZEN.has(x.status) && !x.content_frozen)) await setVariant(ctx, v.id, freezeValues(post, v));
-    const changed = variants.filter((v) => !FROZEN.has(v.status) && hashOf(base(next), v) !== v.content_hash);
-    const blocked = changed.filter((v) => IN_FLIGHT.has(v.status));
-    if (blocked.length > 0) {
-      throw new DomainError('VARIANT_IN_FLIGHT', 409, 'Có kênh đang đăng: chờ kết quả rồi mới sửa nội dung chung', { variantIds: blocked.map((v) => v.id) });
-    }
-    for (const v of changed) await setVariant(ctx, v.id, { content_hash: hashOf(base(next), v), revision: v.revision + 1, ...editValues(v) });
-    if (mediaChanged) await writePostMedia(ctx, post.id, next.media);
-    const revision = post.revision + 1;
-    await ctx.trx
-      .updateTable('crove_social.post')
-      .set({ body: next.body, title: next.title, link_url: next.link_url, time_zone: next.time_zone, scheduled_at: next.scheduled_at, revision, updated_at: ctx.now, ...(input.aiAssisted ? { tainted: true } : {}) })
-      .where('org_id', '=', ctx.orgId)
-      .where('id', '=', post.id)
-      .execute();
-    await refreshPostStatus(ctx, post.id);
-    return { postId: post.id, revision, changedVariants: changed.map((v) => v.id) };
+    const { postId: _postId, revision: _revision, ...edit } = input;
+    return withVersion(ctx, post.id, () => editPost(ctx, post, edit));
   },
 });
 
-// One variant's overrides and settings. null inherits the post's value again; omitted leaves it as is.
+interface VariantEdit {
+  body?: string | null | undefined;
+  title?: string | null | undefined;
+  linkUrl?: string | null | undefined;
+  settings?: Record<string, unknown> | undefined;
+  media?: z.infer<typeof zMedia> | null | undefined;
+}
+
+// The edit of one variant's own content, on the post and variant its caller locked (social.variant.update, and
+// social.post.restore_version). changed: its effective content changed, so it has a new revision and went back to draft.
+async function editVariant(ctx: CommandContext, post: PostRow, v: VariantRow, input: VariantEdit): Promise<{ revision: number; changed: boolean }> {
+  if (input.settings) await checkCover(ctx, v.provider, input.settings);
+  const next = {
+    ...v,
+    body: input.body === undefined ? v.body : input.body,
+    title: input.title === undefined ? v.title : input.title,
+    link_url: input.linkUrl === undefined ? v.link_url : input.linkUrl,
+    settings: input.settings ?? settingsOf(v),
+    media: input.media === undefined ? v.media : input.media === null ? null : await resolveMedia(ctx, input.media),
+  };
+  if (v.content_frozen || FROZEN.has(v.status)) step(v, { type: 'edit' });
+  const columns = { body: next.body, title: next.title, link_url: next.link_url, settings: JSON.stringify(next.settings), media: next.media === null ? null : JSON.stringify(next.media) };
+  const stored =
+    v.body === next.body && v.title === next.title && v.link_url === next.link_url && canonicalJson(settingsOf(v)) === canonicalJson(next.settings) && canonicalJson(v.media) === canonicalJson(next.media);
+  const hash = hashOf(base(post), next);
+  if (hash === v.content_hash) {
+    // The effective content is the same (for example an override equal to the base, or inheriting it again): store
+    // what the user chose, so later base edits reach the variant or not as they asked, without a new revision.
+    if (!stored) await setVariant(ctx, v.id, columns);
+    return { revision: v.revision, changed: false };
+  }
+  await setVariant(ctx, v.id, { ...columns, content_hash: hash, revision: v.revision + 1, ...editValues(v) });
+  return { revision: v.revision + 1, changed: true };
+}
+
+// One variant's overrides and settings. null inherits the post's value again; omitted leaves it as is. A change of the
+// stored content appends a version of the post (#1021).
 export const variantUpdate = defineCommand({
   name: 'social.variant.update',
   input: z.strictObject({
@@ -447,30 +496,65 @@ export const variantUpdate = defineCommand({
     const post = await lockPost(ctx.trx, ctx.orgId, postId);
     const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]) as [VariantRow];
     if (v.revision !== input.revision) throw new DomainError('STALE_REVISION', 409, 'Kênh này đã được sửa ở nơi khác, hãy tải lại', { revision: v.revision });
-    if (input.settings) await checkCover(ctx, v.provider, input.settings);
-    const next = {
-      ...v,
-      body: input.body === undefined ? v.body : input.body,
-      title: input.title === undefined ? v.title : input.title,
-      link_url: input.linkUrl === undefined ? v.link_url : input.linkUrl,
-      settings: input.settings ?? settingsOf(v),
-      media: input.media === undefined ? v.media : input.media === null ? null : await resolveMedia(ctx, input.media),
-    };
-    if (v.content_frozen || FROZEN.has(v.status)) step(v, { type: 'edit' });
-    const columns = { body: next.body, title: next.title, link_url: next.link_url, settings: JSON.stringify(next.settings), media: next.media === null ? null : JSON.stringify(next.media) };
-    const stored =
-      v.body === next.body && v.title === next.title && v.link_url === next.link_url && canonicalJson(settingsOf(v)) === canonicalJson(next.settings) && canonicalJson(v.media) === canonicalJson(next.media);
-    const hash = hashOf(base(post), next);
-    if (hash === v.content_hash) {
-      // The effective content is the same (for example an override equal to the base, or inheriting it again): store
-      // what the user chose, so later base edits reach the variant or not as they asked, without a new revision.
-      if (!stored) await setVariant(ctx, v.id, columns);
-      return { variantId: v.id, revision: v.revision, changed: false };
+    return withVersion(ctx, postId, async () => {
+      const { revision, changed } = await editVariant(ctx, post, v, input);
+      if (changed) {
+        if (input.aiAssisted) await ctx.trx.updateTable('crove_social.post').set({ tainted: true, updated_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', postId).execute();
+        await refreshPostStatus(ctx, postId);
+      }
+      return { variantId: v.id, revision, changed };
+    });
+  },
+});
+
+// Saves a version of the post again as a new edit (#1021), through the edits above: the base content first, then each
+// channel of the version that can still be edited. A changed channel goes back to draft and is reviewed again under its
+// channel's policy, as after any edit. A channel that is history (published, cancelled, removed) keeps what it has: a
+// published post is never changed in place, and a post with no channel left to edit is refused. A channel in flight
+// refuses the restore, as it refuses an edit; a channel added after the version keeps its content.
+export const postRestoreVersion = defineCommand({
+  name: 'social.post.restore_version',
+  input: z.strictObject({ postId: zId, versionId: zId, revision: z.number().int().positive() }),
+  risk: 'R1',
+  access: MEMBERS,
+  target: (input) => ({ type: 'social.post', id: input.postId }),
+  handler: async (ctx, input) => {
+    requireUser(ctx);
+    const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
+    if (post.revision !== input.revision) throw new DomainError('STALE_REVISION', 409, 'Bài đăng đã được sửa ở nơi khác, hãy tải lại', { revision: post.revision });
+    const version = await ctx.trx
+      .selectFrom('crove_social.post_version')
+      .select(['id', 'number', 'body', 'title', 'link_url', 'media', 'variants'])
+      .where('org_id', '=', ctx.orgId)
+      .where('post_id', '=', post.id)
+      .where('id', '=', input.versionId)
+      .executeTakeFirst();
+    if (!version) throw new DomainError('VERSION_NOT_FOUND', 404, 'Không tìm thấy phiên bản này của bài đăng');
+    const editable = (v: VariantRow) => !FROZEN.has(v.status) && !v.content_frozen;
+    if (!(await lockVariants(ctx.trx, ctx.orgId, post.id)).some(editable)) {
+      throw new DomainError('POST_PUBLISHED', 409, 'Bài đã đăng hoặc đã hủy trên mọi kênh: không khôi phục vào bài đã đăng được', { postId: post.id });
     }
-    await setVariant(ctx, v.id, { ...columns, content_hash: hash, revision: v.revision + 1, ...editValues(v) });
-    if (input.aiAssisted) await ctx.trx.updateTable('crove_social.post').set({ tainted: true, updated_at: ctx.now }).where('org_id', '=', ctx.orgId).where('id', '=', postId).execute();
-    await refreshPostStatus(ctx, postId);
-    return { variantId: v.id, revision: v.revision + 1, changed: true };
+    const saved = new Map(versionVariants(version.variants).map((v) => [v.variantId, v]));
+    const result = await withVersion(ctx, post.id, async () => {
+      const edited = await editPost(ctx, post, { body: version.body, title: version.title, linkUrl: version.link_url, media: versionMedia(version.media) });
+      const changed = new Set(edited.changedVariants);
+      const next = await lockPost(ctx.trx, ctx.orgId, post.id);
+      const kept: string[] = [];
+      for (const v of await lockVariants(ctx.trx, ctx.orgId, post.id)) {
+        const s = saved.get(v.id);
+        if (!s) continue;
+        if (!editable(v)) {
+          kept.push(v.id);
+          continue;
+        }
+        const r = await editVariant(ctx, next, v, { body: s.body, title: s.title, linkUrl: s.linkUrl, settings: s.settings, media: s.media });
+        if (r.changed) changed.add(v.id);
+      }
+      await refreshPostStatus(ctx, post.id);
+      return { revision: edited.revision, changedVariants: [...changed], kept };
+    });
+    ctx.audit({ post_id: post.id, version_id: version.id, version_number: version.number, changed_variants: result.changedVariants.length });
+    return { postId: post.id, ...result };
   },
 });
 
@@ -1459,6 +1543,7 @@ export const socialCommands = [
   postAddChannels,
   postUpdate,
   variantUpdate,
+  postRestoreVersion,
   postSubmit,
   variantDecide,
   variantSchedule,
@@ -1545,4 +1630,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries];

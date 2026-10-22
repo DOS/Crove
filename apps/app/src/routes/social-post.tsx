@@ -22,6 +22,7 @@ import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
 import { PostActivity } from '../components/social-activity.tsx';
 import { ReviewChanges } from '../components/social-review-diff.tsx';
+import { PostVersions } from '../components/social-post-versions.tsx';
 import { LabelPicker } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
 import { BestTimeButton } from '../components/social-best-time.tsx';
@@ -2806,6 +2807,19 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           )}
             <ReviewLinks postId={p.id} canDecide={canDecide} />
             <AssignCard post={p} canEdit={canDecide || (canWrite && p.authorUserId !== null && p.authorUserId === userId)} />
+          <PostVersions
+            postId={p.id}
+            revision={p.revision}
+            current={p.variants.map((v) => ({
+              variantId: v.id,
+              name: names.get(v.connectionId) ?? providerName(v.provider),
+              status: v.status,
+              content: { body: v.effective.body, title: v.effective.title, linkUrl: v.effective.linkUrl, media: v.media.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime })), settings: v.settings },
+            }))}
+            canWrite={canWrite}
+            editing={editing}
+            onRestored={() => void settle(false).finally(refresh)}
+          />
           {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
         </div>
         <div className="space-y-4">
