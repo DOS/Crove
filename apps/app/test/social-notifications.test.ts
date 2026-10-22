@@ -10,6 +10,13 @@ describe('social notifications (#637)', () => {
     expect(notificationTarget({ kind: 'comment', postId: null })).toBeNull();
   });
 
+  it('opens a new post for the channel whose queue runs low (#1079), or the channels page without one', () => {
+    const channelId = '0190a3c4-0000-7000-8000-000000000002';
+    expect(notificationTarget({ kind: 'queue_low', postId: null, connectionId: channelId })).toEqual({ to: 'compose', channelId });
+    expect(notificationTarget({ kind: 'queue_low', postId: null, connectionId: null })).toEqual({ to: 'channels' });
+    expect(NOTIFICATION_KINDS).toContain('queue_low');
+  });
+
   it('shows the unread count up to 99, and nothing for none', () => {
     expect(unreadLabel(0)).toBeNull();
     expect(unreadLabel(1)).toBe('1');

@@ -1685,7 +1685,7 @@ export function SocialComposePage() {
   const [aiUsed, setAiUsed] = useState(false);
   const live = (channels.data ?? []).filter((c) => c.status === 'active');
   // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
-  const search: { at?: string; idea?: string; occasion?: string; on?: string } = useSearch({ strict: false });
+  const search: { at?: string; idea?: string; occasion?: string; on?: string; channel?: string } = useSearch({ strict: false });
   // A post for an occasion of the calendar (#702): named above the form, and the AI brief starts from it.
   const tOcc = useTranslations('social.occasions');
   const occasion = search.occasion && search.on ? { name: tOcc(`names.${search.occasion as 'tet'}`), date: f.date(search.on) } : null;
@@ -1707,8 +1707,10 @@ export function SocialComposePage() {
   }, [idea.data]);
   const ideaId = idea.data && !idea.data.postId && idea.data.stage !== 'archived' ? idea.data.id : null;
   useEffect(() => {
-    // The only channel is chosen for you.
-    if (chosen.length === 0 && live.length === 1 && live[0]) setChosen([live[0].id]);
+    // The only channel is chosen for you, and so is the channel a link names (a queue running low, #1079).
+    if (chosen.length > 0) return;
+    if (search.channel && live.some((c) => c.id === search.channel)) setChosen([search.channel]);
+    else if (live.length === 1 && live[0]) setChosen([live[0].id]);
   }, [live.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Unsaved work is kept in this browser as it is typed (#634) and offered back after a reload; leaving asks first.

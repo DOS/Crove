@@ -26,6 +26,7 @@ import { goalCommands, goalQueries } from './goals.ts';
 import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
 import { reminderCommands } from './reminders.ts';
+import { QUEUE_LOW_DAYS_MAX, QUEUE_LOW_DAYS_MIN, queueLowCommands } from './queue-low.ts';
 import { assignCommands } from './assign.ts';
 import { bulkEditCommands } from './bulk-edit.ts';
 import { publishingCommands } from './publishing.ts';
@@ -906,13 +907,15 @@ export const variantCancel = defineCommand({
 
 // Sets a connection's queue: time zone, pause and weekly slots (replacing the old ones). Queued variants keep their
 // slot when it still exists (after a time-zone change, at the same local clock time); the others move to the first
-// free slots. Nothing else moves.
+// free slots. Nothing else moves. lowDays (#1079) turns on the warning when the queue runs low (null turns it off,
+// left out keeps it); a new value starts a new dip, so the team is told again if the queue is low by it.
 export const queueSet = defineCommand({
   name: 'social.queue.set',
   input: z.strictObject({
     connectionId: zId,
     timeZone: zTimeZone,
     paused: z.boolean().optional(),
+    lowDays: z.number().int().min(QUEUE_LOW_DAYS_MIN).max(QUEUE_LOW_DAYS_MAX).nullable().optional(),
     slots: z
       .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional(), labelId: zId.nullable().optional() }))
       .max(MAX_SLOTS),
@@ -935,13 +938,22 @@ export const queueSet = defineCommand({
     // it: schedule commands lock the same row before any variant.
     const missing = await ctx.trx
       .insertInto('crove_social.queue')
-      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, time_zone: input.timeZone, paused: input.paused ?? false })
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, time_zone: input.timeZone, paused: input.paused ?? false, low_days: input.lowDays ?? null })
       .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doNothing())
       .returning('id')
       .executeTakeFirst();
     const locked = await lockQueue(ctx.trx, ctx.orgId, input.connectionId);
     const before = missing ? null : locked;
     const queueId = (locked as QueueState).id;
+    if (before && input.lowDays !== undefined) {
+      // Under the queue row's lock, which the low check takes too.
+      await ctx.trx
+        .updateTable('crove_social.queue')
+        .set({ low_days: input.lowDays, low_alerted_at: sql<Date | null>`CASE WHEN low_days IS NOT DISTINCT FROM ${input.lowDays}::int THEN low_alerted_at END` })
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', before.id)
+        .execute();
+    }
     if (before) {
       await ctx.trx
         .updateTable('crove_social.queue')
@@ -1556,11 +1568,11 @@ export const queueGet = defineQuery({
   handler: async (ctx, input) => {
     const queue = await ctx.trx
       .selectFrom('crove_social.queue')
-      .select(['id', 'time_zone', 'paused'])
+      .select(['id', 'time_zone', 'paused', 'low_days', 'low_alerted_at'])
       .where('org_id', '=', ctx.orgId)
       .where('channel_connection_id', '=', input.connectionId)
       .executeTakeFirst();
-    if (!queue) return { connectionId: input.connectionId, queueId: null, timeZone: null, paused: false, slots: [], nextFree: [] };
+    if (!queue) return { connectionId: input.connectionId, queueId: null, timeZone: null, paused: false, slots: [], nextFree: [], lowDays: null, low: false };
     const slots = await ctx.trx
       .selectFrom('crove_social.queue_slot')
       .select(['weekday', 'minute', 'label', 'label_id', 'active'])
@@ -1590,6 +1602,9 @@ export const queueGet = defineQuery({
       paused: queue.paused,
       slots: slots.map((s) => ({ weekday: s.weekday, minute: s.minute, label: s.label, labelId: s.label_id, active: s.active })),
       nextFree,
+      // The warning when the queue runs low (#1079), and whether the last check found it low.
+      lowDays: queue.low_days,
+      low: queue.low_alerted_at !== null,
     };
   },
 });
@@ -1650,6 +1665,7 @@ export const socialCommands = [
   ...linkPreviewCommands,
   ...notificationCommands,
   ...reminderCommands,
+  ...queueLowCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
 // org shows, or a variant's video cover, so the job never reads another kind of file through it.
@@ -1692,4 +1708,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries];
