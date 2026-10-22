@@ -44,6 +44,7 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.banned_word',
+  'crove_social.goal',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -676,6 +677,17 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => {
       const feed = socialFeedRow(o);
       return { setup: [{ table: 'crove_social.feed', values: feed }], row: { org_id: o.id, feed_id: feed.id, item_key: hex64(), title: 'RLS matrix item' } };
+    },
+  },
+  // The org's monthly goals (#1056), for the whole org (no connection) or one channel: one row per scope, so each row
+  // gets its own fresh connection however many rows an org gets.
+  'crove_social.goal': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), connection_id: connection.id, posts: 12, created_by: o.owner, updated_by: o.owner },
+      };
     },
   },
   // An idea on the Social ideas board (#701), before it becomes a draft.
