@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, SENT_TO_APP, tiktokModeOf, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, localTime, REPLY_SETTINGS, replySettingOf, LINKEDIN_VISIBILITY } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -308,17 +308,19 @@ function ProviderSettings({
   pinAllowed?: boolean;
 }) {
   const t = useTranslations('social');
-  // Telegram (#982): a silent post, and a pin to the top of the channel once it is out. Only what is on is stored, so a
-  // variant left as it was keeps its content hash.
+  // Telegram (#982): a silent post, and a pin to the top of the channel once it is out; link buttons under it (#1017).
+  // Only what is on is stored, so a variant left as it was keeps its content hash.
   if (provider === 'telegram') {
     const options = telegramOptionsOf(settings);
     const current = options && options !== 'invalid' ? options : { silent: false, pin: false };
-    const set = (key: 'silent' | 'pin', on: boolean) => {
-      const next = { ...current, [key]: on };
+    const buttons = telegramButtonsOf(settings);
+    const rows = Array.isArray(buttons) ? buttons : [];
+    const save = (next: { silent: boolean; pin: boolean; rows: TelegramButton[][] }) => {
       const { telegram: _old, ...rest } = settings;
-      const kept = { ...(next.silent ? { silent: true } : {}), ...(next.pin ? { pin: true } : {}) };
+      const kept = { ...(next.silent ? { silent: true } : {}), ...(next.pin ? { pin: true } : {}), ...(next.rows.length > 0 ? { buttons: next.rows } : {}) };
       onChange(Object.keys(kept).length > 0 ? { ...rest, telegram: kept } : rest);
     };
+    const set = (key: 'silent' | 'pin', on: boolean) => save({ ...current, [key]: on, rows });
     return (
       <div className="space-y-1.5">
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -331,6 +333,7 @@ function ProviderSettings({
           {t('telegramPin')}
         </label>
         {!pinAllowed && <p className="text-xs text-subtle-foreground">{t('telegramPinHint')}</p>}
+        <TelegramButtonsField rows={rows} disabled={disabled} onChange={(next) => save({ ...current, rows: next })} />
       </div>
     );
   }
@@ -644,6 +647,65 @@ function ThreadField({ settings, disabled, onChange }: { settings: Record<string
   );
 }
 
+// Link buttons under a Telegram post (#1017): up to 3 rows of up to 3, each a label and an https link, as Telegram
+// shows them under the message. A row left without a button goes; validation flags a label or link that will not do,
+// and the field marks which one.
+function TelegramButtonsField({ rows, disabled, onChange }: { rows: TelegramButton[][]; disabled: boolean; onChange: (rows: TelegramButton[][]) => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const blank: TelegramButton = { text: '', url: 'https://' };
+  const edit = (r: number, i: number, change: Partial<TelegramButton>) => onChange(rows.map((row, j) => (j === r ? row.map((b, k) => (k === i ? { ...b, ...change } : b)) : row)));
+  const remove = (r: number, i: number) => onChange(rows.map((row, j) => (j === r ? row.filter((_, k) => k !== i) : row)).filter((row) => row.length > 0));
+  return (
+    <div className="space-y-2 pt-1">
+      <p className="text-xs font-medium">{t('telegramButtons')}</p>
+      {rows.map((row, r) => (
+        <div key={r} className="space-y-2 rounded-lg border p-2">
+          <p className="text-xs text-muted-foreground">{t('telegramButtonRow', { n: r + 1 })}</p>
+          {row.map((button, i) => (
+            <div key={i} className="flex flex-wrap items-end gap-2">
+              <div className="min-w-32 flex-1 space-y-1">
+                <Label htmlFor={`${id}-${r}-${i}-text`} className="text-xs text-muted-foreground">
+                  {t('telegramButtonText')}
+                </Label>
+                <Input
+                  id={`${id}-${r}-${i}-text`}
+                  value={button.text}
+                  maxLength={TELEGRAM_BUTTON_TEXT_MAX * 2}
+                  disabled={disabled}
+                  aria-invalid={!button.text.trim() || countText(button.text.trim(), 'codepoints') > TELEGRAM_BUTTON_TEXT_MAX}
+                  placeholder={t('telegramButtonTextPlaceholder')}
+                  onChange={(e) => edit(r, i, { text: e.target.value })}
+                />
+              </div>
+              <div className="min-w-48 flex-[2] space-y-1">
+                <Label htmlFor={`${id}-${r}-${i}-url`} className="text-xs text-muted-foreground">
+                  {t('telegramButtonUrl')}
+                </Label>
+                <Input id={`${id}-${r}-${i}-url`} type="url" inputMode="url" value={button.url} disabled={disabled} aria-invalid={!isButtonUrl(button.url)} placeholder="https://" onChange={(e) => edit(r, i, { url: e.target.value.trim() })} />
+              </div>
+              <Button variant="ghost" size="sm" disabled={disabled} onClick={() => remove(r, i)}>
+                {t('telegramButtonRemove')}
+              </Button>
+            </div>
+          ))}
+          {row.length < TELEGRAM_BUTTONS_PER_ROW_MAX && (
+            <Button variant="outline" size="sm" disabled={disabled} onClick={() => onChange(rows.map((x, j) => (j === r ? [...x, blank] : x)))}>
+              {t('telegramButtonAdd')}
+            </Button>
+          )}
+        </div>
+      ))}
+      {rows.length < TELEGRAM_BUTTON_ROWS_MAX && (
+        <Button variant="outline" size="sm" disabled={disabled} onClick={() => onChange([...rows, [blank]])}>
+          {rows.length === 0 ? t('telegramButtonFirst') : t('telegramButtonRowAdd')}
+        </Button>
+      )}
+      <p className="text-xs text-subtle-foreground">{t('telegramButtonsHint', { rows: TELEGRAM_BUTTON_ROWS_MAX, perRow: TELEGRAM_BUTTONS_PER_ROW_MAX, max: TELEGRAM_BUTTON_TEXT_MAX })}</p>
+    </div>
+  );
+}
+
 // The repost when a post takes off (#773): at a like count, after some hours, or whichever comes first.
 function RepostField({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
   const t = useTranslations('social');
@@ -811,6 +873,13 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('WORDPRESS_TERM_INVALID', { limit });
       case 'WORDPRESS_EXCERPT_TOO_LONG':
         return t('WORDPRESS_EXCERPT_TOO_LONG', { limit, actual });
+      // Telegram link buttons (#1017); the editor marks which button's label or link it is.
+      case 'TELEGRAM_TOO_MANY_BUTTONS':
+        return t('TELEGRAM_TOO_MANY_BUTTONS', { limit });
+      case 'TELEGRAM_BUTTONS_ON_ALBUM':
+        return t('TELEGRAM_BUTTONS_ON_ALBUM', { actual });
+      case 'TELEGRAM_BUTTON_TEXT_LENGTH':
+        return t('TELEGRAM_BUTTON_TEXT_LENGTH', { limit });
       // Which image: media.<index> on the issue, counted from 1 for the person.
       case 'IMAGE_RATIO_NOT_ALLOWED':
         return t('IMAGE_RATIO_NOT_ALLOWED', { n: Number(issue.field.split('.')[1] ?? 0) + 1 });
@@ -1225,6 +1294,7 @@ function ChannelEditor({
   const replySettings = replySettingOf(provider, own.settings);
   const linkedinVisibility = provider === 'linkedin' && (own.settings.visibility === 'connections' || own.settings.visibility === 'loggedIn') ? (own.settings.visibility as 'connections' | 'loggedIn') : null;
   const tag = topicTagOf(own.settings);
+  const telegramButtons = provider === 'telegram' ? telegramButtonsOf(own.settings) : null;
   const content = {
     body: own.custom ? own.body : base.body,
     title: own.custom ? own.title : base.title,
@@ -1237,6 +1307,7 @@ function ChannelEditor({
     ...(typeof tag === 'string' && tag ? { topicTag: tag } : {}),
     ...(replySettings ? { replySettings } : {}),
     ...(linkedinVisibility ? { visibility: linkedinVisibility } : {}),
+    ...(Array.isArray(telegramButtons) ? { buttons: telegramButtons } : {}),
   };
   const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   return (

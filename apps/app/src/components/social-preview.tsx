@@ -27,6 +27,8 @@ export interface PreviewContent {
   replySettings?: 'following' | 'mentionedUsers' | 'followers';
   // Who sees a LinkedIn post, when not anyone (#983).
   visibility?: 'connections' | 'loggedIn';
+  // The link buttons under a Telegram post (#1017), in rows.
+  buttons?: readonly (readonly { text: string; url: string }[])[];
 }
 
 // A poll's length as X shows it under the options: days, else hours, else minutes.
@@ -251,6 +253,21 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
       {content.replySettings && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewReplySettings.${content.replySettings}`)}</p>}
       {content.visibility && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewVisibility.${content.visibility}`)}</p>}
       {card}
+      {content.buttons && content.buttons.length > 0 && (
+        // As Telegram lays out an inline keyboard: each row under the message, its buttons sharing the width.
+        <div className="mt-2 space-y-1" role="group" aria-label={t('previewButtons')}>
+          {content.buttons.map((row, r) => (
+            <div key={r} className="flex gap-1">
+              {row.map((b, i) => (
+                <span key={i} title={b.url} className="min-w-0 flex-1 truncate rounded-md bg-muted px-2 py-1.5 text-center text-xs font-medium text-link">
+                  {b.text.trim() || '\u00a0'}
+                  <span aria-hidden="true"> ↗</span>
+                </span>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

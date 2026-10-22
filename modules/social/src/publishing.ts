@@ -18,7 +18,7 @@ import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-r
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { shortOfPolicy } from './policy.ts';
 import { PUBLISH_LIMITS, SENT_TO_APP, STATUS_PUBLISHES, isProvider, limitWait, WORDPRESS_DRAFT, WORDPRESS_PENDING } from './domain/channels.ts';
-import { sentLink } from './domain/utm.ts';
+import { sentLink, sentSettings } from './domain/utm.ts';
 import { withShortLink } from './short-links.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
 import { startsNewAttempt, type VariantEvent } from './domain/state.ts';
@@ -169,7 +169,8 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
       ...withSentLink(v, effectiveContent(base(post), overrides(v), v.content_frozen)),
       media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null })),
     },
-    settings: settingsOf(v),
+    // With the UTM tags on a Telegram post's button links (#1017).
+    settings: isProvider(v.provider) ? sentSettings(v.provider, settingsOf(v)) : settingsOf(v),
     externalRef: v.external_post_id,
     callStartedAt: startedAt.toISOString(),
     connectionVersion: connection ? connection.updatedAt.toISOString() : null,

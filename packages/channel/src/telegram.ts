@@ -12,6 +12,9 @@
 // (members get it without a sound); settings.telegram.pin pins the post afterwards with pinChatMessage, a second step of
 // its own (pin), so a refused pin never touches the post. In a channel a bot may pin when it may edit others' messages
 // (can_edit_messages; can_pin_messages is the right of groups), which connect reads into the connection's scopes.
+// Link buttons (#1017): settings.telegram.buttons go under a text, photo or video post as reply_markup.inline_keyboard
+// (URL buttons). A media group takes no keyboard, so an album with buttons is refused with nothing sent, never posted
+// without them; validation says so first.
 import type { CommentResult, ConnectedAccount, PinInput, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
@@ -31,6 +34,47 @@ const POST_ID = /^(-100\d{5,20}):(\d{1,20})$/;
 // The scope a connection carries when its bot may pin messages in the channel (#982). modules/social names the same
 // string TELEGRAM_PIN_SCOPE, for the editor.
 export const TELEGRAM_PIN_SCOPE = 'can_pin_messages';
+
+// The link buttons under a post (#1017): at most 3 rows of 3, each a label of 1 to 64 characters and an https link.
+// modules/social names the same limits for validation and the editor.
+export const TELEGRAM_BUTTON_ROWS_MAX = 3;
+export const TELEGRAM_BUTTONS_PER_ROW_MAX = 3;
+export const TELEGRAM_BUTTON_TEXT_MAX = 64;
+type InlineKeyboard = { text: string; url: string }[][];
+
+// settings.telegram.buttons (#1017) as Telegram's inline keyboard: null without any, 'invalid' when they are not rows
+// of { text, url } within the limits with https links (sent as they are would be refused, or worse, opened).
+function keyboardOf(settings: Readonly<Record<string, unknown>> | undefined): InlineKeyboard | 'invalid' | null {
+  const raw = settings?.telegram;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const buttons = (raw as { buttons?: unknown }).buttons;
+  if (buttons === undefined) return null;
+  if (!Array.isArray(buttons) || buttons.length === 0 || buttons.length > TELEGRAM_BUTTON_ROWS_MAX) return 'invalid';
+  const rows: InlineKeyboard = [];
+  for (const row of buttons as unknown[]) {
+    if (!Array.isArray(row) || row.length === 0 || row.length > TELEGRAM_BUTTONS_PER_ROW_MAX) return 'invalid';
+    const out: { text: string; url: string }[] = [];
+    for (const b of row as unknown[]) {
+      const { text, url } = (b && typeof b === 'object' ? b : {}) as { text?: unknown; url?: unknown };
+      if (typeof text !== 'string' || typeof url !== 'string') return 'invalid';
+      const label = text.trim();
+      // Counted as validation counts it: characters, a Vietnamese letter with its marks as one however it was typed.
+      if (label.length === 0 || [...label.normalize('NFC')].length > TELEGRAM_BUTTON_TEXT_MAX || !httpsUrl(url)) return 'invalid';
+      out.push({ text: label, url });
+    }
+    rows.push(out);
+  }
+  return rows;
+}
+function httpsUrl(url: string): boolean {
+  if (url.length > 2048 || !/^https:\/\/[^\s]+$/i.test(url)) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
 
 // settings.telegram.silent (#982): true sends the post without a sound; anything else is a post as usual.
 function silentOf(settings: Readonly<Record<string, unknown>> | undefined): boolean {
@@ -228,6 +272,11 @@ export class TelegramPublisher implements Publisher {
     if (!text && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
     if (media.length > ALBUM_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_MEDIA' };
     if (media.length === 0 ? utf16(text) > TELEGRAM_TEXT_MAX : utf16(text) > TELEGRAM_CAPTION_MAX) return { kind: 'rejected', error: 'bad_request', code: media.length === 0 ? 'TEXT_TOO_LONG' : 'CAPTION_TOO_LONG' };
+    // Link buttons (#1017): refused rather than dropped, so a post never goes out without the buttons it was approved with.
+    const keyboard = keyboardOf(input.settings);
+    if (keyboard === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'BUTTONS_INVALID' };
+    if (keyboard && media.length > 1) return { kind: 'rejected', error: 'bad_request', code: 'BUTTONS_ON_ALBUM' };
+    const markup = keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {};
     // Every file is read before the first call, so a read failure posts nothing.
     const files = new Map<string, { bytes: Uint8Array; mime: string }>();
     for (const [i, m] of media.entries()) {
@@ -244,11 +293,11 @@ export class TelegramPublisher implements Publisher {
     let messageId: unknown;
     try {
       if (media.length === 0) {
-        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, 'sendMessage', { chat_id: chat, text, ...quiet })).message_id;
+        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, 'sendMessage', { chat_id: chat, text, ...quiet, ...markup })).message_id;
       } else if (media.length === 1) {
         const one = media[0] as { mime: string };
         const method = isVideo(one) ? 'sendVideo' : 'sendPhoto';
-        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, method, { chat_id: String(chat), [isVideo(one) ? 'video' : 'photo']: 'attach://file0', ...(text ? { caption: text } : {}), ...quiet }, files)).message_id;
+        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, method, { chat_id: String(chat), [isVideo(one) ? 'video' : 'photo']: 'attach://file0', ...(text ? { caption: text } : {}), ...quiet, ...markup }, files)).message_id;
       } else {
         const group = media.map((m, i) => ({ type: isVideo(m) ? 'video' : 'photo', media: `attach://file${i}`, ...(i === 0 && text ? { caption: text } : {}) }));
         const sent = await client.call<{ message_id?: unknown }[]>(s.botToken, 'sendMediaGroup', { chat_id: String(chat), media: group, ...quiet }, files);

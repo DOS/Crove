@@ -420,23 +420,79 @@ export function scopeNeeded(provider: Provider, settings: Readonly<Record<string
   return provider === 'tiktok' && tiktokModeOf(settings) === 'inbox' ? 'video.upload' : null;
 }
 
-// Telegram's silent and pinned posts (#982), in `settings.telegram`: { silent?: true, pin?: true }. silent sends the
-// post without a sound (the adapter reads the same value); pin pins it to the top of the channel once it is out, as a
-// step of its own (pin.ts). Neither is stored when off, so a variant saved before keeps its content hash.
+// Telegram's silent and pinned posts (#982), in `settings.telegram`: { silent?: true, pin?: true, buttons? }. silent
+// sends the post without a sound (the adapter reads the same value); pin pins it to the top of the channel once it is
+// out, as a step of its own (pin.ts). Neither is stored when off, so a variant saved before keeps its content hash.
+// buttons are the link buttons under the post (#1017), read by telegramButtonsOf.
 export interface TelegramOptions {
   silent: boolean;
   pin: boolean;
 }
-// The options in a variant's settings: null when there are none, 'invalid' when they are not an object of those two
-// true-or-false keys.
+// The options in a variant's settings: null when there are none, 'invalid' when they are not an object of those
+// true-or-false keys and the buttons (whose own shape telegramButtonsOf checks).
 export function telegramOptionsOf(settings: Readonly<Record<string, unknown>> | undefined): TelegramOptions | 'invalid' | null {
   const raw = settings?.telegram;
   if (raw === undefined) return null;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
   const r = raw as Record<string, unknown>;
   const flag = (v: unknown) => v === undefined || typeof v === 'boolean';
-  if (Object.keys(r).some((k) => k !== 'silent' && k !== 'pin') || !flag(r.silent) || !flag(r.pin)) return 'invalid';
+  if (Object.keys(r).some((k) => k !== 'silent' && k !== 'pin' && k !== 'buttons') || !flag(r.silent) || !flag(r.pin)) return 'invalid';
   return { silent: r.silent === true, pin: r.pin === true };
+}
+
+// Link buttons under a Telegram post (#1017), in `settings.telegram.buttons`: rows of buttons, each a label (`text`)
+// and an https link (`url`), sent as the message's inline keyboard. At most TELEGRAM_BUTTON_ROWS_MAX rows of
+// TELEGRAM_BUTTONS_PER_ROW_MAX, a label of at most TELEGRAM_BUTTON_TEXT_MAX characters; an album (a media group) takes
+// none, as Telegram puts no keyboard on one. The adapter in @crove/channel names the same limits. Not stored without
+// a button, so a variant saved before keeps its content hash.
+export const TELEGRAM_BUTTON_ROWS_MAX = 3;
+export const TELEGRAM_BUTTONS_PER_ROW_MAX = 3;
+export const TELEGRAM_BUTTON_TEXT_MAX = 64;
+// The longest link a button carries, as for a short link's target.
+export const TELEGRAM_BUTTON_URL_MAX = 2048;
+export interface TelegramButton {
+  text: string;
+  url: string;
+}
+// The buttons in a variant's settings: null when there are none, 'invalid' when they are not a list of rows, each a
+// list of { text, url } with both text. Their number, labels and links are validation's to check.
+export function telegramButtonsOf(settings: Readonly<Record<string, unknown>> | undefined): TelegramButton[][] | 'invalid' | null {
+  const raw = settings?.telegram;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const buttons = (raw as Record<string, unknown>).buttons;
+  if (buttons === undefined) return null;
+  if (!Array.isArray(buttons) || buttons.length === 0) return 'invalid';
+  const rows: TelegramButton[][] = [];
+  for (const row of buttons as unknown[]) {
+    if (!Array.isArray(row) || row.length === 0) return 'invalid';
+    const out: TelegramButton[] = [];
+    for (const b of row as unknown[]) {
+      if (!b || typeof b !== 'object' || Array.isArray(b)) return 'invalid';
+      const r = b as Record<string, unknown>;
+      if (Object.keys(r).some((k) => k !== 'text' && k !== 'url') || typeof r.text !== 'string' || typeof r.url !== 'string') return 'invalid';
+      out.push({ text: r.text, url: r.url });
+    }
+    rows.push(out);
+  }
+  return rows;
+}
+// Whether a button's link is one Telegram opens as a web page: https, with a host, no spaces, at most
+// TELEGRAM_BUTTON_URL_MAX characters. javascript:, plain http and tg: links are refused.
+export function isButtonUrl(url: string): boolean {
+  if (url.length > TELEGRAM_BUTTON_URL_MAX || !/^https:\/\/[^\s]+$/i.test(url)) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' && parsed.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+// The settings with every button's link passed through `map` (UTM tags, a short link); as they are without buttons.
+export function mapTelegramButtonUrls(settings: Record<string, unknown>, map: (url: string) => string): Record<string, unknown> {
+  const rows = telegramButtonsOf(settings);
+  if (rows === null || rows === 'invalid') return settings;
+  const telegram = settings.telegram as Record<string, unknown>;
+  return { ...settings, telegram: { ...telegram, buttons: rows.map((row) => row.map((b) => ({ text: b.text, url: map(b.url) }))) } };
 }
 // The scope a Telegram connection carries when its bot may pin in the channel (TELEGRAM_PIN_SCOPE in @crove/channel,
 // read at connect): the editor greys the pin out without it.

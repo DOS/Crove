@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SHORT_CODE_LENGTH, shortCode, shortened, shortUrl } from '../src/short-links.ts';
+import { SHORT_CODE_LENGTH, shortCode, shortened, shortenedSettings, shortUrl } from '../src/short-links.ts';
 
 describe('short links (#706)', () => {
   it('draws codes of letters and digits, skipping the bytes that would bias them', () => {
@@ -10,6 +10,14 @@ describe('short links (#706)', () => {
     const fixed = shortCode((size) => Uint8Array.from({ length: size }, (_, i) => bytes[i] ?? 0));
     expect(fixed).toBe('A9ABCDEFGHIJ');
     expect(fixed).toHaveLength(SHORT_CODE_LENGTH);
+  });
+
+  it('sends a Telegram button to the link of the post through its short link, and other buttons as they are (#1017)', () => {
+    const link = { target: 'https://shop.example/a?utm_source=telegram', url: 'https://crove.example/l/AbCdEfGhIjKl' };
+    const settings = { telegram: { pin: true, buttons: [[{ text: 'Mua ngay', url: link.target }], [{ text: 'Zalo', url: 'https://zalo.me/0901234567' }]] } };
+    expect(shortenedSettings(settings, link)).toEqual({ telegram: { pin: true, buttons: [[{ text: 'Mua ngay', url: link.url }], [{ text: 'Zalo', url: 'https://zalo.me/0901234567' }]] } });
+    const plain = { telegram: { silent: true } };
+    expect(shortenedSettings(plain, link)).toBe(plain);
   });
 
   it('sends the short link in place of the link, in the text too', () => {

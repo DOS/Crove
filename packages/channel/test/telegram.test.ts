@@ -159,6 +159,69 @@ describe('Telegram publish', () => {
     expect(usual.calls.map((c) => (c.json ? 'disable_notification' in c.json : c.form?.has('disable_notification')))).toEqual([false, false, false, false]);
   });
 
+  describe('link buttons (#1017)', () => {
+    const rows = [[{ text: 'Mua ngay', url: 'https://shop.example/pho?utm_source=telegram' }, { text: 'Zalo', url: 'https://zalo.me/0901234567' }], [{ text: ' Bản đồ ', url: 'https://maps.example/quan-pho' }]];
+    const keyboard = { inline_keyboard: [[{ text: 'Mua ngay', url: 'https://shop.example/pho?utm_source=telegram' }, { text: 'Zalo', url: 'https://zalo.me/0901234567' }], [{ text: 'Bản đồ', url: 'https://maps.example/quan-pho' }]] };
+    const settings = { telegram: { silent: true, buttons: rows } };
+
+    it('sends the buttons as the inline keyboard of a text post', async () => {
+      const { fetchImpl, calls } = bot({ sendMessage: [ok({ message_id: 11 })] });
+      expect(await new TelegramPublisher(fetchImpl).publish(input({ settings }))).toMatchObject({ kind: 'accepted', externalId: `${CHAT}:11` });
+      expect(calls[0]).toEqual({ method: 'sendMessage', token: TOKEN, form: null, json: { chat_id: CHAT, text: 'Khai trương! Xem https://example.com/a', disable_notification: true, reply_markup: keyboard } });
+    });
+
+    it('sends them as JSON in the form of a photo and of a video', async () => {
+      const { fetchImpl, calls } = bot({ sendPhoto: [ok({ message_id: 12 })], sendVideo: [ok({ message_id: 13 })] });
+      const publisher = new TelegramPublisher(fetchImpl);
+      await publisher.publish(input({ settings, content: { body: 'Món mới', title: null, linkUrl: null, media: [photo('f1')] } }));
+      await publisher.publish(input({ settings: { telegram: { buttons: rows } }, content: { body: '', title: null, linkUrl: null, media: [video('v1')] } }));
+      expect(calls.map((c) => c.method)).toEqual(['sendPhoto', 'sendVideo']);
+      for (const call of calls) expect(JSON.parse(call.form?.get('reply_markup') as string)).toEqual(keyboard);
+      expect(calls[0]?.form?.get('caption')).toBe('Món mới');
+      expect(calls[1]?.form?.has('disable_notification')).toBe(false);
+    });
+
+    it('sends no keyboard without buttons', async () => {
+      const { fetchImpl, calls } = bot({ sendMessage: [ok({ message_id: 14 })], sendPhoto: [ok({ message_id: 15 })] });
+      const publisher = new TelegramPublisher(fetchImpl);
+      await publisher.publish(input({ settings: { telegram: { pin: true } } }));
+      await publisher.publish(input({ content: { body: 'Món mới', title: null, linkUrl: null, media: [photo('f1')] } }));
+      expect(calls[0]?.json).not.toHaveProperty('reply_markup');
+      expect(calls[1]?.form?.has('reply_markup')).toBe(false);
+    });
+
+    it('refuses buttons on an album, and buttons Telegram would refuse or should never open, with nothing sent', async () => {
+      const { fetchImpl, calls } = bot({});
+      const publisher = new TelegramPublisher(fetchImpl);
+      const album = { body: 'Album', title: null, linkUrl: null, media: [photo('f1'), photo('f2')] };
+      expect(await publisher.publish(input({ settings: { telegram: { buttons: rows } }, content: album }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BUTTONS_ON_ALBUM' });
+      const refused = (buttons: unknown) => publisher.publish(input({ settings: { telegram: { buttons } } }));
+      const button = (over: Record<string, unknown> = {}) => ({ text: 'Mua ngay', url: 'https://shop.example/', ...over });
+      for (const buttons of [
+        [[button({ url: 'javascript:alert(1)' })]],
+        [[button({ url: 'http://shop.example/' })]],
+        [[button({ url: 'tg://resolve?domain=quanpho' })]],
+        [[button({ url: 'https://shop.example/a b' })]],
+        [[button({ text: 'x'.repeat(65) })]],
+        [[button({ text: '   ' })]],
+        [[button(), button(), button(), button()]],
+        [[button()], [button()], [button()], [button()]],
+        [],
+        [[]],
+        'Mua ngay',
+      ]) {
+        expect(await refused(buttons)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BUTTONS_INVALID' });
+      }
+      expect(calls).toHaveLength(0);
+      // 64 characters, counted as Vietnamese letters rather than UTF-16 units, and a full 3 by 3 grid go out.
+      const full = bot({ sendMessage: [ok({ message_id: 16 }), ok({ message_id: 17 })] });
+      const label = 'ắ'.repeat(64).normalize('NFD');
+      await new TelegramPublisher(full.fetchImpl).publish(input({ settings: { telegram: { buttons: [[button({ text: label })]] } } }));
+      await new TelegramPublisher(full.fetchImpl).publish(input({ settings: { telegram: { buttons: [0, 1, 2].map(() => [button(), button(), button()]) } } }));
+      expect(full.calls.map((c) => (c.json?.reply_markup as { inline_keyboard: unknown[][] } | undefined)?.inline_keyboard.flat().length)).toEqual([1, 9]);
+    });
+  });
+
   it('refuses what Telegram would refuse without calling it, and posts nothing when a file cannot be read', async () => {
     const { fetchImpl, calls } = bot({});
     const publisher = new TelegramPublisher(fetchImpl);
