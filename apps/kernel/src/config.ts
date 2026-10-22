@@ -109,6 +109,9 @@ const schema = z.object({
   // Org exports (issue #212, plan §7.9): kept EXPORT_RETENTION_DAYS (35 to 90) after they are made, then deleted by the
   // worker's daily retention job.
   EXPORT_RETENTION_DAYS: z.coerce.number().int().min(35).max(90).default(35),
+  // The operator's org-purge role (issue #1024) runs only this many days after the org's newest export. The database
+  // refuses fewer than 30 whatever this says.
+  ORG_PURGE_MIN_DAYS: z.coerce.number().int().min(30).max(3650).default(30),
   // The AES-256-GCM key that seals org exports at rest: 32 random bytes as base64 or hex (openssl rand -base64 32). The
   // API (downloads) and the worker (exports) need the same key. Required on a public PUBLIC_URL; without it (local URLs
   // only) exports are stored unencrypted.

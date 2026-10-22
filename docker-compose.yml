@@ -197,6 +197,8 @@ services:
       EXPORT_RETENTION_DAYS: ${EXPORT_RETENTION_DAYS:-35}
       EXPORT_ENCRYPTION_KEY: ${EXPORT_ENCRYPTION_KEY:-}
       EXPORT_ENCRYPTION_KEY_PREVIOUS: ${EXPORT_ENCRYPTION_KEY_PREVIOUS:-}
+      # Days after an org's newest export before the operator's org-purge may close it (issue #1024, 30 at least).
+      ORG_PURGE_MIN_DAYS: ${ORG_PURGE_MIN_DAYS:-30}
       # Files stay on the `files` volume unless STORAGE=s3 (see .env.example).
       STORAGE: ${STORAGE:-local}
       S3_ENDPOINT: ${S3_ENDPOINT:-}

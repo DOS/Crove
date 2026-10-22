@@ -33,6 +33,9 @@ const NOT_SHOWN: Record<string, string> = {
   TASK_CLOSED: 'agents',
   OUTSIDE_SUBTREE: 'agents',
   DEPTH_LIMIT: 'agents',
+  // The operator's org-purge command (#1024) runs in the worker's container, never from a browser.
+  ORG_PURGE_REFUSED: 'operator',
+  ORG_PURGE_BLOB_FAILED: 'operator',
   // The inbound mail endpoint answers the mail relay, not a browser.
   EMPTY_MESSAGE: 'inbound mail',
   UNKNOWN_RECIPIENT: 'inbound mail',

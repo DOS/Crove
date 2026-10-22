@@ -14,6 +14,9 @@
 //   user-disable | user-enable <account id or email> --reason <text>
 //                 block or unblock a user account in Crove, audited in each of its orgs (issue #985); run it in the
 //                 worker's container
+//   org-purge <org slug or id> --reason <text>
+//                 apply the offboarding deletion map to an org in offboarding whose export is old enough, and close
+//                 it (issue #1024); run it in the worker's container
 // It wires the open-source default adapters into the composition root (createKernel, ADR-0030).
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { liveAuthUrl, loadConfig, type Config } from './config.ts';
@@ -24,8 +27,8 @@ import { runProber } from './prober.ts';
 import { describeStorage } from './storage.ts';
 import { runUsageReport } from './usage-report.ts';
 
-type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | ServerRole;
-const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable'];
+type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | 'org-purge' | ServerRole;
+const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable', 'org-purge'];
 
 async function runMigrate(config: Config) {
   const adminUrl = config.ADMIN_DATABASE_URL;
@@ -62,6 +65,7 @@ async function main() {
   if (role === 'user-disable' || role === 'user-enable') {
     process.exit(await createKernel(config, defaultAdapters(config)).setUserStatus(role === 'user-disable', process.argv.slice(3)));
   }
+  if (role === 'org-purge') process.exit(await createKernel(config, defaultAdapters(config)).purgeOrg(process.argv.slice(3)));
   const live = config.AUTH_SESSION_CHECK === 'jwt' ? liveAuthUrl(config) : null;
   console.log(
     `[auth] session check: ${config.AUTH_SESSION_CHECK}, step-up for R3: ${config.AUTH_STEP_UP}` +
