@@ -205,6 +205,138 @@ describe('Discord publish', () => {
   });
 });
 
+describe('Discord forum posts and threads (#1103)', () => {
+  const THREAD = '1200000000000000001';
+  const TAG_A = '1210000000000000001';
+  const TAG_B = '1210000000000000002';
+  const forum = (over: Record<string, unknown> = {}) => ({ discord: { forum: true, ...over } });
+
+  it('keeps a text channel post as it was: no thread fields, wait=true alone', async () => {
+    const { fetchImpl, calls } = discord([{ body: { id: '1300000000000000010', channel_id: CHANNEL } }]);
+    const result = await new DiscordPublisher(fetchImpl).publish(input({ content: { body: 'Khai trương!', title: 'Tiêu đề', linkUrl: null, media: [] } }));
+    expect(result).toEqual({ kind: 'accepted', externalId: '1300000000000000010', url: `https://discord.com/channels/${GUILD}/${CHANNEL}/1300000000000000010` });
+    expect([...(calls[0]?.url.searchParams.keys() ?? [])]).toEqual(['wait']);
+    expect(calls[0]?.json).toEqual({ content: 'Khai trương!', allowed_mentions: { parse: [] } });
+  });
+
+  it('creates a forum post named by the text first line, with its tags, linked in the new thread', async () => {
+    const { fetchImpl, calls } = discord([{ body: { id: THREAD, channel_id: THREAD } }]);
+    const result = await new DiscordPublisher(fetchImpl).publish(input({ content: content('\n  Khai trương   chi nhánh mới  \nGhé thăm cuối tuần này'), settings: forum({ tags: [TAG_A, TAG_B] }) }));
+    expect(result).toEqual({ kind: 'accepted', externalId: THREAD, url: `https://discord.com/channels/${GUILD}/${THREAD}/${THREAD}` });
+    expect(calls[0]?.url.pathname).toBe(`/api/v10/webhooks/${HOOK}/${TOKEN}`);
+    expect([...(calls[0]?.url.searchParams.entries() ?? [])]).toEqual([['wait', 'true']]);
+    expect(calls[0]?.json).toEqual({
+      content: 'Khai trương   chi nhánh mới  \nGhé thăm cuối tuần này',
+      allowed_mentions: { parse: [] },
+      thread_name: 'Khai trương chi nhánh mới',
+      applied_tags: [TAG_A, TAG_B],
+    });
+  });
+
+  it('names a forum post by the name given, else by the post title, and sends no tags when there are none', async () => {
+    const { fetchImpl, calls } = discord([{ body: { id: THREAD } }, { body: { id: THREAD } }, { body: { id: THREAD } }]);
+    const publisher = new DiscordPublisher(fetchImpl);
+    await publisher.publish(input({ content: { body: 'Nội dung', title: 'Tiêu đề bài', linkUrl: null, media: [] }, settings: forum({ threadName: '  Thông báo  ' }) }));
+    await publisher.publish(input({ content: { body: 'Nội dung', title: 'Tiêu đề bài', linkUrl: null, media: [] }, settings: forum() }));
+    // A blank name, as the composer may keep it while typing, is none.
+    await publisher.publish(input({ content: { body: 'Nội dung', title: 'Tiêu đề bài', linkUrl: null, media: [] }, settings: forum({ threadName: '   ' }) }));
+    expect(calls.map((c) => c.json)).toEqual([
+      { content: 'Nội dung', allowed_mentions: { parse: [] }, thread_name: 'Thông báo' },
+      { content: 'Nội dung', allowed_mentions: { parse: [] }, thread_name: 'Tiêu đề bài' },
+      { content: 'Nội dung', allowed_mentions: { parse: [] }, thread_name: 'Tiêu đề bài' },
+    ]);
+  });
+
+  it('cuts a long default name to 100 characters without splitting an emoji', async () => {
+    const { fetchImpl, calls } = discord([{ body: { id: THREAD } }, { body: { id: THREAD } }]);
+    const publisher = new DiscordPublisher(fetchImpl);
+    await publisher.publish(input({ content: content(`${'a'.repeat(99)}\u{1F600}b`), settings: forum() }));
+    await publisher.publish(input({ content: content(`${'a'.repeat(98)}\u{1F600}b`), settings: forum() }));
+    expect(calls[0]?.json?.thread_name).toBe('a'.repeat(99));
+    expect(calls[1]?.json?.thread_name).toBe(`${'a'.repeat(98)}\u{1F600}`);
+  });
+
+  it('sends a forum post with files as one multipart call, the thread fields in payload_json', async () => {
+    const { fetchImpl, calls } = discord([{ body: { id: THREAD, channel_id: THREAD } }]);
+    await new DiscordPublisher(fetchImpl).publish(input({ content: { body: '', title: 'Ảnh khai trương', linkUrl: null, media: [photo('f1', 'Mặt tiền')] }, settings: forum({ tags: [TAG_A] }) }));
+    expect(calls).toHaveLength(1);
+    const form = calls[0]?.form as FormData;
+    expect(JSON.parse(form.get('payload_json') as string)).toEqual({
+      allowed_mentions: { parse: [] },
+      attachments: [{ id: 0, filename: 'image-1.jpg', description: 'Mặt tiền' }],
+      thread_name: 'Ảnh khai trương',
+      applied_tags: [TAG_A],
+    });
+    expect((form.get('files[0]') as File).name).toBe('image-1.jpg');
+  });
+
+  it('posts into an existing thread with thread_id, the body unchanged, linked in that thread', async () => {
+    const { fetchImpl, calls } = discord([{ body: { id: '1300000000000000011', channel_id: THREAD } }]);
+    const result = await new DiscordPublisher(fetchImpl).publish(input({ content: content('Cập nhật mới'), settings: { discord: { threadId: THREAD } } }));
+    expect(result).toEqual({ kind: 'accepted', externalId: '1300000000000000011', url: `https://discord.com/channels/${GUILD}/${THREAD}/1300000000000000011` });
+    expect(calls[0]?.url.toString()).toBe(`https://discord.com/api/v10/webhooks/${HOOK}/${TOKEN}?wait=true&thread_id=${THREAD}`);
+    expect(calls[0]?.json).toEqual({ content: 'Cập nhật mới', allowed_mentions: { parse: [] } });
+  });
+
+  it('refuses settings Discord would refuse, and a forum post with nothing to name it, without calling it', async () => {
+    const { fetchImpl, calls } = discord([]);
+    const publisher = new DiscordPublisher(fetchImpl);
+    const invalid = expect.objectContaining({ kind: 'rejected', error: 'bad_request', code: 'DISCORD_SETTINGS_INVALID' });
+    for (const discordSettings of [
+      'forum',
+      { forum: 'yes' },
+      { tags: [TAG_A] },
+      { threadName: 'Không phải diễn đàn' },
+      { forum: true, threadId: THREAD },
+      { forum: true, tags: ['not-a-tag'] },
+      { forum: true, tags: [TAG_A, TAG_A] },
+      { forum: true, tags: Array.from({ length: 6 }, (_, i) => `121000000000000001${i}`) },
+      { forum: true, threadName: 'x'.repeat(101) },
+      { forum: true, threadName: 7 },
+      { threadId: '../x' },
+      { forum: true, extra: 1 },
+    ]) {
+      expect(await publisher.publish(input({ settings: { discord: discordSettings } })), JSON.stringify(discordSettings)).toEqual(invalid);
+    }
+    const filesOnly = input({ content: content('', [photo('f1')]), settings: forum() });
+    expect(await publisher.publish(filesOnly)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'DISCORD_THREAD_NAME_REQUIRED' });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("maps Discord's forum refusals, each with nothing posted: an unmarked forum, not a forum, a tag needed or unknown, an unknown thread", async () => {
+    const publisher = new DiscordPublisher(
+      discord([
+        fail(400, 220001, 'Webhooks posted to forum channels must have a thread_name or thread_id'),
+        fail(400, 220003, 'Webhooks can only create threads in forum channels'),
+        fail(400, 40067, 'A tag is required to create a forum post in this channel'),
+        fail(400, 10087, 'Unknown Tag'),
+        fail(404, 10003, 'Unknown Channel'),
+      ]).fetchImpl,
+    );
+    expect(await publisher.publish(input())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'DISCORD_THREAD_NAME_REQUIRED', httpStatus: 400 });
+    expect(await publisher.publish(input({ settings: forum() }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'DISCORD_NOT_FORUM' });
+    expect(await publisher.publish(input({ settings: forum() }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'DISCORD_TAG_REQUIRED' });
+    expect(await publisher.publish(input({ settings: forum({ tags: [TAG_A] }) }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'DISCORD_TAG_UNKNOWN' });
+    // Not a webhook gone: the connection stays as it is.
+    expect(await publisher.publish(input({ settings: { discord: { threadId: THREAD } } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'DISCORD_THREAD_UNKNOWN' });
+  });
+
+  it('deletes a message in its thread: the one named, or a forum post in its own thread', async () => {
+    const MESSAGE = '1300000000000000012';
+    const { fetchImpl, calls } = discord([{ status: 204, body: undefined }, { status: 204, body: undefined }, fail(404, 10003, 'Unknown Channel')]);
+    const publisher = new DiscordPublisher(fetchImpl);
+    expect(await publisher.remove({ externalAccountId: HOOK, secret: SECRET, externalId: MESSAGE, settings: { discord: { threadId: THREAD } } })).toEqual({ kind: 'removed' });
+    expect(await publisher.remove({ externalAccountId: HOOK, secret: SECRET, externalId: THREAD, settings: forum({ tags: [TAG_A] }) })).toEqual({ kind: 'removed' });
+    // The forum post was deleted in Discord, and the message with it.
+    expect(await publisher.remove({ externalAccountId: HOOK, secret: SECRET, externalId: THREAD, settings: forum() })).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.method, c.url.toString()])).toEqual([
+      ['DELETE', `https://discord.com/api/v10/webhooks/${HOOK}/${TOKEN}/messages/${MESSAGE}?thread_id=${THREAD}`],
+      ['DELETE', `https://discord.com/api/v10/webhooks/${HOOK}/${TOKEN}/messages/${THREAD}?thread_id=${THREAD}`],
+      ['DELETE', `https://discord.com/api/v10/webhooks/${HOOK}/${TOKEN}/messages/${THREAD}?thread_id=${THREAD}`],
+    ]);
+  });
+});
+
 describe('Discord team alerts (#863)', () => {
   it('sends one line with mentions off and no embeds, on the webhook', async () => {
     const line = 'Bài «Khai trương» đã đăng lên Facebook: https://crove.example/o/shop/social/1';

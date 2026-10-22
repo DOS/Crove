@@ -565,6 +565,55 @@ export function mapTelegramButtonUrls(settings: Record<string, unknown>, map: (u
 // read at connect): the editor greys the pin out without it.
 export const TELEGRAM_PIN_SCOPE = 'can_pin_messages';
 
+// Discord forum posts and threads (#1103), in `settings.discord`: { forum?: true, threadName?, tags?, threadId? }. A
+// webhook's channel type cannot be read with the webhook alone, so the person posting marks a forum (or media)
+// channel's webhook: forum posts the variant as a new forum post named threadName, else the post's title, else the
+// text's first line (cut to DISCORD_THREAD_NAME_MAX), with the forum's tag ids; threadId posts into an existing thread
+// instead. Absent is a message in the webhook's channel, as before. The adapter's discordOptionsOf in @crove/channel
+// reads the same shape and names the same limits.
+export const DISCORD_THREAD_NAME_MAX = 100;
+export const DISCORD_TAGS_MAX = 5;
+const DISCORD_ID = /^\d{17,20}$/;
+export const isDiscordId = (id: string): boolean => DISCORD_ID.test(id);
+export interface DiscordOptions {
+  forum: boolean;
+  // As typed; validateVariant checks each value.
+  threadName: string | null;
+  tags: string[];
+  threadId: string | null;
+}
+// The options in a variant's settings: null when there are none, 'invalid' when they are not an object of those keys
+// with a true-or-false forum, a text name and thread id, and a list of texts as tags.
+export function discordOptionsOf(settings: Readonly<Record<string, unknown>> | undefined): DiscordOptions | 'invalid' | null {
+  const raw = settings?.discord;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== 'forum' && k !== 'threadName' && k !== 'tags' && k !== 'threadId')) return 'invalid';
+  if ((r.forum !== undefined && typeof r.forum !== 'boolean') || (r.threadName !== undefined && typeof r.threadName !== 'string') || (r.threadId !== undefined && typeof r.threadId !== 'string')) return 'invalid';
+  if (r.tags !== undefined && (!Array.isArray(r.tags) || r.tags.some((t) => typeof t !== 'string'))) return 'invalid';
+  return { forum: r.forum === true, threadName: (r.threadName as string | undefined) ?? null, tags: (r.tags as string[] | undefined) ?? [], threadId: (r.threadId as string | undefined) ?? null };
+}
+// Whether a Discord variant goes out as a new forum post, which takes the post's title as its name.
+export const isDiscordForum = (provider: string, settings: Readonly<Record<string, unknown>> | undefined): boolean => {
+  if (provider !== 'discord') return false;
+  const options = discordOptionsOf(settings);
+  return options !== null && options !== 'invalid' && options.forum;
+};
+// At most `max` UTF-16 code units, never ending on half of a surrogate pair.
+function cutUtf16(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  return (last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut).trimEnd();
+}
+// A forum post's name as the adapter sends it: the one given, else the post's title, else the first line of its text,
+// cut to Discord's limit; '' when there is none (files alone, with no title).
+export function discordThreadName(own: string | null, title: string | null, text: string): string {
+  const name = own?.trim() || title?.trim() || (text.split('\n').find((line) => line.trim() !== '') ?? '').trim();
+  return cutUtf16(name.replace(/\s+/g, ' '), DISCORD_THREAD_NAME_MAX);
+}
+
 // What social.publish.record stores as a published variant's note (error_code, with no error kind) when the platform
 // took the post as a draft in its own app (#903): not public yet and with no post id, so it is never read as out.
 export const SENT_TO_APP = 'SENT_TO_APP';

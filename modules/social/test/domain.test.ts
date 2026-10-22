@@ -9,6 +9,10 @@ import {
   contentHash,
   countLinks,
   countText,
+  DISCORD_TAGS_MAX,
+  DISCORD_THREAD_NAME_MAX,
+  discordOptionsOf,
+  discordThreadName,
   IG_REEL_FEEDS,
   IG_TRIAL_GRADUATIONS,
   instagramReelOf,
@@ -200,8 +204,65 @@ describe('validateVariant', () => {
     expect(TELEGRAM_PIN_SCOPE).toBe(channel.TELEGRAM_PIN_SCOPE);
   });
 
+  describe('Discord forum posts and threads (#1103)', () => {
+    const TAG = '1210000000000000001';
+    const THREAD = '1200000000000000001';
+    const discord = (settings: Record<string, unknown>, over: { body?: string; title?: string | null; media?: MediaItem[] } = {}) =>
+      validateVariant({ provider: 'discord', body: over.body ?? 'Khai trương chi nhánh mới', title: over.title ?? null, media: over.media ?? [], settings });
+    const issue = (code: string, field: string, limit: number | null = null, actual: number | null = null) => ({ code, field, limit, actual });
+
+    it('takes a forum post with a name and tags, or a thread id, and leaves a text channel post as it was', () => {
+      expect(discord({})).toEqual([]);
+      expect(discord({ discord: { forum: true } })).toEqual([]);
+      expect(discord({ discord: { forum: true, threadName: 'Thông báo', tags: [TAG, '1210000000000000002'] } })).toEqual([]);
+      expect(discord({ discord: { threadId: THREAD } })).toEqual([]);
+      // A forum post takes the post title as its name; a text channel post still refuses one.
+      expect(discord({ discord: { forum: true } }, { title: 'x'.repeat(300) })).toEqual([]);
+      expect(discord({}, { title: 'Tiêu đề' })).toEqual([issue('TITLE_NOT_SUPPORTED', 'title')]);
+      expect(discord({ discord: { threadId: THREAD } }, { title: 'Tiêu đề' })).toEqual([issue('TITLE_NOT_SUPPORTED', 'title')]);
+    });
+
+    it('refuses a forum post with nothing to name it, and settings Discord would refuse', () => {
+      expect(discord({ discord: { forum: true } }, { body: '', media: [jpeg()] })).toEqual([issue('DISCORD_THREAD_NAME_REQUIRED', 'settings.discord.threadName')]);
+      expect(discord({ discord: { forum: true } }, { body: '', title: 'Ảnh khai trương', media: [jpeg()] })).toEqual([]);
+      expect(discord({ discord: { forum: true, threadName: 'x'.repeat(101) } })).toEqual([issue('DISCORD_THREAD_NAME_TOO_LONG', 'settings.discord.threadName', 100, 101)]);
+      expect(discord({ discord: { tags: [TAG] } })).toEqual([issue('DISCORD_FORUM_ONLY', 'settings.discord.forum')]);
+      expect(discord({ discord: { threadName: 'Tên' } })).toEqual([issue('DISCORD_FORUM_ONLY', 'settings.discord.forum')]);
+      expect(discord({ discord: { forum: true, threadId: THREAD } })).toEqual([issue('DISCORD_THREAD_CONFLICT', 'settings.discord.threadId')]);
+      expect(discord({ discord: { forum: true, tags: ['abc', TAG, TAG] } })).toEqual([issue('DISCORD_TAG_INVALID', 'settings.discord.tags.0'), issue('DISCORD_TAG_INVALID', 'settings.discord.tags.2')]);
+      const six = Array.from({ length: 6 }, (_, i) => `121000000000000001${i}`);
+      expect(discord({ discord: { forum: true, tags: six } })).toEqual([issue('DISCORD_TOO_MANY_TAGS', 'settings.discord.tags', 5, 6)]);
+      expect(discord({ discord: { threadId: '12' } })).toEqual([issue('DISCORD_THREAD_ID_INVALID', 'settings.discord.threadId')]);
+      for (const raw of [true, null, [], { forum: 'yes' }, { tags: TAG }, { threadId: 12 }, { forum: true, extra: 1 }]) {
+        expect(discord({ discord: raw }), JSON.stringify(raw)).toEqual([issue('DISCORD_INVALID', 'settings.discord')]);
+      }
+      expect(validateVariant({ provider: 'telegram', body: 'x', title: null, media: [], settings: { discord: { forum: true } } })).toEqual([issue('DISCORD_NOT_SUPPORTED', 'settings.discord')]);
+    });
+
+    it('names a forum post as the adapter does, with the same limits', () => {
+      expect(DISCORD_THREAD_NAME_MAX).toBe(channel.DISCORD_THREAD_NAME_MAX);
+      expect(DISCORD_TAGS_MAX).toBe(channel.DISCORD_TAGS_MAX);
+      expect(discordThreadName(null, null, '\n  Khai   trương  \nchi tiết')).toBe('Khai trương');
+      expect(discordThreadName(' Tên ', 'Tiêu đề', 'x')).toBe('Tên');
+      expect(discordThreadName(null, 'Tiêu đề', 'x')).toBe('Tiêu đề');
+      expect(discordThreadName(null, null, `${'a'.repeat(99)}\u{1F600}`)).toBe('a'.repeat(99));
+      expect(discordThreadName(null, '  ', '')).toBe('');
+      fc.assert(
+        fc.property(fc.option(fc.string({ unit: 'grapheme', maxLength: 120 })), fc.option(fc.string({ unit: 'grapheme', maxLength: 200 })), fc.string({ unit: 'grapheme', maxLength: 300 }), (own, title, text) => {
+          const name = discordThreadName(own, title, text);
+          expect(name).toBe(channel.discordThreadName(own, title, text));
+          expect(name.length).toBeLessThanOrEqual(DISCORD_THREAD_NAME_MAX);
+          // Never half of a surrogate pair at the end.
+          expect(/[\uD800-\uDBFF]$/.test(name)).toBe(false);
+        }),
+      );
+      expect(discordOptionsOf({ discord: { forum: true, tags: [TAG] } })).toEqual({ forum: true, threadName: null, tags: [TAG], threadId: null });
+      expect(discordOptionsOf({})).toBeNull();
+    });
+  });
+
   describe('Telegram link buttons (#1017)', () => {
-    const button = (over: Record<string, unknown> = {}) => ({ text: 'Mua ngay', url: 'https://shop.example/pho', ...over });
+    const button =(over: Record<string, unknown> = {}) => ({ text: 'Mua ngay', url: 'https://shop.example/pho', ...over });
     const on = (buttons: unknown, media: MediaItem[] = [], provider: 'telegram' | 'mastodon' = 'telegram') => validateVariant({ provider, body: 'Khai trương', title: null, media, settings: { telegram: { buttons } } });
     const issue = (code: string, field: string, limit: number | null = null, actual: number | null = null) => ({ code, field, limit, actual });
 
