@@ -3,7 +3,10 @@
 import { SOCIAL_NOTIFICATION_KINDS } from '@crove/kernel-contract';
 
 export type NotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
-export const NOTIFICATION_KINDS: readonly NotificationKind[] = SOCIAL_NOTIFICATION_KINDS;
+// The weekly digest (#1104) is a mail, not an in-app notification: its switch sits next to the mail switch.
+export const DIGEST_KIND = 'weekly_digest' satisfies NotificationKind;
+export type InAppKind = Exclude<NotificationKind, typeof DIGEST_KIND>;
+export const NOTIFICATION_KINDS: readonly InAppKind[] = SOCIAL_NOTIFICATION_KINDS.filter((k): k is InAppKind => k !== DIGEST_KIND);
 
 export type NotificationTarget = { to: 'post'; postId: string } | { to: 'channels' } | { to: 'feeds' } | { to: 'compose'; channelId: string };
 

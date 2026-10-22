@@ -67,3 +67,5 @@ export * from './notifications.ts';
 export * from './reminders.ts';
 export * from './channel-access.ts';
 export * from './queue-low.ts';
+export * from './domain/digest.ts';
+export * from './digest.ts';

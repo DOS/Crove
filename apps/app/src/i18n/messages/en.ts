@@ -1889,6 +1889,9 @@ export const en = {
       settingsHint: 'Untick what you do not want. This applies to your account only.',
       mail: 'Email me too',
       mailHint: 'When a post waits for review, gets a decision, fails, a channel needs reconnecting, a queue runs low, or someone mentions you, {brand} also sends an email to your address.',
+      digest: 'Weekly digest',
+      digestHint: 'Every Monday morning, {brand} emails you a summary: what went out last week, the posts with the most engagement, the ones that failed, and the schedule for this week.',
+      digestMailOff: 'Turn on "Email me too" to get the weekly digest.',
       kinds: {
         review_requested: 'Posts to review',
         decided: 'Review results of your posts',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NOTIFICATION_KINDS, notificationTarget, unreadLabel } from '../src/lib/social-notifications.ts';
+import { DIGEST_KIND, NOTIFICATION_KINDS, notificationTarget, unreadLabel } from '../src/lib/social-notifications.ts';
 
 describe('social notifications (#637)', () => {
   it('opens the post, or the channels page for an expired channel', () => {
@@ -27,5 +27,10 @@ describe('social notifications (#637)', () => {
   it('lists every kind once, for the settings', () => {
     expect(new Set(NOTIFICATION_KINDS).size).toBe(NOTIFICATION_KINDS.length);
     expect(NOTIFICATION_KINDS).toContain('client_answer');
+  });
+
+  it('keeps the weekly digest (#1104), a mail only, out of the in-app kinds', () => {
+    expect(DIGEST_KIND).toBe('weekly_digest');
+    expect(NOTIFICATION_KINDS).not.toContain(DIGEST_KIND);
   });
 });
