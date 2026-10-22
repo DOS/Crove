@@ -837,7 +837,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
 - **Job I/O:** goes through the `external_call` ledger with deterministic keys. An `ambiguous` state spawns a reconciliation job that asks the provider before retrying.
 - **CPU-heavy work:**
   - Extraction runs in `crove-extract`; archive zipping and hashing run in `worker_threads`.
-  - Watchdog: event-loop lag > 5 s sustained for 30 s -> `exit(1)`.
+  - Watchdog: event-loop lag > 5 s sustained for 30 s -> `exit(1)`. On `main` since #894 (`apps/kernel/src/back-pressure.ts`, a `perf_hooks` delay histogram read every second, with an `[alert]` line).
   - A heartbeat is written to the DB for the prober.
 - **`perOrg` schedules:** jitter by `hash(org_id)`.
 - **Second worker:** enabled before the first paying Finance tenant. The relay stays exclusive; consumers use SKIP LOCKED.
@@ -859,7 +859,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
 
 **Processes:** transitions are pure functions; state lives in `process_instance`; timers are job intents; waiting on a human is a proposal.
 
-**Back-pressure:** outbox lag > 30 s pauses background, agent and bulk jobs. Interactive work keeps running.
+**Back-pressure:** outbox lag > 30 s pauses background, agent and bulk jobs. Interactive work keeps running. On `main` since #894: every 10 s the worker reads `crove_kernel.outbox_lag_seconds()` (worker only); over `OUTBOX_LAG_PAUSE_SECONDS` (default 30) it stops fetching the agent, bulk mail, archive and retention queues (pg-boss `offWork`) and works them again once the lag is under half of it. Each change is logged and posted to the alert webhook ([incidents.md](../runbooks/incidents.md), section 2).
 
 **Event versioning:**
 - Adding an optional field: same version.

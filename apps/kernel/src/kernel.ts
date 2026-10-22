@@ -75,6 +75,7 @@ import type { SocialDrafter } from './rpc.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
 import { createTaxCodeLookup } from './tax-lookup.ts';
 import { startWorker } from './worker.ts';
+import { WORKER_LAG_EXIT_MS, WORKER_LAG_SUSTAIN_MS, startLagWatchdog } from './back-pressure.ts';
 
 // Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds. When
 // sessions.liveCheckForR3 is true, the authenticator must set confirmLive on each user, or every R3 command fails
@@ -396,8 +397,12 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             usageLimits: usageLimits(config),
             securityAlerts: securityAlerts(config),
             aiPrice: { inputPerMTok: config.AI_PRICE_INPUT_PER_MTOK, outputPerMTok: config.AI_PRICE_OUTPUT_PER_MTOK },
+            outboxLagPauseSeconds: config.OUTBOX_LAG_PAUSE_SECONDS,
           }),
         );
+        // The worker watchdog (#894, plan §4.9): a loop blocked over 5 s for 30 s exits the process, which restarts.
+        const stopWatchdog = startLagWatchdog({ thresholdMs: WORKER_LAG_EXIT_MS, sustainMs: WORKER_LAG_SUSTAIN_MS, exit: (code) => process.exit(code) });
+        stops.push(async () => stopWatchdog());
       }
     } catch (error) {
       await stopAll();
