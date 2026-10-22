@@ -60,7 +60,8 @@ import { playlistCallsOf, playlistCommands, playlistsOf, playlistStatus, type Pl
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { clientReviewCommands } from './client-review.ts';
-import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, variantPost, type PostRow, type VariantRow, type Trx } from './variants.ts';
+import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, variantPost, type PostRow, type QueueState, type VariantRow, type Trx } from './variants.ts';
+import { queueOrderCommands } from './queue-order.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -599,32 +600,6 @@ export const variantDecide = defineCommand({
     return { postId: post.id, decision: input.decision, variants: chosen.map((v) => v.id), waiting };
   },
 });
-
-interface QueueState {
-  id: string;
-  spec: QueueSpec;
-  paused: boolean;
-}
-
-async function lockQueue(trx: Trx, orgId: string, connectionId: string): Promise<QueueState | null> {
-  const queue = await trx
-    .selectFrom('crove_social.queue')
-    .select(['id', 'time_zone', 'paused'])
-    .where('org_id', '=', orgId)
-    .where('channel_connection_id', '=', connectionId)
-    .forUpdate()
-    .executeTakeFirst();
-  if (!queue) return null;
-  const slots = await trx
-    .selectFrom('crove_social.queue_slot')
-    .select(['weekday', 'minute', 'label_id'])
-    .where('org_id', '=', orgId)
-    .where('queue_id', '=', queue.id)
-    .where('active', '=', true)
-    .execute();
-  return { id: queue.id, paused: queue.paused, spec: { timeZone: queue.time_zone, slots: slots.map((s) => ({ weekday: s.weekday, minute: s.minute, labelId: s.label_id })) } };
-}
-
 
 async function takenSlots(trx: Trx, orgId: string, connectionId: string, exceptId?: string): Promise<Set<number>> {
   let q = trx
@@ -1491,6 +1466,7 @@ export const socialCommands = [
   variantReschedule,
   variantCancel,
   queueSet,
+  ...queueOrderCommands,
   ...publishingCommands,
   ...publishHoldCommands,
   ...metricsCommands,

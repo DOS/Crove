@@ -31,7 +31,11 @@ import {
   publishJobKey,
   scopeNeeded,
   startsNewAttempt,
+  TELEGRAM_BUTTON_ROWS_MAX,
+  TELEGRAM_BUTTON_TEXT_MAX,
+  TELEGRAM_BUTTONS_PER_ROW_MAX,
   TELEGRAM_PIN_SCOPE,
+  telegramButtonsOf,
   telegramOptionsOf,
   transitionVariant,
   validateVariant,
@@ -188,6 +192,51 @@ describe('validateVariant', () => {
 
   it('names the pin right with the scope the Telegram adapter stores at connect (#982)', () => {
     expect(TELEGRAM_PIN_SCOPE).toBe(channel.TELEGRAM_PIN_SCOPE);
+  });
+
+  describe('Telegram link buttons (#1017)', () => {
+    const button = (over: Record<string, unknown> = {}) => ({ text: 'Mua ngay', url: 'https://shop.example/pho', ...over });
+    const on = (buttons: unknown, media: MediaItem[] = [], provider: 'telegram' | 'mastodon' = 'telegram') => validateVariant({ provider, body: 'Khai trương', title: null, media, settings: { telegram: { buttons } } });
+    const issue = (code: string, field: string, limit: number | null = null, actual: number | null = null) => ({ code, field, limit, actual });
+
+    it('takes up to 3 rows of 3 labelled https links on a text, a photo or a video', () => {
+      expect(on([[button(), button({ text: 'Zalo', url: 'https://zalo.me/0901234567' })], [button({ text: 'Bản đồ' })]])).toEqual([]);
+      expect(on([0, 1, 2].map(() => [button(), button(), button()]))).toEqual([]);
+      expect(on([[button()]], [jpeg()])).toEqual([]);
+      expect(on([[button()]], [mp4()])).toEqual([]);
+      // 64 letters with their marks, typed either way.
+      expect(on([[button({ text: 'ắ'.repeat(64).normalize('NFD') })]])).toEqual([]);
+      expect(validateVariant({ provider: 'telegram', body: 'x', title: null, media: [], settings: { telegram: { silent: true, pin: true, buttons: [[button()]] } } })).toEqual([]);
+    });
+
+    it('refuses javascript:, plain http and other links that are not a web page over https', () => {
+      for (const url of ['javascript:alert(1)', 'JavaScript://shop.example/%0aalert(1)', 'http://shop.example/', 'tg://resolve?domain=quanpho', 'https://', 'https://shop.example/a b', ' https://shop.example/', `https://shop.example/${'a'.repeat(2048)}`, 'https://user:pass@shop.example/', 'https://admin@shop.example/', `https://shop.example/a${String.fromCodePoint(0x200b)}b`, `https://shop.example/${String.fromCodePoint(0x7f)}`, `https://shop.example/${String.fromCodePoint(0x2028)}`]) {
+        expect(on([[button({ url })]])).toEqual([issue('TELEGRAM_BUTTON_URL_INVALID', 'settings.telegram.buttons.0.0.url')]);
+      }
+    });
+
+    it('refuses an empty or long label, too many buttons, and buttons on an album', () => {
+      expect(on([[button(), button({ text: 'x'.repeat(65) })]])).toEqual([issue('TELEGRAM_BUTTON_TEXT_LENGTH', 'settings.telegram.buttons.0.1.text', 64, 65)]);
+      expect(on([[button({ text: '  ' })]])).toEqual([issue('TELEGRAM_BUTTON_TEXT_LENGTH', 'settings.telegram.buttons.0.0.text', 64, 0)]);
+      expect(on([[button()], [button(), button(), button(), button()]])).toEqual([issue('TELEGRAM_TOO_MANY_BUTTONS', 'settings.telegram.buttons.1', 3, 4)]);
+      expect(on([[button()], [button()], [button()], [button()]])).toEqual([issue('TELEGRAM_TOO_MANY_BUTTONS', 'settings.telegram.buttons', 3, 4)]);
+      expect(on([[button()]], [jpeg(), mp4()])).toEqual([issue('TELEGRAM_BUTTONS_ON_ALBUM', 'settings.telegram.buttons', null, 2)]);
+    });
+
+    it('refuses buttons that are not rows of { text, url }, and buttons on another channel', () => {
+      for (const buttons of [[], [[]], 'Mua ngay', [button()], [[{ text: 'Mua ngay' }]], [[{ ...button(), callback_data: 'x' }]], [[null]]]) {
+        expect(on(buttons)).toEqual([issue('TELEGRAM_BUTTONS_INVALID', 'settings.telegram.buttons')]);
+      }
+      expect(on([[button()]], [], 'mastodon')).toEqual([issue('TELEGRAM_NOT_SUPPORTED', 'settings.telegram')]);
+      expect(telegramButtonsOf({ telegram: { buttons: [[button()]] } })).toEqual([[button()]]);
+      expect(telegramButtonsOf({ telegram: { pin: true } })).toBeNull();
+      expect(telegramButtonsOf({})).toBeNull();
+      expect(telegramOptionsOf({ telegram: { buttons: [[button()]] } })).toEqual({ silent: false, pin: false });
+    });
+
+    it('names the limits the Telegram adapter sends within', () => {
+      expect([TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX]).toEqual([channel.TELEGRAM_BUTTON_ROWS_MAX, channel.TELEGRAM_BUTTONS_PER_ROW_MAX, channel.TELEGRAM_BUTTON_TEXT_MAX]);
+    });
   });
 
   it('takes up to 5 distinct playlists on YouTube only, in settings.youtube (#1018)', () => {

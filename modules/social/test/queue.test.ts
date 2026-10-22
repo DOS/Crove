@@ -1,7 +1,7 @@
 // Posting queue slot math (issue #231): IANA zones, DST, and the keep-your-slot placement rules.
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { isSlot, isValidTimeZone, localTime, nextFreeSlot, placeQueued, retime, slotsBetween, zonedToEpoch, type QueueSpec } from '../src/index.ts';
+import { isSlot, isValidTimeZone, localTime, moveToFront, nextFreeSlot, placeQueued, retime, shuffleTimes, slotsBetween, zonedToEpoch, type Holder, type QueueSpec } from '../src/index.ts';
 
 const HCM = 'Asia/Ho_Chi_Minh';
 const NY = 'America/New_York';
@@ -252,5 +252,103 @@ describe('retime', () => {
   it('keeps the local clock time when the queue moves to another zone', () => {
     const moved = retime(monday9, HCM, NY);
     expect(localTime(moved, NY)).toMatchObject({ year: 2026, month: 10, day: 19, hour: 9, minute: 0 });
+  });
+});
+
+
+// Reordering a queue (#1020): posts trade the times they hold.
+describe('queue reordering', () => {
+  // A seeded generator, so a shuffle is the same on every run.
+  const seeded = (seed: number) => () => {
+    seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+    return seed / 2_147_483_648;
+  };
+  type P = Holder & { labels: string[] };
+  // Times 1..n hours; a time's label from the map, open otherwise.
+  const holders = (n: number, labels: Record<string, string[]> = {}): P[] => Array.from({ length: n }, (_, i) => ({ id: `p${i}`, at: (i + 1) * 3_600_000, labels: labels[`p${i}`] ?? [] }));
+  const fitsWith = (kept: Record<number, string>) => (h: P, at: number) => {
+    const label = kept[at];
+    return label === undefined || h.labels.includes(label);
+  };
+  const sameTimes = (before: readonly P[], after: Map<string, number>) => {
+    expect([...after.values()].sort((a, b) => a - b)).toEqual(before.map((h) => h.at).sort((a, b) => a - b));
+    expect(new Set(after.values()).size).toBe(before.length);
+  };
+
+  it('moves every post to another time when no slot is kept, and repeats with the same random', () => {
+    const list = holders(6);
+    const once = shuffleTimes(list, () => true, seeded(7));
+    sameTimes(list, once);
+    for (const h of list) expect(once.get(h.id)).not.toBe(h.at);
+    expect(shuffleTimes(list, () => true, seeded(7))).toEqual(once);
+    expect(shuffleTimes(list, () => true, seeded(8))).not.toEqual(once);
+  });
+
+  it('gives a kept slot only to posts with its label', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 1, max: 1_000_000 }), fc.integer({ min: 2, max: 12 }), (seed, n) => {
+        // Every third time is kept for "promo"; the posts holding them have the label, and so do some others.
+        const kept: Record<number, string> = {};
+        const labels: Record<string, string[]> = {};
+        for (let i = 0; i < n; i++) {
+          if (i % 3 === 0) kept[(i + 1) * 3_600_000] = 'promo';
+          if (i % 3 === 0 || i % 4 === 1) labels[`p${i}`] = ['promo'];
+        }
+        const list = holders(n, labels);
+        const fits = fitsWith(kept);
+        const after = shuffleTimes(list, fits, seeded(seed));
+        sameTimes(list, after);
+        for (const h of list) expect(fits(h, after.get(h.id) as number)).toBe(true);
+      }),
+    );
+  });
+
+  it('keeps a lone post and an empty list as they are', () => {
+    expect(shuffleTimes([], () => true)).toEqual(new Map());
+    expect(shuffleTimes(holders(1), () => true)).toEqual(new Map([['p0', 3_600_000]]));
+  });
+
+  it('puts a post first and moves the posts it passes one place later', () => {
+    const list = holders(4);
+    const after = moveToFront(list, 'p2', () => true);
+    expect(Object.fromEntries(after)).toEqual({ p2: 3_600_000, p0: 7_200_000, p1: 10_800_000, p3: 14_400_000 });
+    // Already first: nothing moves.
+    expect(moveToFront(list, 'p0', () => true)).toEqual(new Map(list.map((h) => [h.id, h.at])));
+    // Not one of them: nothing moves.
+    expect(moveToFront(list, 'nobody', () => true)).toEqual(new Map(list.map((h) => [h.id, h.at])));
+  });
+
+  it('passes by the posts and slots kept for a label the moving post lacks', () => {
+    // 1h is kept for "promo" and held by a promo post; the post at 4h has no label.
+    const list = holders(4, { p0: ['promo'] });
+    const fits = fitsWith({ 3_600_000: 'promo' });
+    const after = moveToFront(list, 'p3', fits);
+    expect(Object.fromEntries(after)).toEqual({ p0: 3_600_000, p3: 7_200_000, p1: 10_800_000, p2: 14_400_000 });
+    sameTimes(list, after);
+    // A post that may not take the moving post's time stays where it is: p0 (no label) cannot take the promo slot at 2h.
+    const passing = moveToFront(holders(3, { p1: ['promo'], p2: ['promo'] }), 'p2', fitsWith({ 7_200_000: 'promo' }));
+    expect(Object.fromEntries(passing)).toEqual({ p0: 3_600_000, p2: 7_200_000, p1: 10_800_000 });
+  });
+
+  it('never hands out a time a post may not take', () => {
+    fc.assert(
+      fc.property(fc.integer({ min: 2, max: 10 }), fc.integer({ min: 0, max: 9 }), fc.array(fc.boolean(), { minLength: 10, maxLength: 10 }), (n, pick, promo) => {
+        const kept: Record<number, string> = {};
+        const labels: Record<string, string[]> = {};
+        for (let i = 0; i < n; i++) {
+          if (promo[i]) {
+            kept[(i + 1) * 3_600_000] = 'promo';
+            labels[`p${i}`] = ['promo'];
+          }
+        }
+        const list = holders(n, labels);
+        const fits = fitsWith(kept);
+        const target = `p${pick % n}`;
+        const after = moveToFront(list, target, fits);
+        sameTimes(list, after);
+        for (const h of list) expect(fits(h, after.get(h.id) as number)).toBe(true);
+        expect(after.get(target) as number).toBeLessThanOrEqual(list[pick % n]?.at as number);
+      }),
+    );
   });
 });

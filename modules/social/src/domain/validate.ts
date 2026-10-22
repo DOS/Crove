@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, instagramReelOf, isInstagramReel, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, LINKEDIN_VISIBILITY } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, LINKEDIN_VISIBILITY, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -143,6 +143,16 @@ export type IssueCode =
   // Telegram (#982): settings.telegram on another channel; or not { silent?, pin? } with true or false values.
   | 'TELEGRAM_NOT_SUPPORTED'
   | 'TELEGRAM_INVALID'
+  // Telegram link buttons (#1017), settings.telegram.buttons: not a list of rows of { text, url }, or an empty list or
+  // row; more than TELEGRAM_BUTTON_ROWS_MAX rows (field settings.telegram.buttons) or TELEGRAM_BUTTONS_PER_ROW_MAX in a
+  // row (field settings.telegram.buttons.<row>), with limit and actual; a label empty or over TELEGRAM_BUTTON_TEXT_MAX
+  // characters (field .<row>.<index>.text); a link that is not https (field .<row>.<index>.url); buttons on an album,
+  // which Telegram sends as a media group that takes no buttons (actual: the number of files).
+  | 'TELEGRAM_BUTTONS_INVALID'
+  | 'TELEGRAM_TOO_MANY_BUTTONS'
+  | 'TELEGRAM_BUTTON_TEXT_LENGTH'
+  | 'TELEGRAM_BUTTON_URL_INVALID'
+  | 'TELEGRAM_BUTTONS_ON_ALBUM'
   // WordPress (#981), settings.wordpress: set on another channel, or not an object; more than WORDPRESS_CATEGORIES_MAX
   // categories or WORDPRESS_TAGS_MAX tags (limit, actual); a name that is not text, is empty, holds < or >, or is over
   // WORDPRESS_TERM_MAX characters (field settings.wordpress.categories.<index> or .tags.<index>); an excerpt over
@@ -386,6 +396,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   if (telegram !== null) {
     if (variant.provider !== 'telegram') issues.push({ code: 'TELEGRAM_NOT_SUPPORTED', field: 'settings.telegram', limit: null, actual: null });
     else if (telegram === 'invalid') issues.push({ code: 'TELEGRAM_INVALID', field: 'settings.telegram', limit: null, actual: null });
+    else checkTelegramButtons(issues, variant);
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkPollAndTag(issues, variant, caps);
@@ -470,6 +481,24 @@ function checkGbp(issues: Issue[], variant: VariantDraft): void {
 
 // A WordPress post's categories, tags, excerpt and status (#981). Each is optional; the names are checked against the
 // site only when the post goes out (an unknown category then fails it with nothing posted).
+// Telegram's link buttons (#1017): rows of labelled https links, none on an album.
+function checkTelegramButtons(issues: Issue[], variant: VariantDraft): void {
+  const rows = telegramButtonsOf(variant.settings);
+  if (rows === null) return;
+  const field = 'settings.telegram.buttons';
+  if (rows === 'invalid') return void issues.push({ code: 'TELEGRAM_BUTTONS_INVALID', field, limit: null, actual: null });
+  if (variant.media.length > 1) issues.push({ code: 'TELEGRAM_BUTTONS_ON_ALBUM', field, limit: null, actual: variant.media.length });
+  if (rows.length > TELEGRAM_BUTTON_ROWS_MAX) issues.push({ code: 'TELEGRAM_TOO_MANY_BUTTONS', field, limit: TELEGRAM_BUTTON_ROWS_MAX, actual: rows.length });
+  rows.forEach((row: TelegramButton[], r) => {
+    if (row.length > TELEGRAM_BUTTONS_PER_ROW_MAX) issues.push({ code: 'TELEGRAM_TOO_MANY_BUTTONS', field: `${field}.${r}`, limit: TELEGRAM_BUTTONS_PER_ROW_MAX, actual: row.length });
+    row.forEach((button, i) => {
+      const n = countText(button.text.trim(), 'codepoints');
+      if (n < 1 || n > TELEGRAM_BUTTON_TEXT_MAX) issues.push({ code: 'TELEGRAM_BUTTON_TEXT_LENGTH', field: `${field}.${r}.${i}.text`, limit: TELEGRAM_BUTTON_TEXT_MAX, actual: n });
+      if (!isButtonUrl(button.url)) issues.push({ code: 'TELEGRAM_BUTTON_URL_INVALID', field: `${field}.${r}.${i}.url`, limit: null, actual: null });
+    });
+  });
+}
+
 function checkWordPress(issues: Issue[], variant: VariantDraft): void {
   const raw = variant.settings?.wordpress;
   if (raw === undefined || raw === null) return;

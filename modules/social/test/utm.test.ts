@@ -1,8 +1,40 @@
 import { describe, expect, it } from 'vitest';
-import { sentLink, tagLink, utmOf } from '../src/domain/utm.ts';
+import { sentLink, sentSettings, tagLink, utmOf } from '../src/domain/utm.ts';
 import { validateVariant } from '../src/domain/validate.ts';
 
 describe('UTM tags (#585)', () => {
+  it('tags the button links of a Telegram post like the link of the post (#1017)', () => {
+    const buttons = [[{ text: 'Mua ngay', url: 'https://shop.example/pho' }, { text: 'Zalo', url: 'https://zalo.me/0901234567?ref=1&utm_source=tay' }]];
+    const settings = { utm: { campaign: 'khai truong' }, telegram: { silent: true, buttons } };
+    expect(sentSettings('telegram', settings)).toEqual({
+      utm: { campaign: 'khai truong' },
+      telegram: {
+        silent: true,
+        buttons: [[{ text: 'Mua ngay', url: 'https://shop.example/pho?utm_source=telegram&utm_medium=social&utm_campaign=khai%20truong' }, { text: 'Zalo', url: 'https://zalo.me/0901234567?ref=1&utm_source=tay&utm_medium=social&utm_campaign=khai%20truong' }]],
+      },
+    });
+    // The stored settings are left as they are; without tags, buttons or Telegram, nothing changes.
+    expect(settings.telegram.buttons).toBe(buttons);
+    const untagged = { telegram: { buttons } };
+    expect(sentSettings('telegram', untagged)).toBe(untagged);
+    const noButtons = { utm: { campaign: 'x' }, telegram: { pin: true } };
+    expect(sentSettings('telegram', noButtons)).toBe(noButtons);
+    expect(sentSettings('mastodon', settings)).toBe(settings);
+  });
+
+  it('sends a button to the post link exactly as the post sends it, so its short link matches (#1017)', () => {
+    const settings = { utm: { campaign: 'he' }, telegram: { buttons: [[{ text: 'Xem', url: 'https://shop.example/pho' }, { text: 'Zalo', url: 'https://zalo.me/0901' }]] } };
+    // The text already holds the link, so the post sends it untagged; the button follows it, the other is tagged.
+    const untaggedPost = { plain: 'https://shop.example/pho', sent: 'https://shop.example/pho' };
+    expect(sentSettings('telegram', settings, untaggedPost)).toEqual({
+      ...settings,
+      telegram: { buttons: [[{ text: 'Xem', url: 'https://shop.example/pho' }, { text: 'Zalo', url: 'https://zalo.me/0901?utm_source=telegram&utm_medium=social&utm_campaign=he' }]] },
+    });
+    // A tagged post link: the button gets the same tagged link.
+    const taggedPost = { plain: 'https://shop.example/pho', sent: 'https://shop.example/pho?utm_source=telegram&utm_medium=social&utm_campaign=he' };
+    expect((sentSettings('telegram', settings, taggedPost).telegram as { buttons: { url: string }[][] }).buttons[0]?.[0]?.url).toBe(taggedPost.sent);
+  });
+
   it('reads tags only with a campaign, and only plain values', () => {
     expect(utmOf({ utm: { campaign: 'khai-truong', medium: 'social' } })).toEqual({ campaign: 'khai-truong', medium: 'social' });
     expect(utmOf({ utm: { medium: 'social' } })).toBeNull();

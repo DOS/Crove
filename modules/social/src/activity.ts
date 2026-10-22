@@ -12,6 +12,7 @@ import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
 import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
 import { mentionsOf } from './domain/mentions.ts';
 import { NOT_PUBLIC_NOTES } from './domain/channels.ts';
+import { QUEUE_ORDER_COMMANDS, reorderCode } from './queue-order.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -124,6 +125,8 @@ export const ACTIVITY_KINDS = [
   'repost_failed',
   // Taken down from its platform (#860), by the member who asked, with their reason.
   'removed',
+  // Moved in its channel's queue (#1020); its code says how: shuffle, front (put first) or shifted (one place later).
+  'queue_moved',
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
@@ -182,7 +185,7 @@ export const postActivity = defineQuery({
       .where('post_id', '=', post.id)
       .execute();
     const variantIds = variants.map((v) => v.id);
-    const [comments, decisions, audited] = await Promise.all([
+    const [comments, decisions, audited, reorders] = await Promise.all([
       ctx.trx
         .selectFrom('crove_social.post_comment')
         .select(['id', 'variant_id', 'author_user_id', 'body', 'created_at', 'edited_at'])
@@ -206,6 +209,13 @@ export const postActivity = defineQuery({
           AND command = ANY(${Object.keys(AUDITED)}::text[])
           AND ((target_type = 'social.post' AND target_id = ${post.id}::uuid)
             OR (target_type = 'social.post_variant' AND target_id = ANY(${variantIds}::uuid[])))
+        ORDER BY occurred_at DESC LIMIT ${ACTIVITY_LIMIT}`.execute(ctx.trx),
+      // A queue reorder (#1020) is audited once for its channel, naming every post it moved.
+      sql<{ id: string; command: string; actor_id: string | null; actor_type: string; occurred_at: Date; detail: { variant_ids?: unknown; target_variant_id?: unknown } }>`
+        SELECT id, command, actor_id, actor_type, occurred_at, detail FROM crove_kernel.audit_event
+        WHERE org_id = ${ctx.orgId}::uuid AND occurred_at >= ${post.created_at} AND outcome = 'ok'
+          AND command = ANY(${QUEUE_ORDER_COMMANDS}::text[])
+          AND detail -> 'post_ids' @> pg_catalog.jsonb_build_array(${post.id}::text)
         ORDER BY occurred_at DESC LIMIT ${ACTIVITY_LIMIT}`.execute(ctx.trx),
     ]);
     const keyed = await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'revision', 'attempt']).where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).execute();
@@ -236,6 +246,12 @@ export const postActivity = defineQuery({
         userId: a.actor_type === 'user' ? a.actor_id : null,
         variantId: a.target_type === 'social.post_variant' ? a.target_id : null,
       })),
+      ...reorders.rows.flatMap((a): ActivityItem[] => {
+        const moved = Array.isArray(a.detail.variant_ids) ? a.detail.variant_ids : [];
+        const variantId = variantIds.find((id) => moved.includes(id));
+        if (!variantId) return [];
+        return [{ ...none, id: a.id, kind: 'queue_moved', at: a.occurred_at.toISOString(), userId: a.actor_type === 'user' ? a.actor_id : null, variantId, code: reorderCode(a.command, a.detail, variantId) }];
+      }),
       ...variants.flatMap((v): ActivityItem[] => {
         // A draft sent to the platform's app (#903) or kept on the site (#981) carries its note, so the timeline does not
         // call it out.
@@ -272,7 +288,7 @@ export const postActivity = defineQuery({
     }
     return {
       items: shown.map((i) => ({ ...i, name: i.userId ? (names.get(i.userId) ?? null) : null })),
-      more: items.length > ACTIVITY_LIMIT || comments.length === ACTIVITY_LIMIT || decisions.length === ACTIVITY_LIMIT || audited.rows.length === ACTIVITY_LIMIT,
+      more: items.length > ACTIVITY_LIMIT || comments.length === ACTIVITY_LIMIT || decisions.length === ACTIVITY_LIMIT || audited.rows.length === ACTIVITY_LIMIT || reorders.rows.length === ACTIVITY_LIMIT,
     };
   },
 });

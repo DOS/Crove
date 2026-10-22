@@ -23,6 +23,7 @@ import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { rememberOAuthAttempt } from '../lib/oauth.ts';
 import { minuteLabel, parseMinute, providerName } from '../lib/social.ts';
+import { shuffleRange } from '../lib/social-queue-order.ts';
 
 type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
 type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
@@ -252,6 +253,48 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
       {!draft && (queue.data?.nextFree.length ?? 0) > 0 && (
         <p className="text-xs text-subtle-foreground">{t('nextFree', { list: (queue.data?.nextFree ?? []).map((s) => f.dateTime(s)).join(', ') })}</p>
       )}
+      {canEdit && queue.data?.queueId && <QueueShuffle connectionId={channel.id} timeZone={queue.data.timeZone ?? current.timeZone} unsaved={Boolean(draft)} />}
+    </div>
+  );
+}
+
+// Shuffling the queue (#1020): the scheduled posts waiting in it trade their times, all of them or those of a few days.
+function QueueShuffle({ connectionId, timeZone, unsaved }: { connectionId: string; timeZone: string; unsaved: boolean }) {
+  const t = useTranslations('social');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const range = shuffleRange(from, to, timeZone);
+  const shuffle = useMutation({
+    mutationFn: () => client.social.queues.shuffle({ connectionId, ...range }),
+    onSuccess: () => void queryClient.invalidateQueries(),
+  });
+  return (
+    <div className="space-y-2 border-t pt-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1">
+          <Label className="text-xs" htmlFor={`shuffle-from-${connectionId}`}>
+            {t('shuffleFrom')}
+          </Label>
+          <Input id={`shuffle-from-${connectionId}`} type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-7 w-40" />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs" htmlFor={`shuffle-to-${connectionId}`}>
+            {t('shuffleTo')}
+          </Label>
+          <Input id={`shuffle-to-${connectionId}`} type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} className="h-7 w-40" />
+        </div>
+        <Button variant="outline" size="sm" disabled={unsaved || !range || shuffle.isPending} title={unsaved ? t('saveQueueFirst') : undefined} onClick={() => shuffle.mutate()}>
+          {t('shuffleQueue')}
+        </Button>
+      </div>
+      <p className="text-xs text-subtle-foreground">{t('shuffleHint')}</p>
+      {!range && <ErrorText>{t('shuffleRangeInvalid')}</ErrorText>}
+      {shuffle.data && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {shuffle.data.moved.length > 0 ? t('shuffled', { count: shuffle.data.moved.length }) : t('shuffledNone')}
+        </p>
+      )}
+      {shuffle.error && <ErrorText>{errorMessage(shuffle.error)}</ErrorText>}
     </div>
   );
 }

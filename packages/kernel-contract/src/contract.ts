@@ -61,6 +61,9 @@ import {
   zSocialReviewPlanLink,
   zSocialActivityItem,
   zSocialQueueSet,
+  zSocialQueueShuffle,
+  zSocialQueueMoveToFront,
+  zSocialQueueReorder,
   zSocialSchedule,
   zSocialVariantUpdate,
   zSocialChannelInput,
@@ -687,6 +690,9 @@ export const contract = {
     queues: {
       get: oc.input(z.object({ connectionId: zId })).output(zSocialQueue),
       set: oc.input(zSocialQueueSet).output(z.object({ queueId: zId, moved: z.array(z.object({ variantId: zId, at: z.string().nullable() })) })),
+      // Reordering (#1020), owners and admins: only queued posts that may move trade their slot times.
+      shuffle: oc.input(zSocialQueueShuffle).output(zSocialQueueReorder),
+      moveToFront: oc.input(zSocialQueueMoveToFront).output(zSocialQueueReorder),
     },
   },
   inbox: {

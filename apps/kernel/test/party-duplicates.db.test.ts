@@ -167,4 +167,19 @@ suite('duplicate parties (#887)', () => {
     // Unmarking a party that is not a duplicate changes nothing.
     expect(await execute('kernel.party.unmark_duplicate', { partyId: duplicate })).toEqual({ partyId: duplicate });
   });
+
+  it('lists vendors by name regardless of case, then by name and id (#999)', async () => {
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.party (org_id, name) VALUES ($1, 'xưởng in Bình An'), ($1, 'Xưởng in Bình An'), ($1, 'XƯỞNG IN BÌNH AN 2')`,
+        [o.orgId],
+      ),
+    );
+    const names = (await vendors()).map((v) => v.name).filter((n) => n.toLowerCase().startsWith('xưởng in'));
+    expect(names).toHaveLength(3);
+    // Equal ignoring case: then by the name as stored, so the order is stable between calls.
+    expect(names[2]).toBe('XƯỞNG IN BÌNH AN 2');
+    expect(names.slice(0, 2).sort()).toEqual(['Xưởng in Bình An', 'xưởng in Bình An'].sort());
+    expect((await vendors()).map((v) => v.name)).toEqual((await vendors()).map((v) => v.name));
+  });
 });

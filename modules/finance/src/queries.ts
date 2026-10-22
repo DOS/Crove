@@ -48,7 +48,11 @@ export const vendorsList = defineQuery({
       )
       .where('p.org_id', '=', ctx.orgId)
       .where('p.duplicate_of', 'is', null)
+      // Case-insensitive by name, on party_name_idx (org_id, lower(name)): the scan stops at the 500th row instead of
+      // reading and checking every party of the org (#999).
+      .orderBy(sql`lower(p.name)`)
       .orderBy('p.name')
+      .orderBy('p.id')
       .limit(500);
     // Vendors: every party but the customers of sales (issue #313) that never sold to the org.
     if (!input.all) {
@@ -60,8 +64,11 @@ export const vendorsList = defineQuery({
     }
     if (input.q) {
       const term = `%${input.q.toLowerCase()}%`;
+      // The parties that match, mapped to the kept party of their group, found once (an array, so the planner cannot
+      // turn it back into a per-party check along the name index: it overestimates LIKE matches, #999) and read by key.
       query = query.where(
-        sql<boolean>`EXISTS (SELECT 1 FROM crove_kernel.party m WHERE m.org_id = p.org_id AND m.id IN ${group} AND (lower(m.name) LIKE ${term} OR m.tax_code LIKE ${term}))`,
+        sql<boolean>`p.id = ANY (ARRAY(SELECT coalesce(m.duplicate_of, m.id) FROM crove_kernel.party m
+          WHERE m.org_id = ${ctx.orgId}::uuid AND (lower(m.name) LIKE ${term} OR m.tax_code LIKE ${term})))`,
       );
     }
     return (await query.execute()).map((r) => ({

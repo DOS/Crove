@@ -6,6 +6,7 @@ import type { Database, SocialVariantStatus } from '@crove/db';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
 import { contentHash, effectiveContent, effectiveMedia, type BaseContent, type PostMedia } from './domain/approval.ts';
 import { REMOVE_AT_MIN_GAP_MS, isProvider, removeAtFit } from './domain/channels.ts';
+import type { QueueSpec } from './domain/queue.ts';
 import { postStatus, transitionVariant, type VariantEvent } from './domain/state.ts';
 import { validateVariant, type Issue } from './domain/validate.ts';
 
@@ -197,6 +198,33 @@ export async function lockPost(trx: Trx, orgId: string, postId: string): Promise
   if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
   // Media rows change only under this post lock, so reading them after it is consistent.
   return { ...post, media: await loadPostMedia(trx, orgId, postId) };
+}
+
+export interface QueueState {
+  id: string;
+  spec: QueueSpec;
+  paused: boolean;
+}
+
+// A connection's queue row, locked, with its active slots. Commands that place or move queued variants take it before
+// any post or variant, so they never wait on each other in a cycle.
+export async function lockQueue(trx: Trx, orgId: string, connectionId: string): Promise<QueueState | null> {
+  const queue = await trx
+    .selectFrom('crove_social.queue')
+    .select(['id', 'time_zone', 'paused'])
+    .where('org_id', '=', orgId)
+    .where('channel_connection_id', '=', connectionId)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!queue) return null;
+  const slots = await trx
+    .selectFrom('crove_social.queue_slot')
+    .select(['weekday', 'minute', 'label_id'])
+    .where('org_id', '=', orgId)
+    .where('queue_id', '=', queue.id)
+    .where('active', '=', true)
+    .execute();
+  return { id: queue.id, paused: queue.paused, spec: { timeZone: queue.time_zone, slots: slots.map((s) => ({ weekday: s.weekday, minute: s.minute, labelId: s.label_id })) } };
 }
 
 export async function lockVariants(trx: Trx, orgId: string, postId: string): Promise<VariantRow[]> {
