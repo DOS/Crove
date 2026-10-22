@@ -53,6 +53,7 @@ docker compose exec db psql -U postgres -c "SELECT name, state, count(*), min(st
 
 - No `[worker] started` line since the last restart, or the container restarts in a loop: read the lines before the crash (a missing setting, a refused database login).
 - A heartbeat that stopped while the container still runs: the process hangs. `[heartbeat]` lines say why a beat failed (usually the database).
+- `[alert] worker event loop lagged over 5000 ms for N s ... exiting so it restarts`: the worker's watchdog (#894) found its event loop blocked for 30 s and exited, so the container restarts it. Once is a slow moment; again and again means a job that blocks the process: the lines before the alert name what was running.
 - Many `active` jobs of one name that never finish: one job type is stuck (for example `kernel-file-extract` waiting on `crove-extract`). Check `docker compose ps crove-extract` and its logs.
 
 **Fix.**
@@ -92,6 +93,8 @@ Restart it with `docker compose restart db`, then the app (`docker compose resta
 The limit for both ages is `PROBER_MAX_OUTBOX_AGE_SECONDS`.
 
 The relay runs inside the worker: it listens for new events (`LISTEN crove_outbox`, plus a check every second), claims up to 100 at a time from `crove_kernel.outbox_pending` (and mail from `crove_kernel.inbound_pending`), and hands them to the job queue. A relay that stops is almost always a worker that stopped (section 1).
+
+**Back-pressure.** Before the prober's limit, the worker steps in by itself (#894): every 10 s it reads the age of the oldest pending event, and while it is over `OUTBOX_LAG_PAUSE_SECONDS` (default 30 s) the worker stops fetching agent, bulk mail, archive and retention jobs, so the relay and the work people wait for get the database. It logs `[alert] back-pressure on: outbox lag N s ...` with the paused queues, and posts the same line to `ALERT_WEBHOOK_URL` as `[Crove] Worker on <instance>: back-pressure on ...` when the webhook is set on the worker. Once the lag is back under half the setting, the paused jobs run again (`back-pressure off`). Nothing is lost while paused: the jobs wait in the queue. A pause that keeps coming back means the relay cannot keep up: look for one org producing a flood of events (`SELECT e.org_id, e.type, count(*) FROM crove_kernel.outbox_pending p JOIN crove_kernel.outbox_event e ON e.org_id = p.org_id AND e.id = p.event_id GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 10;`).
 
 **Checks.**
 

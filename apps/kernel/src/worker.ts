@@ -9,7 +9,7 @@ import { DomainError, inboundKey, type AgentProgram, type BlobStore, type Creden
 import { KERNEL_NOTIFYING_EVENTS, PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges, type UsageLimits } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
-import type { WebhookTarget } from './alert.ts';
+import { postMessage, type WebhookTarget } from './alert.ts';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
@@ -17,6 +17,7 @@ import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, i
 import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
+import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
 import { ChatAlertSender } from './chat-alerts.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.ts';
@@ -224,6 +225,9 @@ export interface WorkerDeps {
   securityAlerts?: { target: WebhookTarget | null; thresholds?: SecurityThresholds };
   // The AI model's price per million input and output tokens, in the unit of the ai_cost limit. Unset: AI costs 0.
   aiPrice?: { inputPerMTok: string; outputPerMTok: string };
+  // Back-pressure (#894): above this outbox lag the agent, bulk mail, archive and retention queues stop fetching
+  // (default DEFAULT_OUTBOX_LAG_PAUSE_SECONDS).
+  outboxLagPauseSeconds?: number;
 }
 
 // A person asked for a published variant to come down from its platform (#860).
@@ -356,6 +360,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // Reading files is the finance module's job today: without it an uploaded file is stored and stays unread.
   const finance = deps.runtime.installed('finance');
   const social = deps.runtime.installed('social');
+  // Background, agent and bulk queues, paused under back-pressure (#894, plan §4.9). Registered with background.add.
+  const background = new PausableWork(boss);
 
   // version: a requested re-extraction (kernel.file.reextract_requested); absent for the first read of a new file.
   // pg-boss waits the polling interval between fetches (2 s by default, less the job's run time), so a batch of 200
@@ -417,7 +423,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
 
   // Fiscal year archive packages (#922). A build that keeps failing is logged after its last attempt, as for the org
   // export; the owner sees the request as still in progress until it is recorded, and may ask again an hour later.
-  if (finance) await boss.work<YearArchiveJob>(QUEUES.yearArchive, { batchSize: 1 }, async ([job]) => {
+  if (finance) await background.add(QUEUES.yearArchive, () => boss.work<YearArchiveJob>(QUEUES.yearArchive, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     const { orgId, year, requestCommandId } = job.data;
     try {
@@ -427,7 +433,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (job.retryCount < YEAR_ARCHIVE_RETRY_LIMIT) throw error;
       console.error(`[year-archive] ALERT archive of org ${orgId} year ${year} failed after ${job.retryCount + 1} attempts`, error);
     }
-  });
+  }));
 
   // The raw message is deleted once it is filed or dropped; after the last failed attempt it is kept for
   // investigation (each delivery owns its blob, so no other job can still need it), and the daily retention job
@@ -492,7 +498,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       }
     };
     await boss.work<MailJob>(MAIL_SEND_QUEUE, { batchSize: 1 }, async ([job]) => sendMail(job, 0));
-    await boss.work<MailJob>(MAIL_BULK_QUEUE, { batchSize: 1 }, async ([job]) => sendMail(job, MAIL_BULK_GAP_MS));
+    await background.add(MAIL_BULK_QUEUE, () => boss.work<MailJob>(MAIL_BULK_QUEUE, { batchSize: 1 }, async ([job]) => sendMail(job, MAIL_BULK_GAP_MS)));
   }
   let mailSweeping = false;
   const mailSweep = async () => {
@@ -535,7 +541,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // deletes abandoned staging objects of presigned uploads (issue #223), leftover raw inbound mail and expired org
   // exports (issue #212).
   const keepDays = deps.refusalTallyRetentionDays ?? DEFAULT_REFUSAL_TALLY_RETENTION_DAYS;
-  await boss.work(QUEUES.retention, { batchSize: 1 }, async () => {
+  await background.add(QUEUES.retention, () => boss.work(QUEUES.retention, { batchSize: 1 }, async () => {
     try {
       await runRetention(deps.workerDb);
       const mailCleared = await purgeMail(deps.workerDb);
@@ -549,7 +555,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       await sweepInboundBlobs(deps.store, deps.workerDb);
       await expireExports(deps.store, deps.runtime, exportRetentionDays);
     }
-  });
+  }));
   await boss.schedule(QUEUES.retention, RETENTION_CRON, null, { tz: RETENTION_TZ, missed: 'once' });
 
   // The WORM fact stream (plan §4.10, #891): batches every minute, the verifier nightly. A failure fails the job: a
@@ -557,12 +563,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // prober alerts on the dead letter (docs/runbooks/worm-archive.md).
   if (deps.archive) {
     const { store, lagSeconds } = deps.archive;
-    await boss.work(QUEUES.archiveWrite, { batchSize: 1 }, async () => {
+    await background.add(QUEUES.archiveWrite, () => boss.work(QUEUES.archiveWrite, { batchSize: 1 }, async () => {
       const written = await writeArchive(deps.workerDb, store, { lagSeconds });
       if (written > 0) console.log(`[archive] wrote ${written} batch(es)`);
-    });
+    }));
     await boss.schedule(QUEUES.archiveWrite, ARCHIVE_WRITE_CRON, null, { tz: RETENTION_TZ });
-    await boss.work(QUEUES.archiveVerify, { batchSize: 1 }, async () => {
+    await background.add(QUEUES.archiveVerify, () => boss.work(QUEUES.archiveVerify, { batchSize: 1 }, async () => {
       // The verifier reads every batch and row, so its time grows with the archive: logged on every run.
       const started = Date.now();
       const elapsed = () => `${Math.round((Date.now() - started) / 1000)} s`;
@@ -573,17 +579,17 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
         console.error(`[archive] ALERT after ${elapsed()}: ${error instanceof Error ? error.message : 'verification could not run'}`);
         throw error;
       }
-    });
+    }));
     // An hour before pg-boss counts the run as expired (its default is 15 minutes).
     await boss.schedule(QUEUES.archiveVerify, ARCHIVE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0, expireInSeconds: 3600 });
   }
 
   // Inbox triage: tasks for the agents whose template subscribes to the event. The command reads the event from the
   // outbox; the job carries only its id.
-  await boss.work<AgentDispatchJob>(QUEUES.agentDispatch, { batchSize: 1 }, async ([job]) => {
+  await background.add(QUEUES.agentDispatch, () => boss.work<AgentDispatchJob>(QUEUES.agentDispatch, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     await deps.runtime.execute('kernel.agent.dispatch_event', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId: job.data.orgId });
-  });
+  }));
 
   // Link preview cards (#641): fetch a requested link's page through the egress guard and read its head in crove-extract.
   if (social) {
@@ -632,27 +638,27 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   }
 
   // Agent proposals and approvals: the worker acts on what an agent recorded, after checking it again.
-  await boss.work<AgentDispatchJob & { type: string }>(QUEUES.agentProposal, { batchSize: 1 }, async ([job]) => {
+  await background.add(QUEUES.agentProposal, () => boss.work<AgentDispatchJob & { type: string }>(QUEUES.agentProposal, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     const command = Object.hasOwn(AGENT_PROPOSAL_COMMANDS, job.data.type) ? AGENT_PROPOSAL_COMMANDS[job.data.type] : undefined;
     if (!command) return;
     await deps.runtime.execute(command, { eventId: job.data.eventId }, { actor: { type: 'system', component: 'kernel.agent' }, orgId: job.data.orgId });
-  });
+  }));
 
   const agentPrograms = deps.agentPrograms ?? {};
-  await boss.work<AgentWakeJob>(QUEUES.agentWake, { batchSize: 1 }, async ([job]) => {
+  await background.add(QUEUES.agentWake, () => boss.work<AgentWakeJob>(QUEUES.agentWake, { batchSize: 1 }, async ([job]) => {
     if (!job) return;
     const result = await runAgentWake({ runtime: deps.runtime, programs: agentPrograms }, job.data.orgId, job.data.agentId);
     const label = `agent ${job.data.agentId.slice(0, 8)}`;
     if (result.runId === null) console.log(`[agent] ${label}: no run (${result.reason})`);
     else console.log(`[agent] ${label}: run ${result.runId.slice(0, 8)} ${result.outcome ?? ''}`);
-  });
+  }));
 
-  await boss.work(QUEUES.agentSweep, { batchSize: 1 }, async () => {
+  await background.add(QUEUES.agentSweep, () => boss.work(QUEUES.agentSweep, { batchSize: 1 }, async () => {
     const { rows } = await sql<{ org_id: string; agent_id: string }>`SELECT * FROM crove_kernel.agent_wakeups_due(${AGENT_SWEEP_LIMIT}::int, ${deps.runtime.modules()}::text[])`.execute(deps.workerDb);
     await Promise.all(rows.map((row) => sendAgentWake(boss, row.org_id, row.agent_id)));
     if (rows.length > 0) console.log(`[agent] sweep woke ${rows.length} agent(s) with pending wake-ups`);
-  });
+  }));
   await boss.schedule(QUEUES.agentSweep, AGENT_SWEEP_CRON, null, { tz: RETENTION_TZ });
 
   // Social publishing (Social plan §3.4): a sweep finds due, stale and pending variants and queues one job each; the
@@ -1206,12 +1212,42 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const heartbeat = () => beat(deps.workerDb, instance).catch((error) => console.error('[heartbeat]', error));
   const heartbeatTimer = setInterval(() => void heartbeat(), HEARTBEAT_INTERVAL_MS);
   await heartbeat();
+  // Back-pressure (#894): checked every 10 s; one check at a time, none after stop. Its start and end go to the alert
+  // webhook too (the security alerts' target, the prober's chat), when one is set.
+  const alertTarget = deps.securityAlerts?.target ?? null;
+  let pressureChecking = false;
+  const pressureCheck = async () => {
+    if (pressureChecking || stopped) return;
+    pressureChecking = true;
+    try {
+      await checkBackPressure({
+        work: background,
+        readLagSeconds: () => outboxLagSeconds(deps.workerDb),
+        thresholdSeconds: deps.outboxLagPauseSeconds ?? DEFAULT_OUTBOX_LAG_PAUSE_SECONDS,
+        notify: alertTarget?.webhookUrl
+          ? async (text) => {
+              const delivery = await postMessage(
+                { text: `[Crove] Worker on ${alertTarget.instance}: ${text}`, crove: { kind: 'back_pressure', instance: alertTarget.instance } },
+                { webhookUrl: alertTarget.webhookUrl, format: alertTarget.webhookFormat, telegramChatId: alertTarget.telegramChatId },
+              );
+              if (!delivery.ok) console.error(`[back-pressure] could not post the alert: ${delivery.error ?? 'unknown error'}`);
+            }
+          : undefined,
+      });
+    } catch (error) {
+      console.error('[back-pressure]', error);
+    } finally {
+      pressureChecking = false;
+    }
+  };
+  const pressureTimer = setInterval(() => void pressureCheck(), BACK_PRESSURE_CHECK_MS);
   console.log('[worker] started');
 
   return async () => {
     stopped = true;
     clearInterval(timer);
     clearInterval(heartbeatTimer);
+    clearInterval(pressureTimer);
     if (socialTimer) clearInterval(socialTimer);
     if (removeTimer) clearInterval(removeTimer);
     if (mailTimer) clearInterval(mailTimer);
