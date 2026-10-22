@@ -60,6 +60,8 @@ import {
   zSocialBannedWord,
   zSocialBannedWordAdd,
   zSocialSnippetUpdate,
+  zSocialReportBrand,
+  zSocialReportBrandingSave,
   zSocialLabel,
   zSocialLabelCreate,
   zSocialLabelUpdate,
@@ -557,6 +559,13 @@ export const contract = {
       save: oc
         .input(z.strictObject({ fileId: zId, corner: z.enum(SOCIAL_WATERMARK_CORNERS), scalePercent: z.number().int().min(5).max(50), opacityPercent: z.number().int().min(10).max(100) }))
         .output(z.object({ saved: z.boolean() })),
+      remove: oc.input(z.strictObject({})).output(z.object({ removed: z.boolean() })),
+    },
+    // White-label client reports (#1053): every member reads the org's report branding; owners and admins save and
+    // remove it. The logo is a data URL the browser made; the command checks its type, magic number and size.
+    reportBranding: {
+      get: oc.input(z.object({})).output(zSocialReportBrand.extend({ updatedAt: z.string() }).nullable()),
+      save: oc.input(zSocialReportBrandingSave).output(z.object({ saved: z.boolean() })),
       remove: oc.input(z.strictObject({})).output(z.object({ removed: z.boolean() })),
     },
     // A hold on all of the org's publishing (#946), for a crisis or a mourning day: owners and admins put it on with a

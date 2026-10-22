@@ -37,8 +37,10 @@ export const ORG_PURGE_REFUSALS: Record<string, string> = {
   too_early: 'the newest export is younger than ORG_PURGE_MIN_DAYS',
 };
 
-// Whether a blob is under a retention hold, which the purge then leaves in place and reports. No hold exists yet
-// (#1009 decides them); until then nothing is held.
+// Whether a blob is under a retention hold, which the purge then leaves in place and reports. Unset in the operator's
+// runtime: the evidence holds of #1009 go only on the original files of posted invoices, and the purge keeps every file
+// a purchase document references (crove_kernel.org_purge), so no key it hands back is held by Crove. A store-side hold
+// Crove did not set (a bucket default retention) refuses the delete itself on a versioned bucket's version.
 export type HeldCheck = (key: string) => Promise<boolean>;
 
 export const zOrgPurge = z.strictObject({

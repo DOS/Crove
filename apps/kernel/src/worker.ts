@@ -21,6 +21,7 @@ import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork,
 import { ChatAlertSender } from './chat-alerts.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.ts';
+import { EVIDENCE_HOLD_SWEEP_MS, runEvidenceHolds } from './evidence-hold.ts';
 import { processInboundEmail, type InboundJob } from './inbound.ts';
 import { mailEventJob, processMailEvent, type MailEventJob, type MailEventRow } from './mail-events.ts';
 import { MAIL_BULK_GAP_MS, MAIL_BULK_QUEUE, MAIL_SEND_QUEUE, MAIL_SWEEP_MS, mailErrorCode, purgeMail, runMailJob, sweepMail, type MailJob, type MailQueueDeps } from './mail-queue.ts';
@@ -208,6 +209,9 @@ export interface WorkerDeps {
   exportSealer?: ExportSealer;
   // Days an org export is kept before the retention job deletes it (EXPORT_RETENTION_DAYS, 35 to 90).
   exportRetentionDays?: number;
+  // Days the original file of a posted invoice is held in the bucket from its posting (EVIDENCE_LOCK_DAYS, issue
+  // #1009). Unset or 0: no holds.
+  evidenceLockDays?: number;
   // Social publishing: the credential broker that opens channel tokens, and the providers this deployment can publish
   // to. Without it, or without the social module, scheduled posts wait.
   channels?: { broker: CredentialBroker; publishers: Readonly<Record<string, Publisher>>; refreshers?: Readonly<Record<string, Refresher>> };
@@ -949,6 +953,26 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const sizeTimer = deps.runtime.installed('social') ? setInterval(() => void sizeSweep(), IMAGE_SIZE_SWEEP_MS) : null;
   if (sizeTimer) void sizeSweep();
 
+  // Retention holds on evidence files (#1009): every 5 minutes, the posted files whose hold is missing or too short.
+  const evidenceLockDays = deps.evidenceLockDays ?? 0;
+  const holdState = { unavailableReportedAt: 0 };
+  let holding = false;
+  const holdSweep = async () => {
+    if (holding) return;
+    holding = true;
+    try {
+      const done = await runEvidenceHolds({ runtime: deps.runtime, workerDb: deps.workerDb, store: deps.store }, evidenceLockDays, holdState);
+      if (done.held + done.failed > 0) console.log(`[evidence-hold] held ${done.held}, failed ${done.failed}`);
+    } catch (error) {
+      console.error('[evidence-hold] ALERT sweep failed', error instanceof Error ? error.message : error);
+    } finally {
+      holding = false;
+    }
+  };
+  const holdTimer = evidenceLockDays > 0 && deps.store.holds && deps.runtime.installed('finance') ? setInterval(() => void holdSweep(), EVIDENCE_HOLD_SWEEP_MS) : null;
+  if (holdTimer) void holdSweep();
+  else if (evidenceLockDays > 0 && !deps.store.holds) console.warn('[evidence-hold] the file store has no per-object retention (local disk): posted files get no retention hold');
+
   // Metrics of published posts (S8): every 15 minutes, the variants whose last capture is older than 6 hours.
   let measuring = false;
   const metricsSweep = async () => {
@@ -1274,6 +1298,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (resealTimer) clearInterval(resealTimer);
     if (metricsTimer) clearInterval(metricsTimer);
     if (sizeTimer) clearInterval(sizeTimer);
+    if (holdTimer) clearInterval(holdTimer);
     if (accountTimer) clearInterval(accountTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});

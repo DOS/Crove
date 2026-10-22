@@ -4,6 +4,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { DomainError, readVerified, type BlobStore, type Runtime } from '@crove/kernel-runtime';
+import type { PageBrand } from './report-link.ts';
 
 export const REVIEW_VIEWS_PER_MINUTE = 60;
 export const REVIEW_ANSWERS_PER_MINUTE = 10;
@@ -32,6 +33,8 @@ type ReviewAnswer = { name: string; verdict: string; body: string | null; at: st
 export interface ReviewPostPage {
   kind?: undefined;
   org: string;
+  // The org's white-label branding (#1053), or null.
+  brand: PageBrand | null;
   expiresAt: string;
   changed: boolean;
   channels: (ReviewChannel & { mediaCount: number })[];
@@ -41,6 +44,7 @@ export interface ReviewPostPage {
 export interface ReviewPlanPage {
   kind: 'plan';
   org: string;
+  brand: PageBrand | null;
   expiresAt: string;
   from: string | null;
   to: string | null;
