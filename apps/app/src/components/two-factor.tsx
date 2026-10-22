@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
+import { brandName } from '../i18n/brand.ts';
 import { auth, authErrorText, authFailure, type AuthFailure } from '../lib/auth.ts';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -116,7 +117,7 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
       for (const f of factors.data?.all ?? []) {
         if (f.factor_type === 'totp' && f.status !== 'verified') await auth().mfa.unenroll({ factorId: f.id });
       }
-      const { data, error: e } = await auth().mfa.enroll({ factorType: 'totp', issuer: 'Crove' });
+      const { data, error: e } = await auth().mfa.enroll({ factorType: 'totp', issuer: brandName() });
       if (e) return authFailure(e);
       setCode('');
       setEnrollment({ factorId: data.id, qrCode: data.totp.qr_code, secret: data.totp.secret });

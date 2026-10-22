@@ -350,7 +350,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL, {}, config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null) : undefined, deps.channels, deps.socialWriter, deps.taxLookup);
+  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL, {}, config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null, config.BRAND_NAME) : undefined, deps.channels, deps.socialWriter, deps.taxLookup);
   const perMinute = config.API_RATE_LIMIT_PER_MINUTE;
   const limiter = deps.rateLimiter !== undefined ? deps.rateLimiter : perMinute > 0 ? new RateLimiter({ perMinute }) : null;
 
@@ -405,6 +405,8 @@ export function createHttpApp(deps: HttpDeps) {
       mailEnabled: deps.mailer?.enabled ?? false,
       // The shell's feedback and support link (SUPPORT_URL, issue #310); null hides it.
       supportUrl: config.SUPPORT_URL ?? null,
+      // The product name users see (BRAND_NAME, #1040); the app fills its messages and the page title with it.
+      brandName: config.BRAND_NAME,
       // The terms and privacy notice linked at sign-up and invite acceptance (#688); null hides each link.
       termsUrl: config.TERMS_URL ?? null,
       privacyUrl: config.PRIVACY_URL ?? null,

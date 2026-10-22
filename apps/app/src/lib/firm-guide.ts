@@ -3,6 +3,7 @@
 // (quick-guide.ts) it is Vietnamese in every interface language and quotes buttons and screens by their Vietnamese
 // catalog labels, so a renamed button renames it here too. Labels with a placeholder ("Duyệt {count} đề xuất") are
 // quoted with the placeholder filled in, as the screen shows them.
+import { brandName, withBrand } from '../i18n/brand.ts';
 import { vi } from '../i18n/messages/vi.ts';
 
 export interface FirmGuideStep {
@@ -19,13 +20,13 @@ export function fill(label: string, values: Readonly<Record<string, string>>): s
   return label.replace(/\{(\w+)(?:,[^}]*)?\}/g, (whole, name: string) => (Object.hasOwn(values, name) ? (values[name] ?? whole) : whole));
 }
 
-export const FIRM_GUIDE: readonly FirmGuideStep[] = [
+const FIRM_GUIDE: readonly FirmGuideStep[] = [
   {
     id: 'client',
     title: 'Bước 1. Thêm doanh nghiệp khách hàng',
     items: [
-      `Mỗi khách hàng là một tổ chức riêng trong Crove, với sổ sách, hộp thư chứng từ và thành viên riêng. Bấm ${q(vi.nav.addOrg)} dưới ô ${q(vi.nav.org)} ở thanh bên trái.`,
-      `Nhập ${q(vi.onboarding.taxCodeLabel)} của khách hàng rồi bấm ${q(vi.onboarding.lookUp)}: Crove điền tên và địa chỉ theo dữ liệu đăng ký thuế, bạn kiểm tra lại. Mã số thuế giúp Crove nhận ra hóa đơn bán ra của khách hàng.`,
+      `Mỗi khách hàng là một tổ chức riêng trong {brand}, với sổ sách, hộp thư chứng từ và thành viên riêng. Bấm ${q(vi.nav.addOrg)} dưới ô ${q(vi.nav.org)} ở thanh bên trái.`,
+      `Nhập ${q(vi.onboarding.taxCodeLabel)} của khách hàng rồi bấm ${q(vi.onboarding.lookUp)}: {brand} điền tên và địa chỉ theo dữ liệu đăng ký thuế, bạn kiểm tra lại. Mã số thuế giúp {brand} nhận ra hóa đơn bán ra của khách hàng.`,
       `Nếu có ${q(vi.onboarding.contactLabel)}, nhập vào: sau khi bấm ${q(vi.onboarding.create)}, trang mời thành viên mở sẵn với email này. Chọn vai trò rồi bấm ${q(vi.settings.invite)}; người được mời phải chấp nhận lời mời thì mới vào tổ chức.`,
       `Khi bạn phụ trách từ hai doanh nghiệp trở lên, ${q(vi.nav.allClients)} ở thanh bên trái mở màn hình ${q(vi.clients.title)}: số đề xuất ${q(vi.clients.columns.pending)}, ${q(vi.clients.columns.failed)} và ${q(vi.clients.columns.vatDeadline)} của từng doanh nghiệp. Bấm tên để mở.`,
     ],
@@ -34,19 +35,19 @@ export const FIRM_GUIDE: readonly FirmGuideStep[] = [
     id: 'setup',
     title: 'Bước 2. Cài đặt một lần cho mỗi khách hàng',
     items: [
-      `Mở ${q(vi.nav.settings)}. Chọn ${q(vi.settings.vatFilingPeriod)} (${q(vi.settings.vatFilingMonth)} hoặc ${q(vi.settings.vatFilingQuarter)}) để Crove nhắc hạn nộp tờ khai; kiểm tra ${q(vi.settings.taxCode)} đã đúng.`,
+      `Mở ${q(vi.nav.settings)}. Chọn ${q(vi.settings.vatFilingPeriod)} (${q(vi.settings.vatFilingMonth)} hoặc ${q(vi.settings.vatFilingQuarter)}) để {brand} nhắc hạn nộp tờ khai; kiểm tra ${q(vi.settings.taxCode)} đã đúng.`,
       `Trong ${q(vi.accounts.title)}, ${q(vi.accounts.addTitle)} nếu khách hàng dùng tài khoản chi tiết, ví dụ 1121.VCB cho từng ngân hàng. Tài khoản tiền gửi (112) là nơi nhập sao kê ở Bước 5.`,
-      `Nếu khách hàng đã có sổ sách trước khi dùng Crove, mở ${q(vi.nav.journal)} và bấm ${q(vi.openingBalance.open)}: ${q(vi.openingBalance.downloadTemplate)}, điền số dư cuối ngày, chọn ngày và file đã điền, rồi bấm ${q(vi.openingBalance.post)}. Việc này cần chủ sở hữu hoặc quản trị.`,
+      `Nếu khách hàng đã có sổ sách trước khi dùng {brand}, mở ${q(vi.nav.journal)} và bấm ${q(vi.openingBalance.open)}: ${q(vi.openingBalance.downloadTemplate)}, điền số dư cuối ngày, chọn ngày và file đã điền, rồi bấm ${q(vi.openingBalance.post)}. Việc này cần chủ sở hữu hoặc quản trị.`,
     ],
   },
   {
     id: 'intake',
     title: 'Bước 3. Nhận hóa đơn mua vào và bán ra của tháng',
     items: [
-      `Tải hóa đơn của cả tháng một lần: tệp ZIP xuất từ cổng thuế, hoặc nhiều tệp XML, kéo vào ${q(vi.nav.inbox)} hoặc bấm ${q(vi.inbox.upload)}. Crove đọc từng hóa đơn và báo đề xuất, trùng hay lỗi cho từng tệp.`,
-      `Hóa đơn bán ra của khách hàng (người bán có mã số thuế của tổ chức) tải lên cùng chỗ: Crove tự ghi chúng là hóa đơn bán ra.`,
+      `Tải hóa đơn của cả tháng một lần: tệp ZIP xuất từ cổng thuế, hoặc nhiều tệp XML, kéo vào ${q(vi.nav.inbox)} hoặc bấm ${q(vi.inbox.upload)}. {brand} đọc từng hóa đơn và báo đề xuất, trùng hay lỗi cho từng tệp.`,
+      `Hóa đơn bán ra của khách hàng (người bán có mã số thuế của tổ chức) tải lên cùng chỗ: {brand} tự ghi chúng là hóa đơn bán ra.`,
       `Hóa đơn nhà cung cấp gửi qua email có thể chuyển tiếp tới địa chỉ trong ô ${q(vi.inbox.forwardTitle)}, nếu máy chủ bật nhận email.`,
-      `Để biết hóa đơn nào cơ quan thuế đã ghi nhận mà Crove chưa có, mở ${q(vi.nav.portalList)}, làm theo ${q(vi.portalList.howTitle)} rồi bấm ${q(vi.portalList.upload)}. Phần ${q(vi.portalList.tiles.missing)} là các hóa đơn cần xin thêm từ người bán.`,
+      `Để biết hóa đơn nào cơ quan thuế đã ghi nhận mà {brand} chưa có, mở ${q(vi.nav.portalList)}, làm theo ${q(vi.portalList.howTitle)} rồi bấm ${q(vi.portalList.upload)}. Phần ${q(vi.portalList.tiles.missing)} là các hóa đơn cần xin thêm từ người bán.`,
     ],
   },
   {
@@ -74,7 +75,7 @@ export const FIRM_GUIDE: readonly FirmGuideStep[] = [
     items: [
       `Mở ${q(vi.nav.ledger)} để xem ${q(vi.ledger.tabs.trialBalance)}, ${q(vi.ledger.tabs.generalLedger)} và ${q(vi.ledger.tabs.parties)} của tháng, rồi bấm ${q(vi.ledger.export)} nếu cần gửi Excel.`,
       `Mở ${q(vi.nav.vat)}, chọn kỳ, xem bảng kê và các chỉ tiêu 01/GTGT. Bấm ${q(vi.vat.export)} để gửi bảng kê, hoặc ${q(vi.vat.exportXml)} để có tệp XML mở trong HTKK.`,
-      'File XML để 0 ở các chỉ tiêu Crove chưa tính được, trong đó có [25] thuế được khấu trừ: kế toán bổ sung và kiểm tra trong HTKK hoặc trên eTax trước khi nộp.',
+      'File XML để 0 ở các chỉ tiêu {brand} chưa tính được, trong đó có [25] thuế được khấu trừ: kế toán bổ sung và kiểm tra trong HTKK hoặc trên eTax trước khi nộp.',
       `Khi đã nộp báo cáo của tháng, quay lại ${q(vi.nav.ledger)} và bấm ${q(fill(vi.periodLock.lock, { month: 'MM/YYYY' }))} ở ô ${q(vi.periodLock.title)}: không ai ghi, duyệt hay đảo bút toán vào tháng đó được nữa. Chủ sở hữu hoặc quản trị khóa sổ; chỉ chủ sở hữu mở khóa được, kèm lý do.`,
     ],
   },
@@ -83,8 +84,14 @@ export const FIRM_GUIDE: readonly FirmGuideStep[] = [
     title: 'Bước 7. Đưa số liệu sang phần mềm kế toán của hãng',
     items: [
       `Nếu hãng dùng MISA SME: ở ${q(vi.nav.journal)} bấm ${q(vi.journal.exportMisa)} và ${q(vi.journal.exportMisaSales)}; ở ${q(vi.nav.vouchers)} bấm ${q(vi.vouchers.exportReceipts)} và ${q(vi.vouchers.exportPayments)}. Mỗi file theo mẫu nhập khẩu từ Excel của MISA.`,
-      'Trước khi nhập vào MISA, điền mã hàng hoặc mã dịch vụ theo danh mục của hãng (Crove để trống vì không biết mã của hãng), rồi kiểm tra các dòng chưa có thuế suất. Giấy báo Có, giấy báo Nợ chưa xuất được sang MISA.',
+      'Trước khi nhập vào MISA, điền mã hàng hoặc mã dịch vụ theo danh mục của hãng ({brand} để trống vì không biết mã của hãng), rồi kiểm tra các dòng chưa có thuế suất. Giấy báo Có, giấy báo Nợ chưa xuất được sang MISA.',
       `Với phần mềm khác, ${q(vi.journal.export)} ở ${q(vi.nav.journal)} cho file Excel ghi từng dòng Nợ/Có.`,
     ],
   },
 ];
+
+// The guide with the product name filled in (BRAND_NAME, issue #1040): the text above, and the labels it quotes, say
+// {brand}.
+export function firmGuide(brand: string = brandName()): readonly FirmGuideStep[] {
+  return FIRM_GUIDE.map((step) => ({ ...step, title: withBrand(step.title, brand), items: step.items.map((item) => withBrand(item, brand)) }));
+}

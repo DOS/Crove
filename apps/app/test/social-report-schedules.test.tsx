@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { vi as viMessages } from '../src/i18n/messages/vi.ts';
+import { catalog } from '../src/i18n/runtime.ts';
 
 const client = vi.hoisted(() => ({ current: null as unknown as import('@tanstack/react-query').QueryClient }));
 
@@ -63,7 +64,7 @@ function card(role: string): string {
   qc.setQueryData(['social', 'reportSchedules', 'list'], [schedule]);
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <IntlProvider locale="vi" messages={viMessages as never} timeZone="Asia/Ho_Chi_Minh">
+      <IntlProvider locale="vi" messages={catalog('vi')} timeZone="Asia/Ho_Chi_Minh">
         <ReportSchedules channels={[]} />
       </IntlProvider>
     </QueryClientProvider>,

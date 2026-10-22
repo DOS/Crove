@@ -14,7 +14,7 @@ export const missingInvoiceMailTemplate: MailTemplate = {
   async render(input) {
     if (!input.subject) return null;
     // Merge data that is not what the template needs throws; the queue records TEMPLATE_DATA.
-    const body = renderMissingInvoiceMail(input.payload, { replyTo: input.inboundAddress });
+    const body = renderMissingInvoiceMail(input.payload, { replyTo: input.inboundAddress, brand: input.brand });
     return { subject: input.subject, ...body };
   },
 };

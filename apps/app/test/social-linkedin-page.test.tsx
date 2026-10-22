@@ -6,6 +6,7 @@ import { IntlProvider } from 'use-intl';
 import { describe, expect, it, vi } from 'vitest';
 import { en as enMessages } from '../src/i18n/messages/en.ts';
 import { vi as viMessages } from '../src/i18n/messages/vi.ts';
+import { catalog } from '../src/i18n/runtime.ts';
 import { parseCsv } from '../src/lib/bank-statement.ts';
 import { connectPlatforms, providerName } from '../src/lib/social.ts';
 import { importRows } from '../src/lib/social-import.ts';
@@ -42,7 +43,7 @@ describe('LinkedIn Company Pages in the app', () => {
     expect(previewRule('linkedin_page')).toEqual(previewRule('linkedin'));
     const html = renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
-        <IntlProvider locale="vi" messages={viMessages} timeZone="Asia/Ho_Chi_Minh">
+        <IntlProvider locale="vi" messages={catalog('vi')} timeZone="Asia/Ho_Chi_Minh">
           <PlatformPreview channel="Tiệm Bánh B" provider="linkedin_page" content={{ body: 'Khai trương chi nhánh mới.', title: '', linkUrl: '', media: [], visibility: 'loggedIn' }} />
         </IntlProvider>
       </QueryClientProvider>,
