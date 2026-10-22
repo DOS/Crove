@@ -68,5 +68,5 @@ The file row keeps the `held_until` Crove recorded: it is the record of what Cro
 
 Neither deletes a held file, and both say so:
 
-- **Offboarding** ([org-offboarding.md](org-offboarding.md)): the export's `kernel.file` table carries `held_until` for every file, and the deletion map keeps every file with a hold (or still waiting for one) until `held_until`. On a bucket with holds the store also refuses the deletion itself until then.
+- **Offboarding** ([org-offboarding.md](org-offboarding.md)): the export's `kernel.file` table carries `held_until` for every file. The `org-purge` command (#1024) keeps every file a purchase document references, so it never deletes a held file or one still waiting for its hold; on a bucket with holds the store would also refuse the deletion of the held version until `held_until`.
 - **Personal-data erasure** ([personal-data-requests.md](personal-data-requests.md)): erasure clears data in the database only. Its result lists the original files of posted invoices that name the person's party under "kept", with the date their hold runs to.
