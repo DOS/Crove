@@ -24,6 +24,7 @@ import {
   zOAuthState,
   zSocialDecide,
   zSocialPost,
+  zSocialRecurrence,
   zSocialReviewDiff,
   zSocialPostCreate,
   zSocialPostUpdate,
@@ -352,6 +353,10 @@ export const contract = {
       duplicate: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.
       setEvergreen: oc.input(z.strictObject({ postId: zId, days: z.number().int().min(7).max(365).nullable() })).output(z.object({ postId: zId, evergreenDays: z.number().int().nullable() })),
+      // Repeat a post on fixed weekdays at a local time (#979): after each publish the worker makes the next copy, planned
+      // for its occurrence and sent to review. Setting it makes the post a series; clearing it ends the series.
+      setRecurrence: oc.input(z.strictObject({ postId: zId, recurrence: zSocialRecurrence })).output(z.object({ postId: zId, recurrence: zSocialRecurrence })),
+      clearRecurrence: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // AI drafting (Social plan §3.7): the server asks the deployment's model for a draft from the brief and saves it as
       // a new post with origin 'ai' (tainted), one variant per channel. Each call drafts anew: a draft whose answer was
       // lost is only an extra draft, which publishes nothing until a person approves it.

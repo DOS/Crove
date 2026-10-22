@@ -1228,6 +1228,24 @@ export const zSocialVariant = z.object({
   review: z.object({ required: z.number().int(), approvedBy: z.array(zId), fourEyes: z.boolean(), client: z.boolean(), clientVerdict: z.enum(['approved', 'changes_requested']).nullable() }),
 });
 
+// A recurring post's rule (#979): every 1 to 4 weeks on these weekdays (0 = Sunday ... 6 = Saturday) at a local
+// "HH:mm" in the post's time zone, until a local date and/or for a number of copies (null: no end of that kind).
+export const SOCIAL_RECURRENCE_WEEKS_MAX = 4;
+export const SOCIAL_RECURRENCE_TIMES_MAX = 500;
+export const zSocialRecurrence = z.strictObject({
+  everyWeeks: z.number().int().min(1).max(SOCIAL_RECURRENCE_WEEKS_MAX),
+  weekdays: z
+    .array(z.number().int().min(0).max(6))
+    .min(1)
+    .max(7)
+    .refine((days) => new Set(days).size === days.length, 'each weekday once'),
+  time: z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/, 'a time HH:mm'),
+  // The database takes years from 2000 (crove_social.recurrence_valid).
+  until: zLocalDate.refine((d) => d >= '2000-01-01', 'a date from 2000').nullable(),
+  times: z.number().int().min(1).max(SOCIAL_RECURRENCE_TIMES_MAX).nullable(),
+});
+export type SocialRecurrence = z.infer<typeof zSocialRecurrence>;
+
 export const zSocialPost = z.object({
   id: zId,
   body: z.string(),
@@ -1236,6 +1254,10 @@ export const zSocialPost = z.object({
   media: z.array(zSocialMedia),
   evergreenDays: z.number().int().nullable(),
   repostOf: zId.nullable(),
+  // A series post's rule and the copies made in this run of it; on a copy, the series post it was made for (#979).
+  recurrence: z.object({ everyWeeks: z.number().int(), weekdays: z.array(z.number().int()), time: z.string(), until: z.string().nullable(), times: z.number().int().nullable() }).nullable(),
+  recurrenceCount: z.number().int(),
+  recurrenceSourceId: zId.nullable(),
   timeZone: z.string(),
   scheduledAt: z.string().nullable(),
   revision: z.number().int(),
@@ -1420,7 +1442,7 @@ export const zSocialReviewPlanLink = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),
