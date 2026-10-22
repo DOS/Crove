@@ -60,10 +60,13 @@ export const KERNEL_ERROR_CODES = [
   // Proposals and extraction.
   'PROPOSAL_DECIDED',
   'PROPOSAL_EXPIRED',
+<<<<<<< HEAD
   'PROPOSAL_NOT_EXPIRED',
   'PROPOSAL_RESUBMITTED',
   'PROPOSAL_SUPERSEDED',
   'NOT_RESUBMITTABLE',
+=======
+>>>>>>> origin/main
   'STALE_REVISION',
   'NOT_EDITABLE',
   'NOT_ELIGIBLE',
