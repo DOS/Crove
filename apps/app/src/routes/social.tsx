@@ -20,6 +20,8 @@ import { InstagramGrid } from '../components/social-instagram-grid.tsx';
 import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
+import { DraftsFromMediaPanel } from '../components/social-bulk-drafts.tsx';
+import { DRAFTS_FROM_MEDIA_MAX, togglePick } from '../lib/social-bulk-drafts.ts';
 import { PlanFromPosts, PlanReviewCard } from '../components/social-plan-review.tsx';
 import { ReportLinks } from '../components/social-report-links.tsx';
 import { GoalsCard } from '../components/social-goals.tsx';
@@ -300,6 +302,9 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const [search, setSearch] = useState('');
   const [tag, setTag] = useState<string | null>(null);
   const [chosen, setOpen] = useState<LibraryItem | null>(null);
+  // Files picked for drafts (#1080), in the order picked; the panel keeps the files it was opened with.
+  const [picked, setPicked] = useState<LibraryItem[]>([]);
+  const [drafting, setDrafting] = useState<{ key: number; files: LibraryItem[] } | null>(null);
   const picker = useRef<HTMLInputElement>(null);
   const library = useLibrary(search, tag);
   const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
@@ -333,6 +338,19 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
       </div>
       <TagFilter value={tag} onChange={setTag} />
       <p className="text-xs text-subtle-foreground">{t('libraryHint')}</p>
+      {canWrite && picked.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card px-3 py-2 text-sm" role="region" aria-label={t('bulkDrafts.picked', { count: picked.length })}>
+          <span className="text-foreground tabular-nums">{t('bulkDrafts.picked', { count: picked.length })}</span>
+          {picked.length >= DRAFTS_FROM_MEDIA_MAX && <span className="text-xs text-warning">{t('bulkDrafts.max', { max: DRAFTS_FROM_MEDIA_MAX })}</span>}
+          <Button size="sm" className="ml-auto" onClick={() => setDrafting({ key: Date.now(), files: picked })}>
+            {t('bulkDrafts.open')}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setPicked([])}>
+            {t('bulkDrafts.clear')}
+          </Button>
+        </div>
+      )}
+      {drafting && <DraftsFromMediaPanel key={drafting.key} slug={slug} files={drafting.files} onClose={() => setDrafting(null)} onCreated={() => setPicked([])} />}
       {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
       {library.isLoading ? (
         <Spinner />
@@ -343,15 +361,31 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-5">
-            {items.map((item) => (
-              <li key={item.fileId}>
+            {items.map((item) => {
+              const order = picked.findIndex((p) => p.fileId === item.fileId);
+              return (
+              <li key={item.fileId} className="relative">
+                {canWrite && (
+                  <span className="absolute top-3 left-3 z-10 flex items-center gap-1 rounded-md bg-card/90 px-1 py-0.5">
+                    <Checkbox
+                      checked={order >= 0}
+                      disabled={order < 0 && picked.length >= DRAFTS_FROM_MEDIA_MAX}
+                      aria-label={order >= 0 ? t('bulkDrafts.unpick', { name: item.filename }) : t('bulkDrafts.pick', { name: item.filename })}
+                      onCheckedChange={() => {
+                        const ids = togglePick(picked.map((p) => p.fileId), item.fileId);
+                        setPicked(ids.map((id) => picked.find((p) => p.fileId === id) ?? item));
+                      }}
+                    />
+                    {order >= 0 && <span className="text-xs font-medium text-foreground tabular-nums">{order + 1}</span>}
+                  </span>
+                )}
                 <button
                   type="button"
                   aria-pressed={open?.fileId === item.fileId}
                   onClick={() => setOpen(open?.fileId === item.fileId ? null : item)}
                   className={cn(
                     'block w-full space-y-1.5 rounded-xl border bg-card p-2 text-left transition-colors hover:border-ring/60 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
-                    open?.fileId === item.fileId && 'border-primary/60',
+                    (open?.fileId === item.fileId || order >= 0) && 'border-primary/60',
                   )}
                 >
                   <Thumb fileId={item.fileId} alt={item.filename} mime={item.mime} durationMs={item.durationMs} className="aspect-square" />
@@ -368,7 +402,8 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
                   )}
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
           {open && (
             <Card className="block h-fit space-y-3 p-4">
