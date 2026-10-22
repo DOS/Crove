@@ -721,14 +721,21 @@ function TaxCalendarField({ canManage }: { canManage: boolean }) {
 }
 
 // Approval reminders (issue #676): after how many days a pending proposal reminds the people who may approve it, and
-// after how many its owners are told. Owners and admins choose; everyone else sees the setting.
+// after how many its owners are told. Expiry (#876): after how many days a proposal still pending expires; it needs the
+// owners' escalation and comes after it, so only longer choices are offered. Owners and admins choose; everyone else
+// sees the setting.
 const REMIND_DAYS = [1, 2, 3, 5, 7] as const;
 const ESCALATE_DAYS = [2, 3, 5, 7, 14] as const;
+const EXPIRE_DAYS = [7, 14, 30, 60, 90] as const;
+type PolicyField = 'remindAfterDays' | 'escalateAfterDays' | 'expireAfterDays';
 
 function ProposalRemindersField({ canManage }: { canManage: boolean }) {
   const t = useTranslations('settings');
   const remindId = useId();
   const escalateId = useId();
+  const expireId = useId();
+  // Set when a change of the escalation turned expiry off with it, so the user is told.
+  const [expiryTurnedOff, setExpiryTurnedOff] = useState(false);
   const policy = useQuery(orpc.org.proposalPolicy.queryOptions());
   const save = useMutation(
     orpc.org.setProposalPolicy.mutationOptions({
@@ -737,13 +744,29 @@ function ProposalRemindersField({ canManage }: { canManage: boolean }) {
       },
     }),
   );
-  const current = save.isPending && save.variables ? save.variables : (policy.data ?? { remindAfterDays: null, escalateAfterDays: null });
-  const label = (days: number | null) => (days === null ? t('reminderOff') : t('reminderDays', { days: String(days) }));
-  const choose = (field: 'remindAfterDays' | 'escalateAfterDays', raw: string) => save.mutate({ ...current, [field]: raw === '' ? null : Number(raw) });
-  const select = (id: string, field: 'remindAfterDays' | 'escalateAfterDays', options: readonly number[]) =>
+  const current = save.isPending && save.variables ? save.variables : (policy.data ?? { remindAfterDays: null, escalateAfterDays: null, expireAfterDays: null });
+  const off = (field: PolicyField) => (field === 'expireAfterDays' ? t('expireOff') : t('reminderOff'));
+  const label = (field: PolicyField, days: number | null) => (days === null ? off(field) : t('reminderDays', { days: String(days) }));
+  const choose = (field: PolicyField, raw: string) => {
+    const next = { ...current, [field]: raw === '' ? null : Number(raw) };
+    // Expiry comes after the escalation: turning the escalation off, or past the expiry, turns expiry off with it.
+    const turnsOff = next.expireAfterDays !== null && (next.escalateAfterDays === null || next.expireAfterDays <= next.escalateAfterDays);
+    if (turnsOff) next.expireAfterDays = null;
+    setExpiryTurnedOff(turnsOff);
+    save.mutate(next);
+  };
+  const escalation = current.escalateAfterDays;
+  const expireOptions = escalation === null ? [] : EXPIRE_DAYS.filter((d) => d > escalation);
+  const select = (id: string, field: PolicyField, options: readonly number[]) =>
     canManage ? (
-      <NativeSelect id={id} size="sm" value={current[field] === null ? '' : String(current[field])} disabled={save.isPending || policy.isLoading} onChange={(e) => choose(field, e.target.value)}>
-        <NativeSelectOption value="">{t('reminderOff')}</NativeSelectOption>
+      <NativeSelect
+        id={id}
+        size="sm"
+        value={current[field] === null ? '' : String(current[field])}
+        disabled={save.isPending || policy.isLoading || (field === 'expireAfterDays' && escalation === null)}
+        onChange={(e) => choose(field, e.target.value)}
+      >
+        <NativeSelectOption value="">{off(field)}</NativeSelectOption>
         {options.map((d) => (
           <NativeSelectOption key={d} value={String(d)}>
             {t('reminderDays', { days: String(d) })}
@@ -752,7 +775,7 @@ function ProposalRemindersField({ canManage }: { canManage: boolean }) {
       </NativeSelect>
     ) : (
       <span id={id} className={current[field] === null ? 'text-subtle-foreground' : 'text-foreground'}>
-        {label(current[field])}
+        {label(field, current[field])}
       </span>
     );
   return (
@@ -771,9 +794,21 @@ function ProposalRemindersField({ canManage }: { canManage: boolean }) {
           </label>
           {select(escalateId, 'escalateAfterDays', ESCALATE_DAYS)}
         </span>
+        <span className="flex items-center gap-2">
+          <label htmlFor={expireId} className="text-muted-foreground">
+            {t('expireAfter')}
+          </label>
+          {select(expireId, 'expireAfterDays', expireOptions)}
+        </span>
         {save.isPending && <Spinner />}
       </dd>
       <dd className="mt-1 text-xs text-subtle-foreground">{t('proposalRemindersHint')}</dd>
+      <dd className="mt-1 text-xs text-subtle-foreground">{t('proposalExpiryHint')}</dd>
+      {expiryTurnedOff && (
+        <dd className="mt-1 text-xs text-warning" role="status">
+          {t('expiryTurnedOff')}
+        </dd>
+      )}
       {policy.error && <ErrorText>{errorMessage(policy.error)}</ErrorText>}
       {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
     </div>

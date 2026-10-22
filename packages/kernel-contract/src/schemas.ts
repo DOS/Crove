@@ -403,6 +403,8 @@ export const zInboxItem = z.object({
   requestedByAgent: z.object({ id: zId, name: z.string() }).nullable(),
   // Whether an extraction run read the proposal's source (so its invoice checks ran); an agent's proposal has none.
   extracted: z.boolean(),
+  // An expired proposal (#876): the whole days it waited for approval before it expired, its reason; null otherwise.
+  expiredAfterDays: z.number().int().nonnegative().nullable(),
 });
 
 // Cash and bank vouchers (issue #327; cash-voucher.ts has the rest).
@@ -518,6 +520,11 @@ export const zInboxDetail = zInboxItem.extend({
   approveReason: z.enum(['ok', 'not_pending', 'not_eligible', 'four_eyes']),
   canEdit: z.boolean(),
   canReject: z.boolean(),
+  // An expired proposal (#876): whether the caller may ask for it again (inbox.resubmit), the proposal asked for again
+  // from it, and for a proposal asked for again, the expired one it came from.
+  canResubmit: z.boolean(),
+  resubmittedAs: zId.nullable(),
+  resubmittedFrom: zId.nullable(),
   // The source file's newest extraction run (issue #40). inFlight: a re-extraction is running, so approve, edit and
   // reject wait for it. proposalVersion: the run this revision was read from; a newer failed run left it unchanged.
   extraction: z

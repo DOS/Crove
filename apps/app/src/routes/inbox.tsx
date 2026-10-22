@@ -492,6 +492,9 @@ export function InboxPage() {
                     {proposalName(item)}
                   </Link>
                   <p className="text-xs text-subtle-foreground">{item.title}</p>
+                  {item.status === 'expired' && item.expiredAfterDays !== null && (
+                    <p className="text-xs text-warning">{t('expiredReason', { days: item.expiredAfterDays })}</p>
+                  )}
                 </TableCell>
                 <TableCell className="px-4 py-3 text-muted-foreground">{f.date(item.issueDate)}</TableCell>
                 <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(item.total)}</TableCell>

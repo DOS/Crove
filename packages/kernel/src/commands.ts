@@ -45,6 +45,7 @@ import { setAddress, setContactEmail } from './org-address.ts';
 import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
+import { PROPOSAL_PREPARERS, REQUESTABLE, resubmitProposal, zPreparedProposal } from './proposal-resubmit.ts';
 import { usageCommands } from './usage-limits.ts';
 import { userStatusCommands } from './user-status.ts';
 import { taxCalendarCommands } from './tax-calendar.ts';
@@ -62,19 +63,7 @@ const PROPOSAL_COMMANDS = new Set([
   'finance.closing.record',
   'finance.depreciation.record',
 ]);
-// Proposals a user may ask for (kernel.proposal.request), and the module command that checks the request and builds
-// the proposal from the database; it writes nothing. The title and payload come from it, never from the requester.
-// A cash or bank voucher (#327) and a general journal voucher (NVK, #888) are entered by hand this way; a year-end
-// closing (#889) is built from the ledger for the year named, and a month's depreciation (#919) from the register.
-const PROPOSAL_PREPARERS = {
-  'finance.journal.reverse': 'finance.journal.prepare_reversal',
-  'finance.voucher.record': 'finance.voucher.prepare',
-  'finance.journal_voucher.record': 'finance.journal_voucher.prepare',
-  'finance.closing.record': 'finance.closing.prepare',
-  'finance.depreciation.record': 'finance.depreciation.prepare',
-} as const;
-type RequestableCommand = keyof typeof PROPOSAL_PREPARERS;
-const REQUESTABLE = Object.keys(PROPOSAL_PREPARERS) as [RequestableCommand, ...RequestableCommand[]];
+// The proposals a user may ask for and their preparers: PROPOSAL_PREPARERS in proposal-resubmit.ts.
 const ADMINS = ['owner', 'admin'] as const;
 // Approving executes an R3 command that posts to the ledger, so only roles that may post approve.
 // The role model has no finance roles yet; owner and admin are the roles that may post today. This is the
@@ -418,8 +407,6 @@ export function inboundRotateCommand(limits: InboundRotateLimits = DEFAULT_INBOU
 
 export const rotateInbound = inboundRotateCommand();
 
-const zPreparedProposal = z.object({ kind: z.string().min(1), command: z.string().min(1), title: z.string().min(1).max(300), payload: z.record(z.string(), z.unknown()) });
-
 // A user asks for a proposal that is not read from a file, for example reversing a posted journal entry (#138). The
 // requester is its author, so with two or more eligible approvers someone else approves it (P10), and the approval
 // runs the command at its own risk level (R3 for a posting, with step-up, P11). Asking is R1 and posts nothing.
@@ -443,6 +430,8 @@ export const requestProposal = defineCommand({
         // P12: who may approve this command right now; approval re-checks each one's role live.
         eligible_approvers: await eligibleApprovers(ctx.trx, ctx.orgId, draft.command),
         authors: JSON.stringify([actorRef(ctx.actor)]),
+        // Kept so the requester can ask for it again if it expires (#876); the preparer then checks it all anew.
+        request_input: JSON.stringify(input.input),
       })
       .returning('id')
       .executeTakeFirstOrThrow();
@@ -904,6 +893,7 @@ const otherKernelCommands = [
   approveProposal,
   approveProposals,
   rejectProposal,
+  resubmitProposal,
   revokeSession,
   ...offboardingCommands,
   ...agentCommands,

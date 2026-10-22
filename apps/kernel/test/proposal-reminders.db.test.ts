@@ -119,12 +119,12 @@ suite('proposal reminders on PostgreSQL (#676)', () => {
   it('lets owners and admins set the policy, everyone read it, and keeps escalation after the reminder', async () => {
     const o = await org();
     const read = (user: string) => rt.query<ProposalPolicy>('kernel.proposal_policy.get', {}, { actor: asUser(user), orgId: o.orgId });
-    expect(await read(o.member)).toEqual({ remindAfterDays: null, escalateAfterDays: null });
-    await expect(save(o, o.member, { remindAfterDays: 2, escalateAfterDays: 5 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(save(o, o.admin, { remindAfterDays: 5, escalateAfterDays: 5 })).rejects.toMatchObject({ code: 'PROPOSAL_POLICY_ORDER' });
-    expect(await save(o, o.admin, { remindAfterDays: 2, escalateAfterDays: 5 })).toEqual({ remindAfterDays: 2, escalateAfterDays: 5 });
-    expect(await save(o, o.owner, { remindAfterDays: 3, escalateAfterDays: null })).toEqual({ remindAfterDays: 3, escalateAfterDays: null });
-    expect(await read(o.member)).toEqual({ remindAfterDays: 3, escalateAfterDays: null });
+    expect(await read(o.member)).toEqual({ remindAfterDays: null, escalateAfterDays: null, expireAfterDays: null });
+    await expect(save(o, o.member, { remindAfterDays: 2, escalateAfterDays: 5, expireAfterDays: null })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(save(o, o.admin, { remindAfterDays: 5, escalateAfterDays: 5, expireAfterDays: null })).rejects.toMatchObject({ code: 'PROPOSAL_POLICY_ORDER' });
+    expect(await save(o, o.admin, { remindAfterDays: 2, escalateAfterDays: 5, expireAfterDays: null })).toEqual({ remindAfterDays: 2, escalateAfterDays: 5, expireAfterDays: null });
+    expect(await save(o, o.owner, { remindAfterDays: 3, escalateAfterDays: null, expireAfterDays: null })).toEqual({ remindAfterDays: 3, escalateAfterDays: null, expireAfterDays: null });
+    expect(await read(o.member)).toEqual({ remindAfterDays: 3, escalateAfterDays: null, expireAfterDays: null });
     const rows = await admin(async (c) => (await c.query('SELECT count(*)::int AS n FROM crove_kernel.proposal_policy WHERE org_id = $1', [o.orgId])).rows[0]);
     expect(rows).toEqual({ n: 1 });
     const audit = await admin(async (c) => (await c.query<{ n: number }>("SELECT count(*)::int AS n FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.proposal_policy.save' AND outcome = 'ok'", [o.orgId])).rows[0]);
@@ -133,7 +133,7 @@ suite('proposal reminders on PostgreSQL (#676)', () => {
 
   it('reminds the approvers once, then tells the owners once, and never a decided proposal', async () => {
     const o = await org();
-    await save(o, o.owner, { remindAfterDays: 2, escalateAfterDays: 5 });
+    await save(o, o.owner, { remindAfterDays: 2, escalateAfterDays: 5, expireAfterDays: null });
     const fresh = await proposal(o, 1);
     const waiting = await proposal(o, 3);
     const decided = await proposal(o, 9, [], 'rejected');
@@ -169,7 +169,7 @@ suite('proposal reminders on PostgreSQL (#676)', () => {
 
   it('does both stages of a proposal that waited past both, and skips an approver four-eyes stops', async () => {
     const o = await org();
-    await save(o, o.owner, { remindAfterDays: 1, escalateAfterDays: 2 });
+    await save(o, o.owner, { remindAfterDays: 1, escalateAfterDays: 2, expireAfterDays: null });
     // The admin wrote this revision: with two eligible approvers, only the owner may approve it.
     const id = await proposal(o, 4, [{ type: 'user', id: o.admin }]);
     await sweep();
@@ -184,7 +184,7 @@ suite('proposal reminders on PostgreSQL (#676)', () => {
   it('leaves orgs without a policy, or with reminders off, alone', async () => {
     const none = await org();
     const off = await org();
-    await save(off, off.owner, { remindAfterDays: null, escalateAfterDays: null });
+    await save(off, off.owner, { remindAfterDays: null, escalateAfterDays: null, expireAfterDays: null });
     const a = await proposal(none, 30);
     const b = await proposal(off, 30);
     await sweep();
@@ -215,7 +215,7 @@ suite('proposal reminders on PostgreSQL (#676)', () => {
 
   it('keeps the policy within its bounds', async () => {
     const o = await org();
-    await expect(save(o, o.owner, { remindAfterDays: 0, escalateAfterDays: null })).rejects.toThrow();
-    await expect(save(o, o.owner, { remindAfterDays: null, escalateAfterDays: 61 })).rejects.toThrow();
+    await expect(save(o, o.owner, { remindAfterDays: 0, escalateAfterDays: null, expireAfterDays: null })).rejects.toThrow();
+    await expect(save(o, o.owner, { remindAfterDays: null, escalateAfterDays: 61, expireAfterDays: null })).rejects.toThrow();
   });
 });

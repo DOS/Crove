@@ -4,6 +4,14 @@
 // (proposal_nudges_due) and runs kernel.proposal.remind for each, which checks again under the proposal's lock, mails
 // once per stage, stamps the proposal and leaves its audit row. A reminder never approves, rejects or changes a
 // proposal's content; a decision ends both stages.
+//
+// Expiry (#876): an org may also set how many days a proposal may stay pending at all. It needs the owners' escalation
+// and comes after it, and a proposal expires only once its owners were told and have had the days between the two
+// since (so a backlog already old when an org turns expiry on is escalated first). The worker finds the proposals past
+// it (proposal_expiries_due) and runs kernel.proposal.expire
+// for each, which checks again under the proposal's lock and moves it to 'expired', a terminal state: audited, an
+// activity entry, and nothing else (no mail; the reminder stages and the notifications only ever act on pending
+// proposals, so its approvers are not mailed again). Its author may ask for it again (kernel.proposal.resubmit).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
@@ -24,11 +32,13 @@ const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export interface ProposalPolicy {
   remindAfterDays: number | null;
   escalateAfterDays: number | null;
+  expireAfterDays: number | null;
 }
 
 export const zProposalPolicy = z.strictObject({
   remindAfterDays: z.number().int().min(1).max(30).nullable(),
   escalateAfterDays: z.number().int().min(1).max(60).nullable(),
+  expireAfterDays: z.number().int().min(2).max(90).nullable(),
 });
 
 export type NudgeStage = 'remind' | 'escalate';
@@ -47,16 +57,28 @@ export function nudgesDue(
   return due;
 }
 
-async function readPolicy(ctx: Pick<CommandContext, 'trx' | 'orgId'>): Promise<ProposalPolicy> {
+// Whether a proposal is past its org's expiry now; the same rule as proposal_expiries_due. It waited the days the org
+// set, its owners were told (escalated_at), and since then they have had the days between escalation and expiry.
+export function expiryDue(p: { status: string; createdAt: Date; escalatedAt: Date | null }, policy: ProposalPolicy, now: Date): boolean {
+  if (p.status !== 'pending' || policy.expireAfterDays === null || policy.escalateAfterDays === null || p.escalatedAt === null) return false;
+  const window = (policy.expireAfterDays - policy.escalateAfterDays) * DAY_MS;
+  return now.getTime() - p.createdAt.getTime() >= policy.expireAfterDays * DAY_MS && now.getTime() - p.escalatedAt.getTime() >= window;
+}
+
+export async function readPolicy(ctx: Pick<CommandContext, 'trx' | 'orgId'>): Promise<ProposalPolicy> {
   const row = await ctx.trx
     .selectFrom('crove_kernel.proposal_policy')
-    .select(['remind_after_days', 'escalate_after_days'])
+    .select(['remind_after_days', 'escalate_after_days', 'expire_after_days'])
     .where('org_id', '=', ctx.orgId)
     .orderBy('created_at')
     .orderBy('id')
     .limit(1)
     .executeTakeFirst();
-  return { remindAfterDays: row?.remind_after_days ?? null, escalateAfterDays: row?.escalate_after_days ?? null };
+  return {
+    remindAfterDays: row?.remind_after_days ?? null,
+    escalateAfterDays: row?.escalate_after_days ?? null,
+    expireAfterDays: row?.expire_after_days ?? null,
+  };
 }
 
 export const proposalPolicyGet = defineQuery({
@@ -76,9 +98,19 @@ export const proposalPolicySave = defineCommand({
     if (input.remindAfterDays !== null && input.escalateAfterDays !== null && input.escalateAfterDays <= input.remindAfterDays) {
       throw new DomainError('PROPOSAL_POLICY_ORDER', 422, 'Số ngày báo chủ sở hữu phải lớn hơn số ngày nhắc người duyệt');
     }
+    // The owners hear about a proposal before it expires: expiry needs the escalation and comes after it.
+    if (input.expireAfterDays !== null && (input.escalateAfterDays === null || input.expireAfterDays <= input.escalateAfterDays)) {
+      throw new DomainError('PROPOSAL_EXPIRY_ORDER', 422, 'Chỉ đặt được hạn chờ duyệt khi đã bật báo chủ sở hữu, và hạn này phải dài hơn số ngày báo chủ sở hữu');
+    }
     await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(${`crove_kernel.proposal_policy:${ctx.orgId}`}))`.execute(ctx.trx);
     const before = await readPolicy(ctx);
-    const values = { remind_after_days: input.remindAfterDays, escalate_after_days: input.escalateAfterDays, updated_by: ctx.actor.userId, updated_at: ctx.now };
+    const values = {
+      remind_after_days: input.remindAfterDays,
+      escalate_after_days: input.escalateAfterDays,
+      expire_after_days: input.expireAfterDays,
+      updated_by: ctx.actor.userId,
+      updated_at: ctx.now,
+    };
     const updated = await ctx.trx.updateTable('crove_kernel.proposal_policy').set(values).where('org_id', '=', ctx.orgId).executeTakeFirst();
     if (Number(updated.numUpdatedRows) === 0) {
       await ctx.trx
@@ -177,10 +209,59 @@ export const proposalRemind = defineCommand({
   },
 });
 
-// One pass: each proposal with a stage due gets it.
+export interface ExpireResult {
+  expired: boolean;
+}
+
+// Moves a pending proposal past its org's expiry to 'expired' (#876). System only, like the reminders: no person
+// expires a proposal, and RPC never reaches it. Under the proposal's lock, so a decision in flight is either seen (the
+// proposal is no longer pending) or comes after and finds it expired (PROPOSAL_EXPIRED). It writes the proposal's state
+// and decision time, its audit row and an activity entry, and nothing else: no mail, no event.
+export const proposalExpire = defineCommand({
+  name: 'kernel.proposal.expire',
+  input: z.strictObject({ proposalId: zId }),
+  risk: 'R1',
+  access: 'system',
+  target: (input) => ({ type: 'kernel.proposal', id: input.proposalId }),
+  handler: async (ctx, input): Promise<ExpireResult> => {
+    const proposal = await ctx.trx
+      .selectFrom('crove_kernel.proposal')
+      .select(['id', 'status', 'title', 'revision', 'created_at', 'escalated_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.proposalId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!proposal) return { expired: false };
+    const policy = await readPolicy(ctx);
+    if (!expiryDue({ status: proposal.status, createdAt: proposal.created_at, escalatedAt: proposal.escalated_at }, policy, ctx.now)) return { expired: false };
+    const days = Math.floor((ctx.now.getTime() - proposal.created_at.getTime()) / DAY_MS);
+    await ctx.trx
+      .updateTable('crove_kernel.proposal')
+      .set({ status: 'expired', decided_at: ctx.now })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', proposal.id)
+      .execute();
+    ctx.audit({ revision: proposal.revision, days, expire_after_days: policy.expireAfterDays });
+    await ctx.activity('kernel.proposal', proposal.id, 'proposal.expired', `Hết hạn sau ${days} ngày chờ duyệt: ${proposal.title}`);
+    return { expired: true };
+  },
+});
+
+// One pass: each proposal past its org's expiry expires first, then each pending proposal with a stage due gets it (an
+// expired proposal is no longer pending, so it gets no reminder). A proposal expires only after its escalation, so the
+// order never skips the owners' mail.
 export async function sweepProposalNudges(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
-  const { rows } = await sql<{ org_id: string; proposal_id: string }>`SELECT org_id, proposal_id FROM crove_kernel.proposal_nudges_due(${PROPOSAL_NUDGE_LIMIT}::int)`.execute(deps.workerDb);
   let done = 0;
+  const { rows: expiring } = await sql<{ org_id: string; proposal_id: string }>`SELECT org_id, proposal_id FROM crove_kernel.proposal_expiries_due(${PROPOSAL_NUDGE_LIMIT}::int)`.execute(deps.workerDb);
+  for (const row of expiring) {
+    try {
+      const result = await deps.runtime.execute<ExpireResult>('kernel.proposal.expire', { proposalId: row.proposal_id }, { actor: ACTOR, orgId: row.org_id });
+      if (result.expired) done += 1;
+    } catch (error) {
+      console.warn(`[proposal-expiry] proposal ${row.proposal_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.message : error);
+    }
+  }
+  const { rows } = await sql<{ org_id: string; proposal_id: string }>`SELECT org_id, proposal_id FROM crove_kernel.proposal_nudges_due(${PROPOSAL_NUDGE_LIMIT}::int)`.execute(deps.workerDb);
   for (const row of rows) {
     try {
       const result = await deps.runtime.execute<RemindResult>('kernel.proposal.remind', { proposalId: row.proposal_id }, { actor: ACTOR, orgId: row.org_id });
@@ -192,5 +273,5 @@ export async function sweepProposalNudges(deps: { runtime: Runtime; workerDb: Db
   return done;
 }
 
-export const proposalReminderCommands = [proposalPolicySave, proposalRemind];
+export const proposalReminderCommands = [proposalPolicySave, proposalRemind, proposalExpire];
 export const proposalReminderQueries = [proposalPolicyGet];
