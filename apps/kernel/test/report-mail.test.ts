@@ -8,7 +8,7 @@ import { goalLine, renderReportMail } from '../src/report-mail.ts';
 
 const TOKEN = 'b'.repeat(43);
 
-function mail(brand: unknown, payload: Record<string, unknown> = {}) {
+function mail(brand: unknown, payload: Record<string, unknown> = {}, product = 'Crove') {
   return renderReportMail({
     messageId: '00000000-0000-4000-8000-000000000001',
     subject: null,
@@ -26,6 +26,7 @@ function mail(brand: unknown, payload: Record<string, unknown> = {}) {
       ...payload,
     },
     publicUrl: 'https://crove.example/',
+    brand: product,
     inboundAddress: null,
     execute: async <T,>(command: string) => {
       expect(command).toBe('social.report_schedule.mint_link');
@@ -47,6 +48,13 @@ describe('report mail branding (#1053)', () => {
     }
     const anonymous = await mail(null, { orgName: undefined });
     expect(anonymous?.html).toContain('Thư này được gửi tự động từ Crove theo lịch gửi báo cáo.');
+  });
+
+  // #1040: the footer names the product by BRAND_NAME.
+  it('names the product by BRAND_NAME in the footer', async () => {
+    const out = await mail(null, {}, 'Tên Mới');
+    expect(out?.html).toContain('Thư này được Công ty Sao Mai gửi tự động qua Tên Mới theo lịch gửi báo cáo.');
+    expect(`${out?.subject}${out?.text}${out?.html}`).not.toContain('Crove');
   });
 
   it('puts the agency name and accent in the header and the name in the footer', async () => {
@@ -107,6 +115,7 @@ function render(payload: Record<string, unknown>) {
     subject: null,
     payload,
     publicUrl: 'https://crove.example',
+    brand: 'Crove',
     inboundAddress: null,
     execute: async <T>() => ({ token: 'a'.repeat(43), expiresAt: '2026-11-15T00:00:00.000Z' }) as T,
   });

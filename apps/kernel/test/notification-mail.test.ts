@@ -10,6 +10,7 @@ const render = (payload: Record<string, unknown>) =>
     subject: 'Hàng đợi của kênh Trang thử sắp hết bài',
     payload,
     publicUrl: 'https://crove.example/',
+    brand: 'Crove',
     inboundAddress: null,
     execute: () => Promise.reject(new Error('not used')),
   });

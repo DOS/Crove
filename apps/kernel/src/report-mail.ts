@@ -123,8 +123,8 @@ export async function renderReportMail(input: MailTemplateInput): Promise<{ subj
       ? `Thư này được ${sender} gửi tự động theo lịch gửi báo cáo.`
       : 'Thư này được gửi tự động theo lịch gửi báo cáo.'
     : sender
-      ? `Thư này được ${sender} gửi tự động qua Crove theo lịch gửi báo cáo.`
-      : 'Thư này được gửi tự động từ Crove theo lịch gửi báo cáo.';
+      ? `Thư này được ${sender} gửi tự động qua ${input.brand} theo lịch gửi báo cáo.`
+      : `Thư này được gửi tự động từ ${input.brand} theo lịch gửi báo cáo.`;
   const url = `${input.publicUrl.replace(/\/+$/, '')}/-/report#${link.token}`;
   const from = day(data.periodStart, data.timeZone);
   // The period ends at a midnight; its last day is the one before.

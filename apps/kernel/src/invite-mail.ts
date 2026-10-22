@@ -64,18 +64,19 @@ export function formatExpiry(iso: string): string {
   return `${parts.hour}:${parts.minute} ngày ${parts.day}/${parts.month}/${parts.year} (giờ Việt Nam)`;
 }
 
-export function inviteMail(input: InviteMailInput, publicUrl: string): OutboundMail {
+// brand: the product name users see (BRAND_NAME, #1040).
+export function inviteMail(input: InviteMailInput, publicUrl: string, brand = 'Crove'): OutboundMail {
   const url = acceptUrl(publicUrl, input.acceptPath);
   const org = oneLine(input.orgName);
   const inviterEmail = oneLine(input.inviterEmail, 320);
   const inviter = input.inviterName ? `${oneLine(input.inviterName)} (${inviterEmail})` : inviterEmail;
   const role = ROLE_LABEL[input.role];
   const expires = formatExpiry(input.expiresAt);
-  const subject = `Lời mời tham gia ${org} trên Crove`;
+  const subject = `Lời mời tham gia ${org} trên ${brand}`;
   const text = [
     'Xin chào,',
     '',
-    `${inviter} mời bạn tham gia tổ chức "${org}" trên Crove với vai trò ${role}.`,
+    `${inviter} mời bạn tham gia tổ chức "${org}" trên ${brand} với vai trò ${role}.`,
     '',
     'Mở liên kết sau để xem và chấp nhận lời mời:',
     url,
@@ -88,7 +89,7 @@ export function inviteMail(input: InviteMailInput, publicUrl: string): OutboundM
   const html = `<!doctype html>
 <html lang="vi"><body style="font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.5;color:#1f2328">
 <p>Xin chào,</p>
-<p>${escapeHtml(inviter)} mời bạn tham gia tổ chức <strong>${escapeHtml(org)}</strong> trên Crove với vai trò ${escapeHtml(role)}.</p>
+<p>${escapeHtml(inviter)} mời bạn tham gia tổ chức <strong>${escapeHtml(org)}</strong> trên ${escapeHtml(brand)} với vai trò ${escapeHtml(role)}.</p>
 <p><a href="${escapeHtml(url)}" style="display:inline-block;padding:10px 16px;background:#1f6feb;color:#ffffff;text-decoration:none;border-radius:6px">Xem và chấp nhận lời mời</a></p>
 <p style="font-size:13px;color:#57606a">Nếu nút không mở được, hãy dán liên kết này vào trình duyệt:<br><span style="word-break:break-all">${escapeHtml(url)}</span></p>
 <p>Hãy đăng nhập hoặc tạo tài khoản bằng đúng địa chỉ email này (${escapeHtml(input.to)}); lời mời chỉ dành cho email được mời. Nếu chưa có tài khoản, hãy tạo tài khoản sau khi mở liên kết này, trên cùng thiết bị. Liên kết dùng được một lần và hết hạn lúc ${escapeHtml(expires)}.</p>
@@ -102,10 +103,10 @@ export function bounceAddress(token: string | null | undefined, inboundDomain: s
   return token && inboundDomain ? `bounce+${token}@${inboundDomain.toLowerCase()}` : undefined;
 }
 
-export function createInviteMailSender(mailer: MailProvider, publicUrl: string, options: DeliverOptions = {}, inboundDomain?: string | null): SendInviteMail {
+export function createInviteMailSender(mailer: MailProvider, publicUrl: string, options: DeliverOptions = {}, inboundDomain?: string | null, brand = 'Crove'): SendInviteMail {
   // async: a template error becomes a rejected promise, never a synchronous throw past the caller's handler.
   return async (invite) => {
     const returnPath = bounceAddress(invite.bounceToken, inboundDomain);
-    return deliver(mailer, { ...inviteMail(invite, publicUrl), ...(returnPath ? { returnPath } : {}) }, { label: 'invite mail', ...options });
+    return deliver(mailer, { ...inviteMail(invite, publicUrl, brand), ...(returnPath ? { returnPath } : {}) }, { label: 'invite mail', ...options });
   };
 }

@@ -1795,7 +1795,7 @@ export function SocialComposePage() {
     if (chosen.length > 0) return;
     if (search.channel && live.some((c) => c.id === search.channel)) setChosen([search.channel]);
     else if (live.length === 1 && live[0]) setChosen([live[0].id]);
-  }, [live.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [live.length, search.channel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Unsaved work is kept in this browser as it is typed (#634) and offered back after a reload; leaving asks first.
   const [restore, setRestore] = useState(() => loadDraft<ComposeDraft>(slug, 'new'));

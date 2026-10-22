@@ -9,6 +9,7 @@ import { SOCIAL_BULK_SKIP_REASONS } from '@crove/kernel-contract';
 import { en as enMessages } from '../src/i18n/messages/en.ts';
 import { vi as viMessages } from '../src/i18n/messages/vi.ts';
 import type { BulkAction, BulkPost } from '../src/lib/social-bulk.ts';
+import { catalog } from '../src/i18n/runtime.ts';
 
 vi.mock('../src/lib/api.ts', () => ({ client: {}, queryClient: { invalidateQueries: () => undefined }, errorMessage: (e: unknown) => String(e) }));
 
@@ -28,7 +29,7 @@ const spring = { id: '00000000-0000-4000-8000-000000000003', name: 'Mùa xuân',
 function bar(canDecide: boolean, actions: readonly BulkAction[], labelOptions: readonly (typeof spring)[] = []): string {
   return renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient()}>
-      <IntlProvider locale="vi" messages={viMessages as never} timeZone="Asia/Ho_Chi_Minh">
+      <IntlProvider locale="vi" messages={catalog('vi')} timeZone="Asia/Ho_Chi_Minh">
         <BulkBar posts={posts} actions={actions} canDecide={canDecide} excerptOf={() => 'Khai trương'} channelName={() => 'Fanpage'} labelOptions={labelOptions} members={[]} onClear={() => undefined} />
       </IntlProvider>
     </QueryClientProvider>,

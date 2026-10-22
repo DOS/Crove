@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { vi as viMessages } from '../src/i18n/messages/vi.ts';
+import { catalog } from '../src/i18n/runtime.ts';
 
 vi.mock('../src/lib/api.ts', () => ({
   client: {},
@@ -20,7 +20,7 @@ const { PlatformPreview } = await import('../src/components/social-preview.tsx')
 function render(buttons?: { text: string; url: string }[][]): string {
   return renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient()}>
-      <IntlProvider locale="vi" messages={viMessages} timeZone="Asia/Ho_Chi_Minh">
+      <IntlProvider locale="vi" messages={catalog('vi')} timeZone="Asia/Ho_Chi_Minh">
         <PlatformPreview channel="Quán Phở" provider="telegram" content={{ body: 'Khai trương chi nhánh mới.', title: '', linkUrl: '', media: [], ...(buttons ? { buttons } : {}) }} />
       </IntlProvider>
     </QueryClientProvider>,

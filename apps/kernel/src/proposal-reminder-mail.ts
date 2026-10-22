@@ -21,7 +21,7 @@ export async function renderProposalReminderMail(input: MailTemplateInput): Prom
   if (!lead) return null;
   const url = `${input.publicUrl.replace(/\/+$/, '')}${path}`;
   const name = typeof title === 'string' && title ? [...oneLine(title)].slice(0, 200).join('') : null;
-  const footer = `Thư này được gửi từ Crove cho ${oneLine(org)}, theo cài đặt nhắc duyệt của tổ chức.`;
+  const footer = `Thư này được gửi từ ${input.brand} cho ${oneLine(org)}, theo cài đặt nhắc duyệt của tổ chức.`;
   const lines = [lead, name ? `Đề xuất: ${name}` : null, `Mở đề xuất: ${url}`, '', footer].filter((l) => l !== null);
   const html = `<!doctype html><html lang="vi"><body style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#18181b;line-height:1.5">
 <p style="margin:0 0 12px">${escapeHtml(lead)}</p>
