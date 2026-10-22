@@ -1,7 +1,8 @@
 // The content plan as a page to print (#978): /o/<slug>/print/social-plan?from=&to=&channels=&labels=, opened in a new
 // tab from Export plan on the calendar, outside the app's frame so only the plan reaches the paper. The rows come from
 // the same audited export as the CSV file (format print), in the browser's time zone, and print to PDF from the
-// browser with the client report's print styles (#643).
+// browser with the client report's print styles (#643). With the org's white-label branding (#1053) it carries the
+// agency's logo, name and accent, as the client report does.
 import { useQuery } from '@tanstack/react-query';
 import { useParams, useSearch } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
@@ -9,11 +10,13 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
+import { AccentRule, BrandMark, MadeWithCrove, accentStyle } from '../components/social-report-branding.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
 import { usePrintInLight } from '../lib/print.ts';
 import { PLAN_EXPORT_MAX_ROWS, planRange, type PlanFilter } from '../lib/social-plan-export.ts';
 import { providerName, VARIANT_TONE, type VariantStatus } from '../lib/social.ts';
+import { pageBrand } from '../lib/social-report-branding.ts';
 
 export function SocialPlanPrintPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
@@ -25,6 +28,8 @@ export function SocialPlanPrintPage() {
   const range = search.from && search.to ? planRange(search.from, search.to) : null;
   const me = useQuery(orpc.me.get.queryOptions());
   const org = me.data?.orgs.find((o) => o.slug === slug)?.name ?? '';
+  const branding = useQuery(orpc.social.reportBranding.get.queryOptions({ input: {} }));
+  const brand = pageBrand(branding.data);
   const channels = search.channels ?? [];
   const labels = search.labels ?? [];
   // A command (each print is audited like a download); asked once, never again on its own.
@@ -45,10 +50,10 @@ export function SocialPlanPrintPage() {
   });
   const rows = plan.data?.rows ?? [];
   return (
-    <div className="min-h-screen bg-background px-4 py-6 text-foreground print:px-0 print:py-0">
+    <div className="min-h-screen bg-background px-4 py-6 text-foreground print:px-0 print:py-0" style={accentStyle(brand)}>
       <div className="mx-auto max-w-4xl space-y-5">
-        <div className="flex items-center justify-between gap-2">
-          <Logo />
+        <div className="flex min-h-7 items-center justify-between gap-2">
+          {branding.isLoading ? <span aria-hidden="true" /> : brand ? <BrandMark brand={brand} org={org} /> : <Logo />}
           {plan.data && (
             <Button variant="outline" size="sm" className="print:hidden" onClick={() => window.print()}>
               {tp('print')}
@@ -66,8 +71,9 @@ export function SocialPlanPrintPage() {
           <ErrorText>{errorMessage(plan.error)}</ErrorText>
         ) : plan.data ? (
           <>
+            <AccentRule brand={brand} />
             <header className="space-y-1">
-              {org && <p className="text-sm text-muted-foreground">{org}</p>}
+              {(brand?.name ?? org) && <p className="text-sm text-muted-foreground">{brand?.name ?? org}</p>}
               <h1 className="text-2xl font-semibold">{tp('pageTitle')}</h1>
               <p className="text-sm text-muted-foreground">
                 {tp('period', { from: f.date(search.from), to: f.date(search.to) })} · {tp('count', { count: rows.length })}
@@ -99,6 +105,7 @@ export function SocialPlanPrintPage() {
                 ))}
               </ol>
             )}
+            <MadeWithCrove brand={brand} />
           </>
         ) : null}
       </div>

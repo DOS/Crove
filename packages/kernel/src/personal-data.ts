@@ -91,6 +91,7 @@ export const PERSONAL_DATA_COLUMNS = {
   'crove_finance.portal_invoice_row.seller_tax_code': { kind: 'tax_code', handling: 'keep_legal', reason: "The tax portal's invoice list, kept like the books" },
   'crove_finance.portal_invoice_row.seller_name': { kind: 'name', handling: 'keep_legal', reason: "The tax portal's invoice list, kept like the books" },
   // Social.
+  'crove_social.report_branding.display_name': { kind: 'name', handling: 'keep_org', reason: "The agency's name on its white-label client reports (#1053), the business itself" },
   'crove_social.report_schedule.recipients': { kind: 'email_list', handling: 'erase', reason: 'Addresses a scheduled client report is mailed to' },
   'crove_social.review_feedback.reviewer_name': {
     kind: 'name',

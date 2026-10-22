@@ -1,23 +1,28 @@
 // The client report page (#643): /-/report#<token>, opened from a link the agency sent, with no account. It shows what
 // went out in the period on the link's channels, the totals, the counts per channel and the posts that did best, and
 // prints cleanly to PDF from the browser. The token stays after the # and goes to the API in a POST body only.
+// With the org's white-label branding (#1053) it shows the agency's logo, name and accent instead of Crove's logo.
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { ChangeChip } from '../components/social-growth.tsx';
+import { AccentRule, BrandMark, MadeWithCrove, accentStyle, useBrandTitle } from '../components/social-report-branding.tsx';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage } from '../lib/api.ts';
 import { apiErrorFromResponse } from '../lib/errors.ts';
 import { usePrintInLight } from '../lib/print.ts';
 import { REPORT_METRICS } from '../lib/social-report.ts';
+import { pageBrand } from '../lib/social-report-branding.ts';
 import { providerName } from '../lib/social.ts';
 
 type Counts = Record<string, number>;
 interface ReportPage {
   org: string;
+  // The org's white-label branding (#1053), or null; absent from a server without it. Read again by pageBrand.
+  brand?: unknown;
   title: string | null;
   periodStart: string;
   periodEnd: string;
@@ -54,13 +59,17 @@ export function SocialReportPage() {
   const data = page.data;
   const metrics = data ? shown(data.totals) : [];
   const against = t('against');
+  const brand = data ? pageBrand(data.brand) : null;
+  useBrandTitle(brand, data?.org ?? '');
+  // Neither mark until the page is known, so a branded report never shows Crove's logo while it loads.
+  const loading = token !== null && page.isLoading;
   // A printed report is on paper: the light theme while printing, whatever the screen uses.
   usePrintInLight();
   return (
-    <div className="min-h-screen bg-background px-4 py-6 text-foreground print:px-0 print:py-0">
+    <div className="min-h-screen bg-background px-4 py-6 text-foreground print:px-0 print:py-0" style={accentStyle(brand)}>
       <div className="mx-auto max-w-4xl space-y-5">
-        <div className="flex items-center justify-between gap-2">
-          <Logo />
+        <div className="flex min-h-7 items-center justify-between gap-2">
+          {loading ? <span aria-hidden="true" /> : brand && data ? <BrandMark brand={brand} org={data.org} /> : <Logo />}
           {data && (
             <Button variant="outline" size="sm" className="print:hidden" onClick={() => window.print()}>
               {t('print')}
@@ -78,8 +87,9 @@ export function SocialReportPage() {
           <ErrorText>{errorMessage(page.error)}</ErrorText>
         ) : data ? (
           <>
+            <AccentRule brand={brand} />
             <header className="space-y-1">
-              <p className="text-sm text-muted-foreground">{data.org}</p>
+              <p className="text-sm text-muted-foreground">{brand?.name ?? data.org}</p>
               <h1 className="text-2xl font-semibold">{data.title ?? t('title')}</h1>
               <p className="text-sm text-muted-foreground">
                 {t('period', { from: f.date(data.periodStart), to: f.date(new Date(Date.parse(data.periodEnd) - 1).toISOString()) })} · {t('posts', { count: data.posts })}{' '}
@@ -170,6 +180,7 @@ export function SocialReportPage() {
               </>
             )}
             <p className="text-xs text-subtle-foreground">{t('footer', { until: f.date(data.expiresAt) })}</p>
+            <MadeWithCrove brand={brand} />
           </>
         ) : null}
       </div>

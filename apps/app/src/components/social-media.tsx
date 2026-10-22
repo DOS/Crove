@@ -163,7 +163,7 @@ export const sizeLabel = (bytes: number) => (bytes >= 1_048_576 ? `${(bytes / 1_
 
 // Images from the library to add to a post: a click adds one, a second click takes it out again. only: the file types
 // offered (a video's cover takes JPEG or PNG images).
-function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; only?: readonly string[] }) {
+export function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; only?: readonly string[] }) {
   const t = useTranslations('social');
   const [search, setSearch] = useState('');
   const [tag, setTag] = useState<string | null>(null);

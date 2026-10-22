@@ -32,6 +32,8 @@ export * from './feeds.ts';
 export * from './report-schedules.ts';
 export * from './brand-voice.ts';
 export * from './watermark.ts';
+export * from './domain/report-branding.ts';
+export * from './report-branding.ts';
 export * from './chat-alerts.ts';
 export * from './channel-sets.ts';
 export * from './domain/report-schedule.ts';

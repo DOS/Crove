@@ -1,6 +1,10 @@
 // The scheduled client report mail (#704, template social.report): the schedule's name, the period, the headline
 // numbers the run stored and a link to the full report. The link is minted when the mail goes out
-// (social.report_schedule.mint_link), one per recipient, so its token is never in the mail queue.
+// (social.report_schedule.mint_link), one per recipient, so its token is never in the mail queue. The org's white-label
+// branding (#1053) comes with the link: its name in the header and the footer, its accent on the header's rule (a
+// graphic, so 3:1 is enough; the link keeps its colour, which text needs at 4.5:1), and with hide Crove no "Crove" in
+// the footer. The logo stays on the report page: the mailer sends no inline images (CID attachments), and mail
+// clients block data URLs.
 import type { MailTemplate, MailTemplateInput } from './mail-queue.ts';
 
 interface ReportMailData {
@@ -29,6 +33,23 @@ function dataOf(payload: Readonly<Record<string, unknown>>): ReportMailData | nu
   return { name: oneLine(name), orgName: typeof orgName === 'string' && orgName.trim() ? oneLine(orgName).slice(0, 200) : null, periodStart, periodEnd, timeZone, test: test === true, posts: posts as number, reach: reach as number, impressions: impressions as number, engagement: engagement as number };
 }
 
+// The branding mint_link returns, as this template uses it: the name on one line, an accent only as #rrggbb (it goes
+// into a style attribute), anything else dropped.
+interface MailBrand {
+  name: string | null;
+  accent: string | null;
+  hideCrove: boolean;
+}
+function brandOf(value: unknown): MailBrand | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { name, accent, hideCrove } = value as Record<string, unknown>;
+  return {
+    name: typeof name === 'string' && name.trim() ? oneLine(name).slice(0, 100) : null,
+    accent: typeof accent === 'string' && /^#[0-9a-f]{6}$/.test(accent) ? accent : null,
+    hideCrove: hideCrove === true,
+  };
+}
+
 function day(iso: string, timeZone: string): string {
   try {
     return new Intl.DateTimeFormat('vi-VN', { timeZone, day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(iso));
@@ -40,7 +61,17 @@ function day(iso: string, timeZone: string): string {
 export async function renderReportMail(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string } | null> {
   const data = dataOf(input.payload);
   if (!data) return null;
-  const link = await input.execute<{ token: string; expiresAt: string }>('social.report_schedule.mint_link', { messageId: input.messageId });
+  const link = await input.execute<{ token: string; expiresAt: string; brand?: unknown }>('social.report_schedule.mint_link', { messageId: input.messageId });
+  const brand = brandOf(link.brand);
+  // Who the mail is from: the brand's name, else the org's.
+  const sender = brand?.name ?? data.orgName;
+  const footer = brand?.hideCrove
+    ? sender
+      ? `Thư này được ${sender} gửi tự động theo lịch gửi báo cáo.`
+      : 'Thư này được gửi tự động theo lịch gửi báo cáo.'
+    : sender
+      ? `Thư này được ${sender} gửi tự động qua Crove theo lịch gửi báo cáo.`
+      : 'Thư này được gửi tự động từ Crove theo lịch gửi báo cáo.';
   const url = `${input.publicUrl.replace(/\/+$/, '')}/-/report#${link.token}`;
   const from = day(data.periodStart, data.timeZone);
   // The period ends at a midnight; its last day is the one before.
@@ -55,6 +86,7 @@ export async function renderReportMail(input: MailTemplateInput): Promise<{ subj
   const until = day(link.expiresAt, data.timeZone);
   const subject = oneLine(`${data.test ? '[Thử] ' : ''}${input.subject ?? `Báo cáo mạng xã hội: ${data.name}`}`).slice(0, 200);
   const text = [
+    brand && sender ? sender : null,
     data.test ? 'Đây là thư thử của lịch gửi báo cáo.' : null,
     data.name,
     `Kỳ báo cáo: ${from} - ${to}`,
@@ -64,12 +96,12 @@ export async function renderReportMail(input: MailTemplateInput): Promise<{ subj
     `Xem báo cáo đầy đủ: ${url}`,
     `Liên kết dùng được đến ngày ${until}.`,
     '',
-    data.orgName ? `Thư này được ${data.orgName} gửi tự động qua Crove theo lịch gửi báo cáo.` : 'Thư này được gửi tự động từ Crove theo lịch gửi báo cáo.',
+    footer,
   ]
     .filter((line) => line !== null)
     .join('\n');
   const html = `<!doctype html><html lang="vi"><body style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#18181b;line-height:1.5">
-${data.test ? '<p style="color:#52525b">Đây là thư thử của lịch gửi báo cáo.</p>' : ''}
+${brand && sender ? `<p style="margin:0 0 16px;padding:0 0 8px;font-size:15px;font-weight:600;border-bottom:3px solid ${brand.accent ?? '#e4e4e7'}">${escapeHtml(sender)}</p>\n` : ''}${data.test ? '<p style="color:#52525b">Đây là thư thử của lịch gửi báo cáo.</p>' : ''}
 <h1 style="font-size:18px;margin:0 0 4px">${escapeHtml(data.name)}</h1>
 <p style="margin:0 0 16px;color:#52525b">Kỳ báo cáo: ${escapeHtml(from)} - ${escapeHtml(to)}</p>
 <table style="border-collapse:collapse;margin:0 0 16px">
@@ -77,7 +109,7 @@ ${rows.map(([label, value]) => `<tr><td style="padding:4px 16px 4px 0">${escapeH
 </table>
 <p style="margin:0 0 8px"><a href="${escapeHtml(url)}" style="color:#b91c1c">Xem báo cáo đầy đủ</a></p>
 <p style="margin:0 0 16px;font-size:13px;color:#52525b">Liên kết dùng được đến ngày ${escapeHtml(until)}.</p>
-<p style="font-size:12px;color:#71717a">${data.orgName ? `Thư này được ${escapeHtml(data.orgName)} gửi tự động qua Crove theo lịch gửi báo cáo.` : 'Thư này được gửi tự động từ Crove theo lịch gửi báo cáo.'}</p>
+<p style="font-size:12px;color:#71717a">${escapeHtml(footer)}</p>
 </body></html>`;
   return { subject, text, html };
 }
