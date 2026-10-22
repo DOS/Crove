@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { sql } from '../lib/db.ts';
-import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
@@ -34,7 +34,7 @@ const INVOICE = { name: 'hd.xml', mimeType: 'application/xml', buffer: Buffer.fr
 
 test('post an invoice of a locked month in the first open month, keeping its invoice date', async ({ page }) => {
   await page.goto('/');
-  await signUp(page, newEmail('late'));
+  await signInNewUser(page, newEmail('late'));
   const slug = await createOrg(page, 'Công ty Hóa đơn muộn');
   const nav = page.getByRole('navigation');
 

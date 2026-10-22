@@ -3,14 +3,14 @@
 // one click and comes back from the sidebar.
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
-import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 
 const INVOICE = fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url));
 const SELLER = 'CÔNG TY TNHH DỊCH VỤ MẪU';
 
 test('an accountant sees every company on one screen and opens one with a click', async ({ page }) => {
   await page.goto('/');
-  await signUp(page, newEmail('clients'));
+  await signInNewUser(page, newEmail('clients'));
   const first = await createOrg(page, 'Công ty An Bình');
 
   await test.step('the first company files quarterly and has an invoice waiting', async () => {
