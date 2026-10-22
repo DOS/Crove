@@ -532,7 +532,12 @@ export function SocialPage() {
         : listTab === 'attention'
           ? canDecide ? ['move', 'cancel'] : ['cancel']
           : [];
-  const agendaActions: readonly BulkAction[] = canDecide ? ['move'] : [];
+  // Labels and the assignee on many posts at once (#1057), for members and above, in the lists, the board and the calendar.
+  const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign'] : [];
+  const listActions = bulkActions.length > 0 ? [...bulkActions, ...editActions] : [];
+  const agendaActions: readonly BulkAction[] = [...(canDecide ? (['move'] as const) : []), ...editActions];
+  const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: canWrite });
+  const members = (org.data?.members ?? []).map((m) => ({ userId: m.userId, name: m.displayName ?? m.email }));
   const toggle = (id: string) => setPicked((now) => { const next = new Set(now); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const excerptOf = (postId: string) => excerpt((rows.find((p) => p.id === postId) ?? upcoming.data?.find((p) => p.id === postId))?.body ?? '', 60) || t('emptyText');
   const channelName = (connectionId: string) => names.get(connectionId) ?? t('bulk.move.channelGone');
@@ -668,6 +673,8 @@ export function SocialPage() {
                 canDecide={canDecide}
                 excerptOf={excerptOf}
                 channelName={channelName}
+                labelOptions={labelList}
+                members={members}
                 onClear={() => setPicked(new Set())}
               />
             </div>
@@ -683,7 +690,29 @@ export function SocialPage() {
         <TabsContent value="calendar">
           {tab === 'calendar' && (
             <div className="space-y-4">
-              <SocialCalendar slug={slug} names={names} canDecide={role === 'owner' || role === 'admin'} canWrite={canWrite} filters={filters} />
+              <SocialCalendar
+                slug={slug}
+                names={names}
+                canDecide={role === 'owner' || role === 'admin'}
+                canWrite={canWrite}
+                filters={filters}
+                bulk={
+                  editActions.length > 0
+                    ? (selected, clear) => (
+                        <BulkBar
+                          posts={selected}
+                          actions={editActions}
+                          canDecide={canDecide}
+                          excerptOf={(postId) => excerpt(selected.find((p) => p.id === postId)?.body ?? '', 60) || t('emptyText')}
+                          channelName={channelName}
+                          labelOptions={labelList}
+                          members={members}
+                          onClear={clear}
+                        />
+                      )
+                    : undefined
+                }
+              />
               <InstagramGrid slug={slug} channels={(channels.data ?? []).filter((c) => c.provider === 'instagram' && c.status !== 'revoked')} canDecide={role === 'owner' || role === 'admin'} />
               <PlanReviewCard channels={channels.data ?? []} canManage={canDecide} />
               <CalendarFeedCard canManage={role === 'owner' || role === 'admin'} />
@@ -698,7 +727,32 @@ export function SocialPage() {
               ) : list.error && rows.length === 0 ? (
                 <ErrorText>{errorMessage(list.error)}</ErrorText>
               ) : (
-                <SocialBoard posts={rows} slug={slug} names={names} labels={labelList} canWrite={canWrite} canDecide={canDecide} />
+                <>
+                  {editActions.length > 0 && (
+                    <div className="mb-2">
+                      <BulkBar
+                        posts={rows.filter((p) => picked.has(p.id))}
+                        actions={editActions}
+                        canDecide={canDecide}
+                        excerptOf={excerptOf}
+                        channelName={channelName}
+                        labelOptions={labelList}
+                        members={members}
+                        onClear={() => setPicked(new Set())}
+                      />
+                    </div>
+                  )}
+                  <SocialBoard
+                    posts={rows}
+                    slug={slug}
+                    names={names}
+                    labels={labelList}
+                    canWrite={canWrite}
+                    canDecide={canDecide}
+                    picked={editActions.length > 0 ? picked : null}
+                    onPick={setPicked}
+                  />
+                </>
               )}
               {list.hasNextPage && (
                 <div className="mt-4 flex justify-center">
@@ -722,14 +776,16 @@ export function SocialPage() {
           <TabsContent key={id} value={id}>
             {tab === id && (
               <>
-                {bulkActions.length > 0 && (
+                {listActions.length > 0 && (
                   <div className="mb-2">
                     <BulkBar
                       posts={rows.filter((p) => picked.has(p.id))}
-                      actions={bulkActions}
+                      actions={listActions}
                       canDecide={canDecide}
                       excerptOf={excerptOf}
                       channelName={channelName}
+                      labelOptions={labelList}
+                      members={members}
                       onClear={() => setPicked(new Set())}
                     />
                     {/* One client review link for the posts selected (#902). */}
@@ -744,7 +800,7 @@ export function SocialPage() {
                   <Empty title={filtered ? t('filters.noMatch') : t(`empty.${id}`)} />
                 ) : (
                   <div className="space-y-2">
-                    {bulkActions.length > 0 && (
+                    {listActions.length > 0 && (
                       <>
                         <label className="flex items-center gap-2 text-xs text-muted-foreground">
                           <Checkbox
@@ -757,7 +813,7 @@ export function SocialPage() {
                     )}
                     {rows.map((post) => (
                       <div key={post.id} className="flex items-center gap-2">
-                        {bulkActions.length > 0 && <Checkbox checked={picked.has(post.id)} onCheckedChange={() => toggle(post.id)} aria-label={t('bulk.select', { text: excerpt(post.body, 40) || t('emptyText') })} />}
+                        {listActions.length > 0 && <Checkbox checked={picked.has(post.id)} onCheckedChange={() => toggle(post.id)} aria-label={t('bulk.select', { text: excerpt(post.body, 40) || t('emptyText') })} />}
                         <div className="min-w-0 flex-1">
                           <PostRow post={post} slug={slug} names={names} labels={labelList} right={f.dateTime(post.updatedAt)} />
                         </div>
