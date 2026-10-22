@@ -22,6 +22,15 @@ This runbook covers setting the archive up, reading its two alerts, and what to 
 
   pg-boss keeps a failed job, and the prober's `dead_letters` check alerts on it ([incidents.md](incidents.md) section 3).
 
+## Outbox events (#997)
+
+The same store also keeps the outbox events that the daily retention run deletes from the database (plan §4.9, [org-offboarding.md](org-offboarding.md)):
+
+- **What:** one object per org and UTC day, `outbox/v1/<org_id>/<day>.jsonl`, one JSON line per event in time order, and `outbox/v1/<org_id>/<day>.manifest.json` with the row count, the first and last event and the object's SHA-256. Unlike the batches, these hold the events themselves (their payloads are ids and short codes).
+- **When:** once the whole day is more than 30 days old. The worker writes the object once, reads it back and compares the SHA-256, records the day in `crove_kernel.outbox_archive`, and only then deletes the day's events. The database refuses any other delete of an outbox event, and rolls a purge back if the day's events no longer match the archived count.
+- **How long:** on `s3`, each object is locked for 400 days (13 months and a margin, plan §7.9) instead of `ARCHIVE_RETENTION_DAYS`. Add a lifecycle rule that expires objects under `outbox/` after 400 days; the worker holds no delete permission. On `local`, the files stay until removed by hand.
+- **Reading an org's old events:** list `outbox/v1/<org_id>/` and read the day's object; the manifest's `sha256` must match it.
+
 ## Setting up the store
 
 | `ARCHIVE_STORE` | Where | Holds against |
