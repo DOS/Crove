@@ -375,11 +375,11 @@ function WordPressSettings({ settings, onChange, disabled }: { settings: Record<
   );
 }
 
-// A Discord thread id, or the thread's link as Discord copies it (https://discord.com/channels/<server>/<thread>), as
-// its id; anything else as typed, for the check to name.
+// A Discord thread id, or the thread's link as Discord copies it (https://discord.com/channels/<server>/<thread>, or a
+// message's link inside it, .../<thread>/<message>), as its id; anything else as typed, for the check to name.
 const discordThreadIdFrom = (text: string): string => {
   const trimmed = text.trim();
-  const link = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/channels\/\d{17,20}\/(\d{17,20})\/?$/.exec(trimmed);
+  const link = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/channels\/\d{17,20}\/(\d{17,20})(?:\/\d{17,20})?\/?$/.exec(trimmed);
   return link ? (link[1] as string) : trimmed;
 };
 
