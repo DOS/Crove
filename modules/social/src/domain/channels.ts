@@ -23,7 +23,7 @@ export const PROVIDERS = [
   // A LinkedIn Company Page the member administers (#1077).
   'linkedin_page',
 ] as const;
-export type Provider =(typeof PROVIDERS)[number];
+export type Provider = (typeof PROVIDERS)[number];
 
 export function isProvider(value: string): value is Provider {
   return (PROVIDERS as readonly string[]).includes(value);
