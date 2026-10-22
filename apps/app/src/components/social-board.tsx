@@ -6,7 +6,7 @@
 // scroll sideways, so every drop target is in view.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -64,6 +64,7 @@ function Card({
   onDragStart,
   onDragEnd,
   onMove,
+  onFocused,
 }: {
   post: Post;
   column: BoardColumn;
@@ -79,17 +80,22 @@ function Card({
   onDragStart: () => void;
   onDragEnd: () => void;
   onMove: (to: BoardColumn, byKey: boolean) => void;
+  onFocused: () => void;
 }) {
   const t = useTranslations('social');
   const f = useFormat();
   const ref = useRef<HTMLDivElement>(null);
-  // After a move by keyboard, the card keeps the focus in its new column.
+  // After a move by keyboard, the card takes the focus once it shows in its new column, and only then.
   useEffect(() => {
-    if (focus) ref.current?.focus();
-  }, [focus, column]);
+    if (!focus) return;
+    ref.current?.focus();
+    onFocused();
+  }, [focus, onFocused]);
   const text = excerpt(post.body) || t('emptyText');
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.target !== e.currentTarget || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
+    // A held key or a combination (Alt+arrow is the browser's back and forward) never moves a card.
+    if (e.repeat || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     e.preventDefault();
     const to = adjacentColumn(column, e.key === 'ArrowLeft' ? -1 : 1);
     if (to) onMove(to, true);
@@ -174,11 +180,15 @@ export function SocialBoard({
   const members = new Map((org.data?.members ?? []).map((m) => [m.userId, m.displayName ?? m.email]));
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<BoardColumn | null>(null);
-  const [focusId, setFocusId] = useState<string | null>(null);
+  // The card moved by keyboard and the column it goes to: it takes the focus there, once.
+  const [focusTo, setFocusTo] = useState<{ id: string; column: BoardColumn } | null>(null);
+  const clearFocus = useCallback(() => setFocusTo(null), []);
   const [notice, setNotice] = useState<Notice | null>(null);
   const move = useMutation({
     mutationFn: (args: { request: NonNullable<ReturnType<typeof boardRequest>>; postId: string }) => sendBoardRequest(args.request, api),
     onSuccess: (outcome) => setNotice({ kind: 'done', outcome }),
+    // A refused move leaves the card where it is, focused already: nothing to take the focus later.
+    onError: () => setFocusTo(null),
     onSettled: () => void queryClient.invalidateQueries({ queryKey: orpc.social.posts.key() }),
   });
   const placed = posts.map((post) => ({ post, column: postColumn(post.variants) })).filter((x): x is { post: Post; column: BoardColumn } => x.column !== null);
@@ -188,7 +198,7 @@ export function SocialBoard({
   const attempt = (postId: string, to: BoardColumn, byKey: boolean) => {
     const found = columnOf(postId);
     if (!found || move.isPending) return;
-    setFocusId(byKey ? postId : null);
+    setFocusTo(null);
     const check = checkMove(found.column, to, who);
     if (!check) return;
     move.reset();
@@ -202,6 +212,7 @@ export function SocialBoard({
       return;
     }
     setNotice(null);
+    if (byKey) setFocusTo({ id: postId, column: to });
     move.mutate({ request, postId });
   };
 
@@ -272,11 +283,12 @@ export function SocialBoard({
                     members={members}
                     moves={movesFrom(column, who)}
                     busy={move.isPending && move.variables?.postId === post.id}
-                    focus={focusId === post.id}
+                    focus={focusTo?.id === post.id && focusTo.column === column}
+                    onFocused={clearFocus}
                     hintId={canWrite ? hintId : undefined}
                     draggable={canWrite}
                     onDragStart={() => {
-                      setFocusId(null);
+                      setFocusTo(null);
                       setDragging(post.id);
                     }}
                     onDragEnd={() => {
