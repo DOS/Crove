@@ -50,7 +50,10 @@ describe('recent posts helpers', () => {
 
   it('accepts only bounded opaque cursors', () => {
     expect(pagingCursor('QVFIUmJ4ZAz1')).toBe('QVFIUmJ4ZAz1');
+    expect(pagingCursor('QVFI/UmJ4+ZAz1==')).toBe('QVFI/UmJ4+ZAz1==');
     expect(pagingCursor('a&b=c')).toBeNull();
+    expect(pagingCursor('a b')).toBeNull();
+    expect(pagingCursor('a?b#c')).toBeNull();
     expect(pagingCursor('x'.repeat(1025))).toBeNull();
     expect(pagingCursor(undefined)).toBeNull();
   });

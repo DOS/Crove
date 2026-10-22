@@ -38,7 +38,8 @@ export function platformLink(value: unknown, hosts: readonly string[]): string |
   return hosts.some((h) => host === h || host.endsWith(`.${h}`)) ? url.toString() : null;
 }
 
-// A paging cursor as Graph gives it: opaque, bounded, sent back as a query parameter.
+// A paging cursor as Graph gives it: opaque, bounded (base64 or base64url), sent back as a query parameter through
+// URLSearchParams, which encodes + and /.
 export function pagingCursor(value: unknown): string | null {
-  return typeof value === 'string' && /^[A-Za-z0-9_=%.-]{1,1024}$/.test(value) ? value : null;
+  return typeof value === 'string' && /^[A-Za-z0-9_=%.+/-]{1,1024}$/.test(value) ? value : null;
 }

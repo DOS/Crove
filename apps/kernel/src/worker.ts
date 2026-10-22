@@ -1022,6 +1022,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     }
   };
   const externalTimer = publishing.size > 0 ? setInterval(() => void externalSweep(), EXTERNAL_SWEEP_MS) : null;
+  // Once at start too, as the account sweep does, so a restart does not wait a whole period.
+  void externalSweep();
 
   let running = false;
   let stopped = false;
