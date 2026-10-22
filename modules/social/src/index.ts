@@ -28,6 +28,8 @@ export * from './media-tags.ts';
 export * from './policy.ts';
 export * from './assign.ts';
 export * from './bulk-edit.ts';
+export * from './domain/bulk-drafts.ts';
+export * from './bulk-drafts.ts';
 export * from './snippets.ts';
 export * from './labels.ts';
 export * from './calendar-notes.ts';

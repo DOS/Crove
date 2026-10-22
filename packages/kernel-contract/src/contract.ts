@@ -25,6 +25,9 @@ import {
   zSocialBulkAssign,
   zSocialBulkLabels,
   zSocialBulkResult,
+  channelsOrSet,
+  zSocialDraftsFromMediaFields,
+  zSocialDraftsFromMediaResult,
   zSocialDecide,
   zSocialPost,
   zSocialRecurrence,
@@ -383,6 +386,9 @@ export const contract = {
       bulkLabels: oc.input(zSocialBulkLabels).output(zSocialBulkResult),
       // The assignee, and optionally the due date, of up to 100 posts at once (#1057), with the same answer.
       bulkAssign: oc.input(zSocialBulkAssign).output(zSocialBulkResult),
+      // One draft per library file (#1080), all or none: every file is checked against every channel first, and a file
+      // that does not fit one is reported with nothing saved. A retry with the same idempotencyKey returns the first answer.
+      createFromMedia: oc.input(zSocialDraftsFromMediaFields.extend({ idempotencyKey: zId }).refine(channelsOrSet, 'channels or a channel set')).output(zSocialDraftsFromMediaResult),
       // A copy of any post as a new draft, for the channels still connected (#575).
       duplicate: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.

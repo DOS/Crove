@@ -261,6 +261,20 @@ export const SLOT_FREED: readonly SocialVariantStatus[] = ['cancelled', 'publish
 // Queued variants a queue edit may move: they have not been handed to the publisher.
 export const MOVABLE: readonly SocialVariantStatus[] = ['draft', 'in_review', 'changes_requested', 'rejected', 'approved', 'scheduled', 'paused'];
 
+// The slots of a connection's queue that variants hold (all but one, when given), as epoch milliseconds.
+export async function takenSlots(trx: Trx, orgId: string, connectionId: string, exceptId?: string): Promise<Set<number>> {
+  let q = trx
+    .selectFrom('crove_social.post_variant')
+    .select('queue_slot_at')
+    .where('org_id', '=', orgId)
+    .where('channel_connection_id', '=', connectionId)
+    .where('queue_slot_at', 'is not', null)
+    .where('status', 'not in', [...SLOT_FREED]);
+  if (exceptId) q = q.where('id', '<>', exceptId);
+  const rows = await q.execute();
+  return new Set(rows.map((r) => (r.queue_slot_at as Date).getTime()));
+}
+
 export async function setVariant(ctx: CommandContext, id: string, values: Record<string, unknown>): Promise<void> {
   await ctx.trx
     .updateTable('crove_social.post_variant')

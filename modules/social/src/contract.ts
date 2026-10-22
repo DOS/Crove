@@ -20,3 +20,5 @@ export * from './domain/report-branding.ts';
 // The team report (#1058): its rows, the median and the CSV file the Metrics tab saves, with the exports' quoting.
 export * from './domain/team-report.ts';
 export { csvCell } from './domain/csv.ts';
+// One draft per library file (#1080): the caption a file's name gives, as the command makes it.
+export * from './domain/bulk-drafts.ts';
