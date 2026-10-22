@@ -53,7 +53,8 @@ export function SocialPlanPrintPage() {
     <div className="min-h-screen bg-background px-4 py-6 text-foreground print:px-0 print:py-0" style={accentStyle(brand)}>
       <div className="mx-auto max-w-4xl space-y-5">
         <div className="flex min-h-7 items-center justify-between gap-2">
-          {branding.isLoading ? <span aria-hidden="true" /> : brand ? <BrandMark brand={brand} org={org} /> : <Logo />}
+          {/* Crove's mark only once the branding is known to be unset; while loading or after a failure, none. */}
+          {brand ? <BrandMark brand={brand} org={org} /> : branding.isSuccess ? <Logo /> : <span aria-hidden="true" />}
           {/* Printing waits for the branding too: a PDF made meanwhile would carry Crove's mark, not the agency's. */}
           {plan.data && branding.isSuccess && (
             <Button variant="outline" size="sm" className="print:hidden" onClick={() => window.print()}>
