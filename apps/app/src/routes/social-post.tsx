@@ -368,6 +368,7 @@ function WordPressSettings({ settings, onChange, disabled }: { settings: Record<
 // when it does well. Offered on a Reel, and kept on another post while it holds a choice, so it can be set back.
 function ReelFeedField({ settings, onChange, disabled }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social');
+  const id = useId();
   const options = instagramReelOf(settings);
   const feed = options && options !== 'invalid' ? options.reelFeed : 'feed';
   const graduation = options && options !== 'invalid' ? (options.trialGraduation ?? 'manual') : 'manual';
@@ -376,10 +377,10 @@ function ReelFeedField({ settings, onChange, disabled }: { settings: Record<stri
     onChange(reelFeed === 'feed' ? rest : { ...rest, instagram: reelFeed === 'trial' && trialGraduation !== 'manual' ? { reelFeed, trialGraduation } : { reelFeed } });
   return (
     <div className="space-y-1.5">
-      <Label htmlFor="ig-reel-feed" className="text-xs">
+      <Label htmlFor={`${id}-feed`} className="text-xs">
         {t('igReelFeed')}
       </Label>
-      <NativeSelect id="ig-reel-feed" size="sm" className="w-full max-w-xs" value={feed} disabled={disabled} onChange={(e) => set(e.target.value, graduation)}>
+      <NativeSelect id={`${id}-feed`} size="sm" className="w-full max-w-xs" value={feed} disabled={disabled} onChange={(e) => set(e.target.value, graduation)}>
         {IG_REEL_FEEDS.map((v) => (
           <NativeSelectOption key={v} value={v}>
             {t(`igReelFeedOption.${v}`)}
@@ -389,10 +390,10 @@ function ReelFeedField({ settings, onChange, disabled }: { settings: Record<stri
       <p className="text-xs text-subtle-foreground">{t(`igReelFeedHint.${feed}`)}</p>
       {feed === 'trial' && (
         <>
-          <Label htmlFor="ig-trial-graduation" className="text-xs">
+          <Label htmlFor={`${id}-graduation`} className="text-xs">
             {t('igTrialGraduation')}
           </Label>
-          <NativeSelect id="ig-trial-graduation" size="sm" className="w-full max-w-xs" value={graduation} disabled={disabled} onChange={(e) => set('trial', e.target.value)}>
+          <NativeSelect id={`${id}-graduation`} size="sm" className="w-full max-w-xs" value={graduation} disabled={disabled} onChange={(e) => set('trial', e.target.value)}>
             {IG_TRIAL_GRADUATIONS.map((v) => (
               <NativeSelectOption key={v} value={v}>
                 {t(`igTrialGraduationOption.${v}`)}

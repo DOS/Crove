@@ -295,7 +295,7 @@ describe('InstagramPublisher', () => {
     expect(await publisher.publish(input({ content: two, settings: { instagram: { reelFeed: 'trial' } } }))).toEqual(notReel);
     expect(await publisher.publish(input({ content: clip, settings: { postType: 'story', instagram: { reelFeed: 'feed' } } }))).toEqual(notReel);
     const invalid = { kind: 'rejected', error: 'bad_request', code: 'IG_REEL_FEED_INVALID' };
-    for (const instagram of [{ reelFeed: 'grid' }, { reelFeed: 'reels_only', trialGraduation: 'manual' }, { reelFeed: 'trial', trialGraduation: 'SS_PERFORMANCE' }, { reelFeed: 'trial', extra: true }, 'trial', null, ['trial']]) {
+    for (const instagram of [{ reelFeed: 'grid' }, { reelFeed: null }, { reelFeed: 'reels_only', trialGraduation: 'manual' }, { reelFeed: 'trial', trialGraduation: 'SS_PERFORMANCE' }, { reelFeed: 'trial', extra: true }, 'trial', null, ['trial']]) {
       expect(await publisher.publish(input({ content: clip, settings: { instagram } }))).toEqual(invalid);
     }
     expect(calls).toEqual([]);

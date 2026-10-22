@@ -121,7 +121,7 @@ export function instagramReelFormOf(settings: Readonly<Record<string, unknown>>)
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
   const r = raw as Record<string, unknown>;
   if (Object.keys(r).some((k) => k !== 'reelFeed' && k !== 'trialGraduation')) return 'invalid';
-  const feed = r.reelFeed ?? 'feed';
+  const feed = r.reelFeed === undefined ? 'feed' : r.reelFeed;
   const graduation = r.trialGraduation;
   if (feed === 'trial') {
     const strategy = graduation === undefined ? 'MANUAL' : typeof graduation === 'string' && Object.hasOwn(GRADUATION, graduation) ? GRADUATION[graduation] : undefined;

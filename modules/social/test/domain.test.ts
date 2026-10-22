@@ -419,7 +419,7 @@ describe('validateVariant', () => {
     expect(check('instagram', [mp4()], { postType: 'story', instagram: { reelFeed: 'reels_only' } })).toEqual(notReel);
     expect(check('instagram', [], { instagram: { reelFeed: 'trial' } })).toEqual(notReel);
     const invalid = [{ code: 'IG_REEL_FEED_INVALID', field: 'settings.instagram', limit: null, actual: null }];
-    for (const instagram of [{ reelFeed: 'grid' }, { reelFeed: 'reels_only', trialGraduation: 'manual' }, { reelFeed: 'trial', trialGraduation: 'SS_PERFORMANCE' }, { reelFeed: 'trial', notify: true }, 'trial', null, ['trial']]) {
+    for (const instagram of [{ reelFeed: 'grid' }, { reelFeed: null }, { reelFeed: 'reels_only', trialGraduation: 'manual' }, { reelFeed: 'trial', trialGraduation: 'SS_PERFORMANCE' }, { reelFeed: 'trial', notify: true }, 'trial', null, ['trial']]) {
       expect(check('instagram', [mp4()], { instagram })).toEqual(invalid);
     }
     expect(check('facebook_page', [mp4()], { instagram: { reelFeed: 'reels_only' } })).toEqual([{ code: 'INSTAGRAM_NOT_SUPPORTED', field: 'settings.instagram', limit: null, actual: null }]);

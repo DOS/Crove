@@ -947,7 +947,7 @@ export function instagramReelOf(settings: Readonly<Record<string, unknown>> | un
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
   const r = raw as Record<string, unknown>;
   if (Object.keys(r).some((k) => k !== 'reelFeed' && k !== 'trialGraduation')) return 'invalid';
-  const feed = r.reelFeed ?? 'feed';
+  const feed = r.reelFeed === undefined ? 'feed' : r.reelFeed;
   if (!(IG_REEL_FEEDS as readonly unknown[]).includes(feed)) return 'invalid';
   const graduation = r.trialGraduation;
   if (graduation !== undefined && (feed !== 'trial' || !(IG_TRIAL_GRADUATIONS as readonly unknown[]).includes(graduation))) return 'invalid';
