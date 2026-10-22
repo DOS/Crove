@@ -9,6 +9,7 @@ describe('bulk approval item refusals', () => {
     for (const [code, status] of [
       ['NOT_FOUND', 404],
       ['PROPOSAL_DECIDED', 409],
+      ['PROPOSAL_EXPIRED', 409],
       ['STALE_REVISION', 409],
       ['FOUR_EYES_REQUIRED', 403],
       ['NOT_ELIGIBLE', 403],

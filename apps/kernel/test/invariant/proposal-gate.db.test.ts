@@ -6,7 +6,8 @@
 //   exist, whatever that proposal's state, so a foreign id reveals nothing;
 // - co-owners: four-eyes (P10) and the owner_override liveness rule hold when an org has more than one owner;
 // - a co-owner's demotion racing an owner_override approval: whichever takes the member rows first wins, and the
-//   approval never acts on an owner role that a committed demotion took away.
+//   approval never acts on an owner role that a committed demotion took away;
+// - an expired proposal (#876) is terminal: approve, bulk approve, edit and reject refuse it with PROPOSAL_EXPIRED.
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 import { randomUUID } from 'node:crypto';
@@ -419,6 +420,42 @@ suite('proposal gate follow-ups on PostgreSQL (#161)', () => {
     expect(list.map((p) => p.id)).toEqual([own]);
     // Org A's own proposal still works for org A.
     expect(await view(a.orgId, a.owner, own)).toMatchObject({ status: 'pending', approveReason: 'four_eyes' });
+  });
+
+  it('keeps an expired proposal terminal: no approval, alone or in bulk, no edit, no rejection, nothing posted (#876)', async () => {
+    const { orgId, owner, people } = await orgWith('Expired proposal', ['admin']);
+    const admin = people[0] as string;
+    const id = await proposeIn(orgId, owner);
+    const other = await proposeIn(orgId, owner);
+    await withAdmin((c) => c.query("UPDATE crove_kernel.proposal SET status = 'expired', decided_at = now() WHERE id = $1", [id]));
+    const expired = { code: 'PROPOSAL_EXPIRED', status: 409 };
+
+    // The Inbox offers nothing, as the commands decide.
+    expect(await view(orgId, admin, id)).toMatchObject({ status: 'expired', canApprove: false, approveReason: 'not_pending', canEdit: false, canReject: false });
+    await expect(approveAs(orgId, admin, id, 1)).rejects.toMatchObject(expired);
+    await expect(
+      runtime.execute('kernel.proposal.edit', { id, revision: 1, lineAccounts: [{ lineNo: 1, debitAccount: '6422' }] }, { actor: asUser(admin), orgId }),
+    ).rejects.toMatchObject(expired);
+    await expect(runtime.execute('kernel.proposal.reject', { id }, { actor: asUser(admin), orgId })).rejects.toMatchObject(expired);
+    // In a bulk approval only the expired item is refused; the other one is approved.
+    const bulk = await runtime.execute<{ results: Array<Record<string, unknown>> }>(
+      'kernel.proposal.approve_many',
+      { items: [{ id, revision: 1, acceptUnverifiedSignature: true }, { id: other, revision: 1, acceptUnverifiedSignature: true }] },
+      { actor: asMfa(admin), orgId },
+    );
+    expect(bulk.results).toEqual([
+      { id, outcome: 'refused', code: 'PROPOSAL_EXPIRED', rule: null },
+      expect.objectContaining({ id: other, outcome: 'approved' }),
+    ]);
+
+    // Nothing was posted for it and it is still expired, at its first revision.
+    expect(await documents(id)).toBe(0);
+    expect(await documents(other)).toBe(1);
+    expect(await proposalRow(id)).toEqual({ status: 'expired', revision: 1 });
+    expect((await approvalAudit(id)).map((r) => [r.outcome, r.detail.code])).toEqual([
+      ['failed', 'PROPOSAL_EXPIRED'],
+      ['failed', 'PROPOSAL_EXPIRED'],
+    ]);
   });
 
   it('keeps four-eyes with co-owners, and lets either co-owner approve only when every eligible approver is an author', async () => {

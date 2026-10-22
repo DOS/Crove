@@ -34,9 +34,10 @@ interface BulkRun {
   stopped: boolean;
 }
 
-type Tab = 'pending' | 'executed' | 'rejected';
+// Expired proposals (#876) waited past the org's expiry; their author may ask for them again.
+type Tab = 'pending' | 'executed' | 'rejected' | 'expired';
 
-const TABS: Tab[] = ['pending', 'executed', 'rejected'];
+const TABS: Tab[] = ['pending', 'executed', 'rejected', 'expired'];
 
 const FILE_STATUS = { processing: 'brand', waiting: 'warning', proposed: 'success', duplicate: 'warning', failed: 'destructive', expanded: 'success' } as const;
 type FileStatus = keyof typeof FILE_STATUS;

@@ -1151,6 +1151,7 @@ export const en = {
       pending: 'Pending',
       executed: 'Posted',
       rejected: 'Rejected',
+      expired: 'Expired',
     },
     fileStatus: {
       processing: 'Reading',
@@ -1268,6 +1269,7 @@ export const en = {
     shortcuts: 'Shortcuts: J or N next pending proposal · K or P previous one · A approve · E edit accounts · Ctrl K command palette',
     executedAt: 'Posted {at}',
     rejected: 'Rejected',
+    expired: 'Expired',
     reading:
       'Reading the document again (reading {version}). The proposal is updated when it finishes; until then it cannot be approved, edited or rejected.',
     lastRunFailed: 'The last reading (reading {version}) failed: {error}.',
@@ -3219,6 +3221,7 @@ export const en = {
       NOT_SUPPRESSED: 'Mail to this address is not stopped.',
       MAIL_COMPLAINT_LIFT: 'The recipient reported this mail as spam. Only their own new sign-up can resume it.',
       PROPOSAL_DECIDED: 'This proposal was already decided.',
+      PROPOSAL_EXPIRED: 'This proposal waited too long for approval and expired, so it can no longer be decided.',
       STALE_REVISION: 'The proposal has changed. Reload it.',
       NOT_EDITABLE: 'This proposal cannot be edited.',
       NOT_ELIGIBLE: 'You are not allowed to approve this proposal.',
