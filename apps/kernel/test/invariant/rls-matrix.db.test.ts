@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.review_check',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -881,6 +882,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       return {
         setup: [{ table: 'crove_social.report_schedule', values: schedule }],
         row: { org_id: o.id, id: randomUUID(), schedule_id: schedule.id, kind: 'scheduled', period_start: '2026-10-12T00:00:00Z', period_end: '2026-10-19T00:00:00Z' },
+      };
+    },
+  },
+  // An item of the org's review checklist (#1105), ticked by a reviewer before approving: for every channel (no
+  // connection) or one channel, at a position. The table has no unique index (the commands keep at most 10 items per
+  // org under an advisory lock), so the rows of an org may share a position; each row gets its own fresh connection.
+  'crove_social.review_check': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, position: 0, label: `RLS matrix check ${tag()}`, created_by: o.owner },
       };
     },
   },
