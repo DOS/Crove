@@ -14,7 +14,8 @@
 //   as [{ id, label }] copied from the database, never a label from the client. A request for changes or a rejection
 //   needs no ticks and stores NULL; so does an approval on a channel without a checklist, as before #1105.
 // - Approvals that complete on their own (a lowered approval count, the client's answer on a review link) add no
-//   decision row and ask nothing: the people who approved already ticked the list. Client review links are not asked.
+//   decision row and ask nothing: they complete on approvals already given, which ticked the list as it was then (or
+//   none, when they came before it), as posts already approved stay approved. Client review links are not asked.
 // - Every member reads the list (social.review_check.list); a member limited to some channels (#1081) sees the
 //   org-wide items and those channels' items only.
 import { sql } from 'kysely';
