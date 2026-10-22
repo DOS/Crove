@@ -56,6 +56,7 @@ import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
 import { repostCommands } from './repost.ts';
 import { pinCallsOf, pinCommands, pinStatus, wantsPin, type PinStatus } from './pin.ts';
+import { playlistCallsOf, playlistCommands, playlistsOf, playlistStatus, type PlaylistStatus } from './playlists.ts';
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { clientReviewCommands } from './client-review.ts';
@@ -952,6 +953,8 @@ export interface VariantView {
   commentStatus: CommentStatus | null;
   // The pin of a published Telegram channel that asks for one (#982); null without one.
   pinStatus: PinStatus | null;
+  // The playlists of a published YouTube video that names some (#1018): how many took it, of how many; null without any.
+  playlistStatus: PlaylistStatus | null;
   // The thread of a published channel (#742): how many parts are out (the post counts as one) and the next one's state.
   threadStatus: { state: 'pending' | 'posted' | 'failed' | 'unknown'; posted: number; total: number } | null;
   queuePaused: boolean;
@@ -1068,6 +1071,10 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
   const pinned = variants.filter((v) => v.status === 'published' && v.external_post_id && wantsPin(v));
   const pinCalls = await pinCallsOf(ctx.trx, ctx.orgId, pinned);
   const pins = new Map<string, PinStatus>(pinned.map((v) => [v.id, pinStatus(pinCalls.get(v.id), now, v.published_at)]));
+  // The playlists of each published channel that names some (#1018).
+  const listed = variants.filter((v) => v.status === 'published' && v.external_post_id && playlistsOf(v));
+  const listCalls = await playlistCallsOf(ctx.trx, ctx.orgId, listed);
+  const lists = new Map<string, PlaylistStatus>(listed.map((v) => [v.id, playlistStatus(playlistsOf(v)?.length ?? 0, listCalls.get(v.id) ?? [], now, v.published_at)]));
   // The thread of each published channel that has one (#742).
   const threaded = variants.filter((v) => v.status === 'published' && v.external_post_id && threadPartsOf(settingsOf(v)));
   const partCalls = await threadCallsOf(ctx.trx, ctx.orgId, threaded);
@@ -1147,6 +1154,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               queueSlotAt: iso(v.queue_slot_at),
               commentStatus: comments.get(v.id) ?? null,
               pinStatus: pins.get(v.id) ?? null,
+              playlistStatus: lists.get(v.id) ?? null,
               threadStatus: threads.get(v.id) ?? null,
               // As the publisher decides it (queuePaused in publishing.ts): a retry time goes out whatever the queue does.
               queuePaused: v.queue_slot_at !== null && v.scheduled_at === null && v.error_retry_at === null && pausedQueues.has(v.channel_connection_id),
@@ -1494,6 +1502,7 @@ export const socialCommands = [
   ...autoReplyCommands,
   ...repostCommands,
   ...pinCommands,
+  ...playlistCommands,
   ...removeCommands,
   ...policyCommands,
   ...clientReviewCommands,
