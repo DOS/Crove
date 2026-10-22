@@ -113,8 +113,13 @@ export function BulkBar({
   // The direction comes from the select alone: a typed minus sign never flips it.
   const move: BulkMove = { amount: (earlier ? -1 : 1) * Math.abs(Number(amount)), unit };
   const run = useMutation({
+    // A new run starts clean: no progress or result of the last one.
+    onMutate: () => {
+      setProgress(null);
+      setResult(null);
+    },
     mutationFn: async (job: Job): Promise<Outcome> => {
-      const step = (done: number, total: number) => setProgress({ done, total });
+      const step =(done: number, total: number) => setProgress({ done, total });
       const ids = posts.map((p) => p.id);
       if (job.action === 'move') return { action: 'move', move: job.move, results: await runMove(posts, job.move, reschedule, step) };
       if (job.action === 'labels') return { action: 'labels', result: await runEdit(ids, editLabels(job.edit), step) };

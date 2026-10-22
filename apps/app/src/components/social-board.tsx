@@ -258,7 +258,16 @@ export function SocialBoard({
       )}
       {picked && shownIds.length > 0 && (
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Checkbox checked={shownIds.every((id) => picked.has(id))} onCheckedChange={(on) => onPick(on === true ? new Set(shownIds) : new Set())} />
+          <Checkbox checked={shownIds.every((id) => picked.has(id))} onCheckedChange={(on) => {
+              // Adds or removes the posts shown here, keeping what was picked elsewhere.
+              const next = new Set(picked);
+              for (const id of shownIds) {
+                if (on === true) next.add(id);
+                else next.delete(id);
+              }
+              onPick(next);
+            }}
+          />
           {t('bulk.selectAll')}
         </label>
       )}
