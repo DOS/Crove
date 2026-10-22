@@ -234,7 +234,7 @@ SH
   log "blobs: $fetched fetched from $BLOB_STORE"
 fi
 STEP="checking the blobs against files.sha256"
-(cd "$RUN/files" && sha256sum --quiet -c ../files.sha256)
+check_blob_sums "$RUN/files" "$RUN/files.sha256"
 [ -z "$(content_address_mismatches <"$RUN/files.sha256")" ]
 # Nothing the checksums do not cover may come along: a stray file under files/ would be copied into the store.
 STEP="checking the run for files neither SHA256SUMS nor files.sha256 lists"

@@ -1,8 +1,8 @@
 // tools/backup/lib.sh (issues #307, #351): the .env reader must see what docker compose sees, the run checks must
 // catch what they claim to, and the shell's sealed size must agree with seal.mjs.
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -114,6 +114,27 @@ describe.skipIf(!hasBash)('backup lib.sh', { timeout: 120_000 }, () => {
     const sizes = [0, 1, 65535, 65536, 65537, 1_000_000];
     const res = bash(`for n in ${sizes.join(' ')}; do sealed_size "$n"; done`);
     expect(res.out.trim().split('\n').map(Number)).toEqual(sizes.map((n) => sealedSize(n)));
+  });
+
+  it('checks the blobs of a run against files.sha256, and accepts a run with no file at all', () => {
+    const run = join(dir, 'blob-run').replaceAll('\\', '/');
+    const files = `${run}/files`;
+    const sums = `${run}/files.sha256`;
+    mkdirSync(`${files}/org/o1`, { recursive: true });
+    // No file existed when the backup ran: an empty list over an empty directory is a valid run (#1091).
+    writeFileSync(sums, '');
+    expect(bash(`check_blob_sums '${files}' '${sums}'`).status).toBe(0);
+    expect(bash(`check_blob_sums '${run}/missing' '${sums}'`).status).toBe(0);
+    // An empty list never vouches for a file that is there anyway.
+    const bytes = Buffer.from('<HDon>blob</HDon>');
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    writeFileSync(`${files}/org/o1/${hash}`, bytes);
+    expect(bash(`check_blob_sums '${files}' '${sums}'`).status).not.toBe(0);
+    // A listed blob with its sha256 passes; a wrong sha256 fails.
+    writeFileSync(sums, `${hash}  ./org/o1/${hash}\n`);
+    expect(bash(`check_blob_sums '${files}' '${sums}'`).status).toBe(0);
+    writeFileSync(sums, `${'0'.repeat(64)}  ./org/o1/${hash}\n`);
+    expect(bash(`check_blob_sums '${files}' '${sums}'`).status).not.toBe(0);
   });
 
   it('reports blobs whose name is not their sha256, and missing meta.env keys', () => {
