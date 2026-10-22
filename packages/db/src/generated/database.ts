@@ -63,6 +63,8 @@ export interface CroveKernelSchema {
   'crove_kernel.proposal_policy': KernelProposalPolicyTable;
   'crove_kernel.task': KernelTaskTable;
   'crove_kernel.task_comment': KernelTaskCommentTable;
+  'crove_kernel.tax_obligation_done': KernelTaxObligationDoneTable;
+  'crove_kernel.tax_profile': KernelTaxProfileTable;
   'crove_kernel.tenant': KernelTenantTable;
   'crove_kernel.tenant_member': KernelTenantMemberTable;
   'crove_kernel.usage_deferral': KernelUsageDeferralTable;
@@ -839,6 +841,28 @@ export interface KernelTaskTable {
   checkout_run_id: string | null;
   lock_expires_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   fence: Generated<string>;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_kernel.tax_obligation_done */
+export interface KernelTaxObligationDoneTable {
+  org_id: string;
+  id: Generated<string>;
+  obligation: string;
+  period: string;
+  done_by: string;
+  done_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_kernel.tax_profile */
+export interface KernelTaxProfileTable {
+  org_id: string;
+  id: Generated<string>;
+  obligations: Generated<string[]>;
+  pit_filing_period: string | null;
+  fiscal_year_end_month: Generated<number>;
+  updated_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }

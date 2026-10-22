@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { UsageLimits } from '@crove/kernel';
 import { SIGNUP_POLICIES, parseAllowedDomains } from './auth-signup-policy.ts';
+import { WEBHOOK_ENV } from './alert.ts';
 import { exportSealer } from './export-seal.ts';
 
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
@@ -190,6 +191,18 @@ const schema = z.object({
   ORG_LIMIT_AI_COST_PER_DAY: z.string().regex(/^\d{1,9}(\.\d{1,6})?$/).default('20'),
   AI_PRICE_INPUT_PER_MTOK: z.string().regex(/^\d{1,6}(\.\d{1,6})?$/).default('0'),
   AI_PRICE_OUTPUT_PER_MTOK: z.string().regex(/^\d{1,6}(\.\d{1,6})?$/).default('0'),
+  // Detective security alerts (#996): the worker alerts when one user acts in more than SECURITY_ALERT_ORG_THRESHOLD
+  // orgs, or the deployment sees more than SECURITY_ALERT_REFUSAL_THRESHOLD refusals, within
+  // SECURITY_ALERT_WINDOW_SECONDS, and on every owner or admin grant; a lasting signal repeats after
+  // SECURITY_ALERT_REPEAT_MINUTES. Alerts go to the log, and to ALERT_WEBHOOK_URL when it is set (the prober's chat).
+  SECURITY_ALERT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(86_400).default(300),
+  SECURITY_ALERT_ORG_THRESHOLD: z.coerce.number().int().min(1).max(1_000_000).default(20),
+  SECURITY_ALERT_REFUSAL_THRESHOLD: z.coerce.number().int().min(1).max(1_000_000).default(500),
+  SECURITY_ALERT_REPEAT_MINUTES: z.coerce.number().int().min(5).max(10_080).default(60),
+  ALERT_WEBHOOK_URL: WEBHOOK_ENV.ALERT_WEBHOOK_URL,
+  ALERT_WEBHOOK_FORMAT: WEBHOOK_ENV.ALERT_WEBHOOK_FORMAT,
+  ALERT_TELEGRAM_CHAT_ID: WEBHOOK_ENV.ALERT_TELEGRAM_CHAT_ID,
+  ALERT_INSTANCE: WEBHOOK_ENV.ALERT_INSTANCE,
   // Bound on denied/failed audit rows (issue #162), counted in the database across API instances: in each fixed
   // window of REFUSAL_AUDIT_WINDOW_SECONDS, an actor's refusals get an audit row until the actor has
   // REFUSAL_AUDIT_LIMIT_PER_ACTOR or the org REFUSAL_AUDIT_LIMIT_PER_ORG refusals in it; later ones are only counted

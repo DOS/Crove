@@ -9,12 +9,14 @@ import { DomainError, inboundKey, type AgentProgram, type BlobStore, type Creden
 import { KERNEL_NOTIFYING_EVENTS, PROPOSAL_NUDGE_SWEEP_MS, runAgentWake, sweepProposalNudges, type UsageLimits } from '@crove/kernel';
 import type { InvoiceReader } from '@crove/agent';
 import type { Publisher, Refresher } from '@crove/channel';
+import type { WebhookTarget } from './alert.ts';
 import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
 import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
+import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { ChatAlertSender } from './chat-alerts.ts';
 import { archiveSource, expandArchive, recordArchiveFailure, type ArchiveSource } from './archive.ts';
 import { backfillImageSizes, IMAGE_SIZE_SWEEP_MS } from './image-size-backfill.ts';
@@ -83,6 +85,9 @@ export const HEARTBEAT_INTERVAL_MS = 30_000;
 // Refusal tally windows (issue #162) older than the retention are deleted by the daily retention job, in batches.
 export const DEFAULT_REFUSAL_TALLY_RETENTION_DAYS = 7;
 const REFUSAL_TALLY_PRUNE_BATCH = 10_000;
+// Days of crove_kernel.security_event windows kept (plan §4.9: 30 days).
+export const SECURITY_EVENT_RETENTION_DAYS = 30;
+const SECURITY_EVENT_PRUNE_BATCH = 10_000;
 
 interface InboundRow {
   seq: string;
@@ -214,6 +219,9 @@ export interface WorkerDeps {
   archive?: { store: ArchiveStore; lagSeconds: number };
   // The per-org abuse limits (#675). Unset: nothing is checked (use is still recorded).
   usageLimits?: UsageLimits;
+  // Detective security alerts (#996): the alert webhook (null: the log only) and the thresholds (default
+  // DEFAULT_SECURITY_THRESHOLDS).
+  securityAlerts?: { target: WebhookTarget | null; thresholds?: SecurityThresholds };
   // The AI model's price per million input and output tokens, in the unit of the ai_cost limit. Unset: AI costs 0.
   aiPrice?: { inputPerMTok: string; outputPerMTok: string };
 }
@@ -275,6 +283,21 @@ export async function pruneRefusalTally(workerDb: Db, keepDays: number): Promise
     const n = rows[0]?.n ?? 0;
     total += n;
     if (n < REFUSAL_TALLY_PRUNE_BATCH) return total;
+  }
+}
+
+/**
+ * Deletes security_event windows older than SECURITY_EVENT_RETENTION_DAYS (crove_kernel.security_event_prune,
+ * crove_worker only), batch by batch, and returns how many rows went.
+ */
+export async function pruneSecurityEvents(workerDb: Db): Promise<number> {
+  let total = 0;
+  for (;;) {
+    const { rows } = await sql<{ n: number }>`
+      SELECT crove_kernel.security_event_prune(${SECURITY_EVENT_RETENTION_DAYS}::integer, ${SECURITY_EVENT_PRUNE_BATCH}::integer) AS n`.execute(workerDb);
+    const n = rows[0]?.n ?? 0;
+    total += n;
+    if (n < SECURITY_EVENT_PRUNE_BATCH) return total;
   }
 }
 
@@ -518,7 +541,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const mailCleared = await purgeMail(deps.workerDb);
       console.log(`[retention] ${Object.entries(mailCleared).map(([store, n]) => `${store}=${n}`).join(' ')}`);
       const pruned = await pruneRefusalTally(deps.workerDb, keepDays);
-      console.log(`[retention] refusal_tally=${pruned}`);
+      const securityEvents = await pruneSecurityEvents(deps.workerDb);
+      console.log(`[retention] refusal_tally=${pruned} security_event=${securityEvents}`);
     } finally {
       // Each catches its own errors; they run even when a database purge failed.
       await sweepStaging(deps.store);
@@ -765,6 +789,22 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   };
   const proposalNudgeTimer = setInterval(() => void proposalNudgeSweep(), PROPOSAL_NUDGE_SWEEP_MS);
   void proposalNudgeSweep();
+
+  // Detective security alerts (#996, plan §7.8): every 5 minutes, the signals worth an alert are logged and posted.
+  let watching = false;
+  const securitySweep = async () => {
+    if (watching) return;
+    watching = true;
+    try {
+      await sweepSecuritySignals({ workerDb: deps.workerDb, target: deps.securityAlerts?.target ?? null, thresholds: deps.securityAlerts?.thresholds });
+    } catch (error) {
+      console.error('[security] sweep', error);
+    } finally {
+      watching = false;
+    }
+  };
+  const securityTimer = setInterval(() => void securitySweep(), SECURITY_SWEEP_MS);
+  void securitySweep();
 
   // Missing-invoice reminders (#669): every 15 minutes, the orgs whose monthly reminder is due.
   let remindingInvoices = false;
@@ -1180,6 +1220,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (reminderTimer) clearInterval(reminderTimer);
     if (missingInvoiceTimer) clearInterval(missingInvoiceTimer);
     clearInterval(proposalNudgeTimer);
+    clearInterval(securityTimer);
     if (closingTimer) clearInterval(closingTimer);
     if (reportTimer) clearInterval(reportTimer);
     if (feedTimer) clearInterval(feedTimer);

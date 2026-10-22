@@ -38,6 +38,9 @@ export const KERNEL_ERROR_CODES = [
   'INTERNAL_SERVER_ERROR',
   // Members and invites.
   'LAST_OWNER',
+  // The tax calendar (#921).
+  'PIT_FILING_PERIOD_REQUIRED',
+  'TAX_PERIOD_MISMATCH',
   'MEMBER_NOT_FOUND',
   'CANNOT_REMOVE_SELF',
   'ALREADY_MEMBER',

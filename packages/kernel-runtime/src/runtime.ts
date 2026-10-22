@@ -285,6 +285,14 @@ export const SECURITY_REFUSAL_CODES: ReadonlySet<string> = new Set([
   'MEMBER_NOT_FOUND',
 ]);
 
+// A refusal noted in security_event when it comes before membership is established: any 4xx the runtime or a
+// definer answered for the caller. A 5xx is a fault of Crove's, never the caller's, and is only logged.
+export function isPreMembershipRefusal(refusal: DomainError): boolean {
+  return refusal.status >= 400 && refusal.status < 500;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function isSecurityRefusal(refusal: DomainError): boolean {
   return refusal.status === 404 || SECURITY_REFUSAL_CODES.has(refusal.code);
 }
@@ -1259,6 +1267,10 @@ export class Runtime {
       // audited today.
       if (entered && !orgIsNew && AUDITED_REFUSAL_STATUSES.has(domain.status)) {
         await this.writeRefusalAudit(name, def, input, inputSha256, actor, orgId, domain);
+      } else if ((!entered || orgIsNew) && isPreMembershipRefusal(domain)) {
+        // Refused before the caller was a member of the org (or the org-less command's new org rolled back with
+        // it): there is no org to audit in, so it is noted in security_event (plan §4.4 step 3, issue #1006).
+        await this.noteSecurityEvent(name, actor, orgIsNew ? null : orgId || null, domain.code);
       }
       if (domain.code === 'INTERNAL') logInternal(`execute ${name}`, error, { orgId, actor });
       throw domain;
@@ -1314,6 +1326,30 @@ export class Runtime {
         sqlState: typeof sqlState === 'string' ? sqlState : null,
       });
       if (contextTaint(auditError)) logInternal(`execute ${name} refusal audit`, auditError, { orgId, actor });
+      // An actor removed from the org in between: the org's audit no longer takes the row, security_event does.
+      if (lost.code === 'NOT_A_MEMBER') await this.noteSecurityEvent(name, actor, orgId, refusal.code);
+    }
+  }
+
+  // Notes a refusal made before membership was established in crove_kernel.security_event (sampled per caller,
+  // kept 30 days), in its own statement with no tenant context. Best effort, like the refusal audit: a failure is
+  // logged with ids and codes only and never replaces the caller's refusal. System actors are not noted: they are the
+  // deployment's own jobs, never an outside caller.
+  private async noteSecurityEvent(name: string, actor: Actor, orgId: string | null, code: string): Promise<void> {
+    if (actor.type === 'system') return;
+    const caller = actor.type === 'user' ? `user:${actor.userId.toLowerCase()}` : `agent:${actor.agentId.toLowerCase()}`;
+    const target = orgId && UUID_RE.test(orgId) ? orgId.toLowerCase() : null;
+    try {
+      await sql`SELECT crove_kernel.security_event_note(${caller}, ${name}, ${code}, ${target}::uuid)`.execute(this.cells.controlPlane());
+    } catch (error) {
+      const sqlState = (error as { code?: unknown } | null)?.code;
+      console.error(`[execute ${name}] SECURITY_EVENT_FAILED`, {
+        orgId: target,
+        actorType: actor.type,
+        actorId: actorId(actor),
+        refusal: code,
+        sqlState: typeof sqlState === 'string' ? sqlState : null,
+      });
     }
   }
 
@@ -1377,6 +1413,7 @@ export class Runtime {
     const def = this.queries.get(name);
     if (!def) throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
     const input = parseInput(def.input, rawInput);
+    let reached = false;
     try {
       const db = await this.cells.resolveTenant(options.orgId);
       return await db.transaction().execute(async (trx) => {
@@ -1384,12 +1421,14 @@ export class Runtime {
         await this.checkSession(trx, options.actor, options.orgId);
         await sql`SET TRANSACTION READ ONLY`.execute(trx);
         const entered = await this.enterContext(trx, options.actor, options.orgId);
+        reached = true;
         this.authorizeQuery(def, options.actor, entered);
         refuseStreamed(def);
         return (await def.handler(this.queryContext(trx, options.orgId, options.actor, entered), input)) as O;
       });
     } catch (error) {
       const domain = toDomainError(error);
+      if (!reached && isPreMembershipRefusal(domain)) await this.noteSecurityEvent(name, options.actor, options.orgId, domain.code);
       if (domain.code === 'INTERNAL') logInternal(`query ${name}`, error, options);
       throw domain;
     }
@@ -1406,6 +1445,7 @@ export class Runtime {
     if (!def) throw new DomainError('QUERY_NOT_FOUND', 404, `Không có truy vấn ${name}`);
     if (!def.stream) throw new DomainError('NOT_STREAMED', 400, `Truy vấn ${name} không đọc theo luồng`);
     const input = parseInput(def.input, rawInput);
+    let reached = false;
     try {
       const db = await this.cells.resolveTenant(options.orgId);
       return await db
@@ -1418,11 +1458,13 @@ export class Runtime {
           // than the pool's 10 s idle-in-transaction limit); every statement keeps the pool's statement_timeout.
           await sql`SET LOCAL idle_in_transaction_session_timeout = ${sql.lit(`${STREAM_IDLE_MINUTES}min`)}`.execute(trx);
           const entered = await this.enterContext(trx, options.actor, options.orgId);
+          reached = true;
           this.authorizeQuery(def, options.actor, entered);
           return (await def.handler(this.queryContext(trx, options.orgId, options.actor, entered), input, sink)) as O;
         });
     } catch (error) {
       const domain = toDomainError(error);
+      if (!reached && isPreMembershipRefusal(domain)) await this.noteSecurityEvent(name, options.actor, options.orgId, domain.code);
       if (domain.code === 'INTERNAL') logInternal(`stream ${name}`, error, options);
       throw domain;
     }

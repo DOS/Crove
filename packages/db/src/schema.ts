@@ -86,6 +86,19 @@ export type TenantTable = Refine<
 
 export type TenantMemberTable = Refine<G.KernelTenantMemberTable, { role: MemberRole }>;
 
+// The tax calendar of an org (issue #921): the obligations that apply to it and its settings (one row per org), and
+// the obligations marked done per period. The rules themselves are data in @crove/kernel-contract (tax-calendar.ts).
+export const TAX_OBLIGATION_CODES = ['vat_return', 'pit_withholding', 'cit_provisional', 'cit_finalization', 'pit_finalization', 'financial_statements', 'license_fee'] as const;
+export const PIT_FILING_PERIODS = ['month', 'quarter'] as const;
+export type TaxProfileTable = Refine<
+  G.KernelTaxProfileTable,
+  {
+    obligations: Generated<Array<(typeof TAX_OBLIGATION_CODES)[number]>>;
+    pit_filing_period: (typeof PIT_FILING_PERIODS)[number] | null;
+  }
+>;
+export type TaxObligationDoneTable = Refine<G.KernelTaxObligationDoneTable, { obligation: (typeof TAX_OBLIGATION_CODES)[number] }>;
+
 // A pending, accepted or revoked invite (issue #35). Tenant roles insert invites and may only set status,
 // revoked_at and revoked_by; crove_kernel.invite_accept() is the only writer of accepted_at and accepted_by.
 export const INVITE_ROLES = ['admin', 'member', 'viewer'] as const;
@@ -503,6 +516,8 @@ export type SocialPostApprovalTable = Refine<
 >;
 
 type Refined = Tables<{
+  'crove_kernel.tax_obligation_done': TaxObligationDoneTable;
+  'crove_kernel.tax_profile': TaxProfileTable;
   'crove_kernel.tenant': TenantTable;
   'crove_kernel.tenant_member': TenantMemberTable;
   'crove_kernel.member_invite': MemberInviteTable;
