@@ -215,7 +215,10 @@ export const queueMoveToFront = defineCommand({
     if (!row || stays(row, ctx.now.getTime()) !== null) {
       throw new DomainError('VARIANT_STATE', 409, 'Chỉ đưa lên đầu được bài đã lên lịch và đang chờ khung giờ trong hàng đợi', { variantId: input.variantId, reason: row ? stays(row, ctx.now.getTime()) : 'not_queued' });
     }
-    const { holders, fits } = await movable(ctx, queue, rows, () => true);
+    // Only the posts up to this one can move (each passed post goes one place later), so a long queue after it does not
+    // count toward the limit.
+    const targetAt = (row.queue_slot_at as Date).getTime();
+    const { holders, fits } = await movable(ctx, queue, rows, (at) => at <= targetAt);
     if (!holders.some((h) => h.id === row.id)) {
       throw new DomainError('VARIANT_STATE', 409, 'Bài này không còn hợp với khung giờ đang giữ; hãy lưu lại hàng đợi để bài được xếp lại', { variantId: row.id, reason: 'misplaced' });
     }
