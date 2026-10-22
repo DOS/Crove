@@ -14,7 +14,7 @@ const LEAD: Record<string, string> = {
   decided_rejected: 'Bài của bạn bị từ chối.',
   failed: 'Một bài đăng không thành công.',
   // A planned takedown (#861) that did not happen.
-  failed_removal: 'Crove chưa tự gỡ được một bài đã hẹn giờ gỡ; bài vẫn còn trên kênh. Hãy gỡ lại từ trang bài viết hoặc gỡ trực tiếp trên nền tảng.',
+  failed_removal: '{brand} chưa tự gỡ được một bài đã hẹn giờ gỡ; bài vẫn còn trên kênh. Hãy gỡ lại từ trang bài viết hoặc gỡ trực tiếp trên nền tảng.',
   needs_attention: 'Một bài đăng cần bạn xử lý trước khi đăng tiếp.',
   channel_expired: 'Một kênh đã hết hạn kết nối; bài lên lịch trên kênh này sẽ chờ đến khi bạn kết nối lại.',
   mention: 'Một thành viên đã nhắc đến bạn trong bình luận nội bộ của một bài.',
@@ -25,24 +25,25 @@ export async function renderNotificationMail(input: MailTemplateInput): Promise<
   if (typeof kind !== 'string' || typeof org !== 'string' || typeof path !== 'string' || !PATH.test(path)) return null;
   const lead = LEAD[kind === 'decided' ? `decided_${typeof decision === 'string' ? decision : ''}` : kind === 'failed' && removal === 'scheduled' ? 'failed_removal' : kind];
   if (!lead) return null;
+  const leadText = lead.replaceAll('{brand}', input.brand);
   const url = `${input.publicUrl.replace(/\/+$/, '')}${path}`;
   const open = path.endsWith('/channels') ? 'Mở trang kênh' : 'Mở bài viết';
   const lines = [
-    lead,
+    leadText,
     typeof post === 'string' && post ? `Bài: ${oneLine(post)}` : null,
     typeof channel === 'string' && channel ? `Kênh: ${oneLine(channel)}` : null,
     `${open}: ${url}`,
     '',
-    `Thư này được gửi từ Crove cho ${oneLine(org)}. Bạn có thể tắt email trong mục Thông báo của Social.`,
+    `Thư này được gửi từ ${input.brand} cho ${oneLine(org)}. Bạn có thể tắt email trong mục Thông báo của Social.`,
   ].filter((l) => l !== null);
   const html = `<!doctype html><html lang="vi"><body style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#18181b;line-height:1.5">
-<p style="margin:0 0 12px">${escapeHtml(lead)}</p>
+<p style="margin:0 0 12px">${escapeHtml(leadText)}</p>
 ${typeof post === 'string' && post ? `<p style="margin:0 0 4px"><strong>Bài:</strong> ${escapeHtml(oneLine(post))}</p>` : ''}
 ${typeof channel === 'string' && channel ? `<p style="margin:0 0 4px"><strong>Kênh:</strong> ${escapeHtml(oneLine(channel))}</p>` : ''}
 <p style="margin:16px 0"><a href="${escapeHtml(url)}" style="color:#b91c1c">${escapeHtml(open)}</a></p>
-<p style="font-size:12px;color:#71717a">Thư này được gửi từ Crove cho ${escapeHtml(oneLine(org))}. Bạn có thể tắt email trong mục Thông báo của Social.</p>
+<p style="font-size:12px;color:#71717a">Thư này được gửi từ ${escapeHtml(input.brand)} cho ${escapeHtml(oneLine(org))}. Bạn có thể tắt email trong mục Thông báo của Social.</p>
 </body></html>`;
-  return { subject: [...oneLine(input.subject ?? lead)].slice(0, 200).join(''), text: lines.join('\n'), html };
+  return { subject: [...oneLine(input.subject ?? leadText)].slice(0, 200).join(''), text: lines.join('\n'), html };
 }
 
 export const notificationMailTemplate: MailTemplate = { render: renderNotificationMail };

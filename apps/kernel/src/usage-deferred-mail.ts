@@ -33,7 +33,7 @@ export async function renderUsageDeferredMail(input: MailTemplateInput): Promise
   const url = `${input.publicUrl.replace(/\/+$/, '')}${path}`;
   const lead = `Tổ chức ${oneLine(org)} đã dùng hết hạn mức ${WHAT[metric]} trong 24 giờ.`;
   const keep = `Các thư và chứng từ đến sau được giữ lại, không bị mất, và sẽ được xử lý tiếp từ khoảng ${when} (giờ Việt Nam).`;
-  const footer = 'Hạn mức do người vận hành Crove đặt để một tổ chức không dùng hết tài nguyên chung. Nếu tổ chức cần hạn mức cao hơn, hãy liên hệ người vận hành.';
+  const footer = `Hạn mức do người vận hành ${input.brand} đặt để một tổ chức không dùng hết tài nguyên chung. Nếu tổ chức cần hạn mức cao hơn, hãy liên hệ người vận hành.`;
   const lines = [lead, keep, `Mở Inbox: ${url}`, '', footer];
   const html = `<!doctype html><html lang="vi"><body style="font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#18181b;line-height:1.5">
 <p style="margin:0 0 12px">${escapeHtml(lead)}</p>

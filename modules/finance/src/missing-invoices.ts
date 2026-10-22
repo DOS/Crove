@@ -430,9 +430,11 @@ function invoiceLine(item: Item): string {
 
 /**
  * The request or reminder mail from its stored merge data. replyTo: the org's inbound address when the deployment
- * receives mail; the client then replies or forwards the invoices there, and they reach the Inbox.
+ * receives mail; the client then replies or forwards the invoices there, and they reach the Inbox. brand: the product
+ * name users see (BRAND_NAME, #1040).
  */
-export function renderMissingInvoiceMail(raw: unknown, context: { replyTo: string | null }): RenderedMail {
+export function renderMissingInvoiceMail(raw: unknown, context: { replyTo: string | null; brand?: string }): RenderedMail {
+  const brand = context.brand ?? 'Crove';
   const mail = zMissingInvoiceMail.parse(raw);
   const org = oneLine(mail.orgName);
   const shown = mail.periods.reduce((n, p) => n + p.items.length, 0);
@@ -447,8 +449,8 @@ export function renderMissingInvoiceMail(raw: unknown, context: { replyTo: strin
   const already = 'Nếu đã gửi hóa đơn nào trong số này, Quý công ty vui lòng bỏ qua hóa đơn đó.';
   const footer =
     mail.kind === 'reminder'
-      ? 'Thư nhắc này được gửi tự động hằng tháng qua Crove cho đến khi bộ phận kế toán nhận đủ hóa đơn.'
-      : 'Thư này được gửi tự động qua Crove theo yêu cầu của bộ phận kế toán.';
+      ? `Thư nhắc này được gửi tự động hằng tháng qua ${brand} cho đến khi bộ phận kế toán nhận đủ hóa đơn.`
+      : `Thư này được gửi tự động qua ${brand} theo yêu cầu của bộ phận kế toán.`;
   const groups = mail.periods.filter((p) => p.items.length > 0);
   const heading = (p: (typeof groups)[number]) => {
     const label = periodLabel(p.period);

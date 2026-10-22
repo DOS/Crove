@@ -131,6 +131,16 @@ describe('SMTP adapter', () => {
     await createInviteMailSender(mailer, 'https://books.example.com/', {}, 'in.example.com')({ ...INVITE, bounceToken: null });
     expect(smtp.received.slice(-2).map((m) => m.from)).toEqual(['MAIL FROM:<noreply@crove.local>', 'MAIL FROM:<noreply@crove.local>']);
   });
+
+  // #1040: a bare sender address takes BRAND_NAME as its display name; "Name <address>" is kept as given.
+  it('names the sender by the brand', async () => {
+    await createInviteMailSender(createSmtpProvider({ host: '127.0.0.1', port, from: 'noreply@crove.local', senderName: 'Ledgerly' }), 'https://books.example.com/', {}, null, 'Ledgerly')(INVITE);
+    expect(smtp.received.at(-1)?.data).toMatch(/^From: Ledgerly <noreply@crove\.local>$/m);
+    expect(unfoldQp(smtp.received.at(-1)?.data ?? '')).toContain('Ledgerly');
+    expect(smtp.received.at(-1)?.data).not.toContain('Crove');
+    await createInviteMailSender(createSmtpProvider({ host: '127.0.0.1', port, from: 'Books <noreply@crove.local>', senderName: 'Ledgerly' }), 'https://books.example.com/')(INVITE);
+    expect(smtp.received.at(-1)?.data).toMatch(/^From: Books <noreply@crove\.local>$/m);
+  });
 });
 
 describe('SMTP adapter, refusals', () => {
@@ -330,6 +340,15 @@ describe('invite mail', () => {
   it('strips bidi overrides from names', () => {
     const mail = inviteMail({ ...INVITE, orgName: 'Ngân hàng \u202Egnoh nân\u202C' }, 'https://books.example.com');
     expect(mail.subject).toBe('Lời mời tham gia Ngân hàng gnoh nân trên Crove');
+  });
+
+  // #1040: the product name in the subject and body is BRAND_NAME, "Crove" when not given.
+  it('names the product by the brand it is given', () => {
+    const mail = inviteMail({ ...INVITE, orgName: 'Công ty A' }, 'https://books.example.com', 'Tên Mới');
+    expect(mail.subject).toBe('Lời mời tham gia Công ty A trên Tên Mới');
+    expect(mail.text).toContain('trên Tên Mới với vai trò quản trị');
+    expect(mail.html).toContain('trên Tên Mới với vai trò quản trị');
+    expect(`${mail.subject}${mail.text}${mail.html}`).not.toContain('Crove');
   });
 
   it('never takes its host from anything but PUBLIC_URL', () => {

@@ -7,6 +7,7 @@ import { Table, TableBody, TableHead, TableHeader, TableRow } from '@crove/ui/co
 import { cn } from '@crove/ui/lib/utils';
 import { useState, type ReactNode } from 'react';
 import { useTranslations } from 'use-intl';
+import { brandName } from '../i18n/brand.ts';
 import { takeOrgLeftNotice } from '../lib/api.ts';
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string | undefined; actions?: ReactNode }) {
@@ -110,7 +111,7 @@ export function Logo() {
         <path d="M98.1 4c-0.7 2.2-1.3 4-1.7 5.8-0.6 2.3-2 3.6-4.2 4.1-1.8 0.5-3.7 1.1-5.9 1.7 2.3 0.7 4.2 1.3 6.2 1.8 2.1 0.6 3.3 1.8 3.9 3.9 0.5 1.9 1.1 3.7 1.8 5.9 0.6-2.1 1.2-3.7 1.6-5.4 0.6-2.4 2-4 4.5-4.6 1.8-0.4 3.5-1 5.7-1.6-1.2-0.4-2-0.6-2.8-0.9-6.6-1.9-6.2-1.6-8.1-7.9C98.7 6.1 98.4 5.3 98.1 4z" />
         <path d="M56.4 33.7C26.9 33.7 3 57.6 3 87.2c0 23 14.7 43.4 36.6 50.7 2.7 0.5 3.7-1.1 3.7-2.5 0-0.8 0.1-8.4 0.1-15.5 0-4.4 0.8-7 2.8-8.6-10.3-4.1-17.6-14.2-17.6-25.9 0-15.4 12.5-27.9 27.9-27.9 15.4 0 27.9 12.5 27.9 27.9 0 11.8-7.3 21.8-17.6 25.9 1.4 1.3 3.3 3.3 3.1 9.4-0.3 7.1-0.1 12.9-0.1 14.7 0 1.4 1 3.1 3.7 2.5 21.8-7.3 36.4-27.8 36.4-50.7C109.9 57.6 86 33.7 56.4 33.7z" />
       </svg>
-      Crove
+      {brandName()}
     </span>
   );
 }

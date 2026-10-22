@@ -72,8 +72,9 @@ describe('resubmitSource and mayResubmit (#876)', () => {
 });
 
 describe('proposal reminder mail', () => {
-  const input = (payload: Record<string, unknown>, subject: string | null = 'Đề xuất chờ bạn duyệt đã 3 ngày') => ({
+  const input = (payload: Record<string, unknown>, subject: string | null = 'Đề xuất chờ bạn duyệt đã 3 ngày', brand = 'Crove') => ({
     publicUrl: 'https://crove.example.com/',
+    brand,
     subject,
     payload,
   });
@@ -88,6 +89,15 @@ describe('proposal reminder mail', () => {
     const escalate = await renderProposalReminderMail(input({ stage: 'escalate', org: 'Công ty A', title: null, days: 6, path }, null) as never);
     expect(escalate?.subject).toBe('Một đề xuất của tổ chức chưa được ai duyệt sau 6 ngày.');
     expect(escalate?.text).not.toContain('Đề xuất:');
+  });
+
+  // #1040: the footer names the product by BRAND_NAME.
+  it('names the product by the brand it is given', async () => {
+    const crove = await renderProposalReminderMail(input({ stage: 'remind', org: 'Công ty A', title: null, days: 3, path }) as never);
+    expect(crove?.text).toContain('Thư này được gửi từ Crove cho Công ty A');
+    const renamed = await renderProposalReminderMail(input({ stage: 'remind', org: 'Công ty A', title: null, days: 3, path }, null, 'Tên Mới') as never);
+    expect(renamed?.text).toContain('Thư này được gửi từ Tên Mới cho Công ty A');
+    expect(`${renamed?.subject}${renamed?.text}${renamed?.html}`).not.toContain('Crove');
   });
 
   it('escapes text and refuses a path, stage or day count it does not expect', async () => {

@@ -5,8 +5,8 @@ import { StatusLink } from '../components/status-link.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { PageHeader } from '../components/ui.tsx';
 import { getConfig } from '../lib/auth.ts';
-import { FIRM_GUIDE } from '../lib/firm-guide.ts';
-import { QUICK_GUIDE } from '../lib/quick-guide.ts';
+import { firmGuide } from '../lib/firm-guide.ts';
+import { quickGuide } from '../lib/quick-guide.ts';
 import { supportLink } from '../lib/support.ts';
 
 // The one-page quick guide (issue #310), then the guide for an accounting firm (#661). Their steps are Vietnamese in
@@ -26,7 +26,7 @@ export function GuidePage() {
         <PageHeader title={t('title')} subtitle={t('subtitle')} />
       </div>
       <div lang="vi" className="grid max-w-3xl gap-4">
-        {QUICK_GUIDE.map((step) => (
+        {quickGuide().map((step) => (
           <Card key={step.id} className="block p-5">
             <h2 className="text-base font-semibold text-foreground">{step.title}</h2>
             <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
@@ -43,7 +43,7 @@ export function GuidePage() {
         <p className="mt-1 text-sm text-muted-foreground">{t('firmSubtitle')}</p>
       </div>
       <div lang="vi" className="grid max-w-3xl gap-4">
-        {FIRM_GUIDE.map((step) => (
+        {firmGuide().map((step) => (
           <Card key={step.id} className="block p-5">
             <h2 className="text-base font-semibold text-foreground">{step.title}</h2>
             <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
