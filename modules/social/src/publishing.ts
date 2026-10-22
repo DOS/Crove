@@ -170,7 +170,7 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
       media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null })),
     },
     // With the UTM tags on a Telegram post's button links (#1017).
-    settings: isProvider(v.provider) ? sentSettings(v.provider, settingsOf(v)) : settingsOf(v),
+    settings: isProvider(v.provider) ? sentSettings(v.provider, settingsOf(v), postLinkOf(v, effectiveContent(base(post), overrides(v), v.content_frozen))) : settingsOf(v),
     externalRef: v.external_post_id,
     callStartedAt: startedAt.toISOString(),
     connectionVersion: connection ? connection.updatedAt.toISOString() : null,
@@ -182,6 +182,8 @@ const none = (reason: string): BeginResult => ({ action: 'none', reason });
 
 // The link as the channel sends it, with its UTM tags (#585).
 const withSentLink = (v: VariantRow, content: BaseContent): BaseContent => ({ ...content, linkUrl: isProvider(v.provider) ? sentLink(v.provider, content.linkUrl, settingsOf(v), content.body) : content.linkUrl });
+// The post's link as written and as it goes out, for a Telegram button that points at it (#1017).
+const postLinkOf = (v: VariantRow, content: BaseContent) => ({ plain: content.linkUrl, sent: withSentLink(v, content).linkUrl });
 
 async function lockVariant(ctx: CommandContext, variantId: string): Promise<{ post: PostRow; v: VariantRow } | null> {
   const found = await ctx.trx.selectFrom('crove_social.post_variant').select('post_id').where('org_id', '=', ctx.orgId).where('id', '=', variantId).executeTakeFirst();

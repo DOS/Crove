@@ -85,9 +85,11 @@ export function sentLink(provider: Provider, link: string | null, settings: Read
 }
 
 // The settings as the channel sends them: the links of a Telegram post's buttons (#1017) with the variant's UTM tags,
-// like the post's link. Everything else, and a variant without tags or buttons, as it is.
-export function sentSettings(provider: Provider, settings: Record<string, unknown>): Record<string, unknown> {
+// like the post's link. A button to the post's own link sends exactly the link the post sends (`postLink.sent`, which
+// may be left untagged), so the post's short link replaces both. Everything else, and a variant without tags or
+// buttons, as it is.
+export function sentSettings(provider: Provider, settings: Record<string, unknown>, postLink?: { plain: string | null; sent: string | null }): Record<string, unknown> {
   const utm = provider === 'telegram' ? utmOf(settings) : null;
   if (!utm) return settings;
-  return mapTelegramButtonUrls(settings, (url) => tagLink(url, provider, utm) ?? url);
+  return mapTelegramButtonUrls(settings, (url) => (postLink?.plain && postLink.sent && url === postLink.plain ? postLink.sent : (tagLink(url, provider, utm) ?? url)));
 }

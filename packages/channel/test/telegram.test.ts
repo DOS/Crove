@@ -202,6 +202,8 @@ describe('Telegram publish', () => {
         [[button({ url: 'http://shop.example/' })]],
         [[button({ url: 'tg://resolve?domain=quanpho' })]],
         [[button({ url: 'https://shop.example/a b' })]],
+        [[button({ url: 'https://user:pass@shop.example/' })]],
+        [[button({ url: `https://shop.example/a${String.fromCodePoint(0x200b)}b` })]],
         [[button({ text: 'x'.repeat(65) })]],
         [[button({ text: '   ' })]],
         [[button(), button(), button(), button()]],

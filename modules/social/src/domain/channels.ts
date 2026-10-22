@@ -477,15 +477,23 @@ export function telegramButtonsOf(settings: Readonly<Record<string, unknown>> | 
   return rows;
 }
 // Whether a button's link is one Telegram opens as a web page: https, with a host, no spaces, at most
-// TELEGRAM_BUTTON_URL_MAX characters. javascript:, plain http and tg: links are refused.
+// TELEGRAM_BUTTON_URL_MAX characters. javascript:, plain http and tg: links are refused, and so are links with a user
+// name or password, control characters or invisible marks.
 export function isButtonUrl(url: string): boolean {
-  if (url.length > TELEGRAM_BUTTON_URL_MAX || !/^https:\/\/[^\s]+$/i.test(url)) return false;
+  if (url.length > TELEGRAM_BUTTON_URL_MAX || !/^https:\/\/[^\s]+$/i.test(url) || hasHiddenChars(url)) return false;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:' && parsed.hostname.length > 0;
+    return parsed.protocol === 'https:' && parsed.hostname.length > 0 && !parsed.username && !parsed.password;
   } catch {
     return false;
   }
+}
+// C0 controls, DEL, zero-width and direction marks, line and paragraph separators, the byte order mark.
+function hasHiddenChars(url: string): boolean {
+  return [...url].some((ch) => {
+    const c = ch.codePointAt(0) as number;
+    return c < 0x20 || c === 0x7f || (c >= 0x200b && c <= 0x200f) || c === 0x2028 || c === 0x2029 || c === 0xfeff;
+  });
 }
 // The settings with every button's link passed through `map` (UTM tags, a short link); as they are without buttons.
 export function mapTelegramButtonUrls(settings: Record<string, unknown>, map: (url: string) => string): Record<string, unknown> {

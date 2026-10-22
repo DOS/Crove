@@ -66,11 +66,18 @@ function keyboardOf(settings: Readonly<Record<string, unknown>> | undefined): In
   }
   return rows;
 }
+// An https link with a host: no user name or password, no control characters or invisible marks (C0, DEL,
+// zero-width and direction marks, line and paragraph separators, the byte order mark).
 function httpsUrl(url: string): boolean {
   if (url.length > 2048 || !/^https:\/\/[^\s]+$/i.test(url)) return false;
+  const hidden = [...url].some((ch) => {
+    const c = ch.codePointAt(0) as number;
+    return c < 0x20 || c === 0x7f || (c >= 0x200b && c <= 0x200f) || c === 0x2028 || c === 0x2029 || c === 0xfeff;
+  });
+  if (hidden) return false;
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:' && parsed.hostname.length > 0;
+    return parsed.protocol === 'https:' && parsed.hostname.length > 0 && !parsed.username && !parsed.password;
   } catch {
     return false;
   }

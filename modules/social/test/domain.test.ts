@@ -203,7 +203,7 @@ describe('validateVariant', () => {
     });
 
     it('refuses javascript:, plain http and other links that are not a web page over https', () => {
-      for (const url of ['javascript:alert(1)', 'JavaScript://shop.example/%0aalert(1)', 'http://shop.example/', 'tg://resolve?domain=quanpho', 'https://', 'https://shop.example/a b', ' https://shop.example/', `https://shop.example/${'a'.repeat(2048)}`]) {
+      for (const url of ['javascript:alert(1)', 'JavaScript://shop.example/%0aalert(1)', 'http://shop.example/', 'tg://resolve?domain=quanpho', 'https://', 'https://shop.example/a b', ' https://shop.example/', `https://shop.example/${'a'.repeat(2048)}`, 'https://user:pass@shop.example/', 'https://admin@shop.example/', `https://shop.example/a${String.fromCodePoint(0x200b)}b`, `https://shop.example/${String.fromCodePoint(0x7f)}`, `https://shop.example/${String.fromCodePoint(0x2028)}`]) {
         expect(on([[button({ url })]])).toEqual([issue('TELEGRAM_BUTTON_URL_INVALID', 'settings.telegram.buttons.0.0.url')]);
       }
     });
