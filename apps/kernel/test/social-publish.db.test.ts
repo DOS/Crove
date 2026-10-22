@@ -1070,7 +1070,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
         const url = new URL(input);
         const route = `${url.host}${url.pathname.replace('/xrpc/', ' ')}`;
         asked.push({ route, json: typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : null });
-        const hosted = url.host === 'plc.directory' ? { body: { id: DID, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: `https://${PDS}` }] } } : null;
+        const hosted: { status?: number; body: unknown } | null = url.host === 'plc.directory' ? { body: { id: DID, service: [{ id: '#atproto_pds', type: 'AtprotoPersonalDataServer', serviceEndpoint: `https://${PDS}` }] } } : null;
         const answer = answers[route]?.shift() ?? hosted ?? { status: 500, body: { error: 'InternalServerError', message: `no answer for ${route}` } };
         return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
       };
