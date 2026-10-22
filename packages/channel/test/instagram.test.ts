@@ -257,6 +257,50 @@ describe('InstagramPublisher', () => {
     expect(image.calls[0]?.form).toEqual({ media_type: 'REELS', video_url: 'https://bucket.example/v-1?sig=1', share_to_feed: 'true', cover_url: 'https://bucket.example/c-1?sig=1', caption: 'Khai trương!' });
   });
 
+  it('keeps a Reel to the Reels tab with share_to_feed false, or makes it a trial Reel with its graduation (#1019)', async () => {
+    const reel = { body: 'Khai trương!', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
+    const sent = async (settings: Record<string, unknown>, over: Partial<PublishInput> = {}) => {
+      const { fetchImpl, calls } = graph({
+        [`POST /${IG}/media`]: [{ body: { id: '9103' } }],
+        'POST /ig-api-upload/9103': [{ body: { success: true } }],
+        'GET /9103': [{ body: { status_code: 'FINISHED' } }],
+        [`POST /${IG}/media_publish`]: [{ body: { id: '18000000000000103' } }],
+        'GET /18000000000000103': [{ body: { permalink: 'https://www.instagram.com/reel/r/' } }],
+      });
+      expect(await new InstagramPublisher(APP, fetchImpl, fast).publish(input({ content: reel, settings, ...over }))).toMatchObject({ kind: 'accepted', externalId: '18000000000000103' });
+      return calls[0]?.form;
+    };
+    const url = 'https://bucket.example/v-1?sig=1';
+    // The default, and feed said outright: in the feed and on the grid, as before.
+    expect(await sent({})).toEqual({ media_type: 'REELS', video_url: url, share_to_feed: 'true', caption: 'Khai trương!' });
+    expect(await sent({ instagram: { reelFeed: 'feed' } })).toEqual({ media_type: 'REELS', video_url: url, share_to_feed: 'true', caption: 'Khai trương!' });
+    expect(await sent({ instagram: { reelFeed: 'reels_only' }, cover: { atMs: 1200 } })).toEqual({ media_type: 'REELS', video_url: url, share_to_feed: 'false', thumb_offset: '1200', caption: 'Khai trương!' });
+    // A trial Reel carries trial_params and no share_to_feed, as in Meta's example; graduated by hand unless chosen.
+    expect(await sent({ instagram: { reelFeed: 'trial' } })).toEqual({ media_type: 'REELS', video_url: url, trial_params: '{"graduation_strategy":"MANUAL"}', caption: 'Khai trương!' });
+    expect(await sent({ instagram: { reelFeed: 'trial', trialGraduation: 'manual' } })).toEqual({ media_type: 'REELS', video_url: url, trial_params: '{"graduation_strategy":"MANUAL"}', caption: 'Khai trương!' });
+    expect(await sent({ instagram: { reelFeed: 'trial', trialGraduation: 'performance' } })).toEqual({ media_type: 'REELS', video_url: url, trial_params: '{"graduation_strategy":"SS_PERFORMANCE"}', caption: 'Khai trương!' });
+    // The same on a Reel whose bytes Crove uploads (#772), with collaborators.
+    const noUrls = { mediaUrl: async () => null, readMedia: async () => new Uint8Array(16) };
+    expect(await sent({ instagram: { reelFeed: 'reels_only' }, collaborators: ['partner'] }, noUrls)).toEqual({ media_type: 'REELS', upload_type: 'resumable', share_to_feed: 'false', caption: 'Khai trương!', collaborators: '["partner"]' });
+    expect(await sent({ instagram: { reelFeed: 'trial', trialGraduation: 'performance' } }, noUrls)).toEqual({ media_type: 'REELS', upload_type: 'resumable', trial_params: '{"graduation_strategy":"SS_PERFORMANCE"}', caption: 'Khai trương!' });
+  });
+
+  it('refuses where a Reel shows on a post that is not a Reel, and any other shape, before calling Meta (#1019)', async () => {
+    const { fetchImpl, calls } = graph({});
+    const publisher = new InstagramPublisher(APP, fetchImpl, fast);
+    const clip = { body: 'x', title: null, linkUrl: null, media: [{ fileId: 'v-1', mime: 'video/mp4', sizeBytes: 5_000_000, altText: null }] };
+    const two = { body: 'x', title: null, linkUrl: null, media: [image('f-1'), image('f-2')] };
+    const notReel = { kind: 'rejected', error: 'bad_request', code: 'IG_REEL_FEED_NOT_REEL' };
+    expect(await publisher.publish(input({ settings: { instagram: { reelFeed: 'reels_only' } } }))).toEqual(notReel);
+    expect(await publisher.publish(input({ content: two, settings: { instagram: { reelFeed: 'trial' } } }))).toEqual(notReel);
+    expect(await publisher.publish(input({ content: clip, settings: { postType: 'story', instagram: { reelFeed: 'feed' } } }))).toEqual(notReel);
+    const invalid = { kind: 'rejected', error: 'bad_request', code: 'IG_REEL_FEED_INVALID' };
+    for (const instagram of [{ reelFeed: 'grid' }, { reelFeed: 'reels_only', trialGraduation: 'manual' }, { reelFeed: 'trial', trialGraduation: 'SS_PERFORMANCE' }, { reelFeed: 'trial', extra: true }, 'trial', null, ['trial']]) {
+      expect(await publisher.publish(input({ content: clip, settings: { instagram } }))).toEqual(invalid);
+    }
+    expect(calls).toEqual([]);
+  });
+
   it('posts nothing with a cover on a post that is not a Reel, or a cover image without a public URL', async () => {
     const { fetchImpl, calls } = graph({});
     const publisher = new InstagramPublisher(APP, fetchImpl, fast);

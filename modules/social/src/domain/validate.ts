@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, LINKEDIN_VISIBILITY } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, instagramReelOf, isInstagramReel, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, LINKEDIN_VISIBILITY } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -33,6 +33,11 @@ export type IssueCode =
   | 'IG_COLLABORATORS_INVALID'
   | 'IG_USER_TAGS_INVALID'
   | 'IG_TAGS_NOT_SUPPORTED'
+  // Where an Instagram Reel shows (#1019): settings.instagram on another channel; not { reelFeed, trialGraduation? }
+  // with known values (a graduation only on a trial); set on a post that is not a Reel (a Story, images, a carousel).
+  | 'INSTAGRAM_NOT_SUPPORTED'
+  | 'IG_REEL_FEED_INVALID'
+  | 'IG_REEL_FEED_NOT_REEL'
   | 'CONTENT_REQUIRED'
   | 'TEXT_REQUIRED'
   | 'TEXT_TOO_LONG'
@@ -357,6 +362,13 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     issues.push({ code: 'VISIBILITY_INVALID', field: 'settings.visibility', limit: null, actual: null });
   }
   if (variant.provider === 'instagram') checkInstagramPeople(issues, variant);
+  // Instagram Reels (#1019): in the feed too unless chosen.
+  const reelOptions = instagramReelOf(variant.settings);
+  if (reelOptions !== null) {
+    if (variant.provider !== 'instagram') issues.push({ code: 'INSTAGRAM_NOT_SUPPORTED', field: 'settings.instagram', limit: null, actual: null });
+    else if (reelOptions === 'invalid') issues.push({ code: 'IG_REEL_FEED_INVALID', field: 'settings.instagram', limit: null, actual: null });
+    else if (!isInstagramReel(variant.media, variant.settings)) issues.push({ code: 'IG_REEL_FEED_NOT_REEL', field: 'settings.instagram.reelFeed', limit: null, actual: null });
+  }
   if (variant.provider === 'youtube') checkYouTube(issues, variant);
   // YouTube playlists (#1018), none when absent.
   const playlists = youtubePlaylistsOf(variant.settings);

@@ -1,7 +1,7 @@
 // The Instagram grid preview (#795): how a channel's profile grid will look, the posts still to come ahead of the ones
-// already out, newest first as Instagram shows them. Stories never reach the grid. Kept apart from the screen so it
-// can be tested without one.
-import { postTypeOf } from '@crove/mod-social/contract';
+// already out, newest first as Instagram shows them. Stories never reach the grid, nor Reels kept to the Reels tab or
+// posted as trial Reels (#1019). Kept apart from the screen so it can be tested without one.
+import { instagramReelOffGrid, postTypeOf } from '@crove/mod-social/contract';
 import type { CalendarPost } from './social-calendar.ts';
 import type { VariantStatus } from './social.ts';
 
@@ -23,6 +23,7 @@ export function gridItems(posts: readonly CalendarPost[], connectionId: string):
   for (const post of posts) {
     for (const v of post.variants) {
       if (v.connectionId !== connectionId || v.media.length === 0 || postTypeOf(v.settings) === 'story') continue;
+      if (v.media.length === 1 && v.media[0]?.mime.startsWith('video/') && instagramReelOffGrid(v.settings)) continue;
       if (v.status === 'published' && v.publishedAt) {
         items.push({ post, v, at: new Date(v.publishedAt), upcoming: false });
         continue;
