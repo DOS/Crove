@@ -32,6 +32,7 @@ const MACHINERY = new Set([
   'crove_kernel.credential',
   'crove_kernel.oauth_state',
   'crove_kernel.inbound_drop',
+  'crove_kernel.outbox_archive',
   'crove_kernel.outbox_pending',
   'crove_kernel.refusal_tally',
   'crove_social.chat_alert_target',
@@ -42,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.outbox_archive',
   'crove_social.publish_hold',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
