@@ -414,6 +414,8 @@ describe('InstagramPublisher', () => {
 
 describe('InstagramPublisher metrics', () => {
   const metricsInput = { externalAccountId: IG, secret: SECRET, externalId: '18000000000000042' };
+  // What a call asked, without the appsecret_proof every call carries.
+  const paramsOf = (query: URLSearchParams) => Object.fromEntries([...query].filter(([k]) => k !== 'appsecret_proof'));
 
   it('reads likes and comments, and reach, saves, shares and views from the insights', async () => {
     const { fetchImpl, calls } = graph({
@@ -434,6 +436,97 @@ describe('InstagramPublisher metrics', () => {
     expect(await new InstagramPublisher(APP, fetchImpl).metrics(metricsInput)).toEqual({ metrics: { reactions: 12, comments: 3, reach: 140, saves: 4, shares: 2, views: 310 } });
     expect(calls[0]?.query.get('fields')).toBe('like_count,comments_count');
     expect(calls[1]?.query.get('metric')).toBe('reach,saved,shares,views');
+    // A feed post's requests are the same as before the Story metrics (#1082), with an explicit feed type or none.
+    expect(calls.map((c) => [c.route, paramsOf(c.query)])).toEqual([
+      ['GET /18000000000000042', { fields: 'like_count,comments_count' }],
+      ['GET /18000000000000042/insights', { metric: 'reach,saved,shares,views' }],
+    ]);
+    const typed = graph({
+      'GET /18000000000000042': [{ body: { like_count: 1, comments_count: 0 } }],
+      'GET /18000000000000042/insights': [{ body: { data: [] } }],
+    });
+    await new InstagramPublisher(APP, typed.fetchImpl).metrics({ ...metricsInput, postType: 'feed' });
+    expect(typed.calls.map((c) => [c.route, paramsOf(c.query)])).toEqual([
+      ['GET /18000000000000042', { fields: 'like_count,comments_count' }],
+      ['GET /18000000000000042/insights', { metric: 'reach,saved,shares,views' }],
+    ]);
+  });
+
+  // A recorded Story answer (#1082), shaped as Meta's media insights reference shows it: the Story metrics, then the
+  // navigation with its breakdown by action.
+  it('asks a Story for the Story metrics and its navigation by action, never for likes or saves', async () => {
+    const { fetchImpl, calls } = graph({
+      'GET /18000000000000042/insights': [
+        {
+          body: {
+            data: [
+              { name: 'reach', period: 'lifetime', values: [{ value: 210 }], id: '18000000000000042/insights/reach/lifetime' },
+              { name: 'views', period: 'lifetime', values: [{ value: 260 }], id: '18000000000000042/insights/views/lifetime' },
+              { name: 'replies', period: 'lifetime', values: [{ value: 4 }], id: '18000000000000042/insights/replies/lifetime' },
+              { name: 'shares', period: 'lifetime', values: [{ value: 2 }], id: '18000000000000042/insights/shares/lifetime' },
+              { name: 'follows', period: 'lifetime', values: [{ value: 3 }], id: '18000000000000042/insights/follows/lifetime' },
+              { name: 'profile_visits', period: 'lifetime', values: [{ value: 7 }], id: '18000000000000042/insights/profile_visits/lifetime' },
+            ],
+          },
+        },
+        {
+          body: {
+            data: [
+              {
+                name: 'navigation',
+                period: 'lifetime',
+                title: 'Navigation',
+                values: [{ value: 25 }],
+                total_value: {
+                  value: 25,
+                  breakdowns: [
+                    {
+                      dimension_keys: ['story_navigation_action_type'],
+                      results: [
+                        { dimension_values: ['tap_forward'], value: 19 },
+                        { dimension_values: ['tap_back'], value: 4 },
+                        { dimension_values: ['tap_exit'], value: 1 },
+                        { dimension_values: ['SWIPE_FORWARD'], value: 1 },
+                        { dimension_values: ['automatic_forward'], value: 9 },
+                      ],
+                    },
+                  ],
+                },
+                id: '18000000000000042/insights/navigation/lifetime',
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(await new InstagramPublisher(APP, fetchImpl).metrics({ ...metricsInput, postType: 'story' })).toEqual({
+      metrics: { reach: 210, views: 260, replies: 4, shares: 2, follows: 3, profileVisits: 7, tapsForward: 19, tapsBack: 4, exits: 1, nextStory: 1 },
+    });
+    expect(calls.map((c) => [c.route, paramsOf(c.query)])).toEqual([
+      ['GET /18000000000000042/insights', { metric: 'reach,views,replies,shares,follows,profile_visits' }],
+      ['GET /18000000000000042/insights', { metric: 'navigation', breakdown: 'story_navigation_action_type' }],
+    ]);
+  });
+
+  it('keeps a Story with too few viewers as an empty answer, and tells an expired token, a deleted Story and an outage apart', async () => {
+    const story = { ...metricsInput, postType: 'story' as const };
+    const few = graph({ 'GET /18000000000000042/insights': [{ status: 400, body: { error: { message: '(#10) Not enough viewers for the media to show insights', code: 10, type: 'OAuthException' } } }] });
+    expect(await new InstagramPublisher(APP, few.fetchImpl).metrics(story)).toEqual({ metrics: {}, extra: { story: 'not_enough_viewers' } });
+    expect(few.calls).toHaveLength(1);
+    const dead = graph({ 'GET /18000000000000042/insights': [{ status: 400, body: { error: { message: 'Error validating access token', code: 190 } } }] });
+    expect(await new InstagramPublisher(APP, dead.fetchImpl).metrics(story)).toEqual({ refused: 'token_expired' });
+    const gone = graph({ 'GET /18000000000000042/insights': [{ status: 400, body: { error: { message: 'Unsupported get request.', code: 100, error_subcode: 33 } } }] });
+    expect(await new InstagramPublisher(APP, gone.fetchImpl).metrics(story)).toEqual({ refused: 'gone' });
+    const down = graph({ 'GET /18000000000000042/insights': [{ status: 503, body: {} }] });
+    expect(await new InstagramPublisher(APP, down.fetchImpl).metrics(story)).toBeNull();
+    // The navigation refused: the other counts stand.
+    const partial = graph({
+      'GET /18000000000000042/insights': [
+        { body: { data: [{ name: 'reach', values: [{ value: 12 }] }, { name: 'saved', values: [{ value: 9 }] }, { name: 'toString', values: [{ value: 1 }] }] } },
+        { status: 500, body: { error: { message: 'An unknown error has occurred.', code: 1 } } },
+      ],
+    });
+    expect(await new InstagramPublisher(APP, partial.fetchImpl).metrics(story)).toEqual({ metrics: { reach: 12 } });
   });
 
   it('keeps the plain counts when the insights are refused (no insights permission)', async () => {
