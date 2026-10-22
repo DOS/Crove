@@ -81,6 +81,44 @@ describe('LinkedInPublisher', () => {
     });
   });
 
+  it('sends who sees the post as its visibility, PUBLIC when unsaid, and refuses an unknown value before any call (#983)', async () => {
+    const answers = () => [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7100000000000000004' } }];
+    const sent = async (settings: Record<string, unknown>) => {
+      const { fetchImpl, calls } = linkedin({ 'POST api.linkedin.com/rest/posts': answers() });
+      expect((await new LinkedInPublisher({}, fetchImpl).publish(input({ settings }))).kind).toBe('accepted');
+      return calls[0]?.body;
+    };
+    // The default sends exactly the body it sent before the setting existed.
+    expect(await sent({})).toEqual({
+      author: `urn:li:person:${MEMBER}`,
+      commentary: 'Khai trương chi nhánh mới \\(Q1\\)',
+      visibility: 'PUBLIC',
+      distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+    });
+    expect(await sent({ visibility: 'public' })).toMatchObject({ visibility: 'PUBLIC' });
+    expect(await sent({ visibility: 'connections' })).toMatchObject({ visibility: 'CONNECTIONS' });
+    expect(await sent({ visibility: 'loggedIn' })).toMatchObject({ visibility: 'LOGGED_IN' });
+
+    // Images and a video carry it too.
+    const img = linkedin({
+      'POST api.linkedin.com/rest/images?action=initializeUpload': [{ body: { value: { uploadUrl: UPLOAD, image: 'urn:li:image:C4E10AQ9' } } }],
+      'PUT www.linkedin.com/dms-uploads/sp/v2/D4D10AQ/upload': [{ status: 201 }],
+      'POST api.linkedin.com/rest/posts': answers(),
+    });
+    await new LinkedInPublisher({}, img.fetchImpl).publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [image('f-9')] }, settings: { visibility: 'connections' } }));
+    expect(img.calls.at(-1)?.body).toMatchObject({ visibility: 'CONNECTIONS', content: { media: { id: 'urn:li:image:C4E10AQ9' } } });
+
+    const none = linkedin({});
+    const publisher = new LinkedInPublisher({}, none.fetchImpl);
+    for (const visibility of ['CONNECTIONS', 'unlisted', 'toString', 7]) {
+      expect(await publisher.publish(input({ settings: { visibility } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'VISIBILITY_INVALID' });
+    }
+    expect(await publisher.publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [image('f-9')] }, settings: { visibility: 'friends' } }))).toMatchObject({ code: 'VISIBILITY_INVALID' });
+    expect(none.calls).toHaveLength(0);
+  });
+
   it('uploads images first, then one post with them', async () => {
     const { fetchImpl, calls } = linkedin({
       'POST api.linkedin.com/rest/images?action=initializeUpload': [
@@ -164,7 +202,33 @@ describe('LinkedInPublisher video', () => {
     expect(calls[0]?.body).toEqual({ initializeUploadRequest: { owner: `urn:li:person:${MEMBER}`, fileSizeBytes: 10, uploadCaptions: false, uploadThumbnail: false } });
     expect(calls.filter((c) => c.route.startsWith('PUT')).map((c) => (c.body as Blob).size)).toEqual([6, 4]);
     expect(calls.find((c) => c.route.endsWith('finalizeUpload'))?.body).toEqual({ finalizeUploadRequest: { video: VIDEO, uploadToken: '', uploadedPartIds: ['etag-0', 'etag-1'] } });
-    expect(calls.at(-1)?.body).toMatchObject({ author: `urn:li:person:${MEMBER}`, content: { media: { id: VIDEO } } });
+    expect(calls.at(-1)?.body).toMatchObject({ author: `urn:li:person:${MEMBER}`, visibility: 'PUBLIC', content: { media: { id: VIDEO } } });
+  });
+
+  it('sends the chosen visibility on a video post, and refuses an unknown one before reading the file (#983)', async () => {
+    const { fetchImpl, calls } = linkedin({
+      ...init(),
+      [`PUT www.linkedin.com/dms-uploads/C5505AQH-oV1qvnFtKA/uploadedVideo`]: [{ headers: { etag: 'etag-0' } }, { headers: { etag: 'etag-1' } }],
+      'POST api.linkedin.com/rest/videos?action=finalizeUpload': [{ body: {} }],
+      [status]: [{ body: { id: VIDEO, status: 'AVAILABLE' } }],
+      'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7300000000000000002' } }],
+    });
+    expect((await new LinkedInPublisher({}, fetchImpl, quick).publish(withClip({ settings: { visibility: 'loggedIn' } }))).kind).toBe('accepted');
+    expect(calls.at(-1)?.body).toMatchObject({ visibility: 'LOGGED_IN', content: { media: { id: VIDEO } } });
+    let read = false;
+    const none = linkedin({});
+    const refused = await new LinkedInPublisher({}, none.fetchImpl, quick).publish(
+      withClip({
+        settings: { visibility: 'LOGGED_IN' },
+        readMedia: async () => {
+          read = true;
+          return new Uint8Array(10);
+        },
+      }),
+    );
+    expect(refused).toMatchObject({ kind: 'rejected', code: 'VISIBILITY_INVALID' });
+    expect(read).toBe(false);
+    expect(none.calls).toHaveLength(0);
   });
 
   it('posts nothing when processing fails, a part is refused, or the file is not MP4', async () => {

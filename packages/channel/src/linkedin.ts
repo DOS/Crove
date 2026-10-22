@@ -7,6 +7,8 @@
 // Publish: images are uploaded first (initializeUpload, then a PUT of the bytes; nothing is visible until the post
 // names them), then one POST /rest/posts. A member app cannot list the member's posts, so an unclear answer cannot be
 // checked: publishSafety 'never', and such a post waits for a person.
+// Who sees the post (#983): the post's visibility, PUBLIC unless the variant's settings choose connections or signed-in
+// members.
 import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
@@ -187,6 +189,20 @@ const textOf = (content: { body: string; linkUrl: string | null }) => {
   return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 
+// Who sees a LinkedIn post (#983), in `settings.visibility` (the field Mastodon's visibility uses), with Crove's names
+// mapped to the Posts API's visibility: public (the default, PUBLIC as before: anyone, on or off LinkedIn), connections
+// (CONNECTIONS, the author's 1st-degree network) or loggedIn (LOGGED_IN, signed-in members only). LinkedIn's fourth
+// value, CONTAINER, is for posts inside a group. Crove posts as the member only (urn:li:person), so every value applies.
+// A company page has no 1st-degree network, so page posting, when it comes, should keep to PUBLIC or LOGGED_IN (the
+// docs do not say LinkedIn refuses CONNECTIONS there; check before allowing it). 'invalid' for any other value.
+const VISIBILITY: Readonly<Record<string, 'PUBLIC' | 'CONNECTIONS' | 'LOGGED_IN'>> = { public: 'PUBLIC', connections: 'CONNECTIONS', loggedIn: 'LOGGED_IN' };
+export function linkedinVisibilityOf(settings: Readonly<Record<string, unknown>>): 'PUBLIC' | 'CONNECTIONS' | 'LOGGED_IN' | 'invalid' {
+  const value = settings.visibility;
+  if (value === undefined || value === null) return 'PUBLIC';
+  return typeof value === 'string' && Object.hasOwn(VISIBILITY, value) ? (VISIBILITY[value] as 'PUBLIC' | 'CONNECTIONS' | 'LOGGED_IN') : 'invalid';
+}
+type Visibility = Exclude<ReturnType<typeof linkedinVisibilityOf>, 'invalid'>;
+
 const VIDEO_URN = /^urn:li:video:[A-Za-z0-9_-]{1,64}$/;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // How long a publish waits for LinkedIn to process a video; with the upload it stays inside callTimeoutMs.
@@ -244,8 +260,10 @@ export class LinkedInPublisher implements Publisher {
     const token = tokenIn(input.secret);
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
     if (!MEMBER_ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    const visibility = linkedinVisibilityOf(input.settings);
+    if (visibility === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'VISIBILITY_INVALID' };
     const author = `urn:li:person:${input.externalAccountId}`;
-    if (input.content.media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token, author);
+    if (input.content.media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token, author, visibility);
     if (input.content.media.length > MAX_IMAGES) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_IMAGES' };
     const images: { id: string; altText?: string }[] = [];
     for (const m of input.content.media) {
@@ -268,15 +286,15 @@ export class LinkedInPublisher implements Publisher {
     }
     const text = textOf(input.content);
     if (!text && images.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
-    if (images.length === 1) return this.post(token, author, text, { media: images[0] });
-    if (images.length > 1) return this.post(token, author, text, { multiImage: { images } });
-    return this.post(token, author, text, null);
+    if (images.length === 1) return this.post(token, author, text, { media: images[0] }, visibility);
+    if (images.length > 1) return this.post(token, author, text, { multiImage: { images } }, visibility);
+    return this.post(token, author, text, null, visibility);
   }
 
   // One video (#451): the Videos API's multipart upload (initialize, a PUT per part, finalize with the parts' ETags),
   // a wait until LinkedIn has processed it, then the post. Nothing is visible before the post, so every failure before
   // it posted nothing; a video still processing when the wait ends is transient and uploaded again next time.
-  private async publishVideo(input: PublishInput, token: string, author: string): Promise<PublishResult> {
+  private async publishVideo(input: PublishInput, token: string, author: string, visibility: Visibility): Promise<PublishResult> {
     const { media } = input.content;
     const video = media[0];
     if (!video || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
@@ -340,7 +358,7 @@ export class LinkedInPublisher implements Publisher {
       return beforePost(publishResult(error));
     }
     if (Date.now() >= budgetEnd) return late();
-    return this.post(token, author, textOf(input.content), { media: { id: urn } });
+    return this.post(token, author, textOf(input.content), { media: { id: urn } }, visibility);
   }
 
   // A comment under the member's post (#587), through the Social Actions API with the same w_member_social grant.
@@ -361,11 +379,11 @@ export class LinkedInPublisher implements Publisher {
   }
 
   // The one visible step.
-  private async post(token: string, author: string, text: string, content: Record<string, unknown> | null): Promise<PublishResult> {
+  private async post(token: string, author: string, text: string, content: Record<string, unknown> | null, visibility: Visibility): Promise<PublishResult> {
     const post: Record<string, unknown> = {
       author,
       commentary: littleText(text),
-      visibility: 'PUBLIC',
+      visibility,
       distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
       lifecycleState: 'PUBLISHED',
       isReshareDisabledByAuthor: false,

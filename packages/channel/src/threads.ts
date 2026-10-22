@@ -8,6 +8,7 @@
 // reference carries the text's hash so a status check recognises the post it became.
 // Polls and topic tags (#711): a text post may carry a poll of 2 to 4 options (poll_attachment), and any post one topic
 // tag (topic_tag); both come from the variant's settings and are checked before anything is created.
+// Who may reply (#983): the post's container carries reply_control, read from the same settings field as X's reply setting.
 // First comment (#609): a reply to the account's own post, made the same way (a TEXT container with reply_to_id, then
 // threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
@@ -240,6 +241,19 @@ export function threadsTopicTagOf(settings: Readonly<Record<string, unknown>>): 
   return [...text].length >= 1 && [...text].length <= 50 && !/[.&]/.test(text) ? text : false;
 }
 
+// Who may reply to a Threads post (#983), in `settings.replySettings`, the field X's reply setting uses (#948), with
+// Crove's names mapped to Meta's reply_control values: everyone (the default, sent as nothing, as before), the accounts
+// the poster follows, the people the post mentions, or the poster's followers (Threads only). Meta sets it per post, on
+// the container that is published; thread parts are replies (comment()) and carry none. Meta's fifth value,
+// parent_post_author_only, concerns replies to someone else's post, which Crove does not make. null for everyone,
+// 'invalid' for any other value.
+const REPLY_CONTROL: Readonly<Record<string, string>> = { following: 'accounts_you_follow', mentionedUsers: 'mentioned_only', followers: 'followers_only' };
+export function threadsReplyControlOf(settings: Readonly<Record<string, unknown>>): string | null | 'invalid' {
+  const value = settings.replySettings;
+  if (value === undefined || value === null || value === 'everyone') return null;
+  return typeof value === 'string' && Object.hasOwn(REPLY_CONTROL, value) ? (REPLY_CONTROL[value] as string) : 'invalid';
+}
+
 export class ThreadsPublisher implements Publisher {
   readonly provider = 'threads' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
@@ -316,7 +330,10 @@ export class ThreadsPublisher implements Publisher {
     if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
     if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
     if (topicTag === false) return { kind: 'rejected', error: 'bad_request', code: 'TOPIC_TAG_INVALID' };
-    const extras = { ...(poll ? { poll_attachment: JSON.stringify(poll) } : {}), ...(topicTag ? { topic_tag: topicTag } : {}) };
+    const replyControl = threadsReplyControlOf(input.settings);
+    if (replyControl === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'REPLY_SETTINGS_INVALID' };
+    // On the container that is published (a carousel's, not its items').
+    const extras = { ...(poll ? { poll_attachment: JSON.stringify(poll) } : {}), ...(topicTag ? { topic_tag: topicTag } : {}), ...(replyControl ? { reply_control: replyControl } : {}) };
     // The profile's publishing quota (plan §3.6; 250 posts in a rolling 24 hours today), read before any container; a
     // read that fails does not hold the post.
     const quota = await this.client.call<Parameters<typeof quotaExhausted>[0]>('GET', `${VERSION}/${user}/threads_publishing_limit`, { token, params: { fields: 'quota_usage,config' } }).catch(() => null);

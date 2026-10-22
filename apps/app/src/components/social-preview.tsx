@@ -23,8 +23,10 @@ export interface PreviewContent {
   poll?: readonly string[];
   pollMinutes?: number;
   topicTag?: string;
-  // Who may reply to an X post, when not everyone (#948).
-  replySettings?: 'following' | 'mentionedUsers';
+  // Who may reply to an X or Threads post, when not everyone (#948, #983).
+  replySettings?: 'following' | 'mentionedUsers' | 'followers';
+  // Who sees a LinkedIn post, when not anyone (#983).
+  visibility?: 'connections' | 'loggedIn';
 }
 
 // A poll's length as X shows it under the options: days, else hours, else minutes.
@@ -247,6 +249,7 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
       )}
       <Media media={content.media} layout="feed" max={rule.gridMax} />
       {content.replySettings && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewReplySettings.${content.replySettings}`)}</p>}
+      {content.visibility && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewVisibility.${content.visibility}`)}</p>}
       {card}
     </div>
   );

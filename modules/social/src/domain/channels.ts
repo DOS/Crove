@@ -266,6 +266,18 @@ export function pollDurationOf(settings: Readonly<Record<string, unknown>> | und
 // the poster follows, or the people the post mentions (POST /2/tweets reply_settings). The adapter reads the same value.
 export const X_REPLY_SETTINGS = ['everyone', 'following', 'mentionedUsers'] as const;
 export type XReplySetting = (typeof X_REPLY_SETTINGS)[number];
+// Threads (#983) reads the same field with the same meanings, plus the poster's followers; its adapter maps them to
+// reply_control (accounts_you_follow, mentioned_only, followers_only) on the published container, everyone sent as nothing.
+export const THREADS_REPLY_SETTINGS = ['everyone', 'following', 'mentionedUsers', 'followers'] as const;
+export type ReplySetting = (typeof THREADS_REPLY_SETTINGS)[number];
+// The reply settings each channel takes, everyone first (the default).
+export const REPLY_SETTINGS: Readonly<Partial<Record<Provider, readonly ReplySetting[]>>> = { x: X_REPLY_SETTINGS, threads: THREADS_REPLY_SETTINGS };
+// A variant's reply setting when it is one its channel takes and not everyone, else null (for the preview).
+export function replySettingOf(provider: string, settings: Readonly<Record<string, unknown>> | undefined): Exclude<ReplySetting, 'everyone'> | null {
+  const allowed = isProvider(provider) ? REPLY_SETTINGS[provider] : undefined;
+  const value = settings?.replySettings;
+  return allowed && value !== 'everyone' && (allowed as readonly unknown[]).includes(value) ? (value as Exclude<ReplySetting, 'everyone'>) : null;
+}
 export const TOPIC_TAG_RULES: Readonly<Partial<Record<Provider, { maxChars: number }>>> = { threads: { maxChars: 50 } };
 
 // The poll's options, trimmed; null when there is none, 'invalid' when it is not { options: string[] }.
@@ -756,6 +768,11 @@ export function countLinks(text: string): number {
 // Mastodon settings (#748): a content warning shown before the post (`settings.contentWarning`, up to 500 characters)
 // and the visibility (`settings.visibility`: public, the default, or unlisted). The adapter reads the same shapes.
 export const MASTODON_VISIBILITY = ['public', 'unlisted'] as const;
+// Who sees a LinkedIn post (#983), in the same `settings.visibility`: public (the default, sent as PUBLIC as before),
+// connections (CONNECTIONS, the member's 1st-degree network) or loggedIn (LOGGED_IN, signed-in members). Crove posts as
+// the member, so all three apply. The adapter maps the same values.
+export const LINKEDIN_VISIBILITY = ['public', 'connections', 'loggedIn'] as const;
+export type LinkedInVisibility = (typeof LINKEDIN_VISIBILITY)[number];
 export const CONTENT_WARNING_MAX = 500;
 
 // YouTube video details (#905), read by the adapter in the same shapes: the audience (`settings.madeForKids`, a
