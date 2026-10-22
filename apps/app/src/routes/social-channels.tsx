@@ -14,6 +14,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { VoiceEditor } from '../components/social-brand-voice.tsx';
 import { WatermarkCard } from '../components/social-watermark.tsx';
+import { ReportBrandingCard } from '../components/social-report-branding.tsx';
 import { ChatAlertCard } from '../components/social-chat-alert.tsx';
 import { PublishHoldCard } from '../components/social-publish-hold.tsx';
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
@@ -457,6 +458,13 @@ export function SocialChannelsPage() {
               <p className="text-xs text-subtle-foreground">{t('watermark.hint')}</p>
             </div>
             <WatermarkCard canEdit={isAdmin} />
+          </Card>
+          <Card className="block space-y-2 p-4">
+            <div>
+              <p className="text-sm font-medium text-foreground">{t('reportBranding.title')}</p>
+              <p className="text-xs text-subtle-foreground">{t('reportBranding.hint')}</p>
+            </div>
+            <ReportBrandingCard canEdit={isAdmin} />
           </Card>
           <Card className="block p-4">
             <PublishHoldCard key={slug} />

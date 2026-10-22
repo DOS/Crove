@@ -11,6 +11,8 @@ export * from './domain/media-tags.ts';
 export { localTime, zonedToEpoch, type LocalTime } from './domain/queue.ts';
 // Recurring posts (#979): the rule's next occurrence, for the post page's preview.
 export * from './domain/recurrence.ts';
+// White-label client reports (#1053): the settings form checks a logo and an accent with the rules the command applies.
+export * from './domain/report-branding.ts';
 // The team report (#1058): its rows, the median and the CSV file the Metrics tab saves, with the exports' quoting.
 export * from './domain/team-report.ts';
 export { csvCell } from './domain/csv.ts';
