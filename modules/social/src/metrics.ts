@@ -457,7 +457,8 @@ export interface MetricsDeps {
 // the platform no longer has (never asked again). A Story (#1082) follows storyCapture: it waits rather than take a
 // capture that would push the next one past its end, takes a final capture in its last hours (a try with no answer
 // is not kept, so the next pass tries again while there is time), and is marked gone and expired once its insights
-// are over, without asking the platform.
+// are over, without asking the platform. metrics_due already leaves out a Story that waits (#1087), by the same rule,
+// so the wait here only catches a Story the database's clock saw a moment earlier.
 export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: number; skipped: number }> {
   const providers = Object.entries(deps.publishers).filter(([, p]) => typeof p.metrics === 'function').map(([id]) => id);
   const out = { recorded: 0, skipped: 0 };
