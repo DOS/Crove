@@ -650,7 +650,7 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       const connection = channelConnectionRow(o);
       return {
         setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
-        row: { org_id: o.id, id: randomUUID(), user_id: o.owner, connection_id: connection.id, created_by: o.owner },
+        row: { org_id: o.id, id: randomUUID(), user_id: o.owner, channel_connection_id: connection.id, created_by: o.owner },
       };
     },
   },
