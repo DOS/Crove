@@ -11,6 +11,7 @@ export * from './publish-hold.ts';
 export * from './domain/versions.ts';
 export * from './versions.ts';
 export * from './metrics.ts';
+export * from './external-posts.ts';
 export * from './plan-export.ts';
 export * from './domain/team-report.ts';
 export * from './team-report.ts';

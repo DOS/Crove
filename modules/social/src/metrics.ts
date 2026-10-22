@@ -126,14 +126,17 @@ export interface WindowTotals extends MetricsTotals {
 // per channel. previous (#947): the same for the window of the same length just before, so a screen can show the
 // change. Both list every channel with posts in either window (0 posts and no counts in the one it did not post in),
 // in the same order (most posts now, then most before), so the channels add up to both windows' totals.
+// includeExternal (#1054): the posts each channel published outside Crove count too, in both windows; they carry no
+// label, so a label filter leaves them out. Without it the totals are Crove's posts alone, as before.
 export const metricsTotals = defineQuery({
   name: 'social.metrics.totals',
-  input: z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() }),
+  input: z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional(), includeExternal: z.boolean().optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<WindowTotals & { previous: WindowTotals }> => {
     const days = input.days ?? 30;
-    const current = await windowTotals(ctx.trx, ctx.orgId, days, 0, input.labelId);
-    const previous = await windowTotals(ctx.trx, ctx.orgId, days, days, input.labelId);
+    const external = input.includeExternal === true && !input.labelId;
+    const current = await windowTotals(ctx.trx, ctx.orgId, days, 0, input.labelId, external);
+    const previous = await windowTotals(ctx.trx, ctx.orgId, days, days, input.labelId, external);
     const now = new Map(current.channels.map((c) => [c.connectionId, c] as const));
     const before = new Map(previous.channels.map((c) => [c.connectionId, c] as const));
     const none = (c: ChannelTotals): ChannelTotals => ({ connectionId: c.connectionId, provider: c.provider, posts: 0, metrics: {}, clicks: null });
@@ -145,8 +148,10 @@ export const metricsTotals = defineQuery({
   },
 });
 
-// The totals of the variants published in the days-long window that ends `before` days ago (0: now, open-ended).
-async function windowTotals(trx: Trx, orgId: string, days: number, before: number, labelId: string | undefined): Promise<WindowTotals> {
+// The totals of the variants published in the days-long window that ends `before` days ago (0: now, open-ended);
+// external: with the channels' posts published outside Crove in the same window (their latest real counts, no clicks),
+// leaving out any whose id is a variant's on the same channel.
+async function windowTotals(trx: Trx, orgId: string, days: number, before: number, labelId: string | undefined, external = false): Promise<WindowTotals> {
   const labelled = labelId
     ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${labelId}::uuid)`
     : sql``;
@@ -156,17 +161,32 @@ async function windowTotals(trx: Trx, orgId: string, days: number, before: numbe
   // it, as the client report does; the later clicks belong to the windows after it. A post's clicks all come after it
   // went out, so the start needs no bound.
   const clickedBy = before === 0 ? sql`` : sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' <= ${end}`;
+  const outside = external
+    ? sql`, x AS (
+      SELECT e.channel_connection_id AS conn, c.provider, e.metrics FROM crove_social.external_post e
+      JOIN crove_kernel.channel_connection c ON c.org_id = e.org_id AND c.id = e.channel_connection_id
+      WHERE e.org_id = ${orgId}
+        AND e.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${before === 0 ? sql`` : sql`AND e.published_at <= ${end}`}
+        AND NOT EXISTS (
+          SELECT 1 FROM crove_social.post_variant pv
+          WHERE pv.org_id = e.org_id AND pv.channel_connection_id = e.channel_connection_id AND pv.external_post_id = e.external_post_id
+        )
+    )`
+    : sql``;
+  const outsideCounts = external ? sql`UNION ALL SELECT x.conn, x.metrics FROM x WHERE x.metrics <> '{}'::jsonb` : sql``;
+  const posted = external ? sql`(SELECT v.conn, v.provider FROM v UNION ALL SELECT x.conn, x.provider FROM x) v` : sql`v`;
   const { rows } = await sql<{ conn: string; provider: string; posts: string; metrics: Record<string, number>; clicks: string | null }>`
     WITH v AS (
       SELECT v.org_id, v.id, v.channel_connection_id AS conn, v.provider FROM crove_social.post_variant v
       WHERE v.org_id = ${orgId} AND v.status = 'published'
         AND v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${ends} ${labelled}
-    ), latest AS (
+    )${outside}, latest AS (
       SELECT v.conn, s.metrics FROM v CROSS JOIN LATERAL (
         SELECT m.metrics FROM crove_social.metric_snapshot m
         WHERE m.org_id = v.org_id AND m.variant_id = v.id
         ORDER BY (m.metrics = '{}'::jsonb), m.captured_at DESC LIMIT 1
       ) s
+      ${outsideCounts}
     ), sums AS (
       SELECT latest.conn, e.key, sum((e.value #>> '{}')::numeric) AS total FROM latest, jsonb_each(latest.metrics) e
       WHERE jsonb_typeof(e.value) = 'number' GROUP BY latest.conn, e.key
@@ -179,7 +199,7 @@ async function windowTotals(trx: Trx, orgId: string, days: number, before: numbe
     SELECT v.conn, min(v.provider) AS provider, count(*) AS posts,
            (SELECT coalesce(jsonb_object_agg(s.key, s.total), '{}'::jsonb) FROM sums s WHERE s.conn = v.conn) AS metrics,
            (SELECT k.clicks FROM clicks k WHERE k.conn = v.conn) AS clicks
-    FROM v GROUP BY v.conn
+    FROM ${posted} GROUP BY v.conn
     ORDER BY count(*) DESC, v.conn`.execute(trx);
   const channels: ChannelTotals[] = rows.map((r) => {
     const metrics: Record<string, number> = {};
@@ -448,7 +468,7 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
 
 // Runs each row, METRICS_CONCURRENCY at a time and METRICS_PER_PROVIDER at a time per platform, in the scan's order
 // otherwise. run never throws: each row catches its own failure.
-async function eachBounded<T extends { provider: string }>(rows: readonly T[], run: (row: T) => Promise<void>): Promise<void> {
+export async function eachBounded<T extends { provider: string }>(rows: readonly T[], run: (row: T) => Promise<void>): Promise<void> {
   const waiting = [...rows];
   const busy = new Map<string, number>();
   const running = new Set<Promise<void>>();

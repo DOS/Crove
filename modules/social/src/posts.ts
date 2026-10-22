@@ -48,6 +48,7 @@ import { attentionInboxQueries } from './attention-inbox.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
+import { externalPostCommands, externalPostQueries } from './external-posts.ts';
 import { planExportCommands } from './plan-export.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { recurringCommands } from './recurring.ts';
@@ -1583,6 +1584,7 @@ export const socialCommands = [
   ...publishingCommands,
   ...publishHoldCommands,
   ...metricsCommands,
+  ...externalPostCommands,
   ...planExportCommands,
   ...evergreenCommands,
   ...recurringCommands,
@@ -1659,4 +1661,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries];

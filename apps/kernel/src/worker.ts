@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepMetrics, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
@@ -1006,6 +1006,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const accountTimer = publishing.size > 0 ? setInterval(() => void accountSweep(), ACCOUNT_SWEEP_MS) : null;
   void accountSweep();
 
+  // Posts published outside Crove (#1054): every 15 minutes, the channels not listed for 6 hours are listed again, and
+  // the posts brought in whose counts are older than 6 hours are measured.
+  let bringing = false;
+  const externalSweep = async () => {
+    if (bringing || publishing.size === 0 || !channels) return;
+    bringing = true;
+    try {
+      const done = await sweepExternalPosts({ runtime: deps.runtime, broker: channels.broker, workerDb: deps.workerDb, publishers });
+      if (done.imported + done.measured + done.expired > 0) console.log(`[social-external] listed ${done.imported}, measured ${done.measured}, expired ${done.expired}, skipped ${done.skipped}`);
+    } catch (error) {
+      console.error('[social-external] sweep', error);
+    } finally {
+      bringing = false;
+    }
+  };
+  const externalTimer = publishing.size > 0 ? setInterval(() => void externalSweep(), EXTERNAL_SWEEP_MS) : null;
+
   let running = false;
   let stopped = false;
   const relay = async () => {
@@ -1300,6 +1317,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (sizeTimer) clearInterval(sizeTimer);
     if (holdTimer) clearInterval(holdTimer);
     if (accountTimer) clearInterval(accountTimer);
+    if (externalTimer) clearInterval(externalTimer);
     await listener.end().catch(() => {});
     await boss.stop({ graceful: true, timeout: 10_000 }).catch(() => {});
   };

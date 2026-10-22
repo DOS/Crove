@@ -7,6 +7,7 @@ import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { ChangeChip } from '../components/social-growth.tsx';
+import { OutsideChip } from '../components/social-external-posts.tsx';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage } from '../lib/api.ts';
@@ -27,7 +28,10 @@ interface ReportPage {
   // The period of the same length just before (#947), on the same channels; absent from a server without it.
   previous?: { periodStart: string; periodEnd: string; posts: number; totals: Counts };
   channels: { channel: string; provider: string; posts: number; totals: Counts; previous?: { posts: number; totals: Counts } }[];
-  top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Counts }[];
+  // external (#1054): the post went out outside Crove; includesExternal: the report counts such posts. Both absent from
+  // a server without them.
+  top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Counts; external?: boolean }[];
+  includesExternal?: boolean;
 }
 
 const tokenOf = () => {
@@ -90,6 +94,7 @@ export function SocialReportPage() {
                   {t('compared', { from: f.date(data.previous.periodStart), to: f.date(new Date(Date.parse(data.previous.periodEnd) - 1).toISOString()) })}
                 </p>
               )}
+              {data.includesExternal === true && <p className="text-xs text-subtle-foreground">{t('withExternal')}</p>}
             </header>
             {data.posts === 0 ? (
               <Card className="block p-6 text-sm text-muted-foreground">{t('empty')}</Card>
@@ -149,8 +154,11 @@ export function SocialReportPage() {
                   <ol className="space-y-2">
                     {data.top.map((p, i) => (
                       <li key={`${p.publishedAt}-${i}`} className="rounded-xl border p-3 print:break-inside-avoid">
-                        <p className="text-xs text-subtle-foreground">
-                          {p.channel} · {providerName(p.provider)} · {f.dateTime(p.publishedAt)}
+                        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-subtle-foreground">
+                          <span>
+                            {p.channel} · {providerName(p.provider)} · {f.dateTime(p.publishedAt)}
+                          </span>
+                          {p.external === true && <OutsideChip label={t('direct')} />}
                         </p>
                         <p className="mt-1 text-sm break-words">{p.excerpt || t('noText')}</p>
                         <p className="mt-1 text-xs text-muted-foreground tabular-nums">

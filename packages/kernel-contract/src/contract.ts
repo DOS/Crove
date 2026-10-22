@@ -34,6 +34,7 @@ import {
   zSocialPostUpdate,
   zSocialQueue,
   zSocialMetricsRow,
+  zSocialExternalPost,
   zSocialPlanRow,
   zSocialTeamReport,
   zSocialWindowTotals,
@@ -430,7 +431,12 @@ export const contract = {
       summary: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), postId: zId.optional(), labelId: zId.optional() })).output(z.array(zSocialMetricsRow)),
       // The window's totals over every published channel (#397), summed by the server, and per channel; previous: the
       // same for the window of the same length just before (#947).
-      totals: oc.input(z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional() })).output(zSocialWindowTotals.extend({ previous: zSocialWindowTotals })),
+      // includeExternal (#1054): with the posts each channel published outside Crove (none under a label filter).
+      totals: oc
+        .input(z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional(), includeExternal: z.boolean().optional() }))
+        .output(zSocialWindowTotals.extend({ previous: zSocialWindowTotals })),
+      // The posts the channels published outside Crove in the window (#1054), newest first, with their latest counts.
+      external: oc.input(z.object({ days: z.number().int().min(1).max(365).optional() })).output(z.array(zSocialExternalPost)),
       // What works (#705): each channel's posts against its own median, by label, format, weekday, hour and hashtag.
       insights: oc
         .input(z.object({ days: z.number().int().min(1).max(365), labelId: zId.optional(), timeZone: z.string().min(1).max(64) }))

@@ -1520,6 +1520,18 @@ export const zSocialMetricsRow = z.object({
   clicks: z.number().int().nullable(),
 });
 
+// A post a channel published outside Crove (#1054), brought in for its counts; url is its https page on the platform.
+export const zSocialExternalPost = z.object({
+  id: zId,
+  connectionId: zId,
+  provider: z.string(),
+  excerpt: z.string(),
+  publishedAt: z.string(),
+  url: z.string().nullable(),
+  metrics: z.record(z.string(), z.number()),
+  capturedAt: z.string().nullable(),
+});
+
 // One channel post of a content plan export (#978), for the print layout.
 export const zSocialPlanRow = z.object({
   postId: zId,
@@ -1583,6 +1595,8 @@ export const zSocialReportLink = z.object({
   createdAt: z.string(),
   expiresAt: z.string(),
   revokedAt: z.string().nullable(),
+  // Whether the report counts the posts published outside Crove (#1054).
+  includeExternal: z.boolean(),
 });
 export const zSocialReportLinkCreate = z.strictObject({
   periodStart: z.iso.datetime({ offset: true }),
@@ -1590,6 +1604,7 @@ export const zSocialReportLinkCreate = z.strictObject({
   connectionIds: z.array(zId).max(50).optional(),
   title: z.string().trim().min(1).max(120).optional(),
   days: z.number().int().min(1).max(90).optional(),
+  includeExternal: z.boolean().optional(),
 });
 
 // A schedule that mails the client report (#704), with its latest sends and each mail's delivery status.

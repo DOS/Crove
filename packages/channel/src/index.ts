@@ -23,6 +23,7 @@ export * from './wordpress.ts';
 export * from './comment.ts';
 export * from './cover.ts';
 export * from './post-type.ts';
+export * from './recent.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -194,6 +195,26 @@ export interface AccountMetricsInput {
 }
 export type AccountMetricsResult = { followers: number | null; reach?: number | null } | { refused: 'token_expired' | 'permission' } | null;
 
+// The posts an account published itself, outside Crove (#1054), so the Metrics tab and the client report can count
+// every post of the account when asked. since: how far back, clamped to RECENT_POSTS_MAX_DAYS before now. null: no
+// answer worth keeping; refused: the token or the permission was refused. The caller drops the posts Crove published.
+// The bounds and helpers are in recent.ts.
+export interface RecentPostsInput {
+  externalAccountId: string;
+  secret: string;
+  since: Date;
+}
+export interface RecentPost {
+  // The platform's id of the post, in the shape publish answers and metrics reads.
+  externalId: string;
+  // The post's text as the platform gives it ('' without one); the caller bounds it.
+  text: string;
+  // The post's page on the platform: https on the platform's own host, else null.
+  permalink: string | null;
+  publishedAt: Date;
+}
+export type RecentPostsResult = { posts: RecentPost[] } | { refused: 'token_expired' | 'permission' } | null;
+
 // A first comment under a published post (#587, #609): a comment where the platform has comments (LinkedIn, Facebook
 // Pages, Instagram), a reply in the post's thread where it has none (X, Bluesky, Threads). The comment never touches
 // the post; a failure leaves it as it is.
@@ -285,6 +306,8 @@ export interface Publisher {
   metrics?(input: MetricsInput): Promise<MetricsResult>;
   // Providers that report an account's followers (#645), read once a day.
   accountMetrics?(input: AccountMetricsInput): Promise<AccountMetricsResult>;
+  // Providers that list the account's own recent posts (#1054), so posts published outside Crove can be counted.
+  listRecentPosts?(input: RecentPostsInput): Promise<RecentPostsResult>;
   // Providers that post a first comment (#587). Never retried by itself: an unclear answer goes to a person.
   comment?(input: CommentInput): Promise<CommentResult>;
   // Providers that repost the account's own post (#773). Never retried by itself, like a comment.

@@ -171,6 +171,7 @@ const UNIONS = unions({
   'crove_social.review_feedback.verdict': SOCIAL_REVIEW_VERDICTS,
   'crove_social.review_link.kind': SOCIAL_REVIEW_LINK_KINDS,
   'crove_social.account_snapshot.error': SOCIAL_ACCOUNT_SNAPSHOT_ERRORS,
+  'crove_social.external_import.error': SOCIAL_ACCOUNT_SNAPSHOT_ERRORS,
   'crove_social.link_preview.status': SOCIAL_LINK_PREVIEW_STATUSES,
   'crove_social.link_preview.error': SOCIAL_LINK_PREVIEW_ERRORS,
   'crove_social.notification.kind': SOCIAL_NOTIFICATION_KINDS,

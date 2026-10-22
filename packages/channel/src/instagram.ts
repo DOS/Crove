@@ -10,8 +10,28 @@
 // images; others get MEDIA_URL_UNAVAILABLE with nothing posted. A Reel or a video Story goes up without one: its bytes
 // are uploaded to the container (upload_type=resumable, #772).
 import { createHash } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+import type {
+  CommentInput,
+  CommentResult,
+  ConnectedAccount,
+  MetricName,
+  AccountMetricsInput,
+  AccountMetricsResult,
+  MetricsInput,
+  MetricsResult,
+  Publisher,
+  PublishInput,
+  PublishResult,
+  RecentPost,
+  RecentPostsInput,
+  RecentPostsResult,
+  ReconcileInput,
+  ReconcileResult,
+  RetrySafety,
+  StatusInput,
+} from './index.ts';
 import { commentResult } from './comment.ts';
+import { graphTime, pagingCursor, platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { videoCoverOf } from './cover.ts';
 import { postTypeOf } from './post-type.ts';
 import { Graph, GraphError, graphPublishResult, MetaLogin, type MetaAppConfig } from './meta.ts';
@@ -90,7 +110,10 @@ interface ContainerAnswer {
 }
 interface MediaListAnswer {
   data?: { id?: unknown; caption?: unknown; timestamp?: unknown; permalink?: unknown }[];
+  paging?: { cursors?: { after?: unknown }; next?: unknown };
 }
+// Where a post's permalink may point.
+const INSTAGRAM_HOSTS = ['instagram.com'] as const;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const captionOf = (content: { body: string }) => content.body.trim();
@@ -350,6 +373,45 @@ export class InstagramPublisher implements Publisher {
       // No insights permission, or none yet: followers only.
     }
     return { followers, reach };
+  }
+
+  // The account's own posts since a date (#1054): `GET /{ig-user-id}/media`, paged by its after cursor, newest first, at
+  // most RECENT_POSTS_MAX_DAYS back. Stories are not listed there, so they never come in. A page after the first that
+  // fails ends the listing with what came before it.
+  async listRecentPosts(input: RecentPostsInput): Promise<RecentPostsResult> {
+    const s = secretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalAccountId)) return null;
+    const since = recentSince(input.since);
+    const posts: RecentPost[] = [];
+    let after: string | null = null;
+    for (let page = 0; page < RECENT_PAGES_MAX && posts.length < RECENT_POSTS_MAX; page++) {
+      let answer: MediaListAnswer;
+      try {
+        answer = await this.graph.call<MediaListAnswer>('GET', `${input.externalAccountId}/media`, {
+          token: s.accessToken,
+          params: { fields: 'id,caption,timestamp,permalink', since: String(Math.floor(since.getTime() / 1000)), limit: '100', ...(after ? { after } : {}) },
+        });
+      } catch (error) {
+        if (page > 0) break;
+        const result = graphPublishResult(error);
+        if (result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'permission')) return { refused: result.error };
+        return null;
+      }
+      let older = false;
+      for (const p of answer.data ?? []) {
+        const at = graphTime(p.timestamp);
+        if (typeof p.id !== 'string' || !NUMERIC_ID.test(p.id) || !at) continue;
+        if (at < since) {
+          older = true;
+          continue;
+        }
+        posts.push({ externalId: p.id, text: typeof p.caption === 'string' ? p.caption : '', permalink: platformLink(p.permalink, INSTAGRAM_HOSTS), publishedAt: at });
+      }
+      after = typeof answer.paging?.next === 'string' ? pagingCursor(answer.paging.cursors?.after) : null;
+      if (older || !after) break;
+    }
+    return { posts: posts.slice(0, RECENT_POSTS_MAX) };
   }
 
   async metrics(input: MetricsInput): Promise<MetricsResult> {

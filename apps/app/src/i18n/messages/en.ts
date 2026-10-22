@@ -2164,6 +2164,16 @@ export const en = {
       revoked: 'Revoked',
       expired: 'Expired',
       revoke: 'Revoke',
+      includeExternal: 'Include posts published outside Crove',
+      includeExternalHint: "Posts the channels published straight on Facebook or Instagram count in the report's totals and best posts too.",
+      withExternal: 'includes posts published outside Crove',
+    },
+    external: {
+      chip: 'Outside Crove',
+      switch: 'Include posts published outside Crove',
+      hint: 'Posts the channels published straight on Facebook or Instagram in the last 30 days. Crove brings them in every 6 hours and counts each post once.',
+      noLabels: 'Posts published outside Crove have no labels, so they are not counted while a label filter is on.',
+      noText: '(No text)',
     },
     channelSets: {
       title: 'Channel sets',
@@ -2331,6 +2341,8 @@ export const en = {
       invalid: 'The link is not valid, was revoked or has expired. Ask the sender for a new one.',
       against: 'the previous period',
       compared: 'Changes are against the previous period of the same length, from {from} to {to}.',
+      withExternal: 'This report also counts the posts published directly on the channels.',
+      direct: 'Published directly',
     },
     reviewLinks: {
       title: 'Client review',

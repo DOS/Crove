@@ -2163,6 +2163,16 @@ export const vi = {
       revoked: 'Đã thu hồi',
       expired: 'Đã hết hạn',
       revoke: 'Thu hồi',
+      includeExternal: 'Tính cả bài đăng ngoài Crove',
+      includeExternalHint: 'Bài kênh đăng thẳng trên Facebook hoặc Instagram cũng được tính vào số tổng và bài nổi bật của báo cáo.',
+      withExternal: 'gồm bài đăng ngoài Crove',
+    },
+    external: {
+      chip: 'Đăng ngoài Crove',
+      switch: 'Tính cả bài đăng ngoài Crove',
+      hint: 'Gồm bài kênh đăng thẳng trên Facebook hoặc Instagram trong 30 ngày gần nhất. Crove lấy về mỗi 6 giờ, mỗi bài chỉ tính một lần.',
+      noLabels: 'Bài đăng ngoài Crove không có nhãn nên không được tính khi đang lọc theo nhãn.',
+      noText: '(Không có chữ)',
     },
     channelSets: {
       title: 'Bộ kênh',
@@ -2330,6 +2340,8 @@ export const vi = {
       invalid: 'Liên kết không hợp lệ, đã bị thu hồi hoặc đã hết hạn. Hãy xin liên kết mới từ bên gửi.',
       against: 'kỳ trước',
       compared: 'Mức thay đổi so với kỳ trước cùng độ dài, từ {from} đến {to}.',
+      withExternal: 'Báo cáo tính cả những bài đăng trực tiếp trên kênh.',
+      direct: 'Đăng trực tiếp',
     },
     reviewLinks: {
       title: 'Gửi khách duyệt',

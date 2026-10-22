@@ -603,6 +603,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       metrics: {
         summary: os.social.metrics.summary.handler(socialQuery('social.metrics.summary')),
         totals: os.social.metrics.totals.handler(socialQuery('social.metrics.totals')),
+        external: os.social.metrics.external.handler(socialQuery('social.metrics.external')),
         insights: os.social.metrics.insights.handler(socialQuery('social.metrics.insights')),
         export: os.social.metrics.export.handler(socialCommand('social.metrics.export')),
       },

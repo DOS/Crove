@@ -29,6 +29,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/t
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { AccountGrowth, ChangeChip, ChannelTotals, TopPosts } from '../components/social-growth.tsx';
 import { WhatWorks } from '../components/social-insights.tsx';
+import { OutsidePostCell, OutsideSwitch } from '../components/social-external-posts.tsx';
+import { mergePublished } from '../lib/social-external.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import { dayKey, dayRange, providerName, SOCIAL_TABS, variantStatusKey, variantTone, type SocialSearch, type SocialTab } from '../lib/social.ts';
@@ -91,15 +93,20 @@ function PostRow({ post, slug, names, labels, right }: { post: Post; slug: strin
 }
 
 // How published posts did (S8): totals over the window, then each published channel with its latest capture; with a
-// label chosen (#639), only the posts that carry it, on the screen and in the export.
+// label chosen (#639), only the posts that carry it, on the screen and in the export. With the outside switch on
+// (#1054), the posts the channels published outside Crove count in the totals and show in the table with their chip;
+// they carry no label, so a label filter turns the switch off.
 function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, string>; labelId: string | undefined }) {
   const t = useTranslations('social');
   const f = useFormat();
   const [days, setDays] = useState(30);
+  const [outside, setOutside] = useState(false);
+  const counting = outside && !labelId;
   const label = labelId ? { labelId } : {};
   const rows = useQuery(orpc.social.metrics.summary.queryOptions({ input: { days, ...label } }));
   // The totals over every published channel of the window, summed by the server (#397); the list below stops at 500.
-  const totals = useQuery(orpc.social.metrics.totals.queryOptions({ input: { days, ...label } }));
+  const totals = useQuery(orpc.social.metrics.totals.queryOptions({ input: { days, ...label, ...(counting ? { includeExternal: true } : {}) } }));
+  const outsideRows = useQuery({ ...orpc.social.metrics.external.queryOptions({ input: { days } }), enabled: counting });
   // The window as a CSV file, built and audited by the server, saved by the browser.
   const exportCsv = useMutation({
     mutationFn: () => client.social.metrics.export({ days, ...label }),
@@ -116,7 +123,8 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
   if (rows.isLoading) return <Spinner />;
   if (rows.error) return <ErrorText>{errorMessage(rows.error)}</ErrorText>;
   const data = rows.data ?? [];
-  const total = (name: string) => totals.data?.metrics[name] ?? data.reduce((sum, r) => sum + (r.metrics[name] ?? 0), 0);
+  const extra = counting ? (outsideRows.data ?? []) : [];
+  const total = (name: string) => totals.data?.metrics[name] ?? [...data, ...extra].reduce((sum, r) => sum + (r.metrics[name] ?? 0), 0);
   // Clicks on Crove's short links (#706), where a channel sends its links through them.
   const clicks = totals.data ? totals.data.clicks : data.some((r) => r.clicks !== null) ? data.reduce((sum, r) => sum + (r.clicks ?? 0), 0) : null;
   const hasClicks = clicks !== null;
@@ -137,12 +145,14 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
           </Button>
         )}
       </div>
+      <OutsideSwitch checked={outside} onChange={setOutside} disabled={Boolean(labelId)} />
       {exportCsv.error && <ErrorText>{errorMessage(exportCsv.error)}</ErrorText>}
       {/* Without the server's totals the cards sum the listed rows only. */}
       {totals.error && <ErrorText>{errorMessage(totals.error)}</ErrorText>}
+      {counting && outsideRows.error && <ErrorText>{errorMessage(outsideRows.error)}</ErrorText>}
       {exportCsv.data?.truncated && <p className="text-xs text-warning">{t('metricsExportCut')}</p>}
       <AccountGrowth days={days} names={names} />
-      {data.length === 0 ? (
+      {data.length === 0 && extra.length === 0 ? (
         <Empty title={t('empty.metrics')} hint={t('metricsHint')} />
       ) : (
         <>
@@ -188,26 +198,34 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
                 </tr>
               </thead>
               <tbody>
-                {data.map((r) => (
-                  <tr key={r.variantId} className="border-t">
-                    <td className="max-w-md px-3 py-2">
-                      <Link to="/o/$slug/social/$id" params={{ slug, id: r.postId }} className="line-clamp-1 text-foreground hover:underline">
-                        {r.excerpt || t('emptyText')}
-                      </Link>
-                      <p className="text-xs text-subtle-foreground">
-                        {[providerName(r.provider), names.get(r.connectionId), r.publishedAt ? f.dateTime(r.publishedAt) : null, r.capturedAt ? t('metricsAsOf', { when: f.dateTime(r.capturedAt) }) : t('metricsPending')]
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </p>
-                    </td>
-                    {METRIC_COLUMNS.map((m) => (
-                      <td key={m} className="px-3 py-2 text-right text-foreground tabular-nums">
-                        {r.metrics[m] === undefined ? '-' : f.number(r.metrics[m])}
+                {mergePublished(data, extra).map((item) => {
+                  const r = item.row;
+                  const meta = [providerName(r.provider), names.get(r.connectionId), r.publishedAt ? f.dateTime(r.publishedAt) : null, r.capturedAt ? t('metricsAsOf', { when: f.dateTime(r.capturedAt) }) : t('metricsPending')]
+                    .filter(Boolean)
+                    .join(' · ');
+                  return (
+                    <tr key={item.kind === 'crove' ? item.row.variantId : `outside-${item.row.id}`} className="border-t">
+                      <td className="max-w-md px-3 py-2">
+                        {item.kind === 'crove' ? (
+                          <>
+                            <Link to="/o/$slug/social/$id" params={{ slug, id: item.row.postId }} className="line-clamp-1 text-foreground hover:underline">
+                              {item.row.excerpt || t('emptyText')}
+                            </Link>
+                            <p className="text-xs text-subtle-foreground">{meta}</p>
+                          </>
+                        ) : (
+                          <OutsidePostCell excerpt={item.row.excerpt} url={item.row.url} meta={meta} />
+                        )}
                       </td>
-                    ))}
-                    {hasClicks && <td className="px-3 py-2 text-right text-foreground tabular-nums">{r.clicks === null ? '-' : f.number(r.clicks)}</td>}
-                  </tr>
-                ))}
+                      {METRIC_COLUMNS.map((m) => (
+                        <td key={m} className="px-3 py-2 text-right text-foreground tabular-nums">
+                          {r.metrics[m] === undefined ? '-' : f.number(r.metrics[m])}
+                        </td>
+                      ))}
+                      {hasClicks && <td className="px-3 py-2 text-right text-foreground tabular-nums">{item.kind === 'crove' && item.row.clicks !== null ? f.number(item.row.clicks) : '-'}</td>}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
