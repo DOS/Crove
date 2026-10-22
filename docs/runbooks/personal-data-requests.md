@@ -32,7 +32,8 @@ The search covers the columns listed in `packages/kernel/src/personal-data.ts`. 
    - **Kept by law** (Accounting Law 88/2015, Art. 41: at least 10 years):
      - the name and tax code of a party on recorded invoices, vouchers or journal lines;
      - the payer or payee named on a phiếu thu or phiếu chi;
-     - the tax portal's invoice lists.
+     - the tax portal's invoice lists;
+     - the original files of posted invoices that name the party (`crove_kernel.file`), with the date their retention hold runs to: erasure clears data in the database only and never deletes a stored file (#1009, `docs/runbooks/evidence-holds.md`).
    - **Kept in a record:**
      - Invites: the retention purge deletes them 90 days after they are accepted, revoked or expired (`docs/runbooks/org-offboarding.md`).
      - A client's review feedback on Social posts.
@@ -50,6 +51,6 @@ A correction is an ordinary edit: change the party on its page (Nhà cung cấp 
 Answer these by hand, or tell the person they are kept, until a later issue covers them:
 
 - **Free text:** activity lines, task comments, journal descriptions, voucher reasons, Social posts and comments. Search them in the app, and edit what can be edited.
-- **Stored files:** invoice PDFs and XML, uploaded images, and the extraction results read from them. They are accounting documents and are kept with the books.
+- **Stored files:** invoice PDFs and XML, uploaded images, and the extraction results read from them. They are accounting documents and are kept with the books; the original file of a posted invoice is held in the bucket for the legal period (`docs/runbooks/evidence-holds.md`), and the erasure result counts the ones that name the person's party.
 - **Backups and archives:** the 7-day point-in-time recovery, the WORM archive of the books (`docs/runbooks/worm-archive.md`) and offboarding exports. A restore brings erased data back, so after one, run the erasures recorded in the audit log again. Crypto-shredding of immutable stores (ADR-0017) is planned.
 - **The person's own Crove account:** if they are a user of Crove, their sign-in account lives with the identity provider (DOS ID or Supabase Auth), not in the org. They delete it there.

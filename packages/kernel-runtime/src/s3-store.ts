@@ -3,6 +3,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
+  GetObjectLockConfigurationCommand,
+  GetObjectRetentionCommand,
   ListObjectsV2Command,
   PutObjectCommand,
   PutObjectRetentionCommand,
@@ -13,6 +15,7 @@ import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   BlobConflictError,
+  BlobIntegrityError,
   BlobNotFoundError,
   BlobTooLargeError,
   DOWNLOAD_TTL_SECONDS,
@@ -29,6 +32,7 @@ import {
   type BlobRef,
   type BlobStore,
   type DirectTransfers,
+  type EvidenceHolds,
   type ListPrefix,
   type ListedBlob,
   type PresignedUpload,
@@ -65,6 +69,10 @@ export interface ArchiveLock {
   mode: 'GOVERNANCE' | 'COMPLIANCE';
   retentionDays: number;
 }
+
+// The lock mode of evidence holds (owner decision on issue #1009): an operator with s3:BypassGovernanceRetention can
+// still lift one, for a court order or a mistake; COMPLIANCE would let nobody.
+export const EVIDENCE_LOCK_MODE = 'GOVERNANCE';
 
 // The only client method the store uses; S3Client satisfies it and unit tests pass a fake.
 export type S3Sender = Pick<S3Client, 'send'>;
@@ -208,7 +216,8 @@ export interface S3BlobStoreOptions {
 // The bucket policy must grant s3:ListBucket on the bucket as well as s3:GetObject, s3:GetObjectVersion,
 // s3:PutObject and s3:DeleteObject on its objects. Without ListBucket, S3 answers a read of a missing key with 403
 // instead of 404, so the store cannot tell a missing blob from a permission problem; get then raises
-// BlobStoreAccessError, not BlobNotFoundError.
+// BlobStoreAccessError, not BlobNotFoundError. Evidence holds (issue #1009) also need s3:GetBucketObjectLockConfiguration
+// on the bucket and s3:GetObjectRetention and s3:PutObjectRetention on its objects.
 export class S3BlobStore implements BlobStore {
   private readonly client: S3Sender;
   private readonly bucket: string;
@@ -217,6 +226,7 @@ export class S3BlobStore implements BlobStore {
   private readonly archiveLock: ArchiveLock | undefined;
   private readonly now: () => Date;
   readonly direct: DirectTransfers | undefined;
+  readonly holds: EvidenceHolds;
 
   constructor(client: S3Sender, bucket: string, options: S3BlobStoreOptions = {}) {
     this.client = client;
@@ -233,6 +243,7 @@ export class S3BlobStore implements BlobStore {
           readStaged: (key, maxBytes) => this.readStaged(key, maxBytes),
         }
       : undefined;
+    this.holds = { available: () => this.holdsAvailable(), hold: (ref, retainUntil) => this.hold(ref, retainUntil) };
   }
 
   static connect(options: S3StoreOptions): S3BlobStore {
@@ -364,6 +375,60 @@ export class S3BlobStore implements BlobStore {
     } catch (error) {
       if (!isMissingObject(error)) throw error;
     }
+  }
+
+  // Object Lock on the bucket is what makes per-object retention possible; without it S3 refuses every retention call.
+  // GCS interoperability has no Object Lock API (its retention is a bucket policy), so it never holds.
+  private async holdsAvailable(): Promise<boolean> {
+    if (this.flavor === 'gcs') return false;
+    try {
+      const out = await this.client.send(new GetObjectLockConfigurationCommand({ Bucket: this.bucket }));
+      return out.ObjectLockConfiguration?.ObjectLockEnabled === 'Enabled';
+    } catch (error) {
+      // S3 and MinIO answer a bucket without Object Lock with ObjectLockConfigurationNotFoundError (404).
+      if (errorName(error) === 'ObjectLockConfigurationNotFoundError' || (httpStatus(error) === 404 && errorName(error) !== 'NoSuchBucket')) return false;
+      throw error;
+    }
+  }
+
+  // Needs s3:GetObjectRetention and s3:PutObjectRetention on org/ objects (and s3:GetBucketObjectLockConfiguration for
+  // the check above), never s3:BypassGovernanceRetention: the store can lengthen a hold, never shorten or lift one.
+  private async hold(ref: BlobRef, retainUntil: Date): Promise<Date> {
+    assertStorageKey(ref.key);
+    if (!ref.key.startsWith('org/')) throw new Error('only evidence files (org/ keys) are held');
+    let versionId = versionOf(ref.generation);
+    if (!versionId) {
+      // No pinned version (a row from before ADR-0013, or S3_VERSIONING=off): hold the current version, and only once
+      // its bytes are the recorded ones, so a swapped object is never the one kept.
+      const current = await this.fetch(ref.key);
+      if (sha256Hex(current.bytes) !== ref.sha256) throw new BlobIntegrityError(ref);
+      versionId = current.versionId && current.versionId !== 'null' ? current.versionId : null;
+    }
+    const version = versionId ? { VersionId: versionId } : {};
+    let existing: { mode: string | undefined; until: Date } | null = null;
+    try {
+      const out = await this.client.send(new GetObjectRetentionCommand({ Bucket: this.bucket, Key: ref.key, ...version }));
+      if (out.Retention?.RetainUntilDate) existing = { mode: out.Retention.Mode, until: out.Retention.RetainUntilDate };
+    } catch (error) {
+      // A version without any retention yet.
+      if (errorName(error) !== 'NoSuchObjectLockConfiguration') {
+        if (isMissingObject(error)) throw new BlobNotFoundError(ref.key);
+        throw error;
+      }
+    }
+    // A hold at least as long stays as it is; a shorter COMPLIANCE one is lengthened in COMPLIANCE (S3 refuses a change
+    // of mode on a locked version, and COMPLIANCE is the stronger of the two).
+    if (existing && existing.until >= retainUntil) return existing.until;
+    const mode = existing?.mode === 'COMPLIANCE' ? 'COMPLIANCE' : EVIDENCE_LOCK_MODE;
+    try {
+      await this.client.send(
+        new PutObjectRetentionCommand({ Bucket: this.bucket, Key: ref.key, ...version, Retention: { Mode: mode, RetainUntilDate: retainUntil } }),
+      );
+    } catch (error) {
+      if (isMissingObject(error)) throw new BlobNotFoundError(ref.key);
+      throw error;
+    }
+    return retainUntil;
   }
 
   // Deletes abandoned staging objects (a grant begun and never completed, or bytes posted to a form again after its

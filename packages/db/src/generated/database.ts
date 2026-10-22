@@ -561,6 +561,10 @@ export interface KernelFileTable {
   duration_ms: string | null;
   image_width: number | null;
   image_height: number | null;
+  held_until: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  hold_attempted_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  hold_attempts: Generated<number>;
+  hold_error: string | null;
 }
 
 /** crove_kernel.file_upload */

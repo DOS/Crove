@@ -246,6 +246,64 @@ suite('evidence integrity on PostgreSQL (ADR-0013, issue #109)', () => {
     expect(after[0]).toEqual({ image_width: 30, image_height: 40, filename: 'anh.png' });
   });
 
+  it('records a retention hold only in a system context, and never clears or shortens one (#1009)', async () => {
+    const sha256 = sha256Hex(new TextEncoder().encode(`held-${randomUUID()}`));
+    const id = randomUUID();
+    await withAdmin((a) =>
+      a.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'hd.xml', 'application/xml', 10, 'upload', $6)`,
+        [orgA, id, sha256, fileKey(orgA, sha256), `content:${sha256}`, users.owner],
+      ),
+    );
+    // A member's session and the database owner may set none of the hold columns.
+    for (const set of ["held_until = now() + interval '10 years'", 'hold_attempts = 1', "hold_error = 'x'", 'hold_attempted_at = now()']) {
+      await asApp(users.owner, async (c) => {
+        await expect(c.query(`UPDATE crove_kernel.file SET ${set} WHERE id = $1`, [id]), set).rejects.toMatchObject({ code: '42501', message: 'FILE_IMMUTABLE' });
+      });
+      await withAdmin(async (a) => {
+        await expect(a.query(`UPDATE crove_kernel.file SET ${set} WHERE id = $1`, [id]), `owner: ${set}`).rejects.toMatchObject({ message: 'FILE_IMMUTABLE' });
+      });
+    }
+    const system = { actor: { type: 'system' as const, component: 'invariant' }, orgId: orgA };
+    // The worker records a failure, then the hold; a shorter hold recorded later leaves the longer one.
+    await workerRuntime.execute('kernel.file.hold.record', { fileId: id, error: 'BLOB_NOT_FOUND' }, system);
+    // A failure is a code: free text (a store message naming the bucket) never reaches a row members can read.
+    await expect(workerRuntime.execute('kernel.file.hold.record', { fileId: id, error: 'Access Denied to bucket crove-prod' }, system)).rejects.toMatchObject({ status: 422 });
+    const until = '2036-10-20T00:00:00.000Z';
+    expect(await workerRuntime.execute('kernel.file.hold.record', { fileId: id, heldUntil: until }, system)).toEqual({ recorded: true, heldUntil: until });
+    expect(await workerRuntime.execute('kernel.file.hold.record', { fileId: id, heldUntil: '2030-01-01T00:00:00.000Z' }, system)).toEqual({
+      recorded: true,
+      heldUntil: until,
+    });
+    // A member may not call it.
+    await expect(runtime.execute('kernel.file.hold.record', { fileId: id, heldUntil: '2040-01-01T00:00:00Z' }, { actor: asUser(users.owner), orgId: orgA })).rejects.toMatchObject({ status: 403 });
+
+    // In a real system context, raw SQL may lengthen the hold, never clear or shorten it, and never touch the reference.
+    const inSystem = async (text: string) => {
+      const c = await workerPool.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_system_context($1::uuid)', [orgA]);
+        await c.query(text, [id]);
+        await c.query('COMMIT');
+      } catch (error) {
+        await c.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      } finally {
+        c.release();
+      }
+    };
+    await expect(inSystem('UPDATE crove_kernel.file SET held_until = NULL WHERE id = $1')).rejects.toMatchObject({ message: 'FILE_IMMUTABLE' });
+    await expect(inSystem("UPDATE crove_kernel.file SET held_until = held_until - interval '1 second' WHERE id = $1")).rejects.toMatchObject({ message: 'FILE_IMMUTABLE' });
+    await expect(inSystem("UPDATE crove_kernel.file SET held_until = held_until + interval '1 day', filename = 'other.xml' WHERE id = $1")).rejects.toMatchObject({
+      message: 'FILE_IMMUTABLE',
+    });
+    await inSystem("UPDATE crove_kernel.file SET held_until = held_until + interval '1 day' WHERE id = $1");
+    const { rows } = await withAdmin((a) => a.query('SELECT held_until, hold_attempts, hold_error FROM crove_kernel.file WHERE id = $1', [id]));
+    expect(rows[0]).toEqual({ held_until: new Date('2036-10-21T00:00:00.000Z'), hold_attempts: 0, hold_error: null });
+  });
+
   it('creates a grant with the database clock and the creator from the context, whatever the insert says', async () => {
     const other = users.member;
     const row = await asApp(users.owner, async (c) => {
