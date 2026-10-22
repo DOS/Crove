@@ -1172,6 +1172,17 @@ export const zSocialQueueSet = z.strictObject({
     .max(100),
 });
 
+// Reordering a channel's queue (#1020): the posts trade the slot times they hold. A shuffle takes the posts of the
+// queue, or of a range; moving to the front takes one post, with the slot time the person saw (refused when it changed).
+export const zSocialQueueShuffle = z
+  .strictObject({ connectionId: zId, from: zInstant.optional(), to: zInstant.optional() })
+  .refine((x) => !x.from || !x.to || Date.parse(x.from) < Date.parse(x.to), 'the range ends after it starts');
+export const zSocialQueueMoveToFront = z.strictObject({ variantId: zId, expectedAt: zInstant.optional() });
+export const zSocialQueueReorder = z.object({
+  queueId: zId,
+  moved: z.array(z.object({ variantId: zId, postId: zId, from: z.string(), at: z.string() })),
+});
+
 export const zSocialIssue = z.object({ code: z.string(), field: z.string(), limit: z.number().nullable(), actual: z.number().nullable() });
 
 const zContent = z.object({ body: z.string(), title: z.string().nullable(), linkUrl: z.string().nullable() });
@@ -1435,7 +1446,7 @@ export const zSocialReviewPlanLink = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'queue_moved']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),
