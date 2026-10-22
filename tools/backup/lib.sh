@@ -308,7 +308,8 @@ check_blob_sums() {
     (cd "$dir" && sha256sum --quiet -c "$sums")
     return
   fi
-  [ ! -d "$dir" ] || [ -z "$(find "$dir" -type f -print -quit)" ]
+  # `find | head` rather than GNU-only -quit, so BSD find (macOS) works too.
+  [ ! -d "$dir" ] || [ -z "$(find "$dir" -type f | head -n 1)" ]
 }
 
 # sha256sum lines in text mode ("<hash>  <name>"): sha256sum on Windows (Git Bash) marks binary mode with "*", which
