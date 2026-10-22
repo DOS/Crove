@@ -335,6 +335,28 @@ export function variantTexts(content: { body: string; title: string | null }, se
   const poll = s.poll;
   const options = poll !== null && typeof poll === 'object' ? (poll as { options?: unknown }).options : undefined;
   if (Array.isArray(options)) options.forEach((o, i) => typeof o === 'string' && out.push({ field: `settings.poll.${i}`, text: o }));
+  // YouTube tags (#905), WordPress excerpt, tags and categories (#981) and Telegram button labels (#1017): published too.
+  if (Array.isArray(s.tags)) s.tags.forEach((tag, i) => typeof tag === 'string' && out.push({ field: `settings.tags.${i}`, text: tag }));
+  const wp = s.wordpress;
+  if (wp !== null && typeof wp === 'object' && !Array.isArray(wp)) {
+    const w = wp as { excerpt?: unknown; tags?: unknown; categories?: unknown };
+    if (typeof w.excerpt === 'string') out.push({ field: 'settings.wordpress.excerpt', text: w.excerpt });
+    for (const key of ['tags', 'categories'] as const) {
+      const list = w[key];
+      if (Array.isArray(list)) list.forEach((name, i) => typeof name === 'string' && out.push({ field: `settings.wordpress.${key}.${i}`, text: name }));
+    }
+  }
+  const tg = s.telegram;
+  const rows = tg !== null && typeof tg === 'object' && !Array.isArray(tg) ? (tg as { buttons?: unknown }).buttons : undefined;
+  if (Array.isArray(rows)) {
+    rows.forEach((row, r) => {
+      if (!Array.isArray(row)) return;
+      row.forEach((button, b) => {
+        const text = button !== null && typeof button === 'object' ? (button as { text?: unknown }).text : undefined;
+        if (typeof text === 'string') out.push({ field: `settings.telegram.buttons.${r}.${b}.text`, text });
+      });
+    });
+  }
   return out;
 }
 

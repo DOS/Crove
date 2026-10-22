@@ -195,6 +195,26 @@ describe('variantTexts', () => {
     expect(variantTexts({ body: '', title: null }, undefined)).toEqual([{ field: 'body', text: '' }]);
   });
 
+  it('checks YouTube tags, the WordPress excerpt, tags and categories, and Telegram button labels', () => {
+    const texts = variantTexts(
+      { body: 'thân', title: null },
+      {
+        tags: ['thẻ một', 7],
+        wordpress: { excerpt: 'tóm tắt', tags: ['tag a'], categories: ['mục', null], status: 'draft' },
+        telegram: { silent: true, buttons: [[{ text: 'Mua ngay', url: 'https://shop.example/' }, { url: 'https://x.example/' }], 'bad'] },
+      },
+    );
+    expect(texts.slice(1)).toEqual([
+      { field: 'settings.tags.0', text: 'thẻ một' },
+      { field: 'settings.wordpress.excerpt', text: 'tóm tắt' },
+      { field: 'settings.wordpress.tags.0', text: 'tag a' },
+      { field: 'settings.wordpress.categories.0', text: 'mục' },
+      { field: 'settings.telegram.buttons.0.0.text', text: 'Mua ngay' },
+    ]);
+    // Wrong shapes add nothing.
+    expect(variantTexts({ body: 'x', title: null }, { wordpress: ['a'], telegram: { buttons: 'no' }, tags: 'no' })).toEqual([{ field: 'body', text: 'x' }]);
+  });
+
   it('names the field of each match', () => {
     const w = word('mua ngay');
     const list = findBannedInTexts(variantTexts({ body: 'ok', title: null }, { firstComment: 'Mua ngay!' }), [w]);
