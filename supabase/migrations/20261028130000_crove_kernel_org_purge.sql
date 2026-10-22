@@ -165,7 +165,7 @@ DECLARE
     'crove_social.post_label', 'crove_social.queue_slot', 'crove_social.queue', 'crove_social.label',
     'crove_social.link_preview', 'crove_social.media_tag', 'crove_social.metric_snapshot',
     'crove_social.notification', 'crove_social.notification_mail_off', 'crove_social.notification_mute',
-    'crove_social.post_comment', 'crove_social.post_media', 'crove_social.publish_hold', 'crove_social.report_link',
+    'crove_social.post_comment', 'crove_social.post_media', 'crove_social.post_version', 'crove_social.publish_hold', 'crove_social.report_link',
     'crove_social.report_schedule_run', 'crove_social.report_schedule', 'crove_social.review_feedback',
     'crove_social.review_link_post', 'crove_social.review_link', 'crove_social.short_link_click',
     'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark'];
