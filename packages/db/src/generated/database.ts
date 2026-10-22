@@ -81,6 +81,8 @@ export interface CroveSocialSchema {
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.channel_set': SocialChannelSetTable;
   'crove_social.chat_alert': SocialChatAlertTable;
+  'crove_social.external_import': SocialExternalImportTable;
+  'crove_social.external_post': SocialExternalPostTable;
   'crove_social.feed': SocialFeedTable;
   'crove_social.feed_item': SocialFeedItemTable;
   'crove_social.goal': SocialGoalTable;
@@ -1044,6 +1046,33 @@ export interface SocialChatAlertTable {
   last_test_code: string | null;
 }
 
+/** crove_social.external_import */
+export interface SocialExternalImportTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  channel_connection_id: ColumnType<string, string, NotGranted>;
+  ran_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  found: Generated<number>;
+  error: string | null;
+}
+
+/** crove_social.external_post */
+export interface SocialExternalPostTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  channel_connection_id: ColumnType<string, string, NotGranted>;
+  external_post_id: ColumnType<string, string, NotGranted>;
+  excerpt: Generated<string>;
+  permalink: string | null;
+  published_at: ColumnType<Date, Date | string, NotGranted>;
+  metrics: ColumnType<unknown, string | undefined, string>;
+  captured_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  checked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  gone: Generated<boolean>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 /** crove_social.feed_item */
 export interface SocialFeedItemTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -1390,6 +1419,7 @@ export interface SocialReportLinkTable {
   schedule_id: ColumnType<string | null, string | null, NotGranted>;
   mail_message_id: ColumnType<string | null, string | null, NotGranted>;
   note: ColumnType<string | null, string | null, NotGranted>;
+  include_external: ColumnType<boolean, boolean | undefined, NotGranted>;
 }
 
 /** crove_social.report_schedule_run */

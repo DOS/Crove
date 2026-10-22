@@ -33,6 +33,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
   const [note, setNote] = useState('');
   const [days, setDays] = useState<number>(30);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [outside, setOutside] = useState(false);
   const [made, setMade] = useState<{ url: string; expiresAt: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.social.reportLinks.list.key() });
@@ -40,7 +41,14 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
   const create = useMutation({
     mutationFn: () => {
       if (!range) throw new Error(t('periodInvalid'));
-      return client.social.reportLinks.create({ ...range, days, ...(picked.size > 0 ? { connectionIds: [...picked] } : {}), ...(title.trim() ? { title: title.trim() } : {}), ...(note.trim() ? { note } : {}) });
+      return client.social.reportLinks.create({
+        ...range,
+        days,
+        ...(picked.size > 0 ? { connectionIds: [...picked] } : {}),
+        ...(title.trim() ? { title: title.trim() } : {}),
+        ...(note.trim() ? { note } : {}),
+        ...(outside ? { includeExternal: true } : {}),
+      });
     },
     onSuccess: (r) => {
       setMade({ url: reportUrl(window.location.origin, r.token), expiresAt: r.expiresAt });
@@ -117,6 +125,13 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
           </div>
         </fieldset>
       )}
+      <div className="space-y-0.5">
+        <label className="flex items-center gap-2 text-sm text-foreground">
+          <Checkbox checked={outside} onCheckedChange={(v) => setOutside(v === true)} />
+          {t('includeExternal')}
+        </label>
+        <p className="text-xs text-subtle-foreground">{t('includeExternalHint')}</p>
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" disabled={!range || create.isPending} onClick={() => create.mutate()}>
           {t('create')}
@@ -148,6 +163,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
                   <span className="block text-xs text-subtle-foreground">
                     {t('period', { from: f.date(l.periodStart), to: f.date(last) })} ·{' '}
                     {l.connectionIds.length === 0 ? t('allChannels') : l.connectionIds.map((id) => names.get(id) ?? t('goneChannel')).join(', ')}
+                    {l.includeExternal ? ` · ${t('withExternal')}` : ''}
                   </span>
                   {l.note && <span className="block truncate text-xs text-subtle-foreground">{l.note}</span>}
                 </span>

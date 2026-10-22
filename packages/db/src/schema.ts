@@ -436,7 +436,7 @@ export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment
 export const SOCIAL_REVIEW_LINK_KINDS = ['post', 'plan'] as const;
 // What an in-app notification is about (#637); a member may turn each kind off.
 export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold'] as const;
-// Why a channel's daily account snapshot has no counts (#645).
+// Why a channel's daily account snapshot has no counts (#645), and why a bring-in of its outside posts found none (#1054).
 export const SOCIAL_ACCOUNT_SNAPSHOT_ERRORS = ['no_answer', 'token_expired', 'permission'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
 // A link preview card (#641): waiting for the worker, read, or not readable and why.
@@ -495,6 +495,7 @@ export type SocialPostVariantTable = Refine<
 export type SocialReviewFeedbackTable = Refine<G.SocialReviewFeedbackTable, { verdict: ColumnType<SocialReviewVerdict, never, never> }>;
 export type SocialReviewLinkTable = Refine<G.SocialReviewLinkTable, { kind: ColumnType<SocialReviewLinkKind, SocialReviewLinkKind | undefined, never> }>;
 export type SocialAccountSnapshotTable = Refine<G.SocialAccountSnapshotTable, { error: ColumnType<SocialAccountSnapshotError | null, SocialAccountSnapshotError | null | undefined, never> }>;
+export type SocialExternalImportTable = Refine<G.SocialExternalImportTable, { error: ColumnType<SocialAccountSnapshotError | null, SocialAccountSnapshotError | null | undefined, SocialAccountSnapshotError | null> }>;
 export type SocialLinkPreviewTable = Refine<
   G.SocialLinkPreviewTable,
   {
@@ -563,6 +564,7 @@ type Refined = Tables<{
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.review_link': SocialReviewLinkTable;
   'crove_social.account_snapshot': SocialAccountSnapshotTable;
+  'crove_social.external_import': SocialExternalImportTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;

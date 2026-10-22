@@ -7,8 +7,26 @@
 // `/me/accounts` lists the Pages the user granted in Meta's dialog, each with its own Page token. A Page token from a
 // long-lived user token has no expiry timer, so it is sealed as is; the user token is dropped.
 import { createHmac } from 'node:crypto';
-import type { CommentInput, CommentResult, ConnectedAccount, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import type {
+  CommentInput,
+  CommentResult,
+  ConnectedAccount,
+  AccountMetricsInput,
+  AccountMetricsResult,
+  MetricsInput,
+  MetricsResult,
+  Publisher,
+  PublishInput,
+  PublishResult,
+  RecentPost,
+  RecentPostsInput,
+  RecentPostsResult,
+  ReconcileInput,
+  ReconcileResult,
+  RetrySafety,
+} from './index.ts';
 import { commentResult } from './comment.ts';
+import { graphTime, pagingCursor, platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { videoCoverOf } from './cover.ts';
 import { postTypeOf } from './post-type.ts';
 import { holdsLink } from './text.ts';
@@ -306,7 +324,10 @@ function storyResult(page: string, answer: StoryAnswer): PublishResult {
 }
 interface PostsAnswer {
   data?: { id?: unknown; message?: unknown; created_time?: unknown; permalink_url?: unknown }[];
+  paging?: { cursors?: { after?: unknown }; next?: unknown };
 }
+// Where a Page post's permalink may point.
+const FACEBOOK_HOSTS = ['facebook.com'] as const;
 
 function pageToken(secret: string): string | null {
   try {
@@ -547,6 +568,45 @@ export class FacebookPagePublisher implements Publisher {
       if (result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'permission')) return { refused: result.error };
       return null;
     }
+  }
+
+  // The Page's own posts since a date (#1054): `GET /{page-id}/published_posts`, paged by its after cursor, newest
+  // first, at most RECENT_POSTS_MAX_DAYS back. It needs pages_read_engagement, which every Page connection has. A page
+  // after the first that fails ends the listing with what came before it.
+  async listRecentPosts(input: RecentPostsInput): Promise<RecentPostsResult> {
+    const token = pageToken(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!/^\d{1,32}$/.test(input.externalAccountId)) return null;
+    const since = recentSince(input.since);
+    const posts: RecentPost[] = [];
+    let after: string | null = null;
+    for (let page = 0; page < RECENT_PAGES_MAX && posts.length < RECENT_POSTS_MAX; page++) {
+      let answer: PostsAnswer;
+      try {
+        answer = await this.graph.call<PostsAnswer>('GET', `${input.externalAccountId}/published_posts`, {
+          token,
+          params: { fields: 'id,message,created_time,permalink_url', since: String(Math.floor(since.getTime() / 1000)), limit: '100', ...(after ? { after } : {}) },
+        });
+      } catch (error) {
+        if (page > 0) break;
+        const result = graphPublishResult(error);
+        if (result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'permission')) return { refused: result.error };
+        return null;
+      }
+      let older = false;
+      for (const p of answer.data ?? []) {
+        const at = graphTime(p.created_time);
+        if (typeof p.id !== 'string' || !/^\d{1,32}_\d{1,32}$/.test(p.id) || !at) continue;
+        if (at < since) {
+          older = true;
+          continue;
+        }
+        posts.push({ externalId: p.id, text: typeof p.message === 'string' ? p.message : '', permalink: platformLink(p.permalink_url, FACEBOOK_HOSTS), publishedAt: at });
+      }
+      after = typeof answer.paging?.next === 'string' ? pagingCursor(answer.paging.cursors?.after) : null;
+      if (older || !after) break;
+    }
+    return { posts: posts.slice(0, RECENT_POSTS_MAX) };
   }
 
   async metrics(input: MetricsInput): Promise<MetricsResult> {

@@ -36,6 +36,8 @@ const NOT_SHOWN: Record<string, string> = {
   // The operator's org-purge command (#1024) runs in the worker's container, never from a browser.
   ORG_PURGE_REFUSED: 'operator',
   ORG_PURGE_BLOB_FAILED: 'operator',
+  // The worker's bring-in of posts published outside Crove (#1054): its system commands alone raise it.
+  EXTERNAL_POST_NOT_FOUND: 'worker',
   // The inbound mail endpoint answers the mail relay, not a browser.
   EMPTY_MESSAGE: 'inbound mail',
   UNKNOWN_RECIPIENT: 'inbound mail',

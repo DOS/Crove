@@ -2203,6 +2203,16 @@ export const en = {
       note: 'Note to the client',
       notePlaceholder: 'Your comments on this period; the client sees them at the top of the report',
       noteHint: 'Plain text, at most 2,000 characters ({used, number}/2,000).',
+      includeExternal: 'Include posts published outside Crove',
+      includeExternalHint: "Posts the channels published straight on Facebook or Instagram count in the report's totals and best posts too.",
+      withExternal: 'includes posts published outside Crove',
+    },
+    external: {
+      chip: 'Outside Crove',
+      switch: 'Include posts published outside Crove',
+      hint: 'Posts the channels published straight on Facebook or Instagram in the last 30 days. Crove brings them in every 6 hours and counts each post once.',
+      noLabels: 'Posts published outside Crove have no labels, so they are not counted while a label filter is on.',
+      noText: '(No text)',
     },
     channelSets: {
       title: 'Channel sets',
@@ -2439,6 +2449,8 @@ export const en = {
       compared: 'Changes are against the previous period of the same length, from {from} to {to}.',
       note: 'A note from {org}',
       goals: 'Goals for {month}/{year}',
+      withExternal: 'This report also counts the posts published directly on the channels.',
+      direct: 'Published directly',
     },
     reviewLinks: {
       title: 'Client review',

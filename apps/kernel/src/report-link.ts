@@ -30,7 +30,9 @@ export interface ReportPage {
   // The period of the same length just before (#947), on the same channels; in each channel, its counts then.
   previous: { periodStart: string; periodEnd: string; posts: number; totals: Record<string, number> };
   channels: { channel: string; provider: string; posts: number; totals: Record<string, number>; previous: { posts: number; totals: Record<string, number> } }[];
-  top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Record<string, number> }[];
+  // external (#1054): the post went out outside Crove; includesExternal: the link counts such posts.
+  top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Record<string, number>; external?: boolean }[];
+  includesExternal?: boolean;
   // The agency's note (#1056), plain text, or null.
   note: string | null;
   // The monthly goals (#1056), only for a period of exactly one month in the goals' zone; null otherwise.

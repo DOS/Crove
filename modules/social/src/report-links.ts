@@ -73,6 +73,8 @@ export const reportLinkCreate = defineCommand({
     connectionIds: z.array(zId).max(50).optional(),
     title: z.string().trim().min(1).max(120).optional(),
     days: z.number().int().min(1).max(REPORT_LINK_MAX_DAYS).optional(),
+    // Count the posts the channels published outside Crove (#1054); fixed for the link's life.
+    includeExternal: z.boolean().optional(),
     note: zReportNote.optional(),
   }),
   risk: 'R2',
@@ -111,6 +113,7 @@ export const reportLinkCreate = defineCommand({
         period_start: start,
         period_end: end,
         connection_ids: ids,
+        include_external: input.includeExternal === true,
         created_by: userId,
         created_at: ctx.now,
         expires_at: expiresAt,
@@ -149,6 +152,7 @@ export interface ReportLinkView {
   createdAt: string;
   expiresAt: string;
   revokedAt: string | null;
+  includeExternal: boolean;
 }
 
 // The org's report links, newest first (never their tokens); the ones a schedule made per mail are not listed.
@@ -159,7 +163,7 @@ export const reportLinkList = defineQuery({
   handler: async (ctx): Promise<ReportLinkView[]> => {
     const rows = await ctx.trx
       .selectFrom('crove_social.report_link')
-      .select(['id', 'title', 'note', 'period_start', 'period_end', 'connection_ids', 'created_by', 'created_at', 'expires_at', 'revoked_at'])
+      .select(['id', 'title', 'note', 'period_start', 'period_end', 'connection_ids', 'created_by', 'created_at', 'expires_at', 'revoked_at', 'include_external'])
       .where('org_id', '=', ctx.orgId)
       .where('schedule_id', 'is', null)
       .orderBy('created_at', 'desc')
@@ -176,6 +180,7 @@ export const reportLinkList = defineQuery({
       createdAt: r.created_at.toISOString(),
       expiresAt: r.expires_at.toISOString(),
       revokedAt: r.revoked_at?.toISOString() ?? null,
+      includeExternal: r.include_external,
     }));
   },
 });
