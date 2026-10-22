@@ -21,6 +21,7 @@ import { createMailMessage } from '@crove/kernel';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { approvalsInRound } from './domain/approval.ts';
 import { decisionsOf } from './policy.ts';
+import { channelScope, connectionInScope, postInScope, usersInScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The newest notifications a read returns, and the unread count it reports at most.
@@ -374,7 +375,14 @@ export const notificationDispatch = defineCommand({
       WHERE m.org_id = ${ctx.orgId} AND m.user_id = ANY(${wanted}::uuid[])
         AND NOT EXISTS (SELECT 1 FROM crove_social.notification_mute x WHERE x.org_id = m.org_id AND x.user_id = m.user_id AND x.kind = ${plan.kind})`.execute(ctx.trx);
     if (rows.length === 0) return { sent: 0, mailed: 0 };
-    const users = rows.map((r) => r.user_id);
+    // A member limited to some channels (#1081) hears only of those and of the posts on them.
+    const users = await usersInScope(
+      ctx.trx,
+      ctx.orgId,
+      rows.map((r) => r.user_id),
+      { postId: plan.postId, connectionId: plan.connectionId },
+    );
+    if (users.length === 0) return { sent: 0, mailed: 0 };
     const inserted = await ctx.trx
       .insertInto('crove_social.notification')
       .values(
@@ -440,6 +448,10 @@ export const notificationList = defineQuery({
   access: ALL,
   handler: async (ctx): Promise<{ items: NotificationItem[]; unread: number; muted: SocialNotificationKind[]; mailOff: boolean }> => {
     const me = requireUser(ctx);
+    // What the viewer may see (#1081): a limited member's notifications of other channels, or of posts with none of
+    // theirs, are left out (one written before the limit, say).
+    const scope = await channelScope(ctx);
+    const seen = sql`(n.connection_id IS NULL OR ${connectionInScope(scope, 'n.connection_id')}) AND (n.post_id IS NULL OR ${postInScope(scope, 'n.post_id', 'n.org_id')})`;
     const { rows } = await sql<{
       id: string;
       kind: SocialNotificationKind;
@@ -457,12 +469,12 @@ export const notificationList = defineQuery({
       FROM crove_social.notification n
       LEFT JOIN crove_social.post p ON p.org_id = n.org_id AND p.id = n.post_id
       LEFT JOIN crove_kernel.channel_connection c ON c.org_id = n.org_id AND c.id = n.connection_id
-      WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND ${STILL_WAITING}
+      WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND ${STILL_WAITING} AND ${seen}
       ORDER BY n.created_at DESC, n.id DESC
       LIMIT ${NOTIFICATION_LIST_LIMIT}`.execute(ctx.trx);
     const unread = await sql<{ n: number }>`
       SELECT count(*)::int AS n FROM (
-        SELECT 1 FROM crove_social.notification n WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND n.read_at IS NULL AND ${STILL_WAITING} LIMIT ${NOTIFICATION_UNREAD_CAP + 1}
+        SELECT 1 FROM crove_social.notification n WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND n.read_at IS NULL AND ${STILL_WAITING} AND ${seen} LIMIT ${NOTIFICATION_UNREAD_CAP + 1}
       ) u`.execute(ctx.trx);
     const mailOff = await ctx.trx.selectFrom('crove_social.notification_mail_off').select('id').where('org_id', '=', ctx.orgId).where('user_id', '=', me).limit(1).executeTakeFirst();
     const muted = await ctx.trx.selectFrom('crove_social.notification_mute').select('kind').where('org_id', '=', ctx.orgId).where('user_id', '=', me).orderBy('kind').execute();

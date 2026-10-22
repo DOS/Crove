@@ -8,6 +8,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contr
 import type { MemberRole } from '@crove/db';
 import { defineQuery } from '@crove/kernel-runtime';
 import { normalizeMediaTag } from './domain/media-tags.ts';
+import { channelScope, postInScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The file types of the library: a social upload of another type is not one of its items.
@@ -120,6 +121,8 @@ export const mediaUsage = defineQuery({
       .selectFrom('crove_social.post as p')
       .select(['p.id', 'p.status', 'p.body', 'p.updated_at'])
       .where('p.org_id', '=', ctx.orgId)
+      // A member limited to some channels (#1081) sees the posts they may see.
+      .where(postInScope(await channelScope(ctx)))
       .where((eb) =>
         eb.or([
           eb.exists(eb.selectFrom('crove_social.post_media as m').select('m.id').whereRef('m.org_id', '=', 'p.org_id').whereRef('m.post_id', '=', 'p.id').where('m.file_id', '=', input.fileId)),

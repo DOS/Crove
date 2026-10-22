@@ -8,6 +8,7 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { MAX_VERSIONS_PER_POST, sameSnapshot, variantContent, versionMedia, versionNumbers, versionVariants, type VersionContent, type VersionSnapshot } from './domain/versions.ts';
 import type { Trx } from './variants.ts';
+import { channelScope, postsInScope, variantsInScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -125,6 +126,9 @@ export const postVersions = defineQuery({
   handler: async (ctx, input): Promise<{ postId: string; versions: VersionView[] }> => {
     const post = await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.postId).executeTakeFirst();
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
+    // A member limited to some channels (#1081) reads the versions of a post they may see, with those channels only.
+    const scope = await channelScope(ctx);
+    if ((await postsInScope(ctx, scope, [post.id])).length === 0) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
     const rows = await ctx.trx
       .selectFrom('crove_social.post_version')
       .select(['id', 'number', 'revision', 'body', 'title', 'link_url', 'media', 'variants', 'created_by', 'created_at'])
@@ -133,9 +137,11 @@ export const postVersions = defineQuery({
       .orderBy('number', 'desc')
       .limit(MAX_VERSIONS_PER_POST)
       .execute();
-    const versions = rows.map((r) => {
+    const saved = rows.map((r) => ({ row: r, variants: versionVariants(r.variants) }));
+    const shown = scope === null ? null : await variantsInScope(ctx, scope, [...new Set(saved.flatMap((s) => s.variants.map((v) => v.variantId)))]);
+    const versions = saved.map(({ row: r, variants }) => {
       const snapshot = { body: r.body, title: r.title, linkUrl: r.link_url, media: versionMedia(r.media) };
-      return { row: r, variants: versionVariants(r.variants).map((v) => ({ variantId: v.variantId, content: variantContent(snapshot, v) })) };
+      return { row: r, variants: variants.filter((v) => shown === null || shown.has(v.variantId)).map((v) => ({ variantId: v.variantId, content: variantContent(snapshot, v) })) };
     });
     // The type of each file a version names, to show a removed video as a video.
     const fileIds = [...new Set(versions.flatMap((v) => v.variants.flatMap((x) => x.content.media.map((m) => m.fileId))).filter((id) => UUID.test(id)))];

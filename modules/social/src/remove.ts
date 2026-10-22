@@ -15,6 +15,7 @@ import { REMOVE_READY, isProvider, removeAtFit, removeAtOf, removeWindowMs } fro
 import { publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, refreshPostStatus, setVariant, settingsOf, step, variantPost, type Trx, type VariantRow } from './variants.ts';
+import { refuseChannels } from './channel-access.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const REMOVE_STEP = 'remove';
@@ -90,6 +91,8 @@ export const variantRemove = defineCommand({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const userId = ctx.actor.userId;
     const v = await lockVariant(ctx, input.variantId);
+    // Only on a channel the caller may use (#1081).
+    await refuseChannels(ctx, [v.channel_connection_id]);
     if (v.status === 'removed') return { postId: v.post_id, variantId: v.id, status: v.status, queued: false };
     if (v.status !== 'published') throw new DomainError('VARIANT_NOT_PUBLISHED', 409, 'Chỉ gỡ được kênh đã đăng', { variantId: v.id, status: v.status });
     if (!isProvider(v.provider) || !REMOVE_READY.has(v.provider)) throw new DomainError('REMOVE_NOT_SUPPORTED', 422, 'Crove chưa gỡ được bài trên kênh này; hãy gỡ trực tiếp trên nền tảng', { variantId: v.id });

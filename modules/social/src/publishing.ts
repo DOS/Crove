@@ -43,6 +43,7 @@ import {
 } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
 import { publishingHeld } from './publish-hold.ts';
+import { refuseChannels } from './channel-access.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export const PUBLISH_STEP = 'publish';
@@ -598,6 +599,11 @@ export const variantRetry = defineCommand({
     const postId = await variantPost(ctx.trx, ctx.orgId, input.variantIds);
     await lockPost(ctx.trx, ctx.orgId, postId);
     const chosen = pick(await lockVariants(ctx.trx, ctx.orgId, postId), input.variantIds);
+    // Only on channels the caller may use (#1081).
+    await refuseChannels(
+      ctx,
+      chosen.map((v) => v.channel_connection_id),
+    );
     for (const v of chosen) {
       // Refused first for a variant that is not failed or waiting on a person.
       step(v, { type: 'retry' });
@@ -633,6 +639,10 @@ export const variantResolve = defineCommand({
     const postId = await variantPost(ctx.trx, ctx.orgId, input.variantIds);
     const post = await lockPost(ctx.trx, ctx.orgId, postId);
     const chosen = pick(await lockVariants(ctx.trx, ctx.orgId, postId), input.variantIds);
+    await refuseChannels(
+      ctx,
+      chosen.map((v) => v.channel_connection_id),
+    );
     for (const v of chosen) {
       if (input.outcome === 'published') {
         await move(ctx, v, { type: 'confirm_published' }, { ...NO_ERROR, external_url: input.url ?? null, published_at: ctx.now, ...freezeValues(post, v) });

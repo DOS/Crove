@@ -35,6 +35,7 @@ import { getConfig } from '../lib/auth.ts';
 import { clearDraft, loadDraft, saveDraft, type StoredDraft } from '../lib/social-draft.ts';
 import { canMoveToFront } from '../lib/social-queue-order.ts';
 import { STORY_METRICS } from '../lib/social-insights.ts';
+import { useChannelScope } from '../components/social-channel-access.tsx';
 import {
   CANCELLABLE,
   EDITABLE,
@@ -1769,7 +1770,9 @@ export function SocialComposePage() {
   const [utm, setUtm] = useState<UtmTags | null>(null);
   // An AI rewrite was taken into the text (#583): the post is saved as AI-assisted.
   const [aiUsed, setAiUsed] = useState(false);
-  const live = (channels.data ?? []).filter((c) => c.status === 'active');
+  // A member limited to some channels (#1081) writes for those only.
+  const scope = useChannelScope();
+  const live = (channels.data ?? []).filter((c) => c.status === 'active' && scope.allows(c.id));
   // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
   const search: { at?: string; idea?: string; occasion?: string; on?: string; channel?: string } = useSearch({ strict: false });
   // A post for an occasion of the calendar (#702): named above the form, and the AI brief starts from it.

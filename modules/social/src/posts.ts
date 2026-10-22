@@ -72,6 +72,7 @@ import { versionQueries, withVersion } from './versions.ts';
 import { bannedChecker, bannedCheckerOf, bannedCommandBudget, bannedForView, bannedWordsOf, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords, type BannedWordsStatus } from './banned-words.ts';
 import type { BannedFieldMatch } from './domain/banned-words.ts';
 import { teamReportQueries } from './team-report.ts';
+import { channelAccessCommands, channelAccessQueries, channelNotAllowed, channelScope, connectionInScope, inScope, mayUse, postInScope, refuseChannels, refuseOutside, refusePostOutside } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -190,6 +191,11 @@ async function liveConnections(ctx: CommandContext, ids: readonly string[]): Pro
 }
 
 export async function insertVariants(ctx: CommandContext, post: PostRow, channels: z.infer<typeof zChannel>[], startAt: number) {
+  // A member limited to some channels (#1081) adds a variant on those only.
+  await refuseChannels(
+    ctx,
+    channels.map((c) => c.connectionId),
+  );
   const providers = await liveConnections(
     ctx,
     channels.map((c) => c.connectionId),
@@ -363,6 +369,8 @@ export const postAddChannels = defineCommand({
     requireUser(ctx);
     distinctConnections(input.channels);
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
+    // Not on a post the member cannot see (#1081): its content belongs to other channels.
+    await refusePostOutside(ctx, post.id);
     const existing = await lockVariants(ctx.trx, ctx.orgId, post.id);
     if (existing.length + input.channels.length > MAX_CHANNELS_PER_POST) {
       throw new DomainError('TOO_MANY_CHANNELS', 422, `Một bài đăng có tối đa ${MAX_CHANNELS_PER_POST} kênh`);
@@ -415,6 +423,13 @@ async function editPost(ctx: CommandContext, post: PostRow, input: PostEdit): Pr
   // History whose content is not frozen yet is frozen first, whatever changes.
   for (const v of variants.filter((x) => FROZEN.has(x.status) && !x.content_frozen)) await setVariant(ctx, v.id, freezeValues(post, v));
   const changed = variants.filter((v) => !FROZEN.has(v.status) && hashOf(base(next), v) !== v.content_hash);
+  // A member limited to some channels (#1081) changes no variant on another channel through the shared content, nor
+  // the planned time every open variant follows (it is not in the content hash).
+  const timing = next.time_zone !== post.time_zone || next.scheduled_at?.getTime() !== post.scheduled_at?.getTime();
+  refuseOutside(
+    await channelScope(ctx),
+    (timing ? variants.filter((v) => !FROZEN.has(v.status)) : changed).map((v) => v.channel_connection_id),
+  );
   const blocked = changed.filter((v) => IN_FLIGHT.has(v.status));
   if (blocked.length > 0) {
     throw new DomainError('VARIANT_IN_FLIGHT', 409, 'Có kênh đang đăng: chờ kết quả rồi mới sửa nội dung chung', { variantIds: blocked.map((v) => v.id) });
@@ -445,6 +460,7 @@ export const postUpdate = defineCommand({
     requireUser(ctx);
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     if (post.revision !== input.revision) throw new DomainError('STALE_REVISION', 409, 'Bài đăng đã được sửa ở nơi khác, hãy tải lại', { revision: post.revision });
+    await refusePostOutside(ctx, post.id);
     const { postId: _postId, revision: _revision, ...edit } = input;
     return withVersion(ctx, post.id, () => editPost(ctx, post, edit));
   },
@@ -509,6 +525,7 @@ export const variantUpdate = defineCommand({
     const postId = await variantPost(ctx.trx, ctx.orgId, [input.variantId]);
     const post = await lockPost(ctx.trx, ctx.orgId, postId);
     const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]) as [VariantRow];
+    await refuseChannels(ctx, [v.channel_connection_id]);
     if (v.revision !== input.revision) throw new DomainError('STALE_REVISION', 409, 'Kênh này đã được sửa ở nơi khác, hãy tải lại', { revision: v.revision });
     return withVersion(ctx, postId, async () => {
       const { revision, changed } = await editVariant(ctx, post, v, input);
@@ -568,6 +585,13 @@ export const postRestoreVersion = defineCommand({
     const content = parsed.data;
     const editable = (v: VariantRow) => !FROZEN.has(v.status) && !v.content_frozen;
     const current = await lockVariants(ctx.trx, ctx.orgId, post.id);
+    // A member limited to some channels (#1081) restores a version only when it touches none of the post's other
+    // channels: the version also holds what those channels said.
+    const scope = await refusePostOutside(ctx, post.id);
+    refuseOutside(
+      scope,
+      current.filter((v) => editable(v) && content.variants.some((s) => s.variantId === v.id)).map((v) => v.channel_connection_id),
+    );
     const seen = Object.entries(input.variantRevisions ?? {});
     const stale = seen.filter(([id, revision]) => current.find((v) => v.id === id)?.revision !== revision).map(([id]) => id);
     if (stale.length > 0) throw new DomainError('STALE_REVISION', 409, 'Có kênh đã được sửa ở nơi khác, hãy tải lại', { variantIds: stale });
@@ -610,7 +634,13 @@ export const postSubmit = defineCommand({
     requireUser(ctx);
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     const all = await lockVariants(ctx.trx, ctx.orgId, post.id);
-    const chosen = input.variantIds ? pick(all, input.variantIds) : all.filter((v) => ['draft', 'changes_requested', 'rejected'].includes(v.status));
+    // A member limited to some channels (#1081) submits those: by default the ones they may use, and never another.
+    const scope = await refusePostOutside(ctx, post.id);
+    const chosen = input.variantIds ? pick(all, input.variantIds) : inScope(scope, all).filter((v) => ['draft', 'changes_requested', 'rejected'].includes(v.status));
+    refuseOutside(
+      scope,
+      chosen.map((v) => v.channel_connection_id),
+    );
     if (chosen.length === 0) throw new DomainError('NOTHING_TO_SUBMIT', 409, 'Không có kênh nào cần gửi duyệt');
     const invalid = chosen.map((v) => ({ variantId: v.id, issues: issuesOf(base(post), v) })).filter((x) => x.issues.length > 0);
     if (invalid.length > 0) throw new DomainError('VARIANT_INVALID', 422, 'Có kênh chưa đúng yêu cầu của nền tảng', { variants: invalid });
@@ -653,6 +683,10 @@ export const variantDecide = defineCommand({
     const chosen = pick(
       all,
       input.variants.map((x) => x.variantId),
+    );
+    await refuseChannels(
+      ctx,
+      chosen.map((v) => v.channel_connection_id),
     );
     const seen = new Map(input.variants.map((x) => [x.variantId, x]));
     // A channel with a blocked word (#1055), added to the list since it was submitted, is not approved; a request for
@@ -780,7 +814,13 @@ export const variantSchedule = defineCommand({
     // The post's labels, read once, for the slots of content categories (#745).
     let labels: Set<string> | null = null;
     const postLabels = async () => (labels ??= new Set(((await labelsOfPosts(ctx.trx, ctx.orgId, [post.id])).get(post.id) ?? []).map((l) => l.id)));
-    const chosen = input.times ? pick(all, [...times.keys()]) : input.variantIds ? pick(all, input.variantIds) : all.filter((v) => v.status === 'approved');
+    // By default the approved variants on the channels the caller may use (#1081); a named one elsewhere is refused.
+    const scope = await refusePostOutside(ctx, post.id);
+    const chosen = input.times ? pick(all, [...times.keys()]) : input.variantIds ? pick(all, input.variantIds) : inScope(scope, all).filter((v) => v.status === 'approved');
+    refuseOutside(
+      scope,
+      chosen.map((v) => v.channel_connection_id),
+    );
     if (chosen.length === 0) throw new DomainError('NOTHING_TO_SCHEDULE', 409, 'Không có kênh nào đã duyệt để lên lịch');
     // A blocked word (#1055), also one added to the list after the approval, refuses this schedule. A variant already
     // scheduled, queued, retried or resumed is not checked again before it goes out.
@@ -836,6 +876,10 @@ export const variantUnschedule = defineCommand({
     const postId = await variantPost(ctx.trx, ctx.orgId, input.variantIds);
     await lockPost(ctx.trx, ctx.orgId, postId);
     const chosen = pick(await lockVariants(ctx.trx, ctx.orgId, postId), input.variantIds);
+    await refuseChannels(
+      ctx,
+      chosen.map((v) => v.channel_connection_id),
+    );
     for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'unschedule' }), queue_slot_at: null, scheduled_at: null, error_retry_at: null });
     await refreshPostStatus(ctx, postId);
     return { postId, variants: chosen.map((v) => v.id) };
@@ -855,6 +899,7 @@ export const variantReschedule = defineCommand({
     await lockPost(ctx.trx, ctx.orgId, postId);
     const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]);
     if (!v) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
+    await refuseChannels(ctx, [v.channel_connection_id]);
     if (v.status !== 'scheduled') throw new DomainError('VARIANT_STATE', 409, 'Chỉ đổi giờ được kênh đã lên lịch', { variantId: v.id, status: v.status });
     const at = new Date(Date.parse(input.at));
     if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai', { variantId: v.id });
@@ -882,6 +927,10 @@ export const variantCancel = defineCommand({
     const postId = await variantPost(ctx.trx, ctx.orgId, input.variantIds);
     const post = await lockPost(ctx.trx, ctx.orgId, postId);
     const chosen = pick(await lockVariants(ctx.trx, ctx.orgId, postId), input.variantIds);
+    await refuseChannels(
+      ctx,
+      chosen.map((v) => v.channel_connection_id),
+    );
     // Approved, scheduled or paused work was signed off by an owner or admin: only they take it back.
     if (chosen.some((v) => ['approved', 'scheduled', 'paused'].includes(v.status)) && ctx.role !== 'owner' && ctx.role !== 'admin') {
       throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới hủy được kênh đã duyệt hoặc đã lên lịch');
@@ -912,6 +961,7 @@ export const queueSet = defineCommand({
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
+    await refuseChannels(ctx, [input.connectionId]);
     await liveConnections(ctx, [input.connectionId]);
     if (new Set(input.slots.map((s) => `${s.weekday}:${s.minute}`)).size !== input.slots.length) {
       throw new DomainError('DUPLICATE_SLOT', 422, 'Có khung giờ bị trùng');
@@ -1133,17 +1183,23 @@ export interface PostView {
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 
-async function viewPosts(ctx: QueryContext, postIds: string[], options: { bannedWords?: boolean } = {}): Promise<PostView[]> {
-  if (postIds.length === 0) return [];
-  const posts = await ctx.trx.selectFrom('crove_social.post').selectAll().where('org_id', '=', ctx.orgId).where('id', 'in', postIds).execute();
+// The posts as the caller may see them (#1081): a member limited to some channels sees only the variants on those, and
+// not a post with none there.
+async function viewPosts(ctx: QueryContext, requested: string[], options: { bannedWords?: boolean } = {}): Promise<PostView[]> {
+  if (requested.length === 0) return [];
+  const scope = await channelScope(ctx);
   const variants = await ctx.trx
     .selectFrom('crove_social.post_variant')
     .selectAll()
     .where('org_id', '=', ctx.orgId)
-    .where('post_id', 'in', postIds)
+    .where('post_id', 'in', requested)
+    .where(connectionInScope(scope, 'channel_connection_id'))
     .orderBy('position')
     .orderBy('id')
     .execute();
+  const postIds = scope === null ? requested : requested.filter((id) => variants.some((v) => v.post_id === id));
+  if (postIds.length === 0) return [];
+  const posts = await ctx.trx.selectFrom('crove_social.post').selectAll().where('org_id', '=', ctx.orgId).where('id', 'in', postIds).execute();
   const decisions = variants.length
     ? await ctx.trx
         .selectFrom('crove_social.post_approval')
@@ -1495,11 +1551,16 @@ export const postList = defineQuery({
   }),
   access: ALL,
   handler: async (ctx, input): Promise<PostView[]> => {
-    let q = ctx.trx.selectFrom('crove_social.post as p').select('p.id').where('p.org_id', '=', ctx.orgId);
+    // A member limited to some channels (#1081) lists the posts with a variant there, and every filter on a variant
+    // looks at those variants only; a channel they may not use lists nothing.
+    const scope = await channelScope(ctx);
+    if (input.connectionId && scope !== null && !scope.has(input.connectionId)) return [];
+    const mine = connectionInScope(scope, 'v.channel_connection_id');
+    let q = ctx.trx.selectFrom('crove_social.post as p').select('p.id').where('p.org_id', '=', ctx.orgId).where(postInScope(scope));
     if (input.status) q = q.where('p.status', '=', input.status);
     if (input.assignee === 'me') q = q.where('p.assignee_user_id', '=', ctx.actor.type === 'user' ? ctx.actor.userId : '00000000-0000-0000-0000-000000000000');
     const variantWhere = (status: 'in_review' | null) =>
-      sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status ${status ? sql`= ${status}` : sql`<> 'cancelled'`}${
+      sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status ${status ? sql`= ${status}` : sql`<> 'cancelled'`}${
         input.connectionId && !status ? sql` AND v.channel_connection_id = ${input.connectionId}::uuid` : sql``
       })`;
     // In review on the chosen channel when one is chosen: the same variant, not any of the post's.
@@ -1507,14 +1568,14 @@ export const postList = defineQuery({
     if (input.stage === 'drafts') q = q.where('p.status', '=', 'draft').where(sql<boolean>`NOT ${variantWhere('in_review')}`);
     if (input.stage === 'done') q = q.where('p.status', 'in', ['published', 'partially_published', 'failed', 'publishing', 'cancelled']);
     if (input.stage === 'attention') {
-      q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status IN ('failed', 'needs_attention', 'paused'))`);
+      q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status IN ('failed', 'needs_attention', 'paused'))`);
     }
     if (input.connectionId) q = q.where(variantWhere(null));
     if (input.labelId) q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = p.org_id AND pl.post_id = p.id AND pl.label_id = ${input.labelId}::uuid)`);
     if (input.search) {
       const term = likeTerm(input.search);
       q = q.where(
-        sql<boolean>`(p.body ILIKE ${term} OR p.title ILIKE ${term} OR EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND (v.body ILIKE ${term} OR v.title ILIKE ${term})))`,
+        sql<boolean>`(p.body ILIKE ${term} OR p.title ILIKE ${term} OR EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND (v.body ILIKE ${term} OR v.title ILIKE ${term})))`,
       );
     }
     // Ordered and paged by the change time as the answer carries it (milliseconds), so a page boundary inside one
@@ -1531,6 +1592,7 @@ export const postList = defineQuery({
             .whereRef('v.org_id', '=', 'p.org_id')
             .whereRef('v.post_id', '=', 'p.id')
             .where('v.status', '<>', 'cancelled')
+            .where(mine)
             .where((w) => {
               const at = sql`CASE WHEN v.status IN ('published', 'removed') THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END`;
               const parts = [];
@@ -1554,6 +1616,8 @@ export const queueGet = defineQuery({
   input: z.object({ connectionId: zId }),
   access: ALL,
   handler: async (ctx, input) => {
+    // Not the queue of a channel the caller may not use (#1081).
+    if (!mayUse(await channelScope(ctx), input.connectionId)) throw channelNotAllowed([input.connectionId]);
     const queue = await ctx.trx
       .selectFrom('crove_social.queue')
       .select(['id', 'time_zone', 'paused', 'low_days', 'low_alerted_at'])
@@ -1654,6 +1718,7 @@ export const socialCommands = [
   ...linkPreviewCommands,
   ...notificationCommands,
   ...reminderCommands,
+  ...channelAccessCommands,
   ...queueLowCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
@@ -1697,4 +1762,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries];

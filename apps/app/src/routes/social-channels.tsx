@@ -18,6 +18,7 @@ import { ReportBrandingCard } from '../components/social-report-branding.tsx';
 import { ChatAlertCard } from '../components/social-chat-alert.tsx';
 import { PublishHoldCard } from '../components/social-publish-hold.tsx';
 import { BannedWordsCard } from '../components/social-banned-words.tsx';
+import { ChannelAccessCard, useChannelScope } from '../components/social-channel-access.tsx';
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -346,7 +347,10 @@ export function SocialChannelsPage() {
   const voices = useQuery(orpc.social.brandVoices.list.queryOptions({ input: {} }));
   const orgVoice = voices.data?.find((v) => v.connectionId === null);
   const channelVoice = new Map((voices.data ?? []).filter((v) => v.connectionId !== null).map((v) => [v.connectionId as string, v]));
-  const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  const listed = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  // A member limited to some channels (#1081) sees those here: the others' queues and settings are not theirs.
+  const scope = useChannelScope();
+  const channels = { ...listed, data: listed.data?.filter((c) => scope.allows(c.id)), isLoading: listed.isLoading || scope.loading };
   const policyRows = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
   const policies = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.approvalsRequired]));
   const reminders = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.reviewReminders]));
@@ -506,6 +510,7 @@ export function SocialChannelsPage() {
             <PublishHoldCard key={slug} />
           </Card>
           <BannedWordsCard channels={(channels.data ?? []).filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />
+          {channels.data && <ChannelAccessCard channels={channels.data} canEdit={isAdmin} />}
           <Card className="block space-y-2 p-4">
             <div>
               <p className="text-sm font-medium text-foreground">{t('chatAlert.title')}</p>

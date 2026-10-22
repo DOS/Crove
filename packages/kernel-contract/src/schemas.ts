@@ -1228,6 +1228,17 @@ export const zSocialBannedWordAdd = z.strictObject({
   connectionIds: z.array(zId).max(50).optional(),
 });
 
+// A member's channels (#1081): with any listed they use those only; members without a list are not listed.
+export const zSocialChannelAccess = z.object({ userId: zId, connectionIds: z.array(zId) });
+// Replaces a member's list; an empty list lets them use every channel again.
+export const zSocialChannelAccessSet = z.strictObject({
+  userId: zId,
+  channelConnectionIds: z
+    .array(zId)
+    .max(100)
+    .refine((ids) => new Set(ids).size === ids.length, 'each channel once'),
+});
+
 const zContent = z.object({ body: z.string(), title: z.string().nullable(), linkUrl: z.string().nullable() });
 
 export const zSocialVariant = z.object({
