@@ -396,6 +396,18 @@ describe('generations (ADR-0013)', () => {
     await expect(readVerified(store, { key, generation: 's3:r2-version', sha256 })).resolves.toEqual(bytes);
     await expect(readVerified(store, { key, generation: `content:${sha256}`, sha256 })).resolves.toEqual(bytes);
     expect(sent.filter((c) => c instanceof GetObjectCommand).map((c) => (c.input as { VersionId?: string }).VersionId)).toEqual([undefined, undefined]);
+
+    // A write the server does not confirm is read back without the version it returned.
+    const unconfirmed = fakeStore(
+      (c) => {
+        if (c instanceof GetObjectCommand && (c.input as { VersionId?: string }).VersionId) throw s3Error('NotImplemented', 501);
+        if (c instanceof GetObjectCommand) return { Body: body(bytes), VersionId: 'r2-version' };
+        return { VersionId: 'r2-version' };
+      },
+      { versioning: 'off' },
+    );
+    await expect(unconfirmed.store.put(key, bytes, 'application/xml')).resolves.toBe(`content:${sha256}`);
+    expect(unconfirmed.sent.map((c) => c.constructor.name)).toEqual(['PutObjectCommand', 'GetObjectCommand']);
   });
 
   it('tags GCS generations as gcs:', async () => {

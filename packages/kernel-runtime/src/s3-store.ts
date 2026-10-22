@@ -349,7 +349,7 @@ export class S3BlobStore implements BlobStore {
       if (confirmed === checksum) return this.generation(key, versionId, sha256);
       // The server did not confirm the checksum (or confirmed another one): verify what it stored.
       if (confirmed === undefined) {
-        const stored = await this.fetch(key, versionId);
+        const stored = await this.fetch(key, this.versioning === 'off' ? undefined : versionId);
         if (sha256Hex(stored.bytes) === sha256) return this.generation(key, versionId ?? stored.versionId, sha256);
       }
       await this.delete(key);
@@ -410,7 +410,9 @@ export class S3BlobStore implements BlobStore {
       // its bytes are the recorded ones, so a swapped object is never the one kept.
       const current = await this.fetch(ref.key);
       if (sha256Hex(current.bytes) !== ref.sha256) throw new BlobIntegrityError(ref);
-      versionId = this.versioning !== 'off' && current.versionId && current.versionId !== 'null' ? current.versionId : null;
+      // The version just verified, even with versioning off: holds only run on an Object Lock bucket, which is always
+      // versioned, so retention lands on exactly these bytes and never on a version written in between.
+      versionId = current.versionId && current.versionId !== 'null' ? current.versionId : null;
     }
     const version = versionId ? { VersionId: versionId } : {};
     let existing: { mode: string | undefined; until: Date } | null = null;

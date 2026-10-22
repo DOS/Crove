@@ -58,7 +58,7 @@ What this gives against S25, by store:
 
 `S3_VERSIONING=required` (the default) makes `S3BlobStore.put` fail with `BlobStoreVersioningError` when the bucket answers without a version id (or with `null`, the id of an object written while versioning was off or suspended). That makes a misconfigured production bucket fail on the first upload instead of silently storing evidence without versions.
 
-`S3_VERSIONING=off` is an explicit operator choice for stores without versioning (Cloudflare R2 has none today). The kernel logs a warning at startup, and generations are `content:<sha256>`.
+`S3_VERSIONING=off` is an explicit operator choice for stores without versioning (Cloudflare R2 has none today). The kernel logs a warning at startup, and generations are `content:<sha256>`. With `off` the store also ignores any version id the server returns and any `s3:` generation an earlier row recorded, and reads the current object (R2 answers every write with a version id but refuses a read that names one, #1073). So never set `off` on a versioned bucket: a file overwritten there would then fail its sha256 check instead of being read from its recorded version.
 
 Not a hard production refusal: a production deployment on R2 is legitimate, and the sha256 check still detects a swap. The trade-off (detection without recovery) is stated in `.env.example` and here.
 
