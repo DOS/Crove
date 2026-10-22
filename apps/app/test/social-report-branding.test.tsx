@@ -153,6 +153,9 @@ describe('white-label client pages (#1053)', () => {
     expect(pageBrand({ logo: 'data:image/png;base64,/9j/4AAQSkZJRgABAQ==' })?.logo).toBeNull();
     expect(pageBrand(null)).toBeNull();
     expect(pageBrand('brand')).toBeNull();
+    // An array is an object too, but not a brand.
+    expect(pageBrand([])).toBeNull();
+    expect(pageBrand(['Sao Mai Agency', PNG])).toBeNull();
     expect(accentStyle(null)).toBeUndefined();
     expect(accentStyle({ name: null, logo: null, accent: '#0f766e', hideCrove: false })).toEqual({ '--brand-accent': '#0f766e' });
   });

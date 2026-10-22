@@ -22,13 +22,15 @@ CREATE TABLE IF NOT EXISTS crove_social.report_branding (
   org_id uuid NOT NULL REFERENCES crove_kernel.tenant (org_id) ON DELETE CASCADE,
   id uuid NOT NULL DEFAULT crove_kernel.uuid_v7(),
   display_name text CHECK (display_name IS NULL OR (length(display_name) BETWEEN 1 AND 100 AND display_name !~ '[[:cntrl:]]')),
-  -- The prefix and the canonical base64 of at most 65536 bytes (87407 characters with the longest prefix); the first
-  -- 12 bytes (16 base64 characters) hold the magic number of the declared type. The CASE keeps decode() to a value the
-  -- pattern already accepted.
+  -- The prefix and the canonical base64 of at most 65536 bytes decoded: first a cheap bound on the whole text (87407
+  -- characters, the longest prefix and the base64 of 65536 bytes), then the pattern, then the exact decoded size (the
+  -- base64 length over 4 times 3, less its padding), then the magic number of the declared type in the first 12 bytes
+  -- (16 base64 characters). The CASE keeps that order, so decode() only sees a value the pattern accepted.
   logo text CONSTRAINT report_branding_logo_check CHECK (
     logo IS NULL OR CASE
       WHEN length(logo) > 87407 THEN false
       WHEN logo !~ '^data:image/(png|webp|jpeg);base64,([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$' THEN false
+      WHEN (pg_catalog.length(logo) - pg_catalog.strpos(logo, ',')) / 4 * 3 - (pg_catalog.length(logo) - pg_catalog.length(pg_catalog.rtrim(logo, '='))) > 65536 THEN false
       WHEN logo LIKE 'data:image/png;base64,%' THEN
         pg_catalog.substr(pg_catalog.decode(pg_catalog.substr(logo, 23, 16), 'base64'), 1, 8) = '\x89504e470d0a1a0a'::bytea
       WHEN logo LIKE 'data:image/jpeg;base64,%' THEN

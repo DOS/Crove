@@ -33,8 +33,8 @@ function mail(brand: unknown, payload: Record<string, unknown> = {}) {
 }
 
 describe('report mail branding (#1053)', () => {
-  it('is the mail of before without branding: no header line, the Crove footer', async () => {
-    for (const brand of [undefined, null]) {
+  it('is the mail of before without branding (or with an array where the brand should be): no header line, the Crove footer', async () => {
+    for (const brand of [undefined, null, [], ['Sao Mai Agency', '#1d4ed8']]) {
       const out = await mail(brand);
       expect(out).not.toBeNull();
       expect(out?.html).not.toContain('border-bottom:3px solid');

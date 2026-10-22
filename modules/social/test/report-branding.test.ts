@@ -1,7 +1,12 @@
 // White-label client reports (#1053): the rules a brand's logo and accent meet, the same in the command and the form.
 import { describe, expect, it } from 'vitest';
+import { SOCIAL_BRAND_ACCENT_INPUT_MAX, SOCIAL_BRAND_LOGO_INPUT_MAX, SOCIAL_BRAND_NAME_MAX, zSocialReportBrandingSave } from '@crove/kernel-contract';
+import { zReportBrandingSave } from '../src/report-branding.ts';
 import {
   accentContrast,
+  BRAND_ACCENT_INPUT_MAX,
+  BRAND_LOGO_INPUT_MAX,
+  BRAND_NAME_MAX,
   accentReadable,
   BRAND_LOGO_MAX_BYTES,
   BRAND_ACCENT_START,
@@ -81,5 +86,27 @@ describe('report branding rules (#1053)', () => {
     expect(checkLogoDataUrl(`data:image/png;base64,${b64(PNG, 4)}=`)).toEqual({ ok: false, reason: 'type' });
     expect(checkLogoDataUrl(`data:image/png;base64,${b64(PNG, BRAND_LOGO_MAX_BYTES - PNG.length + 1)}`)).toEqual({ ok: false, reason: 'size' });
     expect(checkLogoDataUrl(`data:image/png;base64,${'A'.repeat(200_000)}`)).toEqual({ ok: false, reason: 'size' });
+  });
+
+  it('keeps the kernel contract to the same input limits as the save command', () => {
+    expect(SOCIAL_BRAND_NAME_MAX).toBe(BRAND_NAME_MAX);
+    expect(SOCIAL_BRAND_LOGO_INPUT_MAX).toBe(BRAND_LOGO_INPUT_MAX);
+    expect(SOCIAL_BRAND_ACCENT_INPUT_MAX).toBe(BRAND_ACCENT_INPUT_MAX);
+    // A logo just over 64 KB passes both input checks, so the command answers BRAND_LOGO_TOO_LARGE.
+    const big = `data:image/png;base64,${b64(PNG, BRAND_LOGO_MAX_BYTES - PNG.length + 3)}`;
+    for (const schema of [zSocialReportBrandingSave, zReportBrandingSave]) {
+      expect(schema.safeParse({ logo: big, hideCrove: false }).success).toBe(true);
+      expect(schema.safeParse({ logo: 'A'.repeat(BRAND_LOGO_INPUT_MAX + 1), hideCrove: false }).success).toBe(false);
+      expect(schema.safeParse({ name: 'x'.repeat(BRAND_NAME_MAX), hideCrove: false }).success).toBe(true);
+      expect(schema.safeParse({ name: 'x'.repeat(BRAND_NAME_MAX + 1), hideCrove: false }).success).toBe(false);
+      expect(schema.safeParse({ accent: '#'.repeat(BRAND_ACCENT_INPUT_MAX + 1), hideCrove: false }).success).toBe(false);
+    }
+  });
+
+  it('drops format characters from the name (bidi overrides, zero-width), collapses spaces and refuses control characters', () => {
+    const parse = (name: string) => zReportBrandingSave.safeParse({ name, hideCrove: false });
+    expect(parse('Sao\u202eMai\u200b  Agency\u2066 ')).toMatchObject({ success: true, data: { name: 'SaoMai Agency' } });
+    expect(parse('\u200b\u200d')).toMatchObject({ success: true, data: { name: '' } });
+    expect(parse('Sao\u0007Mai').success).toBe(false);
   });
 });

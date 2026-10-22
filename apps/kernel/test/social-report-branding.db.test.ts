@@ -148,6 +148,10 @@ suite('white-label client reports on PostgreSQL (#1053)', () => {
     expect(await refusal(save(o, o.owner, { accent: 'red' }))).toBe('BRAND_ACCENT_INVALID');
     expect(await refusal(save(o, o.owner, { name: 'a\u0000b' }))).toBe('VALIDATION');
     expect(await refusal(save(o, o.owner, { name: 'x'.repeat(101) }))).toBe('VALIDATION');
+    // Format characters are dropped before the name is stored.
+    await save(o, o.owner, { name: 'Sao\u202eMai\u200b Agency' });
+    expect((await get(o, o.owner))?.name).toBe('SaoMai Agency');
+    await exec(o, o.owner, 'social.report_branding.remove', {});
     expect(await get(o, o.owner)).toBeNull();
     // The JPEG it says it is passes; so does the largest logo allowed.
     await save(o, o.owner, { logo: `data:image/jpeg;base64,${jpegBytes}` });
@@ -162,10 +166,14 @@ suite('white-label client reports on PostgreSQL (#1053)', () => {
     expect(await insert(svg)).toBe('23514');
     expect(await insert(`data:image/png;base64,${jpegBytes}`)).toBe('23514');
     expect(await insert(png(BRAND_LOGO_MAX_BYTES))).toBe('23514');
+    // 65538 bytes as unpadded base64 fit the 87407-character bound with the PNG prefix, but not the decoded size.
+    expect(await insert(png(BRAND_LOGO_MAX_BYTES - 8 + 2))).toBe('23514');
+    expect(await insert(png(BRAND_LOGO_MAX_BYTES - 8 + 1))).toBe('23514');
     expect(await insert(`${png()}"><script>`)).toBe('23514');
     expect(await insert(null, '#1D4ED8')).toBe('23514');
     expect(await insert(null, 'red;x')).toBe('23514');
     expect(await insert(png())).toBe('inserted');
+    expect(await insert(png(BRAND_LOGO_MAX_BYTES - 8))).toBe('inserted');
   });
 
   it("returns the brand of the link's own org only, and nothing for a revoked or expired link", async () => {

@@ -12,7 +12,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
-import { accentReadable, BRAND_LOGO_MAX_BYTES, BRAND_NAME_MAX, checkLogoDataUrl, logoDataUrlMax, normalizeAccent, type ReportBrand } from './domain/report-branding.ts';
+import { accentReadable, BRAND_ACCENT_INPUT_MAX, BRAND_LOGO_INPUT_MAX, BRAND_LOGO_MAX_BYTES, BRAND_NAME_MAX, checkLogoDataUrl, normalizeAccent, type ReportBrand } from './domain/report-branding.ts';
 import type { Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -23,10 +23,12 @@ function requireUser(ctx: CommandContext): string {
   return ctx.actor.userId;
 }
 
-// No NUL or other control characters: the name is shown on a public page and in a mail header.
+// No NUL or other control characters: the name is shown on a public page, in the tab title and in the mail. Format
+// characters (bidi overrides, zero-width joiners) are dropped, as the invite mail drops them, so a name cannot reorder
+// or hide what is around it.
 const zName = z
   .string()
-  .transform((s) => s.normalize('NFC').replace(/\s+/gu, ' ').trim())
+  .transform((s) => s.normalize('NFC').replace(/\p{Cf}+/gu, '').replace(/\s+/gu, ' ').trim())
   .pipe(z.string().max(BRAND_NAME_MAX))
   .refine((s) => !/\p{Cc}/u.test(s), 'control characters are not allowed');
 
@@ -34,12 +36,8 @@ export const zReportBrandingSave = z.strictObject({
   // Empty or absent: the org's own name.
   name: zName.nullable().optional(),
   // A data URL; checked in the handler, so a wrong type and an oversized logo each get their own refusal.
-  logo: z
-    .string()
-    .max(logoDataUrlMax() + 1024)
-    .nullable()
-    .optional(),
-  accent: z.string().max(16).nullable().optional(),
+  logo: z.string().max(BRAND_LOGO_INPUT_MAX).nullable().optional(),
+  accent: z.string().max(BRAND_ACCENT_INPUT_MAX).nullable().optional(),
   hideCrove: z.boolean(),
 });
 

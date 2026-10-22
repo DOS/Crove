@@ -6,6 +6,8 @@
 
 // The longest display name, in characters.
 export const BRAND_NAME_MAX = 100;
+// The longest accent the save command's input takes (#rrggbb with room for spaces around it).
+export const BRAND_ACCENT_INPUT_MAX = 16;
 // The logo the browser makes from a library image: at most this many pixels on its longest side...
 export const BRAND_LOGO_MAX_SIDE = 256;
 // ...and at most this many bytes once decoded (the server's cap; the data URL is about 4/3 of it).
@@ -99,3 +101,8 @@ export function checkLogoDataUrl(url: string): LogoCheck {
 
 /** The longest logo data URL: the longest prefix and the base64 of BRAND_LOGO_MAX_BYTES. */
 export const logoDataUrlMax = (): number => 'data:image/jpeg;base64,'.length + Math.ceil(BRAND_LOGO_MAX_BYTES / 3) * 4;
+
+// The longest logo the save command's input takes: a little over the largest allowed, so a logo just too large gets
+// its own refusal (BRAND_LOGO_TOO_LARGE) rather than a validation error. The kernel contract mirrors it
+// (SOCIAL_BRAND_LOGO_INPUT_MAX, checked equal by modules/social/test/report-branding.test.ts).
+export const BRAND_LOGO_INPUT_MAX = logoDataUrlMax() + 1024;

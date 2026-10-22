@@ -10,7 +10,7 @@ export type { ReportBrand };
 
 /** A brand as a public page shows it, from whatever the API answered: unknown parts dropped, null for none. */
 export function pageBrand(value: unknown): ReportBrand | null {
-  if (typeof value !== 'object' || value === null) return null;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const { name, logo, accent, hideCrove } = value as Record<string, unknown>;
   return {
     name: typeof name === 'string' && name.trim() ? name.trim().slice(0, 100) : null,

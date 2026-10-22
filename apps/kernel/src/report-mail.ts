@@ -41,7 +41,7 @@ interface MailBrand {
   hideCrove: boolean;
 }
 function brandOf(value: unknown): MailBrand | null {
-  if (typeof value !== 'object' || value === null) return null;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const { name, accent, hideCrove } = value as Record<string, unknown>;
   return {
     name: typeof name === 'string' && name.trim() ? oneLine(name).slice(0, 100) : null,

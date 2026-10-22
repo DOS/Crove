@@ -1085,10 +1085,15 @@ export const SOCIAL_WATERMARK_CORNERS = ['top_left', 'top_right', 'bottom_left',
 // An org's white-label branding of its client reports (#1053), as the settings and the public views return it. The
 // command checks the logo (PNG, WebP or JPEG data URL, at most 64 KB, its magic number) and the accent's contrast.
 export const zSocialReportBrand = z.object({ name: z.string().nullable(), logo: z.string().nullable(), accent: z.string().nullable(), hideCrove: z.boolean() });
+// The same limits as the save command's input in modules/social (BRAND_NAME_MAX, BRAND_LOGO_INPUT_MAX,
+// BRAND_ACCENT_INPUT_MAX); modules/social/test/report-branding.test.ts checks they stay equal.
+export const SOCIAL_BRAND_NAME_MAX = 100;
+export const SOCIAL_BRAND_LOGO_INPUT_MAX = 'data:image/jpeg;base64,'.length + Math.ceil((64 * 1024) / 3) * 4 + 1024;
+export const SOCIAL_BRAND_ACCENT_INPUT_MAX = 16;
 export const zSocialReportBrandingSave = z.strictObject({
-  name: z.string().max(200).nullable().optional(),
-  logo: z.string().max(100_000).nullable().optional(),
-  accent: z.string().max(16).nullable().optional(),
+  name: z.string().max(SOCIAL_BRAND_NAME_MAX).nullable().optional(),
+  logo: z.string().max(SOCIAL_BRAND_LOGO_INPUT_MAX).nullable().optional(),
+  accent: z.string().max(SOCIAL_BRAND_ACCENT_INPUT_MAX).nullable().optional(),
   hideCrove: z.boolean(),
 });
 // The org's team chat for Social alerts (#863): where it is, and the kinds of alert it may get; the same lists as
