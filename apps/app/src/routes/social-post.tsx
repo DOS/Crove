@@ -2810,6 +2810,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           <PostVersions
             postId={p.id}
             revision={p.revision}
+            variantRevisions={Object.fromEntries(p.variants.map((v) => [v.id, v.revision]))}
             current={p.variants.map((v) => ({
               variantId: v.id,
               name: names.get(v.connectionId) ?? providerName(v.provider),

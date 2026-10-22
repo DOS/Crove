@@ -106,6 +106,7 @@ function VersionEntry({
 export function PostVersions({
   postId,
   revision,
+  variantRevisions,
   current,
   canWrite,
   editing,
@@ -113,6 +114,8 @@ export function PostVersions({
 }: {
   postId: string;
   revision: number;
+  // Each channel's revision as the page shows it, so a channel edited elsewhere since refuses the restore.
+  variantRevisions: Record<string, number>;
   current: readonly CurrentChannel[];
   canWrite: boolean;
   editing: boolean;
@@ -122,7 +125,7 @@ export function PostVersions({
   const versions = useQuery(orpc.social.posts.versions.queryOptions({ input: { postId } }));
   const [done, setDone] = useState<number | null>(null);
   const restore = useMutation({
-    mutationFn: (v: Version) => client.social.posts.restoreVersion({ postId, versionId: v.id, revision }).then(() => v.number),
+    mutationFn: (v: Version) => client.social.posts.restoreVersion({ postId, versionId: v.id, revision, variantRevisions }).then(() => v.number),
     onSuccess: (number) => {
       setDone(number);
       onRestored();

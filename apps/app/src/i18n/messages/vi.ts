@@ -3538,6 +3538,7 @@ export const vi = {
       VARIANT_INVALID: 'Có kênh chưa đúng yêu cầu của nền tảng',
       VARIANT_IN_FLIGHT: 'Có kênh đang đăng: chờ kết quả rồi mới sửa nội dung chung',
       VERSION_NOT_FOUND: 'Không tìm thấy phiên bản này, có thể nó đã quá cũ và bị xóa khỏi lịch sử',
+      VERSION_INVALID: 'Phiên bản này bị hỏng nên không khôi phục được; hãy chọn một phiên bản khác',
       POST_PUBLISHED: 'Bài đã đăng hoặc đã hủy trên mọi kênh nên không khôi phục được; hãy đăng lại thành bài mới',
       APPROVAL_REQUIRED: 'Kênh này chưa được duyệt đúng nội dung hiện tại',
       QUEUE_PAUSED: 'Hàng đợi của kênh này đang tạm dừng; hãy chạy lại hàng đợi hoặc bỏ lịch trước',

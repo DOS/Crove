@@ -82,8 +82,15 @@ suite('social post versions on PostgreSQL (#1021)', () => {
   const get = (o: Org, postId: string) => rt.query<PostView>('social.post.get', { postId }, { actor: asUser(o.owner), orgId: o.orgId });
   const versions = async (o: Org, user: string, postId: string) => (await rt.query<{ versions: VersionView[] }>('social.post.versions', { postId }, { actor: asUser(user), orgId: o.orgId })).versions;
   const edit = async (o: Org, postId: string, body: string) => exec(o, o.member, 'social.post.update', { postId, revision: (await get(o, postId)).revision, body });
-  const restore = async (o: Org, user: string, postId: string, versionId: string) =>
-    exec<{ revision: number; changedVariants: string[]; kept: string[] }>(o, user, 'social.post.restore_version', { postId, versionId, revision: (await get(o, postId)).revision });
+  const restore = async (o: Org, user: string, postId: string, versionId: string, variantRevisions?: Record<string, number>) =>
+    exec<{ revision: number; changedVariants: string[]; kept: string[] }>(o, user, 'social.post.restore_version', {
+      postId,
+      versionId,
+      revision: (await get(o, postId)).revision,
+      ...(variantRevisions ? { variantRevisions } : {}),
+    });
+  const countVersions = async (o: Org, postId: string) =>
+    Number((await admin((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM crove_social.post_version WHERE org_id = $1 AND post_id = $2', [o.orgId, postId]))).rows[0]?.n);
   const decide = async (o: Org, postId: string, decision: string) =>
     exec(o, o.owner, 'social.variant.decide', { postId, decision, variants: (await get(o, postId)).variants.filter((v) => v.status === 'in_review').map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
   async function post(o: Org, body: string, connections: string[]) {
@@ -279,5 +286,76 @@ suite('social post versions on PostgreSQL (#1021)', () => {
     expect((await versions(b, b.owner, postB)).map((v) => v.id)).not.toContain(versionA.id);
     const { rows } = await admin((c) => c.query<{ n: string }>('SELECT count(*) AS n FROM crove_social.post_version WHERE org_id = $1', [a.orgId]));
     expect(Number(rows[0]?.n)).toBe(2);
+  });
+
+  it("refuses another post's version, a channel in flight and a channel edited since it was shown", async () => {
+    const o = await org();
+    const conn = await connection(o);
+    const one = await post(o, 'Bài một', [conn]);
+    await edit(o, one, 'Bài một, đã sửa');
+    const two = await post(o, 'Bài hai', [conn]);
+    await edit(o, two, 'Bài hai, đã sửa');
+    const [, ofOne] = (await versions(o, o.member, one)) as [VersionView, VersionView];
+    await expect(restore(o, o.member, two, ofOne.id)).rejects.toMatchObject({ code: 'VERSION_NOT_FOUND', status: 404 });
+    expect((await get(o, two)).body).toBe('Bài hai, đã sửa');
+
+    // A channel publishing now: the restore would change its content, so it is refused and nothing is written.
+    const flying = (await get(o, one)).variants[0]?.id as string;
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET status = 'publishing' WHERE id = $1", [flying]));
+    await expect(restore(o, o.member, one, ofOne.id)).rejects.toMatchObject({ code: 'VARIANT_IN_FLIGHT', status: 409 });
+    expect((await get(o, one)).body).toBe('Bài một, đã sửa');
+    expect(await countVersions(o, one)).toBe(2);
+
+    // The page showed a channel revision that another tab has moved on from.
+    const [, ofTwo] = (await versions(o, o.member, two)) as [VersionView, VersionView];
+    const shown = (await get(o, two)).variants[0] as PostView['variants'][number];
+    await exec(o, o.owner, 'social.variant.update', { variantId: shown.id, revision: shown.revision, body: 'Sửa ở tab khác' });
+    await expect(restore(o, o.member, two, ofTwo.id, { [shown.id]: shown.revision })).rejects.toMatchObject({ code: 'STALE_REVISION', status: 409 });
+    await expect(restore(o, o.member, two, ofTwo.id, { [randomUUID()]: 1 })).rejects.toMatchObject({ code: 'STALE_REVISION' });
+    const fresh = (await get(o, two)).variants[0] as PostView['variants'][number];
+    await restore(o, o.member, two, ofTwo.id, { [fresh.id]: fresh.revision });
+    expect((await get(o, two)).variants[0]?.effective.body).toBe('Bài hai');
+  });
+
+  it('resolves the files of a version again and refuses a version that does not pass the edit schemas', async () => {
+    const o = await org();
+    const conn = await connection(o);
+    const pic = await image(o.orgId);
+    const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Có ảnh', media: [{ fileId: pic, altText: null }], channels: [{ connectionId: conn }] });
+    await exec(o, o.member, 'social.post.update', { postId, revision: 1, body: 'Không ảnh', media: [] });
+    const [, withImage] = (await versions(o, o.member, postId)) as [VersionView, VersionView];
+    await admin((c) => c.query('DELETE FROM crove_kernel.file WHERE org_id = $1 AND id = $2', [o.orgId, pic]));
+    await expect(restore(o, o.member, postId, withImage.id)).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND', status: 404 });
+
+    // Rows written past the commands: a link an edit refuses, a channel setting that is not an object.
+    const tampered = async (number: number, columns: { link_url?: string; variants?: string }) => {
+      const { rows } = await admin((c) =>
+        c.query<{ id: string }>(
+          `INSERT INTO crove_social.post_version (org_id, post_id, number, revision, body, link_url, variants, created_by)
+           VALUES ($1, $2, $3, 1, 'Sửa tay', $4, $5::jsonb, $6) RETURNING id`,
+          [o.orgId, postId, number, columns.link_url ?? null, columns.variants ?? '[]', o.member],
+        ),
+      );
+      return rows[0]?.id as string;
+    };
+    const badLink = await tampered(90, { link_url: 'javascript:alert(1)' });
+    const variantId = (await get(o, postId)).variants[0]?.id as string;
+    const badSettings = await tampered(91, { variants: JSON.stringify([{ variantId, body: null, title: null, linkUrl: null, settings: 'x', media: null }]) });
+    for (const id of [badLink, badSettings]) await expect(restore(o, o.member, postId, id)).rejects.toMatchObject({ code: 'VERSION_INVALID', status: 422 });
+    expect((await get(o, postId)).body).toBe('Không ảnh');
+  });
+
+  it('restores the base content of a post without channels', async () => {
+    const o = await org();
+    const postId = randomUUID();
+    await admin(async (c) => {
+      await c.query("INSERT INTO crove_social.post (org_id, id, body, author_user_id) VALUES ($1, $2, 'Bây giờ', $3)", [o.orgId, postId, o.member]);
+      await c.query("INSERT INTO crove_social.post_version (org_id, post_id, number, revision, body, created_by) VALUES ($1, $2, 1, 1, 'Ngày trước', $3)", [o.orgId, postId, o.member]);
+    });
+    const [saved] = (await versions(o, o.member, postId)) as [VersionView];
+    const result = await restore(o, o.member, postId, saved.id);
+    expect(result).toMatchObject({ changedVariants: [], kept: [] });
+    expect((await get(o, postId)).body).toBe('Ngày trước');
+    expect((await versions(o, o.member, postId)).map((v) => v.number)).toEqual([2, 1]);
   });
 });

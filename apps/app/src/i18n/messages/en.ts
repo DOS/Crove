@@ -3538,6 +3538,7 @@ export const en = {
       VARIANT_INVALID: "A channel does not meet its platform's rules yet",
       VARIANT_IN_FLIGHT: 'A channel is publishing: wait for the outcome before editing the shared text',
       VERSION_NOT_FOUND: 'This version was not found; it may be too old and gone from the history',
+      VERSION_INVALID: 'This version is damaged and cannot be restored; pick another version',
       POST_PUBLISHED: 'The post went out or was cancelled on every channel, so it cannot be restored; repost it as a new post',
       APPROVAL_REQUIRED: 'This channel is not approved for its current content',
       QUEUE_PAUSED: 'The queue of this channel is paused; resume the queue or unschedule first',

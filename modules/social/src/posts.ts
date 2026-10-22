@@ -62,7 +62,6 @@ import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEy
 import { clientReviewCommands } from './client-review.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, variantPost, type PostRow, type QueueState, type VariantRow, type Trx } from './variants.ts';
 import { queueOrderCommands } from './queue-order.ts';
-import { versionMedia, versionVariants } from './domain/versions.ts';
 import { versionQueries, withVersion } from './versions.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -512,9 +511,28 @@ export const variantUpdate = defineCommand({
 // channel's policy, as after any edit. A channel that is history (published, cancelled, removed) keeps what it has: a
 // published post is never changed in place, and a post with no channel left to edit is refused. A channel in flight
 // refuses the restore, as it refuses an edit; a channel added after the version keeps its content.
+//
+// The version's content passes the same input schemas as an edit before anything is written (VERSION_INVALID
+// otherwise), and its files are resolved again as for an edit (MEDIA_NOT_FOUND for one the org no longer has).
+const zVersionContent = z.object({
+  body: zBody,
+  title: zTitle.nullable(),
+  linkUrl: zLink.nullable(),
+  media: zMedia,
+  variants: z.array(z.object({ variantId: zId, body: zBody.nullable(), title: zTitle.nullable(), linkUrl: zLink.nullable(), settings: zSettings, media: zMedia.nullable() })),
+});
 export const postRestoreVersion = defineCommand({
   name: 'social.post.restore_version',
-  input: z.strictObject({ postId: zId, versionId: zId, revision: z.number().int().positive() }),
+  input: z.strictObject({
+    postId: zId,
+    versionId: zId,
+    revision: z.number().int().positive(),
+    // The revision of each channel as the member saw it; a channel edited since refuses the restore.
+    variantRevisions: z
+      .record(zId, z.number().int().positive())
+      .refine((r) => Object.keys(r).length <= MAX_CHANNELS_PER_POST, 'too many channels')
+      .optional(),
+  }),
   risk: 'R1',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
@@ -530,13 +548,21 @@ export const postRestoreVersion = defineCommand({
       .where('id', '=', input.versionId)
       .executeTakeFirst();
     if (!version) throw new DomainError('VERSION_NOT_FOUND', 404, 'Không tìm thấy phiên bản này của bài đăng');
+    const parsed = zVersionContent.safeParse({ body: version.body, title: version.title, linkUrl: version.link_url, media: version.media, variants: version.variants });
+    if (!parsed.success) throw new DomainError('VERSION_INVALID', 422, 'Phiên bản này bị hỏng nên không khôi phục được', { versionId: version.id });
+    const content = parsed.data;
     const editable = (v: VariantRow) => !FROZEN.has(v.status) && !v.content_frozen;
-    if (!(await lockVariants(ctx.trx, ctx.orgId, post.id)).some(editable)) {
+    const current = await lockVariants(ctx.trx, ctx.orgId, post.id);
+    const seen = Object.entries(input.variantRevisions ?? {});
+    const stale = seen.filter(([id, revision]) => current.find((v) => v.id === id)?.revision !== revision).map(([id]) => id);
+    if (stale.length > 0) throw new DomainError('STALE_REVISION', 409, 'Có kênh đã được sửa ở nơi khác, hãy tải lại', { variantIds: stale });
+    // A post without channels takes its base content back; one whose every channel is history is refused.
+    if (current.length > 0 && !current.some(editable)) {
       throw new DomainError('POST_PUBLISHED', 409, 'Bài đã đăng hoặc đã hủy trên mọi kênh: không khôi phục vào bài đã đăng được', { postId: post.id });
     }
-    const saved = new Map(versionVariants(version.variants).map((v) => [v.variantId, v]));
+    const saved = new Map(content.variants.map((v) => [v.variantId, v]));
     const result = await withVersion(ctx, post.id, async () => {
-      const edited = await editPost(ctx, post, { body: version.body, title: version.title, linkUrl: version.link_url, media: versionMedia(version.media) });
+      const edited = await editPost(ctx, post, { body: content.body, title: content.title, linkUrl: content.linkUrl, media: content.media });
       const changed = new Set(edited.changedVariants);
       const next = await lockPost(ctx.trx, ctx.orgId, post.id);
       const kept: string[] = [];
