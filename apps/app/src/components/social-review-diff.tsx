@@ -53,7 +53,8 @@ function MediaRow({ list, label, faded = false }: { list: readonly DiffMedia[]; 
   );
 }
 
-function Changes({ diff }: { diff: ReviewDiff }) {
+// The changes of one channel's content, as reviewDiff found them; the version history (#1021) shows them too.
+export function ContentChanges({ diff }: { diff: ReviewDiff }) {
   const t = useTranslations('social.reviewDiff');
   const none = t('none');
   return (
@@ -143,7 +144,7 @@ export function ReviewChanges({ postId, variants }: { postId: string; variants: 
             {' · '}
             {since(v.last)}
           </p>
-          <Changes diff={v.changes} />
+          <ContentChanges diff={v.changes} />
         </div>
       ))}
     </section>

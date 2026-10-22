@@ -127,6 +127,8 @@ export const ACTIVITY_KINDS = [
   'removed',
   // Moved in its channel's queue (#1020); its code says how: shuffle, front (put first) or shifted (one place later).
   'queue_moved',
+  // An earlier version saved again as a new edit (#1021).
+  'restored',
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
@@ -157,6 +159,7 @@ export interface ActivityItem {
 const AUDITED: Record<string, ActivityKind> = {
   'social.post.update': 'edited',
   'social.variant.update': 'edited',
+  'social.post.restore_version': 'restored',
   'social.post.add_channels': 'channels_added',
   'social.post.submit': 'submitted',
   'social.variant.schedule': 'scheduled',

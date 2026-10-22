@@ -26,6 +26,7 @@ import {
   zSocialPost,
   zSocialRecurrence,
   zSocialReviewDiff,
+  zSocialPostVersions,
   zSocialPostCreate,
   zSocialPostUpdate,
   zSocialQueue,
@@ -305,6 +306,21 @@ export const contract = {
       get: oc.input(z.object({ postId: zId })).output(zSocialPost),
       // Per channel, the content of its last review decision next to its content now (#944), for the review panel's diff.
       reviewDiff: oc.input(z.strictObject({ postId: zId })).output(zSocialReviewDiff),
+      // The post's saved versions, newest first (#1021), at most 50.
+      versions: oc.input(z.strictObject({ postId: zId })).output(zSocialPostVersions),
+      // Saves a version again as a new edit (#1021): changed channels go back to draft; channels that are history keep
+      // their content (kept), and a post with no channel left to edit is refused.
+      restoreVersion: oc
+        .input(
+          z.strictObject({
+            postId: zId,
+            versionId: zId,
+            revision: z.number().int().positive(),
+            // Each channel's revision as the page shows it; a channel edited since refuses the restore.
+            variantRevisions: z.record(zId, z.number().int().positive()).optional(),
+          }),
+        )
+        .output(z.object({ postId: zId, revision: z.number().int(), changedVariants: z.array(zId), kept: z.array(zId) })),
       // Who should move the post along and by when (#640): owners, admins and the author; null clears.
       assign: oc
         .input(z.strictObject({ postId: zId, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable() }))

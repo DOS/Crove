@@ -1314,6 +1314,23 @@ export const zSocialReviewDiff = z.object({
   ),
 });
 
+// A post's saved versions, newest first (#1021): who saved each and when, and per channel of the version what it showed.
+// createdBy is null for the content a post had before its first saved version.
+export const zSocialPostVersions = z.object({
+  postId: zId,
+  versions: z.array(
+    z.object({
+      id: zId,
+      number: z.number().int(),
+      revision: z.number().int(),
+      createdAt: z.string(),
+      createdBy: zId.nullable(),
+      createdByName: z.string().nullable(),
+      variants: z.array(z.object({ variantId: zId, content: zSocialReviewContent })),
+    }),
+  ),
+});
+
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
 // A media library item (S9): an image of the org uploaded for posts, how many posts show it and its tags (#904).
 export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()) });
@@ -1456,7 +1473,7 @@ export const zSocialReviewPlanLink = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'queue_moved']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'queue_moved', 'restored']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),
