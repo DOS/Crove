@@ -3,14 +3,14 @@
 // worker publish it to the sandbox once it is due. The channel rules run as the text is typed.
 import { expect, test } from '@playwright/test';
 import { exec } from '../lib/db.ts';
-import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 
 // Queue slots are set in the queue's time zone (Asia/Ho_Chi_Minh by default) and the agenda shows the viewer's local
 // time, so the browser runs in that zone whatever the machine's zone is.
 test.use({ timezoneId: 'Asia/Ho_Chi_Minh' });
 
 test('composes, reviews and schedules a post on the sandbox channel', async ({ page }) => {
-  await signUp(page, newEmail('social'));
+  await signInNewUser(page, newEmail('social'));
   await createOrg(page, 'Công ty Social');
 
   await page.getByRole('navigation').getByRole('link', { name: 'Mạng xã hội' }).click();
@@ -61,7 +61,7 @@ test('composes, reviews and schedules a post on the sandbox channel', async ({ p
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==', 'base64');
 
 test('attaches images to a post, shows them in the preview and keeps them out of the Inbox', async ({ page }) => {
-  await signUp(page, newEmail('social-media'));
+  await signInNewUser(page, newEmail('social-media'));
   await createOrg(page, 'Công ty Ảnh');
   await page.getByRole('navigation').getByRole('link', { name: 'Mạng xã hội' }).click();
   await page.getByRole('link', { name: 'Kết nối kênh' }).first().click();
@@ -89,7 +89,7 @@ test('attaches images to a post, shows them in the preview and keeps them out of
 });
 
 test('keeps unsaved edits when another tab approves the post', async ({ page, context }) => {
-  await signUp(page, newEmail('social-edit'));
+  await signInNewUser(page, newEmail('social-edit'));
   await createOrg(page, 'Công ty Hai Tab');
   await page.getByRole('navigation').getByRole('link', { name: 'Mạng xã hội' }).click();
   await page.getByRole('link', { name: 'Kết nối kênh' }).first().click();

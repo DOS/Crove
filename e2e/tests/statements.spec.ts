@@ -2,11 +2,11 @@
 // period under the notice that nobody has verified the mapping, and downloads them as Excel. The figures themselves
 // are checked against posted entries in apps/kernel/test/finance-ledger.db.test.ts.
 import { expect, test } from '@playwright/test';
-import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 
 test('shows the draft B01 and B02 of a period and exports them', async ({ page }) => {
   await page.goto('/');
-  await signUp(page, newEmail('statements'));
+  await signInNewUser(page, newEmail('statements'));
   const slug = await createOrg(page, 'Công ty Báo cáo tài chính');
   await page.getByRole('navigation').getByRole('link', { name: 'Sổ sách' }).click();
   await page.getByRole('tab', { name: 'Báo cáo tài chính' }).click();
