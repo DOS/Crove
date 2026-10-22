@@ -3502,6 +3502,7 @@ export const vi = {
     policyTitle: 'Duyệt trước khi đăng',
     policyApprovals: '{count} người duyệt',
     gbpConnectHint: 'Google Business Profile: mỗi địa điểm bạn quản lý thành một kênh riêng.',
+    linkedinPageHint: 'LinkedIn Page: mỗi Trang doanh nghiệp bạn đang làm quản trị viên thành một kênh riêng, bài đăng dưới tên Trang.',
     gbpSetupHint: 'Google Business Profile chỉ mở được khi dự án Google của Crove được Google duyệt quyền truy cập API (hồ sơ đã xác minh, hoạt động từ 60 ngày, có trang web) và người quản trị bật CHANNEL_GOOGLE_BUSINESS.',
     shortLinksLabel: 'Rút gọn liên kết và đếm lượt bấm',
     queueCategory: 'Nhóm nội dung của khung giờ',

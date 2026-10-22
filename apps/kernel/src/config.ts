@@ -268,6 +268,9 @@ const schema = z.object({
   CHANNEL_LINKEDIN_CLIENT_SECRET: optional,
   // LinkedIn post counts (#797): true once the LinkedIn app has member post analytics (r_member_postAnalytics).
   CHANNEL_LINKEDIN_ANALYTICS: z.enum(['true', 'false']).default('false'),
+  // LinkedIn Company Pages (#1077): true once the LinkedIn app has the Community Management API (w_organization_social,
+  // r_organization_admin). Callback URL: PUBLIC_URL/channels/oauth/linkedin_page/callback.
+  CHANNEL_LINKEDIN_ORGANIZATIONS: z.enum(['true', 'false']).default('false'),
   // The deployment's Google Cloud project for YouTube uploads (YouTube Data API v3, an OAuth web client), S9. Callback
   // URL: PUBLIC_URL/channels/oauth/youtube/callback.
   CHANNEL_GOOGLE_CLIENT_ID: optional,
@@ -453,6 +456,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.CHANNEL_THREADS_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_THREADS_APP_ID)) throw new Error('CHANNEL_THREADS_APP_ID is the numeric id of the Threads app');
   if (Boolean(config.CHANNEL_LINKEDIN_CLIENT_ID) !== Boolean(config.CHANNEL_LINKEDIN_CLIENT_SECRET)) throw new Error('set both CHANNEL_LINKEDIN_CLIENT_ID and CHANNEL_LINKEDIN_CLIENT_SECRET, or neither');
   if (config.CHANNEL_LINKEDIN_CLIENT_ID && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_LINKEDIN_CLIENT_ID)) throw new Error('CHANNEL_LINKEDIN_CLIENT_ID is the client id of the LinkedIn app');
+  if (config.CHANNEL_LINKEDIN_ORGANIZATIONS === 'true' && !config.CHANNEL_LINKEDIN_CLIENT_ID) throw new Error('CHANNEL_LINKEDIN_ORGANIZATIONS needs CHANNEL_LINKEDIN_CLIENT_ID and CHANNEL_LINKEDIN_CLIENT_SECRET');
   if (Boolean(config.CHANNEL_TIKTOK_CLIENT_KEY) !== Boolean(config.CHANNEL_TIKTOK_CLIENT_SECRET)) throw new Error('set both CHANNEL_TIKTOK_CLIENT_KEY and CHANNEL_TIKTOK_CLIENT_SECRET, or neither');
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_TIKTOK_CLIENT_KEY)) throw new Error('CHANNEL_TIKTOK_CLIENT_KEY is the client key of the TikTok app');
   if (Boolean(config.CHANNEL_GOOGLE_CLIENT_ID) !== Boolean(config.CHANNEL_GOOGLE_CLIENT_SECRET)) throw new Error('set both CHANNEL_GOOGLE_CLIENT_ID and CHANNEL_GOOGLE_CLIENT_SECRET, or neither');

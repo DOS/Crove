@@ -64,6 +64,7 @@ const PROVIDER_WORDS: Readonly<Record<string, string>> = {
   'zalo oa': 'zalo_oa',
   threads: 'threads',
   linkedin: 'linkedin',
+  'linkedin page': 'linkedin_page',
   youtube: 'youtube',
   tiktok: 'tiktok',
   x: 'x',

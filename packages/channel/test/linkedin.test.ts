@@ -1,6 +1,6 @@
 // LinkedIn against recorded answers (shapes from LinkedIn's Share on LinkedIn, Posts and Images API docs); no live call.
 import { describe, expect, it } from 'vitest';
-import { LINKEDIN_VERSION, LinkedInConnector, LinkedInPublisher, littleText, type Fetch, type PublishInput } from '../src/index.ts';
+import { LINKEDIN_VERSION, LinkedInConnector, LinkedInPageConnector, LinkedInPagePublisher, LinkedInPublisher, littleText, type Fetch, type PublishInput } from '../src/index.ts';
 
 const APP = { clientId: '86abcdefgh1234', clientSecret: 'test-linkedin-secret-not-real' };
 const MEMBER = 'yrZCpj2Z12';
@@ -295,5 +295,185 @@ describe('LinkedIn post counts (#797)', () => {
     expect(await ask(publisher([{ status: 404, body: {} }]))).toEqual({ refused: 'gone' });
     expect(await ask(publisher([{ status: 401, body: {} }]))).toEqual({ refused: 'token_expired' });
     expect(await ask(publisher([]), 'not-a-urn')).toEqual({ refused: 'gone' });
+  });
+});
+
+// Company Pages (#1077), against answers shaped like the Organization Access Control, Organization Lookup, Posts,
+// Images, Videos and Comments API docs (Community Management API, Linkedin-Version 202604); no live call.
+describe('LinkedIn Company Pages (#1077)', () => {
+  const PAGE_REDIRECT = 'https://crove.example/channels/oauth/linkedin_page/callback';
+  const ORG_A = '2414183';
+  const ORG_B = '79988552';
+  const ACL = '/rest/organizationAcls';
+  const pageInput = (over: Partial<PublishInput> = {}) => input({ externalAccountId: ORG_A, ...over });
+  // Routes by method, host, path and query, so each finder and batch call is named exactly.
+  function pages(routes: Record<string, Answer[]>) {
+    const calls: { route: string; url: URL; headers: Headers; body: unknown }[] = [];
+    const fetchImpl: Fetch = async (raw, init) => {
+      const url = new URL(raw);
+      const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
+      const headers = new Headers(init?.headers);
+      const sent = init?.body;
+      calls.push({ route, url, headers, body: typeof sent === 'string' ? (headers.get('content-type')?.includes('json') ? JSON.parse(sent) : Object.fromEntries(new URLSearchParams(sent))) : sent });
+      const answer = routes[`${route}${url.search.includes('action=') ? url.search : ''}`]?.shift() ?? { status: 500, body: { message: `no answer for ${route}`, status: 500 } };
+      return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json', ...answer.headers } });
+    };
+    return { calls, fetchImpl };
+  }
+  const token = (scope: string) => ({ 'POST www.linkedin.com/oauth/v2/accessToken': [{ body: { access_token: 'li-page-token', expires_in: 5_184_000, scope } }] });
+  const GRANTED = 'r_organization_admin,w_organization_social';
+
+  it('asks for the page scopes only, and connects one channel per administered page', async () => {
+    const { fetchImpl, calls } = pages({
+      ...token(GRANTED),
+      [`GET api.linkedin.com${ACL}`]: [
+        {
+          body: {
+            elements: [
+              // The docs' two shapes of the same answer: `organization` and `organizationTarget`.
+              { role: 'ADMINISTRATOR', state: 'APPROVED', roleAssignee: `urn:li:person:${MEMBER}`, organization: `urn:li:organization:${ORG_A}` },
+              { role: 'ADMINISTRATOR', state: 'APPROVED', roleAssignee: `urn:li:person:${MEMBER}`, organizationTarget: `urn:li:organization:${ORG_B}` },
+              // Another role, a pending request and a duplicate connect nothing more.
+              { role: 'ANALYST', state: 'APPROVED', organization: 'urn:li:organization:111' },
+              { role: 'ADMINISTRATOR', state: 'REQUESTED', organization: 'urn:li:organization:222' },
+              { role: 'ADMINISTRATOR', state: 'APPROVED', organization: `urn:li:organization:${ORG_A}` },
+            ],
+            paging: { count: 100, start: 0, links: [] },
+          },
+        },
+      ],
+      'GET api.linkedin.com/rest/organizations': [
+        { body: { results: { [ORG_A]: { id: Number(ORG_A), localizedName: 'Tiệm Bánh B', vanityName: 'tiem-banh-b' }, [ORG_B]: { id: Number(ORG_B), vanityName: 'firstdemocompany' } }, statuses: { [ORG_A]: 200, [ORG_B]: 200 }, errors: {} } },
+      ],
+    });
+    const connector = new LinkedInPageConnector(APP, fetchImpl);
+    const url = new URL(connector.authorizeUrl({ state: 'st', redirectUri: PAGE_REDIRECT, codeChallenge: null }));
+    expect(url.searchParams.get('scope')).toBe('w_organization_social r_organization_admin');
+    expect(url.searchParams.get('redirect_uri')).toBe(PAGE_REDIRECT);
+    const accounts = await connector.exchange({ code: 'c', redirectUri: PAGE_REDIRECT, codeVerifier: null }, 1_000_000);
+    const secret = JSON.stringify({ accessToken: 'li-page-token' });
+    expect(accounts).toEqual([
+      { provider: 'linkedin_page', externalAccountId: ORG_A, displayName: 'Tiệm Bánh B', scopes: ['r_organization_admin', 'w_organization_social'], expiresAt: new Date(1_000_000 + 5_184_000_000), secret },
+      { provider: 'linkedin_page', externalAccountId: ORG_B, displayName: 'firstdemocompany', scopes: ['r_organization_admin', 'w_organization_social'], expiresAt: new Date(1_000_000 + 5_184_000_000), secret },
+    ]);
+    const acl = calls.find((c) => c.url.pathname === ACL);
+    expect(Object.fromEntries(acl?.url.searchParams ?? [])).toEqual({ q: 'roleAssignee', role: 'ADMINISTRATOR', state: 'APPROVED', start: '0', count: '100' });
+    expect(acl?.headers.get('linkedin-version')).toBe(LINKEDIN_VERSION);
+    expect(acl?.headers.get('x-restli-protocol-version')).toBe('2.0.0');
+    expect(acl?.headers.get('authorization')).toBe('Bearer li-page-token');
+    expect(calls.find((c) => c.url.pathname === '/rest/organizations')?.url.searchParams.get('ids')).toBe(`List(${ORG_A},${ORG_B})`);
+  });
+
+  it('reads every page of roles and names them in batches, keeping a page under a fallback name when the lookup fails', async () => {
+    const ids = Array.from({ length: 101 }, (_, i) => String(1000 + i));
+    const rows = (slice: string[]) => slice.map((id) => ({ role: 'ADMINISTRATOR', state: 'APPROVED', organization: `urn:li:organization:${id}` }));
+    const named = (slice: string[]) => ({ body: { results: Object.fromEntries(slice.map((id) => [id, { localizedName: `Trang ${id}` }])) } });
+    const { fetchImpl, calls } = pages({
+      ...token(GRANTED),
+      [`GET api.linkedin.com${ACL}`]: [{ body: { elements: rows(ids.slice(0, 100)), paging: { links: [{ rel: 'next', href: `${ACL}?start=100` }] } } }, { body: { elements: rows(ids.slice(100)), paging: { links: [] } } }],
+      'GET api.linkedin.com/rest/organizations': [named(ids.slice(0, 50)), { status: 500, body: { message: 'Internal Server Error' } }, named(ids.slice(100))],
+    });
+    const accounts = await new LinkedInPageConnector(APP, fetchImpl).exchange({ code: 'c', redirectUri: PAGE_REDIRECT, codeVerifier: null });
+    expect(accounts.map((a) => a.externalAccountId)).toEqual(ids);
+    expect(accounts[0]?.displayName).toBe('Trang 1000');
+    expect(accounts[50]?.displayName).toBe('LinkedIn Page 1050');
+    expect(accounts[100]?.displayName).toBe('Trang 1100');
+    expect(calls.filter((c) => c.url.pathname === ACL).map((c) => c.url.searchParams.get('start'))).toEqual(['0', '100']);
+    expect(calls.filter((c) => c.url.pathname === '/rest/organizations')).toHaveLength(3);
+  });
+
+  it('refuses a grant without a page scope as MISSING_PERMISSION before reading any page, and connects nothing for a member with no page', async () => {
+    for (const scope of ['r_organization_admin', 'w_organization_social', 'openid,profile,w_member_social']) {
+      const narrow = pages(token(scope));
+      await expect(new LinkedInPageConnector(APP, narrow.fetchImpl).exchange({ code: 'c', redirectUri: PAGE_REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'denied', code: 'MISSING_PERMISSION' });
+      expect(narrow.calls.some((c) => c.url.host === 'api.linkedin.com')).toBe(false);
+    }
+    const used = pages({ 'POST www.linkedin.com/oauth/v2/accessToken': [{ status: 400, body: { error: 'invalid_request', error_description: 'authorization code not found' } }] });
+    await expect(new LinkedInPageConnector(APP, used.fetchImpl).exchange({ code: 'used', redirectUri: PAGE_REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'invalid_grant' });
+    const refused = pages({ ...token(GRANTED), [`GET api.linkedin.com${ACL}`]: [{ status: 403, body: { status: 403, message: 'Not enough permissions to access: organizationAcls' } }] });
+    await expect(new LinkedInPageConnector(APP, refused.fetchImpl).exchange({ code: 'c', redirectUri: PAGE_REDIRECT, codeVerifier: null })).rejects.toMatchObject({ kind: 'denied' });
+    const none = pages({ ...token(GRANTED), [`GET api.linkedin.com${ACL}`]: [{ body: { elements: [], paging: { links: [] } } }] });
+    expect(await new LinkedInPageConnector(APP, none.fetchImpl).exchange({ code: 'c', redirectUri: PAGE_REDIRECT, codeVerifier: null })).toEqual([]);
+    expect(none.calls.some((c) => c.url.pathname === '/rest/organizations')).toBe(false);
+  });
+
+  it('posts text as the page, never retried by itself and with no member counts', async () => {
+    const { fetchImpl, calls } = pages({ 'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7400000000000000001' } }] });
+    const publisher = new LinkedInPagePublisher({}, fetchImpl);
+    expect(publisher.provider).toBe('linkedin_page');
+    expect(publisher.publishSafety).toBe('never');
+    expect(publisher).not.toHaveProperty('metrics');
+    expect(await publisher.publish(pageInput())).toEqual({ kind: 'accepted', externalId: 'urn:li:share:7400000000000000001', url: 'https://www.linkedin.com/feed/update/urn:li:share:7400000000000000001/' });
+    expect(calls[0]?.headers.get('linkedin-version')).toBe(LINKEDIN_VERSION);
+    expect(calls[0]?.body).toEqual({
+      author: `urn:li:organization:${ORG_A}`,
+      commentary: 'Khai trương chi nhánh mới \\(Q1\\)',
+      visibility: 'PUBLIC',
+      distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+    });
+  });
+
+  it('sends signed-in members only when chosen, and refuses connections and a member id before any call', async () => {
+    const shown = pages({ 'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7400000000000000002' } }] });
+    expect((await new LinkedInPagePublisher({}, shown.fetchImpl).publish(pageInput({ settings: { visibility: 'loggedIn' } }))).kind).toBe('accepted');
+    expect(shown.calls[0]?.body).toMatchObject({ author: `urn:li:organization:${ORG_A}`, visibility: 'LOGGED_IN' });
+    const none = pages({});
+    const publisher = new LinkedInPagePublisher({}, none.fetchImpl);
+    expect(await publisher.publish(pageInput({ settings: { visibility: 'connections' } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'VISIBILITY_INVALID' });
+    expect(await publisher.publish(pageInput({ externalAccountId: MEMBER }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' });
+    expect(await publisher.comment({ externalAccountId: MEMBER, secret: SECRET, externalId: 'urn:li:share:7400000000000000002', text: 'x', callKey: 'k' })).toMatchObject({ kind: 'rejected', code: 'BAD_ACCOUNT_ID' });
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('uploads an image and several images owned by the page, then posts them as the page', async () => {
+    const one = pages({
+      'POST api.linkedin.com/rest/images?action=initializeUpload': [{ body: { value: { uploadUrl: UPLOAD, image: 'urn:li:image:C4E10AQP1' } } }],
+      'PUT www.linkedin.com/dms-uploads/sp/v2/D4D10AQ/upload': [{ status: 201 }],
+      'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7400000000000000003' } }],
+    });
+    expect((await new LinkedInPagePublisher({}, one.fetchImpl).publish(pageInput({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [image('f-1', 'Mặt tiền')] } }))).kind).toBe('accepted');
+    expect(one.calls[0]?.body).toEqual({ initializeUploadRequest: { owner: `urn:li:organization:${ORG_A}` } });
+    expect(one.calls.at(-1)?.body).toMatchObject({ author: `urn:li:organization:${ORG_A}`, content: { media: { id: 'urn:li:image:C4E10AQP1', altText: 'Mặt tiền' } } });
+
+    const many = pages({
+      'POST api.linkedin.com/rest/images?action=initializeUpload': [{ body: { value: { uploadUrl: UPLOAD, image: 'urn:li:image:C4E10AQP2' } } }, { body: { value: { uploadUrl: UPLOAD, image: 'urn:li:image:C4E10AQP3' } } }],
+      'PUT www.linkedin.com/dms-uploads/sp/v2/D4D10AQ/upload': [{ status: 201 }, { status: 201 }],
+      'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7400000000000000004' } }],
+    });
+    expect((await new LinkedInPagePublisher({}, many.fetchImpl).publish(pageInput({ content: { body: 'Bộ ảnh', title: null, linkUrl: null, media: [image('f-2'), image('f-3')] } }))).kind).toBe('accepted');
+    expect(many.calls.filter((c) => c.route.endsWith('/rest/images')).map((c) => c.body)).toEqual([
+      { initializeUploadRequest: { owner: `urn:li:organization:${ORG_A}` } },
+      { initializeUploadRequest: { owner: `urn:li:organization:${ORG_A}` } },
+    ]);
+    expect(many.calls.at(-1)?.body).toMatchObject({ author: `urn:li:organization:${ORG_A}`, content: { multiImage: { images: [{ id: 'urn:li:image:C4E10AQP2' }, { id: 'urn:li:image:C4E10AQP3' }] } } });
+  });
+
+  it('uploads a video owned by the page and posts it as the page', async () => {
+    const VIDEO = 'urn:li:video:C5505AQPage1';
+    const PART = 'https://www.linkedin.com/dms-uploads/C5505AQPage1/uploadedVideo';
+    const { fetchImpl, calls } = pages({
+      'POST api.linkedin.com/rest/videos?action=initializeUpload': [{ body: { value: { video: VIDEO, uploadToken: '', uploadInstructions: [{ uploadUrl: PART, firstByte: 0, lastByte: 9 }] } } }],
+      'PUT www.linkedin.com/dms-uploads/C5505AQPage1/uploadedVideo': [{ headers: { etag: 'etag-p' } }],
+      'POST api.linkedin.com/rest/videos?action=finalizeUpload': [{ body: {} }],
+      [`GET api.linkedin.com/rest/videos/${encodeURIComponent(VIDEO)}`]: [{ body: { id: VIDEO, status: 'AVAILABLE' } }],
+      'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7400000000000000005' } }],
+    });
+    const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 10, altText: null };
+    const result = await new LinkedInPagePublisher({}, fetchImpl, { processingWaitMs: 1000, pollMs: 0 }).publish(
+      pageInput({ content: { body: 'Video', title: null, linkUrl: null, media: [clip] }, readMedia: async () => new Uint8Array(10) }),
+    );
+    expect(result.kind).toBe('accepted');
+    expect(calls[0]?.body).toEqual({ initializeUploadRequest: { owner: `urn:li:organization:${ORG_A}`, fileSizeBytes: 10, uploadCaptions: false, uploadThumbnail: false } });
+    expect(calls.at(-1)?.body).toMatchObject({ author: `urn:li:organization:${ORG_A}`, content: { media: { id: VIDEO } } });
+  });
+
+  it('posts the first comment as the page', async () => {
+    const urn = 'urn:li:share:7400000000000000006';
+    const { fetchImpl, calls } = pages({ [`POST api.linkedin.com/rest/socialActions/${encodeURIComponent(urn)}/comments`]: [{ status: 201, body: {}, headers: { 'x-restli-id': '6643206422739898368' } }] });
+    const result = await new LinkedInPagePublisher({}, fetchImpl).comment({ externalAccountId: ORG_A, secret: SECRET, externalId: urn, text: 'Đặt bánh tại tiembanhb.vn', callKey: 'k' });
+    expect(result).toEqual({ kind: 'accepted', externalId: '6643206422739898368' });
+    expect(calls[0]?.body).toEqual({ actor: `urn:li:organization:${ORG_A}`, object: urn, message: { text: 'Đặt bánh tại tiembanhb.vn' } });
   });
 });

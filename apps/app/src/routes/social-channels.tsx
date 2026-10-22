@@ -24,19 +24,17 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { rememberOAuthAttempt } from '../lib/oauth.ts';
-import { minuteLabel, parseMinute, providerName } from '../lib/social.ts';
+import { connectPlatforms, minuteLabel, parseMinute, providerName } from '../lib/social.ts';
 import { shuffleRange } from '../lib/social-queue-order.ts';
 
 type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
 type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
-// Platforms in the order Crove adds them (Social plan §6).
-const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x', 'google_business', 'pinterest'] as const;
 const OAUTH_PROVIDERS: readonly string[] = OAUTH_CHANNEL_PROVIDERS;
 type Slot = { weekday: number; minute: number; label?: string; labelId?: string | null };
 
 const CHANNEL_TONE = { active: 'success', expired: 'warning', error: 'destructive', revoked: 'outline' } as const;
 // Platforms whose tokens Crove cannot renew: the member reconnects before the date, and is warned two weeks ahead.
-const NO_RENEWAL: readonly string[] = ['linkedin'];
+const NO_RENEWAL: readonly string[] = ['linkedin', 'linkedin_page'];
 const WARN_BEFORE_MS = 14 * 86_400_000;
 // The time zones most Crove orgs post in; the queue keeps any IANA zone it already has.
 const ZONES = ['Asia/Ho_Chi_Minh', 'Asia/Bangkok', 'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney', 'Europe/London', 'America/New_York', 'America/Los_Angeles', 'UTC'];
@@ -572,7 +570,7 @@ export function SocialChannelsPage() {
             <p className="text-xs text-subtle-foreground">{isAdmin ? t('sandboxOff') : t('adminsConnect')}</p>
           )}
           <div className="space-y-2 border-t pt-3">
-            {PLATFORMS.map((p) => (
+            {connectPlatforms(oauth).map((p) => (
               <div key={p} className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
                 {providerName(p)}
                 {oauth.includes(p) ? (
@@ -587,6 +585,7 @@ export function SocialChannelsPage() {
               </div>
             ))}
             {isAdmin && <p className="text-xs text-subtle-foreground">{t(oauth.includes('google_business') ? 'gbpConnectHint' : 'gbpSetupHint')}</p>}
+            {isAdmin && oauth.includes('linkedin_page') && <p className="text-xs text-subtle-foreground">{t('linkedinPageHint')}</p>}
             {isAdmin && oauth.length > 0 && <p className="text-xs text-subtle-foreground">{t('oauthHint')}</p>}
             {start.error && <ErrorText>{errorMessage(start.error)}</ErrorText>}
           </div>

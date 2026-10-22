@@ -14,9 +14,19 @@ import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
+//
+// Company Pages (#1077), provider linkedin_page: the same app once LinkedIn has approved it for the Community
+// Management API (CHANNEL_LINKEDIN_ORGANIZATIONS), since a dialog asking for a scope the app lacks fails as a whole.
+// Connect asks for w_organization_social and r_organization_admin, lists the pages the member administers
+// (organizationAcls, role ADMINISTRATOR, state APPROVED) and returns one account per page, all with the member's token.
+// Publish, upload and comment are the member code with the author urn:li:organization:{id}.
+
 // Upload URLs LinkedIn hands out are on www.linkedin.com (dms-uploads) or api.linkedin.com (mediaUpload).
 export const LINKEDIN_HOSTS = ['www.linkedin.com', 'api.linkedin.com'] as const;
 export const LINKEDIN_SCOPES = ['openid', 'profile', 'w_member_social'] as const;
+// Posting, commenting and uploading as a page (Posts, Images, Videos API), and reading the member's page roles and the
+// pages' names (Organization Access Control, Organization Lookup).
+export const LINKEDIN_PAGE_SCOPES = ['w_organization_social', 'r_organization_admin'] as const;
 // Asked for too when the deployment's app has LinkedIn's member post analytics (#797, CHANNEL_LINKEDIN_ANALYTICS);
 // never required, so a member who declines still connects.
 export const LINKEDIN_ANALYTICS_SCOPE = 'r_member_postAnalytics';
@@ -32,6 +42,14 @@ const API = 'https://api.linkedin.com';
 // The Posts and Images APIs are versioned by month (Linkedin-Version: YYYYMM); each version is served for a year.
 export const LINKEDIN_VERSION = '202604';
 const MEMBER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+// An organization's id is a number (urn:li:organization:2414183).
+const ORGANIZATION_ID = /^\d{1,32}$/;
+const ORGANIZATION_URN = /^urn:li:organization:(\d{1,32})$/;
+// Pages read from one grant at most (the connect request then keeps OAUTH_MAX_ACCOUNTS_PER_GRANT of them).
+const MAX_PAGES_LISTED = 1000;
+const ACL_PAGE_SIZE = 100;
+// Organizations named in one batch lookup.
+const NAME_BATCH = 50;
 const DEFAULT_LIFETIME_SECONDS = 60 * 86_400;
 // LinkedIn shows at most 20 images in a post.
 const MAX_IMAGES = 20;
@@ -141,23 +159,116 @@ export class LinkedInConnector implements OAuthConnector {
   }
 
   async exchange(input: ExchangeInput, now = Date.now()): Promise<ConnectedAccount[]> {
-    const answer = await this.client
-      .token({ grant_type: 'authorization_code', code: input.code, redirect_uri: input.redirectUri, client_id: this.app.clientId, client_secret: this.app.clientSecret })
-      .catch((error: unknown) => {
-        throw connectorError(error, true);
-      });
-    if (typeof answer.access_token !== 'string' || !answer.access_token) throw new ConnectorError('provider', 'LinkedIn answered without an access token');
-    const granted = typeof answer.scope === 'string' ? answer.scope.split(/[ ,]+/).filter(Boolean) : [...LINKEDIN_SCOPES];
-    if (!granted.includes('w_member_social')) throw new ConnectorError('denied', 'LinkedIn did not grant w_member_social', 'MISSING_PERMISSION');
-    const me = await this.client.call<{ sub?: unknown; name?: unknown }>('GET', '/v2/userinfo', answer.access_token).catch((error: unknown) => {
+    const { token, granted, expiresAt } = await exchangeCode(this.client, this.app, input, now, LINKEDIN_SCOPES, ['w_member_social']);
+    const me = await this.client.call<{ sub?: unknown; name?: unknown }>('GET', '/v2/userinfo', token).catch((error: unknown) => {
       throw connectorError(error);
     });
     const sub = typeof me.body?.sub === 'string' ? me.body.sub : '';
     if (!MEMBER_ID.test(sub)) throw new ConnectorError('provider', 'LinkedIn answered without a member id');
-    const seconds = Number(answer.expires_in);
-    const expiresAt = new Date(now + (Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_LIFETIME_SECONDS) * 1000);
     const name = typeof me.body?.name === 'string' && me.body.name.trim() ? me.body.name.trim() : `LinkedIn ${sub}`;
-    return [{ provider: 'linkedin', externalAccountId: sub, displayName: name.slice(0, 200), scopes: granted, expiresAt, secret: JSON.stringify({ accessToken: answer.access_token }) }];
+    return [{ provider: 'linkedin', externalAccountId: sub, displayName: name.slice(0, 200), scopes: granted, expiresAt, secret: JSON.stringify({ accessToken: token }) }];
+  }
+}
+
+// The code for a token (60 days, no refresh token for a self-serve app), refused unless LinkedIn granted every required
+// scope. A token answer without its scope list is taken to hold what was asked for.
+async function exchangeCode(
+  client: LinkedInClient,
+  app: LinkedInAppConfig,
+  input: ExchangeInput,
+  now: number,
+  asked: readonly string[],
+  required: readonly string[],
+): Promise<{ token: string; granted: string[]; expiresAt: Date }> {
+  const answer = await client
+    .token({ grant_type: 'authorization_code', code: input.code, redirect_uri: input.redirectUri, client_id: app.clientId, client_secret: app.clientSecret })
+    .catch((error: unknown) => {
+      throw connectorError(error, true);
+    });
+  if (typeof answer.access_token !== 'string' || !answer.access_token) throw new ConnectorError('provider', 'LinkedIn answered without an access token');
+  const granted = typeof answer.scope === 'string' ? answer.scope.split(/[ ,]+/).filter(Boolean) : [...asked];
+  const missing = required.filter((s) => !granted.includes(s));
+  if (missing.length > 0) throw new ConnectorError('denied', `LinkedIn did not grant ${missing.join(', ')}`, 'MISSING_PERMISSION');
+  const seconds = Number(answer.expires_in);
+  const expiresAt = new Date(now + (Number.isFinite(seconds) && seconds > 0 ? seconds : DEFAULT_LIFETIME_SECONDS) * 1000);
+  return { token: answer.access_token, granted, expiresAt };
+}
+
+type AclAnswer = { elements?: { role?: unknown; state?: unknown; organization?: unknown; organizationTarget?: unknown }[]; paging?: { links?: { rel?: unknown }[] } };
+type OrganizationsAnswer = { results?: Record<string, { localizedName?: unknown; vanityName?: unknown } | undefined> };
+
+// Company Pages the member administers (#1077): one account per page, each with the member's token, which posts as any
+// of them. A member who administers no page connects nothing (the connect request says so).
+export class LinkedInPageConnector implements OAuthConnector {
+  readonly provider = 'linkedin_page' as const;
+  readonly pkce = false;
+  private readonly app: LinkedInAppConfig;
+  private readonly client: LinkedInClient;
+
+  constructor(app: LinkedInAppConfig, fetchImpl?: Fetch) {
+    if (!/^[A-Za-z0-9]{8,64}$/.test(app.clientId)) throw new Error('invalid LinkedIn client id');
+    if (!app.clientSecret) throw new Error('missing LinkedIn client secret');
+    this.app = app;
+    this.client = new LinkedInClient(app.version ?? LINKEDIN_VERSION, fetchImpl);
+  }
+
+  authorizeUrl(input: AuthorizeInput): string {
+    const url = new URL('https://www.linkedin.com/oauth/v2/authorization');
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('client_id', this.app.clientId);
+    url.searchParams.set('redirect_uri', input.redirectUri);
+    url.searchParams.set('state', input.state);
+    url.searchParams.set('scope', LINKEDIN_PAGE_SCOPES.join(' '));
+    return url.toString();
+  }
+
+  async exchange(input: ExchangeInput, now = Date.now()): Promise<ConnectedAccount[]> {
+    const { token, granted, expiresAt } = await exchangeCode(this.client, this.app, input, now, LINKEDIN_PAGE_SCOPES, LINKEDIN_PAGE_SCOPES);
+    const ids = await this.administered(token).catch((error: unknown) => {
+      throw connectorError(error);
+    });
+    const names = await this.names(token, ids);
+    const secret = JSON.stringify({ accessToken: token });
+    return ids.map((id) => ({ provider: 'linkedin_page' as const, externalAccountId: id, displayName: (names.get(id) ?? `LinkedIn Page ${id}`).slice(0, 200), scopes: granted, expiresAt, secret }));
+  }
+
+  // The ids of the organizations where the member's administrator role is approved, page by page. LinkedIn's samples
+  // name the organization `organization` in one answer and `organizationTarget` in another, so either is read.
+  private async administered(token: string): Promise<string[]> {
+    const ids: string[] = [];
+    for (let start = 0; start < MAX_PAGES_LISTED; start += ACL_PAGE_SIZE) {
+      const answer = await this.client.call<AclAnswer>('GET', `/rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED&start=${start}&count=${ACL_PAGE_SIZE}`, token);
+      const rows = answer.body?.elements ?? [];
+      for (const row of rows) {
+        if (row.role !== 'ADMINISTRATOR' || row.state !== 'APPROVED') continue;
+        const urn = typeof row.organization === 'string' ? row.organization : typeof row.organizationTarget === 'string' ? row.organizationTarget : '';
+        const id = ORGANIZATION_URN.exec(urn)?.[1];
+        if (id && !ids.includes(id)) ids.push(id);
+      }
+      const next = (answer.body?.paging?.links ?? []).some((l) => l.rel === 'next');
+      if (rows.length === 0 || (rows.length < ACL_PAGE_SIZE && !next)) break;
+    }
+    return ids;
+  }
+
+  // Each page's name, from the batch lookup of administered organizations. A lookup that fails leaves the pages under a
+  // fallback name rather than failing the connect: posting does not need the name.
+  private async names(token: string, ids: readonly string[]): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    for (let i = 0; i < ids.length; i += NAME_BATCH) {
+      const batch = ids.slice(i, i + NAME_BATCH);
+      try {
+        const answer = await this.client.call<OrganizationsAnswer>('GET', `/rest/organizations?ids=List(${batch.join(',')})`, token);
+        for (const id of batch) {
+          const row = answer.body?.results?.[id];
+          const name = typeof row?.localizedName === 'string' && row.localizedName.trim() ? row.localizedName.trim() : typeof row?.vanityName === 'string' && row.vanityName.trim() ? row.vanityName.trim() : null;
+          if (name) names.set(id, name);
+        }
+      } catch {
+        // Fallback names for this batch.
+      }
+    }
+    return names;
   }
 }
 
@@ -192,9 +303,9 @@ const textOf = (content: { body: string; linkUrl: string | null }) => {
 // Who sees a LinkedIn post (#983), in `settings.visibility` (the field Mastodon's visibility uses), with Crove's names
 // mapped to the Posts API's visibility: public (the default, PUBLIC as before: anyone, on or off LinkedIn), connections
 // (CONNECTIONS, the author's 1st-degree network) or loggedIn (LOGGED_IN, signed-in members only). LinkedIn's fourth
-// value, CONTAINER, is for posts inside a group. Crove posts as the member only (urn:li:person), so every value applies.
-// A company page has no 1st-degree network, so page posting, when it comes, should keep to PUBLIC or LOGGED_IN (the
-// docs do not say LinkedIn refuses CONNECTIONS there; check before allowing it). 'invalid' for any other value.
+// value, CONTAINER, is for posts inside a group. A member's post takes every value. A company page has no 1st-degree
+// network, so a page's post (#1077) keeps to PUBLIC or LOGGED_IN: the docs do not say LinkedIn refuses CONNECTIONS
+// there, so Crove does not send it. 'invalid' for any other value.
 const VISIBILITY: Readonly<Record<string, 'PUBLIC' | 'CONNECTIONS' | 'LOGGED_IN'>> = { public: 'PUBLIC', connections: 'CONNECTIONS', loggedIn: 'LOGGED_IN' };
 export function linkedinVisibilityOf(settings: Readonly<Record<string, unknown>>): 'PUBLIC' | 'CONNECTIONS' | 'LOGGED_IN' | 'invalid' {
   const value = settings.visibility;
@@ -209,22 +320,30 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const PROCESSING_WAIT_MS = 300_000;
 const VIDEO_CALL_MARGIN_MS = 90_000;
 
-export class LinkedInPublisher implements Publisher {
-  readonly provider = 'linkedin' as const;
+type PublisherTiming = { processingWaitMs?: number; pollMs?: number; budgetMs?: number };
+
+// Who a post, its images and video and its first comment are made as: the member (urn:li:person) or one of the pages
+// the member administers (urn:li:organization, #1077). The rest is the same code.
+const AUTHORS = {
+  person: { id: MEMBER_ID, urn: (id: string) => `urn:li:person:${id}` },
+  organization: { id: ORGANIZATION_ID, urn: (id: string) => `urn:li:organization:${id}` },
+} as const;
+type AuthorKind = keyof typeof AUTHORS;
+
+// The member's and the pages' posting code, by author kind.
+class LinkedInPosting {
   readonly publishSafety: RetrySafety = 'never';
   // A video's upload and processing take minutes; within the job's stale limit (600 s).
   readonly callTimeoutMs = 420_000;
+  private readonly author: AuthorKind;
   private readonly client: LinkedInClient;
   private readonly processingWaitMs: number;
   private readonly pollMs: number;
   private readonly budgetMs: number;
 
-  // Post counts (#797), when the app has member post analytics (CHANNEL_LINKEDIN_ANALYTICS).
-  readonly metrics?: (input: MetricsInput) => Promise<MetricsResult>;
-
-  constructor(app: Pick<LinkedInAppConfig, 'version' | 'analytics'> = {}, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number; budgetMs?: number } = {}) {
-    this.client = new LinkedInClient(app.version ?? LINKEDIN_VERSION, fetchImpl);
-    if (app.analytics) this.metrics = (input) => this.readMetrics(input);
+  constructor(author: AuthorKind, version: string | undefined, fetchImpl: Fetch | undefined, timing: PublisherTiming) {
+    this.author = author;
+    this.client = new LinkedInClient(version ?? LINKEDIN_VERSION, fetchImpl);
     this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
     this.pollMs = timing.pollMs ?? 5000;
     // The last status check and the post (30 s each at most) plus slack fit between the budget and callTimeoutMs.
@@ -234,7 +353,7 @@ export class LinkedInPublisher implements Publisher {
   // Impressions, members reached, reactions, comments and reshares of the member's own post, from
   // memberCreatorPostAnalytics (one call per count). A grant without the analytics scope answers nothing to keep; a
   // post LinkedIn no longer has is gone.
-  private async readMetrics(input: MetricsInput): Promise<MetricsResult> {
+  protected async readMetrics(input: MetricsInput): Promise<MetricsResult> {
     const token = tokenIn(input.secret);
     if (!token) return { refused: 'token_expired' };
     const urn = /^urn:li:(share|ugcPost):\d{1,32}$/.exec(input.externalId);
@@ -259,10 +378,11 @@ export class LinkedInPublisher implements Publisher {
   async publish(input: PublishInput): Promise<PublishResult> {
     const token = tokenIn(input.secret);
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
-    if (!MEMBER_ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    const kind = AUTHORS[this.author];
+    if (!kind.id.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
     const visibility = linkedinVisibilityOf(input.settings);
-    if (visibility === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'VISIBILITY_INVALID' };
-    const author = `urn:li:person:${input.externalAccountId}`;
+    if (visibility === 'invalid' || (this.author === 'organization' && visibility === 'CONNECTIONS')) return { kind: 'rejected', error: 'bad_request', code: 'VISIBILITY_INVALID' };
+    const author = kind.urn(input.externalAccountId);
     if (input.content.media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token, author, visibility);
     if (input.content.media.length > MAX_IMAGES) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_IMAGES' };
     const images: { id: string; altText?: string }[] = [];
@@ -361,13 +481,15 @@ export class LinkedInPublisher implements Publisher {
     return this.post(token, author, textOf(input.content), { media: { id: urn } }, visibility);
   }
 
-  // A comment under the member's post (#587), through the Social Actions API with the same w_member_social grant.
+  // A comment under the member's post (#587), through the Social Actions API with the same w_member_social grant; a
+  // page comments under its own post as the page, with w_organization_social.
   async comment(input: CommentInput): Promise<CommentResult> {
     const token = tokenIn(input.secret);
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
-    if (!MEMBER_ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    const kind = AUTHORS[this.author];
+    if (!kind.id.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
     if (!/^urn:li:(share|ugcPost):\d{1,32}$/.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
-    const actor = `urn:li:person:${input.externalAccountId}`;
+    const actor = kind.urn(input.externalAccountId);
     try {
       const answer = await this.client.call('POST', `/rest/socialActions/${encodeURIComponent(input.externalId)}/comments`, token, { actor, object: input.externalId, message: { text: input.text } });
       const id = answer.id ?? '';
@@ -398,5 +520,27 @@ export class LinkedInPublisher implements Publisher {
     } catch (error) {
       return publishResult(error);
     }
+  }
+}
+
+// Posts as the member (urn:li:person).
+export class LinkedInPublisher extends LinkedInPosting implements Publisher {
+  readonly provider = 'linkedin' as const;
+  // Post counts (#797), when the app has member post analytics (CHANNEL_LINKEDIN_ANALYTICS).
+  readonly metrics?: (input: MetricsInput) => Promise<MetricsResult>;
+
+  constructor(app: Pick<LinkedInAppConfig, 'version' | 'analytics'> = {}, fetchImpl?: Fetch, timing: PublisherTiming = {}) {
+    super('person', app.version, fetchImpl, timing);
+    if (app.analytics) this.metrics = (input) => this.readMetrics(input);
+  }
+}
+
+// Posts as a Company Page the member administers (urn:li:organization, #1077). Member post analytics do not count a
+// page's posts, so it reads no counts.
+export class LinkedInPagePublisher extends LinkedInPosting implements Publisher {
+  readonly provider = 'linkedin_page' as const;
+
+  constructor(app: Pick<LinkedInAppConfig, 'version'> = {}, fetchImpl?: Fetch, timing: PublisherTiming = {}) {
+    super('organization', app.version, fetchImpl, timing);
   }
 }
