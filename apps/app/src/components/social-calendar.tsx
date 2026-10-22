@@ -1,10 +1,11 @@
 // The Social calendar (#580): month and week views of when each channel goes out, in the viewer's time zone. Owners
 // and admins drag a scheduled channel to another day (same time of day) to move it; a click on a day starts a post
 // planned for it. At phone width the week is a list of days. Vietnamese occasions (#702) show on their days, each
-// starting a post planned a few days before, with a list of the next 60 days; a viewer can hide them.
+// starting a post planned a few days before, with a list of the next 60 days; a viewer can hide them. Members switch to
+// picking (#1057): a click on a post then ticks it for the bulk bar's labels and assignee instead of opening it.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useMemo, useState, type DragEvent } from 'react';
+import { useMemo, useState, type DragEvent, type ReactNode } from 'react';
 import { occasionsBetween, type Occasion } from '@crove/mod-social/contract';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
@@ -22,7 +23,11 @@ import { occasionStart, occasionsShown, setOccasionsShown } from '../lib/social-
 
 const excerpt = (text: string) => text.replace(/\s+/g, ' ').trim();
 
-function Chip({ item, slug, name, draggable }: { item: CalendarItem; slug: string; name: string | undefined; draggable: boolean }) {
+type Post = CalendarItem['post'];
+
+// picked: null shows a link to the post (dragged by owners and admins); true or false, picking (#1057), where a click
+// ticks or unticks the chip's post for the bulk bar instead.
+function Chip({ item, slug, name, draggable, picked, onToggle }: { item: CalendarItem; slug: string; name: string | undefined; draggable: boolean; picked: boolean | null; onToggle: () => void }) {
   const t = useTranslations('social');
   const f = useFormat();
   const onDragStart = (e: DragEvent) => {
@@ -31,21 +36,15 @@ function Chip({ item, slug, name, draggable }: { item: CalendarItem; slug: strin
   };
   // A series post or one of its copies (#979).
   const recurring = item.post.recurrence !== null || item.post.recurrenceSourceId !== null;
-  return (
-    <Link
-      to="/o/$slug/social/$id"
-      params={{ slug, id: item.post.id }}
-      draggable={draggable}
-      onDragStart={draggable ? onDragStart : undefined}
-      title={`${f.time(item.at.toISOString())} · ${providerName(item.v.provider)}${name ? ` · ${name}` : ''}${item.planned ? ` · ${t('calendar.planned')}` : ''}${recurring ? ` · ${t('calendar.recurring')}` : ''}${item.v.status === 'removed' ? ` · ${t('status.removed')}` : ''}`}
-      className={cn(
-        'block truncate rounded-md border px-1.5 py-0.5 text-xs text-foreground transition-colors hover:border-ring/60',
-        item.planned ? 'border-dashed bg-background text-muted-foreground' : 'bg-card',
-        // Taken down from its platform (#860): still on its day, struck through.
-        item.v.status === 'removed' && 'text-muted-foreground line-through',
-        draggable && 'cursor-grab active:cursor-grabbing',
-      )}
-    >
+  const title = `${f.time(item.at.toISOString())} · ${providerName(item.v.provider)}${name ? ` · ${name}` : ''}${item.planned ? ` · ${t('calendar.planned')}` : ''}${recurring ? ` · ${t('calendar.recurring')}` : ''}${item.v.status === 'removed' ? ` · ${t('status.removed')}` : ''}`;
+  const look = cn(
+    'block truncate rounded-md border px-1.5 py-0.5 text-xs text-foreground transition-colors hover:border-ring/60',
+    item.planned ? 'border-dashed bg-background text-muted-foreground' : 'bg-card',
+    // Taken down from its platform (#860): still on its day, struck through.
+    item.v.status === 'removed' && 'text-muted-foreground line-through',
+  );
+  const content = (
+    <>
       <span className="font-mono tabular-nums">{f.time(item.at.toISOString())}</span>{' '}
       {recurring && (
         <>
@@ -55,6 +54,31 @@ function Chip({ item, slug, name, draggable }: { item: CalendarItem; slug: strin
       )}
       <span className="text-subtle-foreground">{providerName(item.v.provider)}</span>{' '}
       {excerpt(item.v.effective.body) || t('emptyText')}
+    </>
+  );
+  if (picked !== null) {
+    return (
+      <button
+        type="button"
+        aria-pressed={picked}
+        title={title}
+        onClick={onToggle}
+        className={cn(look, 'w-full text-left focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none', picked && 'border-primary ring-2 ring-primary/60')}
+      >
+        {content}
+      </button>
+    );
+  }
+  return (
+    <Link
+      to="/o/$slug/social/$id"
+      params={{ slug, id: item.post.id }}
+      draggable={draggable}
+      onDragStart={draggable ? onDragStart : undefined}
+      title={title}
+      className={cn(look, draggable && 'cursor-grab active:cursor-grabbing')}
+    >
+      {content}
     </Link>
   );
 }
@@ -84,7 +108,22 @@ function OccasionChip({ occasion, onStart }: { occasion: Occasion; onStart: (o: 
 // filters: the Social home's post filters (label #639, channel, text, mine #640), the same as the lists and the board
 // (#1022). canWrite: may add and change notes on dates (#794).
 export type CalendarFilters = { connectionId?: string; labelId?: string; search?: string; assignee?: 'me' };
-export function SocialCalendar({ slug, names, canDecide, canWrite, filters = {} }: { slug: string; names: Map<string, string>; canDecide: boolean; canWrite: boolean; filters?: CalendarFilters }) {
+// bulk: the bulk bar for the posts picked in the month or week shown, with a way to clear them; without it, no picking.
+export function SocialCalendar({
+  slug,
+  names,
+  canDecide,
+  canWrite,
+  filters = {},
+  bulk,
+}: {
+  slug: string;
+  names: Map<string, string>;
+  canDecide: boolean;
+  canWrite: boolean;
+  filters?: CalendarFilters;
+  bulk?: ((posts: Post[], clear: () => void) => ReactNode) | undefined;
+}) {
   const t = useTranslations('social');
   const f = useFormat();
   const navigate = useNavigate();
@@ -106,6 +145,17 @@ export function SocialCalendar({ slug, names, canDecide, canWrite, filters = {} 
   }, [items]);
   const [over, setOver] = useState<string | null>(null);
   const [dropError, setDropError] = useState(false);
+  // Picking posts for the bulk bar (#1057): a post leaves the selection when it leaves the month or week shown.
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const selected = (posts.data ?? []).filter((p) => picked.has(p.id));
+  const togglePick = (postId: string) =>
+    setPicked((now) => {
+      const next = new Set(now);
+      if (next.has(postId)) next.delete(postId);
+      else next.add(postId);
+      return next;
+    });
   const move = useMutation({
     mutationFn: (args: { variantId: string; at: Date }) => client.social.variants.reschedule({ variantId: args.variantId, at: args.at.toISOString() }),
     onSettled: () => void queryClient.invalidateQueries(),
@@ -189,6 +239,19 @@ export function SocialCalendar({ slug, names, canDecide, canWrite, filters = {} 
             {t('planExport.open')}
           </Button>
         )}
+        {bulk && (
+          <Button
+            variant={picking ? 'secondary' : 'ghost'}
+            size="sm"
+            aria-pressed={picking}
+            onClick={() => {
+              setPicking(!picking);
+              setPicked(new Set());
+            }}
+          >
+            {t('calendar.pick')}
+          </Button>
+        )}
         <div className="flex gap-1" role="group" aria-label={t('calendar.view')}>
           {(['month', 'week'] as const).map((v) => (
             <Button key={v} variant={view === v ? 'secondary' : 'ghost'} size="sm" aria-pressed={view === v} onClick={() => setView(v)}>
@@ -197,7 +260,14 @@ export function SocialCalendar({ slug, names, canDecide, canWrite, filters = {} 
           ))}
         </div>
       </div>
-      {canDecide && <p className="text-xs text-subtle-foreground">{t('calendar.dragHint')}</p>}
+      {picking && bulk ? (
+        <>
+          <p className="text-xs text-subtle-foreground">{t('calendar.pickHint')}</p>
+          {bulk(selected, () => setPicked(new Set()))}
+        </>
+      ) : (
+        canDecide && <p className="text-xs text-subtle-foreground">{t('calendar.dragHint')}</p>
+      )}
       {noteDraft && <NoteEditor key={'note' in noteDraft ? noteDraft.note.id : noteDraft.day} draft={noteDraft} onClose={() => setNoteDraft(null)} />}
       {exporting && canWrite && <PlanExportPanel slug={slug} month={anchor} onClose={() => setExporting(false)} />}
       {notes.error && <ErrorText>{errorMessage(notes.error)}</ErrorText>}
@@ -252,7 +322,15 @@ export function SocialCalendar({ slug, names, canDecide, canWrite, filters = {} 
                     <OccasionChip key={o.id} occasion={o} onStart={startFor} />
                   ))}
                   {list.slice(0, shown).map((item) => (
-                    <Chip key={item.v.id} item={item} slug={slug} name={names.get(item.v.connectionId)} draggable={canDecide && !item.planned && item.v.status === 'scheduled' && !item.v.queuePaused} />
+                    <Chip
+                      key={item.v.id}
+                      item={item}
+                      slug={slug}
+                      name={names.get(item.v.connectionId)}
+                      draggable={canDecide && !picking && !item.planned && item.v.status === 'scheduled' && !item.v.queuePaused}
+                      picked={picking && bulk ? picked.has(item.post.id) : null}
+                      onToggle={() => togglePick(item.post.id)}
+                    />
                   ))}
                   {list.length > shown && <span className="text-xs text-subtle-foreground">{t('calendar.more', { count: list.length - shown })}</span>}
                 </div>

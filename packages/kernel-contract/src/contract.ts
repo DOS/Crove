@@ -22,6 +22,9 @@ import {
   zChannelConnection,
   zOAuthProvider,
   zOAuthState,
+  zSocialBulkAssign,
+  zSocialBulkLabels,
+  zSocialBulkResult,
   zSocialDecide,
   zSocialPost,
   zSocialRecurrence,
@@ -368,6 +371,10 @@ export const contract = {
       setLabels: oc
         .input(z.strictObject({ postId: zId, labelIds: z.array(zId).max(10) }))
         .output(z.object({ postId: zId, labelIds: z.array(zId) })),
+      // Labels added to and taken off up to 100 posts at once (#1057); the answer names each post left out and why.
+      bulkLabels: oc.input(zSocialBulkLabels).output(zSocialBulkResult),
+      // The assignee, and optionally the due date, of up to 100 posts at once (#1057), with the same answer.
+      bulkAssign: oc.input(zSocialBulkAssign).output(zSocialBulkResult),
       // A copy of any post as a new draft, for the channels still connected (#575).
       duplicate: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.

@@ -1429,6 +1429,24 @@ export const zSocialLabel = z.object({ id: zId, name: z.string(), color: z.enum(
 const zLabelName = z.string().trim().min(1).max(50);
 export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS).optional() });
 export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS) });
+// Labels and the assignee on many posts at once (#1057): at most SOCIAL_BULK_EDIT_MAX posts per command, each once,
+// and why a post was left as it was: gone, published, not the caller's to change, already so, or over the ten labels a
+// post may carry.
+export const SOCIAL_BULK_EDIT_MAX = 100;
+export const SOCIAL_BULK_SKIP_REASONS = ['not_found', 'published', 'not_allowed', 'unchanged', 'too_many_labels'] as const;
+export type SocialBulkSkipReason = (typeof SOCIAL_BULK_SKIP_REASONS)[number];
+const unique = (ids: readonly string[]) => new Set(ids).size === ids.length;
+const zBulkPostIds = z.array(zId).min(1).max(SOCIAL_BULK_EDIT_MAX).refine(unique, 'each post once');
+// Ten, as many as one post may carry (social.post.set_labels).
+const zBulkLabelIds = z.array(zId).max(10).refine(unique, 'labels repeat');
+// Labels added to and taken off every post; at least one, and never the same label both ways.
+export const zSocialBulkLabels = z
+  .strictObject({ postIds: zBulkPostIds, add: zBulkLabelIds, remove: zBulkLabelIds })
+  .refine((v) => v.add.length + v.remove.length > 0, 'nothing to change')
+  .refine((v) => !v.add.some((id) => v.remove.includes(id)), 'a label both added and removed');
+// The assignee (null: nobody) of every post; dueAt null clears the due date, left out keeps each post's own.
+export const zSocialBulkAssign = z.strictObject({ postIds: zBulkPostIds, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable().optional() });
+export const zSocialBulkResult = z.object({ done: z.array(zId), skipped: z.array(z.object({ postId: zId, reason: z.enum(SOCIAL_BULK_SKIP_REASONS) })) });
 // Client review links (#589): the team's view of a post's links and what clients said through them.
 // A plan link (#902) the post is in is listed too, with the posts it covers and its own cap of answers per post.
 export const zSocialReviewLinks = z.object({
@@ -1473,7 +1491,7 @@ export const zSocialReviewPlanLink = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'queue_moved', 'restored']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'queue_moved', 'restored', 'labeled', 'assigned']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),

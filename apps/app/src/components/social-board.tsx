@@ -3,13 +3,14 @@
 // move it along a legal step; each step is the command the post page uses. Any other drop is refused here with the
 // reason and sends nothing. The server still decides who may approve (four-eyes, several approvals): its refusal is
 // shown as it comes. The columns wrap (six in a row on wide screens, three or two below, one on a phone) rather than
-// scroll sideways, so every drop target is in view.
+// scroll sideways, so every drop target is in view. Members tick cards for the bulk bar's labels and assignee (#1057).
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
+import { Checkbox } from '@crove/ui/components/checkbox';
 import { cn } from '@crove/ui/lib/utils';
 import { PostLabels, type SocialLabel } from './social-labels.tsx';
 import { ErrorText } from './ui.tsx';
@@ -65,6 +66,8 @@ function Card({
   onDragEnd,
   onMove,
   onFocused,
+  picked,
+  onToggle,
 }: {
   post: Post;
   column: BoardColumn;
@@ -81,6 +84,9 @@ function Card({
   onDragEnd: () => void;
   onMove: (to: BoardColumn, byKey: boolean) => void;
   onFocused: () => void;
+  // Whether the card is ticked for the bulk bar; null when the viewer has no bulk action.
+  picked: boolean | null;
+  onToggle: () => void;
 }) {
   const t = useTranslations('social');
   const f = useFormat();
@@ -124,9 +130,12 @@ function Card({
         busy && 'opacity-60',
       )}
     >
-      <Link to="/o/$slug/social/$id" params={{ slug, id: post.id }} draggable={false} className="line-clamp-3 text-sm [overflow-wrap:anywhere] text-foreground hover:underline">
-        {text}
-      </Link>
+      <div className="flex items-start gap-2">
+        {picked !== null && <Checkbox className="mt-0.5" checked={picked} onCheckedChange={onToggle} aria-label={t('bulk.select', { text })} />}
+        <Link to="/o/$slug/social/$id" params={{ slug, id: post.id }} draggable={false} className="line-clamp-3 min-w-0 flex-1 text-sm [overflow-wrap:anywhere] text-foreground hover:underline">
+          {text}
+        </Link>
+      </div>
       <div className="flex flex-wrap gap-1">
         {post.variants
           .filter((v) => v.status !== 'cancelled')
@@ -164,6 +173,8 @@ export function SocialBoard({
   labels,
   canWrite,
   canDecide,
+  picked = null,
+  onPick = () => undefined,
 }: {
   posts: readonly Post[];
   slug: string;
@@ -172,6 +183,9 @@ export function SocialBoard({
   // Member and above; owner or admin.
   canWrite: boolean;
   canDecide: boolean;
+  // The posts ticked for the bulk bar (#1057), or null when the viewer has no bulk action.
+  picked?: ReadonlySet<string> | null;
+  onPick?: (next: Set<string>) => void;
 }) {
   const t = useTranslations('social');
   const hintId = useId();
@@ -225,6 +239,15 @@ export function SocialBoard({
     if (postId) attempt(postId, to, false);
   };
 
+  const toggle = (postId: string) => {
+    if (!picked) return;
+    const next = new Set(picked);
+    if (next.has(postId)) next.delete(postId);
+    else next.add(postId);
+    onPick(next);
+  };
+  const shownIds = placed.map((x) => x.post.id);
+
   const doneText = (o: BoardOutcome) => (o.move === 'approve' && o.waiting > 0 ? t('board.done.waiting') : t(`board.done.${o.move}`));
   return (
     <div className="space-y-3">
@@ -232,6 +255,12 @@ export function SocialBoard({
         <p id={hintId} className="text-xs text-subtle-foreground">
           {t('board.hint')}
         </p>
+      )}
+      {picked && shownIds.length > 0 && (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Checkbox checked={shownIds.every((id) => picked.has(id))} onCheckedChange={(on) => onPick(on === true ? new Set(shownIds) : new Set())} />
+          {t('bulk.selectAll')}
+        </label>
       )}
       {/* Refusals and results are read out; a server refusal shows as an error with the kernel's message. */}
       <div aria-live="polite" className="space-y-2">
@@ -296,6 +325,8 @@ export function SocialBoard({
                       setOver(null);
                     }}
                     onMove={(to, byKey) => attempt(post.id, to, byKey)}
+                    picked={picked ? picked.has(post.id) : null}
+                    onToggle={() => toggle(post.id)}
                   />
                 ))
               )}

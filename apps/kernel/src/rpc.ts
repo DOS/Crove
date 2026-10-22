@@ -427,6 +427,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         ),
         duplicate: os.social.posts.duplicate.handler(socialCommand('social.post.duplicate')),
         setLabels: os.social.posts.setLabels.handler(socialCommand('social.post.set_labels')),
+        bulkLabels: os.social.posts.bulkLabels.handler(socialCommand('social.post.bulk_labels')),
+        bulkAssign: os.social.posts.bulkAssign.handler(socialCommand('social.post.bulk_assign')),
         comment: os.social.posts.comment.handler(socialCommand('social.post_comment.add')),
         editComment: os.social.posts.editComment.handler(socialCommand('social.post_comment.edit')),
         activity: os.social.posts.activity.handler(socialQuery('social.post.activity')),

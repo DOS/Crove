@@ -129,6 +129,9 @@ export const ACTIVITY_KINDS = [
   'queue_moved',
   // An earlier version saved again as a new edit (#1021).
   'restored',
+  // Its labels changed, or who it is assigned to or its due date (#1057), one post at a time or many at once.
+  'labeled',
+  'assigned',
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
@@ -167,6 +170,9 @@ const AUDITED: Record<string, ActivityKind> = {
   'social.post.set_evergreen': 'evergreen',
   'social.post.recurrence_set': 'recurrence',
   'social.post.recurrence_clear': 'recurrence',
+  // A bulk edit (#1057) runs these once per post, so each post's timeline shows its own change.
+  'social.post.set_labels': 'labeled',
+  'social.post.assign': 'assigned',
 };
 
 export const postActivity = defineQuery({
