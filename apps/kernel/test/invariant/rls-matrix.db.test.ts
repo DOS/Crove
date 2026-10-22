@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.media_attribution',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -743,6 +744,29 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // A link's preview card (#641), cached per org and URL: asked for by a member, filled in by the worker.
   'crove_social.link_preview': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), url: `https://example.com/rls-${tag()}`, url_sha256: hex64(), status: 'pending', requested_at: new Date().toISOString() } }),
+  },
+  // The credit of a library file saved from a stock photo site (#1106): the photographer, the photo's page and its
+  // description, one per file. Each row gets a file of its own, since a file has at most one.
+  'crove_social.media_attribution': {
+    make: (o) => {
+      const sha256 = hex64();
+      const file = { org_id: o.id, id: randomUUID(), sha256, storage_key: `org/${o.id}/${sha256}`, filename: 'stock.jpg', content_type: 'image/jpeg', size_bytes: 1, source: 'social' };
+      return {
+        setup: [{ table: 'crove_kernel.file', values: file }],
+        row: {
+          org_id: o.id,
+          id: randomUUID(),
+          file_id: file.id,
+          provider: 'pexels',
+          external_id: `rls-${tag()}`,
+          photographer: 'RLS Matrix',
+          photographer_url: 'https://www.pexels.com/@rls-matrix',
+          source_url: `https://www.pexels.com/photo/rls-${tag()}/`,
+          alt_text: 'A photo for the RLS matrix',
+          created_by: o.owner,
+        },
+      };
+    },
   },
   // A tag on a media library file (#904): one name per file (case-insensitive), so every row gets its own name.
   'crove_social.media_tag': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), file_id: o.file, tag: `rls-${tag()}`, created_by: o.owner } }) },
