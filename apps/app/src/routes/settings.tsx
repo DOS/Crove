@@ -734,6 +734,8 @@ function ProposalRemindersField({ canManage }: { canManage: boolean }) {
   const remindId = useId();
   const escalateId = useId();
   const expireId = useId();
+  // Set when a change of the escalation turned expiry off with it, so the user is told.
+  const [expiryTurnedOff, setExpiryTurnedOff] = useState(false);
   const policy = useQuery(orpc.org.proposalPolicy.queryOptions());
   const save = useMutation(
     orpc.org.setProposalPolicy.mutationOptions({
@@ -748,7 +750,9 @@ function ProposalRemindersField({ canManage }: { canManage: boolean }) {
   const choose = (field: PolicyField, raw: string) => {
     const next = { ...current, [field]: raw === '' ? null : Number(raw) };
     // Expiry comes after the escalation: turning the escalation off, or past the expiry, turns expiry off with it.
-    if (next.expireAfterDays !== null && (next.escalateAfterDays === null || next.expireAfterDays <= next.escalateAfterDays)) next.expireAfterDays = null;
+    const turnsOff = next.expireAfterDays !== null && (next.escalateAfterDays === null || next.expireAfterDays <= next.escalateAfterDays);
+    if (turnsOff) next.expireAfterDays = null;
+    setExpiryTurnedOff(turnsOff);
     save.mutate(next);
   };
   const escalation = current.escalateAfterDays;
@@ -800,6 +804,11 @@ function ProposalRemindersField({ canManage }: { canManage: boolean }) {
       </dd>
       <dd className="mt-1 text-xs text-subtle-foreground">{t('proposalRemindersHint')}</dd>
       <dd className="mt-1 text-xs text-subtle-foreground">{t('proposalExpiryHint')}</dd>
+      {expiryTurnedOff && (
+        <dd className="mt-1 text-xs text-warning" role="status">
+          {t('expiryTurnedOff')}
+        </dd>
+      )}
       {policy.error && <ErrorText>{errorMessage(policy.error)}</ErrorText>}
       {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
     </div>

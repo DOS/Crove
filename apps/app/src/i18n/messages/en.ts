@@ -1508,6 +1508,7 @@ export const en = {
     expireAfter: 'Expire after',
     expireOff: 'Never',
     proposalExpiryHint: 'A proposal nobody has approved after this many days expires and can no longer be approved; its author may ask for it again. It needs the owners to be told first, and must be longer than that. No email is sent when a proposal expires.',
+    expiryTurnedOff: 'Expiry was turned off, because it must be longer than the days before the owners are told. Choose it again if you still need it.',
     proposalRemindersHint: 'Emails the people who may approve a proposal once it has waited this long, and the owners if nobody has approved it later. Each proposal is reminded once per step; an email never approves or rejects for anyone.',
     taxCalendar: 'Tax calendar',
     pitFilingPeriod: 'PIT withholding period',

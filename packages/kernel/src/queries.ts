@@ -361,7 +361,8 @@ export const inboxGet = defineQuery({
       extraction: latest
         ? { version: latest.version, status: latest.status, error: latest.error, inFlight: reading, proposalVersion: own?.version ?? null }
         : null,
-      // The same checks kernel.file.reextract makes.
+      // The same checks kernel.file.reextract makes. An expired file proposal offers both ways back (#876): reading the
+      // file again (a new reading, as after a rejection) and asking for it again from the same reading (canResubmit).
       canReextract:
         editor &&
         latest !== undefined &&

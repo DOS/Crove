@@ -1,6 +1,6 @@
 // Proposal reminders (#676): which stages are due, when a proposal expires (#876), and the reminder mail.
 import { describe, expect, it } from 'vitest';
-import { expiryDue, nudgesDue } from '@crove/kernel';
+import { expiryDue, mayResubmit, nudgesDue, resubmitSource } from '@crove/kernel';
 import { renderProposalReminderMail } from '../src/proposal-reminder-mail.ts';
 
 const DAY = 86_400_000;
@@ -30,17 +30,44 @@ describe('nudgesDue', () => {
 describe('expiryDue (#876)', () => {
   const policy = { remindAfterDays: 2, escalateAfterDays: 5, expireAfterDays: 14 };
   it('expires a pending proposal once it waited the days the org set, and not before', () => {
-    expect(expiryDue({ status: 'pending', createdAt: ago(13) }, policy, now)).toBe(false);
-    expect(expiryDue({ status: 'pending', createdAt: new Date(now.getTime() - 14 * DAY + 1) }, policy, now)).toBe(false);
-    expect(expiryDue({ status: 'pending', createdAt: ago(14) }, policy, now)).toBe(true);
-    expect(expiryDue({ status: 'pending', createdAt: ago(40) }, policy, now)).toBe(true);
+    expect(expiryDue({ status: 'pending', createdAt: ago(13), escalatedAt: ago(8) }, policy, now)).toBe(false);
+    expect(expiryDue({ status: 'pending', createdAt: new Date(now.getTime() - 14 * DAY + 1), escalatedAt: ago(9) }, policy, now)).toBe(false);
+    expect(expiryDue({ status: 'pending', createdAt: ago(14), escalatedAt: ago(9) }, policy, now)).toBe(true);
+    expect(expiryDue({ status: 'pending', createdAt: ago(40), escalatedAt: ago(35) }, policy, now)).toBe(true);
+  });
+
+  it('expires only after the owners were told and had the days between escalation and expiry', () => {
+    expect(expiryDue({ status: 'pending', createdAt: ago(40), escalatedAt: null }, policy, now)).toBe(false);
+    expect(expiryDue({ status: 'pending', createdAt: ago(40), escalatedAt: ago(8) }, policy, now)).toBe(false);
+    expect(expiryDue({ status: 'pending', createdAt: ago(40), escalatedAt: ago(9) }, policy, now)).toBe(true);
   });
 
   it('never expires a proposal that is not pending, nor anything while expiry is off', () => {
     for (const status of ['approved', 'executed', 'rejected', 'failed', 'expired']) {
-      expect(expiryDue({ status, createdAt: ago(90) }, policy, now), status).toBe(false);
+      expect(expiryDue({ status, createdAt: ago(90), escalatedAt: ago(80) }, policy, now), status).toBe(false);
     }
-    expect(expiryDue({ status: 'pending', createdAt: ago(90) }, { ...policy, expireAfterDays: null }, now)).toBe(false);
+    expect(expiryDue({ status: 'pending', createdAt: ago(90), escalatedAt: ago(80) }, { ...policy, expireAfterDays: null }, now)).toBe(false);
+  });
+});
+
+describe('resubmitSource and mayResubmit (#876)', () => {
+  const me = '0f6c3a52-8d3b-4c1e-9a77-5b2f0e9d1c01';
+  const base = { status: 'expired', command: 'finance.purchase.record', authors: [{ type: 'user', id: me }], requested_by_agent: null, request_input: null, source_file_id: 'f', extraction_id: 'e' };
+  it('never offers an agent proposal, or one whose authors cannot be read', () => {
+    expect(resubmitSource(base)).toBe('file');
+    expect(mayResubmit(base, me)).toBe(true);
+    expect(resubmitSource({ ...base, requested_by_agent: 'agent' })).toBeNull();
+    expect(resubmitSource({ ...base, authors: [{ type: 'robot', id: me }] })).toBeNull();
+    expect(mayResubmit({ ...base, authors: null }, me)).toBe(false);
+    expect(mayResubmit({ ...base, authors: 'not a list' }, me)).toBe(false);
+  });
+
+  it('lets any editor ask again for a file nobody uploaded by hand, and only the authors otherwise', () => {
+    expect(mayResubmit({ ...base, authors: [{ type: 'system', component: 'kernel.extraction' }] }, me)).toBe(true);
+    expect(mayResubmit({ ...base, authors: [{ type: 'user', id: '0f6c3a52-8d3b-4c1e-9a77-5b2f0e9d1c02' }] }, me)).toBe(false);
+    const requested = { ...base, command: 'finance.journal_voucher.record', source_file_id: null, extraction_id: null, request_input: {}, authors: [] };
+    expect(resubmitSource(requested)).toBe('request');
+    expect(mayResubmit(requested, me)).toBe(false);
   });
 });
 

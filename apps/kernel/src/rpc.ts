@@ -1087,8 +1087,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       reject: os.inbox.reject.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.proposal.reject', input, { actor, orgId })),
       ),
+      // Every proposal it makes is a finance proposal, like inbox.request.
       resubmit: os.inbox.resubmit.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => {
+        inFinance(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;
           return runtime.execute('kernel.proposal.resubmit', rest, { actor, orgId, idempotencyKey });
         }),

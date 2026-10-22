@@ -3,14 +3,15 @@
 --
 -- crove_kernel.proposal_policy.expire_after_days
 --     a pending proposal older than this moves to 'expired' (kernel.proposal.expire, run by the worker). NULL, the
---     default, turns expiry off. When set it needs the owners' escalation and comes after it, so the owners hear about
---     a proposal before it expires.
+--     default, turns expiry off. When set it needs the owners' escalation and comes after it, and a proposal expires
+--     only once its owners were told (escalated_at) and have had the days between the two since: a backlog that is
+--     already old when an org turns expiry on is escalated first and expires that many days later.
 -- crove_kernel.proposal.request_input
 --     what the requester sent to kernel.proposal.request, kept so an expired requested proposal can be asked for again
 --     through the module's preparer, which checks it all anew. NULL for every other proposal.
 -- crove_kernel.proposal.resubmitted_from
---     the expired proposal a new one was asked for again from (kernel.proposal.resubmit). At most one per expired
---     proposal.
+--     the expired proposal a new one was asked for again from (kernel.proposal.resubmit), in the same org. At most one
+--     per expired proposal.
 -- crove_kernel.proposal_extraction_uq
 --     one live proposal per extraction run: an expired one no longer counts, so its file's reading can be proposed
 --     again as a new proposal.
@@ -40,6 +41,13 @@ BEGIN
       CHECK (request_input IS NULL OR pg_catalog.octet_length(request_input::text) <= 262144);
   END IF;
 END $$;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conname = 'proposal_resubmitted_from_fk' AND conrelid = 'crove_kernel.proposal'::regclass) THEN
+    ALTER TABLE crove_kernel.proposal ADD CONSTRAINT proposal_resubmitted_from_fk
+      FOREIGN KEY (org_id, resubmitted_from) REFERENCES crove_kernel.proposal (org_id, id);
+  END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS proposal_resubmitted_from_uq ON crove_kernel.proposal (org_id, resubmitted_from) WHERE resubmitted_from IS NOT NULL;
 
 DO $$
@@ -54,21 +62,24 @@ BEGIN
   END IF;
 END $$;
 
--- Pending proposals of active orgs older than the expiry their org set. The command checks again under the
--- proposal's lock.
+-- Pending proposals of active orgs older than the expiry their org set, whose owners were told at least the days
+-- between escalation and expiry ago. The command checks again under the proposal's lock.
 CREATE OR REPLACE FUNCTION crove_kernel.proposal_expiries_due(p_limit int)
 RETURNS TABLE (org_id uuid, proposal_id uuid)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   SELECT p.org_id, p.id
   FROM crove_kernel.proposal p
   JOIN LATERAL (
-    SELECT x.expire_after_days FROM crove_kernel.proposal_policy x
+    SELECT x.escalate_after_days, x.expire_after_days FROM crove_kernel.proposal_policy x
     WHERE x.org_id = p.org_id ORDER BY x.created_at, x.id LIMIT 1
   ) pp ON true
   JOIN crove_kernel.tenant t ON t.org_id = p.org_id AND t.status = 'active'
   WHERE p.status = 'pending'
     AND pp.expire_after_days IS NOT NULL
+    AND pp.escalate_after_days IS NOT NULL
+    AND p.escalated_at IS NOT NULL
     AND p.created_at <= pg_catalog.now() - pg_catalog.make_interval(days => pp.expire_after_days)
+    AND p.escalated_at <= pg_catalog.now() - pg_catalog.make_interval(days => pp.expire_after_days - pp.escalate_after_days)
   ORDER BY p.created_at
   LIMIT LEAST(GREATEST(COALESCE(p_limit, 200), 1), 1000)
 $$;

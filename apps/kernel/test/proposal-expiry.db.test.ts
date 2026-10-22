@@ -1,8 +1,9 @@
 // Proposal expiry on PostgreSQL 17 (#876): an org's expiry (off by default, after the owners' escalation), the worker's
-// sweep moving a pending proposal past it to 'expired' (audited, an activity entry and nothing else, no mail), expired
-// proposals never approved, the scan and the command for the worker alone, and the author asking for an expired
-// proposal again, from a request or from a file's reading. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run
-// makes its own database.
+// sweep moving a pending proposal past it to 'expired' (audited, an activity entry and nothing else, no mail) only once
+// its owners were told and had the escalation window, expired proposals never approved, the scan and the command for
+// the worker alone, an expiry racing a rejection, and the author asking for an expired proposal again, from a request
+// or from a file's reading, once, by nobody else. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own
+// database.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -103,7 +104,9 @@ suite('proposal expiry on PostgreSQL (#876)', () => {
 
   const save = (o: Org, user: string, policy: ProposalPolicy) => rt.execute<ProposalPolicy>('kernel.proposal_policy.save', policy, { actor: asUser(user), orgId: o.orgId });
   const sweep = () => sweepProposalNudges({ runtime: worker, workerDb });
-  const age = (id: string, days: number) => admin((c) => c.query('UPDATE crove_kernel.proposal SET created_at = now() - make_interval(days => $2) WHERE id = $1', [id, days]));
+  // Waited `days`, and its owners were told as long ago: past every window.
+  const age = (id: string, days: number) =>
+    admin((c) => c.query('UPDATE crove_kernel.proposal SET created_at = now() - make_interval(days => $2), escalated_at = now() - make_interval(days => $2) WHERE id = $1', [id, days]));
   const view = (o: Org, user: string, id: string) => rt.query<Detail>('kernel.inbox.get', { id }, { actor: asUser(user), orgId: o.orgId });
   const resubmit = (o: Org, user: string, id: string) =>
     rt.execute<{ proposalId: string }>('kernel.proposal.resubmit', { id }, { actor: asUser(user), orgId: o.orgId, idempotencyKey: randomUUID() });
@@ -229,7 +232,7 @@ suite('proposal expiry on PostgreSQL (#876)', () => {
     await save(o, o.owner, { remindAfterDays: 1, escalateAfterDays: 2, expireAfterDays: 3 });
     // Reminded and escalated earlier, as the policy says: its approvers and owners were mailed already.
     const id = await rawProposal(o, 4);
-    await admin((c) => c.query('UPDATE crove_kernel.proposal SET reminded_at = now(), escalated_at = now() WHERE id = $1', [id]));
+    await admin((c) => c.query("UPDATE crove_kernel.proposal SET reminded_at = now() - interval '3 days', escalated_at = now() - interval '2 days' WHERE id = $1", [id]));
     const before = await row(id);
     const counted = await counts(o.orgId);
 
@@ -260,24 +263,62 @@ suite('proposal expiry on PostgreSQL (#876)', () => {
     await expect(approve(o, o.admin, id)).rejects.toMatchObject({ code: 'PROPOSAL_EXPIRED', status: 409 });
   });
 
-  it('expires a proposal that is past every stage at once without mailing anyone, and leaves the rest alone', async () => {
+  it('escalates an old backlog first when expiry is turned on, and expires it only after the escalation window', async () => {
     const o = await org();
-    await save(o, o.owner, { remindAfterDays: 1, escalateAfterDays: 2, expireAfterDays: 5 });
-    const late = await rawProposal(o, 9);
+    const late = await rawProposal(o, 30);
     const waiting = await rawProposal(o, 3);
     const decided = await rawProposal(o, 30, { status: 'rejected' });
     const none = await org();
     const unset = await rawProposal(none, 60);
+    // The org turns expiry on while proposals of 30 days wait, never escalated.
+    await save(o, o.owner, { remindAfterDays: 1, escalateAfterDays: 2, expireAfterDays: 5 });
+    const mails = (id: string, stage: string) =>
+      admin(async (c) => (await c.query<{ n: number }>("SELECT count(*)::int AS n FROM crove_kernel.mail_message WHERE source_id = $1 AND payload->>'stage' = $2", [id, stage])).rows[0]?.n);
     await sweep();
-    expect((await row(late)).status).toBe('expired');
+    // Nothing expires: the owners are told first.
+    expect((await row(late)).status).toBe('pending');
+    expect((await row(late)).escalated_at).not.toBeNull();
+    expect(await mails(late, 'escalate')).toBe(1);
+    expect(await expiryAudit(late)).toEqual([]);
     expect((await row(waiting)).status).toBe('pending');
     expect((await row(decided)).status).toBe('rejected');
     expect((await row(unset)).status).toBe('pending');
-    const mails = (id: string) => admin(async (c) => (await c.query<{ n: number }>("SELECT count(*)::int AS n FROM crove_kernel.mail_message WHERE source_id = $1", [id])).rows[0]?.n);
-    // The expired one was never reminded; the waiting one was, and was told to the owners.
-    expect(await mails(late)).toBe(0);
-    expect(await mails(waiting)).toBeGreaterThan(0);
+    // Two days after the owners' mail it still waits: they have the three days between escalation and expiry.
+    await admin((c) => c.query("UPDATE crove_kernel.proposal SET escalated_at = now() - interval '2 days' WHERE id = $1", [late]));
+    await sweep();
+    expect((await row(late)).status).toBe('pending');
+    await admin((c) => c.query("UPDATE crove_kernel.proposal SET escalated_at = now() - interval '3 days' WHERE id = $1", [late]));
+    await sweep();
+    expect((await row(late)).status).toBe('expired');
+    expect(await mails(late, 'escalate')).toBe(1);
+    // The younger one was reminded, and its owners told, and it is not expired.
+    expect(await mails(waiting, 'remind')).toBeGreaterThan(0);
     expect(await expiryAudit(waiting)).toEqual([]);
+  });
+
+  it('lets an expiry and a rejection race on the row lock: exactly one of them decides the proposal', async () => {
+    const o = await org();
+    await save(o, o.owner, { remindAfterDays: null, escalateAfterDays: 2, expireAfterDays: 3 });
+    const system = { actor: { type: 'system' as const, component: 'test' }, orgId: o.orgId };
+    for (let i = 0; i < 6; i++) {
+      const id = await rawProposal(o, 10);
+      await age(id, 10);
+      const [expired, rejected] = await Promise.allSettled([
+        worker.execute<{ expired: boolean }>('kernel.proposal.expire', { proposalId: id }, system),
+        rt.execute('kernel.proposal.reject', { id }, { actor: asUser(o.admin), orgId: o.orgId }),
+      ]);
+      const status = (await row(id)).status;
+      if (status === 'expired') {
+        expect(expired).toMatchObject({ status: 'fulfilled', value: { expired: true } });
+        expect(rejected).toMatchObject({ status: 'rejected', reason: { code: 'PROPOSAL_EXPIRED' } });
+      } else {
+        expect(status).toBe('rejected');
+        expect(rejected.status).toBe('fulfilled');
+        expect(expired).toMatchObject({ status: 'fulfilled', value: { expired: false } });
+        // The runtime still audits the command it ran; the row records no expiry.
+        expect((await expiryAudit(id)).map((a) => a.detail.days)).toEqual([undefined]);
+      }
+    }
   });
 
   it('lets only the worker run the scan and the command', async () => {
@@ -382,10 +423,48 @@ suite('proposal expiry on PostgreSQL (#876)', () => {
     expect(await view(o, o.owner, second.proposalId)).toMatchObject({ canResubmit: false });
   });
 
-  it('refuses to ask again for an expired request that kept no request', async () => {
+  it('refuses to ask again for an expired request that kept no request, or whose authors cannot be read', async () => {
     const o = await org();
     const id = await rawProposal(o, 10, { status: 'expired', command: 'finance.journal_voucher.record', authors: [{ type: 'user', id: o.member }] });
     await expect(resubmit(o, o.member, id)).rejects.toMatchObject({ code: 'NOT_RESUBMITTABLE', status: 422 });
     expect(await view(o, o.member, id)).toMatchObject({ canResubmit: false });
+    // Authors that cannot be read fail closed (four-eyes needs them): nobody may ask again, the original author neither.
+    const unreadable = await rawProposal(o, 10, { status: 'expired', command: 'finance.journal_voucher.record', authors: [{ type: 'robot', id: o.member }] });
+    await admin((c) => c.query(`UPDATE crove_kernel.proposal SET request_input = '{}' WHERE id = $1`, [unreadable]));
+    for (const user of [o.member, o.admin, o.owner]) {
+      await expect(resubmit(o, user, unreadable)).rejects.toMatchObject({ code: 'NOT_RESUBMITTABLE', status: 422 });
+      expect(await view(o, user, unreadable)).toMatchObject({ canResubmit: false });
+    }
+    const forwarded = await rawProposal(o, 10, { status: 'expired', authors: [{ type: 'robot' }] });
+    await expect(resubmit(o, o.member, forwarded)).rejects.toMatchObject({ code: 'NOT_RESUBMITTABLE' });
+  });
+
+  it('asks again exactly once under concurrency, and never for another org, a viewer, or a file being read again', async () => {
+    const o = await org();
+    await save(o, o.owner, { remindAfterDays: null, escalateAfterDays: 2, expireAfterDays: 3 });
+    const { proposalId: id, fileId } = await fileProposal(o, o.owner);
+    await age(id, 5);
+    await sweep();
+    expect((await row(id)).status).toBe('expired');
+
+    // Another org's owner and a viewer of this org are refused; nothing is made.
+    const other = await org();
+    await expect(resubmit(other, other.owner, id)).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    const viewer = await person('viewer');
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'viewer')", [o.orgId, viewer]));
+    await expect(resubmit(o, viewer, id)).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+
+    // While the file is being read again, it waits for the reading.
+    await rt.execute('kernel.file.reextract', { fileId }, { actor: asUser(o.owner), orgId: o.orgId, idempotencyKey: randomUUID() });
+    await expect(resubmit(o, o.owner, id)).rejects.toMatchObject({ code: 'EXTRACTION_PENDING', status: 409 });
+    expect(await view(o, o.owner, id)).toMatchObject({ canResubmit: false });
+    await admin((c) => c.query("UPDATE crove_kernel.extraction SET status = 'failed', completed_at = now() WHERE file_id = $1 AND status = 'pending'", [fileId]));
+
+    // Three requests at once: one proposal, the others refused.
+    const results = await Promise.allSettled([resubmit(o, o.owner, id), resubmit(o, o.owner, id), resubmit(o, o.owner, id)]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    for (const r of results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')) expect(r.reason).toMatchObject({ code: 'PROPOSAL_RESUBMITTED' });
+    const made = await admin(async (c) => (await c.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_kernel.proposal WHERE resubmitted_from = $1', [id])).rows[0]?.n);
+    expect(made).toBe(1);
   });
 });

@@ -6,7 +6,9 @@
 // proposal's content; a decision ends both stages.
 //
 // Expiry (#876): an org may also set how many days a proposal may stay pending at all. It needs the owners' escalation
-// and comes after it. The worker finds the proposals past it (proposal_expiries_due) and runs kernel.proposal.expire
+// and comes after it, and a proposal expires only once its owners were told and have had the days between the two
+// since (so a backlog already old when an org turns expiry on is escalated first). The worker finds the proposals past
+// it (proposal_expiries_due) and runs kernel.proposal.expire
 // for each, which checks again under the proposal's lock and moves it to 'expired', a terminal state: audited, an
 // activity entry, and nothing else (no mail; the reminder stages and the notifications only ever act on pending
 // proposals, so its approvers are not mailed again). Its author may ask for it again (kernel.proposal.resubmit).
@@ -55,9 +57,12 @@ export function nudgesDue(
   return due;
 }
 
-// Whether a proposal is past its org's expiry now; the same rule as proposal_expiries_due.
-export function expiryDue(p: { status: string; createdAt: Date }, policy: ProposalPolicy, now: Date): boolean {
-  return p.status === 'pending' && policy.expireAfterDays !== null && now.getTime() - p.createdAt.getTime() >= policy.expireAfterDays * DAY_MS;
+// Whether a proposal is past its org's expiry now; the same rule as proposal_expiries_due. It waited the days the org
+// set, its owners were told (escalated_at), and since then they have had the days between escalation and expiry.
+export function expiryDue(p: { status: string; createdAt: Date; escalatedAt: Date | null }, policy: ProposalPolicy, now: Date): boolean {
+  if (p.status !== 'pending' || policy.expireAfterDays === null || policy.escalateAfterDays === null || p.escalatedAt === null) return false;
+  const window = (policy.expireAfterDays - policy.escalateAfterDays) * DAY_MS;
+  return now.getTime() - p.createdAt.getTime() >= policy.expireAfterDays * DAY_MS && now.getTime() - p.escalatedAt.getTime() >= window;
 }
 
 export async function readPolicy(ctx: Pick<CommandContext, 'trx' | 'orgId'>): Promise<ProposalPolicy> {
@@ -221,14 +226,14 @@ export const proposalExpire = defineCommand({
   handler: async (ctx, input): Promise<ExpireResult> => {
     const proposal = await ctx.trx
       .selectFrom('crove_kernel.proposal')
-      .select(['id', 'status', 'title', 'revision', 'created_at'])
+      .select(['id', 'status', 'title', 'revision', 'created_at', 'escalated_at'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.proposalId)
       .forUpdate()
       .executeTakeFirst();
     if (!proposal) return { expired: false };
     const policy = await readPolicy(ctx);
-    if (!expiryDue({ status: proposal.status, createdAt: proposal.created_at }, policy, ctx.now)) return { expired: false };
+    if (!expiryDue({ status: proposal.status, createdAt: proposal.created_at, escalatedAt: proposal.escalated_at }, policy, ctx.now)) return { expired: false };
     const days = Math.floor((ctx.now.getTime() - proposal.created_at.getTime()) / DAY_MS);
     await ctx.trx
       .updateTable('crove_kernel.proposal')
@@ -243,7 +248,8 @@ export const proposalExpire = defineCommand({
 });
 
 // One pass: each proposal past its org's expiry expires first, then each pending proposal with a stage due gets it (an
-// expired proposal is no longer pending, so it gets no reminder).
+// expired proposal is no longer pending, so it gets no reminder). A proposal expires only after its escalation, so the
+// order never skips the owners' mail.
 export async function sweepProposalNudges(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
   let done = 0;
   const { rows: expiring } = await sql<{ org_id: string; proposal_id: string }>`SELECT org_id, proposal_id FROM crove_kernel.proposal_expiries_due(${PROPOSAL_NUDGE_LIMIT}::int)`.execute(deps.workerDb);

@@ -1504,6 +1504,7 @@ export const vi = {
     expireAfter: 'Hết hạn sau',
     expireOff: 'Không đặt hạn',
     proposalExpiryHint: 'Đề xuất chờ quá số ngày này mà chưa ai duyệt sẽ hết hạn và không duyệt được nữa; người soạn có thể gửi lại. Chỉ đặt được khi đã bật báo chủ sở hữu, và phải dài hơn số ngày đó. Khi hết hạn không có email nào được gửi.',
+    expiryTurnedOff: 'Đã tắt hạn chờ duyệt, vì hạn này phải dài hơn số ngày báo chủ sở hữu. Hãy chọn lại nếu vẫn cần.',
     proposalRemindersHint: 'Gửi email cho người có quyền duyệt khi một đề xuất chờ quá số ngày này, và cho chủ sở hữu nếu vẫn chưa ai duyệt. Mỗi đề xuất được nhắc một lần ở mỗi bước; email không duyệt hay từ chối thay ai.',
     taxCalendar: 'Lịch thuế',
     pitFilingPeriod: 'Kỳ khai thuế TNCN khấu trừ',

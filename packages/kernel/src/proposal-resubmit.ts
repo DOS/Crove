@@ -42,10 +42,12 @@ export interface ResubmitFacts {
 
 export type ResubmitSource = 'request' | 'file';
 
-// Where a new proposal would come from, or null when the proposal cannot be asked for again: an agent's, a requested
-// one made before its request was kept, or one with no source at all.
+// Where a new proposal would come from, or null when the proposal cannot be asked for again: an agent's, one whose
+// authors cannot be read (fail closed, as the approval does: four-eyes needs them), a requested one made before its
+// request was kept, or one with no source at all.
 export function resubmitSource(p: ResubmitFacts): ResubmitSource | null {
   if (p.requested_by_agent !== null) return null;
+  if (parseAuthors(p.authors) === null) return null;
   if (isRequestable(p.command)) return p.request_input === null || p.request_input === undefined ? null : 'request';
   return p.source_file_id !== null && p.extraction_id !== null ? 'file' : null;
 }
@@ -53,7 +55,9 @@ export function resubmitSource(p: ResubmitFacts): ResubmitSource | null {
 // Whether the user may ask for it again: a person among its authors. A file forwarded by email has no person among its
 // authors; then any member who may edit it may, as they may read the file again (kernel.file.reextract).
 export function mayResubmit(p: ResubmitFacts, userId: string): boolean {
-  const people = (parseAuthors(p.authors) ?? []).flatMap((a) => (a.type === 'user' ? [a.id] : []));
+  const authors = parseAuthors(p.authors);
+  if (authors === null) return false;
+  const people = authors.flatMap((a) => (a.type === 'user' ? [a.id] : []));
   if (people.includes(userId)) return true;
   return resubmitSource(p) === 'file' && people.length === 0;
 }
@@ -93,6 +97,8 @@ export const resubmitProposal = defineCommand({
       );
     }
     if (!mayResubmit(old, ctx.actor.userId)) throw new DomainError('FORBIDDEN', 403, 'Chỉ người soạn đề xuất mới gửi lại được');
+    const authors = parseAuthors(old.authors);
+    if (authors === null) throw new DomainError('NOT_RESUBMITTABLE', 422, 'Đề xuất này không gửi lại được; hãy lập một đề xuất mới');
 
     let content: {
       kind: string;
@@ -133,6 +139,8 @@ export const resubmitProposal = defineCommand({
         payload: JSON.stringify(old.payload),
         source_file_id: old.source_file_id,
         extraction_id: old.extraction_id,
+        // The duplicate found when the file was read; posting it checks the invoice against the books again
+        // (DUPLICATE_INVOICE), so a duplicate recorded since cannot be posted twice.
         duplicate_of: old.duplicate_of,
         // The reading stays tainted; the insert trigger derives it from the extraction too.
         tainted: old.tainted,
@@ -145,7 +153,7 @@ export const resubmitProposal = defineCommand({
         ...content,
         // P12: who may approve it now; P10: whoever wrote the content stays an author, and so does the user asking.
         eligible_approvers: await eligibleApprovers(ctx.trx, ctx.orgId, content.command),
-        authors: JSON.stringify(addAuthor(parseAuthors(old.authors) ?? [], actorRef(ctx.actor))),
+        authors: JSON.stringify(addAuthor(authors, actorRef(ctx.actor))),
         resubmitted_from: old.id,
       })
       .returning('id')
