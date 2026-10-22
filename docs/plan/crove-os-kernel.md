@@ -1374,6 +1374,7 @@ Data residency requirements are handled with a legal opinion plus a copy in Viet
 | `ai_step` payloads | By org prefix | 180 days |
 | IPs in audit | Truncate | 6 months |
 | Exports | Auto-expire | 35-90 days, encrypted |
+| `refusal_tally`, `security_event` (a Crove account id with command names and refusal codes; no tenant data, no contact value) | Pruned by the worker's daily retention job; not touched by `kernel.personal_data.erase`, which erases persons named in an org's data | 7 days (`REFUSAL_TALLY_RETENTION_DAYS`) and 30 days (#1008) |
 
 **Offboarding** (owner request, or, with DOS org sync, DOS reports `org.deleted`; then the tenant locks writes immediately and an export goes to the last known owner):
 1. Export for the tenant.
