@@ -3731,6 +3731,7 @@ export const vi = {
       PORTAL_LIST_TOO_LARGE: 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên.',
       PORTAL_LIST_UNUSABLE: 'Danh sách lấy từ cổng thuế không dùng được cho công ty này; xem lý do ở danh sách bên dưới.',
       PORTAL_SYNC_BUSY: 'Đang có một lượt lấy dữ liệu từ cổng thuế cho khách hàng này; hãy đợi lượt đó xong.',
+      PORTAL_STEP_TIMEOUT: 'Cổng thuế trả lời chậm nên lượt lấy dữ liệu đã tạm dừng; hãy bấm Lấy lại để tiếp tục.',
       CONTACT_EMAIL_REQUIRED: 'Công ty chưa có email liên hệ. Chủ sở hữu hoặc quản trị viên nhập email này trong Cài đặt rồi thử lại.',
       NOTHING_MISSING: 'Kỳ này không còn hóa đơn nào thiếu nên không cần gửi đề nghị.',
       REQUEST_TOO_SOON: 'Vừa gửi đề nghị cho kỳ này trong vòng một giờ qua. Hãy đợi thêm rồi gửi lại.',

@@ -3731,6 +3731,7 @@ export const en = {
       PORTAL_LIST_TOO_LARGE: "This period's list is too large to fetch at once. Export the Excel list from the portal and upload it.",
       PORTAL_LIST_UNUSABLE: 'The list from the tax portal cannot be used for this company; the list below says why.',
       PORTAL_SYNC_BUSY: 'Another fetch from the tax portal is running for this client. Wait until it finishes.',
+      PORTAL_STEP_TIMEOUT: 'The tax portal is answering slowly, so the fetch paused. Click Fetch again to continue.',
       CONTACT_EMAIL_REQUIRED: 'The company has no contact email yet. An owner or admin can set it in Settings; then try again.',
       NOTHING_MISSING: 'No invoices are missing for this period, so there is nothing to ask for.',
       REQUEST_TOO_SOON: 'A request for this period went out less than an hour ago. Wait a little, then send it again.',

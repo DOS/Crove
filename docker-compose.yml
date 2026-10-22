@@ -139,6 +139,7 @@ services:
       TAX_CODE_LOOKUP_URL: ${TAX_CODE_LOOKUP_URL:-}
       # The assisted purchase-invoice sync from the tax portal (#325); off unless true.
       TAX_PORTAL_SYNC: ${TAX_PORTAL_SYNC:-false}
+      TAX_PORTAL_STEP_SECONDS: ${TAX_PORTAL_STEP_SECONDS:-90}
       INBOUND_DOMAIN: ${INBOUND_DOMAIN:-}
       INBOUND_SECRET: ${INBOUND_SECRET:-}
       # Invite mails go through the same SMTP server as Supabase Auth's (Mailpit at http://localhost:8025 locally).

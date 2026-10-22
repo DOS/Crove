@@ -390,6 +390,9 @@ const schema = z.object({
   // Where the portal's API is; unset: https://hoadondientu.gdt.gov.vn/api. Only for pointing a test deployment at a
   // fake portal (the end-to-end tests do); the API refuses it unless PUBLIC_URL is local (localhost or a .test name),
   // since any other address would receive the client's portal password.
+  // One deadline, in seconds, for each list or XML step of a sync, all its portal requests together; past it the step
+  // stops and the screen offers to go on.
+  TAX_PORTAL_STEP_SECONDS: z.coerce.number().int().min(30).max(300).default(90),
   TAX_PORTAL_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,

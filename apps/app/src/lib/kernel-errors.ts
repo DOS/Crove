@@ -140,6 +140,7 @@ export const KERNEL_ERROR_CODES = [
   'PORTAL_LIST_TOO_LARGE',
   'PORTAL_LIST_UNUSABLE',
   'PORTAL_SYNC_BUSY',
+  'PORTAL_STEP_TIMEOUT',
   // Asking the client company for its missing invoices (#669).
   'CONTACT_EMAIL_REQUIRED',
   'NOTHING_MISSING',

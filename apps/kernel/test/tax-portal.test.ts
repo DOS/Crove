@@ -152,6 +152,27 @@ describe('tax portal client', () => {
     expect(await kindOf(login('{"message":"Lỗi"}'))).toBe('WRONG_PASSWORD');
   });
 
+  it('stops a step at its deadline or when the caller goes away, before the next request', async () => {
+    const c = client();
+    const captcha = await c.captcha();
+    const token = await c.login(BUYER, FAKE_PORTAL_PASSWORD, { key: captcha.key, answer: FAKE_CAPTCHA_ANSWER });
+    const before = portal.state.requests.length;
+    expect(await kindOf(c.purchaseInvoices(token, '2026-09-01', '2026-09-30', { deadline: Date.now() - 1 }))).toBe('TOO_SLOW');
+    const gone = new AbortController();
+    gone.abort();
+    expect(await kindOf(c.invoiceXml(token, { sellerTaxCode: '0101234564', template: '1', series: 'C26TAB', number: '9101' }, { deadline: Date.now() + 60_000, signal: gone.signal }))).toBe('TOO_SLOW');
+    expect(portal.state.requests.length).toBe(before);
+    // A request in flight gets only the time the step has left.
+    let given = 0;
+    const spy = (_url: string, _req: GuardedRequest, options: EgressOptions): Promise<EgressResponse> => {
+      given = options.timeoutMs;
+      return Promise.reject(new Error('stop'));
+    };
+    await kindOf(createTaxPortalClient({ baseUrl: portal.url, request: spy, sleep: noWait }).purchaseInvoices(token, '2026-09-01', '2026-09-30', { deadline: Date.now() + 3000 }));
+    expect(given).toBeGreaterThan(0);
+    expect(given).toBeLessThanOrEqual(3000);
+  });
+
   it('parses JSON with numbers as text and refuses what is not JSON', () => {
     expect(parsePortalJson(Buffer.from('{"a":12345678901234567890.25}'))).toEqual({ a: '12345678901234567890.25' });
     expect(() => parsePortalJson(Buffer.from('<html>'))).toThrow(TaxPortalError);

@@ -44,15 +44,23 @@ export interface PortalSyncDeps {
   broker: CredentialBroker;
   client: TaxPortalClient;
   now?: () => number;
-  // Per minute in this process: CAPTCHA images and logins, per person and per client (tests lower or raise them).
-  limits?: { captchaPerUser?: number; captchaPerOrg?: number; loginPerUser?: number; loginPerOrg?: number; listPerOrg?: number; perProcess?: number };
+  // Per minute in this process: CAPTCHA images, logins and list fetches, per person and per client, and for the whole
+  // process per kind (tests lower or raise them).
+  limits?: { captchaPerUser?: number; captchaPerOrg?: number; loginPerUser?: number; loginPerOrg?: number; listPerOrg?: number; captchaPerProcess?: number; loginPerProcess?: number; listPerProcess?: number };
+  // One deadline for each fetchList or fetchXml step, shared by all its portal requests (TAX_PORTAL_STEP_SECONDS).
+  stepMs?: number;
+}
+
+// The browser went away (the request's abort signal), passed from the RPC handler.
+export interface StepOptions {
+  signal?: AbortSignal;
 }
 
 export interface PortalSync {
   captcha(orgId: string, actor: UserActor, period: string): Promise<PortalCaptchaView>;
   login(orgId: string, actor: UserActor, input: { period: string; challenge: string; captcha: string; password: string; consent: true }): Promise<{ session: string; expiresInSeconds: number }>;
-  fetchList(orgId: string, actor: UserActor, input: { period: string; session: string }): Promise<PortalListResult>;
-  fetchXml(orgId: string, actor: UserActor, input: { period: string; session: string; listId: string }): Promise<PortalXmlResult>;
+  fetchList(orgId: string, actor: UserActor, input: { period: string; session: string }, options?: StepOptions): Promise<PortalListResult>;
+  fetchXml(orgId: string, actor: UserActor, input: { period: string; session: string; listId: string }, options?: StepOptions): Promise<PortalXmlResult>;
 }
 
 // What the person sees for each class of failure. Never the portal's own words.
@@ -74,6 +82,8 @@ function portalError(kind: PortalCallError): DomainError {
       return new DomainError('PORTAL_SESSION_EXPIRED', 409, 'Phiên đăng nhập cổng thuế đã hết hạn; hãy đăng nhập lại');
     case 'TOO_LARGE':
       return new DomainError('PORTAL_LIST_TOO_LARGE', 422, 'Danh sách của kỳ này quá lớn để lấy một lần; hãy xuất danh sách Excel từ cổng thuế rồi tải lên');
+    case 'TOO_SLOW':
+      return new DomainError('PORTAL_STEP_TIMEOUT', 503, 'Cổng thuế trả lời chậm nên lượt lấy dữ liệu đã tạm dừng; hãy bấm lấy lại để tiếp tục');
     case 'BAD_ANSWER':
       return new DomainError('PORTAL_BAD_ANSWER', 503, 'Cổng thuế trả lời theo cách Crove chưa đọc được; hãy xuất danh sách Excel từ cổng thuế rồi tải lên');
   }
@@ -89,7 +99,7 @@ function vatPeriodRange(period: string): { from: string; to: string } {
   }
 }
 
-const RETRYABLE: ReadonlySet<PortalCallError> = new Set(['RATE_LIMITED', 'BLOCKED', 'UNAVAILABLE', 'SESSION_EXPIRED']);
+const RETRYABLE: ReadonlySet<PortalCallError> = new Set(['RATE_LIMITED', 'BLOCKED', 'UNAVAILABLE', 'SESSION_EXPIRED', 'TOO_SLOW']);
 
 const sessionInvalid = () => new DomainError('PORTAL_SESSION_INVALID', 409, 'Phiên lấy dữ liệu cổng thuế không hợp lệ; hãy đăng nhập lại');
 
@@ -102,19 +112,20 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
   // Per person in one org, per person across every org (one account with many orgs), per client, and for the whole
   // process: every portal request leaves from this server's address, and a block there stops the feature for everyone.
   const limiter = (perMinute: number) => new RateLimiter({ perMinute, now });
-  const captchas = { user: limiter(limits.captchaPerUser ?? 10), person: limiter((limits.captchaPerUser ?? 10) * 2), org: limiter(limits.captchaPerOrg ?? 20) };
-  const logins = { user: limiter(limits.loginPerUser ?? 3), person: limiter((limits.loginPerUser ?? 3) * 2), org: limiter(limits.loginPerOrg ?? 5) };
-  const lists = { user: limiter(limits.listPerOrg ?? 4), person: limiter((limits.listPerOrg ?? 4) * 2), org: limiter(limits.listPerOrg ?? 4) };
-  const processWide = limiter(limits.perProcess ?? 60);
+  // Each kind has its own process budget, so CAPTCHA images never use up the logins.
+  const captchas = { user: limiter(limits.captchaPerUser ?? 10), person: limiter((limits.captchaPerUser ?? 10) * 2), org: limiter(limits.captchaPerOrg ?? 20), process: limiter(limits.captchaPerProcess ?? 60) };
+  const logins = { user: limiter(limits.loginPerUser ?? 3), person: limiter((limits.loginPerUser ?? 3) * 2), org: limiter(limits.loginPerOrg ?? 5), process: limiter(limits.loginPerProcess ?? 30) };
+  const lists = { user: limiter(limits.listPerOrg ?? 4), person: limiter((limits.listPerOrg ?? 4) * 2), org: limiter(limits.listPerOrg ?? 4), process: limiter(limits.listPerProcess ?? 30) };
+  const stepMs = deps.stepMs ?? 90_000;
   const busy = new ConcurrencyLimiter({ total: 8, perKey: 1 });
 
-  type Limits = { user: RateLimiter; person: RateLimiter; org: RateLimiter };
+  type Limits = { user: RateLimiter; person: RateLimiter; org: RateLimiter; process: RateLimiter };
   const take = (group: Limits, orgId: string, userId: string) => {
     const checks: Array<[RateLimiter, string]> = [
       [group.user, `${orgId}:${userId}`],
       [group.person, userId],
       [group.org, orgId],
-      [processWide, 'all'],
+      [group.process, 'all'],
     ];
     // Every budget is looked at before any is spent.
     for (const [limiter, key] of checks) {
@@ -123,6 +134,10 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
     }
     for (const [limiter, key] of checks) limiter.take(key);
   };
+
+  // The member may run the sync and the org has a tax code: checked before any budget is spent, so refused calls (a
+  // viewer, a client without a tax code) never use up anyone's budget.
+  const authorize = (orgId: string, actor: UserActor) => runtime.query<{ taxCode: string }>('finance.portal_sync.check', {}, { actor, orgId });
 
   async function exclusive<T>(orgId: string, fn: () => Promise<T>): Promise<T> {
     const release = busy.tryAcquire(orgId);
@@ -152,11 +167,13 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
       throw sessionInvalid();
     }
   }
-  function openSession(text: string, orgId: string, actor: UserActor, period: string): { token: string } {
+  // The session of this org, user and period, for the tax code it was opened with (an org whose tax code changed since
+  // logs in again).
+  function openSession(text: string, orgId: string, actor: UserActor, period: string, taxCode: string): { token: string; exp: number } {
     const value = open(text, orgId, SESSION, actor.userId, period);
-    if (typeof value.token !== 'string' || typeof value.exp !== 'number') throw sessionInvalid();
+    if (typeof value.token !== 'string' || typeof value.exp !== 'number' || value.taxCode !== taxCode) throw sessionInvalid();
     if (value.exp <= now()) throw portalError('SESSION_EXPIRED');
-    return { token: value.token };
+    return { token: value.token, exp: value.exp };
   }
 
   // One call to the portal, recorded before and after it is made (external_call): the outcome class only.
@@ -195,6 +212,7 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
   return {
     async captcha(orgId, actor, period) {
       vatPeriodRange(period);
+      await authorize(orgId, actor);
       take(captchas, orgId, actor.userId);
       return exclusive(orgId, async () => {
         let username = '';
@@ -219,18 +237,24 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
       if (typeof challenge.key !== 'string' || typeof challenge.exp !== 'number' || challenge.exp <= now()) {
         throw new DomainError('PORTAL_CHALLENGE_INVALID', 400, 'Mã xác nhận đã hết hạn; hãy lấy mã mới');
       }
+      await authorize(orgId, actor);
       take(logins, orgId, actor.userId);
       return exclusive(orgId, async () => {
         const captchaKey = challenge.key as string;
-        const token = await call(orgId, actor, { step: 'login', period: input.period, consent: true }, (taxCode) => client.login(taxCode, input.password, { key: captchaKey, answer: input.captcha }));
-        const session = seal({ token, exp: now() + PORTAL_SESSION_SECONDS * 1000, nonce: randomUUID() }, orgId, SESSION, actor.userId, input.period);
+        let loginTaxCode = '';
+        const token = await call(orgId, actor, { step: 'login', period: input.period, consent: true }, (taxCode) => {
+          loginTaxCode = taxCode;
+          return client.login(taxCode, input.password, { key: captchaKey, answer: input.captcha });
+        });
+        const session = seal({ token, exp: now() + PORTAL_SESSION_SECONDS * 1000, taxCode: loginTaxCode, nonce: randomUUID() }, orgId, SESSION, actor.userId, input.period);
         return { session, expiresInSeconds: PORTAL_SESSION_SECONDS };
       });
     },
 
-    async fetchList(orgId, actor, input) {
+    async fetchList(orgId, actor, input, options = {}) {
       const range = vatPeriodRange(input.period);
-      const { token } = openSession(input.session, orgId, actor, input.period);
+      const { taxCode: current } = await authorize(orgId, actor);
+      const { token, exp } = openSession(input.session, orgId, actor, input.period, current);
       take(lists, orgId, actor.userId);
       return exclusive(orgId, async () => {
         const opts = { actor, orgId };
@@ -241,7 +265,8 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
           { step: 'list', period: input.period },
           async (taxCode) => {
             orgTaxCode = taxCode;
-            return client.purchaseInvoices(token, range.from, range.to);
+            // One deadline for the whole list, never past the session's own expiry.
+            return client.purchaseInvoices(token, range.from, range.to, { deadline: Math.min(now() + stepMs, exp), ...(options.signal ? { signal: options.signal } : {}) });
           },
           (a) => String(a.reduce((n, q) => n + q.rows.length, 0)),
         );
@@ -260,25 +285,30 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
       });
     },
 
-    async fetchXml(orgId, actor, input) {
+    async fetchXml(orgId, actor, input, options = {}) {
       vatPeriodRange(input.period);
-      const { token } = openSession(input.session, orgId, actor, input.period);
+      const { taxCode: current } = await authorize(orgId, actor);
+      const { token, exp } = openSession(input.session, orgId, actor, input.period, current);
+      // One deadline for the whole batch, never past the session's own expiry.
+      const step = { deadline: Math.min(now() + stepMs, exp), ...(options.signal ? { signal: options.signal } : {}) };
       return exclusive(orgId, async () => {
         const opts = { actor, orgId };
-        const plan = await runtime.query<PortalXmlPlan>('finance.portal_sync.xml_plan', { listId: input.listId, limit: PORTAL_XML_PER_REQUEST }, opts);
+        const plan = await runtime.query<PortalXmlPlan>('finance.portal_sync.xml_plan', { listId: input.listId, period: input.period, limit: PORTAL_XML_PER_REQUEST }, opts);
         // The worker has not recorded the list yet: nothing to download, ask again in a moment.
         if (plan.status === 'pending') return { downloaded: 0, duplicates: 0, failed: 0, remaining: 0, done: false, waiting: true };
         let downloaded = 0;
         let duplicates = 0;
         let failed = 0;
         for (const invoice of plan.pending) {
+          // Out of time, the session about to expire, or the browser gone: stop here; the next call goes on.
+          if (now() >= step.deadline || step.signal?.aborted) break;
           try {
             await call(
               orgId,
               actor,
               { step: 'xml', listId: input.listId, invoice },
               async () => {
-                const bytes = await client.invoiceXml(token, invoice);
+                const bytes = await client.invoiceXml(token, invoice, step);
                 const type = sniffType(bytes);
                 // A ZIP holding the XML (the worker opens it in the sandbox) or the XML itself; anything else is not an
                 // invoice file.
@@ -293,6 +323,8 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
           } catch (error) {
             // The session or the portal stopped answering: stop here, the next sync goes on from this invoice.
             if (error instanceof DomainError && ['PORTAL_SESSION_EXPIRED', 'PORTAL_RATE_LIMITED', 'PORTAL_BLOCKED', 'PORTAL_UNAVAILABLE'].includes(error.code)) throw error;
+            // The step's deadline passed during this download: what is done stays, the next call goes on.
+            if (error instanceof DomainError && error.code === 'PORTAL_STEP_TIMEOUT') break;
             if (error instanceof DomainError && error.code === 'PORTAL_CALL_DONE') continue;
             // The member lost the right to do this (removed or made a viewer): stop.
             if (error instanceof DomainError && (error.status === 403 || error.code === 'NOT_A_MEMBER')) throw error;
@@ -304,7 +336,7 @@ export function createPortalSync(deps: PortalSyncDeps): PortalSync {
             throw error;
           }
         }
-        const after = await runtime.query<PortalXmlPlan>('finance.portal_sync.xml_plan', { listId: input.listId, limit: 0 }, opts);
+        const after = await runtime.query<PortalXmlPlan>('finance.portal_sync.xml_plan', { listId: input.listId, period: input.period, limit: 0 }, opts);
         return { downloaded, duplicates, failed, remaining: after.remaining, done: after.remaining === 0, waiting: false };
       });
     },

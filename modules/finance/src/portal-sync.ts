@@ -38,7 +38,7 @@ export const PORTAL_LOGINS_PER_HOUR = 20;
 export const PORTAL_STEPS = ['captcha', 'login', 'list', 'xml'] as const;
 export type PortalStep = (typeof PORTAL_STEPS)[number];
 // Outcome classes of a call (never the portal's own text, which may echo what was sent).
-export const PORTAL_CALL_ERRORS = ['WRONG_CAPTCHA', 'WRONG_PASSWORD', 'ACCOUNT_LOCKED', 'RATE_LIMITED', 'BLOCKED', 'UNAVAILABLE', 'BAD_ANSWER', 'SESSION_EXPIRED', 'TOO_LARGE'] as const;
+export const PORTAL_CALL_ERRORS = ['WRONG_CAPTCHA', 'WRONG_PASSWORD', 'ACCOUNT_LOCKED', 'RATE_LIMITED', 'BLOCKED', 'UNAVAILABLE', 'BAD_ANSWER', 'SESSION_EXPIRED', 'TOO_LARGE', 'TOO_SLOW'] as const;
 export type PortalCallError = (typeof PORTAL_CALL_ERRORS)[number];
 const ERROR_KIND: Record<PortalCallError, 'token_expired' | 'permission' | 'bad_request' | 'rate_limited' | 'transient' | 'unknown'> = {
   WRONG_CAPTCHA: 'bad_request',
@@ -50,6 +50,7 @@ const ERROR_KIND: Record<PortalCallError, 'token_expired' | 'permission' | 'bad_
   BAD_ANSWER: 'unknown',
   SESSION_EXPIRED: 'token_expired',
   TOO_LARGE: 'bad_request',
+  TOO_SLOW: 'transient',
 };
 
 // The key of an invoice's XML download within one synced list: the same invoice is fetched at most once per list.
@@ -204,14 +205,15 @@ export const portalSyncList = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới lấy được dữ liệu từ cổng thuế');
     vatPeriod(input.period);
-    // Only the portal answer the API stored for this user: a JSON import file, never a document or an uploaded sheet.
+    // Only a portal answer the API stored: a JSON import file of this org, never a document or an uploaded sheet. Files
+    // are deduplicated by content per org, so another member who fetched the same answer gets the same file.
     const file = await ctx.trx
       .selectFrom('crove_kernel.file')
       .select(['id', 'source', 'content_type', 'created_by'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.fileId)
       .executeTakeFirst();
-    if (!file || file.source !== 'import' || file.content_type !== PORTAL_SYNC_CONTENT_TYPE || file.created_by !== ctx.actor.userId) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy dữ liệu đã lấy từ cổng thuế');
+    if (!file || file.source !== 'import' || file.content_type !== PORTAL_SYNC_CONTENT_TYPE) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy dữ liệu đã lấy từ cổng thuế');
     await periodLock(ctx.orgId, input.period).execute(ctx.trx);
     const active = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')
@@ -278,7 +280,7 @@ export interface PortalXmlPlan {
 
 export const portalSyncXmlPlan = defineQuery({
   name: 'finance.portal_sync.xml_plan',
-  input: z.object({ listId: zId, limit: z.number().int().min(0).max(PORTAL_XML_PER_SYNC) }),
+  input: z.object({ listId: zId, period: zVatPeriod, limit: z.number().int().min(0).max(PORTAL_XML_PER_SYNC) }),
   access: EDITORS,
   handler: async (ctx, input): Promise<PortalXmlPlan> => {
     const list = await ctx.trx
@@ -287,6 +289,8 @@ export const portalSyncXmlPlan = defineQuery({
       .select(['l.id', 'l.period', 'l.status'])
       .where('l.org_id', '=', ctx.orgId)
       .where('l.id', '=', input.listId)
+      // The list of the period the portal session was opened for, not another one of the org.
+      .where('l.period', '=', input.period)
       .where('l.removed_at', 'is', null)
       .where('f.content_type', '=', PORTAL_SYNC_CONTENT_TYPE)
       .executeTakeFirst();
@@ -349,4 +353,20 @@ export const portalSyncXmlPlan = defineQuery({
 });
 
 export const portalSyncCommands = [portalSyncCall, portalSyncCallEnd, portalSyncList];
-export const portalSyncQueries = [portalSyncXmlPlan];
+// Before any budget is spent or the portal is called: the member may run the sync (owners, admins, members) and the
+// org has a tax code, the portal user name. Read only.
+export const portalSyncCheck = defineQuery({
+  name: 'finance.portal_sync.check',
+  input: z.object({}),
+  access: EDITORS,
+  handler: async (ctx): Promise<{ taxCode: string }> => {
+    const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
+    const taxCode = parseTaxCode(tenant?.tax_code)?.normalized;
+    if (!taxCode) {
+      throw new DomainError('TAX_CODE_REQUIRED', 409, 'Hãy nhập mã số thuế của công ty trong Cài đặt trước khi lấy dữ liệu từ cổng thuế');
+    }
+    return { taxCode };
+  },
+});
+
+export const portalSyncQueries = [portalSyncXmlPlan, portalSyncCheck];

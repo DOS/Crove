@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
-import { CredentialVault, Runtime, parseVaultKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
+import { CredentialVault, EgressError, Runtime, guardedRequest, parseVaultKey, sha256Hex, type BlobStore } from '@crove/kernel-runtime';
 import { PORTAL_WRONG_PASSWORD_LIMIT, financeCommands, financeQueries, importPortalList } from '@crove/mod-finance';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FAKE_CAPTCHA_ANSWER, FAKE_PORTAL_PASSWORD, startFakeTaxPortal, type FakePortal } from '../../../e2e/fake-tax-portal/server.ts';
@@ -71,6 +71,8 @@ suite('assisted tax portal sync (#325)', () => {
   let workerRuntime: Runtime;
   let app: ReturnType<typeof createHttpApp>;
   let appOff: ReturnType<typeof createHttpApp>;
+  // An API with its own portal client and limits, for the budget and deadline tests.
+  let appWith: (options: { limits?: Parameters<typeof createPortalSync>[0]['limits']; stepMs?: number; client?: ReturnType<typeof createTaxPortalClient> }) => ReturnType<typeof createHttpApp>;
   let portal: FakePortal;
   const store = new MemoryStore();
   const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
@@ -156,9 +158,20 @@ suite('assisted tax portal sync (#325)', () => {
     const config = loadConfig({ DATABASE_URL: appUrl, AUTH_JWT_SECRET: SECRET, AUTH_ISSUER: ISSUER, AUTH_SESSION_CHECK: 'off', MIGRATIONS_DIR: MIGRATIONS, WEB_DIST: '/nonexistent' });
     const client = createTaxPortalClient({ baseUrl: portal.url, gapMs: 0, sleep: async () => {} });
     // Generous in-process limits, so the database's own guard is what the wrong-password test meets.
-    const portalSync = createPortalSync({ runtime, store, broker: vault, client, limits: { loginPerUser: 50, loginPerOrg: 50, captchaPerUser: 100, captchaPerOrg: 100, listPerOrg: 100, perProcess: 1000 } });
+    const generous = { loginPerUser: 50, loginPerOrg: 50, captchaPerUser: 100, captchaPerOrg: 100, listPerOrg: 100, captchaPerProcess: 1000, loginPerProcess: 1000, listPerProcess: 1000 };
+    const portalSync = createPortalSync({ runtime, store, broker: vault, client, limits: generous });
     const authenticate = createAuthenticator(config, db);
     app = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: false, portalSync });
+    appWith = (options) =>
+      createHttpApp({
+        config,
+        runtime,
+        store,
+        authenticate,
+        pool,
+        aiEnabled: false,
+        portalSync: createPortalSync({ runtime, store, broker: vault, client: options.client ?? client, limits: { ...generous, ...options.limits }, ...(options.stepMs ? { stepMs: options.stepMs } : {}) }),
+      });
     appOff = createHttpApp({ config, runtime, store, authenticate, pool, aiEnabled: false });
 
     for (const who of [owner, member, viewer, outsider]) {
@@ -393,6 +406,72 @@ suite('assisted tax portal sync (#325)', () => {
     expect(refused.status).toBe(429);
     expect(refused.body.code).toBe('PORTAL_PASSWORD_GUARD');
     expect(portal.state.loginBodies.length).toBe(logins);
+  });
+
+  it('lets a second member sync the same portal answer: same file, same list', async () => {
+    const period = '2026-07';
+    const first = await login(owner, org.slug, FAKE_PORTAL_PASSWORD, period);
+    const listed = await rpc('portalSync/fetchList', owner, { period, session: first.body.session });
+    expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+    expect(listed.body.unchanged).toBe(false);
+    const second = await login(member, org.slug, FAKE_PORTAL_PASSWORD, period);
+    const again = await rpc('portalSync/fetchList', member, { period, session: second.body.session });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body).toMatchObject({ listId: listed.body.listId, unchanged: true });
+  });
+
+  it('spends no budget on calls it refuses, and keeps CAPTCHAs from using up the logins', async () => {
+    const tight = appWith({ limits: { captchaPerProcess: 2, loginPerProcess: 2 } });
+    for (let i = 0; i < 5; i++) {
+      const refused = await rpc('portalSync/captcha', viewer, { period: PERIOD }, org.slug, tight);
+      expect(refused.status).toBe(403);
+    }
+    // The owner still gets the process's two CAPTCHAs, and a login after them.
+    const one = await rpc('portalSync/captcha', owner, { period: PERIOD }, org.slug, tight);
+    expect(one.status, JSON.stringify(one.body)).toBe(200);
+    const two = await rpc('portalSync/captcha', owner, { period: PERIOD }, org.slug, tight);
+    expect(two.status).toBe(200);
+    const third = await rpc('portalSync/captcha', owner, { period: PERIOD }, org.slug, tight);
+    expect(third.status).toBe(429);
+    const logged = await rpc('portalSync/login', owner, { period: PERIOD, challenge: two.body.challenge, captcha: FAKE_CAPTCHA_ANSWER, password: FAKE_PORTAL_PASSWORD, consent: true }, org.slug, tight);
+    expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+  });
+
+  it('stops a step at its deadline, resumably, whatever the portal does', async () => {
+    // A portal whose list endpoints take 1.5 seconds per page; the step has 1 second in all.
+    const slowRequest: typeof guardedRequest = async (url, request, options) => {
+      if (url.includes('/query/') || url.includes('/sco-query/')) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1500, options.timeoutMs)));
+        if (options.timeoutMs < 1500) throw new EgressError('timeout', 'took too long');
+      }
+      return guardedRequest(url, request, options);
+    };
+    const slow = createTaxPortalClient({ baseUrl: portal.url, gapMs: 0, sleep: async () => {}, request: slowRequest });
+    const slowApp = appWith({ client: slow, stepMs: 1000 });
+    const period = '2026-06';
+    const captcha = await rpc('portalSync/captcha', owner, { period }, org.slug, slowApp);
+    const logged = await rpc('portalSync/login', owner, { period, challenge: captcha.body.challenge, captcha: FAKE_CAPTCHA_ANSWER, password: FAKE_PORTAL_PASSWORD, consent: true }, org.slug, slowApp);
+    expect(logged.status, JSON.stringify(logged.body)).toBe(200);
+    const started = Date.now();
+    const list = await rpc('portalSync/fetchList', owner, { period, session: logged.body.session }, org.slug, slowApp);
+    expect(list.status).toBe(503);
+    expect(list.body.code).toBe('PORTAL_STEP_TIMEOUT');
+    expect(Date.now() - started).toBeLessThan(10_000);
+    // Nothing was filed, and the call stays open to be made again.
+    const call = await admin((c) => c.query<{ state: string; error_code: string }>("SELECT state, error_code FROM crove_kernel.external_call WHERE org_id = $1 AND step = 'list' ORDER BY started_at DESC LIMIT 1", [org.orgId]));
+    expect(call.rows[0]).toEqual({ state: 'ambiguous', error_code: 'TOO_SLOW' });
+  });
+
+  it('binds the session to the tax code it was opened with', async () => {
+    const ok = await login(owner, org.slug, FAKE_PORTAL_PASSWORD, '2026-05');
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect((await rpc('org/setTaxCode', owner, { taxCode: '0302712574' })).status).toBe(200);
+    try {
+      const refused = await rpc('portalSync/fetchList', owner, { period: '2026-05', session: ok.body.session });
+      expect(refused.body.code).toBe('PORTAL_SESSION_INVALID');
+    } finally {
+      expect((await rpc('org/setTaxCode', owner, { taxCode: BUYER })).status).toBe(200);
+    }
   });
 
   it('says the portal is down, without its words', async () => {

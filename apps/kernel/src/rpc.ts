@@ -1248,8 +1248,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     portalSync: {
       captcha: os.portalSync.captcha.handler(({ context, input }) => inPortalSync(context, (orgId, actor, sync) => sync.captcha(orgId, actor, input.period))),
       login: os.portalSync.login.handler(({ context, input }) => inPortalSync(context, (orgId, actor, sync) => sync.login(orgId, actor, input))),
-      fetchList: os.portalSync.fetchList.handler(({ context, input }) => inPortalSync(context, (orgId, actor, sync) => sync.fetchList(orgId, actor, input))),
-      fetchXml: os.portalSync.fetchXml.handler(({ context, input }) => inPortalSync(context, (orgId, actor, sync) => sync.fetchXml(orgId, actor, input))),
+      // The request's signal: a browser that went away stops the step before its next portal request.
+      fetchList: os.portalSync.fetchList.handler(({ context, input, signal }) => inPortalSync(context, (orgId, actor, sync) => sync.fetchList(orgId, actor, input, signal ? { signal } : {}))),
+      fetchXml: os.portalSync.fetchXml.handler(({ context, input, signal }) => inPortalSync(context, (orgId, actor, sync) => sync.fetchXml(orgId, actor, input, signal ? { signal } : {}))),
     },
     missingInvoices: {
       status: os.missingInvoices.status.handler(({ context }) =>

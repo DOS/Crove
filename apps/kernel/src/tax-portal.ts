@@ -60,9 +60,17 @@ export interface TaxPortalClient {
   // ACCOUNT_LOCKED, RATE_LIMITED, BLOCKED, UNAVAILABLE or BAD_ANSWER.
   login(username: string, password: string, captcha: { key: string; answer: string }): Promise<string>;
   // Every purchase invoice dated in [from, to] (YYYY-MM-DD), one month of the range at a time, every query and page.
-  purchaseInvoices(token: string, from: string, to: string): Promise<PortalAnswer[]>;
+  purchaseInvoices(token: string, from: string, to: string, step?: StepLimit): Promise<PortalAnswer[]>;
   // One invoice's signed XML as the portal serves it (a ZIP holding the XML, or the XML itself).
-  invoiceXml(token: string, invoice: PortalXmlItem): Promise<Uint8Array>;
+  invoiceXml(token: string, invoice: PortalXmlItem, step?: StepLimit): Promise<Uint8Array>;
+}
+
+// One step's bound, shared by all its requests: an absolute deadline (epoch ms) and the caller's abort signal (the
+// browser went away). Past either, the next request is not made and the step stops with TOO_SLOW; a request in flight
+// gets at most the time left.
+export interface StepLimit {
+  deadline: number;
+  signal?: AbortSignal;
 }
 
 export interface TaxPortalOptions {
@@ -78,6 +86,7 @@ export interface TaxPortalOptions {
   // Tests: the request function (the egress guard by default).
   request?: (url: string, request: GuardedRequest, options: EgressOptions) => Promise<EgressResponse>;
   sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 const MAX_JSON_BYTES = 4 * 1024 * 1024;
@@ -162,12 +171,16 @@ export function createTaxPortalClient(options: TaxPortalOptions = {}): TaxPortal
   const request = options.request ?? guardedRequest;
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   // The official portal only on public addresses; a test portal the operator configured may be on a private network.
-  const egress = (maxBytes: number): EgressOptions => ({ timeoutMs, maxBytes, overLimit: 'fail', anyPort: true, ...(official ? {} : { allowed: () => true }) });
+  const egress = (maxBytes: number, ms: number): EgressOptions => ({ timeoutMs: ms, maxBytes, overLimit: 'fail', anyPort: true, ...(official ? {} : { allowed: () => true }) });
+  const now = options.now ?? Date.now;
 
-  async function send(path: string, req: GuardedRequest, maxBytes: number): Promise<EgressResponse> {
+  async function send(path: string, req: GuardedRequest, maxBytes: number, step?: StepLimit): Promise<EgressResponse> {
+    const left = step ? step.deadline - now() : timeoutMs;
+    if (left <= 0 || step?.signal?.aborted) throw new TaxPortalError('TOO_SLOW');
     try {
-      return await request(`${prefix}${path}`, req, egress(maxBytes));
+      return await request(`${prefix}${path}`, req, egress(maxBytes, Math.min(timeoutMs, left)));
     } catch (error) {
+      if (error instanceof EgressError && error.code === 'timeout' && step && step.deadline - now() <= 0) throw new TaxPortalError('TOO_SLOW');
       if (error instanceof EgressError && error.code === 'too_large') throw new TaxPortalError('TOO_LARGE');
       // A refused address, a timeout, DNS or the network: the portal cannot be reached.
       throw new TaxPortalError('UNAVAILABLE');
@@ -207,7 +220,7 @@ export function createTaxPortalClient(options: TaxPortalOptions = {}): TaxPortal
       throw failure(r);
     },
 
-    async purchaseInvoices(token, from, to) {
+    async purchaseInvoices(token, from, to, step) {
       const answers: PortalAnswer[] = QUERIES.map((q) => ({ query: q.query, rows: [] }));
       let rows = 0;
       let first = true;
@@ -218,7 +231,7 @@ export function createTaxPortalClient(options: TaxPortalOptions = {}): TaxPortal
             if (page >= maxPages) throw new TaxPortalError('TOO_LARGE');
             if (!first) await sleep(gapMs);
             first = false;
-            const r = await send(`${q.path}?sort=tdlap:desc,khmshdon:asc,shdon:desc&size=${pageSize}&page=${page}&search=${search}`, authorized(token), MAX_JSON_BYTES);
+            const r = await send(`${q.path}?sort=tdlap:desc,khmshdon:asc,shdon:desc&size=${pageSize}&page=${page}&search=${search}`, authorized(token), MAX_JSON_BYTES, step);
             if (r.status !== 200 || isHtml(r)) throw failure(r);
             const parsed = zPage.safeParse(parsePortalJson(r.body));
             if (!parsed.success) throw new TaxPortalError('BAD_ANSWER');
@@ -234,10 +247,10 @@ export function createTaxPortalClient(options: TaxPortalOptions = {}): TaxPortal
       return answers;
     },
 
-    async invoiceXml(token, invoice) {
+    async invoiceXml(token, invoice, step) {
       const params = new URLSearchParams({ nbmst: invoice.sellerTaxCode, khhdon: invoice.series, shdon: invoice.number, khmshdon: invoice.template ?? '1' });
       await sleep(gapMs);
-      const r = await send(`/query/invoices/export-xml?${params.toString()}`, { method: 'GET', headers: { accept: '*/*', authorization: `Bearer ${token}` } }, MAX_XML_BYTES);
+      const r = await send(`/query/invoices/export-xml?${params.toString()}`, { method: 'GET', headers: { accept: '*/*', authorization: `Bearer ${token}` } }, MAX_XML_BYTES, step);
       // The portal answers 500 (or 404) for an invoice it has no XML for: that invoice's failure, not an outage.
       if ((r.status === 500 || r.status === 404) && !isHtml(r)) throw new TaxPortalError('BAD_ANSWER');
       if (r.status !== 200 || isHtml(r)) throw failure(r);
