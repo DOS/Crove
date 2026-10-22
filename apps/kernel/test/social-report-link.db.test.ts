@@ -3,6 +3,8 @@
 // through it. The public side runs as the API login role with no org context, as the HTTP edge does. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -244,6 +246,64 @@ suite('social report links on PostgreSQL (#643)', () => {
       return out;
     });
     expect(starts).toEqual([Date.parse('2026-10-11T00:00:00Z'), Date.parse('2026-10-11T00:00:00Z'), Date.parse('2026-10-11T00:00:00Z')]);
+  });
+
+  // #1087: a Story's own counts (STORY_METRIC_NAMES of packages/channel) reach the report like the post counts, and
+  // are not part of a post's score.
+  it("counts a Story's replies, taps, exits, swipes, follows and profile visits in the report (#1087)", async () => {
+    const o = await org();
+    const ig = await connection(o.orgId, o.owner, 'Instagram shop');
+    const story = await published(o, ig, 'Tin 24 giờ', '2026-10-05T03:00:00Z', {
+      reach: 300, views: 420, shares: 2, replies: 7, tapsForward: 120, tapsBack: 15, exits: 30, nextStory: 12, follows: 3, profileVisits: 9,
+    });
+    await admin((c) => c.query(`UPDATE crove_social.post_variant SET settings = settings || '{"postType":"story"}'::jsonb WHERE post_id = $1`, [story]));
+    await published(o, ig, 'Bài thường', '2026-10-06T03:00:00Z', { reach: 100, reactions: 5 });
+    const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { periodStart: '2026-10-01T00:00:00+07:00', periodEnd: '2026-11-01T00:00:00+07:00' });
+    const page = (await view(token)) as ReportPage;
+    const storyCounts = { replies: 7, tapsForward: 120, tapsBack: 15, exits: 30, nextStory: 12, follows: 3, profileVisits: 9 };
+    expect(page.totals).toEqual({ reach: 400, views: 420, shares: 2, reactions: 5, ...storyCounts });
+    expect(page.channels).toEqual([{ channel: 'Instagram shop', provider: 'sandbox', posts: 2, totals: { reach: 400, views: 420, shares: 2, reactions: 5, ...storyCounts }, previous: { posts: 0, totals: {} } }]);
+    // The feed post's 5 reactions beat the Story's 2 shares: replies, taps and the rest do not make a post do better.
+    expect(page.top.map((p) => [p.excerpt, p.metrics])).toEqual([
+      ['Bài thường', { reach: 100, reactions: 5 }],
+      ['Tin 24 giờ', { reach: 300, views: 420, shares: 2, ...storyCounts }],
+    ]);
+  });
+
+  // #1087 re-created report_link_view with the Story names added and nothing else: for a report whose posts carry no
+  // Story counts, its output is byte for byte what the previous definition (migration 20261028200000) gives.
+  it('gives exactly the previous output for a report without Story counts (#1087)', async () => {
+    const o = await org();
+    const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
+    const zalo = await connection(o.orgId, o.owner, 'Zalo OA');
+    const all = { impressions: 900, reach: 700, reactions: 40, comments: 8, shares: 6, saves: 4, clicks: 3, views: 1200 };
+    const first = await published(o, fb, 'Khai trương', '2026-10-05T03:00:00Z', { ...all, secret_internal: 99, likes_raw: 'x' });
+    await published(o, zalo, 'Tin Zalo', '2026-10-06T03:00:00Z', { reach: 50, views: 80 });
+    await published(o, fb, 'Tháng trước', '2026-09-20T03:00:00Z', { reach: 30, reactions: 2 });
+    // A Story with only the names every post has still reports the same.
+    const story = await published(o, fb, 'Tin 24 giờ', '2026-10-07T03:00:00Z', { reach: 60, views: 90, shares: 1 });
+    await admin((c) => c.query(`UPDATE crove_social.post_variant SET settings = settings || '{"postType":"story"}'::jsonb WHERE post_id = $1`, [story]));
+    await shortLink(o, first, 1, { '2026-10-08': 5 });
+    const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', {
+      periodStart: '2026-10-01T00:00:00+07:00',
+      periodEnd: '2026-11-01T00:00:00+07:00',
+      title: 'Tháng 10',
+    });
+    const previous = readFileSync(join(MIGRATIONS, '20261028200000_crove_social_report_external.sql'), 'utf8');
+    const [now, before] = await admin(async (c) => {
+      const read = async () => (await c.query<{ page: string }>('SELECT crove_social.report_link_view($1)::text AS page', [token])).rows[0]?.page;
+      const current = await read();
+      await c.query('BEGIN');
+      try {
+        await c.query(previous);
+        return [current, await read()];
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    expect(now).toBeTruthy();
+    expect(now).toBe(before);
+    expect(JSON.parse(now as string)).toMatchObject({ posts: 3, totals: { reach: 810, linkClicks: 5 } });
   });
 
   it('lets only owners and admins make and revoke links, within the limits, and lists them without tokens', async () => {

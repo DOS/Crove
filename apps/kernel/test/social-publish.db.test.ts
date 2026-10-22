@@ -11,7 +11,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey, type BlobStore } from '@crove/kernel-runtime';
-import { captureKey, runCommentJob, runPinJob, runPlaylistJob, runPublishJob, runThreadJob, socialCommands, socialQueries, STORY_EXPIRED_KEY, STORY_FINAL_KEY, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
+import { captureKey, runCommentJob, runPinJob, runPlaylistJob, runPublishJob, runThreadJob, METRICS_INTERVAL_SECONDS, socialCommands, socialQueries, STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture, sweepMetrics, type BeginResult, type MetricsRow, type PostView } from '@crove/mod-social';
 import { shortLinkTarget } from '../src/short-link.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -1609,5 +1609,74 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(due.map((r) => r.variant_id)).not.toContain(story);
     const summary = await api.query<MetricsRow[]>('social.metrics.summary', {}, { actor: asUser(o.owner), orgId: o.orgId });
     expect(summary.find((r) => r.variantId === story)?.metrics).toEqual(final?.metrics);
+  });
+
+  // #1087: metrics_due leaves out a Story waiting for its final capture, by storyCapture's own rule, so waiting Stories
+  // never fill a pass's 200 rows and hold back a post that is due. The variants get a provider of their own, so the
+  // other tests' variants stay out of these scans.
+  it('leaves Stories waiting for their final capture out of metrics_due, so a due feed post still comes in the pass (#1087)', async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    const { variants } = await duePost(o);
+    const template = variants[0] as string;
+    expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, template, 'sandbox')).toMatchObject({ status: 'published' });
+    const provider = `story_due_${randomUUID().slice(0, 6)}`;
+    // Copies of the published variant, each in a post of its own, published `hours` ago with these settings and never
+    // captured.
+    const copies = (count: number, hours: number, settings: Record<string, unknown>) =>
+      admin(async (c) => {
+        const posts: string[] = Array.from({ length: count }, () => randomUUID());
+        const ids: string[] = Array.from({ length: count }, () => randomUUID());
+        await c.query(
+          `INSERT INTO crove_social.post SELECT (jsonb_populate_record(NULL::crove_social.post, to_jsonb(p) || jsonb_build_object('id', x.pid))).*
+           FROM crove_social.post p, unnest($2::uuid[]) x(pid) WHERE p.id = (SELECT post_id FROM crove_social.post_variant WHERE id = $1)`,
+          [template, posts],
+        );
+        await c.query(
+          `INSERT INTO crove_social.post_variant SELECT (jsonb_populate_record(NULL::crove_social.post_variant, to_jsonb(v) || jsonb_build_object(
+             'id', x.vid, 'post_id', x.pid, 'provider', $3::text, 'external_post_id', 'ext-' || x.vid, 'settings', $4::jsonb,
+             'published_at', now() - make_interval(mins => $5::int)))).*
+           FROM crove_social.post_variant v, unnest($2::uuid[], $6::uuid[]) x(vid, pid) WHERE v.id = $1`,
+          [template, ids, provider, JSON.stringify(settings), Math.round(hours * 60), posts],
+        );
+        return ids;
+      });
+    const due = (limit: number) =>
+      admin(async (c) => (await c.query<{ variant_id: string }>('SELECT variant_id FROM crove_social.metrics_due($1, ARRAY[$2], $3)', [limit, provider, METRICS_INTERVAL_SECONDS])).rows.map((r) => r.variant_id));
+
+    // 250 Stories 18 hours in, waiting, and a feed post published 20 hours ago and never captured: before #1087 the
+    // Stories came first (no capture, published later) and filled the 200 rows.
+    const waiting = await copies(250, 18, { postType: 'story' });
+    const [feed] = await copies(1, 20, {});
+    const pass = await due(200);
+    expect(pass).toContain(feed);
+    expect(pass.filter((id) => waiting.includes(id))).toEqual([]);
+
+    // Around the edges, metrics_due returns a Story exactly when storyCapture would not wait; a Reel, a feed post and
+    // a post type the adapters do not know are never held back.
+    const now = new Date();
+    const cases: { hours: number; settings: Record<string, unknown>; due: boolean }[] = [
+      { hours: 1, settings: { postType: 'story' }, due: true },
+      { hours: 16.9, settings: { postType: 'story' }, due: true },
+      { hours: 17.1, settings: { postType: 'story' }, due: false },
+      { hours: 21.9, settings: { postType: 'story' }, due: false },
+      { hours: 22.1, settings: { postType: 'story' }, due: true },
+      { hours: 25, settings: { postType: 'story' }, due: true },
+      { hours: 18, settings: { postType: 'reel' }, due: true },
+      { hours: 18, settings: { postType: 'feed' }, due: true },
+      { hours: 18, settings: { postType: 'Story' }, due: true },
+      { hours: 18, settings: { postType: ['story'] }, due: true },
+    ];
+    const made: { id: string; due: boolean; hours: number; story: boolean }[] = [];
+    for (const k of cases) made.push({ id: (await copies(1, k.hours, k.settings))[0] as string, due: k.due, hours: k.hours, story: k.settings.postType === 'story' });
+    const all = await due(1000);
+    for (const m of made) {
+      expect([m.hours, all.includes(m.id)]).toEqual([m.hours, m.due]);
+      if (m.story) expect(storyCapture(new Date(now.getTime() - m.hours * 3_600_000), now, METRICS_INTERVAL_SECONDS * 1000) !== 'wait').toBe(m.due);
+    }
+    // A Story captured in its final window is not due again before its end, as before.
+    const [captured] = await copies(1, 22.5, { postType: 'story' });
+    await admin((c) => c.query(`INSERT INTO crove_social.metric_snapshot (org_id, variant_id, capture_key, metrics) VALUES ($1, $2, $3, '{"reach": 1}')`, [o.orgId, captured, STORY_FINAL_KEY]));
+    expect(await due(1000)).not.toContain(captured);
   });
 });
