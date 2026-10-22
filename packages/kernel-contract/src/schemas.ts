@@ -1614,6 +1614,7 @@ export const zSocialQueue = z.object({
 export const zSocialReportLink = z.object({
   id: zId,
   title: z.string().nullable(),
+  note: z.string().nullable(),
   periodStart: z.string(),
   periodEnd: z.string(),
   connectionIds: z.array(zId),
@@ -1628,6 +1629,56 @@ export const zSocialReportLinkCreate = z.strictObject({
   connectionIds: z.array(zId).max(50).optional(),
   title: z.string().trim().min(1).max(120).optional(),
   days: z.number().int().min(1).max(90).optional(),
+  // The agency's note on the report (#1056), plain text.
+  note: z.string().max(2000).optional(),
+});
+
+// Monthly goals (#1056): a scope's targets (the org's when connectionId is null), and how the month stands.
+const GOAL_METRIC_NAMES = ['posts', 'reach', 'impressions', 'engagement', 'followersGained'] as const;
+const zGoalTarget = z.number().int().min(1).max(1_000_000_000_000).nullable();
+export const zSocialGoalTargets = z.object({
+  posts: zGoalTarget,
+  reach: zGoalTarget,
+  impressions: zGoalTarget,
+  engagement: zGoalTarget,
+  followersGained: zGoalTarget,
+});
+export const zSocialGoalSet = z.strictObject({
+  connectionId: zId.nullable(),
+  targets: z.strictObject({
+    posts: zGoalTarget.optional(),
+    reach: zGoalTarget.optional(),
+    impressions: zGoalTarget.optional(),
+    engagement: zGoalTarget.optional(),
+    followersGained: zGoalTarget.optional(),
+  }),
+  timeZone: z.string().min(1).max(64),
+});
+export const zSocialGoalProgress = z.object({
+  metric: z.enum(GOAL_METRIC_NAMES),
+  target: z.number(),
+  actual: z.number().nullable(),
+  projected: z.number().nullable(),
+  ratio: z.number().nullable(),
+  status: z.enum(['met', 'missed', 'on_track', 'behind', 'no_data']),
+});
+export const zSocialGoals = z.object({
+  // null until an owner or admin sets a goal.
+  timeZone: z.string().nullable(),
+  month: z.string(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  goals: z.array(
+    z.object({
+      id: zId,
+      connectionId: zId.nullable(),
+      timeZone: z.string(),
+      targets: zSocialGoalTargets,
+      updatedBy: zId,
+      updatedAt: z.string(),
+      progress: z.array(zSocialGoalProgress),
+    }),
+  ),
 });
 
 // A schedule that mails the client report (#704), with its latest sends and each mail's delivery status.

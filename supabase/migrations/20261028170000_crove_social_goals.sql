@@ -1,36 +1,54 @@
--- Crove Social: banned and sensitive words, warned or blocked before approval (issue #1055). Idempotent; applied files
--- stay untouched.
+-- Crove Social: monthly goals per org or channel, and an agency note on client report links (issue #1056).
+-- Idempotent; applied files stay untouched.
 --
--- crove_social.banned_word  a word or phrase the org does not want in its posts. level 'warn' shows it to the writer and
---                           the reviewer; 'block' also refuses social.post.submit, the approval in social.variant.decide
---                           and social.variant.schedule (422 BANNED_WORDS), and keeps evergreen and recurring copies
---                           with it as drafts. phrase is as the owner or admin typed it (NFC); normalized is the phrase
---                           the matcher compares (NFC, format characters dropped, spaces collapsed, lower case), one per
---                           org. reason is shown with the match. connection_ids: the channels it applies to, every
---                           channel when empty. Owners and admins add and remove words (the commands check the role);
---                           every member reads them, for the composer. A word is never edited: it is removed and added
---                           again. Crove ships no list of its own.
+-- crove_social.goal  the org's monthly targets, as an agency's contract states them ("12 posts and 50k reach a
+--                    month"): one row for the whole org (connection_id NULL) and at most one per channel. Each count is
+--                    a target from 1 to 10^12 or NULL (no target); a row has at least one. time_zone is the zone the
+--                    months are counted in, the same on every row of an org (social.goal.set keeps it so). Owners and
+--                    admins set and remove goals (the commands check the role); every member reads them. A channel's
+--                    goals go with the channel. Progress is worked out when it is shown, never stored.
+-- crove_social.report_link.note  the agency's own comment on a client report (plain text, at most 2000 characters),
+--                    set when the link is made; the report page shows it as text. The public view of the report
+--                    (report_link_view) returns it in its own migration.
+-- crove_kernel.org_purge (#1024)  also deletes the org's goals, the org-wide row included (it has no connection to
+--                    cascade from, and a kept connection keeps its own).
 SET LOCAL lock_timeout = '2s';
 
-CREATE TABLE IF NOT EXISTS crove_social.banned_word (
+CREATE TABLE IF NOT EXISTS crove_social.goal (
   org_id uuid NOT NULL REFERENCES crove_kernel.tenant (org_id) ON DELETE CASCADE,
   id uuid NOT NULL DEFAULT crove_kernel.uuid_v7(),
-  phrase text NOT NULL CHECK (length(phrase) BETWEEN 1 AND 100),
-  normalized text NOT NULL CHECK (length(normalized) BETWEEN 1 AND 200),
-  level text NOT NULL CHECK (level IN ('warn', 'block')),
-  reason text CHECK (reason IS NULL OR length(reason) BETWEEN 1 AND 200),
-  connection_ids uuid[] NOT NULL DEFAULT '{}' CHECK (cardinality(connection_ids) <= 50),
+  -- NULL: the whole org, every channel together.
+  connection_id uuid,
+  time_zone text NOT NULL DEFAULT 'Asia/Ho_Chi_Minh' CHECK (length(time_zone) BETWEEN 1 AND 64),
+  posts bigint CHECK (posts IS NULL OR posts BETWEEN 1 AND 1000000000000),
+  reach bigint CHECK (reach IS NULL OR reach BETWEEN 1 AND 1000000000000),
+  impressions bigint CHECK (impressions IS NULL OR impressions BETWEEN 1 AND 1000000000000),
+  engagement bigint CHECK (engagement IS NULL OR engagement BETWEEN 1 AND 1000000000000),
+  followers_gained bigint CHECK (followers_gained IS NULL OR followers_gained BETWEEN 1 AND 1000000000000),
   created_by uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (org_id, id)
+  updated_by uuid NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (org_id, id),
+  CONSTRAINT goal_some_target CHECK (num_nonnulls(posts, reach, impressions, engagement, followers_gained) > 0),
+  CONSTRAINT goal_connection_fk FOREIGN KEY (org_id, connection_id) REFERENCES crove_kernel.channel_connection (org_id, id) ON DELETE CASCADE
 );
--- One entry per phrase as the matcher compares it.
-CREATE UNIQUE INDEX IF NOT EXISTS banned_word_normalized_uq ON crove_social.banned_word (org_id, normalized);
-SELECT crove_kernel.apply_tenant_rls('crove_social.banned_word');
--- A word is added and removed, never changed.
-REVOKE UPDATE ON crove_social.banned_word FROM crove_tenant;
+-- One row per scope: the org's, and each channel's.
+CREATE UNIQUE INDEX IF NOT EXISTS goal_scope_uq ON crove_social.goal (org_id, connection_id) NULLS NOT DISTINCT;
+SELECT crove_kernel.apply_tenant_rls('crove_social.goal');
+-- A goal changes its targets and zone; never its org, scope or author.
+REVOKE UPDATE ON crove_social.goal FROM crove_tenant;
+GRANT UPDATE (time_zone, posts, reach, impressions, engagement, followers_gained, updated_by, updated_at) ON crove_social.goal TO crove_tenant;
 
--- The org purge (#1024) deletes crove_social.banned_word with the org's other Social rows (#1055). The function
+ALTER TABLE crove_social.report_link ADD COLUMN IF NOT EXISTS note text;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conname = 'report_link_note_length' AND conrelid = 'crove_social.report_link'::regclass) THEN
+    ALTER TABLE crove_social.report_link ADD CONSTRAINT report_link_note_length CHECK (note IS NULL OR length(note) BETWEEN 1 AND 2000);
+  END IF;
+END $$;
+
+-- The org purge (#1024) deletes crove_social.goal with the org's other Social rows (#1056). The function
 -- is copied verbatim from 20261028150000_crove_social_report_branding.sql, with only this table added to v_social;
 -- the runbook's deletion map already says every crove_social table but post_approval is deleted.
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
@@ -77,7 +95,7 @@ DECLARE
     'crove_social.post_comment', 'crove_social.post_media', 'crove_social.post_version', 'crove_social.publish_hold', 'crove_social.report_link',
     'crove_social.report_schedule_run', 'crove_social.report_schedule', 'crove_social.review_feedback',
     'crove_social.review_link_post', 'crove_social.review_link', 'crove_social.short_link_click',
-    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.banned_word'];
+    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.goal'];
 BEGIN
   -- Also refuses a definer owner or another role reached through a mistaken grant: only the worker login, in the
   -- sealed system context of the org it purges (execute() of kernel.org.purge).

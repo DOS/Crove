@@ -51,6 +51,8 @@ import {
   zSocialReportSchedule,
   zSocialReportScheduleSave,
   zSocialReportLinkCreate,
+  zSocialGoals,
+  zSocialGoalSet,
   zSocialLinkPreview,
   zSocialNotificationKind,
   zSocialNotifications,
@@ -508,6 +510,12 @@ export const contract = {
       remove: oc.input(z.strictObject({ wordId: zId })).output(z.object({ wordId: zId })),
     },
     // Client report links (#643): owners and admins make and revoke them; the token is in the create answer only.
+    // Monthly goals (#1056): every member sees the month's progress; owners and admins set and remove goals.
+    goals: {
+      progress: oc.input(z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional() })).output(zSocialGoals),
+      set: oc.input(zSocialGoalSet).output(z.object({ goalId: zId.nullable() })),
+      remove: oc.input(z.strictObject({ connectionId: zId.nullable() })).output(z.object({ goalId: zId })),
+    },
     reportLinks: {
       list: oc.input(z.object({})).output(z.array(zSocialReportLink)),
       create: oc.input(zSocialReportLinkCreate).output(z.object({ linkId: zId, token: z.string(), expiresAt: z.string() })),

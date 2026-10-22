@@ -13,6 +13,8 @@ export * from './versions.ts';
 export * from './domain/banned-words.ts';
 export * from './banned-words.ts';
 export * from './metrics.ts';
+export * from './domain/goals.ts';
+export * from './goals.ts';
 export * from './plan-export.ts';
 export * from './domain/team-report.ts';
 export * from './team-report.ts';

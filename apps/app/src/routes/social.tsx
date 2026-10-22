@@ -22,6 +22,7 @@ import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
 import { PlanFromPosts, PlanReviewCard } from '../components/social-plan-review.tsx';
 import { ReportLinks } from '../components/social-report-links.tsx';
+import { GoalsCard } from '../components/social-goals.tsx';
 import { TeamReport } from '../components/social-team-report.tsx';
 import { ReportSchedules } from '../components/social-report-schedules.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
@@ -767,6 +768,7 @@ export function SocialPage() {
         </TabsContent>
         <TabsContent value="metrics">
           <div className="space-y-4">
+            <GoalsCard channels={channels.data ?? []} />
             <Metrics slug={slug} names={names} labelId={search.label} />
             <TeamReport key={slug} />
             <ReportLinks channels={channels.data ?? []} />

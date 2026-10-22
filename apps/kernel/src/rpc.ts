@@ -656,6 +656,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         add: os.social.bannedWords.add.handler(socialCommand('social.banned_word.add')),
         remove: os.social.bannedWords.remove.handler(socialCommand('social.banned_word.remove')),
       },
+      goals: {
+        progress: os.social.goals.progress.handler(socialQuery('social.goal.progress')),
+        set: os.social.goals.set.handler(socialCommand('social.goal.set')),
+        remove: os.social.goals.remove.handler(socialCommand('social.goal.remove')),
+      },
       reportLinks: {
         list: os.social.reportLinks.list.handler(socialQuery('social.report_link.list')),
         create: os.social.reportLinks.create.handler(socialCommand('social.report_link.create')),

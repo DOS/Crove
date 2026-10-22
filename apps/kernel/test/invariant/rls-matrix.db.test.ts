@@ -44,6 +44,8 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_social.banned_word',
+  'crove_social.external_import',
+  'crove_social.external_post',
   'crove_social.goal',
   'crove_social.report_branding',
 ]);
@@ -666,6 +668,28 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       return {
         setup: [{ table: 'crove_social.chat_alert', values: alert }],
         row: { org_id: o.id, alert_id: alert.id, key_id: 'rls-matrix', envelope: '\\x00' },
+      };
+    },
+  },
+  // The worker's last bring-in of a channel's posts published outside Crove (#1054): one row per connection, so each
+  // row gets its own fresh connection.
+  'crove_social.external_import': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, found: 2 },
+      };
+    },
+  },
+  // A post a channel published outside Crove (#1054), brought in by the worker for its counts: one row per connection
+  // and platform id.
+  'crove_social.external_post': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, external_post_id: `rls_${tag()}`, published_at: '2026-10-20T00:00:00Z' },
       };
     },
   },

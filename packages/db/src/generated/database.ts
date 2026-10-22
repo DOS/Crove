@@ -83,6 +83,7 @@ export interface CroveSocialSchema {
   'crove_social.chat_alert': SocialChatAlertTable;
   'crove_social.feed': SocialFeedTable;
   'crove_social.feed_item': SocialFeedItemTable;
+  'crove_social.goal': SocialGoalTable;
   'crove_social.idea': SocialIdeaTable;
   'crove_social.idea_label': SocialIdeaLabelTable;
   'crove_social.label': SocialLabelTable;
@@ -1070,6 +1071,23 @@ export interface SocialFeedTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
+/** crove_social.goal */
+export interface SocialGoalTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  connection_id: ColumnType<string | null, string | null, NotGranted>;
+  time_zone: Generated<string>;
+  posts: string | null;
+  reach: string | null;
+  impressions: string | null;
+  engagement: string | null;
+  followers_gained: string | null;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_by: string;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 /** crove_social.idea_label */
 export interface SocialIdeaLabelTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -1371,6 +1389,7 @@ export interface SocialReportLinkTable {
   revoked_by: string | null;
   schedule_id: ColumnType<string | null, string | null, NotGranted>;
   mail_message_id: ColumnType<string | null, string | null, NotGranted>;
+  note: ColumnType<string | null, string | null, NotGranted>;
 }
 
 /** crove_social.report_schedule_run */
