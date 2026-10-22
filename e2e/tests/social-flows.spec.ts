@@ -1,12 +1,13 @@
 // Crove Social flows past the basic publish (issue #590), on the offline sandbox channel: a channel that needs two
 // approvals, retrying a failed channel and settling channels Crove cannot account for, the media library, evergreen
-// reposting, the metrics of a published post, and the AI drafting card on a server without a model. Each test signs
-// up its own user and org. States the worker reaches only on a real platform (a refusal, an unknown outcome, a metrics
+// reposting, the metrics of a published post, and the AI drafting card on a server without a model. Each test has
+// its own users, created confirmed without the sign-up form (signInNewUser: the suite shares one sign-up budget), and
+// its own org. States the worker reaches only on a real platform (a refusal, an unknown outcome, a metrics
 // capture) are written with SQL, as social.spec.ts moves a slot forward.
 import { crc32, deflateSync } from 'node:zlib';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { exec, sql } from '../lib/db.ts';
-import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 
 // The schedule form takes local times; the browser runs in the queue's default zone whatever the machine's zone is.
 const TIME_ZONE = 'Asia/Ho_Chi_Minh';
@@ -90,7 +91,7 @@ async function publishOnSandbox(page: Page, channel: string, body: string): Prom
 }
 
 test('a channel that needs two approvals waits for a second admin, then is approved', async ({ page, browser }) => {
-  await signUp(page, newEmail('social-steps'));
+  await signInNewUser(page, newEmail('social-steps'));
   const slug = await createOrg(page, 'Công ty Hai Người Duyệt');
   const channel = 'Trang Duyệt Kép';
   await connectSandbox(page, channel);
@@ -118,11 +119,11 @@ test('a channel that needs two approvals waits for a second admin, then is appro
   await expect(card.getByText('Chờ duyệt', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Duyệt', exact: true })).toBeDisabled();
 
-  // A second person signs up in a browser of their own and is made an admin of the org.
+  // A second person signs in with a browser of their own and is made an admin of the org.
   const reviewer = newEmail('social-reviewer');
   const reviewerContext = await browser.newContext({ baseURL: new URL(postUrl).origin, locale: 'vi-VN', timezoneId: TIME_ZONE });
   const reviewerPage = await reviewerContext.newPage();
-  await signUp(reviewerPage, reviewer);
+  await signInNewUser(reviewerPage, reviewer);
   await expect
     .poll(() => sql<{ id: string }>(`SELECT id FROM crove_kernel.user_account WHERE lower(email) = lower(:'email')`, { email: reviewer }).length)
     .toBe(1);
@@ -152,7 +153,7 @@ test('a channel that needs two approvals waits for a second admin, then is appro
 });
 
 test('retries a failed channel and settles the channels Crove could not account for', async ({ page }) => {
-  await signUp(page, newEmail('social-retry'));
+  await signInNewUser(page, newEmail('social-retry'));
   await createOrg(page, 'Công ty Đăng Lại');
   const failed = 'Kênh Bị Từ Chối';
   const seen = 'Kênh Đã Thấy Bài';
@@ -213,7 +214,7 @@ test('retries a failed channel and settles the channels Crove could not account 
 });
 
 test('keeps uploaded images in the library with the posts that use them', async ({ page }) => {
-  await signUp(page, newEmail('social-library'));
+  await signInNewUser(page, newEmail('social-library'));
   await createOrg(page, 'Công ty Thư Viện');
   await connectSandbox(page, 'Trang Thư Viện');
 
@@ -250,7 +251,7 @@ test('keeps uploaded images in the library with the posts that use them', async 
 });
 
 test('turns on evergreen reposting for a published post', async ({ page }) => {
-  await signUp(page, newEmail('social-evergreen'));
+  await signInNewUser(page, newEmail('social-evergreen'));
   await createOrg(page, 'Công ty Đăng Lại Định Kỳ');
   const postId = await publishOnSandbox(page, 'Trang Định Kỳ', 'Bài đăng lại mỗi tháng');
 
@@ -273,7 +274,7 @@ test('turns on evergreen reposting for a published post', async ({ page }) => {
 });
 
 test('shows the latest metrics of a published channel on the post and in the Metrics tab, and in a client report', async ({ page, browser }) => {
-  await signUp(page, newEmail('social-metrics'));
+  await signInNewUser(page, newEmail('social-metrics'));
   await createOrg(page, 'Công ty Số Liệu');
   const channel = 'Trang Số Liệu';
   const body = 'Bài có số liệu tương tác';
@@ -364,7 +365,7 @@ test('says AI drafting is off on a server without a model', async ({ page, reque
   const config = (await (await request.get('/api/config')).json()) as { aiEnabled?: boolean };
   test.skip(config.aiEnabled === true, 'this stack has an AI model configured; AI drafts are not tested end to end');
 
-  await signUp(page, newEmail('social-ai'));
+  await signInNewUser(page, newEmail('social-ai'));
   await createOrg(page, 'Công ty Không AI');
   await connectSandbox(page, 'Trang Không AI');
   await compose(page, 'Bài viết tay, không nhờ AI');
@@ -376,7 +377,7 @@ test('says AI drafting is off on a server without a model', async ({ page, reque
 });
 
 test('approves several posts at once from the review list (#635)', async ({ page }) => {
-  await signUp(page, newEmail('social-bulk'));
+  await signInNewUser(page, newEmail('social-bulk'));
   await createOrg(page, 'Công ty Duyệt Nhiều');
   await connectSandbox(page, 'Trang Duyệt Nhiều');
   await page.getByRole('link', { name: 'Quay lại' }).click();
@@ -395,7 +396,7 @@ test('approves several posts at once from the review list (#635)', async ({ page
 });
 
 test('keeps a post being written through a reload, and offers it back (#634)', async ({ page }) => {
-  await signUp(page, newEmail('social-autosave'));
+  await signInNewUser(page, newEmail('social-autosave'));
   await createOrg(page, 'Công ty Lưu Nháp');
   await connectSandbox(page, 'Trang Lưu Nháp');
   await compose(page, 'Bài đang viết dở 🎉');
@@ -417,7 +418,7 @@ test('keeps a post being written through a reload, and offers it back (#634)', a
 });
 
 test('lets an owner approve and schedule their own post in one step (#638)', async ({ page }) => {
-  await signUp(page, newEmail('social-one-step'));
+  await signInNewUser(page, newEmail('social-one-step'));
   await createOrg(page, 'Công ty Một Bước');
   await connectSandbox(page, 'Trang Một Bước');
   // The channel's queue gives the post its slot.
@@ -434,7 +435,7 @@ test('lets an owner approve and schedule their own post in one step (#638)', asy
 });
 
 test('posts a Story of one image, with no text, in a phone frame (#644)', async ({ page }) => {
-  await signUp(page, newEmail('social-story'));
+  await signInNewUser(page, newEmail('social-story'));
   await createOrg(page, 'Công ty Tin');
   await connectSandbox(page, 'Trang Tin');
   await compose(page, 'Chữ này không lên Tin');
@@ -458,7 +459,7 @@ test('posts a Story of one image, with no text, in a phone frame (#644)', async 
 });
 
 test('crops a post image to a frame, and the server reads the new size (#636)', async ({ page }) => {
-  await signUp(page, newEmail('social-crop'));
+  await signInNewUser(page, newEmail('social-crop'));
   await createOrg(page, 'Công ty Cắt Ảnh');
   await connectSandbox(page, 'Trang Cắt Ảnh');
   await compose(page, 'Bài có ảnh dọc');
@@ -478,7 +479,7 @@ test('crops a post image to a frame, and the server reads the new size (#636)', 
   expect(media).toEqual([{ image_width: 1080, image_height: 1080, content_type: 'image/png' }]);
 });
 test('turns an idea on the board into a draft, which moves it to Drafted (#701)', async ({ page }) => {
-  await signUp(page, newEmail('social-idea'));
+  await signInNewUser(page, newEmail('social-idea'));
   await createOrg(page, 'Công ty Ý Tưởng');
   await connectSandbox(page, 'Trang Ý Tưởng');
   await page.getByRole('link', { name: 'Quay lại' }).click();
@@ -511,7 +512,7 @@ test('turns an idea on the board into a draft, which moves it to Drafted (#701)'
 });
 
 test('moves a draft to review on the board and approves it with four-eyes; an illegal drop sends nothing (#1022)', async ({ page, browser }) => {
-  await signUp(page, newEmail('social-board'));
+  await signInNewUser(page, newEmail('social-board'));
   const slug = await createOrg(page, 'Công ty Bảng Bài');
   await connectSandbox(page, 'Trang Bảng Bài');
   // Four-eyes on the channel (#740): the author approves nothing of their own post there.
@@ -568,7 +569,7 @@ test('moves a draft to review on the board and approves it with four-eyes; an il
   const reviewer = newEmail('social-board-reviewer');
   const reviewerContext = await browser.newContext({ baseURL: new URL(page.url()).origin, locale: 'vi-VN', timezoneId: TIME_ZONE });
   const reviewerPage = await reviewerContext.newPage();
-  await signUp(reviewerPage, reviewer);
+  await signInNewUser(reviewerPage, reviewer);
   await expect
     .poll(() => sql<{ id: string }>(`SELECT id FROM crove_kernel.user_account WHERE lower(email) = lower(:'email')`, { email: reviewer }).length)
     .toBe(1);
