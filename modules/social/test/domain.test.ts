@@ -9,6 +9,9 @@ import {
   contentHash,
   countLinks,
   countText,
+  LINKEDIN_VISIBILITY,
+  replySettingOf,
+  THREADS_REPLY_SETTINGS,
   sentText,
   effectiveContent,
   needsPublicUrls,
@@ -306,6 +309,28 @@ describe('validateVariant', () => {
     expect(codes({ replySettings: 'verified' })).toEqual(['REPLY_SETTINGS_INVALID']);
     // A Threads poll has no length of its own, so none is checked there.
     expect(validateVariant({ provider: 'threads', body: 'x', title: null, media: [], settings: { poll: { options: ['a', 'b'], durationMinutes: 1 } } })).toEqual([]);
+    // Followers is a Threads choice, not an X one.
+    expect(codes({ replySettings: 'followers' })).toEqual(['REPLY_SETTINGS_INVALID']);
+  });
+
+  it('checks who may reply to a Threads post and who sees a LinkedIn post (#983)', () => {
+    const check = (provider: 'threads' | 'linkedin' | 'facebook_page', settings: Record<string, unknown>) => validateVariant({ provider, body: 'Khai trương', title: null, media: [], settings });
+    for (const replySettings of ['everyone', 'following', 'mentionedUsers', 'followers']) expect(check('threads', { replySettings })).toEqual([]);
+    expect(check('threads', { replySettings: 'accounts_you_follow' })).toEqual([{ code: 'REPLY_SETTINGS_INVALID', field: 'settings.replySettings', limit: null, actual: null }]);
+    expect(check('threads', { replySettings: 7 }).map((i) => i.code)).toEqual(['REPLY_SETTINGS_INVALID']);
+    for (const visibility of ['public', 'connections', 'loggedIn']) expect(check('linkedin', { visibility })).toEqual([]);
+    expect(check('linkedin', {})).toEqual([]);
+    expect(check('linkedin', { visibility: 'CONNECTIONS' })).toEqual([{ code: 'VISIBILITY_INVALID', field: 'settings.visibility', limit: null, actual: null }]);
+    expect(check('linkedin', { visibility: 'unlisted' }).map((i) => i.code)).toEqual(['VISIBILITY_INVALID']);
+    // A channel without these settings ignores them, as before.
+    expect(check('facebook_page', { replySettings: 'followers', visibility: 'connections' })).toEqual([]);
+    expect(replySettingOf('threads', { replySettings: 'followers' })).toBe('followers');
+    expect(replySettingOf('x', { replySettings: 'followers' })).toBeNull();
+    expect(replySettingOf('threads', { replySettings: 'everyone' })).toBeNull();
+    expect(replySettingOf('linkedin', { replySettings: 'following' })).toBeNull();
+    // The adapters take every value the composer offers.
+    for (const replySettings of THREADS_REPLY_SETTINGS) expect(channel.threadsReplyControlOf({ replySettings })).not.toBe('invalid');
+    for (const visibility of LINKEDIN_VISIBILITY) expect(channel.linkedinVisibilityOf({ visibility })).not.toBe('invalid');
   });
 
   it('checks Google Business Profile posts, and refuses their settings elsewhere (#709)', () => {
