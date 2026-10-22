@@ -49,7 +49,7 @@ The relay here claims and drops. The worker also hands each claimed event to its
 | `finance.vendors.list` p95 | 1.1 s | none |
 | `finance.vendors.list` with a search term, p95 | 3.8 s | none |
 
-Every plan target passes. The vendor list is the slow query at this size (#999).
+Every plan target passes. The vendor list was the slow query at this size (#999, fixed below).
 
 2026-10-21, same container, default flags, after #1010 added the lock count:
 
@@ -61,3 +61,10 @@ Every plan target passes. The vendor list is the slow query at this size (#999).
 | Context guard cost per entry at p95 / max locks | 75.1 / 77.3 µs |
 
 At 230 locks the guard adds about 0.08 ms to a command whose p95 is 15.8 ms, under 0.5%. The `pg_locks` read stays (#105).
+
+2026-10-22, after #999 (vendor list ordered on `party_name_idx`, the search term matched once, an index on `purchase_document (org_id, party_id, direction)`):
+
+| Query | Before | After |
+|---|---|---|
+| `finance.vendors.list` p95 | 831 ms | 11.8 ms |
+| `finance.vendors.list` with a search term, p95 | 3315 ms | 71.6 ms |
