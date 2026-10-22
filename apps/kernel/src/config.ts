@@ -275,6 +275,10 @@ const schema = z.object({
   // LinkedIn Company Pages (#1077): true once the LinkedIn app has the Community Management API (w_organization_social,
   // r_organization_admin). Callback URL: PUBLIC_URL/channels/oauth/linkedin_page/callback.
   CHANNEL_LINKEDIN_ORGANIZATIONS: z.enum(['true', 'false']).default('false'),
+  // A separate LinkedIn app for Company Pages: LinkedIn grants the Community Management API only to an app with no other
+  // product, so a deployment that also posts as members sets these; without them pages use the member app above.
+  CHANNEL_LINKEDIN_PAGE_CLIENT_ID: optional,
+  CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET: optional,
   // The deployment's Google Cloud project for YouTube uploads (YouTube Data API v3, an OAuth web client), S9. Callback
   // URL: PUBLIC_URL/channels/oauth/youtube/callback.
   CHANNEL_GOOGLE_CLIENT_ID: optional,
@@ -471,7 +475,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.CHANNEL_THREADS_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_THREADS_APP_ID)) throw new Error('CHANNEL_THREADS_APP_ID is the numeric id of the Threads app');
   if (Boolean(config.CHANNEL_LINKEDIN_CLIENT_ID) !== Boolean(config.CHANNEL_LINKEDIN_CLIENT_SECRET)) throw new Error('set both CHANNEL_LINKEDIN_CLIENT_ID and CHANNEL_LINKEDIN_CLIENT_SECRET, or neither');
   if (config.CHANNEL_LINKEDIN_CLIENT_ID && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_LINKEDIN_CLIENT_ID)) throw new Error('CHANNEL_LINKEDIN_CLIENT_ID is the client id of the LinkedIn app');
-  if (config.CHANNEL_LINKEDIN_ORGANIZATIONS === 'true' && !config.CHANNEL_LINKEDIN_CLIENT_ID) throw new Error('CHANNEL_LINKEDIN_ORGANIZATIONS needs CHANNEL_LINKEDIN_CLIENT_ID and CHANNEL_LINKEDIN_CLIENT_SECRET');
+  if (Boolean(config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID) !== Boolean(config.CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET)) throw new Error('set both CHANNEL_LINKEDIN_PAGE_CLIENT_ID and CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET, or neither');
+  if (config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID)) throw new Error('CHANNEL_LINKEDIN_PAGE_CLIENT_ID is the client id of the LinkedIn Company Pages app');
+  if (config.CHANNEL_LINKEDIN_ORGANIZATIONS === 'true' && !config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID && !config.CHANNEL_LINKEDIN_CLIENT_ID) throw new Error('CHANNEL_LINKEDIN_ORGANIZATIONS needs CHANNEL_LINKEDIN_PAGE_CLIENT_ID and CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET, or CHANNEL_LINKEDIN_CLIENT_ID and CHANNEL_LINKEDIN_CLIENT_SECRET');
   if (Boolean(config.CHANNEL_TIKTOK_CLIENT_KEY) !== Boolean(config.CHANNEL_TIKTOK_CLIENT_SECRET)) throw new Error('set both CHANNEL_TIKTOK_CLIENT_KEY and CHANNEL_TIKTOK_CLIENT_SECRET, or neither');
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_TIKTOK_CLIENT_KEY)) throw new Error('CHANNEL_TIKTOK_CLIENT_KEY is the client key of the TikTok app');
   if (Boolean(config.CHANNEL_GOOGLE_CLIENT_ID) !== Boolean(config.CHANNEL_GOOGLE_CLIENT_SECRET)) throw new Error('set both CHANNEL_GOOGLE_CLIENT_ID and CHANNEL_GOOGLE_CLIENT_SECRET, or neither');
@@ -500,7 +506,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error('AUTH_STEP_UP=off lets a stolen session approve and change roles without MFA; set it to required');
     }
     // A provider sends the authorization code to PUBLIC_URL/channels/oauth/<provider>/callback (#375).
-    const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID, config.CHANNEL_PINTEREST_APP_ID];
+    const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID, config.CHANNEL_PINTEREST_APP_ID];
     if (oauthApps.some(Boolean) && !config.PUBLIC_URL.startsWith('https://')) {
       throw new Error('channel OAuth sends authorization codes back to PUBLIC_URL; a public PUBLIC_URL must be https when a CHANNEL_* app is set');
     }

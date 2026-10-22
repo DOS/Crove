@@ -28,4 +28,16 @@ describe('CHANNEL_LINKEDIN_ORGANIZATIONS', () => {
   it('refuses the flag without a LinkedIn app', () => {
     expect(() => loadConfig({ ...BASE, CHANNEL_LINKEDIN_ORGANIZATIONS: 'true' })).toThrow(/CHANNEL_LINKEDIN_ORGANIZATIONS/);
   });
+
+  // LinkedIn grants the Community Management API only to an app with no other product.
+  it('offers Company Pages from a separate app, alone or beside the member app, and needs both of its values', () => {
+    const PAGE_APP = { CHANNEL_LINKEDIN_PAGE_CLIENT_ID: ['77pagesapp', '5678'].join(''), CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET: 'test-only-not-real-either' };
+    const alone = loadConfig({ ...BASE, ...PAGE_APP, CHANNEL_LINKEDIN_ORGANIZATIONS: 'true' });
+    expect(Object.keys(channelConnectors(alone))).toEqual(['linkedin_page']);
+    expect(Object.keys(channelPublishers(alone)).filter((p) => p.startsWith('linkedin'))).toEqual(['linkedin_page']);
+    const both = loadConfig({ ...BASE, ...LINKEDIN, ...PAGE_APP, CHANNEL_LINKEDIN_ORGANIZATIONS: 'true' });
+    expect(Object.keys(channelConnectors(both)).sort()).toEqual(['linkedin', 'linkedin_page']);
+    expect(Object.keys(channelConnectors(loadConfig({ ...BASE, ...LINKEDIN, ...PAGE_APP })))).toEqual(['linkedin']);
+    expect(() => loadConfig({ ...BASE, CHANNEL_LINKEDIN_PAGE_CLIENT_ID: PAGE_APP.CHANNEL_LINKEDIN_PAGE_CLIENT_ID })).toThrow(/CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET/);
+  });
 });
