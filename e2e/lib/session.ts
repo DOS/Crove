@@ -27,7 +27,12 @@ export async function signUp(page: Page, email: string, password = PASSWORD): Pr
 const CREATE_CONFIRMED_USER = `
 import { createHmac } from 'node:crypto';
 const [email, password] = process.argv.slice(1);
-const part = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+const missing = ['AUTH_JWT_SECRET', 'AUTH_UPSTREAM_URL', 'AUTH_ISSUER'].filter((name) => !process.env[name]);
+if (missing.length > 0) {
+  console.error('The kernel container lacks ' + missing.join(', ') + '; is the stack fully started?');
+  process.exit(1);
+}
+const part =(value) => Buffer.from(JSON.stringify(value)).toString('base64url');
 const now = Math.floor(Date.now() / 1000);
 const unsigned = part({ alg: 'HS256', typ: 'JWT' }) + '.' + part({ role: 'service_role', aud: 'authenticated', iss: process.env.AUTH_ISSUER, iat: now, exp: now + 60 });
 const token = unsigned + '.' + createHmac('sha256', process.env.AUTH_JWT_SECRET).update(unsigned).digest('base64url');
