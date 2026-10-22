@@ -133,7 +133,7 @@ Each question carries the recommended answer. Per the working rule, a recommenda
 
 ## 8. Follow-ups proposed
 
-Not created by this spike; the coordinator decides.
+Not created by this spike; the coordinator decides. Status on 2026-10-23: item 1 is done (#465). The owner answered O1 to O3 on #325 (assisted sync, never store the password, never solve a CAPTCHA by software, in the open-source core); item 2 is built as [ADR-0036](../adr/0036-assisted-tax-portal-sync.md) and [tax-portal-sync.md](../integrations/tax-portal-sync.md), off unless the deployment opts in, and still needs the supervised trial on a real account and the legal opinion of item 3.
 
 1. Portal purchase-list import and missing-invoice check per client and period (option 1), M2, core.
 2. Retitle and rescope #325 to the assisted sync (option 2), behind O1 to O3.

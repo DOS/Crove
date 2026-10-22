@@ -38,6 +38,8 @@ const NOT_SHOWN: Record<string, string> = {
   ORG_PURGE_BLOB_FAILED: 'operator',
   // The worker's bring-in of posts published outside Crove (#1054): its system commands alone raise it.
   EXTERNAL_POST_NOT_FOUND: 'worker',
+  // The tax portal sync (#325): a download already made for the synced list; fetchXml skips it, the SPA never gets it.
+  PORTAL_CALL_DONE: 'portal sync',
   // The inbound mail endpoint answers the mail relay, not a browser.
   EMPTY_MESSAGE: 'inbound mail',
   UNKNOWN_RECIPIENT: 'inbound mail',

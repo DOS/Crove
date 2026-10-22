@@ -141,6 +141,7 @@ import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts'
 import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
+import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
@@ -979,6 +980,15 @@ export const contract = {
     reconcile: oc.input(z.object({ period: zVatPeriod })).output(zPortalReconciliation),
     import: oc.input(z.object({ period: zVatPeriod, fileId: zId })).output(z.object({ listId: zId })),
     remove: oc.input(z.object({ listId: zId })).output(z.object({ listId: zId })),
+  },
+  // The assisted sync from the tax portal (issue #325, ADR-0036), off unless the deployment sets TAX_PORTAL_SYNC=true
+  // (PORTAL_SYNC_DISABLED, 404). Owners, admins and members of the client org; the steps in order: captcha, login (the
+  // password goes to the portal and is dropped), fetchList, then fetchXml until done. Errors: PORTAL_SYNC_ERRORS.
+  portalSync: {
+    captcha: oc.input(z.object({ period: zVatPeriod })).output(zPortalCaptcha),
+    login: oc.input(zPortalLoginInput).output(zPortalSession),
+    fetchList: oc.input(z.object({ period: zVatPeriod, session: zPortalSession.shape.session })).output(zPortalListResult),
+    fetchXml: oc.input(z.object({ period: zVatPeriod, session: zPortalSession.shape.session, listId: zId })).output(zPortalXmlResult),
   },
   // Asking the client company for the purchase invoices the portal lists and Crove lacks (issue #669). status: every
   // role. request (owners, admins, members; R1): one mail listing a period's missing invoices to the org's contact email,

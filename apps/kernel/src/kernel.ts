@@ -75,6 +75,8 @@ import { createArchiveStore, createBlobStore } from './storage.ts';
 import type { SocialDrafter } from './rpc.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
 import { createTaxCodeLookup } from './tax-lookup.ts';
+import { createPortalSync } from './portal-sync.ts';
+import { createTaxPortalClient } from './tax-portal.ts';
 import { startWorker } from './worker.ts';
 import { WORKER_LAG_EXIT_MS, WORKER_LAG_SUSTAIN_MS, startLagWatchdog } from './back-pressure.ts';
 
@@ -345,6 +347,9 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             rechecks: new Semaphore(config.STREAM_RECHECK_CONCURRENCY),
           };
         }
+        // The tax portal sync seals the portal's session for the browser; without the credential key it cannot run.
+        if (config.TAX_PORTAL_SYNC === 'true' && resolved.broker.id === 'none') throw new Error('TAX_PORTAL_SYNC=true needs the credential key (CREDENTIAL_KEY or CREDENTIAL_KEY_FILE)');
+        if (config.TAX_PORTAL_SYNC === 'true' && config.TAX_PORTAL_URL) console.warn(`[api] TAX_PORTAL_URL points the tax portal sync at ${new URL(config.TAX_PORTAL_URL).origin}, not the real portal`);
         const app = createHttpApp({
           config,
           runtime,
@@ -354,6 +359,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           aiEnabled: resolved.ai !== null,
           ...(resolved.writer ? { socialWriter: socialDrafter(resolved.writer, config.AI_VISION === 'true' ? store : null) } : {}),
           ...(config.TAX_CODE_LOOKUP_URL ? { taxLookup: createTaxCodeLookup(config.TAX_CODE_LOOKUP_URL) } : {}),
+          ...(config.TAX_PORTAL_SYNC === 'true' ? { portalSync: createPortalSync({ runtime, store, broker: resolved.broker, client: createTaxPortalClient(config.TAX_PORTAL_URL ? { baseUrl: config.TAX_PORTAL_URL } : {}) }) } : {}),
           mailer: resolved.mail,
           channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL },
           ...(stream ? { stream } : {}),

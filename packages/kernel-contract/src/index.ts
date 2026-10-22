@@ -7,6 +7,7 @@ export * from './cash-voucher.ts';
 export * from './journal-voucher.ts';
 export * from './personal-data.ts';
 export * from './portal-list.ts';
+export * from './portal-sync.ts';
 export * from './vat-deadline.ts';
 export * from './tax-calendar.ts';
 export * from './vietnam-time.ts';

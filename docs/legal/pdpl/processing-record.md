@@ -114,6 +114,7 @@ The tenant row stays, marked `closed` (`docs/runbooks/org-offboarding.md`).
 | Alert webhook (Telegram, Slack or Discord) | operations alerts carry check names and counts. Security alerts carry ids and counts, with user and org ids but no email, name or token. A Social team-chat alert, set up per org, carries up to 400 characters of a post. | `apps/kernel/src/security-signals.ts`, `modules/social/src/chat-alerts.ts` |
 | Uptime check and heartbeat monitor | a request to `/healthz`, or a ping; no data | `docs/runbooks/alerts.md` |
 | Tax code lookup (`TAX_CODE_LOOKUP_URL`) | the tax codes users type | `.env.example` |
+| Tax portal hoadondientu.gdt.gov.vn (`TAX_PORTAL_SYNC`, #325), when an accountant runs the assisted sync | the client's tax code, the portal password and CAPTCHA answer the accountant types (used for that one login, never stored); the client's purchase invoices come back, which may name individual sellers. The portal's answer is stored as the list's evidence file | `apps/kernel/src/portal-sync.ts`, `docs/integrations/tax-portal-sync.md` |
 | Social networks (Meta, Zalo, Threads, LinkedIn, YouTube, TikTok, X, Pinterest and others), when an org connects one | the posts and media the org publishes; the account's identity comes back | `.env.example`, `packages/channel/src/` |
 
 ## 5. Rights of the people concerned

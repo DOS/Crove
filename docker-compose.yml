@@ -134,6 +134,8 @@ services:
       # The public status page PUBLIC_URL/status (#678): the prober's last result, on the shared `status` volume.
       STATUS_FILE: ${STATUS_FILE:-}
       TAX_CODE_LOOKUP_URL: ${TAX_CODE_LOOKUP_URL:-}
+      # The assisted purchase-invoice sync from the tax portal (#325); off unless true.
+      TAX_PORTAL_SYNC: ${TAX_PORTAL_SYNC:-false}
       INBOUND_DOMAIN: ${INBOUND_DOMAIN:-}
       INBOUND_SECRET: ${INBOUND_SECRET:-}
       # Invite mails go through the same SMTP server as Supabase Auth's (Mailpit at http://localhost:8025 locally).

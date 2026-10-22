@@ -10,6 +10,9 @@ import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { PortalSyncPanel } from '../components/portal-sync.tsx';
+import { getConfig } from '../lib/auth.ts';
+import { canSyncFromPortal } from '../lib/portal-sync.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
 import {
@@ -232,6 +235,9 @@ export function PortalListPage() {
   const editor = canImportPortalList(org.data?.role);
   const input = useRef<HTMLInputElement>(null);
   const [problem, setProblem] = useState<'not_xlsx' | 'too_large' | null>(null);
+  // The assisted sync from the tax portal (issue #325), when the deployment turned it on.
+  const canSync = canSyncFromPortal(org.data?.role, getConfig().taxPortalSync);
+  const [syncOpen, setSyncOpen] = useState(false);
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.portalList.reconcile.key() });
   const importList = useMutation({
@@ -273,6 +279,11 @@ export function PortalListPage() {
         actions={
           editor ? (
             <>
+              {canSync && (
+                <Button size="lg" variant="outline" onClick={() => setSyncOpen(true)} disabled={syncOpen}>
+                  {t('sync.open')}
+                </Button>
+              )}
               <input ref={input} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" aria-label={t('upload')} onChange={(e) => choose(e.target.files?.[0])} />
               <Button size="lg" onClick={() => input.current?.click()} disabled={importList.isPending}>
                 {importList.isPending ? <Spinner className="text-current" /> : null}
@@ -316,6 +327,12 @@ export function PortalListPage() {
         </label>
         {data && <p className="pb-1.5 text-sm text-muted-foreground">{t('range', { from: f.date(data.period.from), to: f.date(data.period.to) })}</p>}
       </div>
+
+      {canSync && syncOpen && (
+        <div className="mb-6">
+          <PortalSyncPanel key={period} period={period} periodLabel={formatPeriod(period)} onChanged={refresh} onClose={() => setSyncOpen(false)} />
+        </div>
+      )}
 
       {problem && (
         <div className="mb-4">
