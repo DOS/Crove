@@ -64,6 +64,7 @@ import { rebindExports as rebindOrgExports } from './export-rebind.ts';
 import { exportSealer } from './export-seal.ts';
 import { webhookTarget, type WebhookTarget } from './alert.ts';
 import type { SecurityThresholds } from './security-signals.ts';
+import { orgPurgeCommand, runOrgPurge } from './org-purge.ts';
 import { runUserDisable } from './user-disable.ts';
 import { ConcurrencyLimiter, Semaphore } from './concurrency.ts';
 import { createHttpApp, type StreamDeps } from './http.ts';
@@ -133,6 +134,9 @@ export interface Kernel {
   // The operator blocks (true) or unblocks a user account, as the worker (issue #985, user-disable.ts). Resolves to the
   // exit code.
   setUserStatus(disabled: boolean, argv: readonly string[]): Promise<number>;
+  // The operator purges an offboarded org by its deletion map and closes it, as the worker (issue #1024,
+  // org-purge.ts). Resolves to the exit code.
+  purgeOrg(argv: readonly string[]): Promise<number>;
 }
 
 // No-op defaults for the optional ports: nothing can be bound, no connector is installed, every module is on.
@@ -441,7 +445,24 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     }
   }
 
-  return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports, setUserStatus };
+  // The operator's org-purge role (#1024): the worker login is the only role that may execute crove_kernel.org_purge
+  // and enter the system context the purge runs in. Its command deletes blobs, so only this runtime registers it.
+  async function purgeOrg(argv: readonly string[]): Promise<number> {
+    const workerUrl = config.WORKER_DATABASE_URL;
+    if (!workerUrl) throw new Error('WORKER_DATABASE_URL is required for org-purge; run it in the worker container');
+    const { pool, runtime } = buildRuntime(workerUrl, 'crove-operator');
+    runtime.register({ commands: [orgPurgeCommand({ store: resolved.storage })] });
+    try {
+      await assertRlsEnforced(pool);
+      await assertSystemContextAccess(pool, 'granted');
+      return await runOrgPurge({ runtime, minDays: config.ORG_PURGE_MIN_DAYS }, argv);
+    } finally {
+      // Best effort: a failure to close never hides the run's own outcome.
+      await pool.end().catch((error: unknown) => console.error('[org-purge] could not close the pool', error));
+    }
+  }
+
+  return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports, setUserStatus, purgeOrg };
 }
 
 // The Social writer as the API uses it: drafts, rewrites and hashtags as they are, and with an image-capable model
