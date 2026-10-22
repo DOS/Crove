@@ -9,8 +9,18 @@ export const REPORT_VIEWS_PER_MINUTE = 60;
 
 const zView = z.strictObject({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/) });
 
+// The org's white-label branding (#1053), or null: a display name, the logo as an inline PNG, WebP or JPEG data URL,
+// an accent colour (#rrggbb) and whether to show no "Crove". Only the link's own org's.
+export interface PageBrand {
+  name: string | null;
+  logo: string | null;
+  accent: string | null;
+  hideCrove: boolean;
+}
+
 export interface ReportPage {
   org: string;
+  brand: PageBrand | null;
   title: string | null;
   periodStart: string;
   periodEnd: string;

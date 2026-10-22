@@ -36,6 +36,7 @@ import { feedCommands, feedQueries } from './feeds.ts';
 import { reportScheduleCommands, reportScheduleQueries } from './report-schedules.ts';
 import { brandVoiceCommands, brandVoiceQueries } from './brand-voice.ts';
 import { watermarkCommands, watermarkQueries } from './watermark.ts';
+import { reportBrandingCommands, reportBrandingQueries } from './report-branding.ts';
 import { publishHoldCommands, publishHoldQueries } from './publish-hold.ts';
 import { chatAlertCommands, chatAlertQueries } from './chat-alerts.ts';
 import { channelSetCommands, channelSetQueries } from './channel-sets.ts';
@@ -1608,6 +1609,7 @@ export const socialCommands = [
   ...reportScheduleCommands,
   ...brandVoiceCommands,
   ...watermarkCommands,
+  ...reportBrandingCommands,
   ...chatAlertCommands,
   ...channelSetCommands,
   ...calendarNoteCommands,
@@ -1661,4 +1663,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries];

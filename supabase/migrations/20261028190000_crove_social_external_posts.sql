@@ -109,7 +109,7 @@ REVOKE ALL ON FUNCTION crove_social.external_metrics_due(int, text[], int) FROM 
 GRANT EXECUTE ON FUNCTION crove_social.external_metrics_due(int, text[], int) TO crove_worker;
 
 -- The org purge (#1024) deletes crove_social.external_import, crove_social.external_post with the org's other Social rows (#1054). The function
--- is copied verbatim from 20261028130000_crove_kernel_org_purge.sql, with only these tables added to v_social;
+-- is copied verbatim from 20261028150000_crove_social_report_branding.sql, with only these tables added to v_social;
 -- the runbook's deletion map already says every crove_social table but post_approval is deleted.
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
 RETURNS TABLE (outcome text, counts jsonb, blob_keys text[])
@@ -155,7 +155,7 @@ DECLARE
     'crove_social.post_comment', 'crove_social.post_media', 'crove_social.post_version', 'crove_social.publish_hold', 'crove_social.report_link',
     'crove_social.report_schedule_run', 'crove_social.report_schedule', 'crove_social.review_feedback',
     'crove_social.review_link_post', 'crove_social.review_link', 'crove_social.short_link_click',
-    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.external_import', 'crove_social.external_post'];
+    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.external_import', 'crove_social.external_post'];
 BEGIN
   -- Also refuses a definer owner or another role reached through a mistaken grant: only the worker login, in the
   -- sealed system context of the org it purges (execute() of kernel.org.purge).

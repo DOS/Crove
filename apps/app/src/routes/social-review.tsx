@@ -2,7 +2,7 @@
 // account. It shows the post as each channel will show it and takes the client's answer with the name they type. A
 // plan link (#902) shows each of its posts in schedule order and takes an answer on each.
 // The token stays after the # (browsers never send it to a server in the address) and goes to the API in a POST
-// body only.
+// body only. With the org's white-label branding (#1053) it shows the agency's logo, name and accent instead of Crove's.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -13,11 +13,13 @@ import { Label } from '@crove/ui/components/label';
 import { Textarea } from '@crove/ui/components/textarea';
 import { FileSource } from '../components/social-media.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
+import { AccentRule, BrandMark, MadeWithCrove, accentStyle, useBrandTitle } from '../components/social-report-branding.tsx';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage } from '../lib/api.ts';
 import { apiErrorFromResponse } from '../lib/errors.ts';
 import { planProgress } from '../lib/social-plan-review.ts';
+import { pageBrand, type ReportBrand } from '../lib/social-report-branding.ts';
 
 type Verdict = 'approved' | 'changes_requested' | 'comment';
 type Answer = { name: string; verdict: Verdict; body: string | null; at: string };
@@ -25,6 +27,8 @@ type Channel = { provider: string; channel: string; status: string; body: string
 interface ReviewPage {
   kind?: undefined;
   org: string;
+  // The org's white-label branding (#1053), or null; absent from a server without it. Read again by pageBrand.
+  brand?: unknown;
   expiresAt: string;
   changed: boolean;
   channels: (Channel & { mediaCount: number })[];
@@ -35,6 +39,7 @@ type PlanPost = { id: string; gone: true } | { id: string; gone: false; at: stri
 interface PlanPage {
   kind: 'plan';
   org: string;
+  brand?: unknown;
   expiresAt: string;
   from: string | null;
   to: string | null;
@@ -165,7 +170,7 @@ function PlanPostCard({ token, item, index, name, files, onAnswered }: { token: 
 }
 
 // The plan page (#902): the client's name once, then every post with its own answer.
-function PlanReview({ token, data, files, onAnswered }: { token: string; data: PlanPage; files: FileFetcher; onAnswered: () => void }) {
+function PlanReview({ token, data, brand, files, onAnswered }: { token: string; data: PlanPage; brand: ReportBrand | null; files: FileFetcher; onAnswered: () => void }) {
   const t = useTranslations('social.clientReview');
   const f = useFormat();
   const [name, setName] = useState(readName);
@@ -173,7 +178,7 @@ function PlanReview({ token, data, files, onAnswered }: { token: string; data: P
   return (
     <>
       <div className="space-y-1">
-        <h1 className="text-lg font-semibold">{t('planTitle', { org: data.org })}</h1>
+        <h1 className="text-lg font-semibold">{t('planTitle', { org: brand?.name ?? data.org })}</h1>
         <p className="text-sm text-muted-foreground">
           {data.from && data.to ? `${t('planPeriod', { from: f.date(data.from), to: f.date(new Date(Date.parse(data.to) - 1).toISOString()) })} · ` : ''}
           {t('subtitle', { until: f.dateTime(data.expiresAt) })}
@@ -223,12 +228,15 @@ export function SocialReviewPage() {
   });
 
   const data = page.data;
+  const brand = data ? pageBrand(data.brand) : null;
+  useBrandTitle(brand, data?.org ?? '');
+  // Neither mark until the page is known, so a branded link never shows Crove's logo while it loads.
+  const loading = token !== null && page.isLoading;
   return (
-    <div className="min-h-screen bg-background px-4 py-6 text-foreground">
+    <div className="min-h-screen bg-background px-4 py-6 text-foreground" style={accentStyle(brand)}>
       <div className="mx-auto max-w-3xl space-y-4">
-        <div className="flex items-center gap-2">
-          <Logo />
-        </div>
+        <div className="flex min-h-7 items-center gap-2">{loading ? <span aria-hidden="true" /> : brand && data ? <BrandMark brand={brand} org={data.org} /> : <Logo />}</div>
+        <AccentRule brand={brand} />
         {token === null || (page.isFetched && data === null) ? (
           <Card className="block p-6 text-sm text-muted-foreground">{t('invalid')}</Card>
         ) : page.isLoading ? (
@@ -236,11 +244,11 @@ export function SocialReviewPage() {
         ) : page.error ? (
           <ErrorText>{errorMessage(page.error)}</ErrorText>
         ) : data?.kind === 'plan' ? (
-          token && <PlanReview token={token} data={data} files={files} onAnswered={() => void page.refetch()} />
+          token && <PlanReview token={token} data={data} brand={brand} files={files} onAnswered={() => void page.refetch()} />
         ) : data ? (
           <>
             <div>
-              <h1 className="text-lg font-semibold">{t('title', { org: data.org })}</h1>
+              <h1 className="text-lg font-semibold">{t('title', { org: brand?.name ?? data.org })}</h1>
               <p className="text-sm text-muted-foreground">{t('subtitle', { until: f.dateTime(data.expiresAt) })}</p>
             </div>
             {data.changed && <p className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">{t('changed')}</p>}
@@ -298,6 +306,7 @@ export function SocialReviewPage() {
             )}
           </>
         ) : null}
+        <MadeWithCrove brand={brand} />
       </div>
     </div>
   );

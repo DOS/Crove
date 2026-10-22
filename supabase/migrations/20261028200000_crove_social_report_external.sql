@@ -1,7 +1,7 @@
 -- The client report with the posts published outside Crove (issue #1054). Idempotent; applied files stay untouched.
 --
 -- crove_social.report_link_view  as before, with the same signature, RETURNS and grants. The body is copied verbatim
---                                from 20261026053000_crove_social_report_compare.sql,
+--                                from 20261028150000_crove_social_report_branding.sql,
 --                                with only this added: for a link made with include_external, the posts its channels
 --                                published outside Crove in each period
 --                                (crove_social.external_post of the link's org, on the link's channels, with their
@@ -109,6 +109,8 @@ BEGIN
     )
     SELECT pg_catalog.jsonb_build_object(
       'org', (SELECT t.name FROM crove_kernel.tenant t WHERE t.org_id = v_link.org_id),
+      -- The white-label branding of the link's own org (#1053), or null.
+      'brand', crove_social.report_brand(v_link.org_id),
       'title', v_link.title,
       'periodStart', v_link.period_start,
       'periodEnd', v_link.period_end,
