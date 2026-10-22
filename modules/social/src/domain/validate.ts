@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -174,7 +174,21 @@ export type IssueCode =
   | 'WORDPRESS_TOO_MANY_TAGS'
   | 'WORDPRESS_TERM_INVALID'
   | 'WORDPRESS_EXCERPT_TOO_LONG'
-  | 'WORDPRESS_STATUS_INVALID';
+  | 'WORDPRESS_STATUS_INVALID'
+  // Discord forum posts and threads (#1103), settings.discord: set on another channel, or not { forum?, threadName?,
+  // tags?, threadId? } with values of their types; a name or tags on a post not marked as a forum post; a forum post
+  // with a thread id too (Discord refuses both); a forum post with no name, title or text to name it; a name over
+  // DISCORD_THREAD_NAME_MAX characters (limit, actual); a tag that is not a Discord id or is given twice (field
+  // settings.discord.tags.<index>); more than DISCORD_TAGS_MAX tags (limit, actual); a thread id that is not a Discord id.
+  | 'DISCORD_NOT_SUPPORTED'
+  | 'DISCORD_INVALID'
+  | 'DISCORD_FORUM_ONLY'
+  | 'DISCORD_THREAD_CONFLICT'
+  | 'DISCORD_THREAD_NAME_REQUIRED'
+  | 'DISCORD_THREAD_NAME_TOO_LONG'
+  | 'DISCORD_TAG_INVALID'
+  | 'DISCORD_TOO_MANY_TAGS'
+  | 'DISCORD_THREAD_ID_INVALID';
 
 export interface Issue {
   code: IssueCode;
@@ -263,9 +277,11 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   const reel = supported && postType === 'reel';
   const sent = story ? '' : sentText(variant.provider, variant.body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, variant.body), variant.media.length);
   if (!story) checkText(issues, 'body', sent, caps.body);
+  // A Discord forum post (#1103) takes the post's title as its name, cut to Discord's limit by the adapter.
+  const titleRule = caps.title ?? (isDiscordForum(variant.provider, variant.settings) ? DISCORD_FORUM_TITLE : null);
   if (story) {
     // Nothing to check: the title is not sent either.
-  } else if (caps.title) checkText(issues, 'title', variant.title ?? '', caps.title);
+  } else if (titleRule) checkText(issues, 'title', variant.title ?? '', titleRule);
   else if (variant.title !== null && variant.title.trim() !== '') issues.push({ code: 'TITLE_NOT_SUPPORTED', field: 'title', limit: null, actual: null });
 
   const { media } = variant;
@@ -412,6 +428,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     else checkTelegramButtons(issues, variant);
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
+  checkDiscord(issues, variant, sent);
   checkPollAndTag(issues, variant, caps);
   checkGbp(issues, variant);
   checkWordPress(issues, variant);
@@ -429,6 +446,30 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     if (links > caps.maxLinks) issues.push({ code: 'TOO_MANY_LINKS', field: 'body', limit: caps.maxLinks, actual: links });
   }
   return issues;
+}
+
+const DISCORD_FORUM_TITLE: TextRule = { max: null, count: 'utf16', required: false };
+
+// Discord forum posts and threads (#1103). Absent, the post is a message in the webhook's channel, as before. sent: the
+// text as the adapter sends it, whose first line names a forum post without a name or title.
+function checkDiscord(issues: Issue[], variant: VariantDraft, sent: string): void {
+  const options = discordOptionsOf(variant.settings);
+  if (options === null) return;
+  const field = 'settings.discord';
+  if (variant.provider !== 'discord') return void issues.push({ code: 'DISCORD_NOT_SUPPORTED', field, limit: null, actual: null });
+  if (options === 'invalid') return void issues.push({ code: 'DISCORD_INVALID', field, limit: null, actual: null });
+  const name = options.threadName?.trim() ?? '';
+  if (!options.forum && (name !== '' || options.tags.length > 0)) issues.push({ code: 'DISCORD_FORUM_ONLY', field: `${field}.forum`, limit: null, actual: null });
+  if (options.forum && options.threadId !== null) issues.push({ code: 'DISCORD_THREAD_CONFLICT', field: `${field}.threadId`, limit: null, actual: null });
+  if (options.forum && discordThreadName(options.threadName, variant.title, sent) === '') issues.push({ code: 'DISCORD_THREAD_NAME_REQUIRED', field: `${field}.threadName`, limit: null, actual: null });
+  if (name.length > DISCORD_THREAD_NAME_MAX) issues.push({ code: 'DISCORD_THREAD_NAME_TOO_LONG', field: `${field}.threadName`, limit: DISCORD_THREAD_NAME_MAX, actual: name.length });
+  const seen = new Set<string>();
+  options.tags.forEach((tag, i) => {
+    if (!isDiscordId(tag) || seen.has(tag)) issues.push({ code: 'DISCORD_TAG_INVALID', field: `${field}.tags.${i}`, limit: null, actual: null });
+    seen.add(tag);
+  });
+  if (options.tags.length > DISCORD_TAGS_MAX) issues.push({ code: 'DISCORD_TOO_MANY_TAGS', field: `${field}.tags`, limit: DISCORD_TAGS_MAX, actual: options.tags.length });
+  if (options.threadId !== null && !isDiscordId(options.threadId)) issues.push({ code: 'DISCORD_THREAD_ID_INVALID', field: `${field}.threadId`, limit: null, actual: null });
 }
 
 // TikTok's commercial content and AI labels (#1078). Absent, the adapter sends what it always did (no disclosure).

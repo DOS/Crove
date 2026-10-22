@@ -1,6 +1,6 @@
 // Shared pieces of the Social screens: status tones, provider names, the effective text of a variant as the composer
 // shows it, and grouping by day for the agenda.
-import { CAPABILITIES, SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, countText, isProvider, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { CAPABILITIES, SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, countText, isDiscordForum, isProvider, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
 import { getConfig } from './auth.ts';
 
 export type VariantStatus =
@@ -104,6 +104,11 @@ export function textBudget(provider: string, body: string, link: { linkUrl?: str
 
 export function hasTitle(provider: string): boolean {
   return isProvider(provider) && CAPABILITIES[provider].title !== null;
+}
+
+// Whether a channel's variant sends a title: its channel has one, or it is a Discord forum post (#1103), named by it.
+export function takesTitle(provider: string, settings: Readonly<Record<string, unknown>> | undefined): boolean {
+  return hasTitle(provider) || isDiscordForum(provider, settings);
 }
 
 // The issues a draft would have at submit, checked as it is typed (the server checks again).

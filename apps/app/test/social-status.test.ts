@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { en } from '../src/i18n/messages/en.ts';
 import { vi } from '../src/i18n/messages/vi.ts';
-import { draftIssues, variantStatusKey, variantTone } from '../src/lib/social.ts';
+import { draftIssues, takesTitle, variantStatusKey, variantTone } from '../src/lib/social.ts';
 
 describe('A TikTok draft sent to the app (#903)', () => {
   it('reads as sent to the TikTok app, never as published', () => {
@@ -40,5 +40,25 @@ describe('A WordPress draft or post pending review (#981)', () => {
     const codes = (wordpress: Record<string, unknown>) => draftIssues('wordpress', { body: 'Khai trương', title: 'Thực đơn', media: [], settings: { wordpress } }).map((i) => i.code);
     expect(codes({ categories: ['Tin tức'], tags: ['bánh mì'], excerpt: 'Món mới', status: 'pending' })).toEqual([]);
     expect(codes({ excerpt: 'x'.repeat(501) })).toEqual(['WORDPRESS_EXCERPT_TOO_LONG']);
+  });
+});
+
+describe('A Discord forum post or thread (#1103)', () => {
+  it('takes the post title only on a forum post, and flags a forum post with nothing to name it', () => {
+    expect(takesTitle('discord', {})).toBe(false);
+    expect(takesTitle('discord', { discord: { forum: true } })).toBe(true);
+    expect(takesTitle('discord', { discord: { threadId: '1200000000000000001' } })).toBe(false);
+    expect(takesTitle('wordpress', {})).toBe(true);
+    const codes = (body: string, discord: Record<string, unknown>) => draftIssues('discord', { body, title: null, media: [], settings: { discord } }).map((i) => i.code);
+    expect(codes('Khai trương', { forum: true, tags: ['1210000000000000001'] })).toEqual([]);
+    expect(codes(' ', { forum: true })).toEqual(['CONTENT_REQUIRED', 'DISCORD_THREAD_NAME_REQUIRED']);
+    expect(codes('Khai trương', { tags: ['1210000000000000001'] })).toEqual(['DISCORD_FORUM_ONLY']);
+  });
+
+  it('says what to change when Discord refuses a forum post, in both languages', () => {
+    for (const key of ['discordThreadNameRequired', 'discordNotForum', 'discordTagRequired', 'discordTagUnknown', 'discordThreadUnknown'] as const) {
+      expect(en.social.outcome[key]).toMatch(/nothing was posted/);
+      expect(vi.social.outcome[key]).toMatch(/chưa đăng gì/);
+    }
   });
 });

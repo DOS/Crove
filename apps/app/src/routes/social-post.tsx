@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -41,7 +41,7 @@ import {
   EDITABLE,
   draftIssues,
   fromLocalInput,
-  hasTitle,
+  takesTitle,
   providerName,
   SUBMITTABLE,
   setFlash,
@@ -375,6 +375,109 @@ function WordPressSettings({ settings, onChange, disabled }: { settings: Record<
   );
 }
 
+// A Discord thread id, or the thread's link as Discord copies it (https://discord.com/channels/<server>/<thread>), as
+// its id; anything else as typed, for the check to name.
+const discordThreadIdFrom = (text: string): string => {
+  const trimmed = text.trim();
+  const link = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/channels\/\d{17,20}\/(\d{17,20})\/?$/.exec(trimmed);
+  return link ? (link[1] as string) : trimmed;
+};
+
+// Discord (#1103): Crove cannot read a webhook's channel type, so the person posting marks a forum (or media) channel's
+// webhook. A forum post takes a name (the post's title or the text's first line unless given) and up to 5 of the
+// forum's tags, by id; otherwise the post can go into an existing thread. Only what is set is stored, so a variant left
+// as it was keeps its content hash and posts as before.
+function DiscordSettings({ settings, onChange, disabled, threadNameDefault }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean; threadNameDefault: string }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const [tagsText, setTagsText] = useState<string | null>(null);
+  const read = discordOptionsOf(settings);
+  const current = read && read !== 'invalid' ? read : { forum: false, threadName: null, tags: [], threadId: null };
+  const save = (next: { forum: boolean; threadName: string | null; tags: string[]; threadId: string | null }) => {
+    const { discord: _old, ...rest } = settings;
+    const kept = next.forum
+      ? { forum: true, ...(next.threadName ? { threadName: next.threadName } : {}), ...(next.tags.length > 0 ? { tags: next.tags } : {}) }
+      : next.threadId
+        ? { threadId: next.threadId }
+        : {};
+    onChange(Object.keys(kept).length > 0 ? { ...rest, discord: kept } : rest);
+  };
+  const nameUsed = (current.threadName ?? '').trim().length;
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox checked={current.forum} disabled={disabled} onCheckedChange={(on) => save({ forum: on === true, threadName: null, tags: [], threadId: null })} />
+          {t('discordForum')}
+        </label>
+        <p className="text-xs text-subtle-foreground">{t('discordForumHint')}</p>
+      </div>
+      {current.forum ? (
+        <>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={`${id}-name`} className="text-xs">
+                {t('discordThreadName')}
+              </Label>
+              <span className={cn('font-mono text-xs tabular-nums', nameUsed > DISCORD_THREAD_NAME_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+                {nameUsed || threadNameDefault.length}/{DISCORD_THREAD_NAME_MAX}
+              </span>
+            </div>
+            <Input
+              id={`${id}-name`}
+              value={current.threadName ?? ''}
+              disabled={disabled}
+              placeholder={threadNameDefault || t('discordThreadNamePlaceholder')}
+              aria-invalid={nameUsed > DISCORD_THREAD_NAME_MAX}
+              onChange={(e) => save({ ...current, threadName: e.target.value === '' ? null : e.target.value })}
+            />
+            <p className="text-xs text-subtle-foreground">{t('discordThreadNameHint')}</p>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={`${id}-tags`} className="text-xs">
+                {t('discordTags')}
+              </Label>
+              <span className={cn('font-mono text-xs tabular-nums', current.tags.length > DISCORD_TAGS_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+                {current.tags.length}/{DISCORD_TAGS_MAX}
+              </span>
+            </div>
+            <Input
+              id={`${id}-tags`}
+              inputMode="numeric"
+              value={tagsText ?? current.tags.join(', ')}
+              disabled={disabled}
+              aria-invalid={current.tags.some((tag) => !isDiscordId(tag))}
+              onFocus={() => setTagsText(current.tags.join(', '))}
+              onBlur={() => setTagsText(null)}
+              onChange={(e) => {
+                setTagsText(e.target.value);
+                save({ ...current, tags: [...new Set(e.target.value.split(/[\s,]+/).filter(Boolean))] });
+              }}
+            />
+            <p className="text-xs text-subtle-foreground">{t('discordTagsHint', { max: DISCORD_TAGS_MAX })}</p>
+          </div>
+        </>
+      ) : (
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-thread`} className="text-xs">
+            {t('discordThreadId')}
+          </Label>
+          <Input
+            id={`${id}-thread`}
+            value={current.threadId ?? ''}
+            disabled={disabled}
+            aria-invalid={current.threadId !== null && !isDiscordId(current.threadId)}
+            placeholder={t('discordThreadIdPlaceholder')}
+            onChange={(e) => save({ ...current, threadId: e.target.value.trim() === '' ? null : discordThreadIdFrom(e.target.value) })}
+          />
+          <p className="text-xs text-subtle-foreground">{t('discordThreadIdHint')}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Where an Instagram Reel shows (#1019): in the feed too (the default, not stored), on the Reels tab only, or as a trial
 // Reel shown to non-followers first, which reaches followers by hand in the Instagram app (the default) or by Instagram
 // when it does well. Offered on a Reel, and kept on another post while it holds a choice, so it can be set back.
@@ -485,7 +588,8 @@ function TikTokDisclosureField({ settings, photo, disabled, onChange }: { settin
 // inboxOffered: the channel's connection was granted video.upload, which Crove asks for only where the deployment turns
 // TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903). pinAllowed: the Telegram bot may pin in the channel, as read at
 // connect (#982). reel: the post goes out as an Instagram Reel (#1019). photo: the post is photos only (TikTok's
-// disclosure label names a photo or a video, #1078).
+// disclosure label names a photo or a video, #1078). threadNameDefault: a Discord forum post's name when none is given
+// (#1103), from the post's title or its text's first line.
 function ProviderSettings({
   provider,
   settings,
@@ -495,6 +599,7 @@ function ProviderSettings({
   pinAllowed = false,
   reel = false,
   photo = false,
+  threadNameDefault = '',
 }: {
   provider: string;
   settings: Record<string, unknown>;
@@ -504,8 +609,10 @@ function ProviderSettings({
   pinAllowed?: boolean;
   reel?: boolean;
   photo?: boolean;
+  threadNameDefault?: string;
 }) {
   const t = useTranslations('social');
+  if (provider === 'discord') return <DiscordSettings settings={settings} onChange={onChange} disabled={disabled} threadNameDefault={threadNameDefault} />;
   // Telegram (#982): a silent post, and a pin to the top of the channel once it is out; link buttons under it (#1017).
   // Only what is on is stored, so a variant left as it was keeps its content hash.
   if (provider === 'telegram') {
@@ -1090,6 +1197,13 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TELEGRAM_BUTTONS_ON_ALBUM', { actual });
       case 'TELEGRAM_BUTTON_TEXT_LENGTH':
         return t('TELEGRAM_BUTTON_TEXT_LENGTH', { limit });
+      // Discord forum posts (#1103); which tag: tags.<index> on the issue, counted from 1 for the person.
+      case 'DISCORD_THREAD_NAME_TOO_LONG':
+        return t('DISCORD_THREAD_NAME_TOO_LONG', { limit, actual });
+      case 'DISCORD_TOO_MANY_TAGS':
+        return t('DISCORD_TOO_MANY_TAGS', { limit, actual });
+      case 'DISCORD_TAG_INVALID':
+        return t('DISCORD_TAG_INVALID', { n: Number(issue.field.split('.')[3] ?? 0) + 1 });
       // Which image: media.<index> on the issue, counted from 1 for the person.
       case 'IMAGE_RATIO_NOT_ALLOWED':
         return t('IMAGE_RATIO_NOT_ALLOWED', { n: Number(issue.field.split('.')[1] ?? 0) + 1 });
@@ -1521,11 +1635,13 @@ function ChannelEditor({
     ...(linkedinVisibility ? { visibility: linkedinVisibility } : {}),
     ...(Array.isArray(telegramButtons) ? { buttons: telegramButtons } : {}),
   };
-  const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
+  // A Discord forum post (#1103) takes the post's title as its name.
+  const titled = takesTitle(provider, own.settings);
+  const issues = draftIssues(provider, { body: content.body, title: titled ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   // The channel's own texts against its banned words (#1055); the shared text is marked under the shared fields.
   const allWords = useBannedWords();
   const banned = connectionId ? wordsForChannel(allWords, connectionId) : allWords;
-  const ownTexts = variantTexts({ body: own.custom ? content.body : '', title: own.custom && hasTitle(provider) ? content.title || null : null }, own.settings).filter((x) => x.text !== '');
+  const ownTexts = variantTexts({ body: own.custom ? content.body : '', title: own.custom && titled ? content.title || null : null }, own.settings).filter((x) => x.text !== '');
   return (
     <Card className="block space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1545,7 +1661,7 @@ function ChannelEditor({
       </label>
       {own.custom && (
         <div className="space-y-2">
-          {hasTitle(provider) && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
+          {titled && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
           <Textarea id={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
           <div className="flex flex-wrap items-center gap-2">
             <EmojiPicker targetId={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />
@@ -1554,7 +1670,7 @@ function ChannelEditor({
           {!disabled && onAiUsed && (
             <AiRewrite
               text={own.body}
-              title={hasTitle(provider) ? own.title || null : null}
+              title={titled ? own.title || null : null}
               {...(connectionId ? { connectionId } : {})}
               onAccept={(next) => {
                 onChange({ ...own, body: next.text, title: next.title ?? own.title });
@@ -1600,6 +1716,7 @@ function ChannelEditor({
         pinAllowed={scopes?.includes(TELEGRAM_PIN_SCOPE) ?? false}
         reel={provider === 'instagram' && isInstagramReel(content.media.map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const) })), own.settings)}
         photo={content.media.length > 0 && content.media.every((m) => m.mime.startsWith('image/'))}
+        threadNameDefault={provider === 'discord' ? discordThreadName(null, content.title || null, content.body) : ''}
         onChange={(settings) => onChange({ ...own, settings })}
       />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
@@ -1890,7 +2007,7 @@ export function SocialComposePage() {
   const blocking = selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
-    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withUtm(mine, utm).settings }).length > 0;
+    return draftIssues(c.provider, { body: content.body, title: takesTitle(c.provider, mine.settings) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withUtm(mine, utm).settings }).length > 0;
   });
   // Owners and admins may approve their own post: for one written by a person (no AI text), one action approves it and
   // schedules it (#638). A channel whose policy needs another reviewer still waits for them.
@@ -1980,7 +2097,7 @@ export function SocialComposePage() {
             onChange={setBase}
             disabled={create.isPending}
             autoFocus
-            needsTitle={selected.some((c) => hasTitle(c.provider))}
+            needsTitle={selected.some((c) => takesTitle(c.provider, own[c.id]?.settings))}
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={selected.map((c) => c.id)}
@@ -2437,6 +2554,16 @@ function RecurrencePanel({ post, published, onDone }: { post: Post; published: b
 // When a published variant that is not public yet went to its platform, in words.
 const NOT_PUBLIC_AT: Readonly<Record<string, 'sentToAppAt' | 'wordpressDraftAt' | 'wordpressPendingAt'>> = { sent_to_app: 'sentToAppAt', wordpress_draft: 'wordpressDraftAt', wordpress_pending: 'wordpressPendingAt' };
 
+// The Discord adapter's refusals of a forum post or a thread (#1103), by the outcome text that says what to change.
+type DiscordOutcome = 'discordThreadNameRequired' | 'discordNotForum' | 'discordTagRequired' | 'discordTagUnknown' | 'discordThreadUnknown';
+const DISCORD_OUTCOMES: Readonly<Record<string, DiscordOutcome>> = {
+  DISCORD_THREAD_NAME_REQUIRED: 'discordThreadNameRequired',
+  DISCORD_NOT_FORUM: 'discordNotForum',
+  DISCORD_TAG_REQUIRED: 'discordTagRequired',
+  DISCORD_TAG_UNKNOWN: 'discordTagUnknown',
+  DISCORD_THREAD_UNKNOWN: 'discordThreadUnknown',
+};
+
 // The WordPress adapter's refusals of a category or tag (#981), by the outcome text that names it.
 type WordPressTermOutcome = 'wordpressCategoryNotFound' | 'wordpressCategoryAmbiguous' | 'wordpressTagNotAllowed';
 const WORDPRESS_TERM_OUTCOMES: Readonly<Record<string, WordPressTermOutcome>> = {
@@ -2495,6 +2622,8 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
       if (v.error?.code && v.error.code in WORDPRESS_TERM_OUTCOMES) {
         return <p className="text-destructive [overflow-wrap:anywhere]">{t(`outcome.${WORDPRESS_TERM_OUTCOMES[v.error.code] as WordPressTermOutcome}`, { name: v.error.message ?? '' })}</p>;
       }
+      // Discord refused a forum post or a thread before posting it (#1103): what to change.
+      if (v.error?.code && v.error.code in DISCORD_OUTCOMES) return <p className="text-destructive">{t(`outcome.${DISCORD_OUTCOMES[v.error.code] as DiscordOutcome}`)}</p>;
       // Kept by the org's publishing hold until more than an hour past its time (#946): nothing was sent.
       if (v.error?.code === 'HELD_TOO_LONG') return <p className="text-warning">{t('outcome.heldTooLong')}</p>;
       // TikTok refused an inbox upload for the missing video.upload grant (#903): a reconnect fixes it.
@@ -2982,7 +3111,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             base={base}
             onChange={setBase}
             disabled={!editable || save.isPending}
-            needsTitle={p.variants.some((v) => hasTitle(v.provider))}
+            needsTitle={p.variants.some((v) => takesTitle(v.provider, own[v.id]?.settings ?? v.settings))}
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={p.variants.map((v) => v.connectionId)}
