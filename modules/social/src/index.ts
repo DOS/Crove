@@ -10,6 +10,8 @@ export * from './publisher.ts';
 export * from './publish-hold.ts';
 export * from './domain/versions.ts';
 export * from './versions.ts';
+export * from './domain/banned-words.ts';
+export * from './banned-words.ts';
 export * from './metrics.ts';
 export * from './plan-export.ts';
 export * from './evergreen.ts';

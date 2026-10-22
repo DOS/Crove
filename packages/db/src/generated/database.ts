@@ -72,6 +72,7 @@ export interface CroveKernelSchema {
 
 export interface CroveSocialSchema {
   'crove_social.account_snapshot': SocialAccountSnapshotTable;
+  'crove_social.banned_word': SocialBannedWordTable;
   'crove_social.bio_click': SocialBioClickTable;
   'crove_social.bio_page': SocialBioPageTable;
   'crove_social.brand_voice': SocialBrandVoiceTable;
@@ -918,6 +919,19 @@ export interface SocialAccountSnapshotTable {
   reach: ColumnType<string | null, string | null, NotGranted>;
   error: ColumnType<string | null, string | null, NotGranted>;
   captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_social.banned_word */
+export interface SocialBannedWordTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  phrase: ColumnType<string, string, NotGranted>;
+  normalized: ColumnType<string, string, NotGranted>;
+  level: ColumnType<string, string, NotGranted>;
+  reason: ColumnType<string | null, string | null, NotGranted>;
+  connection_ids: ColumnType<string[], string[] | undefined, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.bio_click */

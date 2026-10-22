@@ -63,6 +63,8 @@ import { clientReviewCommands } from './client-review.ts';
 import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, variantPost, type PostRow, type QueueState, type VariantRow, type Trx } from './variants.ts';
 import { queueOrderCommands } from './queue-order.ts';
 import { versionQueries, withVersion } from './versions.ts';
+import { bannedCheckerOf, bannedSummary, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords } from './banned-words.ts';
+import type { BannedFieldMatch } from './domain/banned-words.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -312,6 +314,8 @@ export const postImport = defineCommand({
   handler: async (ctx, input) => {
     requireUser(ctx);
     const created: { postId: string; submitted: number }[] = [];
+    // A channel whose text holds a blocked word (#1055) stays a draft, like one that breaks its channel's rules.
+    const banned = input.submit ? await bannedCheckerOf(ctx.trx, ctx.orgId) : null;
     for (const row of input.posts) {
       const { post, variants } = await createPost(ctx, {
         body: row.body,
@@ -323,7 +327,9 @@ export const postImport = defineCommand({
       });
       let submitted = 0;
       if (input.submit) {
-        const ready = (await lockVariants(ctx.trx, ctx.orgId, post.id)).filter((v) => variants.some((c) => c.variantId === v.id) && issuesOf(base(post), v).length === 0);
+        const ready = (await lockVariants(ctx.trx, ctx.orgId, post.id)).filter(
+          (v) => variants.some((c) => c.variantId === v.id) && issuesOf(base(post), v).length === 0 && !(banned && isBlocked(banned, base(post), v)),
+        );
         for (const v of ready) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
         if (ready.length > 0) {
           await refreshPostStatus(ctx, post.id);
@@ -599,6 +605,8 @@ export const postSubmit = defineCommand({
     if (chosen.length === 0) throw new DomainError('NOTHING_TO_SUBMIT', 409, 'Không có kênh nào cần gửi duyệt');
     const invalid = chosen.map((v) => ({ variantId: v.id, issues: issuesOf(base(post), v) })).filter((x) => x.issues.length > 0);
     if (invalid.length > 0) throw new DomainError('VARIANT_INVALID', 422, 'Có kênh chưa đúng yêu cầu của nền tảng', { variants: invalid });
+    // The org's blocked words (#1055); a warning goes to review and shows there.
+    await refuseBannedWords(ctx, base(post), chosen);
     for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
     await refreshPostStatus(ctx, post.id);
     await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: chosen.map((v) => v.id), agent_task: preReviewTask({ ...post, tainted: await postTainted(ctx, post.id) }) });
@@ -638,6 +646,9 @@ export const variantDecide = defineCommand({
       input.variants.map((x) => x.variantId),
     );
     const seen = new Map(input.variants.map((x) => [x.variantId, x]));
+    // A channel with a blocked word (#1055), added to the list since it was submitted, is not approved; a request for
+    // changes or a rejection still goes.
+    if (input.decision === 'approved') await refuseBannedWords(ctx, base(post), chosen);
     const required = await approvalsRequired(
       ctx.trx,
       ctx.orgId,
@@ -775,6 +786,8 @@ export const variantSchedule = defineCommand({
     const postLabels = async () => (labels ??= new Set(((await labelsOfPosts(ctx.trx, ctx.orgId, [post.id])).get(post.id) ?? []).map((l) => l.id)));
     const chosen = input.times ? pick(all, [...times.keys()]) : input.variantIds ? pick(all, input.variantIds) : all.filter((v) => v.status === 'approved');
     if (chosen.length === 0) throw new DomainError('NOTHING_TO_SCHEDULE', 409, 'Không có kênh nào đã duyệt để lên lịch');
+    // A blocked word (#1055) added to the list after the approval keeps the channel from the schedule.
+    await refuseBannedWords(ctx, base(post), chosen);
     const shared = input.at ? new Date(Date.parse(input.at)) : post.scheduled_at;
     const timeOf = (v: VariantRow) => times.get(v.id) ?? shared;
     if (!input.queue) {
@@ -1054,6 +1067,9 @@ export interface VariantView {
   removal: RemoveState | null;
   error: { kind: string | null; code: string | null; action: string | null; message: string | null; retryAt: string | null } | null;
   issues: Issue[];
+  // The org's banned or sensitive words in its effective content (#1055), one per word and field: 'block' ones refuse
+  // submit, approval and scheduling; 'warn' ones are for the writer and the reviewer to see.
+  bannedWords: BannedFieldMatch[];
   latestDecision: { decision: SocialDecision; comment: string | null; decidedBy: string; at: string; revision: number; current: boolean } | null;
   // The approvals its channel needs (S9) and who approved its current content in the open review round.
   // client: the channel also waits for the client's approval (#770); clientVerdict: the client's standing answer.
@@ -1188,6 +1204,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
     mediaByPost.set(r.post_id, list);
   }
   const labels = await labelsOfPosts(ctx.trx, ctx.orgId, postIds);
+  const banned = await bannedCheckerOf(ctx.trx, ctx.orgId);
   const byPost = new Map(posts.map((p) => [p.id, p]));
   return postIds
     .map((id) => byPost.get(id))
@@ -1252,6 +1269,7 @@ async function viewPosts(ctx: QueryContext, postIds: string[]): Promise<PostView
               removal: removals.get(v.id) ?? null,
               error: v.error_kind || v.error_code || v.error_message ? { kind: v.error_kind, code: v.error_code, action: v.error_action, message: v.error_message, retryAt: iso(v.error_retry_at) } : null,
               issues: isProvider(v.provider) ? issuesOf(b, row) : [],
+              bannedWords: bannedSummary(banned(b, row)),
               latestDecision: d
                 ? { decision: d.decision, comment: d.comment, decidedBy: d.decided_by, at: iso(d.created_at) ?? '', revision: d.revision, current: d.revision === v.revision && d.content_hash === v.content_hash }
                 : null,
@@ -1602,6 +1620,7 @@ export const socialCommands = [
   ...feedCommands,
   ...reportScheduleCommands,
   ...brandVoiceCommands,
+  ...bannedWordCommands,
   ...watermarkCommands,
   ...chatAlertCommands,
   ...channelSetCommands,
@@ -1656,4 +1675,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...bannedWordQueries];
