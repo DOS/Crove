@@ -3236,13 +3236,10 @@ export const vi = {
       MAIL_COMPLAINT_LIFT: 'Người nhận đã báo thư là spam; chỉ chính họ đăng ký lại mới bỏ chặn được',
       PROPOSAL_DECIDED: 'Đề xuất này đã được xử lý',
       PROPOSAL_EXPIRED: 'Đề xuất này đã quá hạn chờ duyệt nên không xử lý được nữa',
-<<<<<<< HEAD
       PROPOSAL_NOT_EXPIRED: 'Chỉ gửi lại được đề xuất đã hết hạn',
       PROPOSAL_RESUBMITTED: 'Đề xuất này đã được gửi lại rồi',
       PROPOSAL_SUPERSEDED: 'Chứng từ này đã có đề xuất mới hơn; hãy mở đề xuất đó',
       NOT_RESUBMITTABLE: 'Đề xuất này không gửi lại được; hãy lập một đề xuất mới',
-=======
->>>>>>> origin/main
       STALE_REVISION: 'Đề xuất đã thay đổi, hãy tải lại',
       NOT_EDITABLE: 'Đề xuất này không chỉnh sửa được',
       NOT_ELIGIBLE: 'Bạn không có quyền duyệt đề xuất này',

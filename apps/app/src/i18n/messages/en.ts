@@ -3236,13 +3236,10 @@ export const en = {
       MAIL_COMPLAINT_LIFT: 'The recipient reported this mail as spam. Only their own new sign-up can resume it.',
       PROPOSAL_DECIDED: 'This proposal was already decided.',
       PROPOSAL_EXPIRED: 'This proposal waited too long for approval and expired, so it can no longer be decided.',
-<<<<<<< HEAD
       PROPOSAL_NOT_EXPIRED: 'Only an expired proposal can be asked for again.',
       PROPOSAL_RESUBMITTED: 'This proposal was already asked for again.',
       PROPOSAL_SUPERSEDED: 'This document already has a newer proposal; open that one.',
       NOT_RESUBMITTABLE: 'This proposal cannot be asked for again; make a new one.',
-=======
->>>>>>> origin/main
       STALE_REVISION: 'The proposal has changed. Reload it.',
       NOT_EDITABLE: 'This proposal cannot be edited.',
       NOT_ELIGIBLE: 'You are not allowed to approve this proposal.',
