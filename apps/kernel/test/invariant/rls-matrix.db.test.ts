@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.digest_week',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -173,6 +174,8 @@ const socialShortLinkRows = (o: { id: string; owner: string }) => {
 let portalListYear = 2000;
 // A tax obligation is marked done once per period (#921): each row its own year.
 let taxObligationYear = 2000;
+// An org's weekly digest is marked sent once per ISO week (#1104): each row its own year.
+let digestWeekYear = 2000;
 const portalListRow = (o: { id: string; file: string }) => ({
   org_id: o.id,
   id: randomUUID(),
@@ -679,6 +682,9 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // The weekly digest's sent marker (#1104): the worker's sweep writes one row per org and ISO week, so each row gets
+  // its own week however many rows an org gets.
+  'crove_social.digest_week': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), iso_week: `${digestWeekYear++}-W01` } }) },
   // The worker's last bring-in of a channel's posts published outside Crove (#1054): one row per connection, so each
   // row gets its own fresh connection.
   'crove_social.external_import': {
