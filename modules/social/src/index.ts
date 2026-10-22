@@ -12,6 +12,8 @@ export * from './domain/versions.ts';
 export * from './versions.ts';
 export * from './metrics.ts';
 export * from './plan-export.ts';
+export * from './domain/team-report.ts';
+export * from './team-report.ts';
 export * from './evergreen.ts';
 export * from './domain/recurrence.ts';
 export * from './recurring.ts';
