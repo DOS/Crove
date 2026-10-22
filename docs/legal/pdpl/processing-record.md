@@ -72,12 +72,12 @@ Daily job `kernel-retention-purge`, 02:30 Asia/Ho_Chi_Minh (`apps/kernel/src/ret
 | Sign-in email budget rows | 1 hour | `20261017030000_crove_kernel_auth_email_limit.sql` |
 | Notifications | read ones 30 days, all at most 90 days | `packages/kernel/src/notifications.ts` |
 | Background job rows | 7 days after completion | `20261019034500_crove_jobs_pgboss_v46.sql` |
+| Outbox events (business facts: ids and codes) | 30 days in the database, then 13 months in the WORM archive store | `20261028010000_crove_kernel_outbox_retention.sql`, `apps/kernel/src/outbox-retention.ts` |
 
 ### 3.2 Kept on purpose, with no automatic deletion
 
 - The books (every `crove_finance` table), the files behind recorded entries, and `audit_event`: at least 10 years after the org leaves (`docs/runbooks/org-offboarding.md`, Accounting Law 88/2015 Art. 41).
 - The WORM archive of the books and the audit log: `ARCHIVE_RETENTION_DAYS`, default 3650 days, under S3 Object Lock (`docs/runbooks/worm-archive.md`).
-- `outbox_event`: the plan sets 30 days and an archive; no purge exists yet (#997).
 - Sessions (`auth_session`), inbound addresses and context keys.
 
 ### 3.3 Backups
@@ -149,6 +149,5 @@ These are stated here and in the questions for the lawyer ([README.md](README.md
 - Free text and stored files are not covered by the find and erase tools.
 - Final deletion after offboarding is run by hand.
 - No crypto-shredding yet: data inside append-only records stays as long as the records do (ADR-0017).
-- `outbox_event` has no purge yet (#997).
 - Document content goes to the AI endpoint without redaction.
 - No retention hold is set per evidence file; bucket defaults apply (#1009).

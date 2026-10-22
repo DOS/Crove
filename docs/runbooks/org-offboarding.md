@@ -14,7 +14,9 @@ The worker runs `crove_kernel.retention_purge()` every day at 02:30 Asia/Ho_Chi_
 | `crove_kernel.worker_heartbeat` | 7 days | Already purged by `worker_beat()`. |
 | pg-boss jobs | pg-boss `deleteAfterSeconds` | pg-boss maintenance. |
 
-Never purged by the job: `audit_event`, `outbox_event` (business facts; deleted only after the WORM archive of plan §4.9 exists), every `crove_finance` table, `auth_session` and `auth_session_org` (a revoked row is the revocation list), `inbound_address` (tombstones are permanent), `context_key`.
+Never purged by the job: `audit_event`, every `crove_finance` table, `auth_session` and `auth_session_org` (a revoked row is the revocation list), `inbound_address` (tombstones are permanent), `context_key`.
+
+**Outbox events** (`crove_kernel.outbox_event`, issue #997): the same daily run archives each org's events one UTC day at a time, once the whole day is more than 30 days old, to the WORM archive store (`outbox/v1/<org_id>/<day>.jsonl` and a manifest, [worm-archive.md](worm-archive.md)), reads the object back, and only then deletes exactly those events. It needs the archive store; without one nothing is deleted. A day with an event still waiting for the relay waits for the next run. The log line is `[retention] outbox archived=<days> purged=<events>`; a failure logs `[retention] ALERT outbox archive failed: ...` and the next run starts where it stopped.
 
 **Alert:** the worker logs `[retention] ALERT purge deleted 0 rows while expired rows remain: <tables>` when a batch makes no progress. Look for long transactions holding row locks on those tables (`pg_stat_activity`), then let the next run continue.
 
@@ -62,7 +64,7 @@ Final deletion is not automated. Staff run it after the owner has the export and
 | Source documents behind booked entries (`crove_kernel.file` rows and their blobs that a purchase document references) | **Kept** | Same as the ledger | They are the accounting vouchers for those entries. |
 | Fiscal year archive packages (`archive/<org_id>/<year>/`, #922) | **Kept** | Same as the ledger; on S3 with `S3_ARCHIVE_LOCK_DAYS` the store refuses deletion until the lock ends | The year's books, VAT declarations and manifest, built once the year is locked (docs/runbooks/year-archive.md). Never listed or swept by the retention job. |
 | `crove_kernel.audit_event` | **Kept** | Same as the ledger (no automatic deletion in v1, plan §4.10) | Proof of who did what to the books; append-only. |
-| `crove_kernel.outbox_event` | **Kept** until the archive exists | Plan §4.9: archived, then deleted by org prefix (13 months, plan §7.9) | Business facts stream; append-only today. |
+| `crove_kernel.outbox_event` | Archived, then deleted by the daily job | 30 days after each event, for every org (#997); the archive objects are kept 13 months | Business facts stream; the archive holds them after the database no longer does. |
 | Other files and their blobs (documents never booked, email attachments) | Delete | After the export | Not accounting records. |
 | Export blobs (`export/<org_id>/`) | Deleted by the daily retention job | `EXPORT_RETENTION_DAYS` (35 to 90) after the export, plus a day (plan §7.9) | Copies of data the owner already downloaded; sealed at rest. |
 | `party`, `inbound_message`, `extraction`, `proposal`, `activity`, `vendor_account_rule`, `member_invite` | Delete or anonymize | After the export | Mutable working data; parties referenced by kept purchase documents are anonymized only as far as the law allows (tax code and name stay on the voucher). |
