@@ -1,5 +1,6 @@
 // In-app notifications (#637): the viewer's own, newest first. Opening one marks it read and goes to its post (or to
-// the channels page for an expired channel); the settings turn kinds off for this member only.
+// the channels page for an expired channel, or a new post for a channel whose queue runs low); the settings turn kinds
+// off for this member only.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams, Link } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
@@ -49,6 +50,9 @@ function useLine() {
         return t('text.feed_paused', { feed: n.detail.feed ?? '' });
       case 'review_reminder':
         return t(n.detail.stage === 'due' ? 'text.reminder_due' : 'text.reminder_waiting');
+      // A channel's queue running low (#1079).
+      case 'queue_low':
+        return t('text.queue_low', { channel: n.channel ?? t('aChannel'), days: Number(n.detail.days ?? 0), filled: n.detail.filled ?? '0', posting: n.detail.posting ?? '0' });
       // The org's publishing held or released (#946).
       case 'publishing_hold': {
         if (n.detail.state !== 'released') return t('text.publishing_held', { actor, reason: n.detail.reason ?? '' });
@@ -115,6 +119,7 @@ export function SocialNotificationsPage() {
     if (target?.to === 'post') void navigate({ to: '/o/$slug/social/$id', params: { slug, id: target.postId } });
     else if (target?.to === 'channels') void navigate({ to: '/o/$slug/social/channels', params: { slug } });
     else if (target?.to === 'feeds') void navigate({ to: '/o/$slug/social/feeds', params: { slug } });
+    else if (target?.to === 'compose') void navigate({ to: '/o/$slug/social/new', params: { slug }, search: { channel: target.channelId } });
   };
   const items = list.data?.items ?? [];
   return (

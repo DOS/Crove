@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
@@ -793,6 +793,23 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const reminderTimer = deps.runtime.installed('social') ? setInterval(() => void reminderSweep(), REMINDER_SWEEP_MS) : null;
   if (reminderTimer) void reminderSweep();
 
+  // Queues running low (#1079): every hour, each queue with the warning on is measured, and its team told once per dip.
+  let measuringQueues = false;
+  const queueLowSweep = async () => {
+    if (measuringQueues) return;
+    measuringQueues = true;
+    try {
+      const alerted = await sweepQueueLow({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (alerted > 0) console.log(`[social-queue-low] told ${alerted} team(s) of a low queue`);
+    } catch (error) {
+      console.error('[social-queue-low] sweep', error instanceof Error ? error.name : 'error');
+    } finally {
+      measuringQueues = false;
+    }
+  };
+  const queueLowTimer = deps.runtime.installed('social') ? setInterval(() => void queueLowSweep(), QUEUE_LOW_SWEEP_MS) : null;
+  if (queueLowTimer) void queueLowSweep();
+
   // Proposal reminders and escalation (#676): every half hour, the pending proposals past the days their org set.
   let nudging = false;
   const proposalNudgeSweep = async () => {
@@ -1307,6 +1324,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (recurringTimer) clearInterval(recurringTimer);
     if (reminderTimer) clearInterval(reminderTimer);
+    if (queueLowTimer) clearInterval(queueLowTimer);
     if (missingInvoiceTimer) clearInterval(missingInvoiceTimer);
     clearInterval(proposalNudgeTimer);
     clearInterval(securityTimer);
