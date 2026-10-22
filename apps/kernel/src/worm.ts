@@ -50,8 +50,9 @@ export const GENESIS_SHA256 = createHash('sha256').update('').digest('hex');
 const EPOCH = new Date(0).toISOString();
 
 export interface ArchiveStore {
-  // Writes the object once. Throws ArchiveObjectExistsError when the key is already taken.
-  put(key: string, body: Uint8Array): Promise<void>;
+  // Writes the object once. Throws ArchiveObjectExistsError when the key is already taken. On S3, retentionDays
+  // overrides the store's Object Lock retention for this object (the outbox archive keeps 13 months, #997).
+  put(key: string, body: Uint8Array, options?: { retentionDays?: number }): Promise<void>;
   // The object's bytes, or null when there is none.
   get(key: string): Promise<Uint8Array | null>;
   // Every key under the prefix, in key order.
@@ -137,8 +138,8 @@ export class S3ArchiveStore implements ArchiveStore {
     }
   }
 
-  async put(key: string, body: Uint8Array): Promise<void> {
-    const retainUntil = new Date(this.now().getTime() + this.retentionDays * 86_400_000);
+  async put(key: string, body: Uint8Array, options?: { retentionDays?: number }): Promise<void> {
+    const retainUntil = new Date(this.now().getTime() + (options?.retentionDays ?? this.retentionDays) * 86_400_000);
     try {
       await this.client.send(
         new PutObjectCommand({

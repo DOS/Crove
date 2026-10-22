@@ -869,7 +869,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
 
 | Table | Keep | Notes |
 |---|---|---|
-| `outbox_event` | 30 days | Archived as org-prefixed JSONL with a sha256 manifest before deletion |
+| `outbox_event` | 30 days | Archived as org-prefixed JSONL with a sha256 manifest before deletion. Done in #997: the daily retention run archives each org's UTC day to the WORM archive store (`outbox/v1/<org_id>/<day>.jsonl`, locked 13 months), reads it back, records it in `crove_kernel.outbox_archive` and deletes exactly that day's events; the database refuses any other delete (`outbox_event_guard`) |
 | `processed_message`, `security_event`, `idp_event` | 30 days | |
 | `idempotency_key` | 7 days | |
 | `ai_step` | 180 days | |

@@ -1,0 +1,91 @@
+# The Government CA (Ban Cơ yếu Chính phủ) that issued the tax authority's pinned certificates in tax-authority.crt
+# (#951). Read only by apps/extract/test/einvoice-trust.test.ts, which checks that every pinned certificate was issued
+# by the sub-CA below and the sub-CA by the root. Never a trust anchor for invoice signatures: the Government CA issues
+# certificates to many state bodies, so a chain to it proves nothing about the tax authority.
+# Source: the CA store of the tax authority's iTaxViewer 2.7.3 (see README.md); the SHA-256 lines are still to be
+# confirmed against https://ca.gov.vn.
+
+# Subject: C=VN, O=Ban Cơ yếu Chính phủ, CN=CA phục vụ các cơ quan Nhà nước G2
+# Issuer: C=VN, O=Ban Cơ yếu Chính phủ, CN=RootCA chuyên dùng Chính phủ G2
+# Valid: 2018-08-22 to 2048-08-14
+# SHA-256: d8cab7a4aef92e6bb2509d7c61cee7b44f3731b2d21074963530277b366fae4b
+# Source: http://ca.gov.vn/pki/pub/crt/cpcag2.crt
+# Note: the address in the pinned certificates' AIA; this copy is from the iTaxViewer 2.7.3 CA store.
+-----BEGIN CERTIFICATE-----
+MIIGqTCCBJGgAwIBAgIIevLfUhgmU9MwDQYJKoZIhvcNAQELBQAwYTELMAkGA1UE
+BhMCVk4xIzAhBgNVBAoMGkJhbiBDxqEgeeG6v3UgQ2jDrW5oIHBo4bunMS0wKwYD
+VQQDDCRSb290Q0EgY2h1ecOqbiBkw7luZyBDaMOtbmggcGjhu6cgRzIwHhcNMTgw
+ODIyMDgwNjM2WhcNNDgwODE0MDczNjM5WjBpMQswCQYDVQQGEwJWTjEjMCEGA1UE
+CgwaQmFuIEPGoSB54bq/dSBDaMOtbmggcGjhu6cxNTAzBgNVBAMMLENBIHBo4bul
+YyB24bulIGPDoWMgY8ahIHF1YW4gTmjDoCBuxrDhu5tjIEcyMIICIjANBgkqhkiG
+9w0BAQEFAAOCAg8AMIICCgKCAgEAr+Tbl3sZ0cpqSUVjgc9Ukny8ga8sebklptm7
+9GX6xvJ90sOwpGqOUmQGfc9O0Thkk1qSUJxfyZAi/u4yOP3EAv84O7aD6IzXQ9+D
+zymHUBh6xh0ca6e4Y7lxAkMl0b0pxiXy+RDaOQYpuPQ5FkADjR+26Q3PfYWgWeA1
+f3+VQAnN/JGH590PyxzYyAtQADFhY6pfpAYKvKhwa/vqwYKynvyvU8nPJSqXDqWJ
++UCtUWV88ES4eVCSUhDMxQG0BcqHLopQe8krNSKhZDFlxG2EO+E7Bqp3V3O6kurh
+uK1ue5IaRYVGPvofQihX4orjc1ZON9paCXkef7xEZZlj5IxhstnzgJiyjAw1xjTv
+pjoNagFuW4H3vtsA2Z6b4RsyJFG21sBOe0XdDHpo7+9Z8qWvbn4ksmEyvCteG1D8
+cv7stvkbt/vCWotFP3ekJ1t0ofYqnDKtuZqUgoAiB1cMDLzp1IqUjwgMf95aVi31
+DNJRWYBJrrKyYq3g3HoQOdRyuFSYf3PbjX87EHDva/TA0GEKcPpBAj5XgiK5Lb4g
+OSUHNvoe1u3kKywMi+xWrMmrCvITe5Hc/U0q9FE01S9BkaUfTNXzB811KXZ0lHjh
+kQiRuid6iF5XOhtvooRLhsKkUGJF7TtgjbGO+dIXEF4uDBM0GokISQ6XShUeOIog
+6DCeGXUCAwEAAaOCAVswggFXMBIGA1UdEwEB/wQIMAYBAf8CAQAwHwYDVR0jBBgw
+FoAUd3m69/O9+4YeExpeI1JcqrpurlQwaQYIKwYBBQUHAQEEXTBbMDUGCCsGAQUF
+BzAChilodHRwOi8vY2EuZ292LnZuL3BraS9wdWIvY3J0L3Jvb3RjYWcyLmNydDAi
+BggrBgEFBQcwAYYWaHR0cDovL29jc3AuY2EuZ292LnZuLzBKBgNVHSAEQzBBMD8G
+CGCFQAEBAQEBMDMwMQYIKwYBBQUHAgEWJWh0dHBzOi8vY2EuZ292LnZuL3BraS9w
+dWIvcG9saWNpZXMvQ1AwOgYDVR0fBDMwMTAvoC2gK4YpaHR0cDovL2NhLmdvdi52
+bi9wa2kvcHViL2NybC9yb290Y2FnMi5jcmwwHQYDVR0OBBYEFFC+z6C96g+fTpEo
+oyrrfO7wL8i6MA4GA1UdDwEB/wQEAwIBBjANBgkqhkiG9w0BAQsFAAOCAgEAizrr
+5GdEEWH1t6yqBprEg2mC6vjWxV8Kydov1/b9mGNl/6rLmkLkSny3gKhO7061977H
+5xPHioMv/SRhwu5m4dkJAcojuNB1SQ7a+m8w1OFvPRfKX/CqrTMfGcgNXOl7ZI96
+62XBxqGjWgJwR6GZPUU7cS6bjOtjsLPrUbiU2FJOH3RWWcZCl0CRkq3V19urMkC5
+0jWT6IKZ5lZsvSn0Ddl0BN5Dt8T2dqhN5eN4apl6fdVmqueXwbZcq1JIrGlHvOB8
+vn3DlzE9nmPgNVD/idWdYuUhrtpKC7LNFd/QjmYRpQfqYBUXyfiRZb4f5Ud68mft
+8WApP+xw3RRRFxG6E2BeDCzG0ym4rCxTH4zqFQ7u9dmbva4108ARuVrAHvrgRvap
+vIcHqEqzkgG061OjZAx9WIPanSJE12fjqIbsgxivXD5Jt08U5r/2824qRNnlkoLc
+bBNI6W+x37Ppo4WqmlR1xE3JKVQUby/mUAIPEwtfn5LZC4fmRoG++ZHqT1ti3AxU
+LAnD4ddo4I7Dv19CCykN+TtQ1WIbAEApaDYzoyI+N0kKcyFlMjTerajyUV3pjziP
+iWmOCppXnxs3xDS7YEebDOkDnBx48PE6z9M30fon2JiL95VYTb7K8D4Z+DEGosDd
+/XYQcdyIfSEfoWYsWUzyln8tUdjNoXa9e7VE+m8=
+-----END CERTIFICATE-----
+
+# Subject: C=VN, O=Ban Cơ yếu Chính phủ, CN=RootCA chuyên dùng Chính phủ G2
+# Issuer: C=VN, O=Ban Cơ yếu Chính phủ, CN=RootCA chuyên dùng Chính phủ G2
+# Valid: 2018-08-22 to 2048-08-14
+# SHA-256: f04ba4b459a7c9a1b971ad9b1cb833e695a80c79aea63b174b66a70edfe2fdb8
+# Source: https://ca.gov.vn
+# Note: Ban Cơ yếu Chính phủ's root; this copy is from the iTaxViewer 2.7.3 CA store.
+-----BEGIN CERTIFICATE-----
+MIIFpzCCA4+gAwIBAgIIO2WwoDAG+aswDQYJKoZIhvcNAQELBQAwYTELMAkGA1UE
+BhMCVk4xIzAhBgNVBAoMGkJhbiBDxqEgeeG6v3UgQ2jDrW5oIHBo4bunMS0wKwYD
+VQQDDCRSb290Q0EgY2h1ecOqbiBkw7luZyBDaMOtbmggcGjhu6cgRzIwHhcNMTgw
+ODIyMDczNjM5WhcNNDgwODE0MDczNjM5WjBhMQswCQYDVQQGEwJWTjEjMCEGA1UE
+CgwaQmFuIEPGoSB54bq/dSBDaMOtbmggcGjhu6cxLTArBgNVBAMMJFJvb3RDQSBj
+aHV5w6puIGTDuW5nIENow61uaCBwaOG7pyBHMjCCAiIwDQYJKoZIhvcNAQEBBQAD
+ggIPADCCAgoCggIBAKU35IPgByE9Ui+W0oLSZKNRxWLudIJLAicboYFz/2i2nmpE
+nDdPncAAhCf5NprFHWRwckuP8p+7NS6pRohMlkId6LweFSv7P47IWM1yFYpsiHKk
+5xWbsgItV5yoQc2sqzS3gzuXGacBlP0h4CZndloIo2kcOiTIhbxFpTwIT/YVdRAy
+PLIV/5lxKC5r4ET0VIs5wMVsKL29N0g9u4LvJmJez0Cb3v33FZ4mbRk0X0FAQwMw
+C7KxIoQKnZhTE35yYCEsk4Cp76pYQVMjVAZyeJ1R6YSCuc55LAwUET7o4NAudijZ
+TOJDO7PuUxQcsuv17rdk0pr+AGwi4b03FVQCY6oTclNcwEYVjf2ul3eEMxJKQJ/N
+NDhpvF9LAf7lpCYsQhbxz10Iqeqzl5On+pSPqNKRncgjPfs0ek/8IpOOyc2diwjx
+AdFx2xjVrVS07mXM/G//cV8oWmBvgl/QD96gB6YsLc2DyIZuSHQzJGE312hn7/Gd
+qd+Vj9Pqxytf5+GldxbWB1HQQ/aZD2kFX9A/jQGutd/CTCcs2UCemQnJn261EnVi
+UffQGX3m69n2DwM6O2QluagTxQYONCCEbv4rNy8MTwk7P1Bt8N7QaEIoYXn8GT7X
+HrS8AaNSa7qON7/TG5TlyfJt5JYp2asGVwBQ5onn1tvVGHiHbscQ8dJB4CUhAgMB
+AAGjYzBhMA8GA1UdEwEB/wQFMAMBAf8wHwYDVR0jBBgwFoAUd3m69/O9+4YeExpe
+I1JcqrpurlQwHQYDVR0OBBYEFHd5uvfzvfuGHhMaXiNSXKq6bq5UMA4GA1UdDwEB
+/wQEAwIBBjANBgkqhkiG9w0BAQsFAAOCAgEAhfZKfj1h6fTUr43i8seYh6EUiEvd
+Vd+D5k8iU5pfqT9CoZG1wm4TszJ6JQyok7c4OApKRYWT/cJkgI814FXN97rdTm/I
+zX2pU7Agae6j5mY0cozGq8YURYxpsjKdbcxcj6uK3wlHBRA2YsZgy5UJsRK5Qj9+
+S2jjq5zuQdT+Ir/YLMGidun3Nt9u2O5Xzg0aiAcvJ/6RHzQPl3FjyqHXIPBd4xg+
+Nlpfd0dQ1TkL/y+ykrTvdWlm0Hd0jCd49vRzL58lyqYs6dp1teaNy/yd0MlH9O8d
+DKW30ccu9YA93wiDBZ/4koxLFn5ftRFz7P1Az2f5MA3jZPRuvn6Gv95dOBW4Ifnk
+B+uOno5b4sLMC4gwSAq4w8fdDW/D4QPY/kHily0oj0JYlE8eY79/Sxz9VhPgfCol
+0K9YHiCCOdpmg+oUWmpq+/zrEE7uc7+KUpQNTjxB+0c10kESKdK+jOrJQlWmKegD
+zZ8+fM9AMkveSw22T9VJ0t8sllQalFb0Y6kpszMD45vkp4Pc5MaoyJPfWMG4cAoP
+I0C8C8WGte4D1UzmlfdTyD+ZWO4Fb9xaHUhyewx6CAcDyH5sTjoN1kZNie6aWQVg
+9RihjCzFStpnyCIlbZiEep2bFDQhper6yHEhGtym8MtqT220YJ25NXofQ+5+r+Nf
+btkMVr+VUE5O2Bc=
+-----END CERTIFICATE-----
