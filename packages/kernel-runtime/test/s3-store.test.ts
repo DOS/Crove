@@ -381,6 +381,23 @@ describe('generations (ADR-0013)', () => {
     await expect(off.store.put(key, bytes, 'application/xml')).resolves.toBe(`content:${sha256}`);
   });
 
+  it('records content: with versioning off even when the server returns a version id, and never pins one on reads', async () => {
+    // Cloudflare R2: every write answers with a VersionId, but a read naming one is refused with NotImplemented.
+    const { store, sent } = fakeStore(
+      (c) => {
+        if (c instanceof GetObjectCommand && (c.input as { VersionId?: string }).VersionId) throw s3Error('NotImplemented', 501);
+        if (c instanceof GetObjectCommand) return { Body: body(bytes), VersionId: 'r2-version' };
+        return { ChecksumSHA256: checksum, VersionId: 'r2-version' };
+      },
+      { versioning: 'off' },
+    );
+    await expect(store.put(key, bytes, 'application/xml')).resolves.toBe(`content:${sha256}`);
+    // A row an earlier release recorded as s3:<id> on R2 reads the current object.
+    await expect(readVerified(store, { key, generation: 's3:r2-version', sha256 })).resolves.toEqual(bytes);
+    await expect(readVerified(store, { key, generation: `content:${sha256}`, sha256 })).resolves.toEqual(bytes);
+    expect(sent.filter((c) => c instanceof GetObjectCommand).map((c) => (c.input as { VersionId?: string }).VersionId)).toEqual([undefined, undefined]);
+  });
+
   it('tags GCS generations as gcs:', async () => {
     const { store } = fakeStore(() => ({ ChecksumSHA256: checksum, VersionId: '1729000000000001' }), { flavor: 'gcs' });
     await expect(store.put(key, bytes, 'application/xml')).resolves.toBe('gcs:1729000000000001');

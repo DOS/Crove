@@ -266,10 +266,18 @@ export class S3BlobStore implements BlobStore {
 
   // The generation of the object a write created or found.
   private generation(key: string, versionId: string | undefined, sha256: string): string {
+    // With versioning off the content address is the generation, whatever the server answers: Cloudflare R2 returns a
+    // version id on every write but refuses it on reads (NotImplemented), so recording it would make the blob unreadable.
+    if (this.versioning === 'off') return contentGeneration(sha256);
     // "null" is the version id of an object written while the bucket was unversioned or suspended.
     if (versionId && versionId !== 'null') return `${this.flavor}:${versionId}`;
-    if (this.versioning === 'off') return contentGeneration(sha256);
     throw new BlobStoreVersioningError(this.bucket, key);
+  }
+
+  // The version a generation pins, or null to use the current object. With versioning off nothing is pinned, so rows an
+  // earlier release recorded as s3:<id> on R2 still read (integrity rests on the sha256 check there, as for content:).
+  private pinned(generation: string | null | undefined): string | null {
+    return this.versioning === 'off' ? null : versionOf(generation);
   }
 
   async put(key: string, bytes: Uint8Array, contentType: string): Promise<string> {
@@ -365,7 +373,7 @@ export class S3BlobStore implements BlobStore {
 
   // A versioned generation reads exactly that version; a missing version is a missing blob, never the current one.
   async get(key: string, generation?: string | null): Promise<Uint8Array> {
-    return (await this.fetch(key, versionOf(generation))).bytes;
+    return (await this.fetch(key, this.pinned(generation))).bytes;
   }
 
   async delete(key: string): Promise<void> {
@@ -396,13 +404,13 @@ export class S3BlobStore implements BlobStore {
   private async hold(ref: BlobRef, retainUntil: Date): Promise<Date> {
     assertStorageKey(ref.key);
     if (!ref.key.startsWith('org/')) throw new Error('only evidence files (org/ keys) are held');
-    let versionId = versionOf(ref.generation);
+    let versionId = this.pinned(ref.generation);
     if (!versionId) {
       // No pinned version (a row from before ADR-0013, or S3_VERSIONING=off): hold the current version, and only once
       // its bytes are the recorded ones, so a swapped object is never the one kept.
       const current = await this.fetch(ref.key);
       if (sha256Hex(current.bytes) !== ref.sha256) throw new BlobIntegrityError(ref);
-      versionId = current.versionId && current.versionId !== 'null' ? current.versionId : null;
+      versionId = this.versioning !== 'off' && current.versionId && current.versionId !== 'null' ? current.versionId : null;
     }
     const version = versionId ? { VersionId: versionId } : {};
     let existing: { mode: string | undefined; until: Date } | null = null;
@@ -519,7 +527,7 @@ export class S3BlobStore implements BlobStore {
 
   private async presignDownload(presigner: S3Client, ref: BlobRef, file: { filename: string; contentType: string }): Promise<string | null> {
     assertStorageKey(ref.key);
-    const version = versionOf(ref.generation);
+    const version = this.pinned(ref.generation);
     if (!version) return null;
     return getSignedUrl(
       presigner,
