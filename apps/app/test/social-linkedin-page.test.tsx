@@ -35,7 +35,7 @@ describe('LinkedIn Company Pages in the app', () => {
   it('names the page channel apart from the member, with a hint in both languages', () => {
     expect(providerName('linkedin_page')).toBe('LinkedIn Page');
     expect(providerName('linkedin')).toBe('LinkedIn');
-    expect(viMessages.social.linkedinPageHint).toContain('quản trị viên');
+    expect(viMessages.social.linkedinPageHint).toContain('bạn quản trị');
     expect(enMessages.social.linkedinPageHint).toContain('Company Page');
   });
 

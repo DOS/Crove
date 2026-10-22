@@ -236,7 +236,10 @@ export class LinkedInPageConnector implements OAuthConnector {
   // name the organization `organization` in one answer and `organizationTarget` in another, so either is read.
   private async administered(token: string): Promise<string[]> {
     const ids: string[] = [];
-    for (let start = 0; start < MAX_PAGES_LISTED; start += ACL_PAGE_SIZE) {
+    // LinkedIn may answer fewer rows than asked for (its default page is 10), so the next page starts after the rows
+    // that came back, and a short page ends the list only when no next link follows it.
+    let start = 0;
+    for (let call = 0; call < MAX_PAGES_LISTED / ACL_PAGE_SIZE && start < MAX_PAGES_LISTED; call += 1) {
       const answer = await this.client.call<AclAnswer>('GET', `/rest/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED&start=${start}&count=${ACL_PAGE_SIZE}`, token);
       const rows = answer.body?.elements ?? [];
       for (const row of rows) {
@@ -246,6 +249,7 @@ export class LinkedInPageConnector implements OAuthConnector {
         if (id && !ids.includes(id)) ids.push(id);
       }
       const next = (answer.body?.paging?.links ?? []).some((l) => l.rel === 'next');
+      start += rows.length;
       if (rows.length === 0 || (rows.length < ACL_PAGE_SIZE && !next)) break;
     }
     return ids;

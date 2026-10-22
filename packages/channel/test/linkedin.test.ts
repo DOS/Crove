@@ -382,6 +382,19 @@ describe('LinkedIn Company Pages (#1077)', () => {
     expect(calls.filter((c) => c.url.pathname === '/rest/organizations')).toHaveLength(3);
   });
 
+  it('asks the next page after the rows LinkedIn returned when it answers fewer than asked for', async () => {
+    const ids = Array.from({ length: 15 }, (_, i) => String(2000 + i));
+    const rows = (slice: string[]) => slice.map((id) => ({ role: 'ADMINISTRATOR', state: 'APPROVED', organization: `urn:li:organization:${id}` }));
+    const { fetchImpl, calls } = pages({
+      ...token(GRANTED),
+      [`GET api.linkedin.com${ACL}`]: [{ body: { elements: rows(ids.slice(0, 10)), paging: { links: [{ rel: 'next', href: `${ACL}?start=10` }] } } }, { body: { elements: rows(ids.slice(10)), paging: { links: [] } } }],
+      'GET api.linkedin.com/rest/organizations': [{ body: { results: {} } }],
+    });
+    const accounts = await new LinkedInPageConnector(APP, fetchImpl).exchange({ code: 'c', redirectUri: PAGE_REDIRECT, codeVerifier: null });
+    expect(accounts.map((a) => a.externalAccountId)).toEqual(ids);
+    expect(calls.filter((c) => c.url.pathname === ACL).map((c) => c.url.searchParams.get('start'))).toEqual(['0', '10']);
+  });
+
   it('refuses a grant without a page scope as MISSING_PERMISSION before reading any page, and connects nothing for a member with no page', async () => {
     for (const scope of ['r_organization_admin', 'w_organization_social', 'openid,profile,w_member_social']) {
       const narrow = pages(token(scope));
