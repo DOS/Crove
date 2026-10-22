@@ -1,7 +1,7 @@
 // Posting queue slot math (issue #231): IANA zones, DST, and the keep-your-slot placement rules.
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { isSlot, isValidTimeZone, localTime, moveToFront, nextFreeSlot, placeQueued, retime, shuffleTimes, slotsBetween, zonedToEpoch, type Holder, type QueueSpec } from '../src/index.ts';
+import { isSlot, isValidTimeZone, localTime, moveToFront, nextFreeSlot, placeQueued, queueRunway, retime, shuffleTimes, slotsBetween, zonedToEpoch, type Holder, type QueueSpec } from '../src/index.ts';
 
 const HCM = 'Asia/Ho_Chi_Minh';
 const NY = 'America/New_York';
@@ -350,5 +350,34 @@ describe('queue reordering', () => {
         expect(after.get(target) as number).toBeLessThanOrEqual(list[pick % n]?.at as number);
       }),
     );
+  });
+});
+
+describe('queueRunway: how far ahead a queue is filled (#1079)', () => {
+  // Monday 2026-11-02 08:00 in Ho Chi Minh City (UTC+7).
+  const now = Date.UTC(2026, 10, 2, 1, 0);
+  const at = (day: number, hour: number, minute = 0) => Date.UTC(2026, 10, day, hour - 7, minute);
+  const daily: QueueSpec = { timeZone: HCM, slots: [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, minute: 9 * 60 })) };
+
+  it('counts the posting days ahead and those with a post', () => {
+    expect(queueRunway(daily, [], now, 3)).toEqual({ postingDays: 3, filledDays: 0, low: true });
+    expect(queueRunway(daily, [at(2, 9), at(3, 9), at(4, 9)], now, 3)).toEqual({ postingDays: 3, filledDays: 3, low: false });
+    // A gap in the middle is low too.
+    expect(queueRunway(daily, [at(2, 9), at(4, 9)], now, 3)).toEqual({ postingDays: 3, filledDays: 2, low: true });
+  });
+
+  it('never counts a day without a slot, and a queue without slots is never low', () => {
+    // Mondays, Wednesdays and Fridays only: a week ahead has three posting days.
+    expect(queueRunway(queue, [at(2, 9), at(4, 12, 30), at(6, 20)], now, 7)).toEqual({ postingDays: 3, filledDays: 3, low: false });
+    expect(queueRunway({ timeZone: HCM, slots: [] }, [], now, 7)).toEqual({ postingDays: 0, filledDays: 0, low: false });
+  });
+
+  it('looks only at the window after now, by local day', () => {
+    // Today's slot has passed (9:00 at 10:00): the window starts tomorrow.
+    const later = Date.UTC(2026, 10, 2, 3, 0);
+    expect(queueRunway(daily, [at(3, 9)], later, 1)).toEqual({ postingDays: 1, filledDays: 1, low: false });
+    // A post after the window, or before now, fills nothing.
+    expect(queueRunway(daily, [at(2, 9), at(9, 9)], now, 1)).toEqual({ postingDays: 1, filledDays: 1, low: false });
+    expect(queueRunway(daily, [at(1, 9)], now, 1)).toEqual({ postingDays: 1, filledDays: 0, low: true });
   });
 });

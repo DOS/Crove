@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.channel_access',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -640,6 +641,19 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_social.calendar_feed': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), token_sha256: hex64(), created_by: o.owner } }) },
   // A team's note on calendar dates (#794): a title over one day or a range, with a colour from the app's palette.
   'crove_social.calendar_note': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), starts_on: '2026-10-20', ends_on: '2026-10-22', title: 'RLS matrix note', created_by: o.owner, updated_by: o.owner } }) },
+  // A channel a limited member may work on (#1081): a member with rows is limited to those channels, a member with none
+  // is not limited. The member is the org's owner, the one member the fixture has (tenant roles cannot add members;
+  // only the commands skip owners and admins). One row per member and connection, so each row gets its own fresh
+  // connection however many rows an org gets.
+  'crove_social.channel_access': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), user_id: o.owner, channel_connection_id: connection.id, created_by: o.owner },
+      };
+    },
+  },
   // The review policy of a channel (S9, issue #394): how many people approve a variant, and whether its reviewers
   // are reminded (#703), one row per connection.
   'crove_social.channel_policy': {

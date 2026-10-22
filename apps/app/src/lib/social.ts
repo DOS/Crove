@@ -79,10 +79,20 @@ export const PROVIDER_NAMES: Record<Provider, string> = {
   pinterest: 'Pinterest',
   discord: 'Discord',
   wordpress: 'WordPress',
+  linkedin_page: 'LinkedIn Page',
 };
 
 export function providerName(provider: string): string {
   return isProvider(provider) ? PROVIDER_NAMES[provider] : provider;
+}
+
+// The platforms the channels screen lists to connect, in the order Crove adds them (Social plan §6). A platform the
+// deployment has not set up shows as not configured, except LinkedIn Company Pages, which wait on LinkedIn approving
+// the app for the Community Management API (#1077) and are listed only where the deployment offers them.
+const CONNECT_PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'linkedin_page', 'youtube', 'tiktok', 'x', 'google_business', 'pinterest'] as const;
+const LISTED_WHEN_OFFERED: readonly string[] = ['linkedin_page'];
+export function connectPlatforms(offered: readonly string[]): (typeof CONNECT_PLATFORMS)[number][] {
+  return CONNECT_PLATFORMS.filter((p) => !LISTED_WHEN_OFFERED.includes(p) || offered.includes(p));
 }
 
 // A variant's text against its channel's limit, the way the platform counts, with the link the channel's adapter adds.

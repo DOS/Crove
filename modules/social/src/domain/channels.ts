@@ -20,6 +20,8 @@ export const PROVIDERS = [
   'pinterest',
   'discord',
   'wordpress',
+  // A LinkedIn Company Page the member administers (#1077).
+  'linkedin_page',
 ] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -107,6 +109,7 @@ export const LINK_PLACEMENT: Readonly<Record<Provider, LinkPlacement>> = {
   youtube: 'text',
   threads: 'text',
   linkedin: 'text',
+  linkedin_page: 'text',
   x: 'text',
   bluesky: 'text',
   // The link goes as the call to action's URL (or an offer's redeem link), never in the text.
@@ -151,6 +154,8 @@ export const COMMENT_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
   instagram: { max: 2200, count: 'utf16', required: false },
   threads: { max: 500, count: 'codepoints', required: false },
   linkedin: { max: 1250, count: 'utf16', required: false },
+  // A page comments under its own post as the page (#1077), with the member's limit.
+  linkedin_page: { max: 1250, count: 'utf16', required: false },
   x: { max: 280, count: 'weighted', required: false },
   bluesky: { max: 300, count: 'graphemes', required: false, maxBytes: 3000 },
   mastodon: { max: 500, count: 'codepoints', required: false },
@@ -558,7 +563,7 @@ export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> 
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'linkedin_page', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord']);
 
 // The channels whose Crove adapter takes a published post down (#860); the others answer REMOVE_NOT_SUPPORTED until
 // their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of it.
@@ -683,6 +688,16 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   },
   linkedin: {
     provider: 'linkedin',
+    body: { max: 3000, count: 'utf16', required: false },
+    title: null,
+    media: { min: 0, max: 20, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800 },
+    maxLinks: null,
+    scrapesLinkPreview: false,
+    unverified: ['body.max', 'media.max'],
+  },
+  // A Company Page posts through the same Posts, Images and Videos APIs as the member (#1077), so the same limits.
+  linkedin_page: {
+    provider: 'linkedin_page',
     body: { max: 3000, count: 'utf16', required: false },
     title: null,
     media: { min: 0, max: 20, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800 },
@@ -864,6 +879,12 @@ export const MASTODON_VISIBILITY = ['public', 'unlisted'] as const;
 // the member, so all three apply. The adapter maps the same values.
 export const LINKEDIN_VISIBILITY = ['public', 'connections', 'loggedIn'] as const;
 export type LinkedInVisibility = (typeof LINKEDIN_VISIBILITY)[number];
+// A Company Page (#1077) has no connections, so its post is public or for signed-in members only.
+export const LINKEDIN_PAGE_VISIBILITY = ['public', 'loggedIn'] as const;
+// The visibility values a LinkedIn provider takes, or null for any other provider.
+export function linkedinVisibilities(provider: string): readonly LinkedInVisibility[] | null {
+  return provider === 'linkedin' ? LINKEDIN_VISIBILITY : provider === 'linkedin_page' ? LINKEDIN_PAGE_VISIBILITY : null;
+}
 export const CONTENT_WARNING_MAX = 500;
 
 // YouTube video details (#905), read by the adapter in the same shapes: the audience (`settings.madeForKids`, a

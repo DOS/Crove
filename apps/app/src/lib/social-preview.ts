@@ -18,6 +18,7 @@ const RULES: Readonly<Record<string, PreviewRule>> = {
   instagram: { layout: 'square', cut: 125, linkCard: false, gridMax: 1 },
   threads: { layout: 'feed', cut: null, linkCard: true, gridMax: 4 },
   linkedin: { layout: 'feed', cut: 210, linkCard: true, gridMax: 4 },
+  linkedin_page: { layout: 'feed', cut: 210, linkCard: true, gridMax: 4 },
   x: { layout: 'short', cut: null, linkCard: true, gridMax: 4 },
   bluesky: { layout: 'short', cut: null, linkCard: true, gridMax: 4 },
   tiktok: { layout: 'vertical', cut: 100, linkCard: false, gridMax: 1 },
