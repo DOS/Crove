@@ -367,6 +367,40 @@ suite('social posts on PostgreSQL (S3)', () => {
     await expect(exec(o, o.owner, 'social.variant.reschedule', { variantId: queued.variants[0]?.id, at: later })).rejects.toMatchObject({ code: 'QUEUE_PAUSED' });
   });
 
+  it('refuses a move from a time the channel no longer has, and moves as before without one (#956)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const post = await approved(o, [conn], 'Giờ đã đổi');
+    const v = post.variants[0] as PostView['variants'][number];
+    const first = new Date(Date.now() + 2 * HOUR).toISOString();
+    await exec(o, o.owner, 'social.variant.schedule', { postId: post.id, at: first });
+    // Two people saw it at its first time; one moves it.
+    const seen = (await get(o, o.owner, post.id)).variants[0]?.effectiveAt as string;
+    expect(seen).toBe(first);
+    const other = new Date(Date.now() + 5 * HOUR).toISOString();
+    await exec(o, o.owner, 'social.variant.reschedule', { variantId: v.id, at: other, expectedAt: seen });
+    // The other's drag, from the time they saw, is refused and changes nothing.
+    const later = new Date(Date.now() + 26 * HOUR).toISOString();
+    await expect(exec(o, o.owner, 'social.variant.reschedule', { variantId: v.id, at: later, expectedAt: seen })).rejects.toMatchObject({ code: 'STALE_REVISION', status: 409 });
+    expect((await get(o, o.owner, post.id)).variants[0]).toMatchObject({ status: 'scheduled', effectiveAt: other });
+    // Without expectedAt the move goes ahead, as callers that do not send it expect.
+    await exec(o, o.owner, 'social.variant.reschedule', { variantId: v.id, at: later });
+    expect((await get(o, o.owner, post.id)).variants[0]).toMatchObject({ status: 'scheduled', effectiveAt: later });
+
+    // A channel waiting on a queue slot is compared with its slot time, the time the calendar shows.
+    const slots = [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, minute: 9 * 60 }));
+    await exec(o, o.owner, 'social.queue.set', { connectionId: conn, timeZone: 'Asia/Ho_Chi_Minh', slots });
+    const queued = await approved(o, [conn], 'Chờ khung giờ');
+    await exec(o, o.owner, 'social.variant.schedule', { postId: queued.id, queue: true });
+    const slot = (await get(o, o.owner, queued.id)).variants[0];
+    expect(slot?.queueSlotAt).not.toBeNull();
+    const q = slot?.id as string;
+    await expect(exec(o, o.owner, 'social.variant.reschedule', { variantId: q, at: later, expectedAt: first })).rejects.toMatchObject({ code: 'STALE_REVISION' });
+    expect((await get(o, o.owner, queued.id)).variants[0]).toMatchObject({ queueSlotAt: slot?.queueSlotAt, effectiveAt: slot?.effectiveAt });
+    await exec(o, o.owner, 'social.variant.reschedule', { variantId: q, at: later, expectedAt: slot?.effectiveAt });
+    expect((await get(o, o.owner, queued.id)).variants[0]).toMatchObject({ queueSlotAt: null, effectiveAt: later });
+  });
+
   it('filters the lists by stage, channel and text, and pages by the last change (#574)', async () => {
     const o = await org();
     const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];

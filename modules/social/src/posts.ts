@@ -949,19 +949,27 @@ export const variantUnschedule = defineCommand({
 });
 
 // Moves a scheduled variant to another time (#580, the calendar's drag): its approvals stay, since its content does
-// not change. A variant waiting on a queue slot leaves the slot for the exact time.
+// not change. A variant waiting on a queue slot leaves the slot for the exact time. expectedAt (#956): the time the
+// person saw the channel at (effectiveAt), sent by the calendar's drag and the bulk move; when the channel's time
+// changed meanwhile (another move, a queue change, a retry), the move is refused with STALE_REVISION and nothing
+// changes. Without it the move goes ahead as before.
 export const variantReschedule = defineCommand({
   name: 'social.variant.reschedule',
-  input: z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }) }),
+  input: z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }), expectedAt: z.iso.datetime({ offset: true }).optional() }),
   risk: 'R2',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
     const postId = await variantPost(ctx.trx, ctx.orgId, [input.variantId]);
-    await lockPost(ctx.trx, ctx.orgId, postId);
+    const post = await lockPost(ctx.trx, ctx.orgId, postId);
     const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]);
     if (!v) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
     await refuseChannels(ctx, [v.channel_connection_id]);
+    // The same time the lists and the calendar show for it (effectiveAt), read under the post's lock.
+    const current = v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? post.scheduled_at;
+    if (input.expectedAt !== undefined && current?.getTime() !== Date.parse(input.expectedAt)) {
+      throw new DomainError('STALE_REVISION', 409, 'Giờ đăng của kênh này đã đổi sau khi bạn xem, hãy tải lại', { variantId: v.id, at: current?.toISOString() ?? null });
+    }
     if (v.status !== 'scheduled') throw new DomainError('VARIANT_STATE', 409, 'Chỉ đổi giờ được kênh đã lên lịch', { variantId: v.id, status: v.status });
     const at = new Date(Date.parse(input.at));
     if (at.getTime() <= ctx.now.getTime()) throw new DomainError('SCHEDULE_IN_PAST', 422, 'Giờ đăng phải ở tương lai', { variantId: v.id });

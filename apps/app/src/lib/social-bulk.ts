@@ -167,9 +167,11 @@ export function shiftTime(atMs: number, move: BulkMove, timeZone: string): numbe
 export type MoveSkip = 'queue' | 'published' | 'cancelled' | 'unscheduled';
 const OUT = new Set(['publishing', 'processing', 'published', 'ambiguous', 'removed']);
 
+// expectedAt: the channel's time as last fetched, so a channel moved meanwhile is refused as stale (#956) rather than
+// moved from a time it no longer has.
 export interface MovePlan {
   postId: string;
-  moves: { variantId: string; at: string }[];
+  moves: { variantId: string; at: string; expectedAt: string }[];
   skipped: { variantId: string; reason: MoveSkip }[];
 }
 
@@ -180,14 +182,14 @@ export function planMove(post: BulkPost, move: BulkMove): MovePlan {
     const skip: MoveSkip | null =
       v.status === 'cancelled' ? 'cancelled' : OUT.has(v.status) ? 'published' : v.status !== 'scheduled' || !v.effectiveAt ? 'unscheduled' : v.queueSlotAt ? 'queue' : null;
     if (skip) plan.skipped.push({ variantId: v.id, reason: skip });
-    else plan.moves.push({ variantId: v.id, at: new Date(shiftTime(Date.parse(v.effectiveAt as string), move, post.timeZone)).toISOString() });
+    else plan.moves.push({ variantId: v.id, at: new Date(shiftTime(Date.parse(v.effectiveAt as string), move, post.timeZone)).toISOString(), expectedAt: v.effectiveAt as string });
   }
   return plan;
 }
 
 export interface MovePostResult {
   postId: string;
-  moved: { variantId: string; at: string }[];
+  moved: { variantId: string; at: string; expectedAt: string }[];
   skipped: { variantId: string; reason: MoveSkip }[];
   refused: { variantId: string; error: unknown }[];
 }
@@ -197,7 +199,7 @@ export interface MovePostResult {
 export async function runMove(
   posts: readonly BulkPost[],
   move: BulkMove,
-  send: (request: { variantId: string; at: string }) => Promise<unknown>,
+  send: (request: { variantId: string; at: string; expectedAt: string }) => Promise<unknown>,
   progress?: (done: number, total: number) => void,
 ): Promise<MovePostResult[]> {
   const results: MovePostResult[] = [];

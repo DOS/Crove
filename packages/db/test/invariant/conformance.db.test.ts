@@ -84,7 +84,17 @@ const COLUMN_EXCEPTIONS: Record<string, { rule: 'timestamp' | 'money'; type: str
 // be on main first; while it is listed here, an exception that matches nothing is not stale. Remove the key once the
 // PR is merged. One key per line, sorted, with a trailing comma.
 const PENDING_EXCEPTIONS = new Set<string>([
-  // 'crove_schema.table_name',
+  // The supporting indexes of #1212.
+  'crove_finance.input_vat_check.input_vat_check_voucher_fk',
+  'crove_kernel.agent_wakeup.agent_wakeup_org_id_agent_id_fkey',
+  'crove_kernel.agent_wakeup.agent_wakeup_org_id_run_id_fkey',
+  'crove_kernel.proposal.proposal_decided_by_agent_fk',
+  'crove_kernel.proposal.proposal_requested_by_run_fk',
+  'crove_social.notification.notification_post_fk',
+  'crove_social.post_approval.post_approval_variant_fk',
+  'crove_social.post_comment.post_comment_variant_fk',
+  'crove_social.post_variant.post_variant_post_fk',
+  'crove_social.watermark.watermark_file_fk',
 ]);
 
 type Rule = 'pk' | 'fk-shape' | 'fk-index' | 'timestamp' | 'money' | 'cross-module' | 'trigger';
@@ -236,7 +246,7 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
 }
 
 // The deviations no exception covers, and the exceptions that no longer match a deviation exactly.
-function compare(violations: Violation[]) {
+function compare(violations: Violation[], pending: ReadonlySet<string> = PENDING_EXCEPTIONS) {
   const recorded = new Map<string, string>();
   for (const [table, { pk }] of Object.entries(PK_EXCEPTIONS)) recorded.set(`pk ${table}`, pk);
   for (const [key, { cols }] of Object.entries(FK_INDEX_EXCEPTIONS)) recorded.set(`fk-index ${key}`, cols);
@@ -249,7 +259,7 @@ function compare(violations: Violation[]) {
     if (shape === v.detail) matched.add(id);
     else unexpected.push(`${id}: ${v.detail}${shape ? ` (exception records ${shape})` : ''}`);
   }
-  const stale = [...recorded.keys()].filter((id) => !matched.has(id) && !PENDING_EXCEPTIONS.has(id.slice(id.indexOf(' ') + 1)));
+  const stale = [...recorded.keys()].filter((id) => !matched.has(id) && !pending.has(id.slice(id.indexOf(' ') + 1)));
   return { unexpected, stale };
 }
 
@@ -453,5 +463,18 @@ suite('tenant schema conformance (G3)', () => {
       `pk ${FIXTURE}.by_id: id`,
     ]);
     expect(stale).toEqual(['pk crove_finance.journal_line', 'pk crove_kernel.tenant']);
+  });
+
+  it('accepts a pending exception with or without its deviation, and no other stale one', async () => {
+    const found = await findViolations(admin);
+    const pending = new Set([...PENDING_EXCEPTIONS, 'crove_kernel.tenant']);
+    // Before its PR lands, the pending exception still matches its deviation.
+    expect(compare(found, pending)).toEqual({ unexpected: [], stale: [] });
+    // After, the org table and the journal line conform: only the pending one is let through.
+    const fixed = found.filter((v) => !(v.rule === 'pk' && ['crove_kernel.tenant', 'crove_finance.journal_line'].includes(v.key)));
+    expect(compare(fixed, pending)).toEqual({ unexpected: [], stale: ['pk crove_finance.journal_line'] });
+    // A pending key spares only a stale exception: a changed shape is still reported.
+    const changed = found.map((v) => (v.rule === 'pk' && v.key === 'crove_kernel.tenant' ? { ...v, detail: 'id' } : v));
+    expect(compare(changed, pending).unexpected).toEqual(['pk crove_kernel.tenant: id (exception records org_id)']);
   });
 });
