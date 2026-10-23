@@ -1404,6 +1404,13 @@ export interface SocialPostVariantTable {
   remove_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   outperform_checked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   outperform_notified_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  edit_body: string | null;
+  edit_content_hash: string | null;
+  edit_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  edit_requested_by: string | null;
+  edit_state: string | null;
+  published_revision: number | null;
+  edit_error_code: string | null;
 }
 
 /** crove_social.post_version */

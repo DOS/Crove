@@ -40,6 +40,8 @@ export interface VariantRow {
   // The variant's own media list (jsonb), null to inherit the post's.
   media: unknown;
   revision: number;
+  // The revision it went out under, once a correction of its published text moved its revision on (#1223); else null.
+  published_revision: number | null;
   content_hash: string;
   content_frozen: boolean;
   status: SocialVariantStatus;
@@ -68,6 +70,7 @@ export const VARIANT_COLUMNS = [
   'settings',
   'media',
   'revision',
+  'published_revision',
   'content_hash',
   'content_frozen',
   'status',

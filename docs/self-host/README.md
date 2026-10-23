@@ -207,7 +207,8 @@ and what to check after a restore. Set `CROVE_DIR` to this checkout when you run
 
 Not in a backup, so keep them in your password manager: `.env` (database passwords, `AUTH_JWT_SECRET`,
 `EXPORT_ENCRYPTION_KEY`, `BACKUP_ENCRYPTION_KEY`) and the credential key of connected social channels
-([credential-key.md](../runbooks/credential-key.md)).
+([credential-key.md](../runbooks/credential-key.md)). To replace the database passwords, `INBOUND_SECRET` or the alert
+webhook: [secret-rotation.md](../runbooks/secret-rotation.md).
 
 ## 11. Upgrades and migrations
 

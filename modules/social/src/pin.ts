@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { isProvider, telegramOptionsOf, type Provider } from './domain/channels.ts';
-import { publishCallKey } from './domain/publish.ts';
+import { callRevision, publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
 
@@ -20,8 +20,8 @@ export const PIN_NOT_ALLOWED = 'TELEGRAM_CANNOT_PIN';
 
 export type PinWork = { action: 'none'; reason: string } | { action: 'call'; variantId: string; connectionId: string; callKey: string; externalId: string; silent: boolean };
 
-type PinVariant = Pick<VariantRow, 'id' | 'revision' | 'attempt'>;
-const pinKey = (v: PinVariant) => publishCallKey(v.id, v.revision, v.attempt, PIN_STEP);
+type PinVariant = Pick<VariantRow, 'id' | 'revision' | 'published_revision' | 'attempt'>;
+const pinKey = (v: PinVariant) => publishCallKey(v.id, callRevision(v), v.attempt, PIN_STEP);
 
 // Whether a variant asks for a pin: its settings say so, on a channel that pins.
 export function wantsPin(v: { provider: string; settings: unknown }): boolean {

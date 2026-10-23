@@ -15,8 +15,8 @@
 // line, cut to 100 characters) and applied_tags (the forum's tag ids); threadId posts into an existing thread with
 // ?thread_id=. A forum webhook not marked is refused by Discord (220001) before anything is posted, and that refusal
 // names the setting (DISCORD_THREAD_NAME_REQUIRED). A text channel's post is sent as it always was.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
-import { removeResult } from './comment.ts';
+import type { ConnectedAccount, EditInput, EditResult, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { editResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type Fetch } from './oauth.ts';
 
@@ -121,20 +121,24 @@ class DiscordClient {
     this.fetch = allowlistedFetch(DISCORD_HOSTS, fetchImpl, timeoutMs);
   }
 
-  // One call on a webhook, or on one of its messages (DELETE). The token is in the path, as the API takes it, and never
-  // logged.
+  // One call on a webhook, or on one of its messages (PATCH, DELETE). The token is in the path, as the API takes it, and
+  // never logged.
   // threadId: the thread the message goes to or is in (#1103), as Discord's thread_id query parameter.
   async call<T>(
     webhookId: string,
     token: string,
-    init: { method: 'GET' } | { method: 'POST'; body: string | FormData; threadId?: string | null } | { method: 'DELETE'; messageId: string; threadId?: string | null },
+    init:
+      | { method: 'GET' }
+      | { method: 'POST'; body: string | FormData; threadId?: string | null }
+      | { method: 'PATCH'; messageId: string; body: string; threadId?: string | null }
+      | { method: 'DELETE'; messageId: string; threadId?: string | null },
   ): Promise<T | null> {
     const headers: Record<string, string> = { accept: 'application/json' };
-    if (init.method === 'POST' && typeof init.body === 'string') headers['content-type'] = 'application/json';
+    if ((init.method === 'POST' || init.method === 'PATCH') && typeof init.body === 'string') headers['content-type'] = 'application/json';
     const thread = init.method !== 'GET' && init.threadId ? `thread_id=${init.threadId}` : null;
-    const path = init.method === 'POST' ? `?wait=true${thread ? `&${thread}` : ''}` : init.method === 'DELETE' ? `/messages/${init.messageId}${thread ? `?${thread}` : ''}` : '';
+    const path = init.method === 'POST' ? `?wait=true${thread ? `&${thread}` : ''}` : init.method === 'DELETE' || init.method === 'PATCH' ? `/messages/${init.messageId}${thread ? `?${thread}` : ''}` : '';
     const url = `${API}/webhooks/${webhookId}/${token}${path}`;
-    const response = await this.fetch(url, { method: init.method, headers, ...(init.method === 'POST' ? { body: init.body } : {}) });
+    const response = await this.fetch(url, { method: init.method, headers, ...(init.method === 'POST' || init.method === 'PATCH' ? { body: init.body } : {}) });
     const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!response.ok) throw new DiscordError(response.status, json, response.headers.get('retry-after'));
     return json as T | null;
@@ -307,6 +311,33 @@ export class DiscordPublisher implements Publisher {
     const answered = typeof message?.channel_id === 'string' && SNOWFLAKE.test(message.channel_id) ? message.channel_id : null;
     const channel = options.threadId ?? (options.forum ? (answered ?? messageId) : s.channelId);
     return { kind: 'accepted', externalId: messageId, url: `https://discord.com/channels/${s.guildId}/${channel}/${messageId}` };
+  }
+
+  // Corrects the webhook's message (#1223): PATCH /webhooks/{id}/{token}/messages/{message} with the new content,
+  // answered with the message (Edit Webhook Message). Only content and allowed_mentions are sent: attachments left out
+  // keep the message's files (the docs: files given are appended, and only an attachments field removes any), and
+  // mentions are never parsed, as at publish. A message in a thread (#1103) is edited with thread_id, as it is deleted:
+  // the thread named, or for a forum post its own thread, whose id is the message's; a forum post's name stays. The
+  // text is built as publish builds it. A message or thread Discord no longer has is POST_NOT_FOUND.
+  async edit(input: EditInput): Promise<EditResult> {
+    const s = discordSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_WEBHOOK_TOKEN' };
+    if (!SNOWFLAKE.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_WEBHOOK_ID' };
+    if (!/^\d{1,20}$/.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const text = textOf(input.content);
+    if (!text && input.content.media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    if (text.length > DISCORD_TEXT_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG' };
+    const options = discordOptionsOf(input.settings);
+    if (options === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'DISCORD_SETTINGS_INVALID' };
+    const threadId = options.threadId ?? (options.forum ? input.externalId : null);
+    const client = new DiscordClient(this.fetchImpl);
+    try {
+      const message = await client.call<{ id?: unknown }>(input.externalAccountId, s.token, { method: 'PATCH', messageId: input.externalId, threadId, body: JSON.stringify({ content: text, allowed_mentions: { parse: [] } }) });
+      return message?.id === input.externalId ? { kind: 'edited' } : { kind: 'unknown', code: 'NOT_CONFIRMED' };
+    } catch (error) {
+      if (error instanceof DiscordError && error.status === 404 && (error.code === 10008 || (error.code === 10003 && threadId))) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      return editResult(discordResult(error));
+    }
   }
 
   // Deletes the webhook's message (#860): DELETE /webhooks/{id}/{token}/messages/{message}, answered 204. A message

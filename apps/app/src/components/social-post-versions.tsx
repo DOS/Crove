@@ -40,13 +40,15 @@ function VersionEntry({
   const [confirming, setConfirming] = useState(false);
   const preview = restorePreview(current, version.variants);
   const same = preview.changes.length === 0;
+  // The version is the content as it is now: nothing to restore, and no published channel shows other text since.
+  const now = same && preview.history.length === 0;
   const who =
     version.createdBy === null ? t('before', { when: f.dateTime(version.createdAt) }) : t('by', { who: version.createdByName ?? t('formerMember'), when: f.dateTime(version.createdAt) });
   return (
     <li className="space-y-2 border-l-2 border-border py-1 pl-3 text-sm">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-medium text-foreground">{t('version', { number: version.number })}</span>
-        {newest && same && <Badge variant="secondary">{t('current')}</Badge>}
+        {newest && now && <Badge variant="secondary">{t('current')}</Badge>}
         <span className="text-xs text-subtle-foreground">{who}</span>
       </div>
       <div className="flex flex-wrap gap-2">
@@ -82,9 +84,9 @@ function VersionEntry({
       )}
       {open && (
         <div className="space-y-3">
-          {same ? (
+          {now ? (
             <p className="text-xs text-muted-foreground">{t('same')}</p>
-          ) : (
+          ) : same ? null : (
             <>
               <p className="text-xs text-muted-foreground">{t('changesIntro')}</p>
               {preview.changes.map((c) => (
@@ -96,6 +98,18 @@ function VersionEntry({
             </>
           )}
           {preview.kept > 0 && <p className="text-xs text-subtle-foreground">{t('kept', { count: preview.kept })}</p>}
+          {/* A published channel whose text was corrected on its platform since (#1223): what it showed then. */}
+          {preview.history.length > 0 && (
+            <>
+              <p className="text-xs text-muted-foreground">{t('historyIntro')}</p>
+              {preview.history.map((c) => (
+                <div key={`history-${c.variantId}`} className="space-y-1">
+                  <p className="text-xs font-medium text-foreground">{c.name}</p>
+                  <ContentChanges diff={c.diff} />
+                </div>
+              ))}
+            </>
+          )}
           {/* The approvals given to this version's content, with the review checklist items each reviewer ticked (#1105). */}
           {version.variants
             .filter((v) => v.approvals.length > 0)

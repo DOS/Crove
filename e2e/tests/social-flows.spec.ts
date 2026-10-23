@@ -687,6 +687,86 @@ test('puts an approved post in an open queue slot by dropping it there, then mov
   await expect(page.locator(`[data-slot="${slotAt(day)}"]`)).toContainText('Trống');
 });
 
+test('corrects a published post on its channel: a blocked word is refused, the text changes and the timeline and versions show before and after, a member is refused (#1223)', async ({ page, browser }) => {
+  await signInNewUser(page, newEmail('social-live-edit'));
+  const slug = await createOrg(page, 'Quán Phở Sửa Bài');
+  const channel = 'Trang Sửa Bài';
+  await connectSandbox(page, channel);
+  // A blocked word of the org, on the channels screen.
+  await page.getByLabel('Từ hoặc cụm từ').fill('rẻ nhất');
+  await page.getByLabel('Mức', { exact: true }).selectOption('block');
+  await page.getByRole('button', { name: 'Thêm từ' }).click();
+  await expect(page.getByText('rẻ nhất', { exact: true })).toBeVisible();
+  await compose(page, 'Phở bò giá 54.000đ');
+  await submitApproveSchedule(page, [channel]);
+  const postId = postIdOf(page);
+  const postUrl = page.url();
+  exec(`UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = :'post'`, { post: postId });
+  const card = channelCard(page, channel);
+  await expect(card.getByText('Đã đăng', { exact: true })).toBeVisible({ timeout: 45_000 });
+  const variantId = sql<{ id: string }>(`SELECT id FROM crove_social.post_variant WHERE post_id = :'post'`, { post: postId })[0]?.id as string;
+
+  // A blocked word in the new text is refused, with nothing sent.
+  await card.getByRole('button', { name: 'Sửa nội dung đã đăng' }).click();
+  const text = card.getByLabel('Nội dung mới');
+  await expect(text).toHaveValue('Phở bò giá 54.000đ');
+  await text.fill('Phở bò rẻ nhất phố: 45.000đ');
+  await card.getByRole('button', { name: 'Cập nhật lên kênh' }).click();
+  await expect(card.getByText('Bài có từ bị cấm: «rẻ nhất»')).toBeVisible();
+  expect(sql<{ n: string }>(`SELECT count(*)::text AS n FROM crove_kernel.external_call WHERE key LIKE :'key'`, { key: `social.publish:${variantId}:%:edit%` })).toEqual([{ n: '0' }]);
+  expect(sql<{ edit_state: string | null }>(`SELECT edit_state FROM crove_social.post_variant WHERE id = :'id'`, { id: variantId })).toEqual([{ edit_state: null }]);
+
+  // The corrected text goes to the channel; the page follows until the platform confirms it.
+  await text.fill('Phở bò giá 45.000đ');
+  await card.getByRole('button', { name: 'Cập nhật lên kênh' }).click();
+  await expect(card.getByLabel('Nội dung mới')).toHaveCount(0);
+  await expect
+    .poll(() => sql<{ revision: number; body: string | null; edit_state: string | null }>(`SELECT revision, body, edit_state FROM crove_social.post_variant WHERE id = :'id'`, { id: variantId }), { timeout: 45_000 })
+    .toEqual([{ revision: 2, body: 'Phở bò giá 45.000đ', edit_state: null }]);
+  expect(sql<{ state: string }>(`SELECT state FROM crove_kernel.external_call WHERE key = :'key'`, { key: `social.publish:${variantId}:1:1:edit` })).toEqual([{ state: 'succeeded' }]);
+  await expect(card.getByText('Đang cập nhật nội dung đã sửa lên kênh')).toHaveCount(0, { timeout: 15_000 });
+  await expect(card.getByText('Phở bò giá 45.000đ').first()).toBeVisible();
+
+  // The timeline: the owner corrected it, and the channel shows the corrected text.
+  await page.reload();
+  await expect(page.getByText('đã sửa nội dung bài đã đăng').first()).toBeVisible();
+  await expect(page.getByText('đã hiển thị nội dung đã sửa').first()).toBeVisible();
+  // The versions: the new one is the owner's; the one before shows the text the channel had, without a restore.
+  const versions = page.getByRole('region', { name: 'Lịch sử phiên bản' }).or(page.locator('[aria-label="Lịch sử phiên bản"]'));
+  await expect(versions.getByText('Phiên bản 2', { exact: true })).toBeVisible();
+  const first = versions.locator('li').filter({ hasText: 'Phiên bản 1' });
+  await first.getByRole('button', { name: 'Xem khác biệt' }).click();
+  await expect(first.getByText('Kênh đã đăng giữ nguyên nội dung hiện tại; lúc đó kênh hiện nội dung khác như sau:')).toBeVisible();
+  await expect(first.getByText('54', { exact: false }).first()).toBeVisible();
+  await expect(first.getByRole('button', { name: 'Khôi phục' })).toHaveCount(0);
+
+  // A member sees no such action, and the server refuses them with 403.
+  const writer = newEmail('social-live-edit-member');
+  const memberContext = await browser.newContext({ baseURL: new URL(postUrl).origin, locale: 'vi-VN', timezoneId: TIME_ZONE });
+  const memberPage = await memberContext.newPage();
+  await signInNewUser(memberPage, writer);
+  await expect.poll(() => sql<{ id: string }>(`SELECT id FROM crove_kernel.user_account WHERE lower(email) = lower(:'email')`, { email: writer }).length).toBe(1);
+  exec(
+    `INSERT INTO crove_kernel.tenant_member (org_id, user_id, role)
+     SELECT t.org_id, u.id, 'member' FROM crove_kernel.tenant t, crove_kernel.user_account u
+      WHERE t.slug = :'slug' AND lower(u.email) = lower(:'email')`,
+    { slug, email: writer },
+  );
+  const read = memberPage.waitForRequest((r) => r.url().includes('/api/rpc/social/posts/get'));
+  await memberPage.goto(postUrl);
+  const headers = (await read).headers();
+  const memberCard = channelCard(memberPage, channel);
+  await expect(memberCard.getByText('Đã đăng', { exact: true })).toBeVisible();
+  await expect(memberCard.getByRole('button', { name: /Sửa (lại )?nội dung đã đăng/ })).toHaveCount(0);
+  const refused = await memberPage.request.post('/api/rpc/social/variants/editPublished', {
+    headers: Object.fromEntries(Object.entries(headers).filter(([k]) => k === 'authorization' || k.startsWith('x-crove'))),
+    data: { json: { variantId, revision: 2, body: 'Thành viên sửa bài' } },
+  });
+  expect(refused.status()).toBe(403);
+  expect(sql<{ revision: number }>(`SELECT revision FROM crove_social.post_variant WHERE id = :'id'`, { id: variantId })).toEqual([{ revision: 2 }]);
+  await memberContext.close();
+});
+
 test('draws a post on six channels as one chip, and "+9" opens every post of the day, by keyboard too (#1220)', async ({ page }) => {
   await signInNewUser(page, newEmail('social-day-list'));
   const slug = await createOrg(page, 'Công ty Lịch Kín');

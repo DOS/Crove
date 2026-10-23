@@ -12,8 +12,8 @@
 // instance's window posts nothing new. A content warning (spoiler text) and the visibility (public or unlisted) come
 // from the variant's settings. The limits are the instance's own (GET /api/v2/instance), read before the post.
 // A status may carry a poll instead of media (#1118, `settings.poll`), its text being the question.
-import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
-import { commentResult, removeResult } from './comment.ts';
+import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, EditInput, EditResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { commentResult, EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { ConnectorError, type Fetch } from './oauth.ts';
 
@@ -78,7 +78,7 @@ class MastodonClient {
     this.fetch = fetchImpl;
   }
 
-  async call<T>(s: MastodonSecret, method: 'GET' | 'POST' | 'DELETE', path: string, body?: { json?: unknown; form?: FormData }, headers: Record<string, string> = {}): Promise<{ status: number; data: T }> {
+  async call<T>(s: MastodonSecret, method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, body?: { json?: unknown; form?: FormData }, headers: Record<string, string> = {}): Promise<{ status: number; data: T }> {
     const response = await this.fetch(`${s.instance}${path}`, {
       method,
       headers: { accept: 'application/json', authorization: `Bearer ${s.accessToken}`, ...(body?.json !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
@@ -353,6 +353,52 @@ export class MastodonPublisher implements Publisher {
     } catch (error) {
       if (error instanceof MastodonError && (error.status === 404 || error.status === 410)) return { kind: 'removed' };
       return removeResult(mastodonResult(error));
+    }
+  }
+
+  // Corrects the account's own status (#1223): PUT /api/v1/statuses/:id with the new text, answered with the status
+  // (Mastodon API, Edit a status). An edit sends the status whole, so the status is read first (GET
+  // /api/v1/statuses/:id) and its media_ids, sensitive flag and language go back as they are; leaving media_ids out
+  // would take its media off. The content warning is the variant's, as at publish. A status with a poll is refused
+  // before any call (an edit of a poll's options resets its votes), as the module refuses it first. The text is built
+  // as publish builds it and checked against the instance's limit. A status the instance no longer has (404) is not
+  // edited.
+  async edit(input: EditInput): Promise<EditResult> {
+    const s = mastodonSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!STATUS_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    if (mastodonPollOf(input.settings) !== null) return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
+    const text = textOf(input.content);
+    const { spoilerText } = mastodonSettingsOf(input.settings);
+    let status: { media_attachments?: unknown; sensitive?: unknown; language?: unknown; poll?: unknown };
+    try {
+      status = (await this.client.call<typeof status>(s, 'GET', `/api/v1/statuses/${input.externalId}`)).data;
+    } catch (error) {
+      if (error instanceof MastodonError && (error.status === 404 || error.status === 410)) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      // Nothing was changed yet: a read that fails is a failure to edit, never an unclear one.
+      const result = mastodonResult(error);
+      return result.kind === 'rejected' ? editResult(result) : { kind: 'rejected', error: 'transient', code: (result.kind === 'unknown' && result.code) || 'STATUS_UNREADABLE' };
+    }
+    if (status.poll !== null && status.poll !== undefined) return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
+    const mediaIds = Array.isArray(status.media_attachments)
+      ? status.media_attachments.flatMap((m: unknown) => {
+          const id = m && typeof m === 'object' ? (m as { id?: unknown }).id : undefined;
+          return typeof id === 'string' && STATUS_ID.test(id) ? [id] : [];
+        })
+      : [];
+    if (!text && mediaIds.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    const limits = await this.limits(s);
+    if (codepoints(text) + (spoilerText ? codepoints(spoilerText) : 0) > limits.maxCharacters) return { kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG', message: `this instance takes ${limits.maxCharacters} characters` };
+    // The status's language as Mastodon gave it, regional ones (zh-CN, pt-BR) included; anything else is left out.
+    const language = typeof status.language === 'string' && /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/.test(status.language) ? { language: status.language } : {};
+    try {
+      const { data } = await this.client.call<{ id?: unknown }>(s, 'PUT', `/api/v1/statuses/${input.externalId}`, {
+        json: { status: text, media_ids: mediaIds, sensitive: status.sensitive === true, spoiler_text: spoilerText ?? '', ...language },
+      });
+      return data.id === input.externalId ? { kind: 'edited' } : { kind: 'unknown', code: 'NOT_CONFIRMED' };
+    } catch (error) {
+      if (error instanceof MastodonError && (error.status === 404 || error.status === 410)) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      return editResult(mastodonResult(error));
     }
   }
 

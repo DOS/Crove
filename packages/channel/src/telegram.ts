@@ -16,8 +16,8 @@
 // (URL buttons). A media group takes no keyboard, so an album with buttons is refused with nothing sent, never posted
 // without them; validation says so first.
 // Polls (#1118): settings.poll makes the post one sendPoll, the text its question (telegramPollOf).
-import type { CommentResult, ConnectedAccount, PinInput, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
-import { commentResult, removeResult } from './comment.ts';
+import type { CommentResult, ConnectedAccount, EditInput, EditResult, PinInput, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { commentResult, EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type Fetch } from './oauth.ts';
 
@@ -388,6 +388,39 @@ export class TelegramPublisher implements Publisher {
         return { kind: 'rejected', error: 'permission', code: 'TELEGRAM_CANNOT_PIN', message: error.message };
       }
       return commentResult(telegramResult(error));
+    }
+  }
+
+  // Corrects the channel's message (#1223): editMessageText for a text post, editMessageCaption for a photo, a video
+  // or an album (whose caption is on its first message, the one the post is named by), on the message the bot sent
+  // (Bot API, Updating messages). The text is built as publish builds it, within the same limits. The post's buttons
+  // (#1017) go again as reply_markup, since an edit without it takes the keyboard off; an album has none. A poll's
+  // question cannot be edited, so a poll is refused before any call, as the module refuses it first. Telegram answers
+  // "message is not modified" for the same text, which counts as edited; a message it no longer has is POST_NOT_FOUND.
+  async edit(input: EditInput): Promise<EditResult> {
+    const s = telegramSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_BOT_TOKEN' };
+    const parts = POST_ID.exec(input.externalId);
+    if (!parts || parts[1] !== input.externalAccountId) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    if (telegramPollOf(input.settings) !== null) return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
+    const text = textOf(input.content);
+    const media = input.content.media;
+    if (!text && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    if (media.length === 0 ? utf16(text) > TELEGRAM_TEXT_MAX : utf16(text) > TELEGRAM_CAPTION_MAX) return { kind: 'rejected', error: 'bad_request', code: media.length === 0 ? 'TEXT_TOO_LONG' : 'CAPTION_TOO_LONG' };
+    const keyboard = keyboardOf(input.settings);
+    if (keyboard === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'BUTTONS_INVALID' };
+    const markup = keyboard && media.length <= 1 ? { reply_markup: { inline_keyboard: keyboard } } : {};
+    const target = { chat_id: parts[1], message_id: Number(parts[2]) };
+    const client = new TelegramClient(this.fetchImpl);
+    try {
+      if (media.length === 0) await client.call(s.botToken, 'editMessageText', { ...target, text, ...markup });
+      else await client.call(s.botToken, 'editMessageCaption', { ...target, caption: text, ...markup });
+      return { kind: 'edited' };
+    } catch (error) {
+      if (error instanceof TelegramError && error.status === 400 && /message is not modified/i.test(error.message)) return { kind: 'edited' };
+      if (error instanceof TelegramError && error.status === 400 && /message to edit not found/i.test(error.message)) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      if (error instanceof TelegramError && error.status === 400 && /can't be edited/i.test(error.message)) return { kind: 'rejected', error: 'bad_request', code: 'TELEGRAM_CANNOT_EDIT', message: error.message };
+      return editResult(telegramResult(error));
     }
   }
 

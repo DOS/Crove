@@ -9,7 +9,7 @@ import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { THREAD_RULES, isProvider, threadPartsOf } from './domain/channels.ts';
-import { publishCallKey } from './domain/publish.ts';
+import { callRevision, publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
 import { publishingHeld } from './publish-hold.ts';
@@ -23,8 +23,8 @@ export type ThreadWork =
   | { action: 'none'; reason: string }
   | { action: 'call'; variantId: string; provider: string; connectionId: string; callKey: string; part: number; externalId: string; rootExternalId: string; text: string };
 
-type ThreadVariant = Pick<VariantRow, 'id' | 'revision' | 'attempt'>;
-const threadPrefix = (v: ThreadVariant) => publishCallKey(v.id, v.revision, v.attempt, THREAD_STEP);
+type ThreadVariant = Pick<VariantRow, 'id' | 'revision' | 'published_revision' | 'attempt'>;
+const threadPrefix = (v: ThreadVariant) => publishCallKey(v.id, callRevision(v), v.attempt, THREAD_STEP);
 
 // The part a call key posts (2 is the first reply), or null for a key that is not a thread part.
 export const partOf = (key: string): number | null => {
@@ -129,7 +129,7 @@ export const threadBegin = defineCommand({
     const parent = n === 2 ? v.external_post_id : calls.filter((c) => partOf(c.key) === n - 1 && c.state === 'succeeded').at(-1)?.external_ref;
     if (!parent) return { action: 'none', reason: 'no_parent' };
     const step = mine.length === 0 ? `${THREAD_STEP}_${n}` : `${THREAD_STEP}_${n}_${mine.length + 1}`;
-    const callKey = publishCallKey(v.id, v.revision, v.attempt, step);
+    const callKey = publishCallKey(v.id, callRevision(v), v.attempt, step);
     await ctx.trx
       .insertInto('crove_kernel.external_call')
       .values({ org_id: ctx.orgId, key: callKey, module: 'social', target: v.provider, step, retry_safety: 'never', request_hash: v.content_hash, started_at: ctx.now })
