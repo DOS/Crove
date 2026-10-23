@@ -149,7 +149,7 @@ function Chip({
         onClick={onPlan}
         aria-label={t('calendar.changeDateOf', { text })}
         title={t('calendar.changeDate')}
-        className="shrink-0 rounded px-1 text-xs text-subtle-foreground opacity-0 group-hover/chip:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none max-sm:hidden"
+        className="inline-flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded px-1 text-xs text-subtle-foreground opacity-0 group-hover/chip:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none max-sm:hidden"
       >
         ⋯
       </button>
