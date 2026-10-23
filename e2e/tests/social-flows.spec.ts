@@ -686,3 +686,135 @@ test('puts an approved post in an open queue slot by dropping it there, then mov
   expect(slotOf()).toEqual({ status: 'scheduled', at: `${next} 19:00` });
   await expect(page.locator(`[data-slot="${slotAt(day)}"]`)).toContainText('Trống');
 });
+
+test('draws a post on six channels as one chip, and "+9" opens every post of the day, by keyboard too (#1220)', async ({ page }) => {
+  await signInNewUser(page, newEmail('social-day-list'));
+  const slug = await createOrg(page, 'Công ty Lịch Kín');
+  const channels = ['Kênh 1', 'Kênh 2', 'Kênh 3', 'Kênh 4', 'Kênh 5', 'Kênh 6'];
+  await connectSandbox(page, ...channels);
+  await compose(page, 'Bài sáu kênh', channels);
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  const six = postIdOf(page);
+  await page.goto(`/o/${slug}/social/new`);
+  await page.getByLabel('Nội dung chung').fill('Bài số 2');
+  const pick = page.getByRole('button', { name: 'Kênh 1' });
+  await pick.click();
+  await expect(pick).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  const second = postIdOf(page);
+
+  // Two days ahead is always in the month view. The six-channel draft is planned at 08:00 and the other at 09:00; ten
+  // copies of the other, written with SQL, fill the day to twelve posts, hourly from 10:00.
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date(Date.now() + 2 * 86_400_000));
+  exec(`UPDATE crove_social.post SET scheduled_at = (:'day' || ' 08:00+07')::timestamptz WHERE id = :'six'`, { day, six });
+  exec(`UPDATE crove_social.post SET scheduled_at = (:'day' || ' 09:00+07')::timestamptz WHERE id = :'second'`, { day, second });
+  exec(
+    `WITH n AS (SELECT g, gen_random_uuid() AS id FROM generate_series(3, 12) g),
+          copies AS (
+            INSERT INTO crove_social.post
+            SELECT (jsonb_populate_record(p, jsonb_build_object('id', n.id, 'body', 'Bài số ' || n.g, 'scheduled_at', (:'day' || ' ' || lpad((n.g + 7)::text, 2, '0') || ':00+07')::timestamptz))).*
+              FROM crove_social.post p, n WHERE p.id = :'second' RETURNING id)
+     INSERT INTO crove_social.post_variant
+     SELECT (jsonb_populate_record(v, jsonb_build_object('id', gen_random_uuid(), 'post_id', n.id))).* FROM crove_social.post_variant v, n WHERE v.post_id = :'second'`,
+    { day, second },
+  );
+  const planned = (body: string) =>
+    sql<{ at: string }>(
+      `SELECT to_char(scheduled_at AT TIME ZONE :'zone', 'YYYY-MM-DD HH24:MI') AS at FROM crove_social.post WHERE body = :'body' AND org_id = (SELECT org_id FROM crove_social.post WHERE id = :'six')`,
+      { body, six, zone: TIME_ZONE },
+    )[0]?.at;
+  expect(planned('Bài số 12')).toBe(`${day} 19:00`);
+
+  await page.goto(`/o/${slug}/social?tab=calendar`);
+  const cell = page.locator(`[data-day="${day}"]`);
+  await cell.scrollIntoViewIfNeeded();
+  // Three chips and "+9": the six channels are one chip that names them and their status in words.
+  await expect(cell.getByTestId('calendar-chip')).toHaveCount(3);
+  const sixChip = cell.getByTestId('calendar-chip').filter({ hasText: 'Bài sáu kênh' });
+  await expect(sixChip).toHaveAttribute('data-channels', '6');
+  await expect(sixChip).toContainText('6 kênh · Nháp');
+  const more = cell.getByRole('button', { name: /^\+9 bài nữa, xem cả ngày/ });
+  await expect(more).toHaveText(/^\+9/);
+
+  // By keyboard: the dialog opens on its heading and lists every post of the day with each channel's status.
+  const [y, m, d] = day.split('-');
+  const title = `Các bài ngày ${d}/${m}/${y}`;
+  const dialog = page.getByRole('dialog', { name: title });
+  await more.focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('heading', { name: title })).toBeFocused();
+  await expect(dialog.getByTestId('day-post')).toHaveCount(12);
+  for (const n of [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]) await expect(dialog.getByRole('link', { name: `Bài số ${n}`, exact: true })).toBeVisible();
+  const sixRow = dialog.getByTestId('day-post').filter({ hasText: 'Bài sáu kênh' });
+  for (const name of channels) await expect(sixRow.getByText(`Sandbox (${name}) · Nháp`)).toBeVisible();
+  // Tab walks the rows inside the dialog down to the last post's link, never leaving it.
+  const focused = () => page.evaluate(() => ({ inDialog: document.activeElement?.closest('dialog') !== null, text: document.activeElement?.textContent ?? '' }));
+  let reached = false;
+  for (let i = 0; i < 60 && !reached; i++) {
+    await page.keyboard.press('Tab');
+    const now = await focused();
+    expect(now.inDialog).toBe(true);
+    reached = now.text === 'Bài số 12';
+  }
+  expect(reached).toBe(true);
+  // Esc closes it and gives the focus back to "+9".
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(more).toBeFocused();
+
+  // A hidden post gets its date from its row, without leaving the dialog.
+  await page.keyboard.press('Enter');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Đặt ngày cho bài: Bài số 12' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(dialog.getByLabel('Ngày', { exact: true })).toBeFocused();
+  await dialog.getByLabel('Giờ', { exact: true }).fill('20:30');
+  await page.keyboard.press('Enter');
+  await expect(dialog.getByText('Đã đặt ngày dự kiến:')).toBeVisible();
+  await expect.poll(() => planned('Bài số 12')).toBe(`${day} 20:30`);
+  await expect(dialog.getByTestId('day-post').last()).toContainText('20:30');
+
+  // And opens from its link.
+  await dialog.getByRole('link', { name: 'Bài số 7', exact: true }).focus();
+  await page.keyboard.press('Enter');
+  const [seventh] = sql<{ id: string }>(`SELECT id FROM crove_social.post WHERE body = 'Bài số 7' AND org_id = (SELECT org_id FROM crove_social.post WHERE id = :'six')`, { six });
+  await expect(page).toHaveURL(new RegExp(`/social/${seventh?.id ?? 'missing'}$`));
+
+  // At phone width the month and the day's list fit the screen, and "+9" still opens it.
+  await page.setViewportSize({ width: 360, height: 780 });
+  await page.goto(`/o/${slug}/social?tab=calendar`);
+  await cell.scrollIntoViewIfNeeded();
+  const inside = (box: { x: number; width: number } | null) => box !== null && box.x >= 0 && box.x + box.width <= 360;
+  expect(inside(await cell.locator('xpath=..').boundingBox())).toBe(true);
+  const narrowMore = cell.getByRole('button', { name: /^\+9 bài nữa/ });
+  expect(inside(await narrowMore.boundingBox())).toBe(true);
+  await narrowMore.click();
+  await expect(dialog).toBeVisible();
+  expect(inside(await dialog.boundingBox())).toBe(true);
+  await dialog.getByRole('button', { name: 'Đóng' }).click();
+  await expect(dialog).toBeHidden();
+
+  // A drag moves every channel of the chip at once; a drop while that move still runs is said, not lost (#1044).
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto(`/o/${slug}/social?tab=calendar`);
+  const tomorrow = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date(Date.now() + 86_400_000));
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route('**/api/rpc/social/posts/update', async (route) => {
+    await held;
+    await route.continue();
+  });
+  await cell.scrollIntoViewIfNeeded();
+  await sixChip.dragTo(page.locator(`[data-day="${tomorrow}"]`));
+  await cell.getByTestId('calendar-chip').filter({ hasText: 'Bài số 2' }).dragTo(page.locator(`[data-day="${tomorrow}"]`));
+  await expect(page.getByText('Đang dời một bài, hãy chờ xong rồi kéo tiếp.')).toBeVisible();
+  release();
+  await expect(page.getByText(/^Đã dời 6 kênh sang/)).toBeVisible();
+  await page.unroute('**/api/rpc/social/posts/update');
+  expect(planned('Bài sáu kênh')).toBe(`${tomorrow} 08:00`);
+  expect(planned('Bài số 2')).toBe(`${day} 09:00`);
+  await expect(page.locator(`[data-day="${tomorrow}"]`).getByTestId('calendar-chip').filter({ hasText: 'Bài sáu kênh' })).toHaveAttribute('data-channels', '6');
+});

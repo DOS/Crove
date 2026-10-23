@@ -78,7 +78,8 @@ const send = (r: BulkRequest) =>
       : client.social.variants.cancel({ variantIds: r.variantIds });
 
 // The same call as the post page's "Move the time" and the calendar's drag.
-const reschedule = (m: { variantId: string; at: string }) => client.social.variants.reschedule({ variantId: m.variantId, at: m.at });
+// With the time the channel was shown at, so one moved meanwhile is refused as stale (#956).
+const reschedule = (m: { variantId: string; at: string; expectedAt: string }) => client.social.variants.reschedule({ variantId: m.variantId, at: m.at, expectedAt: m.expectedAt });
 
 // A copy of one post, planned for that time or undated (#1192): the same call as the post page's Duplicate.
 const duplicatePost = (r: { postId: string; scheduledAt: string | null }) => client.social.posts.duplicate({ postId: r.postId, scheduledAt: r.scheduledAt });

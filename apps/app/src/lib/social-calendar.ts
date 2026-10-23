@@ -1,7 +1,7 @@
 // Day arithmetic of the Social calendar (#580), in the browser's time zone, kept apart from the screen so it can be
 // tested without one.
 import type { client } from './api.ts';
-import type { VariantStatus } from './social.ts';
+import { variantStatusKey, type VariantStatus } from './social.ts';
 
 export type CalendarPost = Awaited<ReturnType<typeof client.social.posts.list>>[number];
 type Post = CalendarPost;
@@ -134,6 +134,153 @@ export function calendarItems(posts: readonly Post[], connectionId?: string): Ca
         }),
     )
     .sort((a, b) => a.at.getTime() - b.at.getTime());
+}
+
+// One chip per post and minute (#1220), as Planable, Later and Hootsuite Planner show one card per post: a post's
+// channels going out on the same day at the same minute are drawn together, so a post on many channels takes one line
+// of a day. key names the post and the minute; planned: every channel is a draft at its post's planned time (dashed).
+export interface CalendarGroup {
+  key: string;
+  post: Post;
+  at: Date;
+  items: CalendarItem[];
+  planned: boolean;
+}
+
+const minuteOf = (d: Date) => Math.floor(d.getTime() / 60_000);
+
+// The items in time order make the groups in time order, each with its channels in the post's order.
+export function calendarGroups(items: readonly CalendarItem[]): CalendarGroup[] {
+  const groups = new Map<string, CalendarGroup>();
+  for (const item of items) {
+    const key = `${item.post.id}@${minuteOf(item.at)}`;
+    const group = groups.get(key);
+    if (group) {
+      group.items.push(item);
+      group.planned &&= item.planned;
+    } else groups.set(key, { key, post: item.post, at: item.at, items: [item], planned: item.planned });
+  }
+  return [...groups.values()];
+}
+
+export function groupsByDay(groups: readonly CalendarGroup[]): Map<string, CalendarGroup[]> {
+  const map = new Map<string, CalendarGroup[]>();
+  for (const g of groups) map.set(dayId(g.at), [...(map.get(dayId(g.at)) ?? []), g]);
+  return map;
+}
+
+export type StatusKey = ReturnType<typeof variantStatusKey>;
+// What needs a person first, then what is on its way, then what is out: the order a chip names its statuses in.
+const STATUS_ORDER: readonly StatusKey[] = [
+  'failed',
+  'needs_attention',
+  'ambiguous',
+  'paused',
+  'changes_requested',
+  'rejected',
+  'in_review',
+  'draft',
+  'approved',
+  'scheduled',
+  'publishing',
+  'processing',
+  'sent_to_app',
+  'wordpress_draft',
+  'wordpress_pending',
+  'published',
+  'removed',
+  'cancelled',
+];
+
+// The statuses of a group's channels with how many have each, so the chip says them in words (DESIGN 4.4).
+export function groupStatuses(group: Pick<CalendarGroup, 'items'>): { key: StatusKey; count: number }[] {
+  const counts = new Map<StatusKey, number>();
+  for (const i of group.items) counts.set(variantStatusKey(i.v), (counts.get(variantStatusKey(i.v)) ?? 0) + 1);
+  return STATUS_ORDER.filter((k) => counts.has(k)).map((key) => ({ key, count: counts.get(key) as number }));
+}
+
+// Why a channel of a dragged chip stays where it is (#1220): it is out or going out, it waits in a paused queue, it has
+// no time a drag may change (a channel sent back to review with its own time, a failed one), or only owners and admins
+// move scheduled channels.
+export type Stay = 'out' | 'queuePaused' | 'notScheduled' | 'admins';
+const OUT: readonly VariantStatus[] = ['publishing', 'processing', 'published', 'ambiguous', 'removed'];
+export interface Ability {
+  canDecide: boolean;
+  canWrite: boolean;
+}
+
+function moveOf(item: CalendarItem, may: Ability): 'plan' | 'reschedule' | Stay {
+  if (followsPlan(item)) return may.canWrite ? 'plan' : 'notScheduled';
+  if (item.v.status === 'scheduled' && !item.planned) return item.v.queuePaused ? 'queuePaused' : may.canDecide ? 'reschedule' : 'admins';
+  return OUT.includes(item.v.status) ? 'out' : 'notScheduled';
+}
+
+// Whether a drag of the chip would move any of its channels, so whether it is draggable.
+export const groupMovable = (group: Pick<CalendarGroup, 'items'>, may: Ability): boolean =>
+  group.items.some((i) => {
+    const m = moveOf(i, may);
+    return m === 'plan' || m === 'reschedule';
+  });
+
+// What a drop of a chip asks: its scheduled channels move through social.variant.reschedule, each with the time it was
+// shown at (expectedAt, #956), and its drafts at the post's planned time through one social.post.update on the revision
+// shown (#1145); the others stay, each with its reason. 'past' when the time is gone, refused here with nothing sent;
+// null when nothing would move or the minute would not change.
+export interface GroupMove {
+  at: Date;
+  reschedules: { item: CalendarItem; request: { variantId: string; at: string; expectedAt: string } }[];
+  plan: { request: PlanRequest; items: CalendarItem[] } | null;
+  stayed: { item: CalendarItem; reason: Stay }[];
+}
+
+export function groupDrop(group: CalendarGroup, day: Date, now: Date, may: Ability, hour?: number): GroupMove | 'past' | null {
+  if (!groupMovable(group, may)) return null;
+  const at = onDay(group.at, day, hour);
+  if (at.getTime() <= now.getTime()) return 'past';
+  if (minuteOf(at) === minuteOf(group.at)) return null;
+  const move: GroupMove = { at, reschedules: [], plan: null, stayed: [] };
+  const planned: CalendarItem[] = [];
+  for (const item of group.items) {
+    const m = moveOf(item, may);
+    if (m === 'plan') planned.push(item);
+    else if (m === 'reschedule') move.reschedules.push({ item, request: { variantId: item.v.id, at: at.toISOString(), expectedAt: item.v.effectiveAt ?? item.at.toISOString() } });
+    else move.stayed.push({ item, reason: m });
+  }
+  if (planned.length > 0) move.plan = { request: { postId: group.post.id, revision: group.post.revision, scheduledAt: at.toISOString() }, items: planned };
+  return move;
+}
+
+export interface GroupMoveResult {
+  at: Date;
+  moved: CalendarItem[];
+  stayed: { item: CalendarItem; reason: Stay }[];
+  refused: { item: CalendarItem; error: unknown }[];
+}
+
+// One channel after another, then the drafts' planned time (after the reschedules, which compare the time they saw): a
+// refusal stops none of the others, as the bulk move (#945) goes on.
+export async function runGroupMove(
+  move: GroupMove,
+  api: { reschedule: (request: GroupMove['reschedules'][number]['request']) => Promise<unknown>; plan: (request: PlanRequest) => Promise<unknown> },
+): Promise<GroupMoveResult> {
+  const result: GroupMoveResult = { at: move.at, moved: [], stayed: move.stayed, refused: [] };
+  for (const r of move.reschedules) {
+    try {
+      await api.reschedule(r.request);
+      result.moved.push(r.item);
+    } catch (error) {
+      result.refused.push({ item: r.item, error });
+    }
+  }
+  if (move.plan) {
+    try {
+      await api.plan(move.plan.request);
+      result.moved.push(...move.plan.items);
+    } catch (error) {
+      result.refused.push(...move.plan.items.map((item) => ({ item, error })));
+    }
+  }
+  return result;
 }
 
 // An open slot of the filtered channel's queue (#1158), from social.queue.open_slots.

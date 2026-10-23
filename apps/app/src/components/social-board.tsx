@@ -4,6 +4,8 @@
 // reason and sends nothing. The server still decides who may approve (four-eyes, several approvals): its refusal is
 // shown as it comes. The columns wrap (six in a row on wide screens, three or two below, one on a phone) rather than
 // scroll sideways, so every drop target is in view. Members tick cards for the bulk bar's labels and assignee (#1057).
+// Under a channel filter a move still acts on every channel of the post, as the commands do (#1044): a card with
+// channels outside the filter names them. A drop while a move is still running is refused and said so.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
@@ -50,7 +52,7 @@ const excerpt = (text: string, max = 140) => {
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
 };
 
-type Notice = { kind: 'refused'; reason: BoardRefusal } | { kind: 'done'; outcome: BoardOutcome };
+type Notice = { kind: 'refused'; reason: BoardRefusal } | { kind: 'done'; outcome: BoardOutcome } | { kind: 'busy' };
 
 function Card({
   post,
@@ -70,6 +72,7 @@ function Card({
   onFocused,
   picked,
   onToggle,
+  filtered,
 }: {
   post: Post;
   column: BoardColumn;
@@ -89,10 +92,17 @@ function Card({
   // Whether the card is ticked for the bulk bar; null when the viewer has no bulk action.
   picked: boolean | null;
   onToggle: () => void;
+  // The channel filter, if any (#1044).
+  filtered: string | undefined;
 }) {
   const t = useTranslations('social');
   const f = useFormat();
   const ref = useRef<HTMLDivElement>(null);
+  const othersId = useId();
+  // The post's channels outside the filter, which a move of the card acts on too.
+  const others = filtered
+    ? [...new Set(post.variants.filter((v) => v.status !== 'cancelled' && v.connectionId !== filtered).map((v) => (names.get(v.connectionId) ? `${providerName(v.provider)} (${names.get(v.connectionId)})` : providerName(v.provider))))]
+    : [];
   // After a move by keyboard, the card takes the focus once it shows in its new column, and only then.
   useEffect(() => {
     if (!focus) return;
@@ -115,7 +125,7 @@ function Card({
       tabIndex={0}
       role="group"
       aria-label={t('board.card', { text, column: t(`status.${column}`) })}
-      aria-describedby={hintId}
+      aria-describedby={[hintId, others.length > 0 ? othersId : null].filter(Boolean).join(' ') || undefined}
       aria-busy={busy}
       data-testid="board-card"
       draggable={draggable}
@@ -156,6 +166,11 @@ function Card({
         </p>
       )}
       <PostLabels ids={post.labelIds} labels={labels} />
+      {others.length > 0 && (
+        <p id={othersId} className="text-xs text-subtle-foreground">
+          {t('board.otherChannels', { channels: others.join(', ') })}
+        </p>
+      )}
       {moves.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {moves.map((m) => (
@@ -178,6 +193,7 @@ export function SocialBoard({
   canDecide,
   picked = null,
   onPick = () => undefined,
+  connectionId,
 }: {
   posts: readonly Post[];
   slug: string;
@@ -189,6 +205,8 @@ export function SocialBoard({
   // The posts ticked for the bulk bar (#1057), or null when the viewer has no bulk action.
   picked?: ReadonlySet<string> | null;
   onPick?: (next: Set<string>) => void;
+  // The Social home's channel filter (#1044).
+  connectionId?: string | undefined;
 }) {
   const t = useTranslations('social');
   const hintId = useId();
@@ -214,7 +232,11 @@ export function SocialBoard({
   // A move asked by drop, key or button: refused here with the reason, or sent as the existing command.
   const attempt = (postId: string, to: BoardColumn, byKey: boolean) => {
     const found = columnOf(postId);
-    if (!found || move.isPending) return;
+    if (!found) return;
+    if (move.isPending) {
+      setNotice({ kind: 'busy' });
+      return;
+    }
     setFocusTo(null);
     const check = checkMove(found.column, to, who);
     if (!check) return;
@@ -286,6 +308,8 @@ export function SocialBoard({
           <ErrorText>{t(`board.refused.${notice.reason}`)}</ErrorText>
         ) : notice?.kind === 'done' ? (
           <p className="text-sm text-muted-foreground">{doneText(notice.outcome)}</p>
+        ) : notice?.kind === 'busy' ? (
+          <p className="text-sm text-muted-foreground">{t('board.busy')}</p>
         ) : null}
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
@@ -343,6 +367,7 @@ export function SocialBoard({
                     onMove={(to, byKey) => attempt(post.id, to, byKey)}
                     picked={picked ? picked.has(post.id) : null}
                     onToggle={() => toggle(post.id)}
+                    filtered={connectionId}
                   />
                 ))
               )}
