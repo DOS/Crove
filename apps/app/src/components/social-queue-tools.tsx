@@ -41,7 +41,7 @@ export function QueueSuggestButton({ connectionId, timeZone, slots, onSuggest }:
         </Button>
       </span>
       {reason && (
-        <span id={`${id}-why`} className="sr-only">
+        <span id={`${id}-why`} className="text-xs text-subtle-foreground">
           {reason}
         </span>
       )}
@@ -150,7 +150,8 @@ export function QueueCopy({ source, saved, targets, unsaved, canEdit }: { source
       name: names.get(connectionId) ?? connectionId,
       loading: !error && (!q?.data || !l?.data),
       error: error ? errorMessage(error) : null,
-      slots: q?.data ? q.data.slots.length : null,
+      // The slots it posts at now: inactive ones are not part of the queue a copy replaces.
+      slots: q?.data ? q.data.slots.filter((s) => s.active).length : null,
       replaced: counts?.moved ?? null,
       unqueued: counts?.unqueued ?? 0,
       partial: (l?.data?.length ?? 0) >= COPY_POSTS_LIMIT,
