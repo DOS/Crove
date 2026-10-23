@@ -185,4 +185,46 @@ export const mediaStored = defineQuery({
   },
 });
 
-export const libraryQueries = [mediaList, mediaUsage, mediaStored];
+// The photos an AI draft is written from (#1191), as stored, in the order asked: only the org's own Social uploads, as
+// for alt text. A member limited to some channels (#1081) may not use a channel's own media they cannot see: a file
+// that only variants on other channels list as their own media, in no post's shared media and in no own media of a
+// channel of theirs, is refused with 403 MEDIA_NOT_ALLOWED. The caller checks the types and the sizes.
+export const mediaDraftImages = defineQuery({
+  name: 'social.media.draft_images',
+  input: z.strictObject({ fileIds: z.array(zId).min(1).max(4) }),
+  access: MEMBERS,
+  handler: async (ctx, input): Promise<{ fileId: string; storageKey: string; generation: string | null; sha256: string; contentType: string; sizeBytes: number }[]> => {
+    const scope = await channelScope(ctx);
+    const own = (inScope: boolean) =>
+      sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = f.org_id AND v.media @> jsonb_build_array(jsonb_build_object('fileId', f.id::text)) AND ${
+        scope === null ? sql`TRUE` : inScope ? sql`v.channel_connection_id = ANY(${[...scope]}::uuid[])` : sql`NOT (v.channel_connection_id = ANY(${[...scope]}::uuid[]))`
+      })`;
+    const rows = await ctx.trx
+      .selectFrom('crove_kernel.file as f')
+      .select([
+        'f.id',
+        'f.storage_key',
+        'f.generation',
+        'f.sha256',
+        'f.content_type',
+        'f.size_bytes',
+        (scope === null
+          ? sql<boolean>`FALSE`
+          : sql<boolean>`(${own(false)} AND NOT EXISTS (SELECT 1 FROM crove_social.post_media m WHERE m.org_id = f.org_id AND m.file_id = f.id) AND NOT ${own(true)})`
+        ).as('hidden'),
+      ])
+      .where('f.org_id', '=', ctx.orgId)
+      .where('f.id', 'in', [...new Set(input.fileIds)])
+      .where('f.source', '=', 'social')
+      .execute();
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return input.fileIds.map((fileId) => {
+      const file = byId.get(fileId);
+      if (!file) throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này', { fileId });
+      if (file.hidden) throw new DomainError('MEDIA_NOT_ALLOWED', 403, 'Ảnh này chỉ thuộc riêng một kênh bạn không được dùng', { fileId });
+      return { fileId, storageKey: file.storage_key, generation: file.generation, sha256: file.sha256, contentType: file.content_type, sizeBytes: Number(file.size_bytes) };
+    });
+  },
+});
+
+export const libraryQueries = [mediaList, mediaUsage, mediaStored, mediaDraftImages];

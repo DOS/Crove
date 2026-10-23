@@ -175,6 +175,11 @@ export const zProposalPolicy = z.object({
   expireAfterDays: z.number().int().min(2).max(90).nullable(),
 });
 
+// An AI draft from the post's photos (#1191): 1 to AI_DRAFT_IMAGES_MAX of the org's Social images (SOCIAL_PHOTO_TYPES), each
+// of at most AI_IMAGE_MAX_BYTES, as the writer in @crove/agent takes them (DRAFT_IMAGES_MAX, ALT_TEXT_IMAGE_MAX_BYTES).
+export const AI_DRAFT_IMAGES_MAX = 4;
+export const AI_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+
 // The org for org-scoped procedures comes from the `x-crove-org` header (slug), never from input.
 export const contract = {
   me: {
@@ -430,7 +435,9 @@ export const contract = {
       clearRecurrence: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
       // AI drafting (Social plan §3.7): the server asks the deployment's model for a draft from the brief and saves it as
       // a new post with origin 'ai' (tainted), one variant per channel. Each call drafts anew: a draft whose answer was
-      // lost is only an extra draft, which publishes nothing until a person approves it.
+      // lost is only an extra draft, which publishes nothing until a person approves it. fileIds (#1191): photos of the
+      // org's Social library the draft is written from, when the model takes images; the post carries them, in order,
+      // and the brief may then be empty.
       draftWithAi: oc
         .input(
           z.strictObject({
@@ -444,8 +451,14 @@ export const contract = {
               .max(2000)
               .refine((u) => !/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(u), 'a link without a user name or password')
               .optional(),
+            fileIds: z
+              .array(zId)
+              .min(1)
+              .max(AI_DRAFT_IMAGES_MAX)
+              .refine((ids) => new Set(ids).size === ids.length, 'each photo once')
+              .optional(),
           })
-          .refine((v) => v.brief.length > 0 || v.sourceUrl !== undefined, { message: 'a brief or a source page', path: ['brief'] }),
+          .refine((v) => v.brief.length > 0 || v.sourceUrl !== undefined || v.fileIds !== undefined, { message: 'a brief, a source page or photos', path: ['brief'] }),
         )
         .output(z.object({ postId: zId })),
       // A rewrite of one text, as a proposal the member accepts or discards (#583); nothing is saved. With a channel,

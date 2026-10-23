@@ -24,6 +24,7 @@ import { PostLabels, useLabels, type SocialLabel } from '../components/social-la
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
 import { DraftsFromMediaPanel } from '../components/social-bulk-drafts.tsx';
+import { DraftFromPhotoLink } from '../components/social-ai-photos.tsx';
 import { DRAFTS_FROM_MEDIA_MAX, togglePick } from '../lib/social-bulk-drafts.ts';
 import { PlanFromPosts, PlanReviewCard } from '../components/social-plan-review.tsx';
 import { ReportLinks } from '../components/social-report-links.tsx';
@@ -41,6 +42,7 @@ import { mergePublished } from '../lib/social-external.ts';
 import { StoryLine, StoryTotals } from '../components/social-story-metrics.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient, uploadFiles } from '../lib/api.ts';
+import { getConfig } from '../lib/auth.ts';
 import { dayKey, dayRange, providerName, SOCIAL_TABS, variantStatusKey, variantTone, type SocialSearch, type SocialTab } from '../lib/social.ts';
 import { pollEvery, SAFETY_POLL_MS, useStreamLive } from '../lib/stream-hook.ts';
 
@@ -440,6 +442,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
                   </a>
                 </div>
               )}
+              {canWrite && getConfig().aiEnabled === true && <DraftFromPhotoLink slug={slug} item={open} />}
               <MediaTagEditor key={`${open.fileId}:${open.tags.join('\n')}`} fileId={open.fileId} tags={open.tags} canWrite={canWrite} />
               <p className="text-sm font-medium text-muted-foreground">{t('libraryUsageTitle')}</p>
               <Usage fileId={open.fileId} slug={slug} />
