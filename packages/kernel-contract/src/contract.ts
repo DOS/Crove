@@ -831,7 +831,7 @@ export const contract = {
     },
     // Review policy per channel (S9): how many different people approve a variant before it may be scheduled.
     policies: {
-      list: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId, approvalsRequired: z.number().int(), reviewReminders: z.boolean(), shortLinks: z.boolean(), fourEyes: z.boolean(), clientApproval: z.boolean(), updatedBy: zId, updatedAt: z.string() }))),
+      list: oc.input(z.object({})).output(z.array(z.object({ connectionId: zId, approvalsRequired: z.number().int(), reviewReminders: z.boolean(), shortLinks: z.boolean(), fourEyes: z.boolean(), clientApproval: z.boolean(), signature: z.string().nullable(), updatedBy: zId, updatedAt: z.string() }))),
       set: oc
         .input(z.strictObject({ connectionId: zId, approvalsRequired: z.number().int().min(1).max(3) }))
         .output(z.object({ connectionId: zId, approvalsRequired: z.number().int(), approved: z.array(zId) })),
@@ -843,6 +843,8 @@ export const contract = {
       setFourEyes: oc.input(z.strictObject({ connectionId: zId, fourEyes: z.boolean() })).output(z.object({ connectionId: zId, fourEyes: z.boolean() })),
       // The client's approval on a review link as a review step (#770): owners only.
       setClientApproval: oc.input(z.strictObject({ connectionId: zId, clientApproval: z.boolean() })).output(z.object({ connectionId: zId, clientApproval: z.boolean(), approved: z.array(zId) })),
+      // The channel's signature (#1190), copied into the posts it is added to from now on; null clears it.
+      setSignature: oc.input(z.strictObject({ connectionId: zId, signature: z.string().max(2000).nullable() })).output(z.object({ connectionId: zId, signature: z.string().nullable() })),
     },
     // Variants waiting paused on each channel (expired or disconnected), for the channels screen.
     channels: {

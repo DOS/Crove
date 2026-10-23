@@ -168,11 +168,11 @@ function work(action: PublishPhase, post: PostRow, v: VariantRow, key: string, s
     callKey: key,
     contentHash: v.content_hash,
     content: {
-      ...withSentLink(v, effectiveContent(base(post), overrides(v), v.content_frozen)),
+      ...withSentLink(v, effectiveContent(base(post), overrides(v), v.content_frozen, settingsOf(v))),
       media: mediaFor(base(post), v).map((m) => ({ fileId: m.fileId, mime: m.mime, sizeBytes: m.sizeBytes, altText: m.altText, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null })),
     },
     // With the UTM tags on a Telegram post's button links (#1017).
-    settings: isProvider(v.provider) ? sentSettings(v.provider, settingsOf(v), postLinkOf(v, effectiveContent(base(post), overrides(v), v.content_frozen))) : settingsOf(v),
+    settings: isProvider(v.provider) ? sentSettings(v.provider, settingsOf(v), postLinkOf(v, effectiveContent(base(post), overrides(v), v.content_frozen, settingsOf(v)))) : settingsOf(v),
     externalRef: v.external_post_id,
     callStartedAt: startedAt.toISOString(),
     connectionVersion: connection ? connection.updatedAt.toISOString() : null,

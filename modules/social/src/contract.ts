@@ -34,3 +34,5 @@ export * from './domain/text-styles.ts';
 // Campaign labels (#1169): the label's tag rule, the UTM fields a campaign label fills in, and the two findings the post
 // page shows as social.post.pre_review does.
 export * from './domain/campaign.ts';
+// A channel's signature (#1190): the composer, the counter and the previews append it as effectiveContent does.
+export * from './domain/signature.ts';

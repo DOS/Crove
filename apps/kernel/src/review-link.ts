@@ -28,7 +28,8 @@ const zAnswer = z.strictObject({
   body: zText(2000).optional(),
 });
 
-type ReviewChannel = { provider: string; channel: string; status: string; body: string; title: string | null; linkUrl: string | null };
+// signature (#1190): the variant's signature, sent after the body, or null; the page appends it as effectiveContent does.
+type ReviewChannel = { provider: string; channel: string; status: string; body: string; signature: string | null; title: string | null; linkUrl: string | null };
 type ReviewAnswer = { name: string; verdict: string; body: string | null; at: string };
 export interface ReviewPostPage {
   kind?: undefined;

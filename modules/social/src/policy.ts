@@ -10,7 +10,9 @@ import { approvalsInRound } from './domain/approval.ts';
 import { approvedValues, base, lockPost, lockVariants, refreshPostStatus, regateValues, setVariant, type Trx, type VariantRow } from './variants.ts';
 import { bannedChecker, bannedCommandBudget, bannedWordsOf, isBlocked } from './banned-words.ts';
 import { agentTaskOf } from './agent.ts';
-import { channelScope, connectionInScope } from './channel-access.ts';
+import { channelScope, connectionInScope, mayUse } from './channel-access.ts';
+import { plainNote } from './report-links.ts';
+import { SIGNATURE_MAX } from './domain/signature.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
@@ -32,6 +34,27 @@ export async function approvalsRequired(trx: Trx, orgId: string, connectionIds: 
   for (const r of rows) out.set(r.channel_connection_id, r.approvals_required);
   return out;
 }
+
+// The signature of each connection that has one (#1190), as a channel added to a post copies it.
+export async function channelSignatures(trx: Trx, orgId: string, connectionIds: readonly string[]): Promise<Map<string, string>> {
+  if (connectionIds.length === 0) return new Map();
+  const rows = await trx
+    .selectFrom('crove_social.channel_policy')
+    .select(['channel_connection_id', 'signature'])
+    .where('org_id', '=', orgId)
+    .where('channel_connection_id', 'in', [...new Set(connectionIds)])
+    .where('signature', 'is not', null)
+    .execute();
+  return new Map(rows.flatMap((r) => (r.signature ? [[r.channel_connection_id, r.signature] as const] : [])));
+}
+
+// A channel's signature as it is kept: plain text like the report note (NFC, LF line breaks, no hidden characters,
+// trimmed), at most SIGNATURE_MAX characters; empty clears it.
+export const zSignature = z
+  .string()
+  .max(SIGNATURE_MAX * 4)
+  .transform(plainNote)
+  .refine((text) => [...text].length <= SIGNATURE_MAX, `at most ${SIGNATURE_MAX} characters`);
 
 // The review decisions of variants, newest first, as approvalsInRound reads them. Newest by id: uuid_v7 takes the clock
 // when the row is written, under the post lock, while created_at is the start of its transaction, which a decision
@@ -268,6 +291,36 @@ export const shortLinksSet = defineCommand({
   },
 });
 
+// A channel's signature (#1190): the block its new posts end with. A channel added to a post copies it into the variant,
+// so posts written before keep theirs (or none) and their approvals stand; null or empty clears it.
+export const signatureSet = defineCommand({
+  name: 'social.channel.set_signature',
+  input: z.strictObject({ connectionId: zId, signature: zSignature.nullable() }),
+  risk: 'R1',
+  access: ADMINS,
+  target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const userId = ctx.actor.userId;
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select('id')
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .where('status', '<>', 'revoked')
+      .executeTakeFirst();
+    if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh này');
+    const signature = input.signature || null;
+    await ctx.trx
+      .insertInto('crove_social.channel_policy')
+      .values({ org_id: ctx.orgId, channel_connection_id: input.connectionId, signature, updated_by: userId })
+      .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ signature, updated_by: userId, updated_at: ctx.now }))
+      .execute();
+    ctx.audit({ connection_id: input.connectionId, signature });
+    return { connectionId: input.connectionId, signature };
+  },
+});
+
 export const policyList = defineQuery({
   name: 'social.channel.policies',
   input: z.object({}),
@@ -277,12 +330,14 @@ export const policyList = defineQuery({
     const rows = await ctx.trx
       .selectFrom('crove_social.channel_policy as p')
       .innerJoin('crove_kernel.channel_connection as c', (j) => j.onRef('c.org_id', '=', 'p.org_id').onRef('c.id', '=', 'p.channel_connection_id'))
-      .select(['p.channel_connection_id', 'p.approvals_required', 'p.review_reminders', 'p.short_links', 'p.four_eyes', 'p.client_approval', 'p.updated_by', 'p.updated_at'])
+      .select(['p.channel_connection_id', 'p.approvals_required', 'p.review_reminders', 'p.short_links', 'p.four_eyes', 'p.client_approval', 'p.signature', 'p.updated_by', 'p.updated_at'])
       .where('p.org_id', '=', ctx.orgId)
       .where('c.status', '<>', 'revoked')
       .orderBy('p.channel_connection_id')
       .execute();
-    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, reviewReminders: r.review_reminders, shortLinks: r.short_links, fourEyes: r.four_eyes, clientApproval: r.client_approval, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
+    // A channel's signature is content of its posts: a member limited to some channels (#1081) reads only theirs.
+    const scope = await channelScope(ctx);
+    return rows.map((r) => ({ connectionId: r.channel_connection_id, approvalsRequired: r.approvals_required, reviewReminders: r.review_reminders, shortLinks: r.short_links, fourEyes: r.four_eyes, clientApproval: r.client_approval, signature: mayUse(scope, r.channel_connection_id) ? r.signature : null, updatedBy: r.updated_by, updatedAt: r.updated_at.toISOString() }));
   },
 });
 
@@ -374,5 +429,5 @@ export const clientApprovalSet = defineCommand({
   },
 });
 
-export const policyCommands = [policySet, remindersSet, shortLinksSet, fourEyesSet, clientApprovalSet];
+export const policyCommands = [policySet, remindersSet, shortLinksSet, fourEyesSet, clientApprovalSet, signatureSet];
 export const policyQueries = [policyList, channelWaiting];

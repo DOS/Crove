@@ -110,7 +110,7 @@ export interface VersionContent {
 }
 
 export function variantContent(version: Pick<VersionSnapshot, 'body' | 'title' | 'linkUrl' | 'media'>, v: VersionVariant): VersionContent {
-  const content = effectiveContent({ body: version.body, title: version.title, linkUrl: version.linkUrl }, { body: v.body, title: v.title, linkUrl: v.linkUrl }, v.contentFrozen);
+  const content = effectiveContent({ body: version.body, title: version.title, linkUrl: version.linkUrl }, { body: v.body, title: v.title, linkUrl: v.linkUrl }, v.contentFrozen, v.settings);
   const media = v.contentFrozen ? (v.media ?? []) : (v.media ?? version.media);
   return { body: content.body, title: content.title, linkUrl: content.linkUrl, media, settings: v.settings };
 }

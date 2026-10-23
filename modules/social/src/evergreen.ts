@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { effectiveContent } from './domain/approval.ts';
+import { inheritedContent } from './domain/approval.ts';
 import { insertVariants, writePostMedia } from './posts.ts';
 import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
@@ -67,10 +67,11 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
   const author = ctx.actor.type === 'user' ? ctx.actor.userId : meta.author_user_id;
   const b = base(source);
   const baseMedia = JSON.stringify(b.media);
-  // Each channel once: its effective content, and its images when they are its own (not the base's).
+  // Each channel once: its own content (its signature, #1190, stays in the settings it keeps), and its images when they
+  // are its own (not the base's).
   const outs = targets.map((v) => {
     const media = mediaFor(b, v);
-    return { v, kept: effectiveContent(b, overrides(v), v.content_frozen), ownMedia: JSON.stringify(media) !== baseMedia ? media : null };
+    return { v, kept: inheritedContent(b, overrides(v), v.content_frozen), ownMedia: JSON.stringify(media) !== baseMedia ? media : null };
   });
   const [first] = outs;
   // A repost's base is built from what went out (the source's base may have been edited since): a title or link is
@@ -131,6 +132,7 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
     post,
     channels.map(({ ownMedia: _own, ...c }) => c),
     0,
+    { copy: true },
   );
   // Variants with their own images keep them, and their hash covers those images: a reviewer approves what goes out.
   for (const [i, c] of channels.entries()) {

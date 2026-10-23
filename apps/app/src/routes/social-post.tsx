@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { AiPhotoPicker, aiDraftInput } from '../components/social-ai-photos.tsx';
@@ -35,6 +35,7 @@ import { BestTimeButton } from '../components/social-best-time.tsx';
 import { EmojiPicker } from '../components/social-emoji.tsx';
 import { TextStyleButtons, TextStyleHint } from '../components/social-text-style.tsx';
 import { DuplicateNote, ownRewriteId, SHARED_REWRITE_ID } from '../components/social-duplicate.tsx';
+import { SignatureToggle, signatureSettings } from '../components/social-signature.tsx';
 import { ProofreadProposal } from '../components/social-proofread.tsx';
 import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -1452,6 +1453,12 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('IG_COLLABORATORS_INVALID', { limit });
       case 'IG_USER_TAGS_INVALID':
         return t('IG_USER_TAGS_INVALID', { limit });
+      case 'IG_TOO_MANY_HASHTAGS':
+        return t('IG_TOO_MANY_HASHTAGS', { limit, actual });
+      case 'IG_TOO_MANY_MENTIONS':
+        return t('IG_TOO_MANY_MENTIONS', { limit, actual });
+      case 'SIGNATURE_INVALID':
+        return t('SIGNATURE_INVALID', { limit });
       case 'COMMENT_TOO_LONG':
         return t('COMMENT_TOO_LONG', { limit, actual });
       case 'THREAD_TOO_MANY_PARTS':
@@ -1982,6 +1989,9 @@ function ChannelEditor({
   slug,
   onRemoveAtAll,
   duplicate,
+  channelSignature,
+  adding = false,
+  signaturesLoading = false,
 }: {
   provider: string;
   channel: string;
@@ -2002,10 +2012,20 @@ function ChannelEditor({
   onRemoveAtAll?: ((removeAt: string) => void) | undefined;
   // Another post on this channel with the same text (#1156), and the text the server compared.
   duplicate?: { of: DuplicateOf; checked: string } | null;
+  // The channel's signature as it is now (#1190), and whether the channel is being added (a new post): then the variant
+  // takes it unless the person leaves it off, as social.post.create copies it. A variant already saved keeps its own.
+  channelSignature?: string | null;
+  adding?: boolean;
+  // The channels' signatures are still being read (#1190): the toggle waits for them.
+  signaturesLoading?: boolean;
 }) {
   const t = useTranslations('social');
+  const settings = adding ? withChannelSignature(own.settings, channelSignature) : own.settings;
+  const signature = signatureText(settings);
+  // The text the channel sends: its own or the post's, with its signature, as effectiveContent resolves it.
+  const body = withSignature(own.custom ? own.body : base.body, settings);
   // The link as the channel sends it, with its UTM tags (#585).
-  const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings, own.custom ? own.body : base.body) : base.linkUrl) ?? '';
+  const linkUrl = (isProvider(provider) ? sentLink(provider, base.linkUrl || null, own.settings, body) : base.linkUrl) ?? '';
   const postType = postTypeOf(own.settings) ?? 'feed';
   const poll = pollOptionsOf(own.settings);
   const pollRule = isProvider(provider) ? POLL_RULES[provider] : undefined;
@@ -2020,7 +2040,7 @@ function ChannelEditor({
   const tag = topicTagOf(own.settings);
   const telegramButtons = provider === 'telegram' ? telegramButtonsOf(own.settings) : null;
   const content = {
-    body: own.custom ? own.body : base.body,
+    body,
     title: own.custom ? own.title : base.title,
     linkUrl,
     media: mediaOfOwn(own, base),
@@ -2049,11 +2069,15 @@ function ChannelEditor({
   const previewContent = documentTitle ? { ...content, media: content.media.map((m) => (m === pdf ? { ...m, filename: documentTitle } : m)) } : content;
   // A Discord forum post (#1103) takes the post's title as its name.
   const titled = takesTitle(provider, own.settings);
-  const issues = draftIssues(provider, { body: content.body, title: titled ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
+  const issues = draftIssues(provider, { body: content.body, title: titled ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings });
   // The channel's own texts against its banned words (#1055); the shared text is marked under the shared fields.
   const allWords = useBannedWords();
   const banned = connectionId ? wordsForChannel(allWords, connectionId) : allWords;
-  const ownTexts = variantTexts({ body: own.custom ? content.body : '', title: own.custom && titled ? content.title || null : null }, own.settings).filter((x) => x.text !== '');
+  const ownTexts = [
+    ...variantTexts({ body: own.custom ? content.body : '', title: own.custom && titled ? content.title || null : null }, own.settings),
+    // The signature, which the shared text's marks do not cover (#1190).
+    ...(!own.custom && signature !== null ? [{ field: 'settings.signature', text: signature }] : []),
+  ].filter((x) => x.text !== '');
   return (
     <Card className="block space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2071,6 +2095,8 @@ function ChannelEditor({
         <Checkbox checked={own.custom} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, custom: checked === true, body: own.body || base.body })} />
         {t('ownText')}
       </label>
+      {/* Leaving the signature out of this post (#1190), or putting it back: the channel's as it is now. */}
+      <SignatureToggle settings={settings} disabled={disabled} loading={signaturesLoading} onChange={(off) => onChange({ ...own, settings: signatureSettings(own.settings, off, channelSignature) })} />
       {own.custom && (
         <div className="space-y-2">
           {titled && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
@@ -2449,10 +2475,14 @@ export function SocialComposePage() {
   });
 
   const selected = live.filter((c) => chosen.includes(c.id));
-  const blocking = selected.some((c) => {
+  // Each channel's signature (#1190), which the new post's channels take unless left off.
+  const signatureRows = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
+  const signatures = new Map((signatureRows.data ?? []).map((p) => [p.connectionId, p.signature]));
+  // Until they are read, the channels' checks would leave them out: the post is not ready to send.
+  const blocking = signatureRows.isPending || selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
-    return draftIssues(c.provider, { body: content.body, title: takesTitle(c.provider, mine.settings) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withUtm(mine, utm).settings }).length > 0;
+    return draftIssues(c.provider, { body: content.body, title: takesTitle(c.provider, mine.settings) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withChannelSignature(withUtm(mine, utm).settings, signatures.get(c.id)) }).length > 0;
   });
   // Owners and admins may approve their own post: for one written by a person (no AI text), one action approves it and
   // schedules it (#638). A channel whose policy needs another reviewer still waits for them.
@@ -2471,7 +2501,7 @@ export function SocialComposePage() {
     }
   };
 
-  if (channels.isLoading) return <Spinner />;
+  if (channels.isLoading || signatureRows.isPending) return <Spinner />;
   return (
     <div onKeyDown={onKey}>
       <PageHeader
@@ -2658,6 +2688,9 @@ export function SocialComposePage() {
                 channel={c.displayName}
                 base={base}
                 own={withUtm(own[c.id] ?? EMPTY_OWN, utm)}
+                channelSignature={signatures.get(c.id) ?? null}
+                signaturesLoading={signatureRows.isPending}
+                adding
                 disabled={create.isPending}
                 onChange={(next) => setOwn({ ...own, [c.id]: next })}
                 connectionId={c.id}
@@ -3348,6 +3381,9 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const channels = useQuery(orpc.channels.list.queryOptions({ input: { includeRevoked: true } }));
   const names = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.displayName])), [channels.data]);
   const grants = useMemo(() => new Map((channels.data ?? []).map((c: Channel) => [c.id, c.scopes])), [channels.data]);
+  // Each channel's signature as it is now (#1190), for putting one back on a channel that left it off.
+  const signatureRows = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
+  const signatures = new Map((signatureRows.data ?? []).map((p) => [p.connectionId, p.signature]));
   const [base, setBase] = useState<Base | null>(null);
   const [own, setOwn] = useState<Record<string, Own>>({});
   // The post's UTM tags as the screen shows them; changing them changes every editable channel's settings (#585).
@@ -3741,6 +3777,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 onChange={(next) => setOwn({ ...own, [v.id]: next })}
                 onRemoveAtAll={!frozen && p.variants.filter((x) => EDITABLE.includes(x.status)).length > 1 ? setRemoveAtAll : undefined}
                 duplicate={v.duplicateOf ? { of: v.duplicateOf, checked: v.effective.body } : null}
+                channelSignature={signatures.get(v.connectionId) ?? null}
+                signaturesLoading={signatureRows.isPending}
                 footer={
                   <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
                     {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (

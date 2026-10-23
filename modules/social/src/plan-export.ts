@@ -16,6 +16,8 @@ import { isValidTimeZone, localTime } from './domain/queue.ts';
 import { labelsOfPosts } from './labels.ts';
 import { csvCell } from './metrics.ts';
 import { connectionInScope, refuseChannels } from './channel-access.ts';
+import { withSignature } from './domain/signature.ts';
+import { settingsOf } from './variants.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const PLAN_EXPORT_MAX_ROWS = 500;
@@ -99,6 +101,7 @@ export const planExport = defineCommand({
       status: string;
       display_name: string | null;
       body: string;
+      settings: unknown;
       title: string | null;
       link_url: string | null;
       at: Date;
@@ -106,7 +109,7 @@ export const planExport = defineCommand({
     }>`
       WITH v AS (
         SELECT v.id, v.post_id, v.channel_connection_id, v.provider, v.status, v.position, p.assignee_user_id,
-               CASE WHEN v.content_frozen THEN coalesce(v.body, '') ELSE coalesce(v.body, p.body) END AS body,
+               CASE WHEN v.content_frozen THEN coalesce(v.body, '') ELSE coalesce(v.body, p.body) END AS body, v.settings,
                CASE WHEN v.content_frozen THEN v.title ELSE coalesce(v.title, p.title) END AS title,
                CASE WHEN v.content_frozen THEN v.link_url ELSE coalesce(v.link_url, p.link_url) END AS link_url,
                CASE WHEN v.status IN ('published', 'removed') THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END AS at
@@ -117,7 +120,7 @@ export const planExport = defineCommand({
           AND ${connectionInScope(scope, 'v.channel_connection_id')}
           ${labels.length > 0 ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ANY(${labels}::uuid[]))` : sql``}
       )
-      SELECT v.id AS variant_id, v.post_id, v.channel_connection_id, v.provider, v.status, c.display_name, v.body, v.title,
+      SELECT v.id AS variant_id, v.post_id, v.channel_connection_id, v.provider, v.status, c.display_name, v.body, v.settings, v.title,
              v.link_url, v.at, v.assignee_user_id
       FROM v
       LEFT JOIN crove_kernel.channel_connection c ON c.org_id = ${ctx.orgId}::uuid AND c.id = v.channel_connection_id
@@ -144,7 +147,8 @@ export const planExport = defineCommand({
       status: r.status,
       at: r.at.toISOString(),
       title: r.title,
-      body: r.body,
+      // The text as it goes out, with the channel's signature (#1190).
+      body: withSignature(r.body, settingsOf(r)),
       linkUrl: r.link_url,
       labels: (labelsOf.get(r.post_id) ?? []).map((l) => l.name),
       assignee: r.assignee_user_id ? (names.get(r.assignee_user_id) ?? null) : null,
