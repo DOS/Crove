@@ -47,7 +47,7 @@ Keep at most 3 issues `In progress` across all agents, at least 2 of them in the
 2. If nothing is left, derive new issues:
    1. Run a read-only subagent over `docs/plan/*.md`, the accepted ADRs and `DESIGN.md`, checked against all issues and PRs.
    2. Create only items the subagent can cite a plan line for, with the milestone and priority the plan gives. A plan item with no milestone goes to the Icebox as P3, unless it is a gate row: those follow the GA gate P2 precedent (#996).
-3. Never run two workers on overlapping files. Check the issue's "Files" section against the other running workers.
+3. Never run two workers on overlapping files. Check the issue's "Files" section against the other running workers, and name the other workers' issues and paths in each brief, so a worker knows what is changing beside it.
 4. Claim the issue:
    1. Set Status to `In progress`.
    2. Comment `Claimed by the coordinator for worker session <name>`.
@@ -68,7 +68,7 @@ Keep at most 3 issues `In progress` across all agents, at least 2 of them in the
 2. Once a day, or when something new needs a person, send the owner a short Vietnamese report following the "Writing to the owner" rules in `AGENTS.md`: what each open item is, who must act, your recommendation, and what happens without an answer.
 3. End the turn. The next cycle comes from a worker's wake-up, the owner, or the `/loop` fallback (self-paced, 30 to 60 minutes when workers run, longer when idle).
 
-A coordinator conversation gets long. Once it has been compacted twice, or after a day, tell the owner to start a fresh coordinator session that runs this skill. State lives on GitHub, so nothing is lost.
+After a compaction, run section 1 again before acting: never assume that an action you remember starting finished (a merge, a claim, a message), since compaction is where background agents have lost or redone work. A coordinator conversation gets long. Once it has been compacted twice, or after a day, tell the owner to start a fresh coordinator session that runs this skill. State lives on GitHub, so nothing is lost.
 
 ## 5. Worker brief template
 
