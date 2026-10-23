@@ -119,29 +119,30 @@ function LabelForm({
 
 function Row({ label, canManage }: { label: SocialLabel; canManage: boolean }) {
   const t = useTranslations('social.labels');
-  const [editing, setEditing] = useState(false);
+  // The label as the form opened with it: the campaign fields are compared with this, not with a later refresh.
+  const [opened, setOpened] = useState<Draft | null>(null);
   const update = useMutation({
     // Only the campaign fields this form changed, so it never writes back what another owner set since it opened.
     mutationFn: (d: Draft) => {
-      const before: Record<string, unknown> = campaignInput(draftOf(label));
+      const before: Record<string, unknown> = campaignInput(opened ?? draftOf(label));
       const changed = Object.fromEntries(Object.entries(campaignInput(d)).filter(([k, v]) => v !== before[k]));
       return client.social.labels.update({ labelId: label.id, name: d.name.trim(), color: d.color, ...changed });
     },
     onSuccess: () => {
-      setEditing(false);
+      setOpened(null);
       refreshLabels();
     },
   });
   const remove = useMutation({ mutationFn: () => client.social.labels.remove({ labelId: label.id }), onSuccess: refreshLabels });
-  if (editing) {
+  if (opened) {
     return (
       <Card className="block p-4">
         <LabelForm
           id={`label-${label.id}`}
-          initial={draftOf(label)}
+          initial={opened}
           campaign={canManage}
           onSave={(d) => update.mutate(d)}
-          onCancel={() => setEditing(false)}
+          onCancel={() => setOpened(null)}
           pending={update.isPending}
           error={update.error}
         />
@@ -155,7 +156,7 @@ function Row({ label, canManage }: { label: SocialLabel; canManage: boolean }) {
         <span className="text-xs text-subtle-foreground tabular-nums">{t('posts', { count: label.postCount })}</span>
         {canManage && (
           <div className="ml-auto flex gap-1">
-            <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+            <Button size="sm" variant="ghost" onClick={() => setOpened(draftOf(label))}>
               {t('edit')}
             </Button>
             <Button
