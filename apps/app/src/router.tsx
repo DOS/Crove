@@ -44,6 +44,8 @@ import { parseJournalSearch, parseTextSearch } from './lib/search.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
+import { SocialSharePage } from './routes/social-share.tsx';
+import { SHARE_PATH, pendingShare, readShareFragment, readShareOrg, rememberShare } from './lib/social-share.ts';
 import { TaskDetailPage, TasksPage } from './routes/tasks.tsx';
 import { VatPage } from './routes/vat.tsx';
 import { PortalListPage } from './routes/portal-list.tsx';
@@ -90,6 +92,8 @@ const indexRoute = createRoute({
     await requireAuth();
     // An invite opened before signing in (or signing up) is answered first.
     if (pendingInvite()) throw redirect({ to: '/-/invite' });
+    // So is a page shared before signing in (#1235).
+    if (pendingShare()) throw redirect({ to: SHARE_PATH });
     const me = await queryClient.fetchQuery(orpc.me.get.queryOptions()).catch(async (error: unknown) => {
       if (!isUnauthenticated(error)) throw error;
       await auth().signOut({ scope: 'local' });
@@ -125,6 +129,21 @@ const inviteRoute = createRoute({
     await requireAuth();
   },
   component: InvitePage,
+});
+
+// A page shared into a new Social draft (#1235): the share target's query, already moved to the fragment by
+// share-boot.ts, or the bookmarklet's fragment (#org=&link=&text=). The share is moved from the address bar to this
+// tab's storage before the sign-in check, so it survives the detour through /login.
+const shareRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: SHARE_PATH,
+  beforeLoad: async () => {
+    const shared = readShareFragment(window.location.hash);
+    if (shared) rememberShare({ ...shared, org: readShareOrg(window.location.hash) });
+    if (window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname);
+    await requireAuth();
+  },
+  component: SocialSharePage,
 });
 
 const mfaRoute = createRoute({
@@ -311,6 +330,7 @@ const routeTree = rootRoute.addChildren([
   loginRoute,
   reviewRoute,
   reportRoute,
+  shareRoute,
   socialPlanPrintRoute,
   inviteRoute,
   mfaRoute,
