@@ -389,7 +389,8 @@ export class MastodonPublisher implements Publisher {
     if (!text && mediaIds.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
     const limits = await this.limits(s);
     if (codepoints(text) + (spoilerText ? codepoints(spoilerText) : 0) > limits.maxCharacters) return { kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG', message: `this instance takes ${limits.maxCharacters} characters` };
-    const language = typeof status.language === 'string' && /^[a-z]{2,3}$/.test(status.language) ? { language: status.language } : {};
+    // The status's language as Mastodon gave it, regional ones (zh-CN, pt-BR) included; anything else is left out.
+    const language = typeof status.language === 'string' && /^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$/.test(status.language) ? { language: status.language } : {};
     try {
       const { data } = await this.client.call<{ id?: unknown }>(s, 'PUT', `/api/v1/statuses/${input.externalId}`, {
         json: { status: text, media_ids: mediaIds, sensitive: status.sensitive === true, spoiler_text: spoilerText ?? '', ...language },

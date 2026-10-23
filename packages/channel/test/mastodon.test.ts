@@ -262,6 +262,15 @@ describe('Mastodon edit (#1223)', () => {
     expect(calls[2]?.auth).toBe(`Bearer ${TOKEN}`);
   });
 
+  it('keeps a regional language and leaves out one that is not a language tag', async () => {
+    const regional = instance({ [GET]: [status({ language: 'zh-CN' })], [LIMITS]: [limits()], [PUT]: [{ body: { id: ID } }] });
+    expect(await edit(regional.fetchImpl)).toEqual({ kind: 'edited' });
+    expect(regional.calls[2]?.json).toMatchObject({ language: 'zh-CN' });
+    const odd = instance({ [GET]: [status({ language: 'vi; DROP' })], [LIMITS]: [limits()], [PUT]: [{ body: { id: ID } }] });
+    expect(await edit(odd.fetchImpl)).toEqual({ kind: 'edited' });
+    expect(odd.calls[2]?.json).not.toHaveProperty('language');
+  });
+
   it('refuses a poll, read before the call or from the status, with nothing changed', async () => {
     const none = instance({});
     expect(await edit(none.fetchImpl, { settings: { poll: { options: ['Có', 'Không'] } } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
