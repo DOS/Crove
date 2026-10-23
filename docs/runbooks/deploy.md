@@ -28,7 +28,7 @@ The workflow builds `ghcr.io/<owner>/<repo>` (the kernel image, `Dockerfile`, wi
 
 1. Pull both images by digest. The registry login uses the run's read-only token, sent over stdin into a throwaway Docker config that is deleted right after the pull: no credential stays on the host.
 2. Check that the compose files load with the env file (`docker compose config`). Nothing has changed yet.
-3. Start the database and run `migrate` with the new image. If it fails, the services are left as they were and the run exits 1: the old release keeps running.
+3. Start the database and run `migrate` with the new image (the migrations, then the DDL watch's event triggers, [alerts.md](alerts.md)). If it fails, the services are left as they were and the run exits 1: the old release keeps running.
 4. Start Supabase Auth (it applies its own migrations before it is healthy) and run `auth-grants`.
 5. Start the other services (`crove-extract`, Mailpit, anything from `compose.host.yml`).
 6. Roll the app. With separate `worker` and `api` services, the **worker first**: it must still be running after `CROVE_WORKER_SETTLE` seconds (15), then the API. With the all-in-one `crove` service (the pilot), that one container.
