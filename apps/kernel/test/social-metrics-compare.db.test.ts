@@ -19,6 +19,7 @@ interface Totals {
   posts: number;
   metrics: Record<string, number>;
   clicks: number | null;
+  rateBases?: Record<string, { engagement: number; denominator: number }>;
 }
 interface WindowTotals extends Totals {
   channels: (Totals & { connectionId: string; provider: string })[];
@@ -145,19 +146,24 @@ suite('social metrics against the window before (#947)', () => {
     const t = await totals(o, { days: 30 });
     expect(t).toMatchObject({ posts: 3, metrics: { reach: 1100, reactions: 40, views: 50 }, clicks: 5 });
     // Every channel that posted in either window, in both lists, so the channels add up to both totals.
+    // rateBases (#1164): the engagement and reach of the posts that report both; a channel without either has none.
     expect(t.channels).toEqual([
-      { connectionId: fb, provider: 'sandbox', posts: 2, metrics: { reach: 1000, reactions: 40 }, clicks: 5 },
-      { connectionId: zalo, provider: 'sandbox', posts: 1, metrics: { reach: 100, views: 50 }, clicks: null },
-      { connectionId: quiet, provider: 'sandbox', posts: 0, metrics: {}, clicks: null },
+      { connectionId: fb, provider: 'sandbox', posts: 2, metrics: { reach: 1000, reactions: 40 }, clicks: 5, rateBases: { reach: { engagement: 40, denominator: 1000 } } },
+      { connectionId: zalo, provider: 'sandbox', posts: 1, metrics: { reach: 100, views: 50 }, clicks: null, rateBases: {} },
+      { connectionId: quiet, provider: 'sandbox', posts: 0, metrics: {}, clicks: null, rateBases: {} },
     ]);
+    expect(t.rateBases).toEqual({ reach: { engagement: 40, denominator: 1000 } });
+    // The post of 59 days ago reports reach and no engagement: its reach is in the sums, not in the rate (50 over 800,
+    // not over 1000).
     expect(t.previous).toEqual({
       posts: 3,
       metrics: { reach: 1030, reactions: 50 },
       clicks: 7,
+      rateBases: { reach: { engagement: 50, denominator: 800 } },
       channels: [
-        { connectionId: fb, provider: 'sandbox', posts: 2, metrics: { reach: 1000, reactions: 50 }, clicks: 7 },
-        { connectionId: zalo, provider: 'sandbox', posts: 0, metrics: {}, clicks: null },
-        { connectionId: quiet, provider: 'sandbox', posts: 1, metrics: { reach: 30 }, clicks: null },
+        { connectionId: fb, provider: 'sandbox', posts: 2, metrics: { reach: 1000, reactions: 50 }, clicks: 7, rateBases: { reach: { engagement: 50, denominator: 800 } } },
+        { connectionId: zalo, provider: 'sandbox', posts: 0, metrics: {}, clicks: null, rateBases: {} },
+        { connectionId: quiet, provider: 'sandbox', posts: 1, metrics: { reach: 30 }, clicks: null, rateBases: {} },
       ],
     });
     // The default window is 30 days, the same answer.
@@ -171,7 +177,7 @@ suite('social metrics against the window before (#947)', () => {
       previous: { posts: 1, metrics: { reach: 100, views: 50 }, clicks: null, channels: [{ connectionId: fb, posts: 0 }, { connectionId: zalo, posts: 1 }] },
     });
     // A 1-day window with nothing in the day before it: no previous counts at all.
-    expect((await totals(o, { days: 1 })).previous).toEqual({ posts: 0, metrics: {}, clicks: null, channels: [] });
+    expect((await totals(o, { days: 1 })).previous).toEqual({ posts: 0, metrics: {}, clicks: null, rateBases: {}, channels: [] });
 
     // The other org sees only its own, in both windows.
     expect(await totals(stranger, { days: 30 })).toMatchObject({ posts: 1, metrics: { reach: 7000, reactions: 700 }, clicks: 70, previous: { posts: 1, metrics: { reach: 8000, reactions: 800 }, clicks: 80 } });

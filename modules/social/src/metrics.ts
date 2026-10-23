@@ -17,7 +17,8 @@ import { runAutoReply } from './auto-reply.ts';
 import { runRepost } from './repost.ts';
 import { autoReplyOf, repostRuleOf } from './domain/channels.ts';
 import { csvCell } from './domain/csv.ts';
-import { engagementRate, engagementRatePercent } from './domain/engagement-rate.ts';
+import { ENGAGEMENT_RATE_BASES, addRateBases, engagementRate, engagementRatePercent, type RateBases } from './domain/engagement-rate.ts';
+import { GOAL_ENGAGEMENT_COUNTS } from './domain/goals.ts';
 import { STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture } from './domain/story-metrics.ts';
 import { channelScope, connectionInScope, type ChannelScope } from './channel-access.ts';
 import { OUTPERFORM_AFTER_HOURS } from './domain/outperform.ts';
@@ -146,11 +147,13 @@ export const metricsSummary = defineQuery({
 const SUMMARY_LIMIT = 500;
 
 // A window's totals: how many variants went out, the sum of each count, and the clicks on their short links (null
-// when none went out with one).
+// when none went out with one). rateBases (#1164): the engagement and each rate denominator summed over the posts that
+// report it, which an engagement rate is made of (engagementRateOfBases), never the plain sums.
 export interface MetricsTotals {
   posts: number;
   metrics: Record<string, number>;
   clicks: number | null;
+  rateBases: RateBases;
 }
 export interface ChannelTotals extends MetricsTotals {
   connectionId: string;
@@ -163,56 +166,82 @@ export interface WindowTotals extends MetricsTotals {
 // The window's totals (#397), summed in SQL over every published channel, not only the rows the summary lists: the
 // last real answer of each, and the clicks on its short links (null when no channel sent links through them); also
 // per channel. previous (#947): the same for the window of the same length just before, so a screen can show the
-// change. Both list every channel with posts in either window (0 posts and no counts in the one it did not post in),
-// in the same order (most posts now, then most before), so the channels add up to both windows' totals.
-// includeExternal (#1054): the posts each channel published outside Crove count too, in both windows; they carry no
-// label, so a label filter leaves them out. Without it the totals are Crove's posts alone, as before.
+// change (currentAndPrevious). includeExternal (#1054): the posts each channel published outside Crove count too, in
+// both windows; they carry no label, so a label filter leaves them out. Without it the totals are Crove's posts alone.
 export const metricsTotals = defineQuery({
   name: 'social.metrics.totals',
   input: z.object({ days: z.number().int().min(1).max(365).optional(), labelId: zId.optional(), includeExternal: z.boolean().optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<WindowTotals & { previous: WindowTotals }> => {
     const days = input.days ?? 30;
-    const external = input.includeExternal === true && !input.labelId;
-    const scope = await channelScope(ctx);
-    const current = await windowTotals(ctx.trx, ctx.orgId, days, 0, input.labelId, external, scope);
-    const previous = await windowTotals(ctx.trx, ctx.orgId, days, days, input.labelId, external, scope);
-    const now = new Map(current.channels.map((c) => [c.connectionId, c] as const));
-    const before = new Map(previous.channels.map((c) => [c.connectionId, c] as const));
-    const none = (c: ChannelTotals): ChannelTotals => ({ connectionId: c.connectionId, provider: c.provider, posts: 0, metrics: {}, clicks: null });
-    const ids = [...new Set([...now.keys(), ...before.keys()])].sort(
-      (a, b) => (now.get(b)?.posts ?? 0) - (now.get(a)?.posts ?? 0) || (before.get(b)?.posts ?? 0) - (before.get(a)?.posts ?? 0) || (a < b ? -1 : a > b ? 1 : 0),
-    );
-    const union = (own: Map<string, ChannelTotals>, other: Map<string, ChannelTotals>) => ids.map((id) => own.get(id) ?? none(other.get(id) as ChannelTotals));
-    return { ...current, channels: union(now, before), previous: { ...previous, channels: union(before, now) } };
+    const filter: SpanFilter = { labelId: input.labelId, external: input.includeExternal === true && !input.labelId, scope: await channelScope(ctx) };
+    return currentAndPrevious(await spanTotals(ctx.trx, ctx.orgId, { days, before: 0 }, filter), await spanTotals(ctx.trx, ctx.orgId, { days, before: days }, filter));
   },
 });
 
-// The totals of the variants published in the days-long window that ends `before` days ago (0: now, open-ended);
-// external: with the channels' posts published outside Crove in the same window (their latest real counts, no clicks),
-// leaving out the ones that are Crove's own (crove_social.external_post_is_crove).
-async function windowTotals(trx: Trx, orgId: string, days: number, before: number, labelId: string | undefined, external = false, scope: ChannelScope = null): Promise<WindowTotals> {
-  const labelled = labelId
-    ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${labelId}::uuid)`
+// Two windows' totals with the same channel list, in the same order (most posts now, then most before; a channel
+// that did not post in one has 0 posts and no counts there), so the channels add up to both windows' totals.
+export function currentAndPrevious(current: WindowTotals, previous: WindowTotals): WindowTotals & { previous: WindowTotals } {
+  const now = new Map(current.channels.map((c) => [c.connectionId, c] as const));
+  const before = new Map(previous.channels.map((c) => [c.connectionId, c] as const));
+  const none = (c: ChannelTotals): ChannelTotals => ({ connectionId: c.connectionId, provider: c.provider, posts: 0, metrics: {}, clicks: null, rateBases: {} });
+  const ids = [...new Set([...now.keys(), ...before.keys()])].sort(
+    (a, b) => (now.get(b)?.posts ?? 0) - (now.get(a)?.posts ?? 0) || (before.get(b)?.posts ?? 0) - (before.get(a)?.posts ?? 0) || (a < b ? -1 : a > b ? 1 : 0),
+  );
+  const union = (own: Map<string, ChannelTotals>, other: Map<string, ChannelTotals>) => ids.map((id) => own.get(id) ?? none(other.get(id) as ChannelTotals));
+  return { ...current, channels: union(now, before), previous: { ...previous, channels: union(before, now) } };
+}
+
+// The posts a total counts, by when they went out: the days-long window that ends `before` days ago (0: now,
+// open-ended), as the Metrics tab picks it; or [start, end), a period (the goals of a month, a report's period).
+export type Span = { days: number; before: number } | { start: Date; end: Date };
+// labelId: only Crove's posts with that label; external (#1054): with the channels' posts published outside Crove (they
+// carry no label, so never under one); scope (#1081): the channels the caller may use; connectionIds: only these.
+export interface SpanFilter {
+  labelId?: string | undefined;
+  external?: boolean | undefined;
+  scope?: ChannelScope | undefined;
+  connectionIds?: readonly string[] | undefined;
+}
+
+// SQL: the time column is in the span.
+export function inSpan(span: Span, column: string): RawBuilder<boolean> {
+  const at = sql.ref(column);
+  if ('start' in span) return sql<boolean>`${at} >= ${span.start} AND ${at} < ${span.end}`;
+  const start = sql`${at} > pg_catalog.now() - pg_catalog.make_interval(days => ${span.days + span.before}::int)`;
+  return span.before === 0 ? sql<boolean>`${start}` : sql<boolean>`${start} AND ${at} <= pg_catalog.now() - pg_catalog.make_interval(days => ${span.before}::int)`;
+}
+
+// SQL: the channel column is one the filter keeps.
+export function channelKept(filter: SpanFilter, column: string): RawBuilder<boolean> {
+  const ids = filter.connectionIds && filter.connectionIds.length > 0 ? sql`AND ${sql.ref(column)} = ANY(${[...filter.connectionIds]}::uuid[])` : sql``;
+  return sql<boolean>`${connectionInScope(filter.scope ?? null, column)} ${ids}`;
+}
+
+// The totals of the variants published in the span, with the channels' posts published outside Crove in the same span
+// when the filter says so (their latest real counts, no clicks), leaving out the ones that are Crove's own
+// (crove_social.external_post_is_crove).
+export async function spanTotals(trx: Trx, orgId: string, span: Span, filter: SpanFilter = {}): Promise<WindowTotals> {
+  const labelled = filter.labelId
+    ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${filter.labelId}::uuid)`
     : sql``;
-  const end = sql`pg_catalog.now() - pg_catalog.make_interval(days => ${before}::int)`;
-  const ends = before === 0 ? sql`` : sql`AND v.published_at <= ${end}`;
-  // A window before now counts its posts' short link clicks up to its end only, on the days (UTC) whose midday is in
-  // it, as the client report does; the later clicks belong to the windows after it. A post's clicks all come after it
-  // went out, so the start needs no bound.
-  const clickedBy = before === 0 ? sql`` : sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' <= ${end}`;
-  const outside = external
-    ? sql`e.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${before === 0 ? sql`` : sql`AND e.published_at <= ${end}`} AND ${connectionInScope(scope, 'e.channel_connection_id')}`
-    : undefined;
-  return totalsWhere(trx, orgId, sql`v.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${days + before}::int) ${ends} ${labelled} AND ${connectionInScope(scope, 'v.channel_connection_id')}`, clickedBy, outside);
+  // A span that ends before now counts its posts' short link clicks up to its end only, on the days (UTC) whose midday
+  // is in it, as the client report does; the later clicks belong to the windows after it. A post's clicks all come
+  // after it went out, so the start needs no bound.
+  const midday = sql`(c.day + time '12:00') AT TIME ZONE 'UTC'`;
+  const clickedBy =
+    'start' in span ? sql`AND ${midday} < ${span.end}` : span.before === 0 ? sql`` : sql`AND ${midday} <= pg_catalog.now() - pg_catalog.make_interval(days => ${span.before}::int)`;
+  const outside = filter.external && !filter.labelId ? sql`${inSpan(span, 'e.published_at')} AND ${channelKept(filter, 'e.channel_connection_id')}` : undefined;
+  return totalsWhere(trx, orgId, sql`${inSpan(span, 'v.published_at')} ${labelled} AND ${channelKept(filter, 'v.channel_connection_id')}`, clickedBy, outside);
 }
 
 /**
  * The totals of the variants published in [start, end), as the window totals add them up: the goals of a month
- * (#1056) count with these. Short link clicks up to the end only, on the days (UTC) whose midday is before it.
+ * (#1056) count with these, Crove's posts only (and so do the client report's goals, #1075). Short link clicks up to
+ * the end only, on the days (UTC) whose midday is before it.
  */
 export function periodTotals(trx: Trx, orgId: string, start: Date, end: Date): Promise<WindowTotals> {
-  return totalsWhere(trx, orgId, sql`v.published_at >= ${start} AND v.published_at < ${end}`, sql`AND (c.day + time '12:00') AT TIME ZONE 'UTC' < ${end}`);
+  return spanTotals(trx, orgId, { start, end });
 }
 
 // outsidePublished (#1054): when given, the channels' posts published outside Crove whose time it takes (as e) count
@@ -228,7 +257,14 @@ async function totalsWhere(trx: Trx, orgId: string, published: RawBuilder<unknow
     : sql``;
   const outsideCounts = outsidePublished ? sql`UNION ALL SELECT x.conn, x.metrics FROM x WHERE x.metrics <> '{}'::jsonb` : sql``;
   const posted = outsidePublished ? sql`(SELECT v.conn, v.provider FROM v UNION ALL SELECT x.conn, x.provider FROM x) v` : sql`v`;
-  const { rows } = await sql<{ conn: string; provider: string; posts: string; metrics: Record<string, number>; clicks: string | null }>`
+  const { rows } = await sql<{
+    conn: string;
+    provider: string;
+    posts: string;
+    metrics: Record<string, number>;
+    clicks: string | null;
+    rated: Record<string, { engagement: string | number; denominator: string | number }> | null;
+  }>`
     WITH v AS (
       SELECT v.org_id, v.id, v.channel_connection_id AS conn, v.provider FROM crove_social.post_variant v
       WHERE v.org_id = ${orgId} AND v.status = 'published' AND ${published}
@@ -243,6 +279,18 @@ async function totalsWhere(trx: Trx, orgId: string, published: RawBuilder<unknow
       SELECT latest.conn, e.key, sum((e.value #>> '{}')::numeric) AS total FROM latest, jsonb_each(latest.metrics) e
       -- An average per post (a Reel's average watch time, #1147) adds up to nothing: left out of the sums.
       WHERE jsonb_typeof(e.value) = 'number' AND NOT (e.key = ANY(${[...AVERAGE_METRIC_NAMES]}::text[])) GROUP BY latest.conn, e.key
+    ), rated AS (
+      -- What a rate is made of (#1164), as rateBasesOf adds it up: per basis, the engagement and the denominator of the
+      -- posts that report that denominator above 0 and at least one engagement count.
+      SELECT latest.conn, b.basis, sum(g.engagement) AS engagement, sum((latest.metrics ->> b.basis)::numeric) AS denominator
+      FROM latest
+      CROSS JOIN LATERAL (
+        SELECT sum((e.value #>> '{}')::numeric) AS engagement FROM jsonb_each(latest.metrics) e
+        WHERE jsonb_typeof(e.value) = 'number' AND e.key = ANY(${[...GOAL_ENGAGEMENT_COUNTS]}::text[])
+      ) g
+      CROSS JOIN (VALUES ('reach'), ('impressions')) b(basis)
+      WHERE g.engagement IS NOT NULL AND jsonb_typeof(latest.metrics -> b.basis) = 'number' AND (latest.metrics ->> b.basis)::numeric > 0
+      GROUP BY latest.conn, b.basis
     ), clicks AS (
       SELECT v.conn, coalesce(sum(c.clicks), 0) AS clicks FROM v
       JOIN crove_social.short_link l ON l.org_id = v.org_id AND l.variant_id = v.id
@@ -251,19 +299,31 @@ async function totalsWhere(trx: Trx, orgId: string, published: RawBuilder<unknow
     )
     SELECT v.conn, min(v.provider) AS provider, count(*) AS posts,
            (SELECT coalesce(jsonb_object_agg(s.key, s.total), '{}'::jsonb) FROM sums s WHERE s.conn = v.conn) AS metrics,
-           (SELECT k.clicks FROM clicks k WHERE k.conn = v.conn) AS clicks
+           (SELECT k.clicks FROM clicks k WHERE k.conn = v.conn) AS clicks,
+           (SELECT jsonb_object_agg(r.basis, jsonb_build_object('engagement', r.engagement, 'denominator', r.denominator)) FROM rated r WHERE r.conn = v.conn) AS rated
     FROM ${posted} GROUP BY v.conn
     ORDER BY count(*) DESC, v.conn`.execute(trx);
   const channels: ChannelTotals[] = rows.map((r) => {
     const metrics: Record<string, number> = {};
     for (const [name, value] of Object.entries(r.metrics ?? {})) metrics[name] = Number(value);
-    return { connectionId: r.conn, provider: r.provider, posts: Number(r.posts), metrics, clicks: r.clicks === null ? null : Number(r.clicks) };
+    const rateBases: RateBases = {};
+    for (const basis of ENGAGEMENT_RATE_BASES) {
+      const sums = r.rated?.[basis];
+      if (sums) rateBases[basis] = { engagement: Number(sums.engagement), denominator: Number(sums.denominator) };
+    }
+    return { connectionId: r.conn, provider: r.provider, posts: Number(r.posts), metrics, clicks: r.clicks === null ? null : Number(r.clicks), rateBases };
   });
   // The window's totals are the sums of its channels' (counts, never money).
   const metrics: Record<string, number> = {};
   for (const c of channels) for (const [name, value] of Object.entries(c.metrics)) metrics[name] = (metrics[name] ?? 0) + value;
   const linked = channels.filter((c) => c.clicks !== null);
-  return { posts: channels.reduce((sum, c) => sum + c.posts, 0), metrics, clicks: linked.length === 0 ? null : linked.reduce((sum, c) => sum + (c.clicks ?? 0), 0), channels };
+  return {
+    posts: channels.reduce((sum, c) => sum + c.posts, 0),
+    metrics,
+    clicks: linked.length === 0 ? null : linked.reduce((sum, c) => sum + (c.clicks ?? 0), 0),
+    rateBases: addRateBases(channels.map((c) => c.rateBases)),
+    channels,
+  };
 }
 export const EXPORT_LIMIT = 10_000;
 

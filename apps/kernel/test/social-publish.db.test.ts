@@ -1541,7 +1541,7 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(most).toBe(2);
     const totals = await api.query<{ posts: number; metrics: Record<string, number>; clicks: number | null }>('social.metrics.totals', {}, { actor: asUser(o.owner), orgId: o.orgId });
     expect(totals).toMatchObject({ posts: 4, metrics: expect.objectContaining({ impressions: 160, reach: 120, reactions: 12 }), clicks: null });
-    const none = { posts: 0, metrics: {}, clicks: null, channels: [] };
+    const none = { posts: 0, metrics: {}, clicks: null, rateBases: {}, channels: [] };
     expect(await api.query('social.metrics.totals', { days: 1, labelId: randomUUID() }, { actor: asUser(o.owner), orgId: o.orgId })).toEqual({ ...none, previous: none });
   });
 

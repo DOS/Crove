@@ -26,6 +26,8 @@ vi.mock('../src/lib/api.ts', async () => {
   return { orpc: node([]), client: {}, queryClient: client.current, errorMessage: (e: unknown) => String(e), fetchFile: () => Promise.reject(new Error('not fetched')), uploadFiles: () => Promise.reject(new Error('not uploaded')) };
 });
 vi.mock('@tanstack/react-router', () => ({ useParams: () => ({ slug: 'hoa-mai' }), Link: () => null }));
+// A server without AI: the form shows no summary button here (social-summary.test.tsx covers it).
+vi.mock('../src/lib/auth.ts', () => ({ getConfig: () => ({ aiEnabled: false }) }));
 
 const { ReportLinks } = await import('../src/components/social-report-links.tsx');
 const { SocialReportPage } = await import('../src/routes/social-report.tsx');

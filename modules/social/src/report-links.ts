@@ -21,6 +21,21 @@ const DAY_MS = 86_400_000;
 // Days picked in a zone with daylight saving can be an hour longer than 24 h; the table's CHECK allows a day more.
 const DST_SLACK_MS = 2 * 3_600_000;
 
+/**
+ * A report period's bounds in epoch milliseconds: it must end after it starts and last at most REPORT_PERIOD_MAX_DAYS
+ * days, with DST_SLACK_MS for days picked in a zone with daylight saving. A time that does not parse (NaN) is refused
+ * too, so an in-process caller that skipped the input schema cannot pass an Invalid Date on. Report links and the AI
+ * summary of a period (#1237) check it the same way.
+ */
+export function reportPeriodBounds(periodStart: string, periodEnd: string): { startMs: number; endMs: number } {
+  const startMs = Date.parse(periodStart);
+  const endMs = Date.parse(periodEnd);
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= startMs || endMs - startMs > REPORT_PERIOD_MAX_DAYS * DAY_MS + DST_SLACK_MS) {
+    throw new DomainError('REPORT_PERIOD_INVALID', 422, `Kỳ báo cáo phải kết thúc sau ngày bắt đầu và dài tối đa ${REPORT_PERIOD_MAX_DAYS} ngày`);
+  }
+  return { startMs, endMs };
+}
+
 // 32 random bytes, base64url: the format report_link_view() accepts.
 export const newReportToken = () => randomBytes(32).toString('base64url');
 export const reportTokenHash = (token: string) => createHash('sha256').update(token, 'utf8').digest('hex');
@@ -86,11 +101,9 @@ export const reportLinkCreate = defineCommand({
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
-    const start = new Date(input.periodStart);
-    const end = new Date(input.periodEnd);
-    if (end.getTime() <= start.getTime() || end.getTime() - start.getTime() > REPORT_PERIOD_MAX_DAYS * DAY_MS + DST_SLACK_MS) {
-      throw new DomainError('REPORT_PERIOD_INVALID', 422, `Kỳ báo cáo phải kết thúc sau ngày bắt đầu và dài tối đa ${REPORT_PERIOD_MAX_DAYS} ngày`);
-    }
+    const bounds = reportPeriodBounds(input.periodStart, input.periodEnd);
+    const start = new Date(bounds.startMs);
+    const end = new Date(bounds.endMs);
     const ids = [...new Set(input.connectionIds ?? [])];
     if (ids.length > 0) {
       const found = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', ids).execute();
