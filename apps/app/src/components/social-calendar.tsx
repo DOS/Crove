@@ -34,6 +34,7 @@ import {
   calendarItems,
   DAY_MS,
   dayId,
+  daysOutsideCampaign,
   DROP_HOURS,
   followsPlan,
   localMoment,
@@ -55,6 +56,7 @@ import {
   type View,
 } from '../lib/social-calendar.ts';
 import { NoteChip, NoteEditor, type NoteDraft } from './social-calendar-notes.tsx';
+import { useLabels } from './social-labels.tsx';
 import { PlanExportPanel } from './social-plan-export.tsx';
 import { occasionStart, occasionsShown, setOccasionsShown } from '../lib/social-occasions.ts';
 
@@ -446,6 +448,10 @@ export function SocialCalendar({
   const undated = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { undated: true, ...filters, limit: UNDATED_LIMIT } }), enabled: canWrite });
   const notes = useQuery(orpc.social.calendarNotes.list.queryOptions({ input: { from: dayId(days[0] as Date), to: dayId(days.at(-1) as Date) } }));
   const notesOn = useMemo(() => notesByDay(notes.data ?? [], days), [notes.data, days]);
+  // Under a campaign label's filter (#1169), the days outside its dates are shaded.
+  const labelList = useLabels();
+  const campaign = filters.labelId ? (labelList.data ?? []).find((l) => l.id === filters.labelId) : undefined;
+  const offCampaign = useMemo(() => daysOutsideCampaign(campaign, days), [campaign, days]);
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   // The content plan export (#978), for members and above.
   const [exporting, setExporting] = useState(false);
@@ -720,6 +726,19 @@ export function SocialCalendar({
           ) : (
             <>
               {(posts.data?.length ?? 0) >= 200 && <p className="text-xs text-subtle-foreground">{t('calendar.capped')}</p>}
+              {campaign && (campaign.startsOn || campaign.endsOn) && (
+                <p className="text-xs text-muted-foreground">
+                  {t('calendar.campaignShade', {
+                    name: campaign.name,
+                    period:
+                      campaign.startsOn && campaign.endsOn
+                        ? t('labels.period', { from: f.date(campaign.startsOn), to: f.date(campaign.endsOn) })
+                        : campaign.startsOn
+                          ? t('labels.periodFrom', { from: f.date(campaign.startsOn) })
+                          : t('labels.periodTo', { to: f.date(campaign.endsOn) }),
+                  })}
+                </p>
+              )}
               <div className={cn('grid gap-px overflow-hidden rounded-xl border bg-border', view === 'month' ? 'grid-cols-7' : 'grid-cols-1 sm:grid-cols-7')}>
                 {days.slice(0, 7).map((d) => (
                   <div key={`h-${dayId(d)}`} className={cn('bg-muted px-2 py-1 text-xs font-medium text-muted-foreground', view === 'week' && 'hidden sm:block')}>
@@ -730,6 +749,7 @@ export function SocialCalendar({
                   const id = dayId(d);
                   const list = byDay.get(id) ?? [];
                   const outside = view === 'month' && d.getMonth() !== anchor.getMonth();
+                  const off = offCampaign.has(id);
                   const past = startOfDay(d).getTime() + DAY_MS <= Date.now();
                   // Past days take no drop (#1145): nothing is planned or moved into the past.
                   const target = canWrite && !past;
@@ -742,12 +762,21 @@ export function SocialCalendar({
                       onDragOver={target ? (e) => (e.preventDefault(), setOver(id)) : undefined}
                       onDragLeave={() => setOver((o) => (o === id ? null : o))}
                       onDrop={target ? drop(d) : undefined}
-                      className={cn('group flex min-h-24 flex-col gap-1 bg-background p-1.5', outside && 'bg-muted/40', over === id && 'ring-2 ring-primary ring-inset', view === 'week' && 'sm:min-h-64')}
+                      title={off ? t('calendar.outsideCampaign') : undefined}
+                      data-off-campaign={off || undefined}
+                      className={cn(
+                        'group flex min-h-24 flex-col gap-1 bg-background p-1.5',
+                        outside && 'bg-muted/40',
+                        off && 'bg-muted/80',
+                        over === id && 'ring-2 ring-primary ring-inset',
+                        view === 'week' && 'sm:min-h-64',
+                      )}
                     >
                       <div className="flex items-center justify-between">
                         <span className={cn('text-xs tabular-nums', id === today ? 'rounded-full bg-primary px-1.5 font-semibold text-primary-foreground' : outside ? 'text-subtle-foreground' : 'text-muted-foreground')}>
                           {view === 'week' ? <span className="sm:hidden">{f.weekdayShort(d.toISOString())} </span> : null}
                           {d.getDate()}
+                          {off && <span className="sr-only"> ({t('calendar.outsideCampaign')})</span>}
                         </span>
                         {!past && (
                           <button

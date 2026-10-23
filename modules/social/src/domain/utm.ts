@@ -32,11 +32,12 @@ export const UTM_SOURCE: Readonly<Record<Provider, string>> = {
 };
 
 // Letters with their marks, digits, spaces and common punctuation; the value is percent-encoded in the link anyway.
-const TAG = /^[\p{L}\p{M}\p{N}\p{Zs}_.,:;!?'()/+&%@#-]{1,100}$/u;
-const clean = (value: unknown): string | null => {
+export const UTM_TAG = /^[\p{L}\p{M}\p{N}\p{Zs}_.,:;!?'()/+&%@#-]{1,100}$/u;
+// The tag as the link carries it (NFC, trimmed), or null when it does not follow UTM_TAG.
+export const utmTag = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
   const s = value.normalize('NFC').trim();
-  return TAG.test(s) ? s : null;
+  return UTM_TAG.test(s) ? s : null;
 };
 
 // The tags in a variant's settings, or null when there are none (a campaign is what turns them on).
@@ -44,10 +45,10 @@ export function utmOf(settings: Readonly<Record<string, unknown>> | undefined): 
   const raw = settings?.utm;
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
-  const campaign = clean(r.campaign);
+  const campaign = utmTag(r.campaign);
   if (!campaign) return null;
-  const medium = clean(r.medium);
-  const content = clean(r.content);
+  const medium = utmTag(r.medium);
+  const content = utmTag(r.content);
   return { campaign, ...(medium ? { medium } : {}), ...(content ? { content } : {}) };
 }
 

@@ -1,6 +1,7 @@
 // Labels for posts (#639): the classes each label colour shows with, and choosing a post's labels. No browser or
 // React imports, so it is unit tested.
 import { SOCIAL_LABEL_COLORS } from '@crove/kernel-contract';
+import { labelUtmTag } from '@crove/mod-social/contract';
 
 export type LabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
 export const LABEL_COLORS: readonly LabelColor[] = SOCIAL_LABEL_COLORS;
@@ -50,4 +51,29 @@ export function toggleLabel(current: readonly string[], labelId: string): string
 export function labelsOf<L extends { id: string }>(ids: readonly string[], labels: readonly L[]): L[] {
   const wanted = new Set(ids);
   return labels.filter((l) => wanted.has(l.id));
+}
+
+// A label's campaign (#1169) as the Labels page form holds it: '' for a field left empty.
+export type CampaignDraft = { startsOn: string; endsOn: string; utmCampaign: string; utmMedium: string };
+
+// What is wrong with the campaign as typed, as social.label.create and .update would refuse it; null when it may be
+// saved.
+export function campaignProblem(d: CampaignDraft): 'dates' | 'utm' | 'mediumNeedsCampaign' | null {
+  if (d.startsOn && d.endsOn && d.endsOn < d.startsOn) return 'dates';
+  if ((d.utmCampaign.trim() && labelUtmTag(d.utmCampaign) === null) || (d.utmMedium.trim() && labelUtmTag(d.utmMedium) === null)) return 'utm';
+  if (d.utmMedium.trim() && !d.utmCampaign.trim()) return 'mediumNeedsCampaign';
+  return null;
+}
+
+// The campaign's fields for a create or an update: empty ones as null, so an update clears them.
+export function campaignInput(d: CampaignDraft): { startsOn: string | null; endsOn: string | null; utmCampaign: string | null; utmMedium: string | null } {
+  return { startsOn: d.startsOn || null, endsOn: d.endsOn || null, utmCampaign: d.utmCampaign.trim() || null, utmMedium: d.utmMedium.trim() || null };
+}
+
+// The report period a campaign label suggests (#1169): its first and last day where it has them, else the period
+// shown, and never a last day before the first.
+export function labelPeriod(label: { startsOn: string | null; endsOn: string | null }, shown: { from: string; to: string }): { from: string; to: string } {
+  const from = label.startsOn ?? (label.endsOn !== null && shown.from > label.endsOn ? label.endsOn : shown.from);
+  const to = label.endsOn ?? (shown.to < from ? from : shown.to);
+  return { from, to };
 }

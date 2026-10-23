@@ -109,6 +109,15 @@ export function notesByDay<N extends { startsOn: string; endsOn: string }>(notes
   return map;
 }
 
+// The days a view shows outside a campaign label's dates (#1169), for the calendar under that label's filter: the
+// campaign is read as a note from its first to its last day (an open end reaches past any view), so the days are the
+// ones no such note covers. None for a label without dates.
+export function daysOutsideCampaign(label: { startsOn: string | null; endsOn: string | null } | undefined, days: readonly Date[]): Set<string> {
+  if (!label || (label.startsOn === null && label.endsOn === null)) return new Set();
+  const inside = notesByDay([{ startsOn: label.startsOn ?? '0001-01-01', endsOn: label.endsOn ?? '9999-12-31' }], days);
+  return new Set(days.map(dayId).filter((id) => !inside.has(id)));
+}
+
 // connectionId: the channel filter (#1044), under which only that channel's chips are drawn, not every channel of a
 // post that matches.
 export function calendarItems(posts: readonly Post[], connectionId?: string): CalendarItem[] {
