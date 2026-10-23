@@ -11,10 +11,20 @@
 //                         a waiver comment on the line right before it, `-- migration-lint: cross-module <reason>`,
 //                         with a reason; the lint lists every waiver it accepted (decision on #1213: Social adds its
 //                         tables to crove_kernel.org_purge in its own feature migration, as the owner allowed);
-//   function-revoke       REVOKE ALL ON FUNCTION <name> ... FROM PUBLIC after every CREATE FUNCTION or PROCEDURE.
+//   function-revoke       REVOKE ALL ON FUNCTION <name> ... FROM PUBLIC after every new CREATE FUNCTION or PROCEDURE
+//                         (one no earlier migration created, or one this file dropped first);
+//   no-edit-applied       with --since, not change or delete a migration that is already on the base branch.
 // DO bodies are linted too: their PL/pgSQL is split into statements and each SQL statement is checked like a top-level
-// one, and so is a string an EXECUTE runs when it reads as a SQL command. Function bodies are not: they run when the
+// one, and so is every statement of the command string an EXECUTE runs. Function bodies are not: they run when the
 // function is called, not when the migration is applied.
+//
+// Known blind spots (the lint reads statement shapes; the invariant suite and the security review cover the rest):
+//   - writes in a CTE (WITH d AS (DELETE FROM ...) SELECT ...) and SELECT ... INTO a new table;
+//   - ALTER ... SET SCHEMA and ALTER ... OWNER TO, which move or hand over an object without touching its schema rule;
+//   - PREPARE TRANSACTION;
+//   - EXECUTE of a variable or an expression (only a string literal, or format()'s literal format string, is read);
+//   - a function body the same file then calls (SELECT f()), whose statements run at migration time;
+//   - SET standard_conforming_strings = off, which changes how '...' strings end and so where statements split.
 //
 // The plan names libpg-query for this. This lint uses its own small lexer instead (comments, strings, quoted
 // identifiers and dollar quoting), so it needs no dependency and runs in the Docs check job without an install. The
@@ -27,8 +37,8 @@
 //
 // Usage: node tools/ci/migration-lint.mjs [--allowlist-ref <ref>] [--since <ref> | file...]
 //   Lints every supabase/migrations/*.sql not on the allowlist, or only the named files, or with --since only the
-//   ones HEAD adds or changes since that ref (CI passes the merge commit's first parent, as for migration-order.mjs, so
-//   a file that reached main without the lint never fails other PRs). --allowlist-ref reads the allowlist from that
+//   ones HEAD adds since that ref, reporting every one it changes or deletes (CI passes the merge commit's first parent,
+//   as for migration-order.mjs, so a file that reached main without the lint never fails other PRs). --allowlist-ref reads the allowlist from that
 //   git ref (CI passes the base branch) instead of the working tree; a ref without the file means an empty allowlist.
 //   Exits 1 and prints one ::error line per finding with the file, line and rule.
 import { execFileSync } from 'node:child_process';
@@ -41,11 +51,6 @@ const ALLOWLIST = 'tools/ci/migration-lint-allowlist.txt';
 const MODULE = /^\d{14}_crove_([a-z0-9]+)_[a-z0-9_]+\.sql$/;
 const BANNED_GRANTEES = new Set(['anon', 'authenticated', 'public']);
 const TRANSACTION_WORDS = new Set(['begin', 'start', 'commit', 'end', 'rollback', 'abort']);
-// Words that start a SQL command: a string an EXECUTE runs is linted only when it starts with one.
-const COMMANDS = new Set([
-  'alter', 'analyze', 'begin', 'cluster', 'comment', 'commit', 'create', 'delete', 'do', 'drop', 'end', 'grant',
-  'insert', 'merge', 'refresh', 'reindex', 'revoke', 'rollback', 'security', 'truncate', 'update', 'vacuum',
-]);
 
 // --- Lexer -------------------------------------------------------------------------------------------------------
 
@@ -132,14 +137,16 @@ const isWord = (token, ...words) => token?.t === 'word' && (words.length === 0 |
 const isPunct = (token, v) => token?.t === 'punct' && token.v === v;
 
 // Splits tokens into statements at semicolons. A SQL-standard function body (BEGIN ATOMIC ... END) holds semicolons
-// of its own, so the split waits for its END.
+// of its own, so the split waits for its END; BEGIN ATOMIC counts only in CREATE [OR REPLACE] FUNCTION or PROCEDURE,
+// so the words elsewhere (`SELECT begin atomic FROM ...`) cannot swallow the rest of the file.
 export function splitStatements(tokens) {
   const statements = [];
   let current = [];
   let atomic = 0;
+  const inRoutine = () => isWord(current[0], 'create') && isWord(current[isWord(current[1], 'or') ? 3 : 1], 'function', 'procedure');
   for (let k = 0; k < tokens.length; k++) {
     const token = tokens[k];
-    if (isWord(token, 'begin') && isWord(tokens[k + 1], 'atomic')) atomic++;
+    if (isWord(token, 'begin') && isWord(tokens[k + 1], 'atomic') && (atomic > 0 || inRoutine())) atomic++;
     else if (atomic > 0 && isWord(token, 'case')) atomic++;
     else if (atomic > 0 && isWord(token, 'end')) atomic--;
     if (isPunct(token, ';') && atomic === 0) {
@@ -435,6 +442,7 @@ export function lintMigration(file, sql, { existingFunctions = new Set(), waiver
   const droppedPolicies = new Set();
   const functions = []; // { key, line }: functions created, waiting for their REVOKE
   const revoked = []; // { key | schema, index }: REVOKE ALL ... FROM PUBLIC, in order
+  const dropped = []; // { key, index }: DROP FUNCTION, PROCEDURE or ROUTINE, in order
   let order = 0;
   const comments = [];
   const waiverAt = new Map(); // line of the statement a waiver comment precedes -> { line, reason }
@@ -508,6 +516,9 @@ export function lintMigration(file, sql, { existingFunctions = new Set(), waiver
         if (name) functions.push({ key: `${name.schema ?? ''}.${name.name}`, schema: name.schema, label: name.schema ? `${name.schema}.${name.name}` : name.name, line: head.line, index: order });
       }
     }
+    if (isWord(head, 'drop') && isWord(tokens[1], 'function', 'procedure', 'routine')) {
+      for (const name of nameList(tokens, skipIfExists(tokens, 2), 'cascade', 'restrict')) dropped.push({ key: `${name.schema ?? ''}.${name.name}`, index: order });
+    }
     if (isWord(head, 'revoke')) {
       const from = findWord(tokens, 1, 'from');
       const publicToo = from !== -1 && tokens.slice(from + 1).some((token) => isWord(token, 'public'));
@@ -523,7 +534,9 @@ export function lintMigration(file, sql, { existingFunctions = new Set(), waiver
     }
 
     const { objects, schemas } = touchedObjects(tokens);
+    // A waiver covers only the first statement that starts on the line after it.
     const waiver = waiverAt.get(head.line);
+    waiverAt.delete(head.line);
     const waived = new Set();
     for (const object of objects) if (!object.dynamic) checkSchema(object.schema, object.line, object.name, waiver, waived);
     for (const named of schemas) if (!named.schema?.startsWith('%')) checkSchema(named.schema, named.line, named.what ?? 'the schema', waiver, waived);
@@ -531,7 +544,8 @@ export function lintMigration(file, sql, { existingFunctions = new Set(), waiver
 
     // DO bodies, and SQL an EXECUTE runs from a string literal.
     if (isWord(head, 'do')) {
-      const body = tokens.find((token) => token.t === 'string');
+      // DO [LANGUAGE lang] code, or DO code LANGUAGE lang: the code is the string that does not name the language.
+      const body = tokens.find((token, k) => token.t === 'string' && !isWord(tokens[k - 1], 'language'));
       if (body) {
         const statements = splitStatements(lex(body.body, body.bodyLine, comments));
         collectWaivers();
@@ -539,11 +553,11 @@ export function lintMigration(file, sql, { existingFunctions = new Set(), waiver
       }
     } else if (nested && isWord(head, 'execute')) {
       // Only the command string (EXECUTE '...' or the format string of EXECUTE format('...', ...)): later strings are
-      // arguments or USING values, which may read as a command word ('delete') without being one.
+      // arguments or USING values, which may read as a command word ('delete') without being one. The command string
+      // may hold several statements, each linted.
       const using = findWord(tokens, 1, 'using');
       const command = tokens.slice(0, using === -1 ? tokens.length : using).find((token) => token.t === 'string');
-      const inner = command === undefined ? [] : lex(command.body, command.bodyLine);
-      if (inner[0]?.t === 'word' && COMMANDS.has(inner[0].v)) for (const statement of splitStatements(inner)) lintStatement(statement, false);
+      if (command !== undefined) for (const statement of splitStatements(lex(command.body, command.bodyLine))) lintStatement(statement, false);
     }
   };
 
@@ -552,7 +566,9 @@ export function lintMigration(file, sql, { existingFunctions = new Set(), waiver
   for (const statement of statements) lintStatement(statement, false);
 
   for (const fn of functions) {
-    if (existingFunctions.has(fn.key)) continue;
+    // A function dropped earlier in this file and created again is new: the drop took its privileges with it.
+    const recreated = dropped.some((d) => d.key === fn.key && d.index < fn.index);
+    if (existingFunctions.has(fn.key) && !recreated) continue;
     const done = revoked.some((r) => r.index > fn.index && (r.key === fn.key || (r.schema !== undefined && r.schema === fn.schema)));
     if (!done) report(fn.line, 'function-revoke', `function ${fn.label} needs REVOKE ALL ON FUNCTION ${fn.label}(...) FROM PUBLIC after it, then explicit GRANTs`);
   }
@@ -598,15 +614,31 @@ export function plan(allNames, selected, allowlist) {
   return sorted.filter((name) => wanted.has(name) && !allowlist.has(name));
 }
 
+// From `git diff --name-status --no-renames <since> HEAD`: the migration files added (names), and a finding for each
+// one changed or deleted. A file that exists at <since> is on the base, so it may already be applied: AGENTS.md never
+// edits an applied file, and a fresh install would apply the edited content while migrated databases keep the old.
+export function changedMigrations(nameStatus) {
+  const added = [];
+  const edited = [];
+  for (const row of nameStatus.split('\n').filter(Boolean)) {
+    const [status, path] = row.split('\t');
+    if (!path?.endsWith('.sql')) continue;
+    if (status === 'A') added.push(basename(path));
+    else edited.push({ file: path, line: 1, rule: 'no-edit-applied', message: `${status === 'D' ? 'deletes' : 'changes'} a migration that is already on the base branch; never edit or delete an applied migration, add a new one` });
+  }
+  return { added, edited };
+}
+
 function main() {
   const args = process.argv.slice(2);
   const ref = option(args, '--allowlist-ref');
   const since = option(args, '--since');
   const allowlist = readAllowlist(ref);
   const all = readdirSync(DIR);
-  const selected = since !== undefined
-    ? execFileSync('git', ['diff', '--name-only', '--no-renames', '--diff-filter=AM', since, 'HEAD', '--', DIR], { encoding: 'utf8' }).split('\n').filter(Boolean).map((path) => basename(path))
-    : args.length > 0 ? args.map((path) => basename(path)) : undefined;
+  const changes = since === undefined ? undefined : changedMigrations(
+    execFileSync('git', ['diff', '--name-status', '--no-renames', since, 'HEAD', '--', DIR], { encoding: 'utf8' }),
+  );
+  const selected = changes !== undefined ? changes.added : args.length > 0 ? args.map((path) => basename(path)) : undefined;
   const names = plan(all, selected, allowlist);
   const existing = new Map(); // name -> the functions every earlier file created
   const known = new Set();
@@ -617,6 +649,7 @@ function main() {
   const files = names.map((name) => DIR + name);
   const waivers = [];
   const findings = names.flatMap((name) => lintMigration(DIR + name, readFileSync(DIR + name, 'utf8'), { existingFunctions: existing.get(name), waivers }));
+  findings.push(...(changes?.edited ?? []));
   // Every accepted waiver, so reviewers see each cross-module change: as annotations and in the job summary.
   for (const waiver of waivers) console.log(formatWaiver(waiver));
   if (waivers.length > 0 && process.env.GITHUB_STEP_SUMMARY) {

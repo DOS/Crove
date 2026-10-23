@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { format, formatWaiver, functionsCreated, lintMigration, moduleOf, parseAllowlist, plan } from '../ci/migration-lint.mjs';
+import { changedMigrations, format, formatWaiver, functionsCreated, lintMigration, moduleOf, parseAllowlist, plan } from '../ci/migration-lint.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const FILE = 'supabase/migrations/20261101000000_crove_social_sample.sql';
@@ -82,6 +82,8 @@ describe('migration lint: banned statements', () => {
     expect(rules("DO $$ BEGIN\n  EXECUTE 'TRUNCATE crove_social.sample';\nEND $$;")).toEqual(['2 no-truncate']);
     expect(rules("DO $$ BEGIN\n  EXECUTE format('DROP SCHEMA %I', 'crove_social');\nEND $$;")).toEqual(['2 no-drop-schema']);
     expect(rules("DO $$ BEGIN RAISE NOTICE 'truncate later'; END $$;")).toEqual([]);
+    // Every statement of an EXECUTE's command string, whatever the first one is (review probe P2).
+    expect(rules("DO $$ BEGIN\n  EXECUTE 'SELECT 1; TRUNCATE crove_social.t; GRANT SELECT ON crove_social.t TO anon';\nEND $$;")).toEqual(['2 no-truncate', '2 no-public-grant']);
     // Only the command string of an EXECUTE is SQL: format arguments and USING values are data.
     expect(rules("DO $$ BEGIN\n  EXECUTE format('UPDATE crove_social.%I SET note = %L', 'sample', 'truncate');\n  EXECUTE 'UPDATE crove_social.sample SET note = $1' USING 'drop schema x';\nEND $$;")).toEqual([]);
   });
@@ -120,6 +122,10 @@ describe('migration lint: required statements', () => {
     expect(rules('CREATE PROCEDURE crove_social.p() LANGUAGE sql AS $$ SELECT 1 $$;')).toEqual(['1 function-revoke']);
     // CREATE OR REPLACE of a function an earlier migration created keeps its privileges.
     expect(rules(fn('crove_social.f'), ['crove_social.f'])).toEqual([]);
+    // Unless this file dropped it first: the drop took its privileges, so EXECUTE is back to PUBLIC (review probe P5).
+    expect(rules(`DROP FUNCTION crove_social.f(int);\n${fn('crove_social.f')}`, ['crove_social.f'])).toEqual(['2 function-revoke']);
+    expect(rules(`DROP FUNCTION IF EXISTS crove_social.g(), crove_social.f(int) CASCADE;\n${fn('crove_social.f')}\nREVOKE ALL ON FUNCTION crove_social.f() FROM PUBLIC;`, ['crove_social.f'])).toEqual([]);
+    expect(rules(`${fn('crove_social.f')}\nDROP FUNCTION crove_social.f(int);`, ['crove_social.f'])).toEqual([]);
   });
 
   it('lists the functions a migration creates', () => {
@@ -177,6 +183,9 @@ describe('migration lint: the schema of the module', () => {
     expect(rules('-- migration-lint: cross-module   \nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;')).toEqual(['2 module-schema']);
     expect(rules('-- migration-lint: cross-module reason\n\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;')).toEqual(['3 module-schema']);
     expect(rules('-- migration-lint: cross-module reason\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS y text;')).toEqual(['3 module-schema']);
+    // Only the first statement after the waiver, even when more start on that line (review probe P6).
+    expect(rules('-- migration-lint: cross-module reason\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text; ALTER TABLE crove_kernel.party ADD COLUMN IF NOT EXISTS y text;')).toEqual(['2 module-schema']);
+    expect(rules('-- migration-lint: cross-module reason\nSELECT 1; ALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;')).toEqual(['2 module-schema']);
     expect(rules('-- migration-lint: cross-module reason\nCREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;')).toEqual(['2 module-schema']);
     expect(rules('-- migration-lint: cross-module reason\nCREATE TABLE IF NOT EXISTS t (id int);')).toEqual(['2 module-schema']);
     // A waiver before a DO does not reach into its body: it goes on the line before the statement inside.
@@ -230,6 +239,19 @@ describe('migration lint: the lexer', () => {
     ].join('\n'))).toEqual([]);
   });
 
+  it('lints the code of a DO, not the string naming its language (review probe P1)', () => {
+    const banned = ['no-truncate', 'no-public-grant', 'no-drop-schema', 'module-schema'];
+    const probe = "DO LANGUAGE 'plpgsql' $$ BEGIN TRUNCATE crove_social.t; GRANT SELECT ON crove_social.t TO anon; DROP SCHEMA crove_kernel CASCADE; END $$;";
+    expect(lint(probe).map((f) => f.rule).sort()).toEqual([...banned].sort());
+    expect(lint("DO $$ BEGIN TRUNCATE crove_social.t; END $$ LANGUAGE plpgsql;").map((f) => f.rule)).toEqual(['no-truncate']);
+    expect(lint('DO LANGUAGE plpgsql $$ BEGIN TRUNCATE crove_social.t; END $$;').map((f) => f.rule)).toEqual(['no-truncate']);
+  });
+
+  it('counts BEGIN ATOMIC only in a function or procedure (review probe P3)', () => {
+    expect(rules('SELECT begin atomic FROM (SELECT 1 AS begin) s;\nTRUNCATE crove_social.t;\nGRANT SELECT ON crove_social.t TO anon;')).toEqual(['2 no-truncate', '3 no-public-grant']);
+    expect(rules('CREATE PROCEDURE crove_social.p() LANGUAGE sql BEGIN ATOMIC SELECT 1; END;\nREVOKE ALL ON PROCEDURE crove_social.p() FROM PUBLIC;\nTRUNCATE crove_social.t;')).toEqual(['3 no-truncate']);
+  });
+
   it('counts lines inside DO bodies from the start of the file', () => {
     expect(rules('SELECT 1;\nDO\n$$\nBEGIN\n  -- x\n  TRUNCATE crove_social.sample;\nEND\n$$;')).toEqual(['6 no-truncate']);
   });
@@ -250,5 +272,21 @@ describe('migration lint: the allowlist', () => {
     expect(plan(all, undefined, list)).toEqual(['20261102000000_crove_social_b.sql', '20261103000000_crove_kernel_c.sql']);
     expect(plan(all, ['20261103000000_crove_kernel_c.sql', '20261101000000_crove_social_a.sql'], list)).toEqual(['20261103000000_crove_kernel_c.sql']);
     expect(parseAllowlist('# comment\n\na.sql  # why\nb.sql\n')).toEqual(new Set(['a.sql', 'b.sql']));
+  });
+
+  it('lints the files a PR adds and refuses changing or deleting one already on the base (review probe P4)', () => {
+    const { added, edited } = changedMigrations([
+      'A\tsupabase/migrations/20261103000000_crove_social_c.sql',
+      'M\tsupabase/migrations/20261013120000_crove_kernel_bootstrap.sql',
+      'D\tsupabase/migrations/20261014090000_crove_kernel_definer_tenant.sql',
+      'A\tsupabase/migrations/README.md',
+      '',
+    ].join('\n'));
+    expect(added).toEqual(['20261103000000_crove_social_c.sql']);
+    expect(edited.map((f: Finding) => `${f.file} ${f.rule}`)).toEqual([
+      'supabase/migrations/20261013120000_crove_kernel_bootstrap.sql no-edit-applied',
+      'supabase/migrations/20261014090000_crove_kernel_definer_tenant.sql no-edit-applied',
+    ]);
+    expect(edited[0]!.message).toContain('never edit or delete an applied migration');
   });
 });
