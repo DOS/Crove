@@ -71,7 +71,8 @@ export type NavGroupId = (typeof NAV_GROUPS)[number]['id'];
 export const ALL_NAV: readonly NavItem[] = NAV_GROUPS.flatMap((g): readonly NavItem[] => g.items);
 
 // Shorter or clearer names inside the menu: the work notifications fit the sidebar's width next to their count, and
-// Social's notifications say whose they are, since the Social group has no heading (its first item names it).
+// Social's say what they are about, since the Social group has no heading (its first item names it). Neither may
+// contain another item's name: a link is found by its name (e2e), and a name inside another matches both.
 const IN_MENU_LABEL: Partial<Record<NavLabel, 'alertsShort' | 'socialNotifications'>> = {
   alerts: 'alertsShort',
   notifications: 'socialNotifications',
