@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { format, functionsCreated, lintMigration, moduleOf, parseAllowlist, plan } from '../ci/migration-lint.mjs';
+import { format, formatWaiver, functionsCreated, lintMigration, moduleOf, parseAllowlist, plan } from '../ci/migration-lint.mjs';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const FILE = 'supabase/migrations/20261101000000_crove_social_sample.sql';
@@ -142,6 +142,45 @@ describe('migration lint: the schema of the module', () => {
     expect(rules("DO $$ BEGIN\n  EXECUTE format('ALTER TABLE crove_kernel.%I ADD COLUMN x text', 'tenant');\nEND $$;")).toEqual(['2 module-schema']);
     const purge = 'CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer) RETURNS void LANGUAGE sql AS $$ SELECT 1 $$;\nREVOKE ALL ON FUNCTION crove_kernel.org_purge(integer) FROM PUBLIC;';
     expect(rules(purge)).toEqual(['1 module-schema', '2 module-schema']);
+  });
+
+  it('accepts a cross-module statement with a reasoned waiver on the line before it, and lists the waiver', () => {
+    const sql = [
+      'CREATE TABLE IF NOT EXISTS crove_social.t (id int);',
+      '-- The org purge deletes crove_social.t too.',
+      '-- migration-lint: cross-module Social adds its tables to org_purge in the feature migration (#1024)',
+      'CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer) RETURNS void LANGUAGE sql AS $$ SELECT 1 $$;',
+      '-- migration-lint: cross-module   same function: its privileges',
+      'REVOKE ALL ON FUNCTION crove_kernel.org_purge(integer) FROM PUBLIC, crove_tenant;',
+      'DO $$ BEGIN',
+      '  -- migration-lint: cross-module the digest marker is kept with the tenant',
+      '  ALTER TABLE crove_kernel.tenant ADD COLUMN x text;',
+      'EXCEPTION WHEN duplicate_column THEN NULL;',
+      'END $$;',
+    ].join('\n');
+    const waivers: { file: string; line: number; schemas: string[]; reason: string }[] = [];
+    expect(lintMigration(FILE, sql, { waivers })).toEqual([]);
+    expect(waivers).toEqual([
+      { file: FILE, line: 4, schemas: ['crove_kernel'], reason: 'Social adds its tables to org_purge in the feature migration (#1024)' },
+      { file: FILE, line: 6, schemas: ['crove_kernel'], reason: 'same function: its privileges' },
+      { file: FILE, line: 9, schemas: ['crove_kernel'], reason: 'the digest marker is kept with the tenant' },
+    ]);
+    expect(formatWaiver(waivers[0]!)).toBe(`::notice file=${FILE},line=4::${FILE}:4 cross-module waiver for crove_kernel: Social adds its tables to org_purge in the feature migration (#1024)`);
+  });
+
+  it('refuses a waiver without a reason, away from its statement, or for a schema no module owns', () => {
+    const noReason = lint('-- migration-lint: cross-module\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;');
+    expect(noReason.map((f) => `${f.line} ${f.rule}`)).toEqual(['2 module-schema']);
+    expect(noReason[0]!.message).toContain('the waiver on line 1 has no reason');
+    expect(rules('-- migration-lint: cross-module   \nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;')).toEqual(['2 module-schema']);
+    expect(rules('-- migration-lint: cross-module reason\n\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;')).toEqual(['3 module-schema']);
+    expect(rules('-- migration-lint: cross-module reason\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS y text;')).toEqual(['3 module-schema']);
+    expect(rules('-- migration-lint: cross-module reason\nCREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;')).toEqual(['2 module-schema']);
+    expect(rules('-- migration-lint: cross-module reason\nCREATE TABLE IF NOT EXISTS t (id int);')).toEqual(['2 module-schema']);
+    // A waiver before a DO does not reach into its body: it goes on the line before the statement inside.
+    expect(rules('-- migration-lint: cross-module reason\nDO $$ BEGIN\n  ALTER TABLE crove_kernel.tenant ADD COLUMN x text;\nEND $$;')).toEqual(['3 module-schema']);
+    // A waiver inside a string is not a comment.
+    expect(rules("SELECT 'x\n-- migration-lint: cross-module reason';\nALTER TABLE crove_kernel.tenant ADD COLUMN IF NOT EXISTS x text;")).toEqual(['3 module-schema']);
   });
 
   it('refuses unqualified objects, which land wherever search_path points', () => {

@@ -7,7 +7,10 @@
 //   policy-drop-first     DROP POLICY IF EXISTS <name> ON <table> before every CREATE POLICY <name> ON <table>;
 //   module-schema         touch only the schema of the file's module (<version>_crove_<module>_<desc>.sql touches
 //                         crove_<module>), with every object it creates, alters, drops, comments on, grants on or
-//                         writes qualified by that schema;
+//                         writes qualified by that schema. A statement may touch another crove_* schema only with
+//                         a waiver comment on the line right before it, `-- migration-lint: cross-module <reason>`,
+//                         with a reason; the lint lists every waiver it accepted (decision on #1213: Social adds its
+//                         tables to crove_kernel.org_purge in its own feature migration, as the owner allowed);
 //   function-revoke       REVOKE ALL ON FUNCTION <name> ... FROM PUBLIC after every CREATE FUNCTION or PROCEDURE.
 // DO bodies are linted too: their PL/pgSQL is split into statements and each SQL statement is checked like a top-level
 // one, and so is a string an EXECUTE runs when it reads as a SQL command. Function bodies are not: they run when the
@@ -29,7 +32,7 @@
 //   git ref (CI passes the base branch) instead of the working tree; a ref without the file means an empty allowlist.
 //   Exits 1 and prints one ::error line per finding with the file, line and rule.
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -47,8 +50,9 @@ const COMMANDS = new Set([
 // --- Lexer -------------------------------------------------------------------------------------------------------
 
 // Tokens: { t: 'word' | 'qident' | 'string' | 'punct' | 'other', v, line, body? }. A word's v is lowercased; a
-// quoted identifier keeps its case. A string's body is its content, with bodyLine the line it starts on.
-export function lex(sql, firstLine = 1) {
+// quoted identifier keeps its case. A string's body is its content, with bodyLine the line it starts on. Line
+// comments are pushed to `comments` as { line, text } when it is given.
+export function lex(sql, firstLine = 1, comments = undefined) {
   const tokens = [];
   let i = 0;
   let line = firstLine;
@@ -64,6 +68,7 @@ export function lex(sql, firstLine = 1) {
       advance(i + 1);
     } else if (c === '-' && next === '-') {
       const end = sql.indexOf('\n', i);
+      comments?.push({ line, text: sql.slice(i, end === -1 ? n : end).trim() });
       advance(end === -1 ? n : end);
     } else if (c === '/' && next === '*') {
       let depth = 1;
@@ -416,10 +421,13 @@ export function functionsCreated(sql) {
   return keys;
 }
 
+const WAIVER = /^--\s*migration-lint:\s*cross-module(?:\s+(.*))?$/;
+
 // Lints one migration. Returns [{ file, line, rule, message }], in file order. `existingFunctions` are the keys of
 // functions earlier migrations created (functionsCreated): CREATE OR REPLACE keeps a function's privileges, so only a
-// new function needs its REVOKE. Matching is by name, so a new overload of an existing function is not caught.
-export function lintMigration(file, sql, { existingFunctions = new Set() } = {}) {
+// new function needs its REVOKE. Matching is by name, so a new overload of an existing function is not caught. Each
+// cross-module waiver the lint accepts is pushed to `waivers` as { file, line, schemas, reason }.
+export function lintMigration(file, sql, { existingFunctions = new Set(), waivers = /** @type {{ file: string, line: number, schemas: string[], reason: string }[]} */ ([]) } = {}) {
   const findings = [];
   const module = moduleOf(file);
   const schema = module === undefined ? undefined : `crove_${module}`;
@@ -428,13 +436,33 @@ export function lintMigration(file, sql, { existingFunctions = new Set() } = {})
   const functions = []; // { key, line }: functions created, waiting for their REVOKE
   const revoked = []; // { key | schema, index }: REVOKE ALL ... FROM PUBLIC, in order
   let order = 0;
+  const comments = [];
+  const waiverAt = new Map(); // line of the statement a waiver comment precedes -> { line, reason }
+  const collectWaivers = () => {
+    for (const { line, text } of comments.splice(0)) {
+      const match = WAIVER.exec(text);
+      if (match) waiverAt.set(line + 1, { line, reason: (match[1] ?? '').trim() });
+    }
+  };
 
   if (schema === undefined) report(1, 'module-schema', `the file name does not match <14-digit version>_crove_<module>_<description>.sql, so its module is unknown`);
 
-  const checkSchema = (name, line, what) => {
+  // `waiver` is the cross-module waiver on the line before the statement, if any; `waived` collects the schemas it
+  // covered. A waiver covers only crove_* schemas: no module touches public, auth or extensions.
+  const checkSchema = (name, line, what, waiver, waived) => {
     if (schema === undefined) return;
-    if (name === undefined) report(line, 'module-schema', `${what} is not qualified by a schema; write ${schema}.<name>`);
-    else if (name !== schema) report(line, 'module-schema', `touches schema ${name}, but this file belongs to ${schema}; put that change in a crove_${name.replace(/^crove_/, '')} migration`);
+    if (name === undefined) {
+      report(line, 'module-schema', `${what} is not qualified by a schema; write ${schema}.<name>`);
+    } else if (name !== schema) {
+      if (waiver?.reason && name.startsWith('crove_')) {
+        waived.add(name);
+        return;
+      }
+      const why = waiver === undefined
+        ? `put that change in a crove_${name.replace(/^crove_/, '')} migration, or put \`-- migration-lint: cross-module <reason>\` on the line before the statement`
+        : waiver.reason ? 'a waiver covers only crove_* schemas' : `the waiver on line ${waiver.line} has no reason`;
+      report(line, 'module-schema', `touches schema ${name}, but this file belongs to ${schema}; ${why}`);
+    }
   };
 
   const lintStatement = (raw, nested) => {
@@ -495,13 +523,20 @@ export function lintMigration(file, sql, { existingFunctions = new Set() } = {})
     }
 
     const { objects, schemas } = touchedObjects(tokens);
-    for (const object of objects) if (!object.dynamic) checkSchema(object.schema, object.line, object.name);
-    for (const named of schemas) if (!named.schema?.startsWith('%')) checkSchema(named.schema, named.line, named.what ?? 'the schema');
+    const waiver = waiverAt.get(head.line);
+    const waived = new Set();
+    for (const object of objects) if (!object.dynamic) checkSchema(object.schema, object.line, object.name, waiver, waived);
+    for (const named of schemas) if (!named.schema?.startsWith('%')) checkSchema(named.schema, named.line, named.what ?? 'the schema', waiver, waived);
+    if (waived.size > 0) waivers.push({ file, line: head.line, schemas: [...waived].sort(), reason: waiver.reason });
 
     // DO bodies, and SQL an EXECUTE runs from a string literal.
     if (isWord(head, 'do')) {
       const body = tokens.find((token) => token.t === 'string');
-      if (body) for (const statement of splitStatements(lex(body.body, body.bodyLine))) lintStatement(statement, true);
+      if (body) {
+        const statements = splitStatements(lex(body.body, body.bodyLine, comments));
+        collectWaivers();
+        for (const statement of statements) lintStatement(statement, true);
+      }
     } else if (nested && isWord(head, 'execute')) {
       for (const token of tokens) {
         if (token.t !== 'string') continue;
@@ -511,7 +546,9 @@ export function lintMigration(file, sql, { existingFunctions = new Set() } = {})
     }
   };
 
-  for (const statement of splitStatements(lex(sql))) lintStatement(statement, false);
+  const statements = splitStatements(lex(sql, 1, comments));
+  collectWaivers();
+  for (const statement of statements) lintStatement(statement, false);
 
   for (const fn of functions) {
     if (existingFunctions.has(fn.key)) continue;
@@ -538,6 +575,10 @@ function readAllowlist(ref) {
 
 export function format({ file, line, rule, message }) {
   return `::error file=${file},line=${line}::${file}:${line} [${rule}] ${message}`;
+}
+
+export function formatWaiver({ file, line, schemas, reason }) {
+  return `::notice file=${file},line=${line}::${file}:${line} cross-module waiver for ${schemas.join(', ')}: ${reason}`;
 }
 
 // Takes `--name value` out of args.
@@ -573,14 +614,21 @@ function main() {
     for (const key of functionsCreated(readFileSync(DIR + name, 'utf8'))) known.add(key);
   }
   const files = names.map((name) => DIR + name);
-  const findings = names.flatMap((name) => lintMigration(DIR + name, readFileSync(DIR + name, 'utf8'), { existingFunctions: existing.get(name) }));
+  const waivers = [];
+  const findings = names.flatMap((name) => lintMigration(DIR + name, readFileSync(DIR + name, 'utf8'), { existingFunctions: existing.get(name), waivers }));
+  // Every accepted waiver, so reviewers see each cross-module change: as annotations and in the job summary.
+  for (const waiver of waivers) console.log(formatWaiver(waiver));
+  if (waivers.length > 0 && process.env.GITHUB_STEP_SUMMARY) {
+    const rows = waivers.map((w) => `| \`${w.file}:${w.line}\` | ${w.schemas.join(', ')} | ${w.reason.replaceAll('|', '\\|')} |`);
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, ['### Cross-module waivers', '', '| Statement | Schemas | Reason |', '|---|---|---|', ...rows, ''].join('\n'));
+  }
   for (const finding of findings) console.error(format(finding));
   if (findings.length > 0) {
     console.error(`migration lint: ${findings.length} finding(s) in ${new Set(findings.map((f) => f.file)).size} file(s); the rules are in tools/ci/migration-lint.mjs`);
     process.exitCode = 1;
     return;
   }
-  console.log(`migration lint OK: ${files.length} file(s) checked, ${allowlist.size} on the allowlist`);
+  console.log(`migration lint OK: ${files.length} file(s) checked, ${waivers.length} cross-module waiver(s), ${allowlist.size} on the allowlist`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) main();
