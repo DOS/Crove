@@ -36,7 +36,8 @@ import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { clearDraft, loadDraft, saveDraft, type StoredDraft } from '../lib/social-draft.ts';
 import { canMoveToFront } from '../lib/social-queue-order.ts';
-import { STORY_METRICS } from '../lib/social-insights.ts';
+import { reelCounts, STORY_METRICS } from '../lib/social-insights.ts';
+import { WatchTimeItems } from '../components/social-reel-metrics.tsx';
 import { useChannelScope } from '../components/social-channel-access.tsx';
 import {
   CANCELLABLE,
@@ -3070,9 +3071,9 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
   }
 }
 
-// Takes a published channel down from its platform (#860), after a confirmation with an optional reason. again: an
-// earlier ask failed or its outcome is unclear.
-function RemoveFromChannel({ variantId, channel, again, onDone }: { variantId: string; channel: string; again: boolean; onDone: () => void }) {
+// Takes a published channel down from its platform (#860), after a confirmation with an optional reason (WordPress: to
+// the site's trash, #1138). again: an earlier ask failed or its outcome is unclear.
+function RemoveFromChannel({ variantId, provider, channel, again, onDone }: { variantId: string; provider: string; channel: string; again: boolean; onDone: () => void }) {
   const t = useTranslations('social');
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -3094,7 +3095,8 @@ function RemoveFromChannel({ variantId, channel, again, onDone }: { variantId: s
   }
   return (
     <div className="w-full space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
-      <p className="text-sm text-foreground">{t('remove.confirm', { channel })}</p>
+      {/* WordPress keeps the post in the site's trash (#1138), where it can be restored; elsewhere it is gone. */}
+      <p className="text-sm text-foreground">{t(provider === 'wordpress' ? 'remove.confirmTrash' : 'remove.confirm', { channel })}</p>
       <Label htmlFor={`${id}-reason`}>{t('remove.reason')}</Label>
       <Textarea id={`${id}-reason`} rows={2} maxLength={500} value={reason} placeholder={t('remove.reasonHint')} onChange={(e) => setReason(e.target.value)} />
       <div className="flex flex-wrap gap-2">
@@ -3141,8 +3143,8 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
   );
 }
 
-// The removal answers the post page explains in words (#860, #1137); any other failure shows its code.
-const REMOVE_CODES = ['TELEGRAM_CANNOT_DELETE', 'FACEBOOK_CANNOT_DELETE', 'RECONNECT_FOR_REMOVE', 'REMOVE_NOT_RUN'] as const;
+// The removal answers the post page explains in words (#860, #1137, #1138); any other failure shows its code.
+const REMOVE_CODES = ['TELEGRAM_CANNOT_DELETE', 'FACEBOOK_CANNOT_DELETE', 'RECONNECT_FOR_REMOVE', 'REMOVE_NOT_RUN', 'WORDPRESS_TRASH_DISABLED', 'WORDPRESS_CANNOT_DELETE'] as const;
 
 // Another time for a scheduled channel, its approvals kept (#580): the calendar's drag, from the keyboard.
 function MoveTime({ variantId, connectionId, timeZone, at, onDone }: { variantId: string; connectionId: string; timeZone: string; at: string | null; onDone: () => void }) {
@@ -3205,7 +3207,7 @@ function MoveToFront({ variantId, queueSlotAt, onDone }: { variantId: string; qu
   );
 }
 
-// Then a Story's own counts (#1082).
+// Then a Story's own counts (#1082); a Reel's watch time (#1147) comes after them, in its own units.
 const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks', ...STORY_METRICS] as const;
 
 // A published channel's latest counts, as the platform reported them; a count it does not report is left out.
@@ -3214,7 +3216,7 @@ function VariantMetrics({ row }: { row: { metrics: Record<string, number>; captu
   const f = useFormat();
   if (!row?.capturedAt) return <p className="text-subtle-foreground">{t('metricsNotYet')}</p>;
   const shown = POST_METRICS.filter((m) => row.metrics[m] !== undefined);
-  if (shown.length === 0) return <p className="text-subtle-foreground">{t('metricsNone', { when: f.dateTime(row.capturedAt) })}</p>;
+  if (shown.length === 0 && reelCounts(row.metrics).length === 0) return <p className="text-subtle-foreground">{t('metricsNone', { when: f.dateTime(row.capturedAt) })}</p>;
   return (
     <div className="space-y-1">
       <dl className="flex flex-wrap gap-x-4 gap-y-1">
@@ -3224,6 +3226,7 @@ function VariantMetrics({ row }: { row: { metrics: Record<string, number>; captu
             <dd className="font-medium text-foreground tabular-nums">{f.number(row.metrics[m] ?? 0)}</dd>
           </div>
         ))}
+        <WatchTimeItems metrics={row.metrics} />
       </dl>
       <p className="text-subtle-foreground">{t('metricsAt', { when: f.dateTime(row.capturedAt) })}</p>
     </div>
@@ -3657,7 +3660,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                         </Button>
                       )}
                       {canDecide && v.status === 'published' && isProvider(v.provider) && REMOVE_READY.has(v.provider) && v.removal?.state !== 'pending' && (
-                        <RemoveFromChannel variantId={v.id} channel={names.get(v.connectionId) ?? providerName(v.provider)} again={v.removal !== null} onDone={refresh} />
+                        <RemoveFromChannel variantId={v.id} provider={v.provider} channel={names.get(v.connectionId) ?? providerName(v.provider)} again={v.removal !== null} onDone={refresh} />
                       )}
                       {canWrite && CANCELLABLE.includes(v.status) && (canDecide || !['approved', 'scheduled', 'paused'].includes(v.status)) && (
                         <Button variant="ghost" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(v.id)}>

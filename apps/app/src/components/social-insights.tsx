@@ -1,12 +1,14 @@
 // What works (#705): for each channel, its best and worst posts of the window and how its labels, formats, weekdays,
 // hours and hashtags do against the channel's own median engagement. Each bar shows a group's median against that
-// median (the middle mark), with its post count so a thin sample shows as one.
+// median (the middle mark), with its post count so a thin sample shows as one. A format whose posts report a watch
+// time (#1147, Reels) shows their median average watch time under its bar.
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Card } from '@crove/ui/components/card';
 import { cn } from '@crove/ui/lib/utils';
 import { useLabels } from './social-labels.tsx';
+import { MedianWatchTime } from './social-reel-metrics.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
@@ -33,6 +35,11 @@ function Bars({ title, groups, name }: { title: string; groups: readonly Group[]
               <span className="absolute inset-y-[-2px] left-1/2 w-px bg-foreground/40" />
             </span>
             <span className="text-subtle-foreground tabular-nums">{t('group', { median: f.number(Math.round(g.median)), posts: String(g.posts) })}</span>
+            {g.avgWatchTimeMs !== undefined && (
+              <span className="col-span-3">
+                <MedianWatchTime ms={g.avgWatchTimeMs} />
+              </span>
+            )}
           </li>
         ))}
       </ul>

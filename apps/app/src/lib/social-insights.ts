@@ -8,6 +8,29 @@ export function storyCounts(metrics: Readonly<Record<string, number>>): { name: 
   return STORY_METRICS.filter((m) => typeof metrics[m] === 'number' && Number.isFinite(metrics[m])).map((m) => ({ name: m, value: metrics[m] as number }));
 }
 
+// A Reel's watch time (#1147, the channel package's REEL_METRIC_NAMES), in milliseconds, in the order the screens show
+// it: the average time a play lasted, then the time it was played in all.
+export const REEL_METRICS = ['avgWatchTimeMs', 'totalWatchTimeMs'] as const;
+export type ReelMetric = (typeof REEL_METRICS)[number];
+
+// The watch times a capture holds, in order; one the platform did not give is left out.
+export function reelCounts(metrics: Readonly<Record<string, number>>): { name: ReelMetric; ms: number }[] {
+  return REEL_METRICS.filter((m) => typeof metrics[m] === 'number' && Number.isFinite(metrics[m]) && (metrics[m] as number) >= 0).map((m) => ({ name: m, ms: metrics[m] as number }));
+}
+
+// Milliseconds as seconds with one decimal (12345 is 12.3).
+export function watchSeconds(ms: number): number {
+  return Math.round(ms / 100) / 10;
+}
+
+// A watch time in the unit that reads best, with one decimal: seconds under a minute, minutes under an hour, hours
+// beyond (a Reel's total watch time grows with its plays).
+export function watchDuration(ms: number): { unit: 'seconds' | 'minutes' | 'hours'; value: number } {
+  if (ms < 60_000) return { unit: 'seconds', value: watchSeconds(ms) };
+  if (ms < 3_600_000) return { unit: 'minutes', value: Math.round(ms / 6_000) / 10 };
+  return { unit: 'hours', value: Math.round(ms / 360_000) / 10 };
+}
+
 // What works (#705): how a group's bar is drawn, and the weekday keys the strings use (1 is Monday).
 export const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 

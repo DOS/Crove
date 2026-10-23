@@ -16,7 +16,9 @@
 // kept as settings.pinterest.sectionId. Publishing lists the board's sections again first and sends board_section_id
 // only for one that is still there; a pin without a section is sent exactly as before.
 // Metrics: impressions, saves and clicks of a pin from its pin_metrics.
-import type { ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+// Remove (#1138): DELETE /v5/pins/{pin_id}, with the grant that pins.
+import type { ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { removeResult } from './comment.ts';
 import { videoCoverOf } from './cover.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 import { CHANNEL_OPTIONS_MAX, OptionList, optionCallSignal, optionName, type ChannelOption, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
@@ -141,7 +143,7 @@ class PinterestClient {
     if (!response.ok) throw new PinterestError(response.status, null);
   }
 
-  async call<T>(method: 'GET' | 'POST', path: string, token: string, json?: unknown, signal?: AbortSignal): Promise<T | null> {
+  async call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, token: string, json?: unknown, signal?: AbortSignal): Promise<T | null> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     if (json !== undefined) headers['content-type'] = 'application/json';
     // A page of the composer's list passes its own signal (#1131); otherwise the fetch's own timeout.
@@ -500,6 +502,21 @@ export class PinterestPublisher implements Publisher {
       return (answer?.items?.length ?? 0) < 25 ? { found: false } : { found: 'unknown' };
     } catch {
       return { found: 'unknown' };
+    }
+  }
+
+  // Deletes the pin (#1138): DELETE /v5/pins/{pin_id}, answered 204, with the same scopes as making it (pins:write;
+  // Pinterest's reference lists the same set for both). A pin Pinterest no longer has (404) is gone already.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = pinterestSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      await this.client.call('DELETE', `/pins/${input.externalId}`, s.accessToken);
+      return { kind: 'removed' };
+    } catch (error) {
+      if (error instanceof PinterestError && error.status === 404) return { kind: 'removed' };
+      return removeResult(publishResult(error));
     }
   }
 

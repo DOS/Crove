@@ -15,7 +15,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId }
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_TYPES, coverOf, firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
+import { firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
 import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
@@ -31,7 +31,8 @@ import { QUEUE_LOW_DAYS_MAX, QUEUE_LOW_DAYS_MIN, queueLowCommands } from './queu
 import { digestCommands } from './digest.ts';
 import { outperformingCommands } from './outperforming.ts';
 import { assignCommands } from './assign.ts';
-import { bulkEditCommands } from './bulk-edit.ts';
+import { bulkEditCommands, bulkEditQueries } from './bulk-edit.ts';
+import { coverProblem } from './cover-check.ts';
 import { bulkDraftCommands } from './bulk-drafts.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
@@ -54,6 +55,7 @@ import { reviewInboxQueries } from './review-inbox.ts';
 import { attentionInboxQueries } from './attention-inbox.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
+import { stockPhotoCommands } from './stock-photos.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { externalPostCommands, externalPostQueries } from './external-posts.ts';
 import { planExportCommands } from './plan-export.ts';
@@ -138,22 +140,8 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
 // uploaded for Social, JPEG or PNG, within the channel's size limit. Which channels take which kind, and whether the
 // variant shows one video, are channel rules (validateVariant), checked when it goes to review.
 async function checkCover(ctx: CommandContext, provider: string, settings: Record<string, unknown> | undefined): Promise<void> {
-  if (settings?.cover === undefined) return;
-  const cover = coverOf(settings);
-  if (!cover) throw new DomainError('COVER_INVALID', 422, 'Ảnh bìa phải là một thời điểm trong video hoặc một ảnh');
-  if (!('fileId' in cover)) return;
-  // Stored in the lower case ids are kept in, so the hash and the worker's lookup see one spelling.
-  (settings.cover as { fileId: string }).fileId = cover.fileId;
-  const file = zId.safeParse(cover.fileId).success
-    ? await ctx.trx.selectFrom('crove_kernel.file').select(['source', 'content_type', 'size_bytes']).where('org_id', '=', ctx.orgId).where('id', '=', cover.fileId).executeTakeFirst()
-    : undefined;
-  // Only images uploaded for posts, as for the post's media.
-  if (!file || file.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh bìa này');
-  if (!COVER_IMAGE_TYPES.includes(file.content_type)) throw new DomainError('COVER_TYPE_UNSUPPORTED', 422, 'Ảnh bìa phải là ảnh JPG hoặc PNG');
-  const max = isProvider(provider) ? COVER_IMAGE_MAX_BYTES[provider] : undefined;
-  if (max !== undefined && Number(file.size_bytes) > max) {
-    throw new DomainError('COVER_TOO_LARGE', 422, `Ảnh bìa cho kênh này tối đa ${Math.floor(max / 1_048_576)} MB`, { limit: max, actual: Number(file.size_bytes) });
-  }
+  const problem = await coverProblem(ctx, provider, settings);
+  if (problem) throw problem;
 }
 
 // Replaces a post's media rows with a list, positions from 1.
@@ -1760,6 +1748,7 @@ export const socialCommands = [
   ...bulkEditCommands,
   ...bulkDraftCommands,
   ...mediaTagCommands,
+  ...stockPhotoCommands,
   ...ideaCommands,
   ...bioCommands,
   ...feedCommands,
@@ -1828,4 +1817,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];

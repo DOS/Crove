@@ -455,6 +455,9 @@ export type SocialChannelOptionStatus = (typeof SOCIAL_CHANNEL_OPTION_STATUSES)[
 export type SocialChannelOptionError = (typeof SOCIAL_CHANNEL_OPTION_ERRORS)[number];
 // The palette a label's colour comes from (#639); the app maps each name to a theme tone.
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
+// Where a library file saved from a stock photo site came from (#1106).
+export const SOCIAL_MEDIA_ATTRIBUTION_PROVIDERS = ['pexels'] as const;
+export type SocialMediaAttributionProvider = (typeof SOCIAL_MEDIA_ATTRIBUTION_PROVIDERS)[number];
 // The corner of an image the org's logo watermark goes in (#834).
 export const SOCIAL_WATERMARK_CORNERS = ['top_left', 'top_right', 'bottom_left', 'bottom_right'] as const;
 // The org's team chat for Social alerts (#863): where it is, and the kinds of alert it may get.
@@ -523,6 +526,7 @@ export type SocialChannelOptionTable = Refine<
 export type SocialNotificationTable = Refine<G.SocialNotificationTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialNotificationMuteTable = Refine<G.SocialNotificationMuteTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
 export type SocialCalendarNoteTable = Refine<G.SocialCalendarNoteTable, { color: Generated<SocialLabelColor> }>;
+export type SocialMediaAttributionTable = Refine<G.SocialMediaAttributionTable, { provider: SocialMediaAttributionProvider }>;
 export type SocialWatermarkTable = Refine<G.SocialWatermarkTable, { corner: SocialWatermarkCorner }>;
 export type SocialChatAlertTable = Refine<G.SocialChatAlertTable, { kind: SocialChatAlertTarget; events: SocialChatAlertKind[] }>;
 export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
@@ -587,6 +591,7 @@ type Refined = Tables<{
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
   'crove_social.calendar_note': SocialCalendarNoteTable;
+  'crove_social.media_attribution': SocialMediaAttributionTable;
   'crove_social.watermark': SocialWatermarkTable;
   'crove_social.chat_alert': SocialChatAlertTable;
   'crove_social.label': SocialLabelTable;

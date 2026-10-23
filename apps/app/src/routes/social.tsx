@@ -13,6 +13,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
+import { PEXELS_URL, StockCredit, StockPhotoSearch, pexelsHref, useStockPhotosEnabled } from '../components/social-stock-photos.tsx';
 import { SocialBoard } from '../components/social-board.tsx';
 import { useChannelScope } from '../components/social-channel-access.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
@@ -307,6 +308,9 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const [picked, setPicked] = useState<LibraryItem[]>([]);
   const [drafting, setDrafting] = useState<{ key: number; files: LibraryItem[] } | null>(null);
   const picker = useRef<HTMLInputElement>(null);
+  // Free photos from Pexels (#1106), for those who may add to the library, when the server offers them.
+  const stockEnabled = useStockPhotosEnabled();
+  const [stock, setStock] = useState(false);
   const library = useLibrary(search, tag);
   const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
   const items = library.data?.pages.flatMap((p) => p.items) ?? [];
@@ -334,9 +338,15 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               {upload.isPending ? <Spinner className="text-current" /> : null}
               {t('libraryUpload')}
             </Button>
+            {stockEnabled && (
+              <Button variant="ghost" aria-expanded={stock} onClick={() => setStock(!stock)}>
+                {t(stock ? 'stock.close' : 'stock.open')}
+              </Button>
+            )}
           </>
         )}
       </div>
+      {canWrite && stockEnabled && stock && <StockPhotoSearch />}
       <TagFilter value={tag} onChange={setTag} />
       <p className="text-xs text-subtle-foreground">{t('libraryHint')}</p>
       {canWrite && picked.length > 0 && (
@@ -401,6 +411,11 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
                       {item.tags.join(' · ')}
                     </span>
                   )}
+                  {item.credit && (
+                    <span className="block truncate text-xs text-subtle-foreground" title={item.credit.photographer}>
+                      Pexels · {item.credit.photographer}
+                    </span>
+                  )}
                 </button>
               </li>
               );
@@ -411,6 +426,14 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               <Thumb fileId={open.fileId} alt={open.filename} mime={open.mime} durationMs={open.durationMs} className="aspect-[4/3]" />
               <p className="text-sm font-medium [overflow-wrap:anywhere] text-foreground">{open.filename}</p>
               <p className="text-xs text-subtle-foreground">{f.dateTime(open.createdAt)}</p>
+              {open.credit && (
+                <div className="space-y-1">
+                  <StockCredit photographer={open.credit.photographer} photographerUrl={open.credit.photographerUrl} className="text-sm text-muted-foreground" />
+                  <a href={pexelsHref(open.credit.sourceUrl) ?? PEXELS_URL} target="_blank" rel="noopener noreferrer" className="text-xs text-link hover:underline">
+                    {t('stock.viewOnPexels')}
+                  </a>
+                </div>
+              )}
               <MediaTagEditor key={`${open.fileId}:${open.tags.join('\n')}`} fileId={open.fileId} tags={open.tags} canWrite={canWrite} />
               <p className="text-sm font-medium text-muted-foreground">{t('libraryUsageTitle')}</p>
               <Usage fileId={open.fileId} slug={slug} />
@@ -593,8 +616,9 @@ export function SocialPage() {
         : listTab === 'attention'
           ? canDecide ? ['move', 'cancel'] : ['cancel']
           : [];
-  // Labels and the assignee on many posts at once (#1057), for members and above, in the lists, the board and the calendar.
-  const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign'] : [];
+  // Labels and the assignee on many posts at once (#1057), and find and replace (#1144), for members and above, in the
+  // lists, the board and the calendar.
+  const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign', 'replace'] : [];
   const listActions = bulkActions.length > 0 ? [...bulkActions, ...editActions] : [];
   const agendaActions: readonly BulkAction[] = [...(canDecide ? (['move'] as const) : []), ...editActions];
   const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: canWrite });
@@ -736,6 +760,7 @@ export function SocialPage() {
                 channelName={channelName}
                 labelOptions={labelList}
                 members={members}
+                findHint={search.q}
                 onClear={() => setPicked(new Set())}
               />
             </div>
@@ -768,6 +793,7 @@ export function SocialPage() {
                           channelName={channelName}
                           labelOptions={labelList}
                           members={members}
+                          findHint={search.q}
                           onClear={clear}
                         />
                       )
@@ -799,6 +825,7 @@ export function SocialPage() {
                         channelName={channelName}
                         labelOptions={labelList}
                         members={members}
+                        findHint={search.q}
                         onClear={() => setPicked(new Set())}
                       />
                     </div>
@@ -849,6 +876,7 @@ export function SocialPage() {
                       channelName={channelName}
                       labelOptions={labelList}
                       members={members}
+                      findHint={search.q}
                       onClear={() => setPicked(new Set())}
                     />
                     {/* One client review link for the posts selected (#902). */}

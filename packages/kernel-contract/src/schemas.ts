@@ -1419,7 +1419,47 @@ export const zSocialPostVersions = z.object({
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
 // A media library item (S9): an image of the org uploaded for posts, how many posts show it and its tags (#904).
-export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()) });
+// A stock photo's credit (#1106): the photographer and the photo's page on Pexels, and its description as alt text.
+export const zSocialMediaCredit = z.object({ provider: z.literal('pexels'), photographer: z.string(), photographerUrl: z.string(), sourceUrl: z.string(), altText: z.string().nullable() });
+export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()), credit: zSocialMediaCredit.nullable() });
+// Stock photos from Pexels (#1106): a search (a page of up to 40 photos in the language of the page), its results, and
+// the photo to save at one of Pexels' sizes (large2x by default: up to 1880 by 1300 pixels, enough for every channel).
+export const STOCK_PHOTO_SIZES = ['large2x', 'large', 'original'] as const;
+export const zSocialStockSearch = z.strictObject({
+  query: z.string().trim().min(1).max(100),
+  page: z.number().int().min(1).max(100).optional(),
+  perPage: z.number().int().min(1).max(40).optional(),
+  orientation: z.enum(['landscape', 'portrait', 'square']).optional(),
+  locale: z.enum(['vi-VN', 'en-US']).optional(),
+});
+export const zSocialStockPhoto = z.object({
+  id: z.number().int(),
+  width: z.number().int(),
+  height: z.number().int(),
+  // The photo's page on Pexels, and its photographer's.
+  pageUrl: z.string(),
+  photographer: z.string(),
+  photographerUrl: z.string(),
+  alt: z.string().nullable(),
+  avgColor: z.string().nullable(),
+  // A small copy as a data: URL, relayed by the server; null when it could not be fetched.
+  thumb: z.string().nullable(),
+});
+export const zSocialStockResults = z.object({ photos: z.array(zSocialStockPhoto), page: z.number().int(), total: z.number().int(), more: z.boolean() });
+export const zSocialStockSave = z.strictObject({ photoId: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), size: z.enum(STOCK_PHOTO_SIZES).optional() });
+// The saved file, for the composer to add to a post with the photo's description as alt text; credited false: the
+// same bytes were in the library already with a credit of their own.
+export const zSocialStockSaved = z.object({
+  fileId: zId,
+  duplicate: z.boolean(),
+  credited: z.boolean(),
+  filename: z.string(),
+  mime: z.string(),
+  sizeBytes: z.number().int(),
+  width: z.number().int().nullable(),
+  height: z.number().int().nullable(),
+  altText: z.string().nullable(),
+});
 // A tag of the library and how many files carry it (#904).
 export const zSocialMediaTagCount = z.object({ tag: z.string(), files: z.number().int() });
 // A saved snippet (#584): hashtags, a signature, or a whole post to start from (isTemplate).
@@ -1436,8 +1476,9 @@ export const zSocialSnippet = z.object({
 const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string().trim().min(1).max(10_000), provider: z.string().min(1).max(32).nullable(), isTemplate: z.boolean() };
 export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
 export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
-// What works (#705): a group of a channel's posts and its median engagement against the channel's.
-const zInsightGroup = z.object({ key: z.string(), posts: z.number().int(), median: z.number(), ratio: z.number().nullable() });
+// What works (#705): a group of a channel's posts and its median engagement against the channel's; a format group also
+// the median average watch time in milliseconds of its posts that report one (#1147, Reels).
+const zInsightGroup = z.object({ key: z.string(), posts: z.number().int(), median: z.number(), ratio: z.number().nullable(), avgWatchTimeMs: z.number().optional() });
 const zInsightPost = z.object({ variantId: zId, postId: zId, excerpt: z.string(), publishedAt: z.string().nullable(), externalUrl: z.string().nullable(), engagement: z.number() });
 export const zSocialChannelInsights = z.object({
   connectionId: zId,
@@ -1517,9 +1558,11 @@ export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.en
 export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS) });
 // Labels and the assignee on many posts at once (#1057): at most SOCIAL_BULK_EDIT_MAX posts per command, each once,
 // and why a post was left as it was: gone, published, not the caller's to change, already so, or over the ten labels a
-// post may carry.
+// post may carry. A find and replace (#1144) also leaves out a post where nothing matches, one with a channel going out
+// that the change would reach, one the change would take over a length or channel limit, one whose link would no longer
+// be a link, and one the change would give a blocked word.
 export const SOCIAL_BULK_EDIT_MAX = 100;
-export const SOCIAL_BULK_SKIP_REASONS = ['not_found', 'published', 'not_allowed', 'unchanged', 'too_many_labels'] as const;
+export const SOCIAL_BULK_SKIP_REASONS = ['not_found', 'published', 'not_allowed', 'unchanged', 'too_many_labels', 'no_match', 'in_flight', 'over_limit', 'invalid_link', 'banned_words'] as const;
 export type SocialBulkSkipReason = (typeof SOCIAL_BULK_SKIP_REASONS)[number];
 const unique = (ids: readonly string[]) => new Set(ids).size === ids.length;
 const zBulkPostIds = z.array(zId).min(1).max(SOCIAL_BULK_EDIT_MAX).refine(unique, 'each post once');
@@ -1533,6 +1576,37 @@ export const zSocialBulkLabels = z
 // The assignee (null: nobody) of every post; dueAt null clears the due date, left out keeps each post's own.
 export const zSocialBulkAssign = z.strictObject({ postIds: zBulkPostIds, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable().optional() });
 export const zSocialBulkResult = z.object({ done: z.array(zId), skipped: z.array(z.object({ postId: zId, reason: z.enum(SOCIAL_BULK_SKIP_REASONS) })) });
+// Find and replace across posts (#1144): literal text, never a pattern language, in at most SOCIAL_BULK_REPLACE_MAX
+// posts per command (each post may take a change of its base content and of each channel's own), a search as long as
+// the post list's search, a replacement as long as a link may be.
+export const SOCIAL_BULK_REPLACE_MAX = 50;
+export const SOCIAL_REPLACE_FIND_MAX = 200;
+export const SOCIAL_REPLACE_WITH_MAX = 2000;
+// Where a match is: the text, the title, the link, or a channel's first comment.
+export const SOCIAL_REPLACE_FIELDS = ['body', 'title', 'link', 'first_comment'] as const;
+export type SocialReplaceField = (typeof SOCIAL_REPLACE_FIELDS)[number];
+// No lone surrogate, so a match never starts or ends inside a character.
+const wellFormed = (s: string) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+export const zSocialBulkReplace = z.strictObject({
+  postIds: z.array(zId).min(1).max(SOCIAL_BULK_REPLACE_MAX).refine(unique, 'each post once'),
+  find: z.string().min(1).max(SOCIAL_REPLACE_FIND_MAX).refine(wellFormed, 'a broken character'),
+  replace: z.string().max(SOCIAL_REPLACE_WITH_MAX).refine(wellFormed, 'a broken character'),
+  caseSensitive: z.boolean().optional(),
+  wholeWord: z.boolean().optional(),
+});
+// One field's matches: on the post (variantId null) or on a channel's own content, how many, and the first in its
+// context, as the preview shows it.
+export const zSocialReplaceMatch = z.object({
+  variantId: zId.nullable(),
+  connectionId: zId.nullable(),
+  field: z.enum(SOCIAL_REPLACE_FIELDS),
+  count: z.number().int(),
+  before: z.string(),
+  match: z.string(),
+  after: z.string(),
+});
+// Per post, in the order the command changes them (by id): the matches, and why it would be left out (null: it changes).
+export const zSocialBulkReplacePreview = z.object({ posts: z.array(z.object({ postId: zId, skip: z.enum(SOCIAL_BULK_SKIP_REASONS).nullable(), matches: z.array(zSocialReplaceMatch) })) });
 // One draft per library file (#1080): at most SOCIAL_DRAFTS_FROM_MEDIA_MAX files, each once and in the order given,
 // for the channels named or a saved channel set; the caption is nothing, the file's name or a snippet's text; with
 // queue, each draft holds the next free slot of each channel's queue, in file order.

@@ -6,7 +6,7 @@ import { sql, type RawBuilder } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { METRIC_NAMES, POST_METRIC_NAMES, STORY_METRIC_NAMES, postTypeOf, type PostType, type Publisher } from '@crove/channel';
+import { AVERAGE_METRIC_NAMES, METRIC_NAMES, POST_METRIC_NAMES, REEL_METRIC_NAMES, STORY_METRIC_NAMES, postTypeOf, type PostType, type Publisher } from '@crove/channel';
 import type { Db } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import type { Trx } from './variants.ts';
@@ -61,6 +61,22 @@ export const metricsRecord = defineCommand({
   },
 });
 
+// Whether a variant goes out with one video: its own media when it has them, else the post's (as What works reads them).
+async function singleVideo(trx: Trx, orgId: string, variantId: string): Promise<boolean> {
+  const { rows } = await sql<{ types: string[] | null }>`
+    SELECT CASE WHEN jsonb_typeof(v.media) = 'array' THEN (
+             SELECT array_agg(f.content_type) FROM jsonb_array_elements(v.media) x(e)
+             JOIN crove_kernel.file f ON f.org_id = v.org_id AND f.id::text = x.e->>'fileId'
+           ) ELSE (
+             SELECT array_agg(f.content_type) FROM crove_social.post_media m
+             JOIN crove_kernel.file f ON f.org_id = m.org_id AND f.id = m.file_id
+             WHERE m.org_id = v.org_id AND m.post_id = v.post_id
+           ) END AS types
+    FROM crove_social.post_variant v WHERE v.org_id = ${orgId} AND v.id = ${variantId}`.execute(trx);
+  const types = rows[0]?.types ?? [];
+  return types.length === 1 && (types[0] ?? '').startsWith('video/');
+}
+
 // What the sweep needs to ask a platform about a variant: its connection and the platform's id of the post.
 export const metricsTarget = defineQuery({
   name: 'social.metrics.target',
@@ -74,7 +90,10 @@ export const metricsTarget = defineQuery({
       .where('id', '=', input.variantId)
       .executeTakeFirst();
     if (!row || row.status !== 'published' || !row.external_post_id) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy bài đã đăng này');
-    const postType = postTypeOf((row.settings ?? {}) as Record<string, unknown>);
+    const settingsPostType = postTypeOf((row.settings ?? {}) as Record<string, unknown>);
+    // Instagram publishes a feed post of one video as a Reel (isInstagramReel), so it is asked for the Reels watch time
+    // (#1147) like one marked as a Reel.
+    const postType: PostType | null = row.provider === 'instagram' && settingsPostType === 'feed' && (await singleVideo(ctx.trx, ctx.orgId, row.id)) ? 'reel' : settingsPostType;
     // Whether the variant still waits to be weighed (#1132): the sweep runs the check only then, so a post is weighed
     // (and audited) once, not after every later capture; the check keeps its own guards.
     const outperformCheck = await pendingWeigh(ctx.trx, ctx.orgId, row);
@@ -221,7 +240,8 @@ async function totalsWhere(trx: Trx, orgId: string, published: RawBuilder<unknow
       ${outsideCounts}
     ), sums AS (
       SELECT latest.conn, e.key, sum((e.value #>> '{}')::numeric) AS total FROM latest, jsonb_each(latest.metrics) e
-      WHERE jsonb_typeof(e.value) = 'number' GROUP BY latest.conn, e.key
+      -- An average per post (a Reel's average watch time, #1147) adds up to nothing: left out of the sums.
+      WHERE jsonb_typeof(e.value) = 'number' AND NOT (e.key = ANY(${[...AVERAGE_METRIC_NAMES]}::text[])) GROUP BY latest.conn, e.key
     ), clicks AS (
       SELECT v.conn, coalesce(sum(c.clicks), 0) AS clicks FROM v
       JOIN crove_social.short_link l ON l.org_id = v.org_id AND l.variant_id = v.id
@@ -304,12 +324,12 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
 // A cell as a spreadsheet reads it (domain/csv.ts, which the app shares through the contract).
 export { csvCell };
 
-// labelNames: each post's label names (#639), written as one cell joined by "; ". The Story counts (#1082) come last,
-// so the columns a sheet already reads keep their places.
+// labelNames: each post's label names (#639), written as one cell joined by "; ". The Story counts (#1082), then a
+// Reel's watch time in milliseconds (#1147), come last, so the columns a sheet already reads keep their places.
 export function metricsCsv(rows: readonly (MetricsRow & { text?: string })[], channelNames: ReadonlyMap<string, string>, labelNames: ReadonlyMap<string, readonly string[]> = new Map()): string {
-  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', 'labels', ...POST_METRIC_NAMES, 'captured_at', ...STORY_METRIC_NAMES];
+  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', 'labels', ...POST_METRIC_NAMES, 'captured_at', ...STORY_METRIC_NAMES, ...REEL_METRIC_NAMES];
   const lines = rows.map((r) =>
-    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, (labelNames.get(r.postId) ?? []).join('; '), ...POST_METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt, ...STORY_METRIC_NAMES.map((m) => r.metrics[m] ?? null)]
+    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, (labelNames.get(r.postId) ?? []).join('; '), ...POST_METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt, ...STORY_METRIC_NAMES.map((m) => r.metrics[m] ?? null), ...REEL_METRIC_NAMES.map((m) => r.metrics[m] ?? null)]
       .map(csvCell)
       .join(','),
   );

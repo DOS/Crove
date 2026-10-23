@@ -31,6 +31,18 @@ export interface LibraryItem {
   usedIn: number;
   // Its tags (#904), by name.
   tags: string[];
+  // Who took it and where it came from, for a photo saved from a stock photo site (#1106); null for an upload.
+  credit: MediaCredit | null;
+}
+
+// A stock photo's credit as Pexels gave it (#1106): shown under the image with links back, and its description offered
+// as alt text. The text came from outside the org, so it is shown as text only.
+export interface MediaCredit {
+  provider: 'pexels';
+  photographer: string;
+  photographerUrl: string;
+  sourceUrl: string;
+  altText: string | null;
 }
 
 export interface LibraryUse {
@@ -65,6 +77,7 @@ export const mediaList = defineQuery({
     const limit = input.limit ?? LIBRARY_PAGE;
     let q = ctx.trx
       .selectFrom('crove_kernel.file as f')
+      .leftJoin('crove_social.media_attribution as a', (j) => j.onRef('a.org_id', '=', 'f.org_id').onRef('a.file_id', '=', 'f.id'))
       .select([
         'f.id',
         'f.filename',
@@ -76,6 +89,11 @@ export const mediaList = defineQuery({
         'f.created_at',
         sql<string>`(SELECT count(*) FROM ${postsUsing} u)`.as('used_in'),
         sql<string[]>`ARRAY(SELECT t.tag FROM crove_social.media_tag t WHERE t.org_id = f.org_id AND t.file_id = f.id ORDER BY lower(t.tag), t.tag)`.as('tags'),
+        'a.provider',
+        'a.photographer',
+        'a.photographer_url',
+        'a.source_url',
+        'a.alt_text',
       ])
       .where('f.org_id', '=', ctx.orgId)
       .where('f.source', '=', 'social')
@@ -106,6 +124,10 @@ export const mediaList = defineQuery({
         createdAt: r.created_at.toISOString(),
         usedIn: Number(r.used_in),
         tags: r.tags,
+        credit:
+          r.provider === null || r.photographer === null || r.photographer_url === null || r.source_url === null
+            ? null
+            : { provider: r.provider, photographer: r.photographer, photographerUrl: r.photographer_url, sourceUrl: r.source_url, altText: r.alt_text },
       })),
       more: rows.length > limit,
     };

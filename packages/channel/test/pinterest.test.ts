@@ -305,3 +305,46 @@ describe('Pinterest board sections (#1120)', () => {
     expect(Object.keys(calls[0]?.body as object)).not.toContain('board_section_id');
   });
 });
+describe('Pinterest remove (#1138)', () => {
+  const PIN = '813744226420795884';
+  // Pinterest answers a deleted pin 204 with no body, which the shared helper cannot send.
+  function deletes(answers: { status: number; body?: unknown }[]) {
+    const calls: { method: string; url: URL; auth: string | null }[] = [];
+    const fetchImpl: Fetch = async (input, init) => {
+      const url = new URL(input);
+      calls.push({ method: init?.method ?? 'GET', url, auth: new Headers(init?.headers).get('authorization') });
+      const answer = answers.shift() ?? { status: 500, body: { code: 1, message: 'no answer' } };
+      return new Response(answer.body === undefined ? null : JSON.stringify(answer.body), { status: answer.status, headers: { 'content-type': 'application/json' } });
+    };
+    return { calls, fetchImpl };
+  }
+  const remove = (fetchImpl: Fetch, externalId = PIN, secret = SECRET) => new PinterestPublisher(APP, fetchImpl).remove({ externalAccountId: BOARD, secret, externalId });
+
+  it('deletes the pin with the board token on the Pinterest API only', async () => {
+    const { fetchImpl, calls } = deletes([{ status: 204 }]);
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.method, c.url.href, c.auth])).toEqual([['DELETE', `https://api.pinterest.com/v5/pins/${PIN}`, 'Bearer pina_access-1']]);
+  });
+
+  it('counts a pin Pinterest no longer has as removed', async () => {
+    const { fetchImpl } = deletes([{ status: 404, body: { code: 50, message: 'Pin not found.' } }]);
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+  });
+
+  it('maps a refusal to a code, an outage to unclear, and calls nothing for a malformed id', async () => {
+    const expired = deletes([{ status: 401, body: { code: 2, message: 'Authentication failed.' } }]);
+    const refused = await remove(expired.fetchImpl);
+    expect(refused).toMatchObject({ kind: 'rejected', error: 'token_expired', code: '2' });
+    expect(JSON.stringify(refused)).not.toContain('pina_access-1');
+    const denied = deletes([{ status: 403, body: { code: 29, message: 'You are not permitted to access that resource.' } }]);
+    expect(await remove(denied.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: '29' });
+    const limited = deletes([{ status: 429, body: { code: 8, message: 'You have exceeded your rate limit. Try again later.' } }]);
+    expect(await remove(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const down = deletes([{ status: 503, body: { code: 3, message: 'Service unavailable' } }]);
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: '3' });
+    const none = deletes([]);
+    expect(await remove(none.fetchImpl, '../boards/1')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await remove(none.fetchImpl, PIN, '{}')).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
+    expect(none.calls).toHaveLength(0);
+  });
+});
