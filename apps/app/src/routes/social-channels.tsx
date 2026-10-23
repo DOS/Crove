@@ -16,6 +16,7 @@ import { VoiceEditor } from '../components/social-brand-voice.tsx';
 import { WatermarkCard } from '../components/social-watermark.tsx';
 import { ReportBrandingCard } from '../components/social-report-branding.tsx';
 import { ChatAlertCard } from '../components/social-chat-alert.tsx';
+import { ShareCard } from '../components/social-share.tsx';
 import { PublishHoldCard } from '../components/social-publish-hold.tsx';
 import { BannedWordsCard } from '../components/social-banned-words.tsx';
 import { ReviewChecklistCard } from '../components/social-review-checklist.tsx';
@@ -557,6 +558,7 @@ export function SocialChannelsPage() {
             </div>
             <ChatAlertCard canEdit={isAdmin} />
           </Card>
+          <ShareCard />
           {/* Once the channels are loaded: before, every set would read as having none left. */}
           {channels.data && <ChannelSetsCard channels={channels.data.filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />}
           {channels.isLoading ? (

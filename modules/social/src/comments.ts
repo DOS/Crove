@@ -8,7 +8,7 @@ import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { COMMENT_RULES, firstCommentOf, isProvider } from './domain/channels.ts';
-import { publishCallKey } from './domain/publish.ts';
+import { callRevision, publishCallKey } from './domain/publish.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
 import { publishingHeld } from './publish-hold.ts';
 import { refuseChannels } from './channel-access.ts';
@@ -31,8 +31,8 @@ export interface CommentCall {
   started_at: Date;
 }
 
-type CommentVariant = Pick<VariantRow, 'id' | 'revision' | 'attempt'>;
-const commentPrefix = (v: CommentVariant) => publishCallKey(v.id, v.revision, v.attempt, COMMENT_STEP);
+type CommentVariant = Pick<VariantRow, 'id' | 'revision' | 'published_revision' | 'attempt'>;
+const commentPrefix = (v: CommentVariant) => publishCallKey(v.id, callRevision(v), v.attempt, COMMENT_STEP);
 
 // The comment calls of each variant's current publish, oldest first, in one query. Each retry is a new step
 // (comment, comment_2...).
@@ -110,7 +110,7 @@ export const commentBegin = defineCommand({
       : calls.length === 0;
     if (!go) return { action: 'none', reason: status };
     const step = calls.length === 0 ? COMMENT_STEP : `${COMMENT_STEP}_${calls.length + 1}`;
-    const callKey = publishCallKey(v.id, v.revision, v.attempt, step);
+    const callKey = publishCallKey(v.id, callRevision(v), v.attempt, step);
     await ctx.trx
       .insertInto('crove_kernel.external_call')
       .values({ org_id: ctx.orgId, key: callKey, module: 'social', target: v.provider, step, retry_safety: 'never', request_hash: v.content_hash, started_at: ctx.now })

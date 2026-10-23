@@ -2,6 +2,7 @@ import { oc } from '@orpc/contract';
 import { z } from 'zod';
 import {
   zBulkApproveItems,
+  SOCIAL_REVIEW_CHECKS_MAX,
   zAccount,
   zAgentBudget,
   zAgentRisk,
@@ -849,6 +850,12 @@ export const contract = {
       remove: oc
         .input(z.strictObject({ variantId: zId, reason: z.string().trim().max(500).optional() }))
         .output(z.object({ postId: zId, variantId: zId, status: z.enum(SOCIAL_VARIANT_STATUSES), queued: z.boolean() })),
+      // Correct a published channel's text on its platform (#1223), owners and admins: the channel's new own text (its
+      // signature is appended as at publish), the revision they saw and the review checklist items they ticked. The
+      // worker makes the call; the variant changes once the platform confirms it.
+      editPublished: oc
+        .input(z.strictObject({ variantId: zId, revision: z.number().int().positive(), body: z.string().max(100_000), checks: z.array(zId).max(SOCIAL_REVIEW_CHECKS_MAX).optional() }))
+        .output(z.object({ postId: zId, variantId: zId, revision: z.number().int(), queued: z.boolean() })),
       // Settle needs_attention variants: on the platform after all, or dropped.
       resolve: oc
         .input(z.strictObject({ variantIds: z.array(zId).min(1).max(20), outcome: z.enum(['published', 'dropped']), url: z.url({ protocol: /^https?$/ }).max(2000).nullable().optional() }))

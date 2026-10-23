@@ -1306,6 +1306,9 @@ export const zSocialVariant = z.object({
   removedBy: zId.nullable(),
   removeReason: z.string().nullable(),
   removal: z.object({ state: z.enum(['pending', 'failed', 'unknown']), code: z.string().nullable() }).nullable(),
+  // A correction of the published text a person asked for (#1223), until the platform confirms it: where it stands, the
+  // channel's new own text, who asked and when.
+  liveEdit: z.object({ state: z.enum(['pending', 'failed', 'unknown']), code: z.string().nullable(), body: z.string(), requestedBy: zId.nullable(), requestedAt: z.string() }).nullable(),
   error: z
     .object({ kind: z.string().nullable(), code: z.string().nullable(), action: z.string().nullable(), message: z.string().nullable(), retryAt: z.string().nullable() })
     .nullable(),
@@ -1750,7 +1753,7 @@ export const zSocialReviewPlanLink = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'queue_moved', 'restored', 'labeled', 'assigned']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'live_edit', 'live_edited', 'live_edit_failed', 'queue_moved', 'restored', 'labeled', 'assigned']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),

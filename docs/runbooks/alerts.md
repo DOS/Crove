@@ -20,7 +20,7 @@ Pick outside services that run on infrastructure other than the server: a monito
 
 ## 1. The prober's alerts in Telegram
 
-1. In Telegram, talk to `@BotFather`, send `/newbot` and follow the prompts. It answers with the bot token. Keep the token in the secret store with `.env`: whoever holds it can post as the bot.
+1. In Telegram, talk to `@BotFather`, send `/newbot` and follow the prompts. It answers with the bot token. Keep the token in the secret store with `.env`: whoever holds it can post as the bot. To replace it, or any webhook or heartbeat URL below: [secret-rotation.md](secret-rotation.md), section 3.
 2. Create a group for alerts (or use the private chat with the bot), add the bot, and send any message in it.
 3. Find the chat id: open `https://api.telegram.org/bot<token>/getUpdates` in a browser and read `"chat":{"id":...}` from the message you just sent. Group ids are negative. Close the tab afterwards: the address contains the token.
 4. In the deployment's `.env`:

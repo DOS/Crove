@@ -23,6 +23,17 @@ describe('restoring a version (#1021)', () => {
       { variantId: 'b', content: content({ body: 'Khác' }) },
       { variantId: 'gone', content: content({ body: 'Kênh đã bỏ' }) },
     ]);
-    expect(preview).toEqual({ changes: [], kept: 2 });
+    expect(preview).toMatchObject({ changes: [], kept: 2 });
+    // The published channel's text then is shown, never restored (#1223); a cancelled one's is not.
+    expect(preview.history.map((c) => c.variantId)).toEqual(['a']);
+  });
+
+  it('shows what a published channel showed before its text was corrected on its platform (#1223)', () => {
+    const preview = restorePreview([channel('a', 'published', { body: 'Giá 45.000đ' })], [{ variantId: 'a', content: content({ body: 'Giá 54.000đ' }) }]);
+    expect(preview.changes).toEqual([]);
+    expect(preview.history).toHaveLength(1);
+    expect(preview.history[0]?.diff.body?.some((p) => p.kind === 'added' && p.text.includes('54'))).toBe(true);
+    // The version that is the content now has nothing to show.
+    expect(restorePreview([channel('a', 'published', { body: 'Giá 45.000đ' })], [{ variantId: 'a', content: content({ body: 'Giá 45.000đ' }) }]).history).toEqual([]);
   });
 });

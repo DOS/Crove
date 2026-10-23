@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { wantsBlueskyGate } from './domain/channels.ts';
-import { publishCallKey } from './domain/publish.ts';
+import { callRevision, publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
 
@@ -17,8 +17,8 @@ export const GATE_STEP = 'gate';
 
 export type GateWork = { action: 'none'; reason: string } | { action: 'call'; variantId: string; connectionId: string; callKey: string; externalId: string; settings: Record<string, unknown> };
 
-type GateVariant = Pick<VariantRow, 'id' | 'revision' | 'attempt'>;
-const gateKey = (v: GateVariant) => publishCallKey(v.id, v.revision, v.attempt, GATE_STEP);
+type GateVariant = Pick<VariantRow, 'id' | 'revision' | 'published_revision' | 'attempt'>;
+const gateKey = (v: GateVariant) => publishCallKey(v.id, callRevision(v), v.attempt, GATE_STEP);
 
 // Whether a variant asks for a gate: replies limited or quotes off, on Bluesky.
 export const wantsGate = (v: { provider: string; settings: unknown }): boolean => wantsBlueskyGate(v.provider, settingsOf(v));

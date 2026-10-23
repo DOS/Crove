@@ -61,19 +61,9 @@ const PK_EXCEPTIONS: Record<string, { pk: string; reason: string }> = {
   'crove_social.chat_alert_target': { pk: 'org_id,alert_id', reason: 'The sealed target of one team chat alert (#863): the alert is the key.' },
   'crove_social.notification_mute': { pk: 'org_id,user_id,kind', reason: 'A mute is a set membership of (user, notification kind).' },
 };
-// Tenant foreign keys (<table>.<constraint>) that have no supporting index yet; #1212 adds them.
-const FK_INDEX_EXCEPTIONS: Record<string, { cols: string; reason: string }> = {
-  'crove_finance.input_vat_check.input_vat_check_voucher_fk': { cols: 'org_id,voucher_id', reason: 'Index missing, tracked in #1212.' },
-  'crove_kernel.agent_wakeup.agent_wakeup_org_id_agent_id_fkey': { cols: 'org_id,agent_id', reason: 'Index missing, tracked in #1212: only a partial unique index on pending wakeups.' },
-  'crove_kernel.agent_wakeup.agent_wakeup_org_id_run_id_fkey': { cols: 'org_id,run_id', reason: 'Index missing, tracked in #1212.' },
-  'crove_kernel.proposal.proposal_decided_by_agent_fk': { cols: 'org_id,decided_by_agent', reason: 'Index missing, tracked in #1212.' },
-  'crove_kernel.proposal.proposal_requested_by_run_fk': { cols: 'org_id,requested_by_run', reason: 'Index missing, tracked in #1212.' },
-  'crove_social.notification.notification_post_fk': { cols: 'org_id,post_id', reason: 'Index missing, tracked in #1212.' },
-  'crove_social.post_approval.post_approval_variant_fk': { cols: 'org_id,variant_id,post_id', reason: 'Index missing, tracked in #1212: the index on (org_id, variant_id, created_at) does not cover post_id.' },
-  'crove_social.post_comment.post_comment_variant_fk': { cols: 'org_id,variant_id,post_id', reason: 'Index missing, tracked in #1212: the partial index on (org_id, variant_id) does not cover post_id.' },
-  'crove_social.post_variant.post_variant_post_fk': { cols: 'org_id,post_id', reason: 'Index missing, tracked in #1212: only a partial unique index on live variants.' },
-  'crove_social.watermark.watermark_file_fk': { cols: 'org_id,file_id', reason: 'Index missing, tracked in #1212.' },
-};
+// Tenant foreign keys (<table>.<constraint>) that have no supporting index, with their columns. None today: #1212
+// added the last missing ones.
+const FK_INDEX_EXCEPTIONS: Record<string, { cols: string; reason: string }> = {};
 // Columns of the vendored pg-boss schema (`pnpm db:vendor:pgboss`) that break a column rule, with their type. Its
 // DDL is pg-boss's; its runtime partitions (job_common, queue_stats_<day>) are skipped with every partition.
 const COLUMN_EXCEPTIONS: Record<string, { rule: 'timestamp' | 'money'; type: string; reason: string }> = {
@@ -84,17 +74,7 @@ const COLUMN_EXCEPTIONS: Record<string, { rule: 'timestamp' | 'money'; type: str
 // be on main first; while it is listed here, an exception that matches nothing is not stale. Remove the key once the
 // PR is merged. One key per line, sorted, with a trailing comma.
 const PENDING_EXCEPTIONS = new Set<string>([
-  // The supporting indexes of #1212.
-  'crove_finance.input_vat_check.input_vat_check_voucher_fk',
-  'crove_kernel.agent_wakeup.agent_wakeup_org_id_agent_id_fkey',
-  'crove_kernel.agent_wakeup.agent_wakeup_org_id_run_id_fkey',
-  'crove_kernel.proposal.proposal_decided_by_agent_fk',
-  'crove_kernel.proposal.proposal_requested_by_run_fk',
-  'crove_social.notification.notification_post_fk',
-  'crove_social.post_approval.post_approval_variant_fk',
-  'crove_social.post_comment.post_comment_variant_fk',
-  'crove_social.post_variant.post_variant_post_fk',
-  'crove_social.watermark.watermark_file_fk',
+  // 'crove_schema.table_name',
 ]);
 
 type Rule = 'pk' | 'fk-shape' | 'fk-index' | 'timestamp' | 'money' | 'cross-module' | 'trigger';

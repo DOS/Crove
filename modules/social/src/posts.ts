@@ -73,6 +73,7 @@ import { pinCallsOf, pinCommands, pinStatus, wantsPin, type PinStatus } from './
 import { gateCallsOf, gateCommands, gateStatus, wantsGate, type GateStatus } from './gate.ts';
 import { playlistCallsOf, playlistCommands, playlistsOf, playlistStatus, type PlaylistStatus } from './playlists.ts';
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
+import { editCallsOf, editPublishedCommands, editState, type EditState } from './edit-published.ts';
 import { approvalsRequired, channelSignatures, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { withChannelSignature } from './domain/signature.ts';
 import { clientReviewCommands } from './client-review.ts';
@@ -1195,6 +1196,9 @@ export interface VariantView {
   removedBy: string | null;
   removeReason: string | null;
   removal: RemoveState | null;
+  // A correction of the published text a person asked for (#1223), until the platform confirms it: where it stands, the
+  // new own text and who asked. Gone once the platform shows it.
+  liveEdit: (EditState & { body: string; requestedBy: string | null; requestedAt: string }) | null;
   error: { kind: string | null; code: string | null; action: string | null; message: string | null; retryAt: string | null } | null;
   issues: Issue[];
   // The org's banned or sensitive words in its effective content (#1055), one per word and field: 'block' ones refuse
@@ -1342,6 +1346,15 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
   const asked = variants.filter((v) => v.status === 'published' && v.remove_requested_at !== null);
   const removeCalls = await removeCallsOf(ctx.trx, ctx.orgId, asked);
   const removals = new Map(asked.map((v) => [v.id, removeState(removeCalls.get(v.id) ?? [], v.remove_requested_at, now)]));
+  // The corrections of the published text people asked for (#1223).
+  const editing = variants.filter((v) => v.status === 'published' && v.edit_state !== null);
+  const editCalls = await editCallsOf(ctx.trx, ctx.orgId, editing);
+  const liveEdits = new Map(
+    editing.flatMap((v) => {
+      const state = editState(editCalls.get(v.id) ?? [], v, now);
+      return state && v.edit_body !== null && v.edit_requested_at ? [[v.id, { ...state, body: v.edit_body, requestedBy: v.edit_requested_by, requestedAt: v.edit_requested_at.toISOString() }] as const] : [];
+    }),
+  );
   const mediaRows = await ctx.trx
     .selectFrom('crove_social.post_media as m')
     .innerJoin('crove_kernel.file as f', (j) => j.onRef('f.org_id', '=', 'm.org_id').onRef('f.id', '=', 'm.file_id'))
@@ -1448,6 +1461,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
               removedBy: v.status === 'removed' ? v.removed_by : null,
               removeReason: v.status === 'removed' ? v.remove_reason : null,
               removal: removals.get(v.id) ?? null,
+              liveEdit: liveEdits.get(v.id) ?? null,
               error: v.error_kind || v.error_code || v.error_message ? { kind: v.error_kind, code: v.error_code, action: v.error_action, message: v.error_message, retryAt: iso(v.error_retry_at) } : null,
               issues: isProvider(v.provider) ? issuesOf(b, row) : [],
               ...(banned ? bannedForView(banned, b, row) : { bannedWords: [], bannedWordsStatus: 'not_checked' as const }),
@@ -1903,6 +1917,7 @@ export const socialCommands = [
   ...gateCommands,
   ...playlistCommands,
   ...removeCommands,
+  ...editPublishedCommands,
   ...policyCommands,
   ...clientReviewCommands,
   ...assignCommands,

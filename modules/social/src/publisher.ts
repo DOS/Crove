@@ -17,7 +17,9 @@ import type { PinWork } from './pin.ts';
 import type { GateWork } from './gate.ts';
 import type { PlaylistWork } from './playlists.ts';
 import type { RemoveRecord, RemoveWork } from './remove.ts';
-import type { ThreadWork } from './thread.ts';import { shortened, shortenedSettings, shortUrl } from './short-links.ts';
+import type { ThreadWork } from './thread.ts';
+import type { EditRecord, EditWork } from './edit-published.ts';
+import { shortened, shortenedSettings, shortUrl } from './short-links.ts';
 
 
 export interface PublishDeps {
@@ -376,6 +378,41 @@ export async function runRemoveJob(deps: PublishDeps, orgId: string, variantId: 
     }
   }
   const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.remove.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
+  return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
+}
+
+/**
+ * The correction of a published variant's text a person asked for (#1223): begin, one call, record. after: the last
+ * edit call the ask saw. The content goes out as at publish, through the variant's short link (#706) when it has one.
+ */
+export async function runEditJob(deps: PublishDeps, orgId: string, variantId: string, provider: string, after: string | null): Promise<{ action: string; reason?: string; state?: string }> {
+  const publisher = deps.publishers[provider];
+  if (!publisher?.edit) return { action: 'none', reason: 'provider_not_configured' };
+  const begun = await deps.runtime.execute<EditWork>('social.edit.begin', { variantId, provider, after }, { actor: ACTOR, orgId });
+  if (begun.action === 'none') return { action: 'none', reason: begun.reason };
+  const credential = await openCredential(deps, orgId, begun.connectionId);
+  let result: EditRecord;
+  if ('blocked' in credential) result = { kind: 'blocked', code: credential.blocked };
+  else {
+    const timeout = deps.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+    const short = begun.shortLink && deps.publicUrl ? { target: begun.shortLink.target, url: shortUrl(deps.publicUrl, begun.shortLink.code) } : null;
+    const content = short ? shortened(begun.content, short) : begun.content;
+    const settings = short ? shortenedSettings(begun.settings, short) : begun.settings;
+    try {
+      const r = await withTimeout(timeout, () => publisher.edit!({ ...credential, externalId: begun.externalId, content, settings, callKey: begun.callKey }));
+      // What the record takes: codes and messages cut to their columns.
+      result =
+        r.kind === 'edited'
+          ? r
+          : r.kind === 'unknown'
+            ? { kind: 'unknown', ...(r.code !== undefined ? { code: r.code.slice(0, 200) } : {}) }
+            : { kind: 'rejected', error: r.error, ...(r.code !== undefined ? { code: r.code.slice(0, 200) } : {}), ...(r.message !== undefined ? { message: r.message.slice(0, 2000) } : {}) };
+    } catch (error) {
+      // A throw or a timeout after the call may have reached the platform.
+      result = { kind: 'unknown', code: error instanceof Timeout ? 'TIMEOUT' : 'ADAPTER_ERROR' };
+    }
+  }
+  const recorded = await deps.runtime.execute<{ recorded: boolean; state?: string }>('social.edit.record', { variantId, callKey: begun.callKey, result }, { actor: ACTOR, orgId });
   return { action: 'call', ...(recorded.state ? { state: recorded.state } : {}) };
 }
 

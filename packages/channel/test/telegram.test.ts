@@ -440,3 +440,52 @@ describe('Telegram remove (#860)', () => {
     expect(none.calls).toHaveLength(0);
   });
 });
+
+describe('Telegram edit (#1223)', () => {
+  const edit = (fetchImpl: Fetch, over: { body?: string; media?: ReturnType<typeof photo>[]; settings?: Record<string, unknown>; externalId?: string } = {}) =>
+    new TelegramPublisher(fetchImpl).edit({
+      externalAccountId: CHAT,
+      secret: SECRET,
+      externalId: over.externalId ?? `${CHAT}:42`,
+      content: { body: over.body ?? 'Giá đúng: 45.000đ', title: null, linkUrl: null, media: over.media ?? [] },
+      settings: over.settings ?? {},
+      callKey: 'edit-1',
+    });
+  const buttons = { telegram: { buttons: [[{ text: 'Đặt bàn', url: 'https://example.com/dat-ban' }]] } };
+
+  it('edits a text post with editMessageText and sends its buttons again', async () => {
+    const { fetchImpl, calls } = bot({ editMessageText: [ok({ message_id: 42 })] });
+    expect(await edit(fetchImpl, { settings: buttons })).toEqual({ kind: 'edited' });
+    expect(calls).toEqual([
+      { method: 'editMessageText', token: TOKEN, form: null, json: { chat_id: CHAT, message_id: 42, text: 'Giá đúng: 45.000đ', reply_markup: { inline_keyboard: [[{ text: 'Đặt bàn', url: 'https://example.com/dat-ban' }]] } } },
+    ]);
+  });
+
+  it('edits the caption of a photo, and of an album on its first message without buttons', async () => {
+    const one = bot({ editMessageCaption: [ok({ message_id: 42 })] });
+    expect(await edit(one.fetchImpl, { media: [photo('a')], settings: buttons })).toEqual({ kind: 'edited' });
+    expect(one.calls[0]).toMatchObject({ method: 'editMessageCaption', json: { chat_id: CHAT, message_id: 42, caption: 'Giá đúng: 45.000đ', reply_markup: { inline_keyboard: [[{ text: 'Đặt bàn', url: 'https://example.com/dat-ban' }]] } } });
+    const album = bot({ editMessageCaption: [ok({ message_id: 42 })] });
+    expect(await edit(album.fetchImpl, { media: [photo('a'), photo('b')] })).toEqual({ kind: 'edited' });
+    expect(album.calls[0]?.json).toEqual({ chat_id: CHAT, message_id: 42, caption: 'Giá đúng: 45.000đ' });
+  });
+
+  it('counts the same text as edited, and says when the message is gone or cannot be edited', async () => {
+    const same = bot({ editMessageText: [fail(400, 'Bad Request: message is not modified: specified new message content and reply markup are exactly the same')] });
+    expect(await edit(same.fetchImpl)).toEqual({ kind: 'edited' });
+    const gone = bot({ editMessageText: [fail(400, 'Bad Request: message to edit not found')] });
+    expect(await edit(gone.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    const locked = bot({ editMessageText: [fail(400, "Bad Request: message can't be edited")] });
+    expect(await edit(locked.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'TELEGRAM_CANNOT_EDIT' });
+    const down = bot({ editMessageText: [fail(502, 'Bad Gateway')] });
+    expect(await edit(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'TELEGRAM_502' });
+  });
+
+  it('refuses a poll, a caption over the limit and another chat with nothing sent', async () => {
+    const none = bot({});
+    expect(await edit(none.fetchImpl, { settings: { poll: { options: ['Có', 'Không'] } } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(await edit(none.fetchImpl, { media: [photo('a')], body: 'x'.repeat(1025) })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'CAPTION_TOO_LONG' });
+    expect(await edit(none.fetchImpl, { externalId: '-1009999999999:42' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(none.calls).toHaveLength(0);
+  });
+});
