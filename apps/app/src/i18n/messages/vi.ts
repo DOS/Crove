@@ -1983,7 +1983,7 @@ export const vi = {
     engagementRate: {
       label: 'Tỷ lệ tương tác',
       byImpressions: 'theo lượt hiển thị',
-      hint: 'Tổng cảm xúc, bình luận, chia sẻ, lượt lưu và lượt nhấp chia cho số người tiếp cận; kênh nào không có số người tiếp cận thì chia cho lượt hiển thị.',
+      hint: 'Tổng cảm xúc, bình luận, chia sẻ, lượt lưu và lượt nhấp chia cho số người tiếp cận. Tỷ lệ chung chỉ tính các kênh có số người tiếp cận; khi không kênh nào có, tỷ lệ chia cho lượt hiển thị.',
       line: 'Tỷ lệ tương tác: {rate}',
       inline: 'tỷ lệ tương tác {rate}',
     },

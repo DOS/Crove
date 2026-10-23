@@ -1984,7 +1984,7 @@ export const en = {
     engagementRate: {
       label: 'Engagement rate',
       byImpressions: 'by impressions',
-      hint: 'Reactions, comments, shares, saves and clicks divided by reach; by impressions where a channel reports no reach.',
+      hint: 'Reactions, comments, shares, saves and clicks divided by reach. The overall rate counts only the channels that report reach; when none does, it is divided by impressions.',
       line: 'Engagement rate: {rate}',
       inline: 'engagement rate {rate}',
     },
