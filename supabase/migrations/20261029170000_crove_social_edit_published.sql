@@ -9,6 +9,10 @@
 --                                    body, revision and content_hash change only on the platform's confirmation,
 --                                    which clears them; a failed or unclear edit stays for the post page to show until
 --                                    the next ask.
+-- crove_social.post_variant.edit_error_code
+--                                    why the worker stopped an edit before calling (a publishing hold, the channel's
+--                                    policy or blocked words that changed since the ask, an ask too old to send), or
+--                                    the platform's code; only on a failed or unclear edit.
 -- crove_social.post_variant.published_revision
 --                                    the revision the variant went out under, kept at its first confirmed edit, when
 --                                    its revision moves on: the external_call keys of its publish and of every step
@@ -26,9 +30,10 @@ ALTER TABLE crove_social.post_variant ADD COLUMN IF NOT EXISTS edit_requested_at
 ALTER TABLE crove_social.post_variant ADD COLUMN IF NOT EXISTS edit_requested_by uuid;
 ALTER TABLE crove_social.post_variant ADD COLUMN IF NOT EXISTS edit_state text;
 ALTER TABLE crove_social.post_variant ADD COLUMN IF NOT EXISTS published_revision integer;
+ALTER TABLE crove_social.post_variant ADD COLUMN IF NOT EXISTS edit_error_code text;
 
 -- NOT VALID: added without scanning the table under its exclusive lock; validated below (every existing row has all
--- six NULL).
+-- seven NULL).
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid = 'crove_social.post_variant'::regclass AND conname = 'post_variant_edit_body') THEN
@@ -48,6 +53,10 @@ BEGIN
       AND (edit_state IS NULL) = (edit_requested_at IS NULL)
       AND (edit_state IS NULL) = (edit_requested_by IS NULL)) NOT VALID;
   END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid = 'crove_social.post_variant'::regclass AND conname = 'post_variant_edit_error_code') THEN
+    -- A reason only on an edit that did not go through.
+    ALTER TABLE crove_social.post_variant ADD CONSTRAINT post_variant_edit_error_code CHECK (edit_error_code IS NULL OR (pg_catalog.length(edit_error_code) <= 200 AND edit_state IN ('failed', 'unknown'))) NOT VALID;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid = 'crove_social.post_variant'::regclass AND conname = 'post_variant_published_revision') THEN
     -- Kept only once the revision moved past it.
     ALTER TABLE crove_social.post_variant ADD CONSTRAINT post_variant_published_revision CHECK (published_revision IS NULL OR (published_revision >= 1 AND published_revision < revision)) NOT VALID;
@@ -57,6 +66,7 @@ ALTER TABLE crove_social.post_variant VALIDATE CONSTRAINT post_variant_edit_body
 ALTER TABLE crove_social.post_variant VALIDATE CONSTRAINT post_variant_edit_content_hash;
 ALTER TABLE crove_social.post_variant VALIDATE CONSTRAINT post_variant_edit_state_check;
 ALTER TABLE crove_social.post_variant VALIDATE CONSTRAINT post_variant_edit_together;
+ALTER TABLE crove_social.post_variant VALIDATE CONSTRAINT post_variant_edit_error_code;
 ALTER TABLE crove_social.post_variant VALIDATE CONSTRAINT post_variant_published_revision;
 
 -- One job per ask (singleton key <org>:<variant>:edit:<last call seen>). create_queue skips a queue that exists.

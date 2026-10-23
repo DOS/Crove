@@ -1410,6 +1410,7 @@ export interface SocialPostVariantTable {
   edit_requested_by: string | null;
   edit_state: string | null;
   published_revision: number | null;
+  edit_error_code: string | null;
 }
 
 /** crove_social.post_version */

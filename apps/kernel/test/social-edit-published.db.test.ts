@@ -312,4 +312,115 @@ suite('correcting a published post on PostgreSQL (#1223)', () => {
     await expect(exec(o, 'social.variant.edit_published', { variantId: poll.id, revision: 1, body: 'Sửa' })).rejects.toMatchObject({ code: 'EDIT_NOT_SUPPORTED', details: { reason: 'poll' } });
     await nothingQueued(o, poll.id);
   });
+
+  // The worker's record, called by hand, to put a late answer after a person's second ask.
+  const record = (o: Org, id: string, callKey: string, result: EditResult) => worker.execute('social.edit.record', { variantId: id, callKey, result }, { actor: { type: 'system', component: 'social.publisher' }, orgId: o.orgId });
+  // The ask's call as begin records it, made two hours ago and gone quiet past EDIT_STALE_MS (a call row's time never
+  // changes, so it is written as begin would have then), so a person may ask again.
+  const quietCall = (o: Org, id: string, key: string) =>
+    admin(async (c) => {
+      await c.query(
+        `INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, started_at)
+         SELECT org_id, $2, 'social', provider, 'edit', 'idempotent', edit_content_hash, now() - interval '2 hours' FROM crove_social.post_variant WHERE id = $1`,
+        [id, key],
+      );
+      await c.query("UPDATE crove_social.post_variant SET edit_requested_at = now() - interval '3 hours' WHERE id = $1", [id]);
+    });
+
+  it('applies a late answer to the ask it was made for, never to a newer one (#1223 review)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const { postId, id } = await publishedPost(o, sandbox, { signature: 'Hotline 0901 234 567' });
+    const key = `social.publish:${id}:1:1:edit`;
+
+    // E1 is sent and goes quiet; the person asks again with E2 before its answer comes.
+    await exec(o, 'social.variant.edit_published', { variantId: id, revision: 1, body: 'Giá 45.000đ' });
+    await quietCall(o, id, key);
+    expect((await variant(o, postId)).liveEdit).toMatchObject({ state: 'unknown', code: 'OUTCOME_UNKNOWN' });
+    await exec(o, 'social.variant.edit_published', { variantId: id, revision: 1, body: 'Giá 46.000đ' });
+
+    // E1's confirmation arrives: the channel shows E1, so the variant takes E1 (its text from the approval of its hash),
+    // and E2, asked before that was known, is stopped for the person to send again.
+    expect(await record(o, id, key, { kind: 'edited' })).toMatchObject({ recorded: true, state: 'succeeded', revision: 2 });
+    const after = await variant(o, postId);
+    expect(after).toMatchObject({ revision: 2, overrides: { body: 'Giá 45.000đ' }, liveEdit: { state: 'failed', code: 'EDIT_SUPERSEDED', body: 'Giá 46.000đ' } });
+    expect(after.effective.body).toBe('Giá 45.000đ\n\nHotline 0901 234 567');
+    expect(after.contentHash).toBe((await approvals(id))[1]?.content_hash);
+    // E2's job sends nothing.
+    expect(await runEditJob(deps(sandbox), o.orgId, id, 'sandbox', key)).toEqual({ action: 'none', reason: 'not_asked' });
+    expect(await editCalls(id)).toHaveLength(1);
+  });
+
+  it('leaves a newer ask pending when an older ask is refused late, and finishes it when both asked the same text', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const { postId, id, account } = await publishedPost(o, sandbox);
+    const key = `social.publish:${id}:1:1:edit`;
+    await exec(o, 'social.variant.edit_published', { variantId: id, revision: 1, body: 'Giá 45.000đ' });
+    await quietCall(o, id, key);
+    await exec(o, 'social.variant.edit_published', { variantId: id, revision: 1, body: 'Giá 46.000đ' });
+    // E1 refused late: the platform shows what it showed; E2 is not marked failed and still goes out.
+    await record(o, id, key, { kind: 'rejected', error: 'bad_request', code: 'TELEGRAM_CANNOT_EDIT' });
+    expect(await variant(o, postId)).toMatchObject({ revision: 1, liveEdit: { state: 'pending', body: 'Giá 46.000đ' } });
+    expect(await runEditJob(deps(sandbox), o.orgId, id, 'sandbox', key)).toEqual({ action: 'call', state: 'succeeded' });
+    expect(await variant(o, postId)).toMatchObject({ revision: 2, overrides: { body: 'Giá 46.000đ' }, liveEdit: null });
+    expect(sandbox.posts(account).map((p) => p.body)).toEqual(['Giá 46.000đ']);
+
+    // Asked again with the same text: the late confirmation of the first call settles the second ask too.
+    const same = await publishedPost(o, sandbox);
+    const sameKey = `social.publish:${same.id}:1:1:edit`;
+    await exec(o, 'social.variant.edit_published', { variantId: same.id, revision: 1, body: 'Giá 45.000đ' });
+    await quietCall(o, same.id, sameKey);
+    await exec(o, 'social.variant.edit_published', { variantId: same.id, revision: 1, body: 'Giá 45.000đ' });
+    await record(o, same.id, sameKey, { kind: 'edited' });
+    expect(await variant(o, same.postId)).toMatchObject({ revision: 2, overrides: { body: 'Giá 45.000đ' }, liveEdit: null });
+  });
+
+  it('never sends an ask its job reached too late, or one the policy or the blocked words now refuse', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    // Delayed past EDIT_STALE_MS (a worker outage): the page already said it did not run, and nothing goes out.
+    const late = await publishedPost(o, sandbox);
+    await exec(o, 'social.variant.edit_published', { variantId: late.id, revision: 1, body: 'Giá 45.000đ' });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET edit_requested_at = now() - interval '2 hours' WHERE id = $1", [late.id]));
+    expect(await runEditJob(deps(sandbox), o.orgId, late.id, 'sandbox', null)).toEqual({ action: 'none', reason: 'EDIT_NOT_RUN' });
+    expect(await variant(o, late.postId)).toMatchObject({ revision: 1, liveEdit: { state: 'failed', code: 'EDIT_NOT_RUN' } });
+    expect(await editCalls(late.id)).toEqual([]);
+    expect(sandbox.posts(late.account).map((p) => p.body)).toEqual(['Phở bò giá 54.000đ']);
+
+    // The channel's policy raised after the ask.
+    const policy = await publishedPost(o, sandbox);
+    await exec(o, 'social.variant.edit_published', { variantId: policy.id, revision: 1, body: 'Giá 45.000đ' });
+    await exec(o, 'social.channel.set_policy', { connectionId: policy.connectionId, approvalsRequired: 2 });
+    expect(await runEditJob(deps(sandbox), o.orgId, policy.id, 'sandbox', null)).toEqual({ action: 'none', reason: 'EDIT_NEEDS_REVIEW' });
+    expect(await variant(o, policy.postId)).toMatchObject({ revision: 1, liveEdit: { state: 'failed', code: 'EDIT_NEEDS_REVIEW' } });
+    expect(await editCalls(policy.id)).toEqual([]);
+
+    // A word blocked after the ask.
+    const banned = await publishedPost(o, sandbox);
+    await exec(o, 'social.variant.edit_published', { variantId: banned.id, revision: 1, body: 'Phở ngon nhất phố' });
+    await exec(o, 'social.banned_word.add', { phrase: 'ngon nhất', level: 'block' });
+    expect(await runEditJob(deps(sandbox), o.orgId, banned.id, 'sandbox', null)).toEqual({ action: 'none', reason: 'BANNED_WORDS' });
+    expect(await variant(o, banned.postId)).toMatchObject({ revision: 1, liveEdit: { state: 'failed', code: 'BANNED_WORDS' } });
+    expect(await editCalls(banned.id)).toEqual([]);
+    expect((await events(o, 'social.variant.edit_failed')).map((e) => e.code)).toEqual(['EDIT_NOT_RUN', 'EDIT_NEEDS_REVIEW', 'BANNED_WORDS']);
+  });
+
+  it('sends nothing while publishing is held, and refuses an ask during the hold (#946)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const { postId, id, account } = await publishedPost(o, sandbox);
+    await exec(o, 'social.variant.edit_published', { variantId: id, revision: 1, body: 'Giá 45.000đ' });
+    await exec(o, 'social.publishing.hold', { reason: 'Ngày quốc tang' });
+    expect(await runEditJob(deps(sandbox), o.orgId, id, 'sandbox', null)).toEqual({ action: 'none', reason: 'PUBLISHING_HELD' });
+    expect(await variant(o, postId)).toMatchObject({ revision: 1, liveEdit: { state: 'failed', code: 'PUBLISHING_HELD' } });
+    expect(await editCalls(id)).toEqual([]);
+    expect(sandbox.posts(account).map((p) => p.body)).toEqual(['Phở bò giá 54.000đ']);
+    await expect(exec(o, 'social.variant.edit_published', { variantId: id, revision: 1, body: 'Giá 45.000đ' })).rejects.toMatchObject({ code: 'PUBLISHING_HELD' });
+    // After the release the person sends it again, and it goes out.
+    await exec(o, 'social.publishing.release', {});
+    await exec(o, 'social.variant.edit_published', { variantId: id, revision: 1, body: 'Giá 45.000đ' });
+    expect(await runEditJob(deps(sandbox), o.orgId, id, 'sandbox', null)).toEqual({ action: 'call', state: 'succeeded' });
+    expect(sandbox.posts(account).map((p) => p.body)).toEqual(['Giá 45.000đ']);
+  });
 });
