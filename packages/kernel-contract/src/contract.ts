@@ -65,6 +65,8 @@ import {
   zSocialSnippetCreate,
   zSocialBannedWord,
   zSocialBannedWordAdd,
+  zSocialReviewCheck,
+  zSocialReviewChecklistSet,
   zSocialChannelAccess,
   zSocialChannelAccessSet,
   zSocialSnippetUpdate,
@@ -523,6 +525,12 @@ export const contract = {
       list: oc.input(z.object({})).output(z.array(zSocialBannedWord)),
       add: oc.input(zSocialBannedWordAdd).output(z.object({ wordId: zId })),
       remove: oc.input(z.strictObject({ wordId: zId })).output(z.object({ wordId: zId })),
+    },
+    // The review checklist (#1105): every member reads it (a limited member, the org-wide items and their channels');
+    // owners and admins replace it whole.
+    reviewChecklist: {
+      list: oc.input(z.object({})).output(z.object({ items: z.array(zSocialReviewCheck) })),
+      set: oc.input(zSocialReviewChecklistSet).output(z.object({ items: z.array(zSocialReviewCheck) })),
     },
     // Channels a member may use (#1081): owners and admins read every member's list and replace one (an empty list
     // lifts the limit; owners and admins are never limited); every member reads their own.

@@ -8,6 +8,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { ContentChanges } from './social-review-diff.tsx';
+import { TickedChecks } from './social-review-checklist.tsx';
 import { ErrorText, Notice, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
@@ -95,6 +96,22 @@ function VersionEntry({
             </>
           )}
           {preview.kept > 0 && <p className="text-xs text-subtle-foreground">{t('kept', { count: preview.kept })}</p>}
+          {/* The approvals given to this version's content, with the review checklist items each reviewer ticked (#1105). */}
+          {version.variants
+            .filter((v) => v.approvals.length > 0)
+            .map((v) => (
+              <div key={`approvals-${v.variantId}`} className="space-y-1">
+                <p className="text-xs font-medium text-foreground">{current.find((c) => c.variantId === v.variantId)?.name ?? ''}</p>
+                <ul className="space-y-1.5">
+                  {v.approvals.map((a, i) => (
+                    <li key={i} className="space-y-0.5">
+                      <p className="text-xs text-muted-foreground">{t('approvedBy', { who: a.decidedByName ?? t('formerMember'), when: f.dateTime(a.at) })}</p>
+                      <TickedChecks items={a.checklist} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
         </div>
       )}
     </li>

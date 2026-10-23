@@ -14,6 +14,7 @@ import { mentionsOf } from './domain/mentions.ts';
 import { NOT_PUBLIC_NOTES } from './domain/channels.ts';
 import { QUEUE_ORDER_COMMANDS, reorderCode } from './queue-order.ts';
 import { channelScope, connectionInScope, postsInScope, refuseChannels, refusePostOutside } from './channel-access.ts';
+import { tickedOf, type TickedCheck } from './review-checklist.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -165,6 +166,8 @@ export interface ActivityItem {
   // keeps unpublished (#981).
   url: string | null;
   code: string | null;
+  // On an approval: the review checklist items the reviewer ticked (#1105); null otherwise or without a checklist.
+  checklist: TickedCheck[] | null;
 }
 
 // The audited commands the timeline shows, by what they did. Decisions come from the decision rows, which carry the
@@ -219,7 +222,7 @@ export const postActivity = defineQuery({
         .execute(),
       ctx.trx
         .selectFrom('crove_social.post_approval')
-        .select(['id', 'variant_id', 'decision', 'comment', 'decided_by', 'created_at'])
+        .select(['id', 'variant_id', 'decision', 'comment', 'decided_by', 'created_at', 'checklist'])
         .where('org_id', '=', ctx.orgId)
         .where('post_id', '=', post.id)
         .orderBy('created_at', 'desc')
@@ -246,7 +249,7 @@ export const postActivity = defineQuery({
     const reposts = await repostCallsOf(ctx.trx, ctx.orgId, keyed);
     const viewer = ctx.actor.type === 'user' ? ctx.actor.userId : null;
     const now = Date.now();
-    const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null };
+    const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null, checklist: null };
     const items: ActivityItem[] = [
       { ...none, id: `created:${post.id}`, kind: 'created', at: post.created_at.toISOString(), userId: post.author_user_id, code: post.origin === 'ai' ? 'ai' : null },
       ...comments.map((c) => ({
@@ -260,7 +263,7 @@ export const postActivity = defineQuery({
         editedAt: c.edited_at?.toISOString() ?? null,
         editable: c.author_user_id === viewer && now - c.created_at.getTime() <= COMMENT_EDIT_MS,
       })),
-      ...decisions.map((d) => ({ ...none, id: d.id, kind: 'decision' as const, at: d.created_at.toISOString(), userId: d.decided_by, variantId: d.variant_id, body: d.comment, decision: d.decision })),
+      ...decisions.map((d) => ({ ...none, id: d.id, kind: 'decision' as const, at: d.created_at.toISOString(), userId: d.decided_by, variantId: d.variant_id, body: d.comment, decision: d.decision, checklist: tickedOf(d.checklist) })),
       ...audited.rows.map((a) => ({
         ...none,
         id: a.id,

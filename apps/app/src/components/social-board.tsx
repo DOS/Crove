@@ -23,6 +23,7 @@ import {
   BOARD_COLUMNS,
   boardRequest,
   checkMove,
+  needsChecklist,
   movesFrom,
   postColumn,
   sendBoardRequest,
@@ -223,6 +224,10 @@ export function SocialBoard({
     const request = boardRequest(found.post, check.move, Date.now());
     if (!request) {
       setNotice({ kind: 'refused', reason: 'nothing' });
+      return;
+    }
+    if (request.move === 'approve' && needsChecklist(found.post)) {
+      setNotice({ kind: 'refused', reason: 'checklist' });
       return;
     }
     setNotice(null);

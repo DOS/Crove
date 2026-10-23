@@ -140,7 +140,7 @@ suite('social post versions on PostgreSQL (#1021)', () => {
     ]);
     expect(list[0]?.createdByName).toEqual(expect.stringContaining('member-'));
     const variantId = (await get(o, postId)).variants[0]?.id as string;
-    expect(list[1]?.variants).toEqual([{ variantId, content: { body: 'Bản đầu', title: null, linkUrl: null, media: [{ fileId: first, altText: 'Áo đỏ', mime: 'image/jpeg' }], settings: {} } }]);
+    expect(list[1]?.variants).toEqual([{ variantId, content: { body: 'Bản đầu', title: null, linkUrl: null, media: [{ fileId: first, altText: 'Áo đỏ', mime: 'image/jpeg' }], settings: {} }, approvals: [] }]);
     expect(list[0]?.variants[0]?.content).toMatchObject({ body: 'Bản hai', media: [{ fileId: second, altText: null, mime: 'image/jpeg' }] });
 
     // A save that changes no content (the time zone) keeps no version; a channel's own text does.

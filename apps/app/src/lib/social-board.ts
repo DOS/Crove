@@ -86,7 +86,9 @@ export type BoardRefusal =
   // A failed channel is retried or cancelled on the post's page.
   | 'fromFailed'
   // None of the post's channels is in the state the move needs (a channel on its way out, say).
-  | 'nothing';
+  | 'nothing'
+  // A channel in review has a review checklist (#1105), which is ticked on the post's page.
+  | 'checklist';
 
 // From one column to another: the move, or why not. Same-column drops are no move at all (null).
 const MOVES: Readonly<Record<BoardColumn, Partial<Record<BoardColumn, BoardMove | BoardRefusal>>>> = {
@@ -134,7 +136,13 @@ export interface BoardVariant {
   status: string;
   revision: number;
   contentHash: string;
+  // The review checklist of its channel (#1105); absent or empty without one.
+  checklist?: readonly unknown[];
 }
+
+// Whether approving the post needs the review checklist (#1105) ticked, which the board cannot do: some channel in
+// review has items.
+export const needsChecklist = (post: BoardPost): boolean => post.variants.some((v) => v.status === 'in_review' && (v.checklist?.length ?? 0) > 0);
 export interface BoardPost {
   id: string;
   // The post's planned time, if any: a drop on Scheduled uses it when it is still ahead, else the channels' queues.
