@@ -2,21 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { localTime } from '@crove/mod-social/contract';
 import {
   BULK_EDIT_MAX,
+  BULK_REPLACE_MAX,
   assignInput,
   bulkRequest,
   editBatches,
   moveSummary,
+  previewSummary,
+  replaceKey,
   planMove,
   runBulk,
   runEdit,
   runMove,
+  runReplacePreview,
   shiftTime,
   toggleEditLabel,
   validLabelEdit,
   validMove,
+  validReplace,
   type BulkPost,
   type BulkVariant,
   type EditAnswer,
+  type ReplacePreviewPost,
 } from '../src/lib/social-bulk.ts';
 
 const v = (id: string, status: string, at: string | null = null, queueSlotAt: string | null = null): BulkVariant => ({
@@ -232,5 +238,52 @@ describe('labels and the assignee on many posts (#1057)', () => {
     expect(result.refused).toHaveLength(100);
     expect(result.refused[0]).toMatchObject({ postId: 'p100' });
     expect(result.refused.map((r) => (r.error as Error).message)[0]).toBe('ASSIGNEE_NOT_MEMBER');
+  });
+});
+
+describe('find and replace across posts (#1144)', () => {
+  const edit = { find: 'https://shop.example/spring', replace: 'https://shop.example/summer', caseSensitive: false, wholeWord: false };
+  const match = { variantId: null, connectionId: null, field: 'body' as const, before: 'Mua tại ', match: edit.find, after: '' };
+
+  it('takes something to find, within the bounds the server takes', () => {
+    expect(validReplace(edit)).toBe(true);
+    expect(validReplace({ ...edit, replace: '' })).toBe(true);
+    expect(validReplace({ ...edit, find: '' })).toBe(false);
+    expect(validReplace({ ...edit, find: 'x'.repeat(201) })).toBe(false);
+    expect(validReplace({ ...edit, replace: 'x'.repeat(2001) })).toBe(false);
+  });
+
+  it('previews the selection in batches the server takes, in order', async () => {
+    const ids = Array.from({ length: BULK_REPLACE_MAX + 3 }, (_, i) => `p${String(i).padStart(3, '0')}`);
+    const batches: string[][] = [];
+    const steps: number[] = [];
+    const posts = await runReplacePreview(
+      ids,
+      async (batch) => {
+        batches.push(batch);
+        return { posts: batch.map((postId) => ({ postId, skip: null, matches: [] })) };
+      },
+      (done) => steps.push(done),
+    );
+    expect(batches.map((b) => b.length)).toEqual([BULK_REPLACE_MAX, 3]);
+    expect(posts.map((p) => p.postId)).toEqual(ids);
+    expect(steps).toEqual([BULK_REPLACE_MAX, BULK_REPLACE_MAX + 3]);
+  });
+
+  it('counts the posts and matches that would change, and the posts left as they are', () => {
+    const posts: ReplacePreviewPost[] = [
+      { postId: 'a', skip: null, matches: [{ ...match, count: 2 }, { ...match, variantId: 'v', connectionId: 'c', field: 'first_comment', count: 1 }] },
+      { postId: 'b', skip: 'banned_words', matches: [{ ...match, count: 4 }] },
+      { postId: 'c', skip: 'no_match', matches: [] },
+    ];
+    expect(previewSummary(posts)).toEqual({ changes: 1, matches: 3, skipped: 2 });
+  });
+
+  it('asks for a new preview when the search, the replacement, an option or the selection changes', () => {
+    const key = replaceKey(edit, ['b', 'a']);
+    expect(replaceKey(edit, ['a', 'b'])).toBe(key);
+    expect(replaceKey({ ...edit, replace: 'x' }, ['a', 'b'])).not.toBe(key);
+    expect(replaceKey({ ...edit, wholeWord: true }, ['a', 'b'])).not.toBe(key);
+    expect(replaceKey(edit, ['a'])).not.toBe(key);
   });
 });

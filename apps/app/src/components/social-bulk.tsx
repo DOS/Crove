@@ -2,11 +2,13 @@
 // in their channels' queues, cancel them, or move them by days or hours (#945). Each post goes through its own command
 // (a move, one per channel); the result says what was done, what had nothing to do, and what was refused and why.
 // Labels and the assignee (#1057) are set on up to 100 posts per command, and the result names each post left out.
+// Find and replace (#1144) shows the server's preview of every match first; the replace changes what it listed.
 import { useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { cn } from '@crove/ui/lib/utils';
@@ -15,15 +17,22 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, queryClient } from '../lib/api.ts';
 import { fromLocalInput } from '../lib/social-assign.ts';
 import {
+  BULK_REPLACE_MAX,
   MOVE_MAX,
+  REPLACE_FIND_MAX,
+  REPLACE_WITH_MAX,
   assignInput,
   moveSummary,
+  previewSummary,
+  replaceKey,
   runBulk,
   runEdit,
   runMove,
+  runReplacePreview,
   toggleEditLabel,
   validLabelEdit,
   validMove,
+  validReplace,
   type AssignEdit,
   type BulkAction,
   type BulkMove,
@@ -36,6 +45,8 @@ import {
   type MovePostResult,
   type MoveUnit,
   type PostAction,
+  type ReplaceEdit,
+  type ReplacePreviewPost,
 } from '../lib/social-bulk.ts';
 import { LABEL_TONE, type LabelColor } from '../lib/social-labels.ts';
 
@@ -53,12 +64,15 @@ const reschedule = (m: { variantId: string; at: string }) => client.social.varia
 type AssignInput = { assigneeUserId: string | null; dueAt?: string | null };
 const editLabels = (edit: LabelEdit) => (postIds: string[]) => client.social.posts.bulkLabels({ postIds, add: edit.add, remove: edit.remove });
 const editAssign = (input: AssignInput) => (postIds: string[]) => client.social.posts.bulkAssign({ postIds, ...input });
+// Find and replace (#1144): the preview and the replace take the same input.
+const previewReplace = (edit: ReplaceEdit) => (postIds: string[]) => client.social.posts.bulkReplacePreview({ postIds, ...edit });
+const editReplace = (edit: ReplaceEdit) => (postIds: string[]) => client.social.posts.bulkReplace({ postIds, ...edit });
 
 type Outcome = { action: PostAction; result: BulkResult } | { action: 'move'; move: BulkMove; results: MovePostResult[] } | { action: EditAction; result: EditResult };
-type Job = { action: PostAction } | { action: 'move'; move: BulkMove } | { action: 'labels'; edit: LabelEdit } | { action: 'assign'; input: AssignInput };
+type Job = { action: PostAction } | { action: 'move'; move: BulkMove } | { action: 'labels'; edit: LabelEdit } | { action: 'assign'; input: AssignInput } | { action: 'replace'; edit: ReplaceEdit };
 // The forms the bar opens under its buttons.
 type Form = 'move' | EditAction;
-const FORMS: readonly BulkAction[] = ['move', 'labels', 'assign'];
+const FORMS: readonly BulkAction[] = ['move', 'labels', 'assign', 'replace'];
 
 export interface BulkLabelOption {
   id: string;
@@ -78,6 +92,7 @@ export function BulkBar({
   channelName,
   labelOptions = [],
   members = [],
+  findHint = '',
   onClear,
 }: {
   posts: BulkPost[];
@@ -90,6 +105,8 @@ export function BulkBar({
   labelOptions?: readonly BulkLabelOption[];
   // The org's members, for assigning.
   members?: readonly BulkMember[];
+  // What the find and replace starts searching for: the list's search, when there is one.
+  findHint?: string | undefined;
   onClear: () => void;
 }) {
   const t = useTranslations('social.bulk');
@@ -110,6 +127,12 @@ export function BulkBar({
   const [unit, setUnit] = useState<MoveUnit>('days');
   const [earlier, setEarlier] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // Find and replace (#1144): the form, and the preview with what it was made for.
+  const [replaceEdit, setReplaceEdit] = useState<ReplaceEdit>({ find: findHint ?? '', replace: '', caseSensitive: false, wholeWord: false });
+  const [preview, setPreview] = useState<{ key: string; posts: ReplacePreviewPost[] } | null>(null);
+  const ids = posts.map((p) => p.id);
+  const fresh = preview !== null && preview.key === replaceKey(replaceEdit, ids);
+  const summary = preview ? previewSummary(preview.posts) : { changes: 0, matches: 0, skipped: 0 };
   // The direction comes from the select alone: a typed minus sign never flips it.
   const move: BulkMove = { amount: (earlier ? -1 : 1) * Math.abs(Number(amount)), unit };
   const run = useMutation({
@@ -119,28 +142,41 @@ export function BulkBar({
       setResult(null);
     },
     mutationFn: async (job: Job): Promise<Outcome> => {
-      const step =(done: number, total: number) => setProgress({ done, total });
-      const ids = posts.map((p) => p.id);
+      const step = (done: number, total: number) => setProgress({ done, total });
       if (job.action === 'move') return { action: 'move', move: job.move, results: await runMove(posts, job.move, reschedule, step) };
       if (job.action === 'labels') return { action: 'labels', result: await runEdit(ids, editLabels(job.edit), step) };
       if (job.action === 'assign') return { action: 'assign', result: await runEdit(ids, editAssign(job.input), step) };
+      if (job.action === 'replace') return { action: 'replace', result: await runEdit(ids, editReplace(job.edit), step, BULK_REPLACE_MAX) };
       return { action: job.action, result: await runBulk(posts, job.action, canDecide, send) };
     },
     onSuccess: (r) => {
       setResult(r);
       setForm(null);
+      setPreview(null);
       onClear();
       void queryClient.invalidateQueries();
     },
     onSettled: () => setProgress(null),
   });
+  const previewing = useMutation({
+    onMutate: () => {
+      setProgress(null);
+      setPreview(null);
+    },
+    mutationFn: async (edit: ReplaceEdit) => ({ key: replaceKey(edit, ids), posts: await runReplacePreview(ids, previewReplace(edit), (done, total) => setProgress({ done, total })) }),
+    onSuccess: setPreview,
+    onSettled: () => setProgress(null),
+  });
+  const busy = run.isPending || previewing.isPending;
   const snapshot = () => {
     setResult(null);
     setLabels(new Map(posts.map((p) => [p.id, excerptOf(p.id)])));
     setChannels(new Map(posts.flatMap((p) => p.variants.map((v) => [v.id, channelName(v.connectionId)] as const))));
   };
   const start = (action: BulkAction) => {
-    if (action === 'move' || action === 'labels' || action === 'assign') {
+    if (action === 'move' || action === 'labels' || action === 'assign' || action === 'replace') {
+      // An empty search box starts from the list's search.
+      if (action === 'replace' && replaceEdit.find === '' && findHint) setReplaceEdit({ ...replaceEdit, find: findHint });
       setForm((open) => (open === action ? null : action));
       return;
     }
@@ -162,6 +198,17 @@ export function BulkBar({
     if (!assignment) return;
     snapshot();
     run.mutate({ action: 'assign', input: assignment });
+  };
+  const showPreview = () => {
+    if (!validReplace(replaceEdit)) return;
+    snapshot();
+    previewing.mutate(replaceEdit);
+  };
+  // Only what the preview on screen was made for.
+  const applyReplace = () => {
+    if (!fresh || summary.changes === 0) return;
+    snapshot();
+    run.mutate({ action: 'replace', edit: replaceEdit });
   };
   const postName = (postId: string) => labels.get(postId) ?? excerptOf(postId);
   const channel = (variantId: string) => channels.get(variantId) ?? variantId;
@@ -200,11 +247,11 @@ export function BulkBar({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-foreground">{t('selected', { count: posts.length })}</span>
             {shown.map((a) => (
-              <Button key={a} size="sm" variant={a === 'cancel' || form === a ? 'outline' : 'default'} disabled={run.isPending} aria-expanded={FORMS.includes(a) ? form === a : undefined} onClick={() => start(a)}>
+              <Button key={a} size="sm" variant={a === 'cancel' || form === a ? 'outline' : 'default'} disabled={busy} aria-expanded={FORMS.includes(a) ? form === a : undefined} onClick={() => start(a)}>
                 {t(`action.${a}`)}
               </Button>
             ))}
-            <Button size="sm" variant="ghost" disabled={run.isPending} onClick={onClear}>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={onClear}>
               {t('clear')}
             </Button>
           </div>
@@ -228,10 +275,10 @@ export function BulkBar({
                   <NativeSelectOption value="hours">{t('move.hours')}</NativeSelectOption>
                 </NativeSelect>
               </label>
-              <Button size="sm" disabled={run.isPending || !validMove(move)} onClick={apply}>
+              <Button size="sm" disabled={busy || !validMove(move)} onClick={apply}>
                 {t('move.apply')}
               </Button>
-              <Button size="sm" variant="ghost" disabled={run.isPending} onClick={() => setForm(null)}>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setForm(null)}>
                 {t('move.close')}
               </Button>
               <p className="w-full text-muted-foreground">{t('move.hint')}</p>
@@ -242,10 +289,10 @@ export function BulkBar({
               {labelRow('add')}
               {labelRow('remove')}
               <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" disabled={run.isPending || !validLabelEdit(labelEdit)} onClick={applyLabels}>
+                <Button size="sm" disabled={busy || !validLabelEdit(labelEdit)} onClick={applyLabels}>
                   {t('labels.apply')}
                 </Button>
-                <Button size="sm" variant="ghost" disabled={run.isPending} onClick={() => setForm(null)}>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setForm(null)}>
                   {t('move.close')}
                 </Button>
               </div>
@@ -283,19 +330,60 @@ export function BulkBar({
                   <Input type="datetime-local" className="mt-1 w-52" value={dueValue} onChange={(e) => setDueValue(e.target.value)} />
                 </label>
               )}
-              <Button size="sm" disabled={run.isPending || !assignment} onClick={applyAssign}>
+              <Button size="sm" disabled={busy || !assignment} onClick={applyAssign}>
                 {t('assign.apply')}
               </Button>
-              <Button size="sm" variant="ghost" disabled={run.isPending} onClick={() => setForm(null)}>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setForm(null)}>
                 {t('move.close')}
               </Button>
               <p className="w-full text-muted-foreground">{t('assign.hint')}</p>
             </div>
           )}
-          {progress && <p className="text-xs text-muted-foreground">{t(form === 'labels' || form === 'assign' ? 'edit.progress' : 'move.progress', { done: progress.done, total: progress.total })}</p>}
+          {form === 'replace' && (
+            <div className="space-y-2 text-xs">
+              <div className="flex flex-wrap items-end gap-2">
+                <label>
+                  <span className="text-subtle-foreground">{t('replace.find')}</span>
+                  <Input className="mt-1 w-56" maxLength={REPLACE_FIND_MAX} value={replaceEdit.find} onChange={(e) => setReplaceEdit({ ...replaceEdit, find: e.target.value })} />
+                </label>
+                <label>
+                  <span className="text-subtle-foreground">{t('replace.with')}</span>
+                  <Input className="mt-1 w-56" maxLength={REPLACE_WITH_MAX} value={replaceEdit.replace} onChange={(e) => setReplaceEdit({ ...replaceEdit, replace: e.target.value })} />
+                </label>
+                <label className="flex items-center gap-1.5 pb-2">
+                  <Checkbox checked={replaceEdit.caseSensitive} onCheckedChange={(on) => setReplaceEdit({ ...replaceEdit, caseSensitive: on === true })} />
+                  <span>{t('replace.caseSensitive')}</span>
+                </label>
+                <label className="flex items-center gap-1.5 pb-2">
+                  <Checkbox checked={replaceEdit.wholeWord} onCheckedChange={(on) => setReplaceEdit({ ...replaceEdit, wholeWord: on === true })} />
+                  <span>{t('replace.wholeWord')}</span>
+                </label>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="outline" disabled={busy || !validReplace(replaceEdit)} onClick={showPreview}>
+                  {t('replace.preview')}
+                </Button>
+                <Button size="sm" disabled={busy || !fresh || summary.changes === 0} onClick={applyReplace}>
+                  {t('replace.apply', { count: fresh ? summary.changes : 0 })}
+                </Button>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setForm(null)}>
+                  {t('move.close')}
+                </Button>
+              </div>
+              <p className="text-muted-foreground">{t('replace.hint')}</p>
+              {preview && !fresh && <p className="text-warning">{t('replace.stale')}</p>}
+              {preview && fresh && <ReplacePreview posts={preview.posts} replacement={replaceEdit.replace} postName={postName} channelName={channelName} />}
+            </div>
+          )}
+          {progress && (
+            <p className="text-xs text-muted-foreground">
+              {t(previewing.isPending ? 'replace.progress' : form === 'labels' || form === 'assign' || form === 'replace' ? 'edit.progress' : 'move.progress', { done: progress.done, total: progress.total })}
+            </p>
+          )}
         </Card>
       )}
       {run.error && <ErrorText>{errorMessage(run.error)}</ErrorText>}
+      {previewing.error && <ErrorText>{errorMessage(previewing.error)}</ErrorText>}
       {result?.action === 'move' && (
         <Card className="block space-y-2 p-3 text-sm">
           <p className="text-foreground">
@@ -323,7 +411,7 @@ export function BulkBar({
           ))}
         </Card>
       )}
-      {(result?.action === 'labels' || result?.action === 'assign') && (
+      {(result?.action === 'labels' || result?.action === 'assign' || result?.action === 'replace') && (
         <Card className="block space-y-1 p-3 text-sm">
           <p className="text-foreground">{t('edit.result', { action: t(`action.${result.action}`), done: result.result.done.length, skipped: result.result.skipped.length, refused: result.result.refused.length })}</p>
           {result.result.skipped.map((s) => (
@@ -348,6 +436,49 @@ export function BulkBar({
           ))}
         </Card>
       )}
+    </div>
+  );
+}
+
+// The server's preview of a find and replace (#1144): per post, each field where the text matches, how often, and the
+// first match in its context with what replaces it; a post left out says why.
+export function ReplacePreview({
+  posts,
+  replacement,
+  postName,
+  channelName,
+}: {
+  posts: readonly ReplacePreviewPost[];
+  replacement: string;
+  postName: (postId: string) => string;
+  channelName: (connectionId: string) => string;
+}) {
+  const t = useTranslations('social.bulk');
+  return (
+    <div className="space-y-2">
+      <p className="text-foreground">{t('replace.summary', previewSummary(posts))}</p>
+      <ul className="max-h-80 space-y-2 overflow-y-auto">
+        {posts.map((p) => (
+          <li key={p.postId} className="space-y-0.5">
+            <p className="text-foreground">
+              {postName(p.postId)}
+              {p.skip && <span className="text-muted-foreground"> · {t('replace.left', { reason: t(`edit.skip.${p.skip}`) })}</span>}
+            </p>
+            {p.matches.map((m) => (
+              <p key={`${m.variantId ?? 'post'}:${m.field}`} className="break-words text-muted-foreground">
+                <span className="text-subtle-foreground">
+                  {m.connectionId ? t('replace.onChannel', { field: t(`replace.field.${m.field}`), channel: channelName(m.connectionId) }) : t('replace.onPost', { field: t(`replace.field.${m.field}`) })} (
+                  {t('replace.count', { count: m.count })}):
+                </span>{' '}
+                {m.before}
+                <del className="rounded-sm bg-destructive/10 line-through decoration-destructive">{m.match}</del>
+                {p.skip === null && <ins className="rounded-sm bg-success/15 text-foreground no-underline">{replacement}</ins>}
+                {m.after}
+              </p>
+            ))}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

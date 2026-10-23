@@ -223,7 +223,8 @@ export function bannedSummary(matches: readonly BannedFieldMatch[]): BannedField
 
 const blocking = (matches: readonly BannedFieldMatch[]) => matches.filter((m) => m.level === 'block');
 
-const tooComplex = () =>
+// The refusal of a command whose check ran out of its budget.
+export const bannedTooComplex = () =>
   new DomainError('BANNED_WORDS_TOO_COMPLEX', 422, 'Bài quá dài hoặc danh sách từ cấm quá lớn để kiểm tra; hãy rút gọn bài hoặc danh sách từ cấm rồi thử lại');
 
 /**
@@ -238,7 +239,7 @@ export async function refuseBannedWords(ctx: Pick<CommandContext, 'trx' | 'orgId
       .map((v) => ({ variantId: v.id, words: bannedSummary(blocking(check(post, v))).map((m) => ({ wordId: m.wordId, phrase: m.phrase, field: m.field, reason: m.reason })) }))
       .filter((x) => x.words.length > 0);
   } catch (error) {
-    if (error instanceof BannedWordsTooComplex) throw tooComplex();
+    if (error instanceof BannedWordsTooComplex) throw bannedTooComplex();
     throw error;
   }
   if (blocked.length === 0) return;

@@ -1,14 +1,14 @@
 // Acting on many posts at once from the Social home lists (#635). Each post still goes through its own command, on
 // what the list shows: one refused post does not stop the others, and the result says what was done and what was
 // refused, with the reason.
-import { SOCIAL_BULK_EDIT_MAX, type SocialBulkSkipReason } from '@crove/kernel-contract';
+import { SOCIAL_BULK_EDIT_MAX, SOCIAL_BULK_REPLACE_MAX, SOCIAL_REPLACE_FIND_MAX, SOCIAL_REPLACE_WITH_MAX, type SocialBulkSkipReason, type SocialReplaceField } from '@crove/kernel-contract';
 import { localTime, zonedToEpoch } from '@crove/mod-social/contract';
 import { CANCELLABLE } from './social.ts';
 import { MAX_LABELS_PER_POST } from './social-labels.ts';
 
-export type BulkAction = 'approve' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign';
-// The edits the server makes for many posts in one command (#1057): labels and the assignee.
-export type EditAction = 'labels' | 'assign';
+export type BulkAction = 'approve' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign' | 'replace';
+// The edits the server makes for many posts in one command: labels and the assignee (#1057), find and replace (#1144).
+export type EditAction = 'labels' | 'assign' | 'replace';
 // The actions that send one command per post; a move sends one per channel (runMove).
 export type PostAction = Exclude<BulkAction, 'move' | EditAction>;
 
@@ -213,7 +213,7 @@ export function assignInput(edit: AssignEdit): { assigneeUserId: string | null; 
 }
 
 // The selection in batches the server takes, in the order shown.
-export function editBatches(postIds: readonly string[], size = BULK_EDIT_MAX): string[][] {
+export function editBatches(postIds: readonly string[], size: number = BULK_EDIT_MAX): string[][] {
   const out: string[][] = [];
   for (let i = 0; i < postIds.length; i += size) out.push(postIds.slice(i, i + size));
   return out;
@@ -230,10 +230,15 @@ export interface EditResult extends EditAnswer {
 
 // One batch after another; a batch refused as a whole does not stop the next, as runBulk goes on past a refusal.
 // progress counts the posts sent.
-export async function runEdit(postIds: readonly string[], send: (postIds: string[]) => Promise<EditAnswer>, progress?: (done: number, total: number) => void): Promise<EditResult> {
+export async function runEdit(
+  postIds: readonly string[],
+  send: (postIds: string[]) => Promise<EditAnswer>,
+  progress?: (done: number, total: number) => void,
+  size: number = BULK_EDIT_MAX,
+): Promise<EditResult> {
   const result: EditResult = { done: [], skipped: [], refused: [] };
   let sent = 0;
-  for (const batch of editBatches(postIds)) {
+  for (const batch of editBatches(postIds, size)) {
     try {
       const answer = await send(batch);
       result.done.push(...answer.done);
@@ -246,3 +251,58 @@ export async function runEdit(postIds: readonly string[], send: (postIds: string
   }
   return result;
 }
+
+// Find and replace across the selected posts (#1144): the server previews, per post, where the text matches and why a
+// post would be left out, then replaces in batches of up to SOCIAL_BULK_REPLACE_MAX posts. The pattern is plain text.
+export const BULK_REPLACE_MAX = SOCIAL_BULK_REPLACE_MAX;
+export const REPLACE_FIND_MAX = SOCIAL_REPLACE_FIND_MAX;
+export const REPLACE_WITH_MAX = SOCIAL_REPLACE_WITH_MAX;
+
+export interface ReplaceEdit {
+  find: string;
+  replace: string;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+}
+
+export const validReplace = (edit: ReplaceEdit): boolean => edit.find.length > 0 && edit.find.length <= REPLACE_FIND_MAX && edit.replace.length <= REPLACE_WITH_MAX;
+
+export interface ReplaceMatch {
+  variantId: string | null;
+  connectionId: string | null;
+  field: SocialReplaceField;
+  count: number;
+  before: string;
+  match: string;
+  after: string;
+}
+export interface ReplacePreviewPost {
+  postId: string;
+  skip: SocialBulkSkipReason | null;
+  matches: ReplaceMatch[];
+}
+
+// The preview of every post, batch after batch, in the order the server answers (by id within a batch).
+export async function runReplacePreview(
+  postIds: readonly string[],
+  send: (postIds: string[]) => Promise<{ posts: ReplacePreviewPost[] }>,
+  progress?: (done: number, total: number) => void,
+): Promise<ReplacePreviewPost[]> {
+  const out: ReplacePreviewPost[] = [];
+  let sent = 0;
+  for (const batch of editBatches(postIds, BULK_REPLACE_MAX)) {
+    out.push(...(await send(batch)).posts);
+    sent += batch.length;
+    progress?.(sent, postIds.length);
+  }
+  return out;
+}
+
+// The posts that would change and their matches, and the posts left as they are.
+export function previewSummary(posts: readonly ReplacePreviewPost[]): { changes: number; matches: number; skipped: number } {
+  const changing = posts.filter((p) => p.skip === null);
+  return { changes: changing.length, matches: changing.reduce((n, p) => n + p.matches.reduce((m, x) => m + x.count, 0), 0), skipped: posts.length - changing.length };
+}
+
+// What a preview was made for: another search, replacement, option or selection needs a new preview first.
+export const replaceKey = (edit: ReplaceEdit, postIds: readonly string[]): string => JSON.stringify([edit.find, edit.replace, edit.caseSensitive, edit.wholeWord, [...postIds].sort()]);
