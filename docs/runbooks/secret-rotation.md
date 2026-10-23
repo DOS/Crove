@@ -14,7 +14,13 @@ A leak is also a security incident: contain it with this runbook, then follow [i
 
 - Work on the server in the stack directory (`/opt/crove`), as in [incidents.md](incidents.md). Service names are those of the all-in-one layout (`crove`); in the split layout, `api` and `worker` take the same settings, and `docker compose up -d` restarts both.
 - Generate every new value on the server with `openssl rand -hex 32`: 64 characters with no `$`, which docker compose would expand, and no quote, which the SQL below would break on.
-- Put the new value in `.env` with a `sed` like the ones below, so it never appears on a command line or in the shell history, then copy it into the owner's secret store. The commands below that read a value back from `.env` (`grep ... | cut -d= -f2-`) expect it unquoted, as these `sed` lines write it. Keep the old value there until the last step of the procedure, so you can go back.
+- Put the new value in `.env` with this shell function, so it never appears in a command's arguments (which other users of the server can list with `ps`) or in the shell history. It replaces the line `NAME=...` (which must exist, as it does in a `.env` made from `.env.example`) and keeps the file's owner and mode:
+
+  ```bash
+  rotate() ( umask 077; V="$(openssl rand -hex 32)" awk -v k="$1" -F= '$1 == k { print k "=" ENVIRON["V"]; next } { print }' .env > .env.new && cat .env.new > .env && rm .env.new )
+  ```
+
+  Then copy the new value from `.env` into the owner's secret store. The commands below that read a value back from `.env` (`grep ... | cut -d= -f2-`) expect it unquoted, as `rotate` writes it. Keep the old value in the secret store until the last step of the procedure, so you can go back.
 - `docker compose up -d` applies `.env`: it runs `migrate` first, then recreates every service whose settings changed. The app is unavailable while it restarts (about 15 s on the test stack below), so rotate at a quiet time and tell the design partner beforehand when it is planned.
 
 ## 1. Database login passwords
@@ -37,11 +43,11 @@ Connections from inside the `db` container over its socket or `127.0.0.1` need n
 1. Replace the values you rotate (one, several or all five) in `.env`, for example:
 
    ```bash
-   sed -i "s|^CROVE_APP_DB_PASSWORD=.*|CROVE_APP_DB_PASSWORD=$(openssl rand -hex 32)|" .env
-   sed -i "s|^CROVE_WORKER_DB_PASSWORD=.*|CROVE_WORKER_DB_PASSWORD=$(openssl rand -hex 32)|" .env
-   sed -i "s|^CROVE_PROBER_DB_PASSWORD=.*|CROVE_PROBER_DB_PASSWORD=$(openssl rand -hex 32)|" .env
-   sed -i "s|^CROVE_REPORTER_DB_PASSWORD=.*|CROVE_REPORTER_DB_PASSWORD=$(openssl rand -hex 32)|" .env
-   sed -i "s|^AUTH_DB_PASSWORD=.*|AUTH_DB_PASSWORD=$(openssl rand -hex 32)|" .env
+   rotate CROVE_APP_DB_PASSWORD
+   rotate CROVE_WORKER_DB_PASSWORD
+   rotate CROVE_PROBER_DB_PASSWORD
+   rotate CROVE_REPORTER_DB_PASSWORD
+   rotate AUTH_DB_PASSWORD
    ```
 
    Copy the new values into the secret store.
@@ -79,7 +85,7 @@ Connections from inside the `db` container over its socket or `127.0.0.1` need n
 1. Replace the value in `.env`:
 
    ```bash
-   sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 32)|" .env
+   rotate POSTGRES_PASSWORD
    ```
 
 2. Set it in the database, over the trusted socket, with the value read from `.env` on stdin:
@@ -119,7 +125,7 @@ So the only cost is the window between switching the mail worker and the kernel 
 1. Generate the new value into `.env`, without applying it yet:
 
    ```bash
-   sed -i "s|^INBOUND_SECRET=.*|INBOUND_SECRET=$(openssl rand -hex 32)|" .env
+   rotate INBOUND_SECRET
    grep '^INBOUND_SECRET=' .env      # copy the value into the secret store, next to the old one
    ```
 
@@ -158,7 +164,7 @@ Whoever holds the webhook can post into the alert chat (or, for Telegram, act as
    - **Slack:** add a new incoming webhook for the same channel (the Slack app's **Incoming Webhooks** page). Keep the old one until step 5.
    - **Discord:** in the channel's **Settings**, **Integrations**, **Webhooks**, create a new webhook and copy its URL. Keep the old one until step 5.
    - **A heartbeat check** (Healthchecks.io, Uptime Kuma, Better Stack): create a new check with the same period, grace and alerts ([alerts.md](alerts.md), section 3) and copy its ping URL.
-2. Replace the value in `.env` with an editor (`nano .env`; the URL contains `/` and `&`, which make a `sed` one-liner fragile), and copy it into the secret store.
+2. Replace the value in `.env` with an editor (`nano .env`; the vendor issues the URL, so `rotate` does not apply), and copy it into the secret store.
 3. Apply it:
 
    ```bash
@@ -184,7 +190,7 @@ Whoever holds the webhook can post into the alert chat (or, for Telegram, act as
 Tried on 2026-10-23 on a local compose stack of `main` (commit `8d5ca026`), in its own compose project with throwaway values, `INBOUND_DOMAIN` set, the prober profile on, and a small HTTP receiver standing in for the alert webhook and the heartbeat monitor (`ALERT_WEBHOOK_FORMAT=generic`). The stack and its volumes were removed afterwards.
 
 - **Login passwords (1.1):** all five rotated in one `docker compose up -d`. Afterwards each old password was refused over the network (`password authentication failed`) and each new one accepted; `/readyz` was ready, the worker's heartbeat was recent, `prober` and `usage-report` exited 0, a sign-up and a password sign-in through `/auth/v1` worked, and the logs had no authentication failure. `/readyz` and `/auth/v1/health` were unavailable for about 14 s while the services restarted.
-- **`postgres` (1.2):** after the `ALTER ROLE`, the old password was refused and the new one accepted; `docker compose up -d` recreated `db`, `migrate` and `auth-grants` exited 0 with the new `ADMIN_DATABASE_URL`, and `/readyz` failed for about 1 s. The stdin form of the check in 1.1, step 4, and the `ALTER ROLE` pipe were tried again on a separate throwaway PostgreSQL 17: no password appeared in the server log or in `pg_stat_activity`.
+- **`postgres` (1.2):** after the `ALTER ROLE`, the old password was refused and the new one accepted; `docker compose up -d` recreated `db`, `migrate` and `auth-grants` exited 0 with the new `ADMIN_DATABASE_URL`, and `/readyz` failed for about 1 s. The stdin form of the check in 1.1, step 4, and the `ALTER ROLE` pipe were tried again on a separate throwaway PostgreSQL 17: no password appeared in the server log or in `pg_stat_activity`. The `rotate` function was tried on a copy of a `.env`: it replaced only the named lines with 64 hex characters and left every other line as it was.
 - **`INBOUND_SECRET` (2):** messages were relayed with `relay()` from `tools/inbound-mail/worker.js` itself, one per second, from switching the worker's value until well after the restart. Between the switch and the kernel's restart, each one got 401 and the worker threw (the retry path); during the restart, a connection error (the same path); from the restart on (about 11 s after the switch), each one was accepted. Relaying the 8 refused messages again, as their senders would, got all 8 accepted: 41 messages accepted in all, and 41 `kernel-inbound-email` jobs queued. The old value then got 401.
 - **Webhook and heartbeat URLs (3):** after `docker compose up -d`, the `crove` and prober containers held the new `ALERT_WEBHOOK_URL` (hashes matched), and the test alert, a probe's heartbeat ping and `usage-report --post` all reached only the new URLs.
 
