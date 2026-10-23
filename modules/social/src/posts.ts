@@ -29,6 +29,7 @@ import { notificationCommands, notificationQueries } from './notifications.ts';
 import { reminderCommands } from './reminders.ts';
 import { QUEUE_LOW_DAYS_MAX, QUEUE_LOW_DAYS_MIN, queueLowCommands } from './queue-low.ts';
 import { digestCommands } from './digest.ts';
+import { outperformingCommands } from './outperforming.ts';
 import { assignCommands } from './assign.ts';
 import { bulkEditCommands } from './bulk-edit.ts';
 import { bulkDraftCommands } from './bulk-drafts.ts';
@@ -1769,6 +1770,7 @@ export const socialCommands = [
   ...reviewChecklistCommands,
   ...queueLowCommands,
   ...digestCommands,
+  ...outperformingCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
 // org shows, or a variant's video cover, so the job never reads another kind of file through it.
