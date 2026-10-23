@@ -143,18 +143,19 @@ export function ShellNav({ slug, groups, badges, orgs, email, onOpenPalette, pal
       {/* The menu scrolls on a short window, so the account menu below it always stays on screen. */}
       <nav aria-label={t('menu')} className="mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto">
         {groups.map((group, index) => {
-          const headingId = `${orgSelectId}-${group.id}`;
+          const labelId = `${orgSelectId}-${group.id}`;
           return (
             // A group without a visible heading still has a name for screen readers.
             <section
               key={group.id}
               className={index === 0 ? '' : 'mt-3'}
-              {...(NO_HEADING.has(group.id) ? { 'aria-label': t(`groups.${group.id}`) } : { 'aria-labelledby': headingId })}
+              {...(NO_HEADING.has(group.id) ? { 'aria-label': t(`groups.${group.id}`) } : { 'aria-labelledby': labelId })}
             >
               {!NO_HEADING.has(group.id) && (
-                <h2 id={headingId} className="px-3 pb-1 text-xs font-medium text-subtle-foreground">
+                // A label, not a heading: the page's own heading stays the only one with a screen's name ("Khách hàng").
+                <p id={labelId} className="px-3 pb-1 text-xs font-medium text-subtle-foreground">
                   {t(`groups.${group.id}`)}
-                </h2>
+                </p>
               )}
               <ul className="flex flex-col gap-0.5">
                 {group.items.map((item) => {
@@ -185,13 +186,14 @@ export function ShellNav({ slug, groups, badges, orgs, email, onOpenPalette, pal
   );
 }
 
-// The account at the foot of the menu: its email opens support, status, language and theme; sign out stays in view
-// (#516), under it.
+// The account at the foot of the menu: the support link (#310) stays in view, the email opens status, language and
+// theme, and sign out stays in view (#516) under it.
 function AccountMenu({ email }: { email: string | undefined }) {
   const t = useTranslations('nav');
   const tc = useTranslations('common');
   return (
     <div className="mt-3 shrink-0 border-t pt-2">
+      <SupportLink className="mb-1 block px-2 text-sm text-link" />
       <details className="group">
         <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground [&::-webkit-details-marker]:hidden">
           <span className="sr-only">{t('account')}: </span>
@@ -199,7 +201,6 @@ function AccountMenu({ email }: { email: string | undefined }) {
           <NavIcon name="expand" className="transition-transform group-open:rotate-180 motion-reduce:transition-none" />
         </summary>
         <div className="mt-2 flex flex-col gap-2 px-2 pb-1 text-xs text-subtle-foreground">
-          <SupportLink className="text-sm text-link" />
           <StatusLink className="text-sm text-link" />
           {/* One per row: side by side, both names were cut off at the sidebar's width. */}
           <LocaleSwitcher className="w-full text-muted-foreground" />

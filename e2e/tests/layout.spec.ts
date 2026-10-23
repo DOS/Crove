@@ -68,7 +68,7 @@ test.describe('at phone width', () => {
     const open = page.getByRole('button', { name: 'Mở menu' });
     await open.click();
     const drawer = page.getByRole('dialog', { name: 'Menu chính' });
-    await expect(drawer.getByRole('heading', { name: 'Kế toán' })).toBeVisible();
+    await expect(drawer.getByRole('region', { name: 'Kế toán' }).getByRole('link', { name: 'Sổ sách' })).toBeVisible();
     await expect(drawer.getByRole('button', { name: 'Đăng xuất', exact: true })).toBeVisible();
     await drawer.getByRole('link', { name: 'Sổ sách' }).click();
     await expect(page).toHaveURL(/\/ledger$/);
