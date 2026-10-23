@@ -24,7 +24,7 @@ import { PostLabels, useLabels, type SocialLabel } from '../components/social-la
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
 import { DraftsFromMediaPanel } from '../components/social-bulk-drafts.tsx';
-import { DraftFromPhotoLink } from '../components/social-ai-photos.tsx';
+import { DraftFromPhotoLink, useAiPhotos } from '../components/social-ai-photos.tsx';
 import { DRAFTS_FROM_MEDIA_MAX, togglePick } from '../lib/social-bulk-drafts.ts';
 import { PlanFromPosts, PlanReviewCard } from '../components/social-plan-review.tsx';
 import { ReportLinks } from '../components/social-report-links.tsx';
@@ -328,6 +328,8 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const picker = useRef<HTMLInputElement>(null);
   // Free photos from Pexels (#1106), for those who may add to the library, when the server offers them.
   const stockEnabled = useStockPhotosEnabled();
+  // *Soạn bài từ ảnh này* (#1191) where the server's model reads images (#1196).
+  const aiPhotos = useAiPhotos(canWrite && getConfig().aiEnabled === true);
   const [stock, setStock] = useState(false);
   const library = useLibrary(search, tag);
   const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
@@ -452,7 +454,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
                   </a>
                 </div>
               )}
-              {canWrite && getConfig().aiEnabled === true && <DraftFromPhotoLink slug={slug} item={open} />}
+              {canWrite && aiPhotos && <DraftFromPhotoLink slug={slug} item={open} />}
               <MediaTagEditor key={`${open.fileId}:${open.tags.join('\n')}`} fileId={open.fileId} tags={open.tags} canWrite={canWrite} />
               <p className="text-sm font-medium text-muted-foreground">{t('libraryUsageTitle')}</p>
               <Usage fileId={open.fileId} slug={slug} />

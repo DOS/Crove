@@ -4,6 +4,7 @@
 // its own users, created confirmed without the sign-up form (signInNewUser: the suite shares one sign-up budget), and
 // its own org. States the worker reaches only on a real platform (a refusal, an unknown outcome, a metrics
 // capture) are written with SQL, as social.spec.ts moves a slot forward.
+import { randomUUID } from 'node:crypto';
 import { crc32, deflateSync } from 'node:zlib';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { exec, sql } from '../lib/db.ts';
@@ -248,6 +249,63 @@ test('keeps uploaded images in the library with the posts that use them', async 
   await expect(page.getByText('Bài đang dùng ảnh này')).toBeVisible();
   await expect(page.getByRole('link', { name: /Bài đầu tiên có ảnh/ })).toBeVisible();
   await expect(page.getByRole('link', { name: /Bài thứ hai dùng lại ảnh/ })).toBeVisible();
+});
+
+test('imports a sheet with images, alt texts, labels and a first comment as drafts with their media (#1258)', async ({ page }) => {
+  await signInNewUser(page, newEmail('social-csv-media'));
+  await createOrg(page, 'Công ty Nhập Ảnh');
+  await connectSandbox(page, 'Trang Nhập Ảnh');
+
+  // Two images in the library, uploaded with a draft.
+  await compose(page, 'Bài tải ảnh lên thư viện');
+  await page.locator('input[type="file"]').setInputFiles([
+    { name: 'mat-tien.png', mimeType: 'image/png', buffer: solidPng(40, 30) },
+    { name: 'quay-pha-che.png', mimeType: 'image/png', buffer: solidPng(30, 40) },
+  ]);
+  await expect(page.getByText('2/20')).toBeVisible();
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+
+  // The sheet: images by library name (any case), their alt texts one per line, labels, a first comment; a row whose
+  // image URL is on a private address (the API's egress guard refuses it before any connection) and one with a file
+  // the library does not have show their problems and are not created. The texts carry this run's mark, so the
+  // database reads find this test's posts only.
+  const run = randomUUID().slice(0, 8);
+  const sheet =
+    'text,channels,media,alt,first_comment,labels\r\n' +
+    `"Khai trương chi nhánh mới, giảm 20% ${run}",Trang Nhập Ảnh,"MAT-TIEN.png\nquay-pha-che.png","Mặt tiền chi nhánh\nQuầy pha chế",Xem thực đơn ở trang của quán,"Khai trương, Tháng 11"\r\n` +
+    `Bài có ảnh nội bộ ${run},Trang Nhập Ảnh,https://127.0.0.1/anh.jpg,,,Tháng 11\r\n` +
+    `Bài thiếu ảnh ${run},Trang Nhập Ảnh,khong-co.jpg,,,\r\n`;
+  await page.getByRole('link', { name: 'Quay lại' }).click();
+  await page.getByRole('link', { name: 'Nhập từ tệp' }).click();
+  await page.getByLabel('Chọn tệp CSV hoặc Excel').setInputFiles([{ name: 'ke-hoach.csv', mimeType: 'text/csv', buffer: Buffer.from(sheet) }]);
+  await expect(page.getByText('1 trên 3 dòng sẵn sàng.')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('Không tải ảnh từ "https://127.0.0.1/anh.jpg" vì đây là địa chỉ trong mạng nội bộ')).toBeVisible();
+  await expect(page.getByText('Không thấy tệp "khong-co.jpg" trong thư viện ảnh')).toBeVisible();
+  await expect(page.getByText('Sẽ tạo 2 nhãn mới: Khai trương, Tháng 11')).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Ảnh của dòng 2' }).getByRole('listitem')).toHaveCount(2);
+  await expect(page.getByText('2/2 ảnh')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Tạo 1 bản nháp' }).click();
+  await expect(page).toHaveURL(/\/social$/);
+  const [post] = sql<{ id: string; media: { name: string; alt: string | null }[]; labels: string[]; comments: string[] }>(
+    `SELECT p.id,
+            (SELECT json_agg(json_build_object('name', f.filename, 'alt', m.alt_text) ORDER BY m.position) FROM crove_social.post_media m JOIN crove_kernel.file f ON f.org_id = m.org_id AND f.id = m.file_id WHERE m.org_id = p.org_id AND m.post_id = p.id) AS media,
+            (SELECT json_agg(l.name ORDER BY l.name) FROM crove_social.post_label pl JOIN crove_social.label l ON l.org_id = pl.org_id AND l.id = pl.label_id WHERE pl.org_id = p.org_id AND pl.post_id = p.id) AS labels,
+            (SELECT json_agg(v.settings->>'firstComment') FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status = 'draft') AS comments
+       FROM crove_social.post p WHERE p.body = :'body'`,
+    { body: `Khai trương chi nhánh mới, giảm 20% ${run}` },
+  );
+  expect(post?.media).toEqual([
+    { name: 'mat-tien.png', alt: 'Mặt tiền chi nhánh' },
+    { name: 'quay-pha-che.png', alt: 'Quầy pha chế' },
+  ]);
+  expect(post?.labels).toEqual(['Khai trương', 'Tháng 11']);
+  expect(post?.comments).toEqual(['Xem thực đơn ở trang của quán']);
+  expect(sql<{ n: number }>(`SELECT count(*)::int AS n FROM crove_social.post WHERE body IN (:'a', :'b')`, { a: `Bài có ảnh nội bộ ${run}`, b: `Bài thiếu ảnh ${run}` })).toEqual([{ n: 0 }]);
+  // The draft shows its two images on its page.
+  await page.goto(`${new URL(page.url()).pathname}/${post?.id}`);
+  await expect(page.getByText('2/20')).toBeVisible();
 });
 
 test('turns on evergreen reposting for a published post', async ({ page }) => {

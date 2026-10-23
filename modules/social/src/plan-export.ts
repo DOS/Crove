@@ -2,22 +2,24 @@
 // agency sends with the month's plan, or as rows for the app's print layout (PDF through the browser). A command, as
 // social.metrics.export is, so every export leaves an audit row with its counts.
 //
-// The CSV starts with the CSV import's columns (#586), in its names and formats, so a client's edits stripped to them
-// go back in as drafts: text, title, link, channels (the channel's name) and time ("YYYY-MM-DD HH:mm", local to the
-// time zone asked for, which the app sends as the browser's, the zone the import reads times in). Then the plan's own
-// columns: status, labels, assignee and post_id. Cells go through the metrics export's csvCell, so a cell a
-// spreadsheet would run as a formula is written as text.
+// The CSV starts with the CSV import's columns (#586, #1258), in its names and formats, so a client's edits go back in
+// as drafts with their images, alt texts, first comment and labels: text, title, link, channels (the channel's name),
+// time, media, alt, first_comment and labels. Then the plan's own columns: status, assignee and post_id. The file's
+// format is domain/plan-csv.ts, which the app's import reads with.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
-import { isValidTimeZone, localTime } from './domain/queue.ts';
+import { isValidTimeZone } from './domain/queue.ts';
 import { labelsOfPosts } from './labels.ts';
-import { csvCell } from './metrics.ts';
 import { connectionInScope, refuseChannels } from './channel-access.ts';
 import { withSignature } from './domain/signature.ts';
-import { settingsOf } from './variants.ts';
+import { firstCommentOf } from './domain/channels.ts';
+import { PLAN_CSV_COLUMNS, plainMediaName, planCsv, planTime, type PlanMedia, type PlanRow } from './domain/plan-csv.ts';
+import { effectiveMedia, type PostMedia } from './domain/approval.ts';
+import { LIBRARY_MEDIA_TYPES } from './library.ts';
+import { mediaOf, settingsOf, type Trx } from './variants.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const PLAN_EXPORT_MAX_ROWS = 500;
@@ -25,45 +27,51 @@ export const PLAN_EXPORT_MAX_DAYS = 92;
 const DAY_MS = 86_400_000;
 // Days picked in a zone with daylight saving can be an hour longer than 24 h, as for plan review links (#902).
 const DST_SLACK_MS = 2 * 3_600_000;
-// The import template's columns first, in its names (apps/app/src/lib/social-import.ts IMPORT_COLUMNS).
-export const PLAN_CSV_COLUMNS = ['text', 'title', 'link', 'channels', 'time', 'status', 'labels', 'assignee', 'post_id'] as const;
-
-export interface PlanRow {
-  postId: string;
-  variantId: string;
-  connectionId: string;
-  channel: string;
-  provider: string;
-  status: string;
-  // When it goes out (its slot, its schedule or the post's planned time) or went out, as an ISO instant.
-  at: string;
-  title: string | null;
-  body: string;
-  linkUrl: string | null;
-  labels: string[];
-  // The assignee's name while a member (#640), else null.
-  assignee: string | null;
-}
-
-const pad = (n: number) => String(n).padStart(2, '0');
-
-// An instant as the import reads a time: "YYYY-MM-DD HH:mm" in the zone.
-export function planTime(iso: string, timeZone: string): string {
-  const l = localTime(Date.parse(iso), timeZone);
-  return `${l.year}-${pad(l.month)}-${pad(l.day)} ${pad(l.hour)}:${pad(l.minute)}`;
-}
-
-// The rows as a CSV file: a byte order mark (so a spreadsheet opens Vietnamese text as UTF-8), the header, a line each.
-export function planCsv(rows: readonly PlanRow[], timeZone: string): string {
-  const lines = rows.map((r) =>
-    // Label names joined by commas, not semicolons: the import guesses the separator from the first lines, and
-    // semicolons there could tip it.
-    [r.body, r.title, r.linkUrl, r.channel, planTime(r.at, timeZone), r.status, r.labels.join(', '), r.assignee, r.postId].map(csvCell).join(','),
-  );
-  return `\uFEFF${[PLAN_CSV_COLUMNS.join(','), ...lines].join('\r\n')}\r\n`;
-}
+export { PLAN_CSV_COLUMNS, planCsv, planTime, type PlanMedia, type PlanRow };
 
 const zInstant = z.iso.datetime({ offset: true });
+
+type MediaRow = { post_id: string; media: unknown; content_frozen: boolean };
+
+// Each channel's images or video as the export writes them (#1258): the channel's own list, else the post's, each by
+// its file's name when that name finds this file alone among the org's library files (as social.media.resolve looks
+// names up, whatever the case), else by its id, so the import attaches the same files.
+async function planMedia(trx: Trx, orgId: string, rows: readonly MediaRow[]): Promise<(r: MediaRow) => PlanMedia[]> {
+  const postIds = [...new Set(rows.map((r) => r.post_id))];
+  const shared = new Map<string, PostMedia[]>();
+  if (postIds.length > 0) {
+    const list = await trx
+      .selectFrom('crove_social.post_media')
+      .select(['post_id', 'file_id', 'alt_text'])
+      .where('org_id', '=', orgId)
+      .where('post_id', 'in', postIds)
+      .orderBy('post_id')
+      .orderBy('position')
+      .execute();
+    // Only what the reference and the alt text need: the rest of a PostMedia is not read here.
+    for (const m of list) shared.set(m.post_id, [...(shared.get(m.post_id) ?? []), { fileId: m.file_id, generation: null, altText: m.alt_text, mime: '', sizeBytes: 0, durationMs: null, width: null, height: null }]);
+  }
+  const listOf = (r: MediaRow) => effectiveMedia(shared.get(r.post_id) ?? [], mediaOf(r.media), r.content_frozen);
+  const fileIds = [...new Set(rows.flatMap((r) => listOf(r).map((m) => m.fileId)))];
+  const refs = new Map<string, string>();
+  if (fileIds.length > 0) {
+    const key = sql<string>`lower(normalize(filename, NFC))`;
+    const files = await trx.selectFrom('crove_kernel.file').select(['id', 'filename', key.as('name_key')]).where('org_id', '=', orgId).where('id', 'in', fileIds).execute();
+    const names = [...new Set(files.map((f) => f.name_key))];
+    const counts = await trx
+      .selectFrom('crove_kernel.file')
+      .select([key.as('name_key'), (eb) => eb.fn.countAll<string>().as('n')])
+      .where('org_id', '=', orgId)
+      .where('source', '=', 'social')
+      .where('content_type', 'in', [...LIBRARY_MEDIA_TYPES])
+      .where(sql<boolean>`lower(normalize(filename, NFC)) = ANY(${names}::text[])`)
+      .groupBy(key)
+      .execute();
+    const many = new Set(counts.filter((c) => Number(c.n) > 1).map((c) => c.name_key));
+    for (const f of files) refs.set(f.id, plainMediaName(f.filename) && !many.has(f.name_key) ? f.filename : f.id);
+  }
+  return (r) => listOf(r).map((m) => ({ ref: refs.get(m.fileId) ?? m.fileId, altText: m.altText }));
+}
 
 export const planExport = defineCommand({
   name: 'social.plan.export',
@@ -106,9 +114,11 @@ export const planExport = defineCommand({
       link_url: string | null;
       at: Date;
       assignee_user_id: string | null;
+      media: unknown;
+      content_frozen: boolean;
     }>`
       WITH v AS (
-        SELECT v.id, v.post_id, v.channel_connection_id, v.provider, v.status, v.position, p.assignee_user_id,
+        SELECT v.id, v.post_id, v.channel_connection_id, v.provider, v.status, v.position, p.assignee_user_id, v.media, v.content_frozen,
                CASE WHEN v.content_frozen THEN coalesce(v.body, '') ELSE coalesce(v.body, p.body) END AS body, v.settings,
                CASE WHEN v.content_frozen THEN v.title ELSE coalesce(v.title, p.title) END AS title,
                CASE WHEN v.content_frozen THEN v.link_url ELSE coalesce(v.link_url, p.link_url) END AS link_url,
@@ -121,7 +131,7 @@ export const planExport = defineCommand({
           ${labels.length > 0 ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ANY(${labels}::uuid[]))` : sql``}
       )
       SELECT v.id AS variant_id, v.post_id, v.channel_connection_id, v.provider, v.status, c.display_name, v.body, v.settings, v.title,
-             v.link_url, v.at, v.assignee_user_id
+             v.link_url, v.at, v.assignee_user_id, v.media, v.content_frozen
       FROM v
       LEFT JOIN crove_kernel.channel_connection c ON c.org_id = ${ctx.orgId}::uuid AND c.id = v.channel_connection_id
       WHERE v.at >= ${from} AND v.at < ${to}
@@ -138,6 +148,7 @@ export const planExport = defineCommand({
         SELECT user_id, email, display_name FROM crove_kernel.member_profiles(${people}::uuid[])`.execute(ctx.trx);
       for (const p of profiles) names.set(p.user_id, p.display_name ?? p.email);
     }
+    const mediaOfRow = await planMedia(ctx.trx, ctx.orgId, rows);
     const plan: PlanRow[] = rows.map((r) => ({
       postId: r.post_id,
       variantId: r.variant_id,
@@ -150,6 +161,8 @@ export const planExport = defineCommand({
       // The text as it goes out, with the channel's signature (#1190).
       body: withSignature(r.body, settingsOf(r)),
       linkUrl: r.link_url,
+      media: mediaOfRow(r),
+      firstComment: firstCommentOf(settingsOf(r)),
       labels: (labelsOf.get(r.post_id) ?? []).map((l) => l.name),
       assignee: r.assignee_user_id ? (names.get(r.assignee_user_id) ?? null) : null,
     }));
