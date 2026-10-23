@@ -36,6 +36,7 @@ import { EmojiPicker } from '../components/social-emoji.tsx';
 import { TextStyleButtons, TextStyleHint } from '../components/social-text-style.tsx';
 import { DuplicateNote, ownRewriteId, SHARED_REWRITE_ID } from '../components/social-duplicate.tsx';
 import { SignatureToggle, signatureSettings } from '../components/social-signature.tsx';
+import { ThreadSplitField } from '../components/social-thread-split.tsx';
 import { ProofreadProposal } from '../components/social-proofread.tsx';
 import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -2142,6 +2143,20 @@ function ChannelEditor({
         <RemoveAtField settings={own.settings} disabled={disabled} onApplyAll={onRemoveAtAll} onChange={(settings) => onChange({ ...own, settings })} />
       )}
       {isProvider(provider) && AUTO_REPLY_RULES[provider] && postType !== 'story' && <AutoReplyField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
+      {/* A text over the channel's limit split into a thread (#1222), and merged back. */}
+      {postType !== 'story' && (
+        <ThreadSplitField
+          provider={provider}
+          value={{ custom: own.custom, body: own.body, settings: own.settings }}
+          baseBody={base.body}
+          settings={settings}
+          linkUrl={base.linkUrl || null}
+          mediaCount={content.media.length}
+          tooLong={issues.some((i) => i.field === 'body' && (i.code === 'TEXT_TOO_LONG' || i.code === 'TEXT_TOO_MANY_BYTES'))}
+          disabled={disabled}
+          onChange={(next) => onChange({ ...own, ...next })}
+        />
+      )}
       {isProvider(provider) && THREAD_RULES[provider] && postType !== 'story' && <ThreadField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {isProvider(provider) && COMMENT_RULES[provider] && postType !== 'story' && (!threadPartsOf(own.settings) || typeof own.settings.firstComment === 'string') && (
         <div className="space-y-1">
