@@ -3251,6 +3251,8 @@ export const en = {
       unknown: 'Not sure the post was removed; check the channel, then try again',
       code: {
         TELEGRAM_CANNOT_DELETE: 'Telegram lets a bot remove a post only within 48 hours of it; remove it in Telegram itself',
+        FACEBOOK_CANNOT_DELETE: 'Facebook would not let {brand} remove this post; remove it on the Page itself',
+        RECONNECT_FOR_REMOVE: 'Connect the YouTube channel again and allow managing its videos, then try again',
         REMOVE_NOT_RUN: 'The removal was not handled; try again',
       },
     },
