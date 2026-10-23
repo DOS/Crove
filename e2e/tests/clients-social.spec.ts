@@ -44,7 +44,7 @@ test('an agency sees each client’s Social figures on the overview and opens th
   await test.step('a figure opens the filtered list of that company', async () => {
     await page.getByRole('row').filter({ hasText: 'Công ty An Bình' }).getByRole('link', { name: '1 bài chờ duyệt' }).click();
     await expect(page).toHaveURL(new RegExp(`/o/${first}/social\\?tab=review$`));
-    await expect(page.getByText('Khuyến mãi cuối tuần của An Bình')).toBeVisible();
+    await expect(page.getByText('Khuyến mãi cuối tuần của An Bình').first()).toBeVisible();
   });
 
   await test.step('a channel whose sign-in expired shows as one to reconnect, leading to the channels page', async () => {
