@@ -134,12 +134,13 @@ export function OverviewPage() {
                     className="flex items-center gap-3 px-4 py-3 text-sm hover:bg-muted/50 focus-visible:bg-muted/50"
                   >
                     <NavIcon name={TARGET[key].icon} className="text-muted-foreground" />
-                    <span className="w-10 shrink-0 text-right font-mono text-base font-semibold tabular-nums text-foreground">{count}</span>
+                    <span className="w-8 shrink-0 text-right font-mono text-base font-semibold tabular-nums text-foreground">{count}</span>
                     <span className="min-w-0 flex-1">
                       <span className="block text-foreground">{t(`waiting.${key}.label`, { count })}</span>
                       <span className="block text-xs text-subtle-foreground">{t(`waiting.${key}.hint`)}</span>
                     </span>
-                    <span className="shrink-0 text-xs text-link">{t(`waiting.${key}.open`)}</span>
+                    {/* The whole row is the link; on a phone the words would only squeeze what it counts. */}
+                    <span className="hidden shrink-0 text-xs text-link sm:inline">{t(`waiting.${key}.open`)}</span>
                   </Link>
                 </li>
               ))}
