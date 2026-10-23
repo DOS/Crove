@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { comparableText } from '@crove/channel';
-import { duplicateText, newestDuplicate, refusesDuplicates, type DuplicateCandidate } from '../src/contract.ts';
+import { duplicateText, newestDuplicate, refusesDuplicates, styleSelection, styleText, type DuplicateCandidate } from '../src/contract.ts';
 
 describe('duplicateText (#1156)', () => {
   it('drops links, t.co ones and bare hosts alike', () => {
@@ -28,6 +28,15 @@ describe('duplicateText (#1156)', () => {
     expect(duplicateText('Ưu đãi')).not.toBe(duplicateText('ưu đãi'));
   });
 
+  it('compares styled letters (#1179) as their plain ones, links included', () => {
+    expect(duplicateText(styleText('Ưu đãi cuối tuần', 'bold'))).toBe('Ưu đãi cuối tuần');
+    expect(duplicateText(`${styleText('Khuyến mãi', 'italic')} ${styleText('crove.vn/gia', 'bold')}`)).toBe('Khuyến mãi');
+    const half = styleSelection('Ưu đãi cuối tuần #sale', 0, 6, 'boldItalic').text;
+    expect(duplicateText(half)).toBe(duplicateText('Ưu đãi cuối tuần #sale'));
+    // Still case sensitive: a bold capital is a capital.
+    expect(duplicateText(styleText('ƯU ĐÃI', 'bold'))).not.toBe(duplicateText('Ưu đãi'));
+  });
+
   it('compares as the X adapter compares a post with what it sent', () => {
     for (const text of ['a &lt;b&gt; &amp; c https://t.co/x', 'Khai trương crove.vn/a\n\n  mới', 'Việt'.normalize('NFD'), '&amp;lt;', '', ' https://a.vn ']) {
       expect(duplicateText(text)).toBe(comparableText(text));
@@ -47,6 +56,11 @@ describe('newestDuplicate (#1156)', () => {
   it('names the newest match, scheduled ahead of published', () => {
     expect(newestDuplicate('Ưu đãi cuối tuần https://crove.vn/uu-dai', candidates)).toEqual({ at: '2026-10-30T02:00:00.000Z', status: 'queued' });
     expect(newestDuplicate('Ưu đãi cuối tuần', candidates.slice(0, 2))).toEqual({ at: '2026-10-20T02:00:00.000Z', status: 'published' });
+  });
+
+  it('catches the same text sent again in bold (#1179)', () => {
+    expect(newestDuplicate(styleText('Ưu đãi cuối tuần', 'bold'), candidates.slice(0, 2))).toEqual({ at: '2026-10-20T02:00:00.000Z', status: 'published' });
+    expect(newestDuplicate('Ưu đãi cuối tuần', [{ text: styleText('Ưu đãi cuối tuần', 'italic'), at: at('2026-10-10T02:00:00Z'), status: 'published' }])).not.toBeNull();
   });
 
   it('finds nothing for another text, or a text of links alone', () => {

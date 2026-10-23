@@ -11,7 +11,10 @@
 // so they cannot hide a word. A phrase that starts or ends with a letter or digit matches only at a word boundary:
 // the unit before and after it is not a letter or digit (Unicode letters and digits, so Vietnamese, Thai or CJK
 // letters count, and emoji or punctuation do not). Ranges are UTF-16 offsets into the text as given, never inside a
-// surrogate pair or between a letter and its marks.
+// surrogate pair or between a letter and its marks. A letter written in a Unicode style (the bold, italic and other
+// letters and digits of the Mathematical Alphanumeric Symbols block, and the letterlike symbols in its holes, #1179) is
+// compared as its plain letter, so "𝐜𝐡𝐮̛̃𝐚 𝐤𝐡𝐨̉𝐢" is "chữa khỏi"; it stays one unit at its own offsets, a letter for word
+// boundaries as before, and a styled Greek letter folds to Greek, never to a Latin look-alike.
 //
 // What it does not catch: look-alike letters from other scripts (a Cyrillic "о" for "o"), punctuation or symbols put
 // inside a word ("t.ố.t"), letters spaced out ("t ố t"), and misspellings. It is a help for honest writers and their
@@ -22,6 +25,8 @@
 // letters. Every step counts against a budget (BANNED_OPS_MAX by default), and preparing text against its own cap in
 // characters (BANNED_PREPARE_MAX, what a valid post may hold); past either the scan throws
 // BannedWordsTooComplex, which a command turns into a refusal and a view into "not checked".
+
+import { foldMathAlphanumerics, isFoldable } from './text-styles.ts';
 
 // The level of a word; the table's CHECK and SOCIAL_BANNED_WORD_LEVELS in @crove/db hold the same two (this module
 // stays free of the database package, as the app imports it; banned-words.ts checks the two agree at compile time).
@@ -132,7 +137,8 @@ function units(text: string): Unit[] {
       i += next > 0xffff ? 2 : 1;
     }
     const first = String.fromCodePoint(cp);
-    const raw = text.slice(start, i);
+    // A styled letter as its plain one; only the first code point can be one (marks are never in the block).
+    const raw = isFoldable(cp) ? foldMathAlphanumerics(text.slice(start, i)) : text.slice(start, i);
     const exact = raw.normalize('NFC').toLowerCase();
     const stripped = raw.normalize('NFD').replace(MARKS, '').toLowerCase();
     const base = stripped === 'đ' ? 'd' : stripped === '' ? exact : stripped;
@@ -180,9 +186,9 @@ export function prepareBannedText(text: string, budget?: BannedBudget): BannedTe
   return { text, units: list, solid, afterSpace, wordBefore };
 }
 
-/** The phrase as the matcher compares it, and as the table keeps it unique: NFC, format characters dropped, white space collapsed to one space, trimmed, lower case. */
+/** The phrase as the matcher compares it, and as the table keeps it unique: styled letters plain, NFC, format characters dropped, white space collapsed to one space, trimmed, lower case. */
 export function normalizePhrase(phrase: string): string {
-  return phrase.normalize('NFC').replace(FORMATS, '').replace(/\s+/gu, ' ').trim().toLowerCase();
+  return foldMathAlphanumerics(phrase).normalize('NFC').replace(FORMATS, '').replace(/\s+/gu, ' ').trim().toLowerCase();
 }
 
 // A unit of the text against one of the phrase: the same letter, or the same base letter where one side has no mark.

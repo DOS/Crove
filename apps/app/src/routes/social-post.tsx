@@ -30,6 +30,7 @@ import { CampaignFindings, LabelPicker, useLabels } from '../components/social-l
 import { AssignCard } from '../components/social-assign.tsx';
 import { BestTimeButton } from '../components/social-best-time.tsx';
 import { EmojiPicker } from '../components/social-emoji.tsx';
+import { TextStyleButtons, TextStyleHint } from '../components/social-text-style.tsx';
 import { DuplicateNote, ownRewriteId, SHARED_REWRITE_ID } from '../components/social-duplicate.tsx';
 import { ProofreadProposal } from '../components/social-proofread.tsx';
 import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
@@ -2074,7 +2075,9 @@ function ChannelEditor({
           <div className="flex flex-wrap items-center gap-2">
             <EmojiPicker targetId={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />
             {slug && <SnippetPicker slug={slug} targetId={`social-own-${connectionId ?? provider}`} value={own.body} provider={provider} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />}
+            <TextStyleButtons targetId={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />
           </div>
+          <TextStyleHint text={own.body} providers={[provider]} />
           {!disabled && onAiUsed && (
             <AiRewrite
               {...(connectionId ? { id: ownRewriteId(connectionId) } : {})}
@@ -2226,6 +2229,7 @@ function SharedFields({
   onAiUsed,
   slug,
   connectionIds = [],
+  providers = [],
 }: {
   base: Base;
   onChange: (base: Base) => void;
@@ -2236,6 +2240,8 @@ function SharedFields({
   slug?: string;
   // The post's channels: the shared text is checked against the banned words of any of them (#1055).
   connectionIds?: readonly string[];
+  // Their platforms, for the hints on styled letters (#1179).
+  providers?: readonly string[];
 }) {
   const t = useTranslations('social');
   const banned = wordsForChannels(useBannedWords(), connectionIds);
@@ -2247,7 +2253,9 @@ function SharedFields({
         <div className="flex flex-wrap items-center gap-2">
           <EmojiPicker targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />
           {slug && <SnippetPicker slug={slug} targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />}
+          <TextStyleButtons targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />
         </div>
+        <TextStyleHint text={base.body} providers={providers} />
         <BannedWordHints texts={[{ field: 'body', text: base.body }, ...(needsTitle && base.title ? [{ field: 'title', text: base.title }] : [])]} words={banned} />
         {!disabled && <HashtagSuggestions text={base.body} connectionId={null} onAiUsed={onAiUsed} onPick={(tag) => onChange({ ...base, body: withHashtag(base.body, tag) })} />}
         {!disabled && onAiUsed && (
@@ -2532,6 +2540,7 @@ export function SocialComposePage() {
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={selected.map((c) => c.id)}
+            providers={selected.map((c) => c.provider)}
           />
           {base.linkUrl.trim() && (
             <Card className="block p-4">
@@ -3594,6 +3603,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={p.variants.map((v) => v.connectionId)}
+            providers={p.variants.map((v) => v.provider)}
           />
           {base.linkUrl.trim() && editable && (
             <Card className="block p-4">
