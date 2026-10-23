@@ -41,6 +41,8 @@ export interface MailTemplateInput {
   // The org's inbound address when this deployment receives mail (#669), else null. A template whose replies should
   // reach the org's Inbox returns it as replyTo.
   inboundAddress: string | null;
+  // The product name users see (BRAND_NAME, #1040), for the template's own texts.
+  brand: string;
   execute<T>(command: string, input: unknown): Promise<T>;
 }
 export interface MailTemplate {
@@ -56,6 +58,8 @@ export interface MailQueueDeps {
   // INBOUND_DOMAIN when mail reaches this deployment (INBOUND_SECRET set): the Return-Path of each mail, and the domain
   // of the org's inbound address a template may name as the Reply-To.
   bounceDomain: string | null;
+  // BRAND_NAME (#1040); "Crove" when not given.
+  brand?: string;
   sleep?: (ms: number) => Promise<void>;
   sendTimeoutMs?: number;
   // The worker's connection, to read the operator's mail switch (#886) before a send.
@@ -135,6 +139,7 @@ async function sendOne(deps: MailQueueDeps, job: MailJob, mail: Extract<QueuedMa
       subject: mail.subject,
       payload: mail.payload,
       publicUrl: deps.publicUrl,
+      brand: deps.brand ?? 'Crove',
       inboundAddress: deps.bounceDomain ? `${mail.inboundToken}@${deps.bounceDomain.toLowerCase()}` : null,
       execute: <T>(command: string, input: unknown) => deps.runtime.execute<T>(command, input, { actor: ACTOR, orgId: job.orgId }),
     });

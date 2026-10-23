@@ -10,6 +10,7 @@ import { approvalsInRound } from './domain/approval.ts';
 import { approvedValues, base, lockPost, lockVariants, refreshPostStatus, regateValues, setVariant, type Trx, type VariantRow } from './variants.ts';
 import { bannedChecker, bannedCommandBudget, bannedWordsOf, isBlocked } from './banned-words.ts';
 import { agentTaskOf } from './agent.ts';
+import { channelScope, connectionInScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
@@ -297,6 +298,8 @@ export const channelWaiting = defineQuery({
       .select(['channel_connection_id', (eb) => eb.fn.countAll<string>().as('paused')])
       .where('org_id', '=', ctx.orgId)
       .where('status', '=', 'paused')
+      // A member limited to some channels (#1081) sees those only.
+      .where(connectionInScope(await channelScope(ctx), 'channel_connection_id'))
       .groupBy('channel_connection_id')
       .orderBy('channel_connection_id')
       .execute();

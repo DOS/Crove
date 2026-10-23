@@ -58,6 +58,8 @@
   --color-warning: var(--warning);
   /* AI-proposed data that no one has approved yet (DESIGN.md 3.1, principle 2): outline and chip color. */
   --color-proposal: var(--proposal);
+  /* Behind an image made for a white page in either theme (the tax portal's CAPTCHA, #325). */
+  --color-image-surface: var(--image-surface);
   /* Post labels (#639): the hues a member picks for a label; gray uses the neutral tokens. */
   --color-label-red: var(--label-red);
   --color-label-orange: var(--label-orange);
@@ -116,6 +118,7 @@
   --sidebar-border: oklch(0.915 0.007 290);
   --sidebar-ring: oklch(0.55 0.2 290);
   --proposal: oklch(0.5 0.13 245);
+  --image-surface: oklch(1 0 0);
   --label-red: oklch(0.52 0.19 25);
   --label-orange: oklch(0.56 0.15 50);
   --label-yellow: oklch(0.55 0.11 90);
@@ -165,6 +168,7 @@
   --sidebar-border: oklch(0.285 0.012 285);
   --sidebar-ring: oklch(0.75 0.13 293);
   --proposal: oklch(0.78 0.11 245);
+  --image-surface: oklch(1 0 0);
   --label-red: oklch(0.74 0.15 25);
   --label-orange: oklch(0.79 0.13 55);
   --label-yellow: oklch(0.86 0.13 95);

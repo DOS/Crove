@@ -6,10 +6,14 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineQuery, type CommandContext } from '@crove/kernel-runtime';
-import { MAX_VERSIONS_PER_POST, sameSnapshot, variantContent, versionMedia, versionNumbers, versionVariants, type VersionContent, type VersionSnapshot } from './domain/versions.ts';
+import { MAX_VERSIONS_PER_POST, contentKey, sameSnapshot, snapshotContentKey, variantContent, versionMedia, versionNumbers, versionVariants, type VersionContent, type VersionSnapshot } from './domain/versions.ts';
 import type { Trx } from './variants.ts';
+import { channelScope, postsInScope, variantsInScope } from './channel-access.ts';
+import { tickedOf, type TickedCheck } from './review-checklist.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
+// The newest approvals of a post the versions are matched with (#1105).
+const APPROVALS_SHOWN = 200;
 
 export interface SavedState {
   snapshot: VersionSnapshot;
@@ -102,6 +106,14 @@ export interface VersionContentView extends Omit<VersionContent, 'media'> {
   media: Array<{ fileId: string; altText: string | null; mime: string | null }>;
 }
 
+// An approval given to a version's content of a channel, with the review checklist items its reviewer ticked (#1105).
+export interface VersionApproval {
+  decidedBy: string;
+  decidedByName: string | null;
+  at: string;
+  checklist: TickedCheck[] | null;
+}
+
 export interface VersionView {
   id: string;
   number: number;
@@ -110,8 +122,9 @@ export interface VersionView {
   // null for the content a post had before its first saved version.
   createdBy: string | null;
   createdByName: string | null;
-  // Per channel of the version, what it showed: its effective text, link, images and settings.
-  variants: Array<{ variantId: string; content: VersionContentView }>;
+  // Per channel of the version, what it showed: its effective text, link, images and settings; and the approvals given
+  // to that content, oldest first.
+  variants: Array<{ variantId: string; content: VersionContentView; approvals: VersionApproval[] }>;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -125,6 +138,9 @@ export const postVersions = defineQuery({
   handler: async (ctx, input): Promise<{ postId: string; versions: VersionView[] }> => {
     const post = await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.postId).executeTakeFirst();
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
+    // A member limited to some channels (#1081) reads the versions of a post they may see, with those channels only.
+    const scope = await channelScope(ctx);
+    if ((await postsInScope(ctx, scope, [post.id])).length === 0) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
     const rows = await ctx.trx
       .selectFrom('crove_social.post_version')
       .select(['id', 'number', 'revision', 'body', 'title', 'link_url', 'media', 'variants', 'created_by', 'created_at'])
@@ -133,17 +149,37 @@ export const postVersions = defineQuery({
       .orderBy('number', 'desc')
       .limit(MAX_VERSIONS_PER_POST)
       .execute();
-    const versions = rows.map((r) => {
+    const saved = rows.map((r) => ({ row: r, variants: versionVariants(r.variants) }));
+    const shown = scope === null ? null : await variantsInScope(ctx, scope, [...new Set(saved.flatMap((s) => s.variants.map((v) => v.variantId)))]);
+    const versions = saved.map(({ row: r, variants }) => {
       const snapshot = { body: r.body, title: r.title, linkUrl: r.link_url, media: versionMedia(r.media) };
-      return { row: r, variants: versionVariants(r.variants).map((v) => ({ variantId: v.variantId, content: variantContent(snapshot, v) })) };
+      return { row: r, variants: variants.filter((v) => shown === null || shown.has(v.variantId)).map((v) => ({ variantId: v.variantId, content: variantContent(snapshot, v) })) };
     });
     // The type of each file a version names, to show a removed video as a video.
     const fileIds = [...new Set(versions.flatMap((v) => v.variants.flatMap((x) => x.content.media.map((m) => m.fileId))).filter((id) => UUID.test(id)))];
     const mimes = new Map(
       fileIds.length === 0 ? [] : (await ctx.trx.selectFrom('crove_kernel.file').select(['id', 'content_type']).where('org_id', '=', ctx.orgId).where('id', 'in', fileIds).execute()).map((f) => [f.id, f.content_type]),
     );
+    // The approvals of the channels shown (#1105), matched with a version by the content they were given to: the
+    // snapshot an approval keeps, compared with the version's content of that channel.
+    const approvalRows = await ctx.trx
+      .selectFrom('crove_social.post_approval')
+      .select(['id', 'variant_id', 'decided_by', 'created_at', 'snapshot', 'checklist'])
+      .where('org_id', '=', ctx.orgId)
+      .where('post_id', '=', post.id)
+      .where('decision', '=', 'approved')
+      .orderBy('id', 'desc')
+      .limit(APPROVALS_SHOWN)
+      .execute();
+    const approvalsOf = new Map<string, Array<{ key: string; decidedBy: string; at: string; checklist: TickedCheck[] | null }>>();
+    for (const a of [...approvalRows].reverse()) {
+      if (shown !== null && !shown.has(a.variant_id)) continue;
+      const list = approvalsOf.get(a.variant_id) ?? [];
+      list.push({ key: snapshotContentKey(a.snapshot), decidedBy: a.decided_by, at: a.created_at.toISOString(), checklist: tickedOf(a.checklist) });
+      approvalsOf.set(a.variant_id, list);
+    }
     // Names while they are members (crove_kernel.member_profiles answers only members of the org).
-    const people = [...new Set(rows.map((r) => r.created_by).filter((id): id is string => id !== null))];
+    const people = [...new Set([...rows.map((r) => r.created_by), ...approvalRows.map((a) => a.decided_by)].filter((id): id is string => id !== null))];
     const names = new Map<string, string>();
     if (people.length > 0) {
       const { rows: profiles } = await sql<{ user_id: string; email: string; display_name: string | null }>`
@@ -159,7 +195,13 @@ export const postVersions = defineQuery({
         createdAt: row.created_at.toISOString(),
         createdBy: row.created_by,
         createdByName: row.created_by === null ? null : (names.get(row.created_by) ?? null),
-        variants: variants.map((v) => ({ variantId: v.variantId, content: { ...v.content, media: v.content.media.map((m) => ({ ...m, mime: mimes.get(m.fileId) ?? null })) } })),
+        variants: variants.map((v) => {
+          const key = contentKey(v.content);
+          const approvals = (approvalsOf.get(v.variantId) ?? [])
+            .filter((a) => a.key === key)
+            .map((a) => ({ decidedBy: a.decidedBy, decidedByName: names.get(a.decidedBy) ?? null, at: a.at, checklist: a.checklist }));
+          return { variantId: v.variantId, content: { ...v.content, media: v.content.media.map((m) => ({ ...m, mime: mimes.get(m.fileId) ?? null })) }, approvals };
+        }),
       })),
     };
   },

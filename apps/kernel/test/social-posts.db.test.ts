@@ -628,8 +628,12 @@ suite('social posts on PostgreSQL (S3)', () => {
     it('takes only images uploaded for posts, never a document of the org, and keeps them out of the Inbox', async () => {
       const o = await org();
       const conn = await connection(o.orgId, o.owner, 'facebook_page');
+      const xml = await image(o.orgId, 'application/xml', 1000, 'social');
+      await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: xml }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'MEDIA_TYPE_UNSUPPORTED' });
+      // A PDF (#1119) is taken for a LinkedIn document; Facebook's rules flag it, so it never goes out there.
       const pdf = await image(o.orgId, 'application/pdf', 1000, 'social');
-      await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: pdf }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'MEDIA_TYPE_UNSUPPORTED' });
+      const { postId: withPdf } = await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: pdf }], channels: [{ connectionId: conn }] });
+      expect((await get(o, o.viewer, withPdf)).variants[0]?.issues).toEqual([{ code: 'DOCUMENT_NOT_SUPPORTED', field: 'media.0', limit: null, actual: null }]);
       // An invoice photo is an image too, but it is an accounting document: it cannot be attached.
       const scan = await image(o.orgId, 'image/jpeg', 1000, 'upload');
       await expect(exec(o, o.member, 'social.post.create', { body: 'x', media: [{ fileId: scan }], channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });

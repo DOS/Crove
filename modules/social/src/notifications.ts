@@ -4,13 +4,15 @@
 // channel that failed or needs attention tells the owners, the admins and the author; an expired channel tells the
 // owners and admins; an internal comment or a client's answer tells the author and the people who commented before;
 // an assignment tells the assignee; a reminder of a post still waiting for review (#703) tells the owners and admins who
-// have not approved its current content yet; a publishing hold put on or taken off (#946) tells the whole team. Never the person who acted, never a kind the person turned off, and only people
-// who are members when it is written. Each member reads and marks only their own (a restrictive policy).
+// have not approved its current content yet; a publishing hold put on or taken off (#946) tells the whole team; a
+// channel's queue running low (#1079) tells the owners, admins and members, who can fill it. Never the person who
+// acted, never a kind the person turned off, and only people who are members when it is written. Each member reads
+// and marks only their own (a restrictive policy).
 //
-// Email (#579): the kinds someone must act on (a post to review, a decision, a failed or stuck post, an expired channel)
-// also go out by email, one per notification, through the kernel's queued mail (the suppression list, the mail log),
-// unless the member turned Social emails off. The mail names the post and links to it; nothing secret is in it. A
-// deployment without mail records the mail as not sent and nothing fails.
+// Email (#579): the kinds someone must act on (a post to review, a decision, a failed or stuck post, an expired channel,
+// a queue running low) also go out by email, one per notification, through the kernel's queued mail (the suppression
+// list, the mail log), unless the member turned Social emails off. The mail names the post and links to it; nothing
+// secret is in it. A deployment without mail records the mail as not sent and nothing fails.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
@@ -19,6 +21,7 @@ import { createMailMessage } from '@crove/kernel';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { approvalsInRound } from './domain/approval.ts';
 import { decisionsOf } from './policy.ts';
+import { channelScope, connectionInScope, postInScope, usersInScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The newest notifications a read returns, and the unread count it reports at most.
@@ -46,6 +49,8 @@ export const NOTIFYING_EVENTS = [
   // The org's publishing held and released (#946): the whole team is told.
   'social.publishing.held',
   'social.publishing.released',
+  // A channel's queue ran low (#1079).
+  'social.queue.low',
   // Not a notice: a member's links stop working when they lose the right to make them (#625).
   'kernel.member.removed',
   'kernel.member.role_changed',
@@ -208,6 +213,23 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
         detail: { state: released ? 'released' : 'held', reason: [...hold.reason].slice(0, 300).join(''), ...(released ? { heldTooLong: String(e.data.held_too_long ?? 0) } : {}) },
       };
     }
+    case 'social.queue.low': {
+      const e = z
+        .object({ queue_id: zId, low_days: z.number().int().min(1).max(30), posting_days: z.number().int().min(0).max(31), filled_days: z.number().int().min(0).max(31) })
+        .safeParse(payload);
+      if (!e.success) return null;
+      // Filled again since, or the warning turned off: nothing to tell.
+      const q = await ctx.trx.selectFrom('crove_social.queue').select(['channel_connection_id', 'low_days', 'low_alerted_at']).where('org_id', '=', ctx.orgId).where('id', '=', e.data.queue_id).executeTakeFirst();
+      if (!q || q.low_days === null || q.low_alerted_at === null) return null;
+      const team = await ctx.trx.selectFrom('crove_kernel.tenant_member').select('user_id').where('org_id', '=', ctx.orgId).where('role', 'in', ['owner', 'admin', 'member']).execute();
+      return {
+        kind: 'queue_low',
+        users: team.map((m) => m.user_id),
+        postId: null,
+        connectionId: q.channel_connection_id,
+        detail: { days: String(e.data.low_days), posting: String(e.data.posting_days), filled: String(e.data.filled_days) },
+      };
+    }
     case 'social.review.reminder': {
       const e = z.object({ post_id: zId, stage: z.enum(['waiting', 'due']), variant_ids: z.array(zId).min(1).max(100) }).safeParse(payload);
       if (!e.success) return null;
@@ -237,7 +259,7 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
 }
 
 // The kinds that also go out by email, and the template they use.
-export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'mention']);
+export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'mention', 'queue_low']);
 export const NOTIFICATION_MAIL_TEMPLATE = 'social.notification';
 
 const oneLine = (text: string, max: number) => {
@@ -259,6 +281,8 @@ function subjectOf(kind: SocialNotificationKind, detail: Record<string, string>,
       return `Bài đăng cần bạn xử lý${channel ? ` trên ${oneLine(channel, 60)}` : ''}${about}`;
     case 'mention':
       return `Bạn được nhắc đến trong một bình luận${about}`;
+    case 'queue_low':
+      return `Hàng đợi của kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} sắp hết bài`;
     default:
       return `Kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} cần kết nối lại`;
   }
@@ -292,7 +316,12 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
   const channel = plan.connectionId
     ? ((await ctx.trx.selectFrom('crove_kernel.channel_connection').select('display_name').where('org_id', '=', ctx.orgId).where('id', '=', plan.connectionId).executeTakeFirst())?.display_name ?? null)
     : null;
-  const path = plan.postId ? `/o/${org.slug}/social/${plan.postId}` : `/o/${org.slug}/social/channels`;
+  // A queue running low links to a new post for its channel, to fill it.
+  const path = plan.postId
+    ? `/o/${org.slug}/social/${plan.postId}`
+    : plan.kind === 'queue_low' && plan.connectionId
+      ? `/o/${org.slug}/social/new?channel=${plan.connectionId}`
+      : `/o/${org.slug}/social/channels`;
   const subject = subjectOf(plan.kind, plan.detail, postText, channel);
   let queued = 0;
   for (const c of to) {
@@ -305,7 +334,16 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
       templateKey: NOTIFICATION_MAIL_TEMPLATE,
       to: email,
       subject,
-      payload: { kind: plan.kind, org: org.name, post: postText, channel, decision: plan.detail.decision ?? null, ...(plan.detail.removal ? { removal: plan.detail.removal } : {}), path },
+      payload: {
+        kind: plan.kind,
+        org: org.name,
+        post: postText,
+        channel,
+        decision: plan.detail.decision ?? null,
+        ...(plan.detail.removal ? { removal: plan.detail.removal } : {}),
+        ...(plan.kind === 'queue_low' ? { days: plan.detail.days ?? null } : {}),
+        path,
+      },
       status: 'queued',
     });
     if (mail.status === 'queued') queued++;
@@ -337,7 +375,14 @@ export const notificationDispatch = defineCommand({
       WHERE m.org_id = ${ctx.orgId} AND m.user_id = ANY(${wanted}::uuid[])
         AND NOT EXISTS (SELECT 1 FROM crove_social.notification_mute x WHERE x.org_id = m.org_id AND x.user_id = m.user_id AND x.kind = ${plan.kind})`.execute(ctx.trx);
     if (rows.length === 0) return { sent: 0, mailed: 0 };
-    const users = rows.map((r) => r.user_id);
+    // A member limited to some channels (#1081) hears only of those and of the posts on them.
+    const users = await usersInScope(
+      ctx.trx,
+      ctx.orgId,
+      rows.map((r) => r.user_id),
+      { postId: plan.postId, connectionId: plan.connectionId },
+    );
+    if (users.length === 0) return { sent: 0, mailed: 0 };
     const inserted = await ctx.trx
       .insertInto('crove_social.notification')
       .values(
@@ -390,16 +435,23 @@ export interface NotificationItem {
 }
 
 // The viewer's newest notifications, how many are unread (up to NOTIFICATION_UNREAD_CAP + 1) and the kinds they
-// turned off. A review reminder shows only while its post still has a channel in the round of review it was about.
+// turned off. A review reminder shows only while its post still has a channel in the round of review it was about; a
+// low queue (#1079) only while its queue is still in the dip it was about.
 const STILL_WAITING = sql`(n.kind <> 'review_reminder' OR EXISTS (
   SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = n.org_id AND v.post_id = n.post_id AND v.status = 'in_review'
-    AND v.review_since <= n.created_at))`;
+    AND v.review_since <= n.created_at)) AND (n.kind <> 'queue_low' OR EXISTS (
+  SELECT 1 FROM crove_social.queue q WHERE q.org_id = n.org_id AND q.channel_connection_id = n.connection_id
+    AND q.low_alerted_at <= n.created_at))`;
 export const notificationList = defineQuery({
   name: 'social.notification.list',
   input: z.object({}),
   access: ALL,
   handler: async (ctx): Promise<{ items: NotificationItem[]; unread: number; muted: SocialNotificationKind[]; mailOff: boolean }> => {
     const me = requireUser(ctx);
+    // What the viewer may see (#1081): a limited member's notifications of other channels, or of posts with none of
+    // theirs, are left out (one written before the limit, say).
+    const scope = await channelScope(ctx);
+    const seen = sql`(n.connection_id IS NULL OR ${connectionInScope(scope, 'n.connection_id')}) AND (n.post_id IS NULL OR ${postInScope(scope, 'n.post_id', 'n.org_id')})`;
     const { rows } = await sql<{
       id: string;
       kind: SocialNotificationKind;
@@ -417,12 +469,12 @@ export const notificationList = defineQuery({
       FROM crove_social.notification n
       LEFT JOIN crove_social.post p ON p.org_id = n.org_id AND p.id = n.post_id
       LEFT JOIN crove_kernel.channel_connection c ON c.org_id = n.org_id AND c.id = n.connection_id
-      WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND ${STILL_WAITING}
+      WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND ${STILL_WAITING} AND ${seen}
       ORDER BY n.created_at DESC, n.id DESC
       LIMIT ${NOTIFICATION_LIST_LIMIT}`.execute(ctx.trx);
     const unread = await sql<{ n: number }>`
       SELECT count(*)::int AS n FROM (
-        SELECT 1 FROM crove_social.notification n WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND n.read_at IS NULL AND ${STILL_WAITING} LIMIT ${NOTIFICATION_UNREAD_CAP + 1}
+        SELECT 1 FROM crove_social.notification n WHERE n.org_id = ${ctx.orgId} AND n.user_id = ${me} AND n.read_at IS NULL AND ${STILL_WAITING} AND ${seen} LIMIT ${NOTIFICATION_UNREAD_CAP + 1}
       ) u`.execute(ctx.trx);
     const mailOff = await ctx.trx.selectFrom('crove_social.notification_mail_off').select('id').where('org_id', '=', ctx.orgId).where('user_id', '=', me).limit(1).executeTakeFirst();
     const muted = await ctx.trx.selectFrom('crove_social.notification_mute').select('kind').where('org_id', '=', ctx.orgId).where('user_id', '=', me).orderBy('kind').execute();

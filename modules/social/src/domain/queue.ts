@@ -268,6 +268,32 @@ export function moveToFront<T extends Holder>(holders: readonly T[], targetId: s
   return result;
 }
 
+// How far ahead a queue is filled (#1079), for the warning when it runs low. Its posting days are the local calendar
+// days (in the queue's zone) that have one of its slots in (now, now + days * 24h]; a posting day is filled when a post
+// holds one of its slots there. Days without a slot (a queue that posts on weekdays only) are never counted against it.
+// The queue is low when a posting day ahead is not filled; a queue with no slot in the window is never low.
+export interface QueueRunway {
+  postingDays: number;
+  filledDays: number;
+  low: boolean;
+}
+
+export function queueRunway(queue: QueueSpec, taken: Iterable<number>, nowMs: number, days: number): QueueRunway {
+  const end = nowMs + days * DAY;
+  const dayOf = (at: number) => {
+    const l = localTime(at, queue.timeZone);
+    return `${l.year}-${l.month}-${l.day}`;
+  };
+  const posting = new Set(slotsBetween(queue, nowMs, end).map(dayOf));
+  const filled = new Set<string>();
+  for (const at of taken) {
+    if (at <= nowMs || at > end) continue;
+    const day = dayOf(at);
+    if (posting.has(day)) filled.add(day);
+  }
+  return { postingDays: posting.size, filledDays: filled.size, low: filled.size < posting.size };
+}
+
 // The same local clock time in another zone, for a post when its queue's time zone changes.
 export function retime(epochMs: number, fromZone: string, toZone: string): number {
   return zonedToEpoch(localTime(epochMs, fromZone), toZone);

@@ -3,8 +3,8 @@ import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
-import type { SocialWriter, WriterChannel } from '@crove/agent';
-import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
+import { ALT_TEXT_IMAGE_MAX_BYTES, ALT_TEXT_IMAGE_TYPES, type SocialWriter, type WriterChannel } from '@crove/agent';
+import { CAPABILITIES, isProvider as isSocialProvider, strictestAltTextLimit } from '@crove/mod-social/contract';
 import { voiceNotes, type BrandVoice } from '@crove/mod-social';
 import {
   clientOverviews,
@@ -31,6 +31,7 @@ import { ConcurrencyLimiter } from './concurrency.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 import type { Delivery, DeliveryResult } from './mail.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
+import type { PortalSync } from './portal-sync.ts';
 
 export interface RpcContext {
   user: AuthUser;
@@ -71,8 +72,9 @@ interface CreatedInvite {
 // Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
 export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> &
   Partial<Pick<SocialWriter, 'hashtags'>> & {
-    // An image's alt text from its stored bytes (#817), when the deployment's model takes images (AI_VISION).
-    describeStored?: (file: { key: string; generation: string | null; sha256: string }, mime: string, language: 'vi' | 'en') => Promise<string | null>;
+    // An image's alt text from its stored bytes (#817), when the deployment's model takes images (AI_VISION), within
+    // maxChars when the chosen channels take less than the writer's own limit (#1121).
+    describeStored?: (file: { key: string; generation: string | null; sha256: string }, mime: string, language: 'vi' | 'en', maxChars?: number | null) => Promise<string | null>;
   };
 
 // The org's saved brand voices (#741) as notes for the writer: the org's, and each channel's by connection.
@@ -155,7 +157,7 @@ function discordFailure(code: string | undefined): DomainError | null {
   if (code === 'DISCORD_WEBHOOK_REFUSED') return new DomainError('DISCORD_WEBHOOK_REFUSED', 422, 'Discord không nhận webhook này, có thể nó đã bị xóa; hãy tạo webhook mới');
   return null;
 }
-const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram', mastodon: 'Mastodon', pinterest: 'Pinterest', discord: 'Discord', wordpress: 'WordPress (blog post)' };
+const PROVIDER_LABELS: Record<string, string> = { sandbox: 'test channel', facebook_page: 'Facebook Page', instagram: 'Instagram', zalo_oa: 'Zalo Official Account (article)', tiktok: 'TikTok', youtube: 'YouTube', threads: 'Threads', linkedin: 'LinkedIn', x: 'X', bluesky: 'Bluesky', google_business: 'Google Business Profile', telegram: 'Telegram', mastodon: 'Mastodon', pinterest: 'Pinterest', discord: 'Discord', wordpress: 'WordPress (blog post)', linkedin_page: 'LinkedIn Page' };
 
 export interface RpcChannels {
   // Seals tokens before kernel.channel.connect stores them; never opens one in the API.
@@ -194,7 +196,8 @@ function connectorFailure(error: unknown): DomainError {
 // sendInviteMail unset: invite mail is off (tests, or an embedder without mail). channels unset: no channel can be
 // connected through the API (the list and disconnect still work).
 // taxLookup unset: the public tax registry lookup is off (issue #324, TAX_CODE_LOOKUP_URL).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, taxLookup?: TaxCodeLookup, drafts: DraftBudget = new DraftBudget(), blueskyLogins: BlueskyLoginBudget = new BlueskyLoginBudget()) {
+// portalSync unset: the assisted sync from the tax portal is off (issue #325, TAX_PORTAL_SYNC).
+export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, taxLookup?: TaxCodeLookup, drafts: DraftBudget = new DraftBudget(), blueskyLogins: BlueskyLoginBudget = new BlueskyLoginBudget(), portalSync?: PortalSync) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -219,6 +222,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     if (!finance) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun tài chính chưa được bật' });
     return inOrg(context, fn);
   };
+  // The assisted tax portal sync (issue #325): the steps check the member's role again in their commands; the password
+  // in login's input goes to the portal and nowhere else.
+  const inPortalSync = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor, sync: PortalSync) => Promise<T>) =>
+    inFinance(context, (orgId, actor) => {
+      if (!portalSync) throw new DomainError('PORTAL_SYNC_DISABLED', 404, 'Chức năng lấy dữ liệu từ cổng thuế chưa được bật trên máy chủ này');
+      return fn(orgId, actor, portalSync);
+    });
 
   // The multi-client home screen reads up to four orgs at once, a transaction each, on the API's pool of ten
   // connections (#495): one screen per user at a time and two per process; another is refused at once (OVERLOADED).
@@ -535,15 +545,33 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             return result;
           }),
         ),
+        // An alt text suggestion for one image (#817, #1121): a proposal the member keeps or edits, never saved here.
+        // The image is read only when it is the org's own Social upload, a JPG, PNG or WEBP of at most 10 MB, and goes
+        // only to the configured model; neither it nor the prompt is logged.
         describeImage: os.social.posts.describeImage.handler(({ context, input }) =>
           inSocial(context, async (orgId, actor) => {
             const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
             if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không soạn được bài');
-            if (!socialWriter?.describeStored) throw new DomainError('AI_VISION_OFF', 422, 'Mô hình AI của máy chủ chưa đọc được ảnh (AI_VISION)');
-            // The member's own org's file, an image, small enough to send: the same read a download makes.
-            const file = await runtime.query<{ content_type: string; storage_key: string; generation: string | null; sha256: string; size_bytes: string }>('kernel.file.get', { id: input.fileId }, { actor, orgId });
-            if (!file.content_type.startsWith('image/')) throw new DomainError('ALT_TEXT_IMAGE_ONLY', 422, 'Chỉ gợi ý mô tả cho ảnh');
-            if (Number(file.size_bytes) > 10 * 1024 * 1024) throw new DomainError('TOO_LARGE', 413, 'Ảnh quá lớn để AI đọc');
+            if (!socialWriter) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
+            if (!socialWriter.describeStored) throw new DomainError('AI_VISION_OFF', 422, 'Mô hình AI của máy chủ chưa đọc được ảnh (AI_VISION)');
+            const file = await runtime.query<{ storageKey: string; generation: string | null; sha256: string; contentType: string; sizeBytes: number }>('social.media.stored', { fileId: input.fileId }, { actor, orgId });
+            if (!ALT_TEXT_IMAGE_TYPES.includes(file.contentType)) throw new DomainError('ALT_TEXT_IMAGE_ONLY', 422, 'Chỉ gợi ý mô tả cho ảnh');
+            if (file.sizeBytes > ALT_TEXT_IMAGE_MAX_BYTES) throw new DomainError('ALT_TEXT_IMAGE_TOO_LARGE', 413, 'Ảnh lớn hơn 10 MB nên AI không đọc được');
+            // The post's channels, the org's own (a disconnected one of a saved post included): the suggestion keeps
+            // within their strictest alt-text limit.
+            let maxChars: number | null = null;
+            if (input.connectionIds && input.connectionIds.length > 0) {
+              const connections = await runtime.query<{ id: string; provider: string }[]>('kernel.channel.list', { includeRevoked: true }, { actor, orgId });
+              const own = new Map(connections.map((c) => [c.id, c.provider]));
+              const providers: string[] = [];
+              for (const id of input.connectionIds) {
+                const provider = own.get(id);
+                if (provider === undefined) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại');
+                providers.push(provider);
+              }
+              maxChars = strictestAltTextLimit(providers);
+            }
+            // The same budget as drafts: each ask is a paid model call (#386).
             const ticket = drafts.take(orgId, actor.userId);
             if (!ticket.allowed) {
               throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang chờ AI trả lời, hãy đợi xong rồi thử tiếp' : 'Đã dùng AI nhiều lần trong phút này, hãy thử lại sau ít phút', {
@@ -552,14 +580,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
             let altText: string | null;
             try {
-              altText = await socialWriter.describeStored({ key: file.storage_key, generation: file.generation, sha256: file.sha256 }, file.content_type, input.language);
+              altText = await socialWriter.describeStored({ key: file.storageKey, generation: file.generation, sha256: file.sha256 }, file.contentType, input.language, maxChars);
             } catch (error: unknown) {
               console.error('[social-ai] describe failed', error instanceof Error ? error.name : typeof error);
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
             } finally {
               ticket.release();
             }
-            if (!altText) throw new DomainError('AI_REWRITE_EMPTY', 422, 'AI không viết lại được đoạn này, hãy thử cách khác');
+            if (!altText) throw new DomainError('AI_ALT_TEXT_EMPTY', 422, 'AI không mô tả được ảnh này, bạn hãy tự viết mô tả');
             return { altText };
           }),
         ),
@@ -663,6 +691,15 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         add: os.social.bannedWords.add.handler(socialCommand('social.banned_word.add')),
         remove: os.social.bannedWords.remove.handler(socialCommand('social.banned_word.remove')),
       },
+      reviewChecklist: {
+        list: os.social.reviewChecklist.list.handler(socialQuery('social.review_check.list')),
+        set: os.social.reviewChecklist.set.handler(socialCommand('social.review_check.set')),
+      },
+      channelAccess: {
+        list: os.social.channelAccess.list.handler(socialQuery('social.channel_access.list')),
+        mine: os.social.channelAccess.mine.handler(socialQuery('social.channel_access.mine')),
+        set: os.social.channelAccess.set.handler(socialCommand('social.channel_access.set')),
+      },
       goals: {
         progress: os.social.goals.progress.handler(socialQuery('social.goal.progress')),
         set: os.social.goals.set.handler(socialCommand('social.goal.set')),
@@ -725,6 +762,10 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       linkPreviews: {
         request: os.social.linkPreviews.request.handler(socialCommand('social.link_preview.request')),
         get: os.social.linkPreviews.get.handler(socialQuery('social.link_preview.get')),
+      },
+      channelOptions: {
+        request: os.social.channelOptions.request.handler(socialCommand('social.channel_option.request')),
+        get: os.social.channelOptions.get.handler(socialQuery('social.channel_option.get')),
       },
       notifications: {
         list: os.social.notifications.list.handler(socialQuery('social.notification.list')),
@@ -1235,6 +1276,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       remove: os.portalList.remove.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.portal_list.remove', input, { actor, orgId })),
       ),
+    },
+    portalSync: {
+      captcha: os.portalSync.captcha.handler(({ context, input }) => inPortalSync(context, (orgId, actor, sync) => sync.captcha(orgId, actor, input.period))),
+      login: os.portalSync.login.handler(({ context, input }) => inPortalSync(context, (orgId, actor, sync) => sync.login(orgId, actor, input))),
+      // The request's signal: a browser that went away stops the step before its next portal request.
+      fetchList: os.portalSync.fetchList.handler(({ context, input, signal }) => inPortalSync(context, (orgId, actor, sync) => sync.fetchList(orgId, actor, input, signal ? { signal } : {}))),
+      fetchXml: os.portalSync.fetchXml.handler(({ context, input, signal }) => inPortalSync(context, (orgId, actor, sync) => sync.fetchXml(orgId, actor, input, signal ? { signal } : {}))),
     },
     missingInvoices: {
       status: os.missingInvoices.status.handler(({ context }) =>

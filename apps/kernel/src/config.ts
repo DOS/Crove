@@ -5,6 +5,10 @@ import { SIGNUP_POLICIES, parseAllowedDomains } from './auth-signup-policy.ts';
 import { WEBHOOK_ENV } from './alert.ts';
 import { exportSealer } from './export-seal.ts';
 
+// The product name when BRAND_NAME is unset (#1040).
+export const DEFAULT_BRAND_NAME = 'Crove';
+const BRAND_NAME_PATTERN = /^[\p{L}\p{N}][\p{L}\p{M}\p{N} .,&'+_!()-]*$/u;
+
 const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 
 const optional = z
@@ -268,6 +272,13 @@ const schema = z.object({
   CHANNEL_LINKEDIN_CLIENT_SECRET: optional,
   // LinkedIn post counts (#797): true once the LinkedIn app has member post analytics (r_member_postAnalytics).
   CHANNEL_LINKEDIN_ANALYTICS: z.enum(['true', 'false']).default('false'),
+  // LinkedIn Company Pages (#1077): true once the LinkedIn app has the Community Management API (w_organization_social,
+  // r_organization_admin). Callback URL: PUBLIC_URL/channels/oauth/linkedin_page/callback.
+  CHANNEL_LINKEDIN_ORGANIZATIONS: z.enum(['true', 'false']).default('false'),
+  // A separate LinkedIn app for Company Pages: LinkedIn grants the Community Management API only to an app with no other
+  // product, so a deployment that also posts as members sets these; without them pages use the member app above.
+  CHANNEL_LINKEDIN_PAGE_CLIENT_ID: optional,
+  CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET: optional,
   // The deployment's Google Cloud project for YouTube uploads (YouTube Data API v3, an OAuth web client), S9. Callback
   // URL: PUBLIC_URL/channels/oauth/youtube/callback.
   CHANNEL_GOOGLE_CLIENT_ID: optional,
@@ -349,6 +360,17 @@ const schema = z.object({
       })
       .optional(),
   ),
+  // The product name users see (#1040): in the app, the page title and Crove's own mails (sender name and texts). Code,
+  // schemas, logs and the AGPL source notice keep "Crove". Plain text of 1 to 40 characters (letters, digits, spaces
+  // and . , & ' + _ ! ( ) -), so it needs no escaping in HTML, ICU messages or a mail's From header. Browsers read it
+  // from /api/config.
+  BRAND_NAME: optional.pipe(
+    z
+      .string()
+      .transform((value) => value.normalize('NFC'))
+      .pipe(z.string().max(40, 'BRAND_NAME is at most 40 characters').regex(BRAND_NAME_PATTERN, "BRAND_NAME is plain text: letters, digits, spaces and . , & ' + _ ! ( ) -"))
+      .default(DEFAULT_BRAND_NAME),
+  ),
   // The terms of service and the privacy notice that sign-up and invite acceptance link to (#688, plan M3-6): https:
   // pages the deployment publishes. Unset hides the line. Browsers read them from /api/config.
   TERMS_URL: optional.pipe(z.url({ protocol: /^https$/ }).optional()),
@@ -367,6 +389,18 @@ const schema = z.object({
       })
       .optional(),
   ),
+  // The assisted purchase-invoice sync from the tax portal (issue #325, ADR-0036): the accountant types the client's
+  // portal password and solves the portal's CAPTCHA in Crove, and the API fetches the period's purchase list and invoice
+  // XML from hoadondientu.gdt.gov.vn. Off unless true: it logs in to a government portal on a client's behalf, which
+  // the deployment opts into (docs/integrations/tax-portal-sync.md). Needs the credential key (CREDENTIAL_KEY).
+  TAX_PORTAL_SYNC: z.enum(['true', 'false']).default('false'),
+  // Where the portal's API is; unset: https://hoadondientu.gdt.gov.vn/api. Only for pointing a test deployment at a
+  // fake portal (the end-to-end tests do); the API refuses it unless PUBLIC_URL is local (localhost or a .test name),
+  // since any other address would receive the client's portal password.
+  // One deadline, in seconds, for each list or XML step of a sync, all its portal requests together; past it the step
+  // stops and the screen offers to go on.
+  TAX_PORTAL_STEP_SECONDS: z.coerce.number().int().min(30).max(300).default(90),
+  TAX_PORTAL_URL: optional.pipe(z.url({ protocol: /^https?$/ }).optional()),
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,
   INBOUND_SECRET: optional,
@@ -453,6 +487,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (config.CHANNEL_THREADS_APP_ID && !/^\d{1,32}$/.test(config.CHANNEL_THREADS_APP_ID)) throw new Error('CHANNEL_THREADS_APP_ID is the numeric id of the Threads app');
   if (Boolean(config.CHANNEL_LINKEDIN_CLIENT_ID) !== Boolean(config.CHANNEL_LINKEDIN_CLIENT_SECRET)) throw new Error('set both CHANNEL_LINKEDIN_CLIENT_ID and CHANNEL_LINKEDIN_CLIENT_SECRET, or neither');
   if (config.CHANNEL_LINKEDIN_CLIENT_ID && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_LINKEDIN_CLIENT_ID)) throw new Error('CHANNEL_LINKEDIN_CLIENT_ID is the client id of the LinkedIn app');
+  if (Boolean(config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID) !== Boolean(config.CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET)) throw new Error('set both CHANNEL_LINKEDIN_PAGE_CLIENT_ID and CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET, or neither');
+  if (config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID)) throw new Error('CHANNEL_LINKEDIN_PAGE_CLIENT_ID is the client id of the LinkedIn Company Pages app');
+  if (config.CHANNEL_LINKEDIN_ORGANIZATIONS === 'true' && !config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID && !config.CHANNEL_LINKEDIN_CLIENT_ID) throw new Error('CHANNEL_LINKEDIN_ORGANIZATIONS needs CHANNEL_LINKEDIN_PAGE_CLIENT_ID and CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET, or CHANNEL_LINKEDIN_CLIENT_ID and CHANNEL_LINKEDIN_CLIENT_SECRET');
   if (Boolean(config.CHANNEL_TIKTOK_CLIENT_KEY) !== Boolean(config.CHANNEL_TIKTOK_CLIENT_SECRET)) throw new Error('set both CHANNEL_TIKTOK_CLIENT_KEY and CHANNEL_TIKTOK_CLIENT_SECRET, or neither');
   if (config.CHANNEL_TIKTOK_CLIENT_KEY && !/^[A-Za-z0-9]{8,64}$/.test(config.CHANNEL_TIKTOK_CLIENT_KEY)) throw new Error('CHANNEL_TIKTOK_CLIENT_KEY is the client key of the TikTok app');
   if (Boolean(config.CHANNEL_GOOGLE_CLIENT_ID) !== Boolean(config.CHANNEL_GOOGLE_CLIENT_SECRET)) throw new Error('set both CHANNEL_GOOGLE_CLIENT_ID and CHANNEL_GOOGLE_CLIENT_SECRET, or neither');
@@ -481,7 +518,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       throw new Error('AUTH_STEP_UP=off lets a stolen session approve and change roles without MFA; set it to required');
     }
     // A provider sends the authorization code to PUBLIC_URL/channels/oauth/<provider>/callback (#375).
-    const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID, config.CHANNEL_PINTEREST_APP_ID];
+    const oauthApps = [config.CHANNEL_META_APP_ID, config.CHANNEL_ZALO_APP_ID, config.CHANNEL_THREADS_APP_ID, config.CHANNEL_LINKEDIN_CLIENT_ID, config.CHANNEL_LINKEDIN_PAGE_CLIENT_ID, config.CHANNEL_GOOGLE_CLIENT_ID, config.CHANNEL_TIKTOK_CLIENT_KEY, config.CHANNEL_X_CLIENT_ID, config.CHANNEL_PINTEREST_APP_ID];
     if (oauthApps.some(Boolean) && !config.PUBLIC_URL.startsWith('https://')) {
       throw new Error('channel OAuth sends authorization codes back to PUBLIC_URL; a public PUBLIC_URL must be https when a CHANNEL_* app is set');
     }

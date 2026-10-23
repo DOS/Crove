@@ -87,8 +87,8 @@ export function bestTimes(samples: readonly PublishedSample[], timeZone: string,
 // format, weekday, hour and hashtag, plus its best and worst posts. Engagement is engagementOf (reactions, comments,
 // shares and saves), which every platform reports; a rate over reach would leave out the channels that report none.
 // Medians, so one viral post does not tilt a group. A post without a capture yet is left out.
-export type PostFormat = 'text' | 'image' | 'carousel' | 'video' | 'story' | 'reel';
-export const POST_FORMATS: readonly PostFormat[] = ['text', 'image', 'carousel', 'video', 'story', 'reel'];
+export type PostFormat = 'text' | 'image' | 'carousel' | 'video' | 'document' | 'story' | 'reel';
+export const POST_FORMATS: readonly PostFormat[] = ['text', 'image', 'carousel', 'video', 'document', 'story', 'reel'];
 
 export interface InsightSample {
   variantId: string;
@@ -135,7 +135,8 @@ export function formatOf(postType: string | null | undefined, mediaTypes: readon
   if (postType === 'reel') return 'reel';
   if (mediaTypes.length === 0) return 'text';
   if (mediaTypes.length > 1) return 'carousel';
-  return mediaTypes[0]?.startsWith('video/') ? 'video' : 'image';
+  // A PDF is a document post (#1119, LinkedIn).
+  return mediaTypes[0]?.startsWith('video/') ? 'video' : mediaTypes[0] === 'application/pdf' ? 'document' : 'image';
 }
 
 // A post's hashtags, each once, lower-cased the Vietnamese way (letters with their marks, digits and _).

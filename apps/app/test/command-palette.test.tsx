@@ -6,6 +6,7 @@ import { IntlProvider } from 'use-intl';
 import { describe, expect, it } from 'vitest';
 import { CommandPalette, type PaletteEntry } from '../src/components/command-palette.tsx';
 import { vi as viMessages } from '../src/i18n/messages/vi.ts';
+import { catalog } from '../src/i18n/runtime.ts';
 
 const t = viMessages.palette;
 const none = () => {};
@@ -17,7 +18,7 @@ const found: PaletteEntry[] = [
 
 const render = (props: Partial<Parameters<typeof CommandPalette>[0]>) =>
   renderToStaticMarkup(
-    <IntlProvider locale="vi" messages={viMessages}>
+    <IntlProvider locale="vi" messages={catalog('vi')}>
       <CommandPalette entries={entries} open={false} onOpenChange={none} {...props} />
     </IntlProvider>,
   );

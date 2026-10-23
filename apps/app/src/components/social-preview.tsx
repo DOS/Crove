@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isProvider, LINK_PLACEMENT, sentText, type Cover } from '@crove/mod-social/contract';
-import { useTranslations } from 'use-intl';
+import { useFormatter, useTranslations } from 'use-intl';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, type MediaItem } from './social-media.tsx';
 import { client } from '../lib/api.ts';
@@ -19,12 +19,19 @@ export interface PreviewContent {
   cover?: Cover | null;
   // The channel's post type (#644): a Story shows only its image or video, in a phone frame.
   postType?: string;
-  // A Threads or X poll's options and a Threads topic tag (#711, #948); an X poll's length in minutes.
+  // A poll's options and a Threads topic tag (#711, #948, #1118); the poll's length in minutes where it has one.
   poll?: readonly string[];
   pollMinutes?: number;
+  // A LinkedIn poll's own question; voters may pick several options; counts hidden until the end (#1118).
+  pollQuestion?: string;
+  pollMultiple?: boolean;
+  pollHideTotals?: boolean;
   topicTag?: string;
   // Who may reply to an X or Threads post, when not everyone (#948, #983).
   replySettings?: 'following' | 'mentionedUsers' | 'followers';
+  // Who may reply to a Bluesky post when not everyone (#1102): nobody, or one or several groups; and quotes off.
+  replyRules?: 'nobody' | readonly ('mentionedUsers' | 'following' | 'followers')[];
+  quotesOff?: boolean;
   // Who sees a LinkedIn post, when not anyone (#983).
   visibility?: 'connections' | 'loggedIn';
   // The link buttons under a Telegram post (#1017), in rows.
@@ -60,7 +67,7 @@ function Media({ media, layout, max, cover }: { media: readonly MediaItem[]; lay
         {covered && 'fileId' in covered ? (
           <Thumb fileId={covered.fileId} alt={t('coverImageAlt')} mime="image/jpeg" className={cn(frame, 'mx-auto w-full')} />
         ) : (
-          <Thumb fileId={first.fileId} alt={alt(first, 0)} mime={first.mime} durationMs={first.durationMs} frameMs={covered?.atMs} className={cn(frame, 'mx-auto w-full')} />
+          <Thumb fileId={first.fileId} alt={alt(first, 0)} name={first.filename} mime={first.mime} durationMs={first.durationMs} frameMs={covered?.atMs} className={cn(frame, 'mx-auto w-full')} />
         )}
         {media.length > 1 && (
           <span className="absolute top-2 right-2 rounded-full bg-background/80 px-2 text-xs text-foreground tabular-nums" aria-label={t('previewCount', { count: media.length })}>
@@ -75,7 +82,7 @@ function Media({ media, layout, max, cover }: { media: readonly MediaItem[]; lay
     <div className={cn('mt-3 grid gap-1', shown.length === 1 ? 'grid-cols-1' : 'grid-cols-2')}>
       {shown.map((m, i) => (
         <div key={m.fileId} className={cn('relative', shown.length === 3 && i === 0 && 'row-span-2')}>
-          <Thumb fileId={m.fileId} alt={alt(m, i)} mime={m.mime} durationMs={m.durationMs} className={shown.length === 1 ? 'aspect-[4/3]' : shown.length === 3 && i === 0 ? 'h-full' : 'aspect-square'} />
+          <Thumb fileId={m.fileId} alt={alt(m, i)} name={m.filename} mime={m.mime} durationMs={m.durationMs} className={shown.length === 1 ? 'aspect-[4/3]' : shown.length === 3 && i === 0 ? 'h-full' : 'aspect-square'} />
           {i === shown.length - 1 && media.length > shown.length && (
             <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/70 text-lg font-semibold text-foreground">+{media.length - shown.length}</span>
           )}
@@ -110,8 +117,16 @@ function useLinkPreview(url: string, enabled: boolean) {
 
 export function PlatformPreview({ channel, provider, content, readLink = false }: { channel: string; provider: string; content: PreviewContent; readLink?: boolean }) {
   const t = useTranslations('social');
+  const format = useFormatter();
   const rule = previewRule(provider);
   const [open, setOpen] = useState(false);
+  // Who may reply to a Bluesky post (#1102): one group as X and Threads say it, several joined as the locale lists them.
+  const replyRulesLine = (rules: NonNullable<PreviewContent['replyRules']>) => {
+    if (rules === 'nobody') return t('previewReplySettings.nobody');
+    const [only] = rules;
+    if (rules.length === 1 && only) return t(`previewReplySettings.${only}`);
+    return t('previewReplyRules', { who: format.list(rules.map((r) => t(`previewReplyWho.${r}`)), { type: 'conjunction' }) });
+  };
   // An edit shows the cut again, as the feed would.
   useEffect(() => setOpen(false), [content.body]);
   const host = hostOf(content.linkUrl);
@@ -237,6 +252,7 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
       {title && <p className="mt-3 text-sm font-semibold text-foreground">{title}</p>}
       {content.topicTag && <p className="mt-2 text-xs font-medium text-link">{content.topicTag}</p>}
       <div className="mt-2">{body}</div>
+      {content.poll && content.poll.length > 0 && typeof content.pollQuestion === 'string' && <p className="mt-2 text-sm font-semibold text-foreground">{content.pollQuestion.trim() || ' '}</p>}
       {content.poll && content.poll.length > 0 && (
         <ul className="mt-2 space-y-1" aria-label={t('previewPoll')}>
           {content.poll.map((option, i) => (
@@ -249,9 +265,13 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
       {content.poll && content.poll.length > 0 && content.pollMinutes !== undefined && (
         <p className="mt-1 text-xs text-subtle-foreground">{t(`previewPollLength.${pollLength(content.pollMinutes).unit}`, { n: pollLength(content.pollMinutes).n })}</p>
       )}
+      {content.poll && content.poll.length > 0 && content.pollMultiple && <p className="mt-1 text-xs text-subtle-foreground">{t('previewPollMultiple')}</p>}
+      {content.poll && content.poll.length > 0 && content.pollHideTotals && <p className="mt-1 text-xs text-subtle-foreground">{t('previewPollHideTotals')}</p>}
       <Media media={content.media} layout="feed" max={rule.gridMax} />
       {content.replySettings && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewReplySettings.${content.replySettings}`)}</p>}
       {content.visibility && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewVisibility.${content.visibility}`)}</p>}
+      {content.replyRules && <p className="mt-2 text-xs text-subtle-foreground">{replyRulesLine(content.replyRules)}</p>}
+      {content.quotesOff && <p className="mt-2 text-xs text-subtle-foreground">{t('previewQuotesOff')}</p>}
       {card}
       {content.buttons && content.buttons.length > 0 && (
         // As Telegram lays out an inline keyboard: each row under the message, its buttons sharing the width.

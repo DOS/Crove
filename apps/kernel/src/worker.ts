@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
@@ -115,6 +115,12 @@ interface LinkPreviewJob {
   previewId: string;
 }
 const LINK_PREVIEW_RETRY_LIMIT = 2;
+
+interface ChannelOptionJob {
+  orgId: string;
+  optionId: string;
+}
+const CHANNEL_OPTION_RETRY_LIMIT = 2;
 
 interface ExtractJob {
   orgId: string;
@@ -706,6 +712,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const done = await runRemoveJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, after);
       console.log(`[social-remove] ${provider.slice(0, 32)} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
     });
+    // A channel's options for the composer (#1120): the token is opened here and goes to the adapter only.
+    await boss.work<ChannelOptionJob>(QUEUES.socialChannelOption, { batchSize: 1 }, async ([job]) => {
+      if (!job || !channels) return;
+      const done = await runChannelOptionJob({ runtime: deps.runtime, broker: channels.broker, publishers }, job.data.orgId, job.data.optionId);
+      if (done !== 'none') console.log(`[social-channel-option] ${job.data.optionId.slice(0, 8)}: ${done}`);
+    });
   }
   let sweeping = false;
   const socialSweep = async () => {
@@ -792,6 +804,41 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   };
   const reminderTimer = deps.runtime.installed('social') ? setInterval(() => void reminderSweep(), REMINDER_SWEEP_MS) : null;
   if (reminderTimer) void reminderSweep();
+
+  // Queues running low (#1079): every hour, each queue with the warning on is measured, and its team told once per dip.
+  let measuringQueues = false;
+  const queueLowSweep = async () => {
+    if (measuringQueues) return;
+    measuringQueues = true;
+    try {
+      const alerted = await sweepQueueLow({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (alerted > 0) console.log(`[social-queue-low] told ${alerted} team(s) of a low queue`);
+    } catch (error) {
+      console.error('[social-queue-low] sweep', error instanceof Error ? error.name : 'error');
+    } finally {
+      measuringQueues = false;
+    }
+  };
+  const queueLowTimer = deps.runtime.installed('social') ? setInterval(() => void queueLowSweep(), QUEUE_LOW_SWEEP_MS) : null;
+  if (queueLowTimer) void queueLowSweep();
+
+  // The weekly digest (#1104): every hour, the orgs past Monday 08:00 in their zone that have not had this week's;
+  // each is claimed once per ISO week in its own transaction. The log names counts only.
+  let digesting = false;
+  const digestSweep = async () => {
+    if (digesting) return;
+    digesting = true;
+    try {
+      const sent = await sweepDigests({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (sent > 0) console.log(`[social-digest] sent the weekly digest of ${sent} org(s)`);
+    } catch (error) {
+      console.error('[social-digest] sweep', error instanceof Error ? error.name : 'error');
+    } finally {
+      digesting = false;
+    }
+  };
+  const digestTimer = deps.runtime.installed('social') ? setInterval(() => void digestSweep(), DIGEST_SWEEP_MS) : null;
+  if (digestTimer) void digestSweep();
 
   // Proposal reminders and escalation (#676): every half hour, the pending proposals past the days their org set.
   let nudging = false;
@@ -1118,6 +1165,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   retryLimit: 0,
                 });
               }
+              // A channel's options for the composer (#1120): read by the worker with the channel's token.
+              if (social && row.type === 'social.channel_option.requested') {
+                const optionId = String(row.payload.option_id);
+                return boss.send(QUEUES.socialChannelOption, { orgId: row.org_id, optionId } satisfies ChannelOptionJob, {
+                  singletonKey: `${row.org_id}:${optionId}`,
+                  retryLimit: CHANNEL_OPTION_RETRY_LIMIT,
+                  retryDelay: 10,
+                  retryBackoff: true,
+                });
+              }
               if (social && row.type === 'social.link_preview.requested') {
                 const previewId = String(row.payload.preview_id);
                 return boss.send(QUEUES.socialLinkPreview, { orgId: row.org_id, previewId } satisfies LinkPreviewJob, {
@@ -1307,6 +1364,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (evergreenTimer) clearInterval(evergreenTimer);
     if (recurringTimer) clearInterval(recurringTimer);
     if (reminderTimer) clearInterval(reminderTimer);
+    if (queueLowTimer) clearInterval(queueLowTimer);
+    if (digestTimer) clearInterval(digestTimer);
     if (missingInvoiceTimer) clearInterval(missingInvoiceTimer);
     clearInterval(proposalNudgeTimer);
     clearInterval(securityTimer);

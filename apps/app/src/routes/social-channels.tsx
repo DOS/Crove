@@ -18,31 +18,33 @@ import { ReportBrandingCard } from '../components/social-report-branding.tsx';
 import { ChatAlertCard } from '../components/social-chat-alert.tsx';
 import { PublishHoldCard } from '../components/social-publish-hold.tsx';
 import { BannedWordsCard } from '../components/social-banned-words.tsx';
+import { ReviewChecklistCard } from '../components/social-review-checklist.tsx';
+import { ChannelAccessCard, useChannelScope } from '../components/social-channel-access.tsx';
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { rememberOAuthAttempt } from '../lib/oauth.ts';
-import { minuteLabel, parseMinute, providerName } from '../lib/social.ts';
+import { connectPlatforms, minuteLabel, parseMinute, providerName } from '../lib/social.ts';
 import { shuffleRange } from '../lib/social-queue-order.ts';
 
 type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
 type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
-// Platforms in the order Crove adds them (Social plan §6).
-const PLATFORMS = ['facebook_page', 'instagram', 'zalo_oa', 'threads', 'linkedin', 'youtube', 'tiktok', 'x', 'google_business', 'pinterest'] as const;
 const OAUTH_PROVIDERS: readonly string[] = OAUTH_CHANNEL_PROVIDERS;
 type Slot = { weekday: number; minute: number; label?: string; labelId?: string | null };
 
 const CHANNEL_TONE = { active: 'success', expired: 'warning', error: 'destructive', revoked: 'outline' } as const;
 // Platforms whose tokens Crove cannot renew: the member reconnects before the date, and is warned two weeks ahead.
-const NO_RENEWAL: readonly string[] = ['linkedin'];
+const NO_RENEWAL: readonly string[] = ['linkedin', 'linkedin_page'];
 const WARN_BEFORE_MS = 14 * 86_400_000;
 // The time zones most Crove orgs post in; the queue keeps any IANA zone it already has.
 const ZONES = ['Asia/Ho_Chi_Minh', 'Asia/Bangkok', 'Asia/Singapore', 'Asia/Tokyo', 'Australia/Sydney', 'Europe/London', 'America/New_York', 'America/Los_Angeles', 'UTC'];
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
 const DAY_KEYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
 const dayKeyOf = (weekday: number) => DAY_KEYS[(weekday - 1) % 7] ?? 'mon';
+// The windows the low-queue warning offers (#1079); a queue keeps any other value it already has (1 to 30).
+const LOW_DAYS = [1, 2, 3, 5, 7, 10, 14, 21, 30];
 
 // How many different people approve a post for this channel before it may be scheduled (S9 review policy).
 // loading: the policies are still being read, so the select waits instead of showing the default.
@@ -141,6 +143,7 @@ function ReviewPolicy({ channel, required, reminders, shortLinks, fourEyes, clie
 function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean }) {
   const t = useTranslations('social');
   const f = useFormat();
+  const { slug } = useParams({ strict: false }) as { slug: string };
   const queue = useQuery(orpc.social.queues.get.queryOptions({ input: { connectionId: channel.id } }));
   const [draft, setDraft] = useState<{ timeZone: string; slots: Slot[] } | null>(null);
   const [weekday, setWeekday] = useState(1);
@@ -151,7 +154,7 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
   const labelName = new Map((labels.data ?? []).map((l) => [l.id, l.name]));
   const current = draft ?? (queue.data ? { timeZone: queue.data.timeZone ?? 'Asia/Ho_Chi_Minh', slots: queue.data.slots.map((s) => ({ weekday: s.weekday, minute: s.minute, ...(s.label ? { label: s.label } : {}), ...(s.labelId ? { labelId: s.labelId } : {}) })) } : null);
   const save = useMutation({
-    mutationFn: (next: { timeZone: string; slots: Slot[]; paused?: boolean }) => client.social.queues.set({ connectionId: channel.id, ...next }),
+    mutationFn: (next: { timeZone: string; slots: Slot[]; paused?: boolean; lowDays?: number | null }) => client.social.queues.set({ connectionId: channel.id, ...next }),
     onSuccess: () => {
       setDraft(null);
       void queryClient.invalidateQueries();
@@ -171,9 +174,18 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
     setDraft({ ...current, slots: [...current.slots, ...missing] });
   };
   const paused = queue.data?.paused ?? false;
+  const lowDays = queue.data?.lowDays ?? null;
   return (
     <div className="space-y-3">
       {paused && <p className="text-xs text-warning">{t('queuePausedNote')}</p>}
+      {!paused && queue.data?.low && lowDays !== null && (
+        <p className="text-xs text-warning">
+          {t('queueLowNote', { days: lowDays })}{' '}
+          <Link to="/o/$slug/social/new" params={{ slug }} search={{ channel: channel.id }} className="font-medium underline underline-offset-2 hover:text-foreground">
+            {t('queueLowFill')}
+          </Link>
+        </p>
+      )}
       <div className="flex flex-wrap items-end gap-2">
         {canEdit && queue.data?.queueId && (
           <label className="flex h-7 items-center gap-2 text-sm text-muted-foreground" title={draft ? t('saveQueueFirst') : undefined}>
@@ -197,7 +209,32 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
             ))}
           </NativeSelect>
         </div>
+        {queue.data?.queueId && (
+          <div className="space-y-1">
+            <Label className="text-xs" htmlFor={`queue-low-${channel.id}`}>
+              {t('queueLowLabel')}
+            </Label>
+            <NativeSelect
+              id={`queue-low-${channel.id}`}
+              size="sm"
+              value={lowDays === null ? '' : String(lowDays)}
+              disabled={!canEdit || Boolean(draft) || save.isPending}
+              title={draft ? t('saveQueueFirst') : t('queueLowHint')}
+              onChange={(e) => save.mutate({ ...current, lowDays: e.target.value === '' ? null : Number(e.target.value) })}
+            >
+              <NativeSelectOption value="">{t('queueLowOff')}</NativeSelectOption>
+              {[...new Set([...LOW_DAYS, ...(lowDays === null ? [] : [lowDays])])]
+                .sort((a, b) => a - b)
+                .map((n) => (
+                  <NativeSelectOption key={n} value={String(n)}>
+                    {t('queueLowDays', { count: n })}
+                  </NativeSelectOption>
+                ))}
+            </NativeSelect>
+          </div>
+        )}
       </div>
+      {queue.data?.queueId && (canEdit || lowDays !== null) && <p className="text-xs text-subtle-foreground">{t('queueLowHint')}</p>}
       {sorted.length === 0 ? (
         <p className="text-xs text-subtle-foreground">{t('noSlots')}</p>
       ) : (
@@ -311,7 +348,10 @@ export function SocialChannelsPage() {
   const voices = useQuery(orpc.social.brandVoices.list.queryOptions({ input: {} }));
   const orgVoice = voices.data?.find((v) => v.connectionId === null);
   const channelVoice = new Map((voices.data ?? []).filter((v) => v.connectionId !== null).map((v) => [v.connectionId as string, v]));
-  const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  const listed = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  // A member limited to some channels (#1081) sees those here: the others' queues and settings are not theirs.
+  const scope = useChannelScope();
+  const channels = { ...listed, data: listed.data?.filter((c) => scope.allows(c.id)), isLoading: listed.isLoading || scope.loading };
   const policyRows = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
   const policies = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.approvalsRequired]));
   const reminders = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.reviewReminders]));
@@ -471,6 +511,8 @@ export function SocialChannelsPage() {
             <PublishHoldCard key={slug} />
           </Card>
           <BannedWordsCard channels={(channels.data ?? []).filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />
+          <ReviewChecklistCard channels={(channels.data ?? []).filter((c) => c.status !== 'revoked')} canEdit={isAdmin} />
+          {channels.data && <ChannelAccessCard channels={channels.data} canEdit={isAdmin} />}
           <Card className="block space-y-2 p-4">
             <div>
               <p className="text-sm font-medium text-foreground">{t('chatAlert.title')}</p>
@@ -572,7 +614,7 @@ export function SocialChannelsPage() {
             <p className="text-xs text-subtle-foreground">{isAdmin ? t('sandboxOff') : t('adminsConnect')}</p>
           )}
           <div className="space-y-2 border-t pt-3">
-            {PLATFORMS.map((p) => (
+            {connectPlatforms(oauth).map((p) => (
               <div key={p} className="flex items-center justify-between gap-2 text-sm text-muted-foreground">
                 {providerName(p)}
                 {oauth.includes(p) ? (
@@ -587,6 +629,7 @@ export function SocialChannelsPage() {
               </div>
             ))}
             {isAdmin && <p className="text-xs text-subtle-foreground">{t(oauth.includes('google_business') ? 'gbpConnectHint' : 'gbpSetupHint')}</p>}
+            {isAdmin && oauth.includes('linkedin_page') && <p className="text-xs text-subtle-foreground">{t('linkedinPageHint')}</p>}
             {isAdmin && oauth.length > 0 && <p className="text-xs text-subtle-foreground">{t('oauthHint')}</p>}
             {start.error && <ErrorText>{errorMessage(start.error)}</ErrorText>}
           </div>

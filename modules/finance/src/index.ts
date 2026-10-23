@@ -11,6 +11,7 @@ import { accountsList, documentsList, journalExport, journalGet, journalList, pu
 import { vatDeclarationQuery, vatExport, vatPaymentMark, vatPeriodQuery } from './vat.ts';
 import { ledgerAccountQuery, ledgerBookQuery, ledgerExport, ledgerPeriodQuery } from './ledger-reports.ts';
 import { portalListImport, portalListReconcile, portalListRecord, portalListRemove, portalListSource } from './portal-list.ts';
+import { portalSyncCommands, portalSyncQueries } from './portal-sync.ts';
 import { bankImport, bankLines, bankPreview } from './bank.ts';
 import { bankLineVoucher, bankOpenLines, bankSuggestions } from './bank-match.ts';
 import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts';
@@ -28,12 +29,26 @@ export {
   firstPerOutcome,
   importPortalList,
   recordPortalListFailure,
+  PORTAL_LIST_ACTOR,
   PORTAL_PERIOD_ROW_LIMIT,
   PORTAL_RECONCILE_ITEMS_PER_OUTCOME,
   PORTAL_RECONCILE_LIMIT,
   reconcilePeriod,
   type PortalListDeps,
 } from './portal-list.ts';
+export { vatPeriod } from './domain/vat-return.ts';
+export {
+  normalizePortalInvoices,
+  parseJsonKeepingNumbers,
+  portalDate,
+  readSyncedList,
+  PORTAL_QUERIES,
+  PORTAL_SYNC_CONTENT_TYPE,
+  type NormalizedPortalList,
+  type PortalAnswer,
+  type PortalQuery,
+} from './domain/portal-api.ts';
+export { xmlCallKey, PORTAL_SYNC_TARGET, PORTAL_WRONG_PASSWORD_LIMIT, type PortalCallError, type PortalXmlItem, type PortalXmlPlan } from './portal-sync.ts';
 export {
   MISSING_INVOICE_ACTOR,
   MISSING_INVOICE_REMIND_SOURCE,
@@ -109,7 +124,7 @@ export { SEARCH_LIMIT, searchAmount, type SearchResult } from './search.ts';
 export { ARCHIVE_FORMAT, type ArchiveSource, type ArchiveSourceFile, type RecordedArchive } from './year-archive.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, vatPaymentMark, ...financeNotificationCommands, ...yearArchiveCommands, ...fixedAssetCommands];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, vatPaymentMark, ...portalSyncCommands, ...financeNotificationCommands, ...yearArchiveCommands, ...fixedAssetCommands];
 export const financeQueries = [
   ...fixedAssetQueries,
   ...statementsHtkkQueries,
@@ -136,6 +151,7 @@ export const financeQueries = [
   cashVouchers,
   portalListSource,
   portalListReconcile,
+  ...portalSyncQueries,
   missingInvoicesStatus,
   periodLockStateQuery,
   bankPreview,

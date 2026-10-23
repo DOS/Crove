@@ -13,6 +13,7 @@ import { ErrorText } from './ui.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
 import { monthOf, PLAN_EXPORT_MAX_DAYS, PLAN_EXPORT_MAX_ROWS, planPrintPath, planRange, saveCsv } from '../lib/social-plan-export.ts';
 import { providerName } from '../lib/social.ts';
+import { useChannelScope } from './social-channel-access.tsx';
 
 const toggled = (set: ReadonlySet<string>, id: string) => {
   const next = new Set(set);
@@ -43,7 +44,9 @@ export function PlanExportPanel({ slug, month, onClose }: { slug: string; month:
     if (!range) return;
     window.open(planPrintPath(slug, { ...period, channels: [...pickedChannels], labels: [...pickedLabels] }), '_blank', 'noopener');
   };
-  const live = (channels.data ?? []).filter((c) => c.status !== 'revoked');
+  // A member limited to some channels (#1081) exports those only.
+  const scope = useChannelScope();
+  const live = (channels.data ?? []).filter((c) => c.status !== 'revoked' && scope.allows(c.id));
   const labelList = labels.data ?? [];
   return (
     <Card className="block space-y-3 p-4" role="dialog" aria-label={t('title')}>

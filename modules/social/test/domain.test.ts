@@ -9,6 +9,10 @@ import {
   contentHash,
   countLinks,
   countText,
+  DISCORD_TAGS_MAX,
+  DISCORD_THREAD_NAME_MAX,
+  discordOptionsOf,
+  discordThreadName,
   IG_REEL_FEEDS,
   IG_TRIAL_GRADUATIONS,
   instagramReelOf,
@@ -16,6 +20,10 @@ import {
   LINKEDIN_VISIBILITY,
   replySettingOf,
   THREADS_REPLY_SETTINGS,
+  BLUESKY_REPLY_RULES,
+  BLUESKY_REPLY_SETTINGS,
+  blueskyRepliesOf,
+  wantsBlueskyGate,
   sentText,
   effectiveContent,
   needsPublicUrls,
@@ -45,6 +53,8 @@ import {
   YOUTUBE_PLAYLIST_ID,
   youtubePlaylistIdFrom,
   youtubePlaylistsOf,
+  pinterestSectionOf,
+  PINTEREST_SECTION_ID,
   youtubeTagsLength,
   type CallState,
   type HashedVariant,
@@ -196,8 +206,65 @@ describe('validateVariant', () => {
     expect(TELEGRAM_PIN_SCOPE).toBe(channel.TELEGRAM_PIN_SCOPE);
   });
 
+  describe('Discord forum posts and threads (#1103)', () => {
+    const TAG = '1210000000000000001';
+    const THREAD = '1200000000000000001';
+    const discord = (settings: Record<string, unknown>, over: { body?: string; title?: string | null; media?: MediaItem[] } = {}) =>
+      validateVariant({ provider: 'discord', body: over.body ?? 'Khai trương chi nhánh mới', title: over.title ?? null, media: over.media ?? [], settings });
+    const issue = (code: string, field: string, limit: number | null = null, actual: number | null = null) => ({ code, field, limit, actual });
+
+    it('takes a forum post with a name and tags, or a thread id, and leaves a text channel post as it was', () => {
+      expect(discord({})).toEqual([]);
+      expect(discord({ discord: { forum: true } })).toEqual([]);
+      expect(discord({ discord: { forum: true, threadName: 'Thông báo', tags: [TAG, '1210000000000000002'] } })).toEqual([]);
+      expect(discord({ discord: { threadId: THREAD } })).toEqual([]);
+      // A forum post takes the post title as its name; a text channel post still refuses one.
+      expect(discord({ discord: { forum: true } }, { title: 'x'.repeat(300) })).toEqual([]);
+      expect(discord({}, { title: 'Tiêu đề' })).toEqual([issue('TITLE_NOT_SUPPORTED', 'title')]);
+      expect(discord({ discord: { threadId: THREAD } }, { title: 'Tiêu đề' })).toEqual([issue('TITLE_NOT_SUPPORTED', 'title')]);
+    });
+
+    it('refuses a forum post with nothing to name it, and settings Discord would refuse', () => {
+      expect(discord({ discord: { forum: true } }, { body: '', media: [jpeg()] })).toEqual([issue('DISCORD_THREAD_NAME_REQUIRED', 'settings.discord.threadName')]);
+      expect(discord({ discord: { forum: true } }, { body: '', title: 'Ảnh khai trương', media: [jpeg()] })).toEqual([]);
+      expect(discord({ discord: { forum: true, threadName: 'x'.repeat(101) } })).toEqual([issue('DISCORD_THREAD_NAME_TOO_LONG', 'settings.discord.threadName', 100, 101)]);
+      expect(discord({ discord: { tags: [TAG] } })).toEqual([issue('DISCORD_FORUM_ONLY', 'settings.discord.forum')]);
+      expect(discord({ discord: { threadName: 'Tên' } })).toEqual([issue('DISCORD_FORUM_ONLY', 'settings.discord.forum')]);
+      expect(discord({ discord: { forum: true, threadId: THREAD } })).toEqual([issue('DISCORD_THREAD_CONFLICT', 'settings.discord.threadId')]);
+      expect(discord({ discord: { forum: true, tags: ['abc', TAG, TAG] } })).toEqual([issue('DISCORD_TAG_INVALID', 'settings.discord.tags.0'), issue('DISCORD_TAG_INVALID', 'settings.discord.tags.2')]);
+      const six = Array.from({ length: 6 }, (_, i) => `121000000000000001${i}`);
+      expect(discord({ discord: { forum: true, tags: six } })).toEqual([issue('DISCORD_TOO_MANY_TAGS', 'settings.discord.tags', 5, 6)]);
+      expect(discord({ discord: { threadId: '12' } })).toEqual([issue('DISCORD_THREAD_ID_INVALID', 'settings.discord.threadId')]);
+      for (const raw of [true, null, [], { forum: 'yes' }, { tags: TAG }, { threadId: 12 }, { forum: true, extra: 1 }]) {
+        expect(discord({ discord: raw }), JSON.stringify(raw)).toEqual([issue('DISCORD_INVALID', 'settings.discord')]);
+      }
+      expect(validateVariant({ provider: 'telegram', body: 'x', title: null, media: [], settings: { discord: { forum: true } } })).toEqual([issue('DISCORD_NOT_SUPPORTED', 'settings.discord')]);
+    });
+
+    it('names a forum post as the adapter does, with the same limits', () => {
+      expect(DISCORD_THREAD_NAME_MAX).toBe(channel.DISCORD_THREAD_NAME_MAX);
+      expect(DISCORD_TAGS_MAX).toBe(channel.DISCORD_TAGS_MAX);
+      expect(discordThreadName(null, null, '\n  Khai   trương  \nchi tiết')).toBe('Khai trương');
+      expect(discordThreadName(' Tên ', 'Tiêu đề', 'x')).toBe('Tên');
+      expect(discordThreadName(null, 'Tiêu đề', 'x')).toBe('Tiêu đề');
+      expect(discordThreadName(null, null, `${'a'.repeat(99)}\u{1F600}`)).toBe('a'.repeat(99));
+      expect(discordThreadName(null, '  ', '')).toBe('');
+      fc.assert(
+        fc.property(fc.option(fc.string({ unit: 'grapheme', maxLength: 120 })), fc.option(fc.string({ unit: 'grapheme', maxLength: 200 })), fc.string({ unit: 'grapheme', maxLength: 300 }), (own, title, text) => {
+          const name = discordThreadName(own, title, text);
+          expect(name).toBe(channel.discordThreadName(own, title, text));
+          expect(name.length).toBeLessThanOrEqual(DISCORD_THREAD_NAME_MAX);
+          // Never half of a surrogate pair at the end.
+          expect(/[\uD800-\uDBFF]$/.test(name)).toBe(false);
+        }),
+      );
+      expect(discordOptionsOf({ discord: { forum: true, tags: [TAG] } })).toEqual({ forum: true, threadName: null, tags: [TAG], threadId: null });
+      expect(discordOptionsOf({})).toBeNull();
+    });
+  });
+
   describe('Telegram link buttons (#1017)', () => {
-    const button = (over: Record<string, unknown> = {}) => ({ text: 'Mua ngay', url: 'https://shop.example/pho', ...over });
+    const button =(over: Record<string, unknown> = {}) => ({ text: 'Mua ngay', url: 'https://shop.example/pho', ...over });
     const on = (buttons: unknown, media: MediaItem[] = [], provider: 'telegram' | 'mastodon' = 'telegram') => validateVariant({ provider, body: 'Khai trương', title: null, media, settings: { telegram: { buttons } } });
     const issue = (code: string, field: string, limit: number | null = null, actual: number | null = null) => ({ code, field, limit, actual });
 
@@ -263,6 +330,23 @@ describe('validateVariant', () => {
     expect(youtubePlaylistsOf({})).toBeNull();
     // The same shape the adapter sends.
     expect(YOUTUBE_PLAYLIST_ID.source).toBe(channel.YOUTUBE_PLAYLIST_ID.source);
+  });
+
+  it('takes one board section on Pinterest only, in settings.pinterest (#1120)', () => {
+    const SALE = '5027630990032166911';
+    const on = (provider: 'pinterest' | 'instagram', settings: Record<string, unknown>) =>
+      validateVariant({ provider, body: 'Bánh mì', title: 'Thực đơn', media: [{ kind: 'image', mime: 'image/jpeg', sizeBytes: 100_000, durationSeconds: null }], settings }).filter((i) => i.field.startsWith('settings.pinterest'));
+    expect(on('pinterest', {})).toEqual([]);
+    expect(on('pinterest', { pinterest: { sectionId: SALE } })).toEqual([]);
+    expect(on('pinterest', { pinterest: {} })).toEqual([]);
+    const invalid = [{ code: 'PINTEREST_SECTION_INVALID', field: 'settings.pinterest.sectionId', limit: null, actual: null }];
+    for (const pinterest of [{ sectionId: 'Khuyến mãi' }, { sectionId: 12345 }, { sectionId: SALE, boardId: '1' }, [SALE], null, SALE]) expect(on('pinterest', { pinterest })).toEqual(invalid);
+    expect(on('instagram', { pinterest: { sectionId: SALE } })).toEqual([{ code: 'PINTEREST_NOT_SUPPORTED', field: 'settings.pinterest', limit: null, actual: null }]);
+    expect(pinterestSectionOf({ pinterest: { sectionId: SALE } })).toBe(SALE);
+    expect(pinterestSectionOf({})).toBeNull();
+    // The same shape, and the same reading, as the adapter's.
+    expect(PINTEREST_SECTION_ID.source).toBe(channel.PINTEREST_SECTION_ID.source);
+    for (const settings of [{}, { pinterest: { sectionId: SALE } }, { pinterest: { sectionId: 'x' } }, { pinterest: {} }]) expect(pinterestSectionOf(settings)).toBe(channel.pinterestSectionOf(settings));
   });
 
   it('reads the playlist id from what a person pastes (#1018)', () => {
@@ -408,6 +492,66 @@ describe('validateVariant', () => {
     expect(codes({ replySettings: 'followers' })).toEqual(['REPLY_SETTINGS_INVALID']);
   });
 
+  it('checks Mastodon polls: up to 4 options of 50 characters, 5 minutes to a month, several answers and hidden counts (#1118)', () => {
+    const check = (settings: Record<string, unknown>, media: MediaItem[] = []) => validateVariant({ provider: 'mastodon', body: 'Bạn thích món nào?', title: null, media, settings });
+    const codes = (settings: Record<string, unknown>, media: MediaItem[] = []) => check(settings, media).map((i) => i.code);
+    const img: MediaItem = { kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null };
+    expect(codes({ poll: { options: ['Phở', 'Bún chả'] } })).toEqual([]);
+    expect(codes({ poll: { options: ['Phở', 'Bún chả', 'Cơm tấm', 'x'.repeat(50)], durationMinutes: 43_829, multiple: true, hideTotals: true } })).toEqual([]);
+    expect(check({ poll: { options: ['a', 'b', 'c', 'd', 'e'] } })).toEqual([{ code: 'POLL_OPTIONS', field: 'settings.poll', limit: 4, actual: 5 }]);
+    expect(check({ poll: { options: ['a', 'x'.repeat(51)] } })).toEqual([{ code: 'POLL_OPTION_LENGTH', field: 'settings.poll.1', limit: 50, actual: 51 }]);
+    expect(check({ poll: { options: ['a', 'b'], durationMinutes: 4 } })).toEqual([{ code: 'POLL_DURATION', field: 'settings.poll.durationMinutes', limit: 43_829, actual: 4 }]);
+    expect(codes({ poll: { options: ['a', 'b'], durationMinutes: 43_830 } })).toEqual(['POLL_DURATION']);
+    expect(check({ poll: { options: ['a', 'b'], multiple: 'có' } })).toEqual([{ code: 'POLL_SETTING_INVALID', field: 'settings.poll.multiple', limit: null, actual: null }]);
+    expect(check({ poll: { options: ['a', 'b'], question: 'Món nào?' } })).toEqual([{ code: 'POLL_SETTING_NOT_SUPPORTED', field: 'settings.poll.question', limit: null, actual: null }]);
+    expect(codes({ poll: { options: ['a', 'b'] } }, [img])).toEqual(['POLL_WITH_MEDIA']);
+  });
+
+  it('checks Telegram polls: the text with its link as the question, up to 12 options of 100 characters, open until stopped (#1118)', () => {
+    const check = (settings: Record<string, unknown>, body = 'Bạn thích món nào?', linkUrl: string | null = null, media: MediaItem[] = []) => validateVariant({ provider: 'telegram', body, title: null, media, linkUrl, settings });
+    const codes = (...args: Parameters<typeof check>) => check(...args).map((i) => i.code);
+    const img: MediaItem = { kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null };
+    const twelve = Array.from({ length: 12 }, (_, i) => `Món ${i + 1}`);
+    expect(codes({ poll: { options: ['Phở', 'Bún chả'] } })).toEqual([]);
+    expect(codes({ poll: { options: twelve, durationMinutes: 43_800, multiple: true, hideTotals: false }, telegram: { silent: true, pin: true } })).toEqual([]);
+    expect(codes({ poll: { options: ['a', 'b'], durationMinutes: 1 } }, 'x'.repeat(300))).toEqual([]);
+    expect(check({ poll: { options: [...twelve, 'Món 13'] } })).toEqual([{ code: 'POLL_OPTIONS', field: 'settings.poll', limit: 12, actual: 13 }]);
+    expect(check({ poll: { options: ['a', 'x'.repeat(101)] } })).toEqual([{ code: 'POLL_OPTION_LENGTH', field: 'settings.poll.1', limit: 100, actual: 101 }]);
+    expect(check({ poll: { options: ['a', 'b'], durationMinutes: 43_801 } })).toEqual([{ code: 'POLL_DURATION', field: 'settings.poll.durationMinutes', limit: 43_800, actual: 43_801 }]);
+    // The question is the text as sent, its link included.
+    expect(check({ poll: { options: ['a', 'b'] } }, 'x'.repeat(301))).toEqual([{ code: 'POLL_TEXT_LENGTH', field: 'body', limit: 300, actual: 301 }]);
+    expect(check({ poll: { options: ['a', 'b'] } }, 'x'.repeat(290), 'https://example.com/menu')).toEqual([{ code: 'POLL_TEXT_LENGTH', field: 'body', limit: 300, actual: 316 }]);
+    expect(codes({ poll: { options: ['a', 'b'] } }, 'Món mới', null, [img])).toEqual(['POLL_WITH_MEDIA']);
+    expect(codes({ poll: { options: ['a', 'b'], question: 'Món nào?' } })).toEqual(['POLL_SETTING_NOT_SUPPORTED']);
+  });
+
+  it('checks LinkedIn polls for members and pages: a question of its own, 2 to 4 options of 30 characters, 1, 3, 7 or 14 days (#1118)', () => {
+    for (const provider of ['linkedin', 'linkedin_page'] as const) {
+      const check = (settings: Record<string, unknown>, media: MediaItem[] = []) => validateVariant({ provider, body: 'Chúng tôi sắp mở chi nhánh mới.', title: null, media, settings });
+      const codes = (settings: Record<string, unknown>, media: MediaItem[] = []) => check(settings, media).map((i) => i.code);
+      const poll = { question: 'Chi nhánh tiếp theo ở đâu?', options: ['Quận 1', 'Thủ Đức'] };
+      expect(codes({ poll })).toEqual([]);
+      for (const durationMinutes of [1440, 4320, 10_080, 20_160]) expect(codes({ poll: { ...poll, durationMinutes } })).toEqual([]);
+      expect(codes({ poll: { ...poll, question: 'ệ'.repeat(140), options: ['a', 'b', 'c', 'x'.repeat(30)] } })).toEqual([]);
+      expect(check({ poll: { ...poll, durationMinutes: 2880 } })).toEqual([{ code: 'POLL_DURATION', field: 'settings.poll.durationMinutes', limit: 20_160, actual: 2880 }]);
+      expect(check({ poll: { options: poll.options } })).toEqual([{ code: 'POLL_QUESTION_LENGTH', field: 'settings.poll.question', limit: 140, actual: 0 }]);
+      expect(check({ poll: { ...poll, question: '  ' } })).toEqual([{ code: 'POLL_QUESTION_LENGTH', field: 'settings.poll.question', limit: 140, actual: 0 }]);
+      expect(check({ poll: { ...poll, question: 'x'.repeat(141) } })).toEqual([{ code: 'POLL_QUESTION_LENGTH', field: 'settings.poll.question', limit: 140, actual: 141 }]);
+      expect(check({ poll: { ...poll, question: 7 } })).toEqual([{ code: 'POLL_SETTING_INVALID', field: 'settings.poll.question', limit: null, actual: null }]);
+      expect(check({ poll: { ...poll, options: ['a', 'x'.repeat(31)] } })).toEqual([{ code: 'POLL_OPTION_LENGTH', field: 'settings.poll.1', limit: 30, actual: 31 }]);
+      expect(codes({ poll: { ...poll, options: ['a', 'b', 'c', 'd', 'e'] } })).toEqual(['POLL_OPTIONS']);
+      // One answer per voter, counts always shown: false is LinkedIn's way, true is refused.
+      expect(codes({ poll: { ...poll, multiple: false, hideTotals: false } })).toEqual([]);
+      expect(check({ poll: { ...poll, multiple: true, hideTotals: true } })).toEqual([
+        { code: 'POLL_SETTING_NOT_SUPPORTED', field: 'settings.poll.multiple', limit: null, actual: null },
+        { code: 'POLL_SETTING_NOT_SUPPORTED', field: 'settings.poll.hideTotals', limit: null, actual: null },
+      ]);
+      expect(codes({ poll }, [{ kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null }])).toEqual(['POLL_WITH_MEDIA']);
+    }
+    // X keeps to its own: no question of its own, one answer per voter.
+    expect(validateVariant({ provider: 'x', body: 'x', title: null, media: [], settings: { poll: { options: ['a', 'b'], multiple: true } } }).map((i) => i.code)).toEqual(['POLL_SETTING_NOT_SUPPORTED']);
+  });
+
   it('takes where a Reel shows on Instagram Reels only, and refuses it on other posts and channels (#1019)', () => {
     const check = (provider: 'instagram' | 'facebook_page', media: MediaItem[], settings: Record<string, unknown>) =>
       validateVariant({ provider, body: 'Khai trương', title: null, media, settings }).filter((i) => i.field.startsWith('settings.instagram'));
@@ -457,6 +601,42 @@ describe('validateVariant', () => {
     // The adapters take every value the composer offers.
     for (const replySettings of THREADS_REPLY_SETTINGS) expect(channel.threadsReplyControlOf({ replySettings })).not.toBe('invalid');
     for (const visibility of LINKEDIN_VISIBILITY) expect(channel.linkedinVisibilityOf({ visibility })).not.toBe('invalid');
+  });
+
+  it('checks who may reply to and quote a Bluesky post, several groups together, and refuses quotes elsewhere (#1102)', () => {
+    const check = (provider: 'bluesky' | 'threads' | 'x', settings: Record<string, unknown>) => validateVariant({ provider, body: 'Khai trương', title: null, media: [], settings });
+    for (const replySettings of [...BLUESKY_REPLY_SETTINGS, ['followers', 'mentionedUsers'], [...BLUESKY_REPLY_RULES]]) expect(check('bluesky', { replySettings })).toEqual([]);
+    expect(check('bluesky', { quotes: false })).toEqual([]);
+    expect(check('bluesky', { replySettings: 'nobody', quotes: true })).toEqual([]);
+    expect(check('bluesky', {})).toEqual([]);
+    for (const replySettings of ['mentioned_only', [], ['following', 'following'], ['nobody'], 'everyone,following', 3]) {
+      expect(check('bluesky', { replySettings })).toEqual([{ code: 'REPLY_SETTINGS_INVALID', field: 'settings.replySettings', limit: null, actual: null }]);
+    }
+    expect(check('bluesky', { quotes: 'no' })).toEqual([{ code: 'QUOTES_INVALID', field: 'settings.quotes', limit: null, actual: null }]);
+    expect(check('threads', { quotes: false })).toEqual([{ code: 'QUOTES_NOT_SUPPORTED', field: 'settings.quotes', limit: null, actual: null }]);
+    // Nobody and a list are Bluesky's alone.
+    expect(check('threads', { replySettings: 'nobody' }).map((i) => i.code)).toEqual(['REPLY_SETTINGS_INVALID']);
+    expect(check('x', { replySettings: ['following'] }).map((i) => i.code)).toEqual(['REPLY_SETTINGS_INVALID']);
+    expect(blueskyRepliesOf({ replySettings: ['followers', 'mentionedUsers'] })).toEqual(['mentionedUsers', 'followers']);
+    expect(blueskyRepliesOf({ replySettings: 'following' })).toEqual(['following']);
+    expect(blueskyRepliesOf({ replySettings: 'everyone' })).toBeNull();
+    expect(blueskyRepliesOf({ replySettings: 'nobody' })).toBe('nobody');
+    // A gate is asked for only when something is limited, on Bluesky, with readable settings.
+    expect(wantsBlueskyGate('bluesky', {})).toBe(false);
+    expect(wantsBlueskyGate('bluesky', { replySettings: 'everyone', quotes: true })).toBe(false);
+    expect(wantsBlueskyGate('bluesky', { quotes: false })).toBe(true);
+    expect(wantsBlueskyGate('bluesky', { replySettings: 'nobody' })).toBe(true);
+    expect(wantsBlueskyGate('bluesky', { replySettings: 'nobody', quotes: 'no' })).toBe(false);
+    expect(wantsBlueskyGate('threads', { replySettings: 'following' })).toBe(false);
+    // The adapter reads every value the composer offers the same way, and refuses what validation refuses.
+    for (const replySettings of [...BLUESKY_REPLY_SETTINGS, ['followers', 'mentionedUsers']]) {
+      const replies = blueskyRepliesOf({ replySettings });
+      const gates = channel.blueskyGatesOf({ replySettings });
+      expect(gates === null ? null : gates === 'invalid' ? 'invalid' : gates.allow?.length === 0 ? 'nobody' : gates.allow).toEqual(replies);
+    }
+    for (const replySettings of ['mentioned_only', [], ['following', 'following']]) expect(channel.blueskyGatesOf({ replySettings })).toBe('invalid');
+    expect(channel.blueskyGatesOf({ quotes: 'no' })).toBe('invalid');
+    expect([...channel.BLUESKY_REPLY_RULES]).toEqual([...BLUESKY_REPLY_RULES]);
   });
 
   it('checks Google Business Profile posts, and refuses their settings elsewhere (#709)', () => {

@@ -1,5 +1,6 @@
 // In-app notifications (#637): the viewer's own, newest first. Opening one marks it read and goes to its post (or to
-// the channels page for an expired channel); the settings turn kinds off for this member only.
+// the channels page for an expired channel, or a new post for a channel whose queue runs low); the settings turn kinds
+// off for this member only.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams, Link } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
@@ -11,7 +12,7 @@ import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName } from '../lib/social.ts';
-import { NOTIFICATION_KINDS, notificationTarget, type NotificationKind } from '../lib/social-notifications.ts';
+import { DIGEST_KIND, NOTIFICATION_KINDS, notificationTarget, type NotificationKind } from '../lib/social-notifications.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 export type NotificationItem = Awaited<ReturnType<typeof client.social.notifications.list>>['items'][number];
@@ -49,12 +50,18 @@ function useLine() {
         return t('text.feed_paused', { feed: n.detail.feed ?? '' });
       case 'review_reminder':
         return t(n.detail.stage === 'due' ? 'text.reminder_due' : 'text.reminder_waiting');
+      // A channel's queue running low (#1079).
+      case 'queue_low':
+        return t('text.queue_low', { channel: n.channel ?? t('aChannel'), days: Number(n.detail.days ?? 0), filled: n.detail.filled ?? '0', posting: n.detail.posting ?? '0' });
       // The org's publishing held or released (#946).
       case 'publishing_hold': {
         if (n.detail.state !== 'released') return t('text.publishing_held', { actor, reason: n.detail.reason ?? '' });
         const count = Number(n.detail.heldTooLong ?? 0);
         return count > 0 ? t('text.publishing_released_stale', { actor, count }) : t('text.publishing_released', { actor });
       }
+      // A mail only (#1104); never an item of the list.
+      case 'weekly_digest':
+        return t('digest');
       default:
         return t(`text.${n.kind}`, { actor });
     }
@@ -69,6 +76,7 @@ function Settings({ muted, mailOff }: { muted: readonly NotificationKind[]; mail
   });
   const mail = useMutation({ mutationFn: (enabled: boolean) => client.social.notifications.mail({ enabled }), onSettled: refresh });
   const mailOn = mail.isPending && mail.variables !== undefined ? mail.variables : !mailOff;
+  const digestOn = mute.isPending && mute.variables?.kind === DIGEST_KIND ? !mute.variables.muted : !muted.includes(DIGEST_KIND);
   return (
     <Card className="block space-y-3 p-4">
       <div>
@@ -93,6 +101,14 @@ function Settings({ muted, mailOff }: { muted: readonly NotificationKind[]; mail
           <span className="block text-xs text-subtle-foreground">{t('mailHint')}</span>
         </span>
       </label>
+      {/* The weekly digest (#1104): a mail, so it needs the mail switch on too. */}
+      <label className="flex items-start gap-2 text-sm text-muted-foreground">
+        <Checkbox checked={mailOn && digestOn} disabled={mute.isPending || !mailOn} onCheckedChange={(checked) => mute.mutate({ kind: DIGEST_KIND, muted: checked !== true })} />
+        <span>
+          <span className="block text-foreground">{t('digest')}</span>
+          <span className="block text-xs text-subtle-foreground">{mailOn ? t('digestHint') : t('digestMailOff')}</span>
+        </span>
+      </label>
       {(mute.error ?? mail.error) && <ErrorText>{errorMessage(mute.error ?? mail.error)}</ErrorText>}
     </Card>
   );
@@ -115,6 +131,7 @@ export function SocialNotificationsPage() {
     if (target?.to === 'post') void navigate({ to: '/o/$slug/social/$id', params: { slug, id: target.postId } });
     else if (target?.to === 'channels') void navigate({ to: '/o/$slug/social/channels', params: { slug } });
     else if (target?.to === 'feeds') void navigate({ to: '/o/$slug/social/feeds', params: { slug } });
+    else if (target?.to === 'compose') void navigate({ to: '/o/$slug/social/new', params: { slug }, search: { channel: target.channelId } });
   };
   const items = list.data?.items ?? [];
   return (

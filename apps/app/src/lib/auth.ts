@@ -18,6 +18,8 @@ export interface PublicConfig {
   stream?: boolean;
   // The feedback and support link (SUPPORT_URL, issue #310): https: or mailto:, null when the deployment has none.
   supportUrl?: string | null;
+  // The product name users see (BRAND_NAME, issue #1040); older servers send none, and "Crove" stands.
+  brandName?: string;
   // The terms of service and privacy notice (TERMS_URL, PRIVACY_URL, #688): https: pages, null when unset.
   termsUrl?: string | null;
   privacyUrl?: string | null;
@@ -25,6 +27,8 @@ export interface PublicConfig {
   statusPage?: boolean;
   // The server can look up a tax code in the public registry to prefill a new org (TAX_CODE_LOOKUP_URL, issue #324).
   taxCodeLookup?: boolean;
+  // The reconciliation screen may fetch a period's purchase list from the tax portal (TAX_PORTAL_SYNC, issue #325).
+  taxPortalSync?: boolean;
   // The offline sandbox channel can be connected (CHANNEL_SANDBOX); `oauth` lists the providers connected through
   // their OAuth dialog that the server has app credentials for.
   channels?: { sandbox: boolean; bluesky?: boolean; telegram?: boolean; mastodon?: boolean; discord?: boolean; wordpress?: boolean; oauth?: string[] };

@@ -434,8 +434,9 @@ export const SOCIAL_DECISIONS = ['approved', 'changes_requested', 'rejected'] as
 export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment'] as const;
 // A review link of one post (#589), or of a content plan's posts (#902).
 export const SOCIAL_REVIEW_LINK_KINDS = ['post', 'plan'] as const;
-// What an in-app notification is about (#637); a member may turn each kind off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold'] as const;
+// What an in-app notification is about (#637); a member may turn each kind off. weekly_digest is the weekly email
+// digest (#1104): never a notification row, only a member's switch to turn the digest off.
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold', 'queue_low', 'weekly_digest'] as const;
 // Why a channel's daily account snapshot has no counts (#645), and why a bring-in of its outside posts found none (#1054).
 export const SOCIAL_ACCOUNT_SNAPSHOT_ERRORS = ['no_answer', 'token_expired', 'permission'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
@@ -444,6 +445,13 @@ export const SOCIAL_LINK_PREVIEW_STATUSES = ['pending', 'ready', 'failed'] as co
 export const SOCIAL_LINK_PREVIEW_ERRORS = ['invalid_url', 'blocked', 'dns', 'timeout', 'too_large', 'redirects', 'encoding', 'network', 'http', 'not_html'] as const;
 export type SocialLinkPreviewStatus = (typeof SOCIAL_LINK_PREVIEW_STATUSES)[number];
 export type SocialLinkPreviewError = (typeof SOCIAL_LINK_PREVIEW_ERRORS)[number];
+// A channel's options for the composer (#1120): what a list holds, where its read stands and why it failed.
+export const SOCIAL_CHANNEL_OPTION_KINDS = ['pinterest_section'] as const;
+export const SOCIAL_CHANNEL_OPTION_STATUSES = ['pending', 'ready', 'failed'] as const;
+export const SOCIAL_CHANNEL_OPTION_ERRORS = ['token_expired', 'permission', 'not_found', 'no_answer'] as const;
+export type SocialChannelOptionKind = (typeof SOCIAL_CHANNEL_OPTION_KINDS)[number];
+export type SocialChannelOptionStatus = (typeof SOCIAL_CHANNEL_OPTION_STATUSES)[number];
+export type SocialChannelOptionError = (typeof SOCIAL_CHANNEL_OPTION_ERRORS)[number];
 // The palette a label's colour comes from (#639); the app maps each name to a theme tone.
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
 // The corner of an image the org's logo watermark goes in (#834).
@@ -501,6 +509,14 @@ export type SocialLinkPreviewTable = Refine<
   {
     status: ColumnType<SocialLinkPreviewStatus, SocialLinkPreviewStatus, SocialLinkPreviewStatus>;
     error: ColumnType<SocialLinkPreviewError | null, SocialLinkPreviewError | null | undefined, SocialLinkPreviewError | null>;
+  }
+>;
+export type SocialChannelOptionTable = Refine<
+  G.SocialChannelOptionTable,
+  {
+    kind: ColumnType<SocialChannelOptionKind, SocialChannelOptionKind, never>;
+    status: ColumnType<SocialChannelOptionStatus, SocialChannelOptionStatus, SocialChannelOptionStatus>;
+    error: ColumnType<SocialChannelOptionError | null, SocialChannelOptionError | null | undefined, SocialChannelOptionError | null>;
   }
 >;
 export type SocialNotificationTable = Refine<G.SocialNotificationTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
@@ -566,6 +582,7 @@ type Refined = Tables<{
   'crove_social.account_snapshot': SocialAccountSnapshotTable;
   'crove_social.external_import': SocialExternalImportTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
+  'crove_social.channel_option': SocialChannelOptionTable;
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
   'crove_social.calendar_note': SocialCalendarNoteTable;

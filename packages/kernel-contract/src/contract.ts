@@ -58,6 +58,7 @@ import {
   zSocialGoals,
   zSocialGoalSet,
   zSocialLinkPreview,
+  zSocialChannelOptions,
   zSocialNotificationKind,
   zSocialNotifications,
   zSocialAccountTrend,
@@ -65,6 +66,10 @@ import {
   zSocialSnippetCreate,
   zSocialBannedWord,
   zSocialBannedWordAdd,
+  zSocialReviewCheck,
+  zSocialReviewChecklistSet,
+  zSocialChannelAccess,
+  zSocialChannelAccessSet,
   zSocialSnippetUpdate,
   zSocialReportBrand,
   zSocialReportBrandingSave,
@@ -144,6 +149,7 @@ import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts'
 import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
+import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
@@ -430,8 +436,12 @@ export const contract = {
         )
         .output(z.object({ text: z.string(), title: z.string().nullable() })),
       // Hashtags the writer suggests for a text (#824), tainted like every AI text; the same budget as drafts.
-      // An image's alt text the writer suggests (#817), when the model takes images; the same budget as drafts.
-      describeImage: oc.input(z.strictObject({ fileId: zId, language: z.enum(['vi', 'en']) })).output(z.object({ altText: z.string() })),
+      // An image's alt text the writer suggests (#817, #1121), when the model takes images; the same budget as drafts.
+      // fileId: a Social upload of the org; connectionIds: the channels it goes to, whose strictest alt-text limit the
+      // suggestion keeps within. Nothing is saved.
+      describeImage: oc
+        .input(z.strictObject({ fileId: zId, language: z.enum(['vi', 'en']), connectionIds: z.array(zId).max(20).optional() }))
+        .output(z.object({ altText: z.string() })),
       suggestHashtags: oc
         .input(z.strictObject({ text: z.string().trim().min(1).max(20_000), connectionId: zId.optional(), language: z.enum(['vi', 'en']), exclude: z.array(z.string().max(100)).max(50) }))
         .output(z.object({ hashtags: z.array(z.string()) })),
@@ -520,6 +530,19 @@ export const contract = {
       list: oc.input(z.object({})).output(z.array(zSocialBannedWord)),
       add: oc.input(zSocialBannedWordAdd).output(z.object({ wordId: zId })),
       remove: oc.input(z.strictObject({ wordId: zId })).output(z.object({ wordId: zId })),
+    },
+    // The review checklist (#1105): every member reads it (a limited member, the org-wide items and their channels');
+    // owners and admins replace it whole.
+    reviewChecklist: {
+      list: oc.input(z.object({})).output(z.object({ items: z.array(zSocialReviewCheck) })),
+      set: oc.input(zSocialReviewChecklistSet).output(z.object({ items: z.array(zSocialReviewCheck) })),
+    },
+    // Channels a member may use (#1081): owners and admins read every member's list and replace one (an empty list
+    // lifts the limit; owners and admins are never limited); every member reads their own.
+    channelAccess: {
+      list: oc.input(z.object({})).output(z.array(zSocialChannelAccess)),
+      mine: oc.input(z.object({})).output(z.object({ limited: z.boolean(), connectionIds: z.array(zId) })),
+      set: oc.input(zSocialChannelAccessSet).output(z.object({ userId: zId, limited: z.boolean(), connectionIds: z.array(zId) })),
     },
     // Client report links (#643): owners and admins make and revoke them; the token is in the create answer only.
     // Monthly goals (#1056): every member sees the month's progress; owners and admins set and remove goals.
@@ -638,6 +661,12 @@ export const contract = {
     linkPreviews: {
       request: oc.input(z.strictObject({ url: z.string().min(1).max(2048) })).output(zSocialLinkPreview),
       get: oc.input(z.object({ url: z.string().min(1).max(2048) })).output(zSocialLinkPreview.nullable()),
+    },
+    // A channel's options for the composer (#1120): a Pinterest board's sections, read by the worker with the
+    // channel's token; shown in Crove only.
+    channelOptions: {
+      request: oc.input(z.strictObject({ connectionId: zId })).output(zSocialChannelOptions),
+      get: oc.input(z.strictObject({ connectionId: zId })).output(zSocialChannelOptions.nullable()),
     },
     // In-app notifications (#637): each member reads, marks and turns off only their own.
     notifications: {
@@ -985,6 +1014,15 @@ export const contract = {
     reconcile: oc.input(z.object({ period: zVatPeriod })).output(zPortalReconciliation),
     import: oc.input(z.object({ period: zVatPeriod, fileId: zId })).output(z.object({ listId: zId })),
     remove: oc.input(z.object({ listId: zId })).output(z.object({ listId: zId })),
+  },
+  // The assisted sync from the tax portal (issue #325, ADR-0036), off unless the deployment sets TAX_PORTAL_SYNC=true
+  // (PORTAL_SYNC_DISABLED, 404). Owners, admins and members of the client org; the steps in order: captcha, login (the
+  // password goes to the portal and is dropped), fetchList, then fetchXml until done. Errors: PORTAL_SYNC_ERRORS.
+  portalSync: {
+    captcha: oc.input(z.object({ period: zVatPeriod })).output(zPortalCaptcha),
+    login: oc.input(zPortalLoginInput).output(zPortalSession),
+    fetchList: oc.input(z.object({ period: zVatPeriod, session: zPortalSession.shape.session })).output(zPortalListResult),
+    fetchXml: oc.input(z.object({ period: zVatPeriod, session: zPortalSession.shape.session, listId: zId })).output(zPortalXmlResult),
   },
   // Asking the client company for the purchase invoices the portal lists and Crove lacks (issue #669). status: every
   // role. request (owners, admins, members; R1): one mail listing a period's missing invoices to the org's contact email,

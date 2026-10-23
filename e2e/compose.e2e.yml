@@ -18,3 +18,19 @@ services:
       INBOUND_SECRET: e2e-only-inbound-secret-0123456789abcdef
       # The shell's feedback and support link (#310).
       SUPPORT_URL: mailto:support@e2e.test
+      # The assisted tax portal sync (#325) against the fake portal below, never the real one.
+      TAX_PORTAL_SYNC: 'true'
+      TAX_PORTAL_URL: http://tax-portal:30000/api
+  # A fake of the tax portal's lookup API (e2e/fake-tax-portal, #325): synthetic invoices, no network beyond the stack.
+  # Paths are relative to the first compose file (the repository root).
+  tax-portal:
+    image: node:26-slim@sha256:193fe51b64e77981119c98c2002c9e32a70e2f006fb4d25068ce0558998917f0
+    working_dir: /srv
+    command: ['node', 'main.ts']
+    environment:
+      PORT: '30000'
+    volumes:
+      - ./e2e/fake-tax-portal:/srv:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']

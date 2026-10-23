@@ -144,7 +144,7 @@ suite('social video posts on PostgreSQL (S9)', () => {
     const zalo = await connection(o, 'zalo_oa');
     const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Khai trương', media: [{ fileId: clip }], channels: [{ connectionId: sandbox }, { connectionId: zalo }] });
     const view = await get(o, postId);
-    expect(view.media).toEqual([{ fileId: clip, altText: null, mime: 'video/mp4', sizeBytes: 20_000_000, durationMs: 12_500, width: null, height: null }]);
+    expect(view.media).toEqual([{ fileId: clip, altText: null, mime: 'video/mp4', sizeBytes: 20_000_000, durationMs: 12_500, width: null, height: null, filename: null }]);
     const issues = Object.fromEntries(view.variants.map((v) => [v.provider, v.issues.map((i) => i.code)]));
     expect(issues).toEqual({ sandbox: [], zalo_oa: ['TITLE_REQUIRED', 'MEDIA_KIND_NOT_ALLOWED'] });
     await expect(exec(o, 'social.post.submit', { postId })).rejects.toMatchObject({ code: 'VARIANT_INVALID' });

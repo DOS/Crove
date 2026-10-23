@@ -14,6 +14,7 @@ import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { SocialBoard } from '../components/social-board.tsx';
+import { useChannelScope } from '../components/social-channel-access.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
 import { CalendarFeedCard } from '../components/social-calendar-feed.tsx';
 import { InstagramGrid } from '../components/social-instagram-grid.tsx';
@@ -540,6 +541,8 @@ export function SocialPage() {
     return { from: from.toISOString(), to: new Date(from.getTime() + (AGENDA_DAYS + 1) * DAY).toISOString() };
   }, []);
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  // The channel filter offers a member limited to some channels (#1081) those only.
+  const scope = useChannelScope();
   const labels = useLabels();
   const labelList = labels.data ?? [];
   const me = useQuery(orpc.me.get.queryOptions());
@@ -684,7 +687,7 @@ export function SocialPage() {
                   <span className="text-subtle-foreground">{t('filters.channel')}</span>
                   <NativeSelect className="mt-1 w-56" value={search.channel ?? ''} onChange={(e) => setSearch({ channel: e.target.value || undefined })}>
                     <NativeSelectOption value="">{t('filters.allChannels')}</NativeSelectOption>
-                    {(channels.data ?? []).map((c) => (
+                    {(channels.data ?? []).filter((c) => scope.allows(c.id)).map((c) => (
                       <NativeSelectOption key={c.id} value={c.id}>
                         {c.displayName} · {providerName(c.provider)}
                       </NativeSelectOption>

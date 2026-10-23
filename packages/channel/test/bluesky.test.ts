@@ -1,6 +1,6 @@
 // Bluesky against recorded XRPC answers (shapes from the AT Protocol lexicons); no live call.
 import { describe, expect, it } from 'vitest';
-import { BlueskyPublisher, blueskyFacets, blueskyLangs, connectBluesky, isBlueskyHost, linkFacets, pdsOrigin, tagFacets, type BlueskyFacet, type Fetch, type PublishInput } from '../src/index.ts';
+import { BlueskyPublisher, blueskyFacets, blueskyGatesOf, blueskyLangs, connectBluesky, isBlueskyHost, linkFacets, pdsOrigin, tagFacets, type BlueskyFacet, type Fetch, type PublishInput } from '../src/index.ts';
 
 const DID = 'did:plc:abc123def456ghi789jkl012';
 const PDS = 'https://morel.us-east.host.bsky.network';
@@ -468,5 +468,96 @@ describe('Bluesky remove (#860)', () => {
     expect(await remove(other.fetchImpl, 'at://did:plc:someoneelse0000000000000/app.bsky.feed.post/3kq2abcdxyz22')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'NOT_OWN_POST' });
     expect(await remove(other.fetchImpl, 'https://bsky.app/profile/x/post/1')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
     expect(other.calls.some((c) => c.route === DELETE)).toBe(false);
+  });
+});
+
+describe('Bluesky reply and quote gates (#1102)', () => {
+  const POST = `at://${DID}/app.bsky.feed.post/3kgate`;
+  const THREADGATE = `at://${DID}/app.bsky.feed.threadgate/3kgate`;
+  const POSTGATE = `at://${DID}/app.bsky.feed.postgate/3kgate`;
+  const CREATE = `POST ${new URL(PDS).host}/xrpc/com.atproto.repo.createRecord`;
+  const SESSION = 'POST bsky.social/xrpc/com.atproto.server.createSession';
+  const gateInput = (settings: Record<string, unknown>, externalId = POST) => ({ externalAccountId: DID, secret: SECRET, externalId, settings, callKey: 'call-1:gate' });
+  const created = (uri: string) => ({ body: { uri, cid: 'bafygate' } });
+
+  it('posts exactly what it posted before, with or without gates: they are written after, in their own step', async () => {
+    // Every request of a publish, its body as sent, the record's time left out.
+    const sent = async (settings: Record<string, unknown>) => {
+      const { fetchImpl, calls } = xrpc({ [SESSION]: [session()], [CREATE]: [{ body: { uri: POST, cid: 'bafy' } }] });
+      expect(await new BlueskyPublisher(fetchImpl).publish(input({ settings }))).toEqual({ kind: 'accepted', externalId: POST, url: 'https://bsky.app/profile/quan-a.bsky.social/post/3kgate' });
+      return calls.map((c) => `${c.route} ${c.auth ?? '-'} ${JSON.stringify(c.json).replace(/"createdAt":"[^"]+"/, '"createdAt":"T"')}`);
+    };
+    const text = 'Khai trương! Xem https://example.com/a';
+    const before = await sent({});
+    expect(before).toEqual([
+      `GET plc.directory/${DID} - null`,
+      `${SESSION} - ${JSON.stringify({ identifier: DID, password: APP_PASSWORD })}`,
+      `${CREATE} Bearer access-jwt-1 ${JSON.stringify({ repo: DID, collection: 'app.bsky.feed.post', record: { $type: 'app.bsky.feed.post', text, createdAt: 'T', langs: ['vi'], facets: linkFacets(text) } })}`,
+    ]);
+    expect(await sent({ replySettings: 'nobody', quotes: false })).toEqual(before);
+    expect(await sent({ replySettings: ['followers', 'mentionedUsers'] })).toEqual(before);
+    expect(await sent({ replySettings: 'everyone', quotes: true })).toEqual(before);
+  });
+
+  it('writes a threadgate and a postgate with the post record key, each naming the post by its URI', async () => {
+    const { fetchImpl, calls } = xrpc({ [SESSION]: [session()], [CREATE]: [created(THREADGATE), created(POSTGATE)] });
+    expect(await new BlueskyPublisher(fetchImpl).gate(gateInput({ replySettings: 'nobody', quotes: false }))).toEqual({ kind: 'accepted', externalId: THREADGATE });
+    const writes = calls.filter((c) => c.route === CREATE);
+    expect(writes.map((c) => c.json)).toEqual([
+      { repo: DID, collection: 'app.bsky.feed.threadgate', rkey: '3kgate', record: { $type: 'app.bsky.feed.threadgate', post: POST, allow: [], createdAt: expect.any(String) } },
+      { repo: DID, collection: 'app.bsky.feed.postgate', rkey: '3kgate', record: { $type: 'app.bsky.feed.postgate', post: POST, embeddingRules: [{ $type: 'app.bsky.feed.postgate#disableRule' }], createdAt: expect.any(String) } },
+    ]);
+    expect(writes.map((c) => c.auth)).toEqual(['Bearer access-jwt-1', 'Bearer access-jwt-1']);
+    // Nothing else is written: the post itself is never touched.
+    expect(calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`, SESSION, CREATE, CREATE]);
+  });
+
+  it('combines reply rules as Bluesky allows, and writes only the gate asked for', async () => {
+    const records = async (settings: Record<string, unknown>, answers: { body: unknown }[]) => {
+      const { fetchImpl, calls } = xrpc({ [SESSION]: [session()], [CREATE]: answers });
+      const result = await new BlueskyPublisher(fetchImpl).gate(gateInput(settings));
+      return { result, records: calls.filter((c) => c.route === CREATE).map((c) => (c.json as { collection: string; record: Record<string, unknown> }).record) };
+    };
+    const several = await records({ replySettings: ['followers', 'mentionedUsers'] }, [created(THREADGATE)]);
+    expect(several.result).toEqual({ kind: 'accepted', externalId: THREADGATE });
+    expect(several.records).toEqual([{ $type: 'app.bsky.feed.threadgate', post: POST, allow: [{ $type: 'app.bsky.feed.threadgate#mentionRule' }, { $type: 'app.bsky.feed.threadgate#followerRule' }], createdAt: expect.any(String) }]);
+    const one = await records({ replySettings: 'following', quotes: true }, [created(THREADGATE)]);
+    expect(one.records.map((r) => r.allow)).toEqual([[{ $type: 'app.bsky.feed.threadgate#followingRule' }]]);
+    const quotes = await records({ quotes: false }, [created(POSTGATE)]);
+    expect(quotes.result).toEqual({ kind: 'accepted', externalId: POSTGATE });
+    expect(quotes.records.map((r) => r.$type)).toEqual(['app.bsky.feed.postgate']);
+  });
+
+  it('says which gate failed and leaves the post as it is, never writes on another account, and refuses settings it cannot write before any call', async () => {
+    const refused = xrpc({ [SESSION]: [session()], [CREATE]: [{ status: 400, body: { error: 'InvalidRequest', message: 'Invalid threadgate' } }] });
+    expect(await new BlueskyPublisher(refused.fetchImpl).gate(gateInput({ replySettings: 'nobody', quotes: false }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'threadgate:InvalidRequest', message: 'Invalid threadgate' });
+    // The postgate is not tried after a refused threadgate, and nothing is deleted.
+    expect(refused.calls.map((c) => c.route)).toEqual([`GET plc.directory/${DID}`, SESSION, CREATE]);
+    const down = xrpc({ [SESSION]: [session()], [CREATE]: [created(THREADGATE), { status: 502, body: { error: 'UpstreamFailure', message: 'Upstream Failure' } }] });
+    expect(await new BlueskyPublisher(down.fetchImpl).gate(gateInput({ replySettings: ['following'], quotes: false }))).toEqual({ kind: 'unknown', code: 'postgate:UpstreamFailure' });
+    const revoked = xrpc({ [SESSION]: [{ status: 401, body: { error: 'AuthenticationRequired', message: 'Invalid identifier or password' } }] });
+    expect(await new BlueskyPublisher(revoked.fetchImpl).gate(gateInput({ quotes: false }))).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    const other = xrpc({ [SESSION]: [session()] });
+    const publisher = new BlueskyPublisher(other.fetchImpl);
+    expect(await publisher.gate(gateInput({ quotes: false }, 'at://did:plc:someoneelse0000000000000/app.bsky.feed.post/3kgate'))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'NOT_OWN_POST' });
+    expect(other.calls.some((c) => c.route === CREATE)).toBe(false);
+    const none = xrpc({});
+    const idle = new BlueskyPublisher(none.fetchImpl);
+    expect(await idle.gate(gateInput({ replySettings: 'mentioned_only' }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'GATES_INVALID' });
+    expect(await idle.gate(gateInput({ replySettings: 'everyone' }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'NO_GATES' });
+    expect(await idle.gate(gateInput({ quotes: false }, 'https://bsky.app/profile/x/post/1'))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    // A post whose gates could not be written never goes out ungated.
+    expect(await idle.publish(input({ settings: { replySettings: ['following', 'following'] } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'GATES_INVALID' });
+    expect(await idle.publish(input({ settings: { quotes: 'off' } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'GATES_INVALID' });
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('reads the gates from the settings the composer saves', () => {
+    expect(blueskyGatesOf({})).toBeNull();
+    expect(blueskyGatesOf({ replySettings: 'everyone', quotes: true })).toBeNull();
+    expect(blueskyGatesOf({ replySettings: 'nobody' })).toEqual({ allow: [], quotes: true });
+    expect(blueskyGatesOf({ quotes: false })).toEqual({ allow: null, quotes: false });
+    expect(blueskyGatesOf({ replySettings: ['followers', 'following', 'mentionedUsers'] })).toEqual({ allow: ['mentionedUsers', 'following', 'followers'], quotes: true });
+    for (const replySettings of [[], ['nobody'], ['following', 'following'], 'all', 1]) expect(blueskyGatesOf({ replySettings })).toBe('invalid');
   });
 });

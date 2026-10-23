@@ -16,6 +16,7 @@ import type { Db, MemberRole } from '@crove/db';
 import { METRIC_NAMES, RECENT_POSTS_MAX, RECENT_POSTS_MAX_DAYS, type Publisher, type RecentPost, type RecentPostsResult } from '@crove/channel';
 import { DomainError, defineCommand, defineQuery, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { eachBounded } from './metrics.ts';
+import { channelScope, connectionInScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ACTOR: SystemActor = { type: 'system', component: 'social.external_posts' };
@@ -218,6 +219,8 @@ export const metricsExternal = defineQuery({
       WHERE e.org_id = ${ctx.orgId}
         AND e.published_at > pg_catalog.now() - pg_catalog.make_interval(days => ${input.days ?? 30}::int)
         AND NOT crove_social.external_post_is_crove(e.org_id, e.channel_connection_id, e.external_post_id, e.permalink)
+        -- A member limited to some channels (#1081) sees those only.
+        AND ${connectionInScope(await channelScope(ctx), 'e.channel_connection_id')}
       ORDER BY e.published_at DESC, e.id
       LIMIT ${EXTERNAL_LIST_LIMIT}`.execute(ctx.trx);
     return rows.map((r) => {

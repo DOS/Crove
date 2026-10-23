@@ -8,6 +8,7 @@ import { SOCIAL_LABEL_COLORS, zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialLabelColor } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import type { Trx } from './variants.ts';
+import { refusePostOutside } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -121,6 +122,8 @@ export const postSetLabels = defineCommand({
     // One change of a post's labels at a time; its content and revision are left alone.
     const post = await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.postId).forUpdate().executeTakeFirst();
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
+    // Only a post the caller may see (#1081).
+    await refusePostOutside(ctx, post.id);
     if (input.labelIds.length > 0) {
       // Held until the commit, so a label deleted meanwhile waits instead of failing the insert below.
       const found = await ctx.trx.selectFrom('crove_social.label').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', input.labelIds).forKeyShare().execute();

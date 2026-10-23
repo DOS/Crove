@@ -53,7 +53,8 @@ const byId = (postIds: readonly string[]) => [...postIds].sort((a, b) => (a < b 
 
 // The refusals of a nested command that leave only that post out: the caller may not change it. Anything else (a
 // broken session, an agent's limits, a server error) fails the whole command.
-const notAllowed = (refusal: DomainError) => refusal.code === 'FORBIDDEN';
+// A post on channels a limited member may not use (#1081) is one of those.
+const notAllowed = (refusal: DomainError) => refusal.code === 'FORBIDDEN' || refusal.code === 'CHANNEL_NOT_ALLOWED';
 
 function audit(ctx: CommandContext, result: BulkEditResult, facts: Record<string, unknown>) {
   ctx.audit({

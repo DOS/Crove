@@ -6,10 +6,12 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { defineQuery } from '@crove/kernel-runtime';
+import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { normalizeMediaTag } from './domain/media-tags.ts';
+import { channelScope, postInScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
+const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 // The file types of the library: a social upload of another type is not one of its items.
 export const LIBRARY_MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
 export const LIBRARY_PAGE = 60;
@@ -120,6 +122,8 @@ export const mediaUsage = defineQuery({
       .selectFrom('crove_social.post as p')
       .select(['p.id', 'p.status', 'p.body', 'p.updated_at'])
       .where('p.org_id', '=', ctx.orgId)
+      // A member limited to some channels (#1081) sees the posts they may see.
+      .where(postInScope(await channelScope(ctx)))
       .where((eb) =>
         eb.or([
           eb.exists(eb.selectFrom('crove_social.post_media as m').select('m.id').whereRef('m.org_id', '=', 'p.org_id').whereRef('m.post_id', '=', 'p.id').where('m.file_id', '=', input.fileId)),
@@ -140,4 +144,23 @@ export const mediaUsage = defineQuery({
   },
 });
 
-export const libraryQueries = [mediaList, mediaUsage];
+// One file of the library as stored, for an AI alt text suggestion (#1121): only the org's own Social uploads, so an
+// accounting document is never sent to the model whatever its type. The caller checks the type and the size.
+export const mediaStored = defineQuery({
+  name: 'social.media.stored',
+  input: z.strictObject({ fileId: zId }),
+  access: MEMBERS,
+  handler: async (ctx, input): Promise<{ storageKey: string; generation: string | null; sha256: string; contentType: string; sizeBytes: number }> => {
+    const file = await ctx.trx
+      .selectFrom('crove_kernel.file')
+      .select(['storage_key', 'generation', 'sha256', 'content_type', 'size_bytes'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.fileId)
+      .where('source', '=', 'social')
+      .executeTakeFirst();
+    if (!file) throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
+    return { storageKey: file.storage_key, generation: file.generation, sha256: file.sha256, contentType: file.content_type, sizeBytes: Number(file.size_bytes) };
+  },
+});
+
+export const libraryQueries = [mediaList, mediaUsage, mediaStored];

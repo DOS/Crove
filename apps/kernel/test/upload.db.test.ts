@@ -414,6 +414,31 @@ suite.each(backends)('staged uploads on PostgreSQL and $name (issue #109)', (bac
     expect((await call(`/api/files/uploads/${odd.uploadId}/complete`, 'owner', { json: { filename: 'anh.png', purpose: 'payroll' } })).status).toBe(400);
   });
 
+  // PDFs for LinkedIn document posts (#1119): the type is read from the bytes (%PDF-), the file is recorded as source
+  // social with no image size, and no extraction is queued for it. Bytes that only claim to be a PDF are refused.
+  it('records a PDF for a Social post as source social, never read as a document, and refuses a fake PDF', async () => {
+    await join('pdfer', 'member');
+    const pdf = Buffer.from(`%PDF-1.7\n%âãÏÓ\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n% ${randomUUID()}\n%%EOF\n`, 'latin1');
+    const form = await begin('pdfer', 'social');
+    expect(await backend.post(form, pdf)).toBe(204);
+    const done = await call(`/api/files/uploads/${form.uploadId}/complete`, 'pdfer', { json: { filename: 'bao-gia-q4.pdf', purpose: 'social' } });
+    expect(done.status).toBe(200);
+    const { fileId } = (await done.json()) as { fileId: string };
+    const row = await admin(async (c) => (await c.query('SELECT source, content_type, filename, image_width, image_height FROM crove_kernel.file WHERE id = $1', [fileId])).rows[0]);
+    expect(row).toEqual({ source: 'social', content_type: 'application/pdf', filename: 'bao-gia-q4.pdf', image_width: null, image_height: null });
+    const events = await admin(async (c) => (await c.query("SELECT 1 FROM crove_kernel.outbox_event WHERE type = 'kernel.file.ingested' AND payload->>'fileId' = $1", [fileId])).rowCount);
+    expect(events).toBe(0);
+    const extractions = await admin(async (c) => (await c.query('SELECT 1 FROM crove_kernel.extraction WHERE file_id = $1', [fileId])).rowCount);
+    expect(extractions).toBe(0);
+
+    // A name and a type that say PDF do not make one: the bytes decide.
+    const fake = await begin('pdfer', 'social');
+    expect(await backend.post(fake, Buffer.from(`PDF-1.7 not really ${randomUUID()}`))).toBe(204);
+    const refused = await call(`/api/files/uploads/${fake.uploadId}/complete`, 'pdfer', { json: { filename: 'bao-gia.pdf', purpose: 'social' } });
+    expect(refused.status).toBe(415);
+    expect(await refused.json()).toMatchObject({ code: 'UNSUPPORTED_TYPE' });
+  });
+
   // Videos for Social posts (#409): a social grant allows 100 MB, the type and duration come from the file itself.
   it('records a video for a Social post with the duration read from it, and refuses one it cannot read', async () => {
     const u32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];

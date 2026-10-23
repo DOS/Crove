@@ -69,7 +69,8 @@ services:
       GOTRUE_SMTP_USER: ${SMTP_USER:-}
       GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
       GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_FROM:-noreply@crove.local}
-      GOTRUE_SMTP_SENDER_NAME: Crove
+      # The sender name of sign-in mails: the product name users see (BRAND_NAME, #1040).
+      GOTRUE_SMTP_SENDER_NAME: ${BRAND_NAME:-Crove}
       # Email links resolve these paths against API_EXTERNAL_URL's origin, so they must include the /auth/v1 proxy prefix.
       GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
@@ -127,6 +128,8 @@ services:
       AI_API_KEY: ${AI_API_KEY:-}
       AI_MODEL: ${AI_MODEL:-}
       AI_VISION: ${AI_VISION:-false}
+      # The product name users see in the app and in mails (#1040); empty keeps "Crove".
+      BRAND_NAME: ${BRAND_NAME:-}
       # The app's feedback and support link (https: or mailto:); empty hides it.
       SUPPORT_URL: ${SUPPORT_URL:-}
       TERMS_URL: ${TERMS_URL:-}
@@ -134,6 +137,9 @@ services:
       # The public status page PUBLIC_URL/status (#678): the prober's last result, on the shared `status` volume.
       STATUS_FILE: ${STATUS_FILE:-}
       TAX_CODE_LOOKUP_URL: ${TAX_CODE_LOOKUP_URL:-}
+      # The assisted purchase-invoice sync from the tax portal (#325); off unless true.
+      TAX_PORTAL_SYNC: ${TAX_PORTAL_SYNC:-false}
+      TAX_PORTAL_STEP_SECONDS: ${TAX_PORTAL_STEP_SECONDS:-90}
       INBOUND_DOMAIN: ${INBOUND_DOMAIN:-}
       INBOUND_SECRET: ${INBOUND_SECRET:-}
       # Invite mails go through the same SMTP server as Supabase Auth's (Mailpit at http://localhost:8025 locally).
@@ -242,6 +248,9 @@ services:
       CHANNEL_THREADS_APP_SECRET: ${CHANNEL_THREADS_APP_SECRET:-}
       CHANNEL_LINKEDIN_CLIENT_ID: ${CHANNEL_LINKEDIN_CLIENT_ID:-}
       CHANNEL_LINKEDIN_CLIENT_SECRET: ${CHANNEL_LINKEDIN_CLIENT_SECRET:-}
+      CHANNEL_LINKEDIN_ORGANIZATIONS: ${CHANNEL_LINKEDIN_ORGANIZATIONS:-false}
+      CHANNEL_LINKEDIN_PAGE_CLIENT_ID: ${CHANNEL_LINKEDIN_PAGE_CLIENT_ID:-}
+      CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET: ${CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET:-}
       CHANNEL_GOOGLE_CLIENT_ID: ${CHANNEL_GOOGLE_CLIENT_ID:-}
       CHANNEL_GOOGLE_CLIENT_SECRET: ${CHANNEL_GOOGLE_CLIENT_SECRET:-}
       CHANNEL_GOOGLE_BUSINESS: ${CHANNEL_GOOGLE_BUSINESS:-false}
