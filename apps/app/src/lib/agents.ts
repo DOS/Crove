@@ -98,3 +98,12 @@ export const TASK_STATUSES = ['todo', 'in_progress', 'waiting', 'in_review', 'do
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 // Statuses a task can still move from.
 export const OPEN_TASK_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'waiting', 'in_review'];
+
+// The Social post a task is about (#1193): the content agent's tasks point at their post by their source ref, and the
+// task page links to it. Anything else, or an id that is not a UUID, is none.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function socialPostOf(sourceRef: unknown): string | null {
+  if (typeof sourceRef !== 'object' || sourceRef === null) return null;
+  const { type, id } = sourceRef as { type?: unknown; id?: unknown };
+  return type === 'social.post' && typeof id === 'string' && UUID.test(id) ? id : null;
+}

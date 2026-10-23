@@ -16,6 +16,7 @@ import { cn } from '@crove/ui/lib/utils';
 import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
+import { AiPhotoPicker, aiDraftInput } from '../components/social-ai-photos.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
@@ -23,6 +24,7 @@ import { ReviewLinks } from '../components/social-review-links.tsx';
 import { PostActivity } from '../components/social-activity.tsx';
 import { boardMedia } from '../components/social-comment-pins.tsx';
 import { ReviewChanges } from '../components/social-review-diff.tsx';
+import { PreReviewFindings } from '../components/social-pre-review.tsx';
 import { PostVersions } from '../components/social-post-versions.tsx';
 import { BannedWordHints, BannedWordReview, useBannedWords } from '../components/social-banned-words.tsx';
 import { ReviewChecklistTicks } from '../components/social-review-checklist.tsx';
@@ -2354,7 +2356,7 @@ export function SocialComposePage() {
   const scope = useChannelScope();
   const live = (channels.data ?? []).filter((c) => c.status === 'active' && scope.allows(c.id));
   // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
-  const search: { at?: string; idea?: string; occasion?: string; on?: string; channel?: string } = useSearch({ strict: false });
+  const search: { at?: string; idea?: string; occasion?: string; on?: string; channel?: string; photo?: string } = useSearch({ strict: false });
   // A post for an occasion of the calendar (#702): named above the form, and the AI brief starts from it.
   const tOcc = useTranslations('social.occasions');
   const occasion = search.occasion && search.on ? { name: tOcc(`names.${search.occasion as 'tet'}`), date: f.date(search.on) } : null;
@@ -2459,8 +2461,12 @@ export function SocialComposePage() {
   const source = /^https?:\/\/[^\s@/?#]+(?:[/?#]\S*)?$/.test(sourceUrl.trim()) ? sourceUrl.trim() : null;
   const locale = useLocale();
   const aiEnabled = getConfig().aiEnabled === true;
+  // Writing from photos (#1191): the photos picked, in order; a library item's *Soạn bài từ ảnh này* opens with its photo.
+  const [fromPhotos, setFromPhotos] = useState(() => Boolean(search.photo));
+  const [photos, setPhotos] = useState<string[]>(() => (search.photo ? [search.photo] : []));
+  const sentPhotos = fromPhotos ? photos : [];
   const aiDraft = useMutation({
-    mutationFn: () => client.social.posts.draftWithAi({ brief: brief.trim(), connectionIds: chosen, language: locale === 'en' ? 'en' : 'vi', ...(source ? { sourceUrl: source } : {}) }),
+    mutationFn: () => client.social.posts.draftWithAi(aiDraftInput({ brief, connectionIds: chosen, locale, source, photos: sentPhotos })),
     onSuccess: ({ postId }) => {
       leaving.current = true;
       void queryClient.invalidateQueries();
@@ -2617,7 +2623,31 @@ export function SocialComposePage() {
             <Label htmlFor="social-ai-brief">{t('aiDraftTitle')}</Label>
             {aiEnabled ? (
               <>
-                <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t('aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => {
+                <Button
+                  variant={fromPhotos ? 'default' : 'outline'}
+                  size="sm"
+                  aria-pressed={fromPhotos}
+                  disabled={aiDraft.isPending}
+                  onClick={() => {
+                    setFromPhotos(!fromPhotos);
+                    if (aiDraft.error) aiDraft.reset();
+                  }}
+                >
+                  {t('aiPhotos.toggle')}
+                </Button>
+                {fromPhotos && (
+                  <AiPhotoPicker
+                    postMedia={base.media}
+                    picked={photos}
+                    disabled={aiDraft.isPending}
+                    libraryOpen={Boolean(search.photo)}
+                    onChange={(next) => {
+                      setPhotos(next);
+                      if (aiDraft.error) aiDraft.reset();
+                    }}
+                  />
+                )}
+                <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t(fromPhotos ? 'aiPhotos.briefPlaceholder' : 'aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => {
                   setBrief(e.target.value);
                   if (aiDraft.error) aiDraft.reset();
                 }} />
@@ -2629,9 +2659,14 @@ export function SocialComposePage() {
                   if (aiDraft.error) aiDraft.reset();
                 }} />
                 <p className="text-xs text-subtle-foreground">{t('aiDraftHint')}</p>
-                <Button variant="outline" size="sm" disabled={(!brief.trim() && !source) || (sourceUrl.trim() !== '' && !source) || chosen.length === 0 || aiDraft.isPending} onClick={() => aiDraft.mutate()}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={(!brief.trim() && !source && sentPhotos.length === 0) || (sourceUrl.trim() !== '' && !source) || (fromPhotos && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
+                  onClick={() => aiDraft.mutate()}
+                >
                   {aiDraft.isPending ? <Spinner className="text-current" /> : null}
-                  {t('aiDraft')}
+                  {t(fromPhotos ? 'aiPhotos.draft' : 'aiDraft')}
                 </Button>
                 {aiDraft.error && <ErrorText>{errorMessage(aiDraft.error)}</ErrorText>}
               </>
@@ -2793,6 +2828,8 @@ function ReviewPanel({ post, names, onDone, rewriteTarget }: { post: Post; names
       {waiting.map((v) =>
         v.duplicateOf ? <DuplicateNote key={`duplicate-${v.id}`} provider={v.provider} of={v.duplicateOf} channel={names.get(v.connectionId) ?? providerName(v.provider)} rewriteTarget={rewriteTarget?.(v) ?? null} /> : null,
       )}
+      {/* The automatic checks the content agent reads (#1193): its task holds counts only. */}
+      <PreReviewFindings postId={post.id} waiting={waiting} />
       {/* The review checklist (#1105): every item of the channels being approved, which the Approve button needs. */}
       <ReviewChecklistTicks variants={approvable} names={names} ticked={checked} onChange={setChecked} />
       {/* What changed since each channel's last decision (#944); nothing on a first review. */}

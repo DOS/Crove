@@ -321,7 +321,7 @@ export const publishBegin = defineCommand({
           // Its channel now asks for more approvals than it has (set_policy re-checks too; a retry or a resume can
           // bring one back to scheduled): back to review, never published short.
           await move(ctx, v, { type: 'regate' }, regateValues(v));
-          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: [v.id], by_policy: true, agent_task: await agentTaskOf(ctx, post.id) });
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: [v.id], by_policy: true, agent_task: await agentTaskOf(ctx, post.id, 1) });
           result = none('approval');
           break;
         }

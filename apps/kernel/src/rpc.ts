@@ -3,7 +3,7 @@ import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
-import { ALT_TEXT_IMAGE_MAX_BYTES, ALT_TEXT_IMAGE_TYPES, ProofreadChangedError, type SocialWriter, type WriterChannel } from '@crove/agent';
+import { ALT_TEXT_IMAGE_MAX_BYTES, ALT_TEXT_IMAGE_TYPES, ProofreadChangedError, type DraftRequest, type DraftResult, type SocialWriter, type WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider, strictestAltTextLimit } from '@crove/mod-social/contract';
 import { channelNotAllowed, voiceNotes, type BrandVoice } from '@crove/mod-social';
 import {
@@ -76,8 +76,19 @@ export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> &
     // An image's alt text from its stored bytes (#817), when the deployment's model takes images (AI_VISION), within
     // maxChars when the chosen channels take less than the writer's own limit (#1121). The read stops at the size the
     // file row records (#1126).
-    describeStored?: (file: { key: string; generation: string | null; sha256: string; sizeBytes: number }, mime: string, language: 'vi' | 'en', maxChars?: number | null) => Promise<string | null>;
+    describeStored?: (file: StoredImage, mime: string, language: 'vi' | 'en', maxChars?: number | null) => Promise<string | null>;
+    // A draft written from photos of the library (#1191) too, read from their stored bytes like alt text, when the model
+    // takes images; each read stops at the size its file row records.
+    draftStored?: (request: Omit<DraftRequest, 'images'>, images: readonly { file: StoredImage; mime: string }[]) => Promise<DraftResult | null>;
   };
+
+// A stored file as the vision reads take it: the row's reference, hash and recorded size.
+export interface StoredImage {
+  key: string;
+  generation: string | null;
+  sha256: string;
+  sizeBytes: number;
+}
 
 // A member limited to some channels (#1081) may not have AI write for another one (#1099): refused before the paid model
 // call and before that channel's brand voice is read, as social.post.create would refuse the channel afterwards.
@@ -447,6 +458,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         list: os.social.posts.list.handler(socialQuery('social.post.list')),
         get: os.social.posts.get.handler(socialQuery('social.post.get')),
         reviewDiff: os.social.posts.reviewDiff.handler(socialQuery('social.post.review_diff')),
+        preReview: os.social.posts.preReview.handler(socialQuery('social.post.pre_review')),
         versions: os.social.posts.versions.handler(socialQuery('social.post.versions')),
         restoreVersion: os.social.posts.restoreVersion.handler(socialCommand('social.post.restore_version')),
         assign: os.social.posts.assign.handler(socialCommand('social.post.assign')),
@@ -495,12 +507,27 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
             if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không soạn được bài');
             if (!socialWriter) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
+            // Photos (#1191) need a model that takes images, said before anything is read.
+            const fileIds = input.fileIds ?? [];
+            const draftStored = socialWriter.draftStored;
+            if (fileIds.length > 0 && !draftStored) throw new DomainError('AI_VISION_OFF', 422, 'Mô hình AI của máy chủ chưa đọc được ảnh (AI_VISION)');
             if (new Set(input.connectionIds).size !== input.connectionIds.length) throw new DomainError('CHANNEL_ALREADY_IN_POST', 409, 'Mỗi kênh chỉ có một bản trong bài đăng');
             await refuseChannelsOutside(runtime, actor, orgId, input.connectionIds);
             const connections = await runtime.query<{ id: string; provider: string; displayName: string; status: string }[]>('kernel.channel.list', {}, { actor, orgId });
             const chosen = input.connectionIds.map((id) => connections.find((c) => c.id === id && c.status === 'active'));
             if (chosen.some((c) => !c)) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
             const channels = (chosen as { id: string; provider: string; displayName: string }[]).map((c) => writerChannel(c));
+            // Each photo: an image of the org's Social library the member may use (for a limited member, not another
+            // channel's own media, #1081), of a type and size the model is sent (as for alt text), checked before the
+            // source page and the budget.
+            const photos =
+              fileIds.length > 0
+                ? await runtime.query<{ fileId: string; storageKey: string; generation: string | null; sha256: string; contentType: string; sizeBytes: number }[]>('social.media.draft_images', { fileIds }, { actor, orgId })
+                : [];
+            for (const photo of photos) {
+              if (!ALT_TEXT_IMAGE_TYPES.includes(photo.contentType)) throw new DomainError('AI_DRAFT_IMAGE_ONLY', 422, 'AI chỉ soạn bài từ ảnh JPG, PNG hoặc WEBP, không từ video hay tệp PDF', { fileId: photo.fileId });
+              if (photo.sizeBytes > ALT_TEXT_IMAGE_MAX_BYTES) throw new DomainError('AI_DRAFT_IMAGE_TOO_LARGE', 413, 'Có ảnh lớn hơn 10 MB nên AI không đọc được', { fileId: photo.fileId });
+            }
             // The source page (#769) as its link preview read it (fetched by the worker through the egress guard, parsed in
             // the extract container): asked for if new, and waited for a few seconds. Before the budget: waiting for a page
             // costs no model call, and a page that cannot be read takes no slot.
@@ -515,7 +542,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             let draft: Awaited<ReturnType<SocialDrafter['draft']>>;
             try {
               const voices = input.tone ? null : await savedVoices(runtime, actor, orgId);
-              draft = await socialWriter.draft({
+              const request: Omit<DraftRequest, 'images'> = {
                 brief: input.brief,
                 channels,
                 language: input.language ?? 'vi',
@@ -523,13 +550,23 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
                 ...(voices?.org ? { voice: voices.org } : {}),
                 ...(source ? { source } : {}),
                 ...(voices ? { channelVoices: Object.fromEntries(input.connectionIds.flatMap((id) => (voices.byChannel.has(id) ? [[id, voices.byChannel.get(id) as string]] : []))) } : {}),
-              });
+              };
+              draft =
+                photos.length > 0 && draftStored
+                  ? await draftStored(
+                      request,
+                      photos.map((p) => ({ file: { key: p.storageKey, generation: p.generation, sha256: p.sha256, sizeBytes: p.sizeBytes }, mime: p.contentType })),
+                    )
+                  : await socialWriter.draft(request);
             } catch (error: unknown) {
               console.error('[social-ai] draft failed', error instanceof Error ? error.name : typeof error);
+              // A photo that could not be read as recorded, or a failed vision call, has its own words (#1126).
+              if (photos.length > 0) throw new DomainError('AI_DRAFT_VISION_FAILED', 503, 'AI chưa đọc được ảnh để soạn bài lúc này, hãy thử lại sau');
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
             } finally {
               ticket.release();
             }
+            if (!draft && photos.length > 0) throw new DomainError('AI_DRAFT_PHOTOS_EMPTY', 422, 'AI không soạn được bài từ những ảnh này, hãy thêm vài dòng mô tả');
             if (!draft) throw new DomainError('AI_DRAFT_EMPTY', 422, 'AI không soạn được bài từ mô tả này, hãy viết rõ hơn');
             const own = new Map(draft.variants.map((v) => [v.key, v]));
             const created = await runtime.execute<{ postId: string }>(
@@ -539,6 +576,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
                 title: draft.title,
                 origin: 'ai',
                 ...(input.sourceUrl ? { linkUrl: input.sourceUrl } : {}),
+                // The photos it was written from, in the order picked, as the post's images.
+                ...(photos.length > 0 ? { media: photos.map((p) => ({ fileId: p.fileId })) } : {}),
                 channels: input.connectionIds.map((connectionId) => {
                   const v = own.get(connectionId);
                   return { connectionId, ...(v?.body ? { body: v.body } : {}), ...(v?.title ? { title: v.title } : {}) };

@@ -361,7 +361,7 @@ export const postImport = defineCommand({
         for (const v of ready) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
         if (ready.length > 0) {
           await refreshPostStatus(ctx, post.id);
-          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: ready.map((v) => v.id), agent_task: preReviewTask({ ...post, tainted: await postTainted(ctx, post.id) }) });
+          await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: ready.map((v) => v.id), agent_task: preReviewTask({ id: post.id, tainted: await postTainted(ctx, post.id) }, ready.length) });
         }
         submitted = ready.length;
       }
@@ -664,7 +664,7 @@ export const postSubmit = defineCommand({
     await refuseBannedWords(ctx, base(post), chosen);
     for (const v of chosen) await setVariant(ctx, v.id, { status: step(v, { type: 'submit' }) });
     await refreshPostStatus(ctx, post.id);
-    await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: chosen.map((v) => v.id), agent_task: preReviewTask({ ...post, tainted: await postTainted(ctx, post.id) }) });
+    await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: chosen.map((v) => v.id), agent_task: preReviewTask({ id: post.id, tainted: await postTainted(ctx, post.id) }, chosen.length) });
     return { postId: post.id, submitted: chosen.map((v) => v.id) };
   },
 });
@@ -1609,8 +1609,9 @@ function campaignFindingText(f: CampaignFinding): string {
 }
 
 // What a reviewer should look at before deciding (#799), from deterministic checks only: each waiting channel's rule
-// issues, the brand voice's words to avoid in its text, and images without a description. Members and the
-// social.content_manager agent read it; it changes nothing.
+// issues, the brand voice's words to avoid in its text, and images without a description. Members (the post page's
+// review panel, #1193) and the social.content_manager agent read it; it changes nothing. A member limited to some
+// channels (#1081) gets POST_NOT_FOUND for a post with none of theirs and the findings of their channels only.
 const PRE_REVIEW_FINDINGS_MAX = 30;
 export const postPreReview = defineQuery({
   name: 'social.post.pre_review',
@@ -1660,8 +1661,7 @@ export const postPreReview = defineQuery({
       const channels = waiting.map((v) => ({ name: names.get(v.connectionId) ?? v.provider, settings: v.settings, linkUrl: v.effective.linkUrl, at: v.effectiveAt }));
       for (const f of campaignFindings(campaigns, channels, view.timeZone)) findings.push(campaignFindingText(f));
     }
-    const title = view.title?.trim() || view.body.replace(/\s+/g, ' ').trim().slice(0, 120);
-    return { postId: view.id, title, waiting: waiting.length, findings: findings.slice(0, PRE_REVIEW_FINDINGS_MAX) };
+    return { postId: view.id, waiting: waiting.length, findings: findings.slice(0, PRE_REVIEW_FINDINGS_MAX) };
   },
 });
 
