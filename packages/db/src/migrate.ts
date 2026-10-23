@@ -127,8 +127,8 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
 // auth-grants admin URL other than the runner's) marks nothing, and its DDL is recorded like any other.
 async function mayMarkPipelineSession(client: pg.ClientBase): Promise<boolean> {
   const { rows } = await client.query<{ ok: boolean }>(
-    `SELECT pg_catalog.to_regclass('crove_meta.pipeline_session') IS NOT NULL
-            AND pg_catalog.has_table_privilege('crove_meta.pipeline_session', 'INSERT, DELETE') AS ok`,
+    // By OID: has_table_privilege raises for a table name that does not exist, and AND does not guarantee the order.
+    `SELECT COALESCE(pg_catalog.has_table_privilege(pg_catalog.to_regclass('crove_meta.pipeline_session'), 'INSERT, DELETE'), false) AS ok`,
   );
   return rows[0]?.ok === true;
 }
@@ -183,7 +183,7 @@ export async function installDdlWatch(options: DdlWatchOptions): Promise<'instal
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
-      if ((error as { code?: string }).code !== '42501') throw error;
+      if ((error as { code?: string } | null)?.code !== '42501') throw error;
       log(
         `DDL watch skipped: ${(error as Error).message}. Schema changes outside the migration pipeline are not recorded ` +
           'on this database (docs/runbooks/alerts.md, "DDL outside the migration pipeline")',
