@@ -106,11 +106,17 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="report-from">{t('from')}</Label>
-          <Input id="report-from" type="date" value={period.from} onChange={(e) => (setPeriod({ ...period, from: e.target.value }), setDatesFrom(null))} />
+          <Input id="report-from" type="date" value={period.from} onChange={(e) => {
+              setPeriod({ ...period, from: e.target.value });
+              setDatesFrom(null);
+            }} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="report-to">{t('to')}</Label>
-          <Input id="report-to" type="date" value={period.to} onChange={(e) => (setPeriod({ ...period, to: e.target.value }), setDatesFrom(null))} />
+          <Input id="report-to" type="date" value={period.to} onChange={(e) => {
+              setPeriod({ ...period, to: e.target.value });
+              setDatesFrom(null);
+            }} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="report-title">{t('name')}</Label>
