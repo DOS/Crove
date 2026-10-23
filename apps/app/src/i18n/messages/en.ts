@@ -2416,6 +2416,14 @@ export const en = {
         poll: 'poll option',
       },
     },
+    // Reviewing posts one after another by keyboard (#1221).
+    reviewKeys: {
+      approveNext: 'Approve and open the next post',
+      shortcuts: 'Shortcuts: J or N next post · K or P previous post · A approve and open the next post (with checklist items left to tick, A takes you to the first one) · R write why changes are needed. Shortcuts do nothing while you type in a field.',
+      noneLeft: 'No posts left to review',
+      noneLeftHint: 'No post is waiting for your approval. New posts sent for review show in the To review tab.',
+      backToReview: 'Back to the review list',
+    },
     reviewChecklist: {
       title: 'Review checklist',
       hint: 'What a reviewer must check before pressing Approve, such as spelling, the brand name, the disclaimer or a link that still opens. A reviewer ticks every item to approve; requesting changes or rejecting needs none. Up to {max, number} items for the whole organization, counting the items of single channels.',
@@ -2809,7 +2817,8 @@ export const en = {
       reopen: 'Reopen',
       resolvedBy: 'Resolved · {name} · {when}',
       pinsTitle: 'Pins on images and videos',
-      pinsHint: 'Click the exact spot on an image to pin your comment there. For a video, pause at the moment and press Pin.',
+      pinsHint: 'Click the exact spot on an image to pin your comment there. For a video, pause at the moment and press Pin. From the keyboard, press Enter on an image to pin its middle, then move the pin with the arrow keys (hold Shift to move it further).',
+      draftAt: 'The pin is {x, number}% from the left and {y, number}% from the top',
       pinImage: 'Pin a comment to a spot on {media}',
       pinVideoHere: 'Pin at {time}',
       imageN: 'Image {n}',
