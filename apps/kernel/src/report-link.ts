@@ -41,6 +41,13 @@ export interface ReportPage {
     timeZone: string;
     groups: { channel: string | null; provider: string | null; items: { metric: string; target: number; actual: number | null }[] }[];
   } | null;
+  // Who follows each channel (#1146): the latest audience taken in the period, per channel that has one.
+  audience: { channel: string; provider: string; day: string; audience: { age: AudienceSlice[]; gender: AudienceSlice[]; cities: AudienceSlice[]; countries: AudienceSlice[] } }[];
+}
+
+interface AudienceSlice {
+  key: string;
+  count: number;
 }
 
 // null: a malformed body, or a token that names no live link (the same answer either way).

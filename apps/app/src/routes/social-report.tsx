@@ -3,12 +3,13 @@
 // prints cleanly to PDF from the browser. The token stays after the # and goes to the API in a POST body only.
 // With the org's white-label branding (#1053) it shows the agency's logo, name and accent instead of Crove's logo. A
 // link may carry the agency's note, shown as plain text, and a report of exactly one month shows the monthly goals
-// (#1056).
+// (#1056), and who follows each channel, from the latest weekly capture in the period (#1146).
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { ReportAudiences } from '../components/social-audience.tsx';
 import { GoalList } from '../components/social-goals.tsx';
 import { ChangeChip } from '../components/social-growth.tsx';
 import { OutsideChip } from '../components/social-external-posts.tsx';
@@ -45,6 +46,9 @@ interface ReportPage {
   note?: string | null;
   // The monthly goals (#1056), only for a report of exactly one month; null or absent otherwise.
   goals?: ReportGoals | null;
+  // Who follows each channel (#1146): the latest capture in the period; absent from a server without it. Read again by
+  // ReportAudiences.
+  audience?: unknown;
 }
 
 const tokenOf = () => {
@@ -234,6 +238,7 @@ export function SocialReportPage() {
                 </section>
               </>
             )}
+            <ReportAudiences entries={data.audience} />
             <p className="text-xs text-subtle-foreground">{t('footer', { until: f.date(data.expiresAt) })}</p>
             <MadeWithCrove brand={brand} />
           </>

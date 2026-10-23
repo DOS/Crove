@@ -30,6 +30,7 @@ import type {
   RetrySafety,
   StatusInput,
 } from './index.ts';
+import { AUDIENCE_BREAKDOWNS, AUDIENCE_MIN_FOLLOWERS, audienceOf, audienceSlices, type Audience, type AudienceBreakdown, type AudienceSlice } from './audience.ts';
 import { commentResult } from './comment.ts';
 import { graphTime, pagingCursor, platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { videoCoverOf } from './cover.ts';
@@ -350,8 +351,8 @@ export class InstagramPublisher implements Publisher {
   // Likes and comments are fields of the post; reach, saves, shares and views come from its insights, which need
   // instagram_manage_insights (an account connected before Crove asked for it has none) and exist only for posts made
   // after the account became professional. Without insights the plain counts are still reported.
-  // The account's followers and yesterday's reach (#645). The reach needs instagram_manage_insights; an account
-  // connected before Crove asked for it reports followers only.
+  // The account's followers and yesterday's reach (#645), and who follows it when asked (#1146). The reach and the
+  // audience need instagram_manage_insights; an account connected before Crove asked for it reports followers only.
   async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
     const s = secretOf(input.secret);
     if (!s) return { refused: 'token_expired' };
@@ -373,7 +374,34 @@ export class InstagramPublisher implements Publisher {
     } catch {
       // No insights permission, or none yet: followers only.
     }
-    return { followers, reach };
+    if (!input.audience) return { followers, reach };
+    const audience = followers !== null && followers >= AUDIENCE_MIN_FOLLOWERS ? await this.audience(input.externalAccountId, s.accessToken) : null;
+    if (audience === 'token_expired') return { refused: 'token_expired' };
+    return { followers, reach, audience };
+  }
+
+  // Who follows the account (#1146): follower_demographics on the account's insights, one call per breakdown, with
+  // period lifetime, metric_type total_value and timeframe this_month (the last 30 days; this_week and this_month are
+  // the timeframes left since Graph v20, and the metric takes no since or until). It needs instagram_manage_insights,
+  // like the reach: a connection without it gets null, and its followers stand. A breakdown that fails or comes back
+  // empty is left out.
+  private async audience(id: string, token: string): Promise<Audience | null | 'token_expired'> {
+    const parts: Partial<Record<AudienceBreakdown, AudienceSlice[]>> = {};
+    for (const breakdown of AUDIENCE_BREAKDOWNS) {
+      try {
+        const answer = await this.graph.call<unknown>('GET', `${id}/insights`, {
+          token,
+          params: { metric: 'follower_demographics', period: 'lifetime', metric_type: 'total_value', timeframe: 'this_month', breakdown },
+        });
+        parts[breakdown] = audienceSlices(answer, breakdown);
+      } catch (error) {
+        const result = graphPublishResult(error);
+        if (result.kind === 'rejected' && result.error === 'token_expired') return 'token_expired';
+        // The permission is the connection's: the other breakdowns would be refused the same way.
+        if (result.kind === 'rejected' && result.error === 'permission') return null;
+      }
+    }
+    return audienceOf(parts);
   }
 
   // The account's own posts since a date (#1054): `GET /{ig-user-id}/media`, paged by its after cursor, newest first, at

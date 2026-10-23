@@ -1978,6 +1978,19 @@ export const vi = {
       reachColumn: 'Người tiếp cận',
       engagementColumn: 'Tương tác',
     },
+    // Who follows a channel (#1146), on the Metrics tab and in the client report.
+    audience: {
+      title: 'Người theo dõi',
+      hint: 'Độ tuổi, giới tính và nơi sống của người theo dõi trên Instagram và Threads, {brand} cập nhật mỗi tuần một lần. Nền tảng chỉ cung cấp số liệu này khi tài khoản có từ 100 người theo dõi trở lên, và chỉ tính những người mà nền tảng biết thông tin.',
+      reportHint: 'Độ tuổi, giới tính và nơi sống của người theo dõi từng kênh, theo lần cập nhật gần nhất trong kỳ báo cáo. Chỉ tính những người mà nền tảng biết thông tin.',
+      updated: 'Cập nhật ngày {date}',
+      age: 'Độ tuổi',
+      gender: 'Giới tính',
+      cities: 'Thành phố',
+      countries: 'Quốc gia',
+      genders: { F: 'Nữ', M: 'Nam', U: 'Không rõ' },
+      share: '{percent} · {count} người',
+    },
     gbp: {
       topic: 'Kiểu bài',
       topics: { STANDARD: 'Bài cập nhật', EVENT: 'Sự kiện', OFFER: 'Ưu đãi' },

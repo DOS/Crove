@@ -932,6 +932,7 @@ export interface SocialAccountSnapshotTable {
   reach: ColumnType<string | null, string | null, NotGranted>;
   error: ColumnType<string | null, string | null, NotGranted>;
   captured_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  audience: ColumnType<unknown, string | null | undefined, NotGranted>;
 }
 
 /** crove_social.banned_word */

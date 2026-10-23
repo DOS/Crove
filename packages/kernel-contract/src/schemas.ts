@@ -1911,9 +1911,24 @@ export const zSocialNotifications = z.object({
   mailOff: z.boolean(),
 });
 
-// A channel's daily account snapshots (#645), oldest first.
+// Who follows a channel's account (#1146), as Instagram and Threads give it: shares of the followers by age bucket
+// ("18-24"), gender ("F", "M", "U"), city as the platform names it, and country (ISO 3166-1 alpha-2), each with how
+// many followers it holds. Cities and countries are the 10 largest. The bounds keep a snapshot well under the
+// database's 16 KiB cap on the column.
+const zAudienceSlices = (keyMax: number, max: number) =>
+  z.array(z.strictObject({ key: z.string().min(1).max(keyMax), count: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) })).max(max);
+export const zSocialAudience = z.strictObject({
+  age: zAudienceSlices(40, 12),
+  gender: zAudienceSlices(40, 12),
+  cities: zAudienceSlices(100, 10),
+  countries: zAudienceSlices(40, 10),
+});
+
+// A channel's daily account snapshots (#645), oldest first, and the latest audience taken in the window (#1146), with
+// the day it was taken; null when none was.
 export const zSocialAccountTrend = z.object({
   connectionId: zId,
   provider: z.string(),
   points: z.array(z.object({ day: z.string(), followers: z.number().int().nullable(), reach: z.number().int().nullable() })),
+  audience: zSocialAudience.extend({ day: z.string() }).nullable(),
 });

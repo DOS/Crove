@@ -1979,6 +1979,19 @@ export const en = {
       reachColumn: 'Reach',
       engagementColumn: 'Engagement',
     },
+    // Who follows a channel (#1146), on the Metrics tab and in the client report.
+    audience: {
+      title: 'Followers',
+      hint: 'The age, gender and location of followers on Instagram and Threads, which {brand} updates once a week. The platforms give these figures only for accounts with at least 100 followers, and count only the followers whose details they know.',
+      reportHint: "The age, gender and location of each channel's followers, from the latest update in the report's period. Only followers whose details the platform knows are counted.",
+      updated: 'Updated {date}',
+      age: 'Age',
+      gender: 'Gender',
+      cities: 'Top cities',
+      countries: 'Top countries',
+      genders: { F: 'Women', M: 'Men', U: 'Unknown' },
+      share: '{percent} · {count} people',
+    },
     gbp: {
       topic: 'Post type',
       topics: { STANDARD: 'Update', EVENT: 'Event', OFFER: 'Offer' },
