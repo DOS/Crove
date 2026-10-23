@@ -86,11 +86,51 @@ export type ChannelBestTimes = { state: 'few'; posts: number } | { state: 'none'
 // One channel's ranked slots from the org's published samples, or why there are none: too few posts with metrics
 // (the button says so), or enough posts but no slot that stands out.
 export function channelBestTimes(samples: readonly PublishedSample[], connectionId: string, timeZone: string): ChannelBestTimes {
-  const own = samples.filter((s) => s.connectionId === connectionId);
-  const posts = own.filter((s) => s.publishedAt && Object.keys(s.metrics).length > 0).length;
+  const { own, posts } = ownSamples(samples, connectionId);
   if (posts < BEST_TIME_MIN_POSTS) return { state: 'few', posts };
   const slots = bestTimes(own, timeZone, { minPostsPerChannel: BEST_TIME_MIN_POSTS, top: BEST_TIME_MAX }).get(connectionId) ?? [];
   return slots.length > 0 ? { state: 'ready', slots } : { state: 'none' };
+}
+
+// A channel's own samples and how many of them are published posts with metrics, the count the #980 rule reads.
+function ownSamples(samples: readonly PublishedSample[], connectionId: string): { own: PublishedSample[]; posts: number } {
+  const own = samples.filter((s) => s.connectionId === connectionId);
+  return { own, posts: own.filter((s) => s.publishedAt && Object.keys(s.metrics).length > 0).length };
+}
+
+// "Gợi ý từ giờ đẹp" in a channel's queue editor (#1166): its best weekday-and-hour slots as queue slots (on the hour),
+// read in the queue's own time zone, so a post published at 09:00 counts for 09:00 on either side of a DST change. The
+// queue's slots are left out before the top is taken, so a suggestion never repeats one and the next best fill in.
+export const QUEUE_SUGGEST_MAX = 5;
+
+export interface QueueSuggestion {
+  weekday: number;
+  minute: number;
+  posts: number;
+  engagement: number;
+}
+
+// had: every slot that stands out is in the queue already.
+export type QueueSuggestions = { state: 'few'; posts: number } | { state: 'none' } | { state: 'had' } | { state: 'ready'; slots: QueueSuggestion[] };
+
+export function queueSuggestions(
+  samples: readonly PublishedSample[],
+  connectionId: string,
+  timeZone: string,
+  existing: readonly { weekday: number; minute: number }[],
+  max = QUEUE_SUGGEST_MAX,
+): QueueSuggestions {
+  const { own, posts } = ownSamples(samples, connectionId);
+  if (posts < BEST_TIME_MIN_POSTS) return { state: 'few', posts };
+  // Every ranked slot of the week, so the queue's own leave room for the next ones.
+  const ranked = bestTimes(own, timeZone, { minPostsPerChannel: BEST_TIME_MIN_POSTS, top: 7 * 24 }).get(connectionId) ?? [];
+  if (ranked.length === 0) return { state: 'none' };
+  const have = new Set(existing.map((s) => `${s.weekday}:${s.minute}`));
+  const slots = ranked
+    .map((s) => ({ weekday: s.weekday, minute: s.hour * 60, posts: s.posts, engagement: s.engagement }))
+    .filter((s) => !have.has(`${s.weekday}:${s.minute}`))
+    .slice(0, max);
+  return slots.length > 0 ? { state: 'ready', slots } : { state: 'had' };
 }
 
 interface ListedVariant {
