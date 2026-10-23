@@ -127,6 +127,7 @@ export function EngagementRateCard({ current, previous, against, className }: { 
 
 // A channel's engagement rate in a table cell, with its change against the period before over the same basis.
 export function EngagementRateCell({ current, previous, against }: { current: Readonly<Record<string, number>>; previous: Readonly<Record<string, number>> | undefined; against: string }) {
+  const text = useRateText();
   const now = engagementRateOf([current]);
   const then = comparableRate(now, previous ? engagementRateOf([previous]) : null);
   return (
@@ -134,7 +135,7 @@ export function EngagementRateCell({ current, previous, against }: { current: Re
       <span className="block text-foreground">
         <RateValue rate={now} />
       </span>
-      <ChangeChip current={now?.rate} previous={then?.rate} against={against} />
+      <ChangeChip current={now?.rate} previous={then?.rate} against={against} format={(rate) => text({ rate })} />
     </td>
   );
 }
