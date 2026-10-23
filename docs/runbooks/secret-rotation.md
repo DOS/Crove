@@ -14,7 +14,7 @@ A leak is also a security incident: contain it with this runbook, then follow [i
 
 - Work on the server in the stack directory (`/opt/crove`), as in [incidents.md](incidents.md). Service names are those of the all-in-one layout (`crove`); in the split layout, `api` and `worker` take the same settings, and `docker compose up -d` restarts both.
 - Generate every new value on the server with `openssl rand -hex 32`: 64 characters with no `$`, which docker compose would expand, and no quote, which the SQL below would break on.
-- Put the new value in `.env` with a `sed` like the ones below, so it never appears on a command line or in the shell history, then copy it into the owner's secret store. Keep the old value there until the last step of the procedure, so you can go back.
+- Put the new value in `.env` with a `sed` like the ones below, so it never appears on a command line or in the shell history, then copy it into the owner's secret store. The commands below that read a value back from `.env` (`grep ... | cut -d= -f2-`) expect it unquoted, as these `sed` lines write it. Keep the old value there until the last step of the procedure, so you can go back.
 - `docker compose up -d` applies `.env`: it runs `migrate` first, then recreates every service whose settings changed. The app is unavailable while it restarts (about 15 s on the test stack below), so rotate at a quiet time and tell the design partner beforehand when it is planned.
 
 ## 1. Database login passwords
@@ -172,7 +172,7 @@ Whoever holds the webhook can post into the alert chat (or, for Telegram, act as
    docker compose run --rm prober prober --test-alert   # exit 0; the phone shows "[Crove] Test alert from <instance>"
    docker compose run --rm prober prober                # "[prober] heartbeat sent to heartbeat monitor at <host>"; the new check shows the ping
    # the worker has the new webhook too: the two hashes match
-   grep '^ALERT_WEBHOOK_URL=' .env | cut -d= -f2- | tr -d '\n' | sha256sum | cut -c1-12
+   grep '^ALERT_WEBHOOK_URL=' .env | cut -d= -f2- | sed -e "s/^[\"']//" -e "s/[\"']\$//" | tr -d '\n' | sha256sum | cut -c1-12
    docker compose exec -T crove sh -c 'printf %s "$ALERT_WEBHOOK_URL" | sha256sum | cut -c1-12'
    ```
 
