@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { YOUTUBE_PLAYLISTS_MAX, isProvider, youtubePlaylistsOf, type Provider } from './domain/channels.ts';
-import { publishCallKey } from './domain/publish.ts';
+import { callRevision, publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
 
@@ -24,9 +24,9 @@ export type PlaylistWork =
   | { action: 'none'; reason: string }
   | { action: 'call'; variantId: string; connectionId: string; callKey: string; externalId: string; playlistId: string; index: number };
 
-type PlaylistVariant = Pick<VariantRow, 'id' | 'revision' | 'attempt'>;
-const playlistKey = (v: PlaylistVariant, n: number) => publishCallKey(v.id, v.revision, v.attempt, `${PLAYLIST_STEP}_${n}`);
-const playlistPrefix = (v: PlaylistVariant) => publishCallKey(v.id, v.revision, v.attempt, PLAYLIST_STEP);
+type PlaylistVariant = Pick<VariantRow, 'id' | 'revision' | 'published_revision' | 'attempt'>;
+const playlistKey = (v: PlaylistVariant, n: number) => publishCallKey(v.id, callRevision(v), v.attempt, `${PLAYLIST_STEP}_${n}`);
+const playlistPrefix = (v: PlaylistVariant) => publishCallKey(v.id, callRevision(v), v.attempt, PLAYLIST_STEP);
 
 // The place in the list (1 is the first playlist) a call key inserts into, or null for a key that is not an insert.
 export const playlistIndexOf = (key: string): number | null => {

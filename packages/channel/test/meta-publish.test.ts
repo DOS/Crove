@@ -415,3 +415,51 @@ describe('FacebookPagePublisher.remove (#1137)', () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe('FacebookPagePublisher.edit (#1223)', () => {
+  const POST = `${PAGE}_42`;
+  const UPDATE = `POST /${POST}`;
+  const photo = { fileId: 'f1', mime: 'image/jpeg', sizeBytes: 3, altText: null };
+  const edit = (publisher: FacebookPagePublisher, over: { externalId?: string; settings?: Record<string, unknown>; media?: (typeof photo)[] } = {}) =>
+    publisher.edit({
+      externalAccountId: PAGE,
+      secret: SECRET,
+      externalId: over.externalId ?? POST,
+      content: { body: '  Giá đúng: 45.000đ  ', title: null, linkUrl: 'https://example.com/menu', media: over.media ?? [] },
+      settings: over.settings ?? {},
+      callKey: 'edit-1',
+    });
+
+  it('updates the Page post message with the Page token, built as publish builds it', async () => {
+    const { calls, publisher } = routed({ [UPDATE]: [{ body: { success: true } }] });
+    expect(await edit(publisher)).toEqual({ kind: 'edited' });
+    expect(calls.map((c) => [c.route, c.host, c.headers.get('authorization')])).toEqual([[UPDATE, 'graph.facebook.com', 'Bearer page-token-1']]);
+    // The link of a post without photos is its preview, apart from the text.
+    expect(Object.fromEntries(calls[0]?.form ?? [])).toEqual({ message: 'Giá đúng: 45.000đ' });
+    // A post with photos has no link preview: its link is at the end of the text, as at publish.
+    const photos = routed({ [UPDATE]: [{ body: { success: true } }] });
+    expect(await edit(photos.publisher, { media: [photo] })).toEqual({ kind: 'edited' });
+    expect(photos.calls[0]?.form.get('message')).toBe('Giá đúng: 45.000đ\n\nhttps://example.com/menu');
+  });
+
+  it('maps a post gone, a missing permission, a dead token and a rate limit, and leaves an outage unclear', async () => {
+    const gone = { status: 400, body: { error: { message: 'Object with ID does not exist', type: 'GraphMethodException', code: 100, error_subcode: 33 } } };
+    expect(await edit(routed({ [UPDATE]: [gone] }).publisher)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    expect(await edit(routed({ [UPDATE]: [graphError(403, 200, 'Requires pages_manage_posts')] }).publisher)).toMatchObject({ kind: 'rejected', error: 'permission', code: '200' });
+    expect(await edit(routed({ [UPDATE]: [graphError(400, 190, 'Error validating access token')] }).publisher)).toMatchObject({ kind: 'rejected', error: 'token_expired', code: '190' });
+    expect(await edit(routed({ [UPDATE]: [graphError(400, 32, 'Page request limit reached')] }).publisher)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    expect(await edit(routed({ [UPDATE]: [graphError(500, 2, 'Service temporarily unavailable')] }).publisher)).toMatchObject({ kind: 'unknown', code: '2' });
+    expect(await edit(fake(new TypeError('fetch failed')).publisher)).toEqual({ kind: 'unknown', code: 'NETWORK' });
+    expect(await edit(routed({ [UPDATE]: [{ body: { success: false } }] }).publisher)).toEqual({ kind: 'unknown', code: 'NOT_CONFIRMED' });
+  });
+
+  it('sends nothing for a Story, a Reel, a video, another Page or without a Page token', async () => {
+    const { calls, publisher } = routed({});
+    expect(await edit(publisher, { settings: { postType: 'story' } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(await edit(publisher, { settings: { postType: 'reel' } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(await edit(publisher, { media: [{ ...photo, mime: 'video/mp4' }] })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(await edit(publisher, { externalId: '999888777_42' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await publisher.edit({ externalAccountId: PAGE, secret: '{}', externalId: POST, content: { body: 'x', title: null, linkUrl: null, media: [] }, settings: {}, callKey: 'edit-1' })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' });
+    expect(calls).toEqual([]);
+  });
+});

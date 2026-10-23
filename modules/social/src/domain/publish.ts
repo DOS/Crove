@@ -49,6 +49,14 @@ export function publishCallKey(variantId: string, revision: number, attempt: num
   return `social.publish:${variantId}:${revision}:${attempt}:${step}`;
 }
 
+// The revision the call keys of a published variant are named by (#1223): the one it went out under. A correction of
+// its published text moves its revision on and keeps that one (published_revision), so every step done once for the
+// post (its first comment, thread, pin, gate, playlists, auto-reply, repost, removal and edits) keeps its key and
+// never runs again.
+export function callRevision(v: { revision: number; published_revision: number | null }): number {
+  return v.published_revision ?? v.revision;
+}
+
 // pg-boss singleton key of the publish job: one job per attempt of a variant revision in an org.
 export function publishJobKey(orgId: string, variantId: string, revision: number, attempt: number): string {
   checkParts([orgId, variantId], revision, attempt);

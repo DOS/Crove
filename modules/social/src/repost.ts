@@ -9,7 +9,7 @@ import { zId } from '@crove/kernel-contract';
 import type { Publisher } from '@crove/channel';
 import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { REPOST_PROVIDERS, isProvider, repostRuleOf } from './domain/channels.ts';
-import { publishCallKey } from './domain/publish.ts';
+import { callRevision, publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, settingsOf, variantPost, type Trx, type VariantRow } from './variants.ts';
 import { publishingHeld } from './publish-hold.ts';
@@ -19,8 +19,8 @@ const ACTOR: SystemActor = { type: 'system', component: 'social.repost' };
 
 export type RepostWork = { action: 'none'; reason: string } | { action: 'call'; variantId: string; callKey: string; externalId: string };
 
-type RepostVariant = Pick<VariantRow, 'id' | 'revision' | 'attempt'>;
-const repostKey = (v: RepostVariant) => publishCallKey(v.id, v.revision, v.attempt, REPOST_STEP);
+type RepostVariant = Pick<VariantRow, 'id' | 'revision' | 'published_revision' | 'attempt'>;
+const repostKey = (v: RepostVariant) => publishCallKey(v.id, callRevision(v), v.attempt, REPOST_STEP);
 
 // The repost calls of variants' current publishes (one at most each), for the post's activity.
 export async function repostCallsOf(trx: Trx, orgId: string, variants: readonly RepostVariant[]): Promise<Map<string, CommentCall & { finished_at: Date | null }>> {
