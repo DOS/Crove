@@ -855,6 +855,7 @@ export function SocialPage() {
                     canDecide={canDecide}
                     picked={editActions.length > 0 ? picked : null}
                     onPick={setPicked}
+                    connectionId={filters.connectionId}
                   />
                 </>
               )}

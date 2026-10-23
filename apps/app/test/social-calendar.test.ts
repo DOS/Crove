@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { calendarItems, DAY_MS, dayId, DROP_HOURS, followsPlan, localMoment, notesByDay, onDay, planDrop, plannedAt, SLOT_RANGE_DAYS, slotDrop, slotRange, slotsByDay, slotVariant, startOfWeek, viewDays, type CalendarItem } from '../src/lib/social-calendar.ts';
+import {
+  calendarGroups,
+  calendarItems,
+  DAY_MS,
+  dayId,
+  DROP_HOURS,
+  followsPlan,
+  groupDrop,
+  groupMovable,
+  groupsByDay,
+  groupStatuses,
+  localMoment,
+  notesByDay,
+  onDay,
+  planDrop,
+  plannedAt,
+  runGroupMove,
+  SLOT_RANGE_DAYS,
+  slotDrop,
+  slotRange,
+  slotsByDay,
+  slotVariant,
+  startOfWeek,
+  viewDays,
+  type CalendarGroup,
+  type CalendarItem,
+} from '../src/lib/social-calendar.ts';
 
 type Post = Parameters<typeof calendarItems>[0][number];
 
@@ -152,5 +178,121 @@ describe('open queue slots on the Social calendar (#1158)', () => {
     expect(slotDrop({ post: draft, item: null }, slot(at), 'A', { canDecide: false, canWrite: false }, now)).toBeNull();
     const [own] = calendarItems([full([ch('r', 'in_review', 'A', { effectiveAt: '2026-10-26T02:00:00.000Z' })], { scheduledAt: '2026-10-25T02:00:00.000Z' })]);
     expect(slotDrop({ post: (own as CalendarItem).post, item: own as CalendarItem }, slot(at), 'A', member, now)).toBeNull();
+  });
+});
+describe('one calendar chip per post (#1220)', () => {
+  const ch = (id: string, status: string, connectionId: string, extra: Record<string, unknown> = {}) =>
+    ({ id, status, connectionId, provider: 'sandbox', effectiveAt: null, queueSlotAt: null, queuePaused: false, error: null, ...extra }) as unknown as Post['variants'][number];
+  const full = (id: string, variants: Post['variants'], extra: Record<string, unknown> = {}) => ({ id, revision: 4, scheduledAt: null, labelIds: [], variants, ...extra }) as unknown as Post;
+  const owner = { canDecide: true, canWrite: true };
+  const member = { canDecide: false, canWrite: true };
+  // Local times, so the day arithmetic holds in any zone the tests run in.
+  const at = (day: number, hour: number, minute = 0, second = 0) => new Date(2026, 9, day, hour, minute, second).toISOString();
+  const now = new Date(2026, 9, 21, 14, 10);
+
+  it('makes one chip of a post’s channels at the same minute, and one per minute otherwise', () => {
+    const six = full('six', ['a', 'b', 'c', 'd', 'e', 'f'].map((id, i) => ch(id, 'scheduled', id.toUpperCase(), { effectiveAt: at(22, 9, 0, i) })));
+    const split = full('split', [ch('g', 'scheduled', 'A', { effectiveAt: at(22, 9) }), ch('h', 'scheduled', 'B', { effectiveAt: at(22, 10) })]);
+    const other = full('other', [ch('i', 'scheduled', 'A', { effectiveAt: at(22, 9, 30) })]);
+    const groups = calendarGroups(calendarItems([six, split, other]));
+    expect(groups.map((g) => [g.post.id, g.items.map((i) => i.v.id).join('')])).toEqual([
+      ['six', 'abcdef'],
+      ['split', 'g'],
+      ['other', 'i'],
+      ['split', 'h'],
+    ]);
+    // A day of twelve posts holds twelve chips, whatever their channels.
+    const twelve = Array.from({ length: 12 }, (_, n) => full(`p${n}`, [ch(`v${n}`, 'scheduled', 'A', { effectiveAt: at(23, 8 + n) }), ch(`w${n}`, 'scheduled', 'B', { effectiveAt: at(23, 8 + n) })]));
+    const byDay = groupsByDay(calendarGroups(calendarItems(twelve)));
+    expect(byDay.get('2026-10-23')).toHaveLength(12);
+  });
+
+  it('is dashed only when every channel is a draft at the planned time, and names the statuses in words', () => {
+    const mixed = full('m', [ch('a', 'draft', 'A', { effectiveAt: at(25, 9) }), ch('b', 'failed', 'B', { effectiveAt: at(25, 9) }), ch('c', 'scheduled', 'C', { effectiveAt: at(25, 9) }), ch('d', 'scheduled', 'D', { effectiveAt: at(25, 9) })], {
+      scheduledAt: at(25, 9),
+    });
+    const [group] = calendarGroups(calendarItems([mixed]));
+    expect(group?.items).toHaveLength(4);
+    expect(group?.planned).toBe(false);
+    // What needs a person comes first.
+    expect(groupStatuses(group as CalendarGroup)).toEqual([
+      { key: 'failed', count: 1 },
+      { key: 'draft', count: 1 },
+      { key: 'scheduled', count: 2 },
+    ]);
+    const [drafts] = calendarGroups(calendarItems([full('d', [ch('a', 'draft', 'A', { effectiveAt: at(25, 9) }), ch('b', 'in_review', 'B', { effectiveAt: at(25, 9) })], { scheduledAt: at(25, 9) })]));
+    expect(drafts?.planned).toBe(true);
+  });
+
+  it('moves the scheduled channels with the time shown and the drafts through the planned time, naming those that stay', () => {
+    const post = full(
+      'p',
+      [
+        ch('s1', 'scheduled', 'A', { effectiveAt: at(22, 9) }),
+        ch('s2', 'scheduled', 'B', { effectiveAt: at(22, 9), queueSlotAt: at(22, 9) }),
+        ch('held', 'scheduled', 'C', { effectiveAt: at(22, 9), queueSlotAt: at(22, 9), queuePaused: true }),
+        ch('d', 'draft', 'D', { effectiveAt: at(22, 9) }),
+        ch('out', 'published', 'E', { effectiveAt: at(22, 9) }),
+        // Sent back to review with a time of its own, in the same minute.
+        ch('own', 'in_review', 'F', { effectiveAt: at(22, 9, 0, 30) }),
+      ],
+      { scheduledAt: at(22, 9) },
+    );
+    const [group] = calendarGroups(calendarItems([post]));
+    const g = group as CalendarGroup;
+    expect(g.items).toHaveLength(6);
+    const move = groupDrop(g, new Date(2026, 9, 24), now, owner);
+    if (move === null || move === 'past') throw new Error('expected a move');
+    expect(move.at.toISOString()).toBe(at(24, 9));
+    expect(move.reschedules.map((r) => r.request)).toEqual([
+      { variantId: 's1', at: at(24, 9), expectedAt: at(22, 9) },
+      { variantId: 's2', at: at(24, 9), expectedAt: at(22, 9) },
+    ]);
+    // The draft at the post's planned time moves with the post; a channel with a time of its own in review does not.
+    expect(move.plan).toEqual({ request: { postId: 'p', revision: 4, scheduledAt: at(24, 9) }, items: [g.items[3]] });
+    expect(move.stayed.map((s) => `${s.item.v.id}:${s.reason}`)).toEqual(['held:queuePaused', 'out:out', 'own:notScheduled']);
+    // A member moves the draft; the scheduled channels stay, said to be for owners and admins.
+    const byMember = groupDrop(g, new Date(2026, 9, 24), now, member, 16);
+    if (byMember === null || byMember === 'past') throw new Error('expected a move');
+    expect(byMember.reschedules).toEqual([]);
+    expect(byMember.plan?.request.scheduledAt).toBe(at(24, 16));
+    expect(byMember.stayed.map((s) => `${s.item.v.id}:${s.reason}`)).toEqual(['s1:admins', 's2:admins', 'held:queuePaused', 'out:out', 'own:notScheduled']);
+  });
+
+  it('refuses a time gone, sends nothing for the same minute, and is not draggable with nothing to move', () => {
+    const [scheduled] = calendarGroups(calendarItems([full('p', [ch('s', 'scheduled', 'A', { effectiveAt: at(21, 9, 0, 30) })])]));
+    const g = scheduled as CalendarGroup;
+    // Today at 09:00 is gone; the same day and minute (the seconds aside) changes nothing.
+    expect(groupDrop(g, new Date(2026, 9, 21), new Date(2026, 9, 20, 8), owner)).toBeNull();
+    expect(groupDrop({ ...g, at: new Date(at(22, 9)) }, new Date(2026, 9, 21), now, owner)).toBe('past');
+    expect(groupMovable(g, owner)).toBe(true);
+    expect(groupMovable(g, member)).toBe(false);
+    expect(groupDrop(g, new Date(2026, 9, 24), now, member)).toBeNull();
+    const [published] = calendarGroups(calendarItems([full('q', [ch('o', 'published', 'A', { effectiveAt: at(20, 9) })])]));
+    expect(groupMovable(published as CalendarGroup, owner)).toBe(false);
+  });
+
+  it('goes on after a refusal, then plans the drafts, and keeps each refusal for the result', async () => {
+    const post = full('p', [ch('a', 'scheduled', 'A', { effectiveAt: at(22, 9) }), ch('b', 'scheduled', 'B', { effectiveAt: at(22, 9) }), ch('d', 'draft', 'D', { effectiveAt: at(22, 9) })], { scheduledAt: at(22, 9) });
+    const [group] = calendarGroups(calendarItems([post]));
+    const move = groupDrop(group as CalendarGroup, new Date(2026, 9, 24), now, owner);
+    if (move === null || move === 'past') throw new Error('expected a move');
+    const sent: string[] = [];
+    const stale = Object.assign(new Error('stale'), { code: 'STALE_REVISION' });
+    const result = await runGroupMove(move, {
+      reschedule: async (r) => {
+        sent.push(`reschedule:${r.variantId}`);
+        if (r.variantId === 'a') throw stale;
+      },
+      plan: async (r) => {
+        sent.push(`plan:${r.postId}`);
+      },
+    });
+    expect(sent).toEqual(['reschedule:a', 'reschedule:b', 'plan:p']);
+    expect(result.moved.map((i) => i.v.id)).toEqual(['b', 'd']);
+    expect(result.refused).toEqual([{ item: (group as CalendarGroup).items[0], error: stale }]);
+    // A refused plan names each of its drafts.
+    const refusedPlan = await runGroupMove(move, { reschedule: async () => undefined, plan: async () => Promise.reject(stale) });
+    expect(refusedPlan.refused.map((x) => x.item.v.id)).toEqual(['d']);
   });
 });

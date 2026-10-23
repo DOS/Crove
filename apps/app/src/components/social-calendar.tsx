@@ -12,14 +12,22 @@
 // dashed "Trống" chips (greyed while the queue is paused). An owner or admin drops an approved or scheduled channel on
 // one to put it in exactly that slot (social.variant.schedule with slotAt); a draft dropped there, by a member too, gets
 // the slot's time as its planned time. The chip's menu and the list's "Đặt ngày" offer the same slots by keyboard.
+// One chip per post and minute (#1220): a post's channels at the same time are one chip naming the channels (or how
+// many) and their statuses in words. A chip dragged moves its channels that may move (scheduled ones through
+// social.variant.reschedule with the time shown, so a channel moved meanwhile is refused as stale, #956; drafts at the
+// post's planned time through social.post.update), and the result names the channels that stayed and why. A day with
+// more chips than it shows has a "+N" button opening a dialog with every post and channel of the day, their times and
+// statuses, each with its link, its "Đặt ngày" or slot, and a tick for the bulk bar. A drop while a move is still
+// running is refused and said so (#1044).
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useMemo, useState, type DragEvent, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { occasionsBetween, type Occasion } from '@crove/mod-social/contract';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
@@ -28,27 +36,35 @@ import { cn } from '@crove/ui/lib/utils';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
-import { providerName, VARIANT_TONE } from '../lib/social.ts';
+import { providerName, VARIANT_TONE, variantStatusKey, variantTone } from '../lib/social.ts';
 import {
   addDays,
+  calendarGroups,
   calendarItems,
   DAY_MS,
   dayId,
   daysOutsideCampaign,
   DROP_HOURS,
   followsPlan,
+  groupDrop,
+  groupMovable,
+  groupsByDay,
+  groupStatuses,
   localMoment,
   notesByDay,
-  onDay,
   planDrop,
   plannedAt,
+  runGroupMove,
   slotDrop,
   slotRange,
   slotsByDay,
   slotVariant,
   startOfDay,
   viewDays,
+  type CalendarGroup,
   type CalendarItem,
+  type GroupMove,
+  type GroupMoveResult,
   type OpenSlot,
   type PlanRequest,
   type PlanTarget,
@@ -63,8 +79,9 @@ import { occasionStart, occasionsShown, setOccasionsShown } from '../lib/social-
 const excerpt = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 type Post = CalendarItem['post'];
-// What is being dragged: a channel on the calendar, or an undated draft from the list (#1145).
-type Dragged = { kind: 'variant'; id: string } | { kind: 'post'; id: string };
+// What is being dragged: a chip on the calendar (a post's channels at one time, #1220), or an undated draft from the
+// list (#1145).
+type Dragged = { kind: 'group'; key: string } | { kind: 'post'; id: string };
 // A draft or channel opened in the date editor, with the text it is named by: item is the chip it was opened from (null:
 // the undated list), and dates whether it may be given any date and time (a planned draft) or only an open slot (#1158).
 type Planning = Omit<PlanTarget, 'post'> & { post: Post; text: string; item: CalendarItem | null; dates: boolean };
@@ -75,13 +92,23 @@ const UNDATED_LIMIT = 50;
 
 const hourLabel = (hour: number) => `${String(hour).padStart(2, '0')}:00`;
 
-// picked: null shows a link to the post (dragged by owners and admins, or by members for a planned draft); true or
-// false, picking (#1057), where a click ticks or unticks the chip's post for the bulk bar instead. onPlan: the chip's
-// menu, which opens the date editor for a planned draft (#1145).
+// A channel by its provider and, when it has one, its name.
+function channelLabel(item: CalendarItem, names: Map<string, string>): string {
+  const name = names.get(item.v.connectionId);
+  return name ? `${providerName(item.v.provider)} (${name})` : providerName(item.v.provider);
+}
+
+const groupText = (group: CalendarGroup, empty: string) => excerpt((group.items[0] as CalendarItem).v.effective.body) || empty;
+
+// One chip per post and minute (#1220): the time, the channel (or how many), the statuses in words and the text.
+// picked: null shows a link to the post (dragged when a channel of it may move: scheduled ones by owners and admins,
+// planned drafts by members too); true or false, picking (#1057), where a click ticks or unticks the chip's post for
+// the bulk bar instead. onPlan: the chip's menu, which opens the date editor for a planned draft (#1145) or the open
+// slots (#1158).
 function Chip({
-  item,
+  group,
   slug,
-  name,
+  names,
   draggable,
   picked,
   onToggle,
@@ -90,9 +117,9 @@ function Chip({
   onPlan,
   menu,
 }: {
-  item: CalendarItem;
+  group: CalendarGroup;
   slug: string;
-  name: string | undefined;
+  names: Map<string, string>;
   draggable: boolean;
   picked: boolean | null;
   onToggle: () => void;
@@ -105,30 +132,49 @@ function Chip({
   const t = useTranslations('social');
   const f = useFormat();
   const start = (e: DragEvent) => {
-    e.dataTransfer.setData('text/plain', item.v.id);
+    e.dataTransfer.setData('text/plain', `group:${group.key}`);
     e.dataTransfer.effectAllowed = 'move';
     onDragStart();
   };
+  const first = group.items[0] as CalendarItem;
   // A series post or one of its copies (#979).
-  const recurring = item.post.recurrence !== null || item.post.recurrenceSourceId !== null;
-  const title = `${f.time(item.at.toISOString())} · ${providerName(item.v.provider)}${name ? ` · ${name}` : ''}${item.planned ? ` · ${t('calendar.planned')}` : ''}${recurring ? ` · ${t('calendar.recurring')}` : ''}${item.v.status === 'removed' ? ` · ${t('status.removed')}` : ''}`;
+  const recurring = group.post.recurrence !== null || group.post.recurrenceSourceId !== null;
+  const time = f.time(group.at.toISOString());
+  const channels = group.items.length === 1 ? providerName(first.v.provider) : t('calendar.channels', { count: group.items.length });
+  const statuses = groupStatuses(group)
+    .map((s) => t(`status.${s.key}`))
+    .join(', ');
+  const title = [
+    time,
+    group.items.map((i) => `${channelLabel(i, names)}: ${t(`status.${variantStatusKey(i.v)}`)}`).join('; '),
+    group.planned ? t('calendar.planned') : null,
+    recurring ? t('calendar.recurring') : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   const look = cn(
-    'block truncate rounded-md border px-1.5 py-0.5 text-xs text-foreground transition-colors hover:border-ring/60',
-    item.planned ? 'border-dashed bg-background text-muted-foreground' : 'bg-card',
+    'block overflow-hidden rounded-md border px-1.5 py-0.5 text-xs text-foreground transition-colors hover:border-ring/60',
+    group.planned ? 'border-dashed bg-background text-muted-foreground' : 'bg-card',
     // Taken down from its platform (#860): still on its day, struck through.
-    item.v.status === 'removed' && 'text-muted-foreground line-through',
+    group.items.every((i) => i.v.status === 'removed') && 'text-muted-foreground line-through',
   );
-  const text = excerpt(item.v.effective.body) || t('emptyText');
+  const text = groupText(group, t('emptyText'));
+  // Two lines, so a narrow day still shows the text and, below it, the channels and their statuses.
   const content = (
     <>
-      <span className="font-mono tabular-nums">{f.time(item.at.toISOString())}</span>{' '}
-      {recurring && (
-        <>
-          <RepeatIcon className="text-primary" />
-          <span className="sr-only">{t('calendar.recurring')}</span>{' '}
-        </>
-      )}
-      <span className="text-subtle-foreground">{providerName(item.v.provider)}</span> {text}
+      <span className="block truncate">
+        <span className="font-mono tabular-nums">{time}</span>{' '}
+        {recurring && (
+          <>
+            <RepeatIcon className="text-primary" />
+            <span className="sr-only">{t('calendar.recurring')}</span>{' '}
+          </>
+        )}
+        {text}
+      </span>
+      <span className="block truncate text-subtle-foreground">
+        {channels} · {statuses}
+      </span>
     </>
   );
   if (picked !== null) {
@@ -138,6 +184,7 @@ function Chip({
         aria-pressed={picked}
         title={title}
         onClick={onToggle}
+        data-testid="calendar-chip"
         className={cn(look, 'w-full text-left focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none', picked && 'border-primary ring-2 ring-primary/60')}
       >
         {content}
@@ -147,12 +194,13 @@ function Chip({
   const link = (
     <Link
       to="/o/$slug/social/$id"
-      params={{ slug, id: item.post.id }}
+      params={{ slug, id: group.post.id }}
       draggable={draggable}
       onDragStart={draggable ? start : undefined}
       onDragEnd={draggable ? onDragEnd : undefined}
       title={title}
       data-testid="calendar-chip"
+      data-channels={group.items.length}
       className={cn(look, onPlan && 'min-w-0 flex-1', draggable && 'cursor-grab active:cursor-grabbing')}
     >
       {content}
@@ -404,6 +452,125 @@ function PlanEditor({
   );
 }
 
+// What a chip's drag did (#1220): how many channels moved and to when, each channel that stayed and why, and each
+// refusal with the server's message (STALE_REVISION when a channel's time changed meanwhile, #956).
+function MoveResult({ result, names }: { result: GroupMoveResult; names: Map<string, string> }) {
+  const t = useTranslations('social.calendar');
+  const f = useFormat();
+  return (
+    <div className="space-y-0.5">
+      <p>{t('groupDone', { count: result.moved.length, when: f.dateTime(result.at.toISOString()) })}</p>
+      {result.stayed.map((s) => (
+        <p key={s.item.v.id}>{t('groupStayed', { channel: channelLabel(s.item, names), reason: t(`stay.${s.reason}`) })}</p>
+      ))}
+      {result.refused.map((x) => (
+        <p key={x.item.v.id}>
+          {t('groupRefused', { channel: channelLabel(x.item, names) })} <span className="text-warning">{errorMessage(x.error)}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+// Every post and channel of a day (#1220), opened by its "+N": a modal dialog, as the command palette is, so focus stays
+// in it, Esc closes it, and the focus goes back to the button that opened it (DESIGN 4.5). It starts on the heading, so
+// a long day is read from the top. Each row links to its post and carries what the chip's menu and picking offer
+// (actions). children: the date editor and the notices, shown here while the dialog is open.
+export function DayDialog({
+  title,
+  groups,
+  slug,
+  names,
+  editing,
+  actions,
+  onClose,
+  children,
+}: {
+  title: string;
+  groups: readonly CalendarGroup[];
+  slug: string;
+  names: Map<string, string>;
+  editing: boolean;
+  actions: (group: CalendarGroup, text: string) => ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const headingId = useId();
+  useEffect(() => {
+    const el = dialog.current;
+    if (!el) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (!el.open) el.showModal();
+    heading.current?.focus();
+    return () => {
+      if (el.open) el.close();
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, []);
+  // The editor closed (saved or cancelled): the focus, left on a button now gone, goes back to the top.
+  const wasEditing = useRef(editing);
+  useEffect(() => {
+    if (wasEditing.current && !editing) heading.current?.focus();
+    wasEditing.current = editing;
+  }, [editing]);
+  return (
+    <dialog
+      ref={dialog}
+      aria-labelledby={headingId}
+      onClose={onClose}
+      // A click on the backdrop lands on the dialog element itself.
+      onClick={(e) => e.target === dialog.current && onClose()}
+      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(40rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border bg-popover p-0 text-popover-foreground shadow-2xl backdrop:bg-background/70"
+    >
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b bg-popover px-4 py-3">
+        <h3 ref={heading} id={headingId} tabIndex={-1} className="text-sm font-medium text-foreground outline-none first-letter:uppercase">
+          {title}
+        </h3>
+        <Button size="sm" variant="ghost" onClick={onClose}>
+          {t('calendar.dayClose')}
+        </Button>
+      </div>
+      <div className="space-y-3 p-4">
+        {children}
+        {groups.length === 0 ? (
+          <p className="text-sm text-subtle-foreground">{t('calendar.dayEmpty')}</p>
+        ) : (
+          <ul className="space-y-2">
+            {groups.map((g) => {
+              const text = groupText(g, t('emptyText'));
+              return (
+                <li key={g.key} data-testid="day-post" className="space-y-2 rounded-lg border p-2.5">
+                  <div className="flex min-w-0 items-baseline gap-2">
+                    <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">{f.time(g.at.toISOString())}</span>
+                    <Link to="/o/$slug/social/$id" params={{ slug, id: g.post.id }} className="min-w-0 flex-1 truncate text-sm text-foreground hover:underline">
+                      {text}
+                    </Link>
+                    {g.planned && <span className="shrink-0 text-xs text-subtle-foreground">{t('calendar.plannedTime')}</span>}
+                  </div>
+                  <ul className="flex flex-wrap gap-1" aria-label={t('calendar.dayChannels')}>
+                    {g.items.map((i) => (
+                      <li key={i.v.id}>
+                        <Badge variant={variantTone(i.v)}>
+                          {channelLabel(i, names)} · {t(`status.${variantStatusKey(i.v)}`)}
+                        </Badge>
+                      </li>
+                    ))}
+                  </ul>
+                  {actions(g, text)}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </dialog>
+  );
+}
+
 // filters: the Social home's post filters (label #639, channel, text, mine #640), the same as the lists and the board
 // (#1022). canWrite: may add and change notes on dates (#794) and plan drafts (#1145).
 export type CalendarFilters = { connectionId?: string; labelId?: string; search?: string; assignee?: 'me' };
@@ -432,8 +599,8 @@ export function SocialCalendar({
   const range = useMemo(() => ({ from: (days[0] as Date).toISOString(), to: addDays(days.at(-1) as Date, 1).toISOString() }), [days]);
   const posts = useQuery(orpc.social.posts.list.queryOptions({ input: { ...range, ...filters, limit: 200 } }));
   const connectionId = filters.connectionId;
-  // Under a channel filter, only that channel's chips (#1044).
-  const items = useMemo(() => calendarItems(posts.data ?? [], connectionId), [posts.data, connectionId]);
+  // Under a channel filter, only that channel's chips (#1044); a post's channels at one time are one chip (#1220).
+  const groups = useMemo(() => calendarGroups(calendarItems(posts.data ?? [], connectionId)), [posts.data, connectionId]);
   // And the open slots of its queue that the view shows from now on (#1158); the range is read once per view, so the
   // query keeps its key while the view stays.
   const slotWindow = useMemo(() => (connectionId ? slotRange(view, days, anchor, new Date()) : null), [connectionId, view, days, anchor]);
@@ -455,11 +622,9 @@ export function SocialCalendar({
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   // The content plan export (#978), for members and above.
   const [exporting, setExporting] = useState(false);
-  const byDay = useMemo(() => {
-    const map = new Map<string, CalendarItem[]>();
-    for (const item of items) map.set(dayId(item.at), [...(map.get(dayId(item.at)) ?? []), item]);
-    return map;
-  }, [items]);
+  const byDay = useMemo(() => groupsByDay(groups), [groups]);
+  // The day whose full list is open (#1220).
+  const [dayOpen, setDayOpen] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const [dragged, setDragged] = useState<Dragged | null>(null);
   // Set after the drag has started: changing the page in dragstart itself ends some browsers' drag at once.
@@ -467,6 +632,9 @@ export function SocialCalendar({
   const [refusal, setRefusal] = useState<'dropPast' | 'planPast' | 'slotLabel' | null>(null);
   const [planning, setPlanning] = useState<Planning | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [moved, setMoved] = useState<GroupMoveResult | null>(null);
+  // A drop while a move is still running, said rather than dropped silently (#1044).
+  const [blocked, setBlocked] = useState(false);
   // Picking posts for the bulk bar (#1057): a post leaves the selection when it leaves the month or week shown.
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
@@ -478,9 +646,19 @@ export function SocialCalendar({
       else next.add(postId);
       return next;
     });
+  // A chip's channels moved by a drag (#1220): each scheduled one with the time it was shown at (#956), then the drafts'
+  // planned time; runGroupMove keeps each refusal for the result.
   const move = useMutation({
-    mutationFn: (args: { variantId: string; at: Date }) => client.social.variants.reschedule({ variantId: args.variantId, at: args.at.toISOString() }),
-    onSettled: () => void queryClient.invalidateQueries(),
+    mutationFn: (m: GroupMove) =>
+      runGroupMove(m, {
+        reschedule: (request) => client.social.variants.reschedule(request),
+        plan: (request) => client.social.posts.update(request),
+      }),
+    onSuccess: (result) => setMoved(result),
+    onSettled: () => {
+      setBlocked(false);
+      void queryClient.invalidateQueries();
+    },
   });
   // A draft's planned time (#1145), on the revision the viewer saw: a post changed meanwhile is refused as stale, said
   // with the server's message, and everything reloads either way.
@@ -494,7 +672,10 @@ export function SocialCalendar({
     onError: (error) => {
       if ((error as { code?: unknown }).code === 'STALE_REVISION') setPlanning(null);
     },
-    onSettled: () => void queryClient.invalidateQueries(),
+    onSettled: () => {
+      setBlocked(false);
+      void queryClient.invalidateQueries();
+    },
   });
   // A channel put in exactly an open slot (#1158); the server checks the slot again under the queue's lock.
   const slotting = useMutation({
@@ -503,14 +684,20 @@ export function SocialCalendar({
       setPlanning((open) => (open && open.post.id !== r.postId ? open : null));
       setDone(t('calendar.slotDone', { when: f.dateTime(r.slotAt) }));
     },
-    onSettled: () => void queryClient.invalidateQueries(),
+    onSettled: () => {
+      setBlocked(false);
+      void queryClient.invalidateQueries();
+    },
   });
+  const pending = move.isPending || plan.isPending || slotting.isPending;
   const clearNotices = () => {
     move.reset();
     plan.reset();
     slotting.reset();
     setRefusal(null);
     setDone(null);
+    setMoved(null);
+    setBlocked(false);
   };
   const sendPlan = (request: PlanRequest | 'past' | null) => {
     if (request === null || plan.isPending) return;
@@ -529,21 +716,22 @@ export function SocialCalendar({
     if (request.kind === 'plan') sendPlan(request.request);
     else slotting.mutate(request);
   };
-  // What a slot drop or pick acts on: an undated draft of the list, or a chip.
+  // What a slot drop or pick acts on: an undated draft of the list, or a chip (under the channel filter, its channel).
   const slotTargetOf = (what: Dragged) => {
     if (what.kind === 'post') {
       const post = (undated.data ?? []).find((p) => p.id === what.id);
       return post ? { post, item: null } : null;
     }
-    const item = items.find((i) => i.v.id === what.id);
-    return item ? { post: item.post, item } : null;
+    const group = groups.find((g) => g.key === what.key);
+    const item = group ? (group.items.find((i) => i.v.connectionId === connectionId) ?? group.items[0]) : undefined;
+    return group && item ? { post: group.post, item } : null;
   };
   const may = { canDecide, canWrite };
   const today = dayId(new Date());
   const shift = (n: number) => setAnchor((a) => (view === 'month' ? new Date(a.getFullYear(), a.getMonth() + n, 1) : addDays(a, 7 * n)));
   const draggedOf = (e: DragEvent): Dragged | null => {
     const data = e.dataTransfer.getData('text/plain');
-    return dragged ?? (data.startsWith('post:') ? { kind: 'post', id: data.slice(5) } : data ? { kind: 'variant', id: data } : null);
+    return dragged ?? (data.startsWith('post:') ? { kind: 'post', id: data.slice(5) } : data.startsWith('group:') ? { kind: 'group', key: data.slice(6) } : null);
   };
   // A drop on an open slot of the filtered channel's queue (#1158).
   const dropOnSlot = (slot: OpenSlot) => (e: DragEvent) => {
@@ -554,6 +742,10 @@ export function SocialCalendar({
     setDragged(null);
     const target = what ? slotTargetOf(what) : null;
     if (!target || !connectionId) return;
+    if (pending) {
+      setBlocked(true);
+      return;
+    }
     clearNotices();
     sendSlot(slotDrop(target, slot, connectionId, may, new Date()));
   };
@@ -565,6 +757,10 @@ export function SocialCalendar({
     const what = draggedOf(e);
     setDragged(null);
     if (!what) return;
+    if (pending) {
+      setBlocked(true);
+      return;
+    }
     clearNotices();
     const now = new Date();
     if (what.kind === 'post') {
@@ -572,25 +768,31 @@ export function SocialCalendar({
       if (post && canWrite) sendPlan(planDrop({ post, at: null }, day, now, hour));
       return;
     }
-    const item = items.find((i) => i.v.id === what.id);
-    if (!item) return;
-    if (followsPlan(item)) {
-      if (canWrite) sendPlan(planDrop({ post: item.post, at: item.at }, day, now, hour));
-      return;
-    }
-    if (!canDecide || item.planned || item.v.status !== 'scheduled' || item.v.queuePaused) return;
-    const at = onDay(item.at, day, hour);
-    if (at.getTime() === item.at.getTime()) return;
+    const group = groups.find((g) => g.key === what.key);
+    if (!group) return;
+    const request = groupDrop(group, day, now, may, hour);
     // Today, at a time already gone: say so here rather than ask the server.
-    if (at.getTime() <= now.getTime()) {
-      setRefusal('dropPast');
-      return;
-    }
-    move.mutate({ variantId: item.v.id, at });
+    if (request === 'past') setRefusal('dropPast');
+    else if (request) move.mutate(request);
   };
   const openPlan = (target: Planning) => {
     clearNotices();
     setPlanning(target);
+  };
+  // What a chip's menu, and its row in the day's list, opens (#1145, #1158): the date editor for a draft at its post's
+  // planned time, else the open slots for a channel an owner or admin may put in one; null when neither applies.
+  const menuOf = (group: CalendarGroup): Planning | null => {
+    const text = groupText(group, t('emptyText'));
+    const plannable = canWrite ? group.items.find(followsPlan) : undefined;
+    if (plannable) return { post: group.post, at: plannable.at, text, item: plannable, dates: true };
+    const slottable =
+      canDecide && connectionId !== undefined && openSlots.length > 0 ? group.items.find((i) => slotVariant({ post: group.post, item: i }, connectionId) !== null) : undefined;
+    return slottable ? { post: group.post, at: slottable.at, text, item: slottable, dates: false } : null;
+  };
+  // A tick in the day's list starts picking, keeping what was picked.
+  const pickFromDay = (postId: string) => {
+    setPicking(true);
+    togglePick(postId);
   };
   // A new post planned at 09:00 that day; today after 09:00, at the next full hour.
   const start = (day: Date) => {
@@ -614,6 +816,34 @@ export function SocialCalendar({
   const title = view === 'month' ? f.monthYear(anchor.toISOString()) : `${f.date(dayId(days[0] as Date))} - ${f.date(dayId(days.at(-1) as Date))}`;
   const shown = view === 'month' ? 3 : 20;
   const undatedPosts = canWrite ? (undated.data ?? []) : [];
+  // The date editor and the notices stand above the calendar, or in the day's list while it is open (the page behind a
+  // modal dialog cannot be reached).
+  const editor = planning && (
+    <PlanEditor
+      key={`${planning.post.id}:${planning.item?.v.id ?? ''}`}
+      target={planning}
+      busy={plan.isPending || slotting.isPending}
+      slots={openSlots}
+      schedules={canDecide && connectionId !== undefined && slotVariant(planning, connectionId) !== null}
+      onSave={sendPlan}
+      onSlot={(slot) => connectionId && sendSlot(slotDrop(planning, slot, connectionId, may, new Date()))}
+      onClose={() => setPlanning(null)}
+    />
+  );
+  const notices = (
+    <>
+      {notes.error && <ErrorText>{errorMessage(notes.error)}</ErrorText>}
+      {move.error && <ErrorText>{errorMessage(move.error)}</ErrorText>}
+      {plan.error && <ErrorText>{errorMessage(plan.error)}</ErrorText>}
+      {slotting.error && <ErrorText>{errorMessage(slotting.error)}</ErrorText>}
+      {slots.error && <ErrorText>{errorMessage(slots.error)}</ErrorText>}
+      {refusal && <ErrorText>{t(`calendar.${refusal}`)}</ErrorText>}
+      <div role="status" className={cn('text-xs text-muted-foreground', !blocked && !done && !moved && 'sr-only')}>
+        {blocked ? <p>{t('calendar.busy')}</p> : done ? <p>{done}</p> : moved ? <MoveResult result={moved} names={names} /> : null}
+      </div>
+    </>
+  );
+  const openGroups = dayOpen ? (byDay.get(dayOpen) ?? []) : [];
 
   return (
     <div className="space-y-3">
@@ -682,27 +912,8 @@ export function SocialCalendar({
       {!picking && canWrite && openSlots.length > 0 && <p className="text-xs text-subtle-foreground">{t(canDecide ? 'calendar.slotHint' : 'calendar.slotHintMember')}</p>}
       {noteDraft && <NoteEditor key={'note' in noteDraft ? noteDraft.note.id : noteDraft.day} draft={noteDraft} onClose={() => setNoteDraft(null)} />}
       {exporting && canWrite && <PlanExportPanel slug={slug} month={anchor} onClose={() => setExporting(false)} />}
-      {planning && (
-        <PlanEditor
-          key={`${planning.post.id}:${planning.item?.v.id ?? ''}`}
-          target={planning}
-          busy={plan.isPending || slotting.isPending}
-          slots={openSlots}
-          schedules={canDecide && connectionId !== undefined && slotVariant(planning, connectionId) !== null}
-          onSave={sendPlan}
-          onSlot={(slot) => connectionId && sendSlot(slotDrop(planning, slot, connectionId, may, new Date()))}
-          onClose={() => setPlanning(null)}
-        />
-      )}
-      {notes.error && <ErrorText>{errorMessage(notes.error)}</ErrorText>}
-      {move.error && <ErrorText>{errorMessage(move.error)}</ErrorText>}
-      {plan.error && <ErrorText>{errorMessage(plan.error)}</ErrorText>}
-      {slotting.error && <ErrorText>{errorMessage(slotting.error)}</ErrorText>}
-      {slots.error && <ErrorText>{errorMessage(slots.error)}</ErrorText>}
-      {refusal && <ErrorText>{t(`calendar.${refusal}`)}</ErrorText>}
-      <p role="status" className={cn('text-xs text-muted-foreground', !done && 'sr-only')}>
-        {done}
-      </p>
+      {!dayOpen && editor}
+      {!dayOpen && notices}
       {undated.error && <ErrorText>{errorMessage(undated.error)}</ErrorText>}
       {/* On wide screens the undated list stands beside the calendar and stays in view, so every day is a drop away. */}
       <div className={cn('space-y-3', undatedPosts.length > 0 && 'xl:grid xl:grid-cols-[minmax(0,1fr)_16rem] xl:items-start xl:gap-3 xl:space-y-0')}>
@@ -795,29 +1006,39 @@ export function SocialCalendar({
                       {(occasionsByDay.get(id) ?? []).map((o) => (
                         <OccasionChip key={o.id} occasion={o} onStart={startFor} />
                       ))}
-                      {list.slice(0, shown).map((item) => {
-                        const plannable = canWrite && followsPlan(item);
-                        const movable = canDecide && !item.planned && item.v.status === 'scheduled' && !item.v.queuePaused;
-                        // Under a channel filter with open slots, an owner or admin puts the channel in one from the menu.
-                        const slottable = canDecide && connectionId !== undefined && openSlots.length > 0 && slotVariant({ post: item.post, item }, connectionId) !== null;
-                        const text = excerpt(item.v.effective.body) || t('emptyText');
+                      {list.slice(0, shown).map((group) => {
+                        // The menu: a planned draft's date, or (under a channel filter with open slots, for an owner or
+                        // admin) a slot of the queue.
+                        const target = menuOf(group);
                         return (
                           <Chip
-                            key={item.v.id}
-                            item={item}
+                            key={group.key}
+                            group={group}
                             slug={slug}
-                            name={names.get(item.v.connectionId)}
-                            draggable={!picking && (plannable || movable)}
-                            picked={picking && bulk ? picked.has(item.post.id) : null}
-                            onToggle={() => togglePick(item.post.id)}
-                            onDragStart={() => beginDrag({ kind: 'variant', id: item.v.id })}
+                            names={names}
+                            draggable={!picking && groupMovable(group, may)}
+                            picked={picking && bulk ? picked.has(group.post.id) : null}
+                            onToggle={() => togglePick(group.post.id)}
+                            onDragStart={() => beginDrag({ kind: 'group', key: group.key })}
                             onDragEnd={() => setDragged(null)}
-                            onPlan={plannable || slottable ? () => openPlan({ post: item.post, at: item.at, text, item, dates: plannable }) : null}
-                            menu={plannable ? 'changeDate' : 'toSlot'}
+                            onPlan={target ? () => openPlan(target) : null}
+                            menu={target?.dates ? 'changeDate' : 'toSlot'}
                           />
                         );
                       })}
-                      {list.length > shown && <span className="text-xs text-subtle-foreground">{t('calendar.more', { count: list.length - shown })}</span>}
+                      {/* The chips past those shown open in the day's full list, by pointer and keyboard (#1220). */}
+                      {list.length > shown && (
+                        <button
+                          type="button"
+                          aria-haspopup="dialog"
+                          onClick={() => setDayOpen(id)}
+                          data-testid="calendar-more"
+                          className="inline-flex min-h-6 self-start items-center rounded px-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                        >
+                          {t('calendar.more', { count: list.length - shown })}
+                          <span className="sr-only"> {t('calendar.moreOf', { day: f.date(id) })}</span>
+                        </button>
+                      )}
                       {(slotsOn.get(id) ?? []).slice(0, shown).map((slot) => {
                         const key = `slot:${slot.at}`;
                         return (
@@ -900,6 +1121,38 @@ export function SocialCalendar({
           )}
         </div>
       </div>
+      {dayOpen && (
+        <DayDialog
+          title={t('calendar.dayTitle', { day: f.date(dayOpen) })}
+          groups={openGroups}
+          slug={slug}
+          names={names}
+          editing={planning !== null}
+          onClose={() => setDayOpen(null)}
+          actions={(group, text) => {
+            const target = menuOf(group);
+            if (!target && !bulk) return null;
+            return (
+              <div className="flex flex-wrap items-center gap-3">
+                {target && (
+                  <Button size="sm" variant="outline" aria-label={t(target.dates ? 'calendar.setDateOf' : 'calendar.toSlotOf', { text })} onClick={() => openPlan(target)}>
+                    {t(target.dates ? 'calendar.setDate' : 'calendar.toSlot')}
+                  </Button>
+                )}
+                {bulk && (
+                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Checkbox checked={picked.has(group.post.id)} onCheckedChange={() => pickFromDay(group.post.id)} aria-label={t('bulk.select', { text })} />
+                    {t('calendar.dayPick')}
+                  </label>
+                )}
+              </div>
+            );
+          }}
+        >
+          {editor}
+          {notices}
+        </DayDialog>
+      )}
     </div>
   );
 }

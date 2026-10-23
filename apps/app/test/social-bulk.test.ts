@@ -116,7 +116,8 @@ describe('moving posts by days or hours (#945)', () => {
     );
     expect(planMove(p, { amount: 1, unit: 'days' })).toEqual({
       postId: 'p1',
-      moves: [{ variantId: 'time', at: '2026-10-25T09:00:00.000Z' }],
+      // Each move carries the time it starts from, for the server's stale check (#956).
+      moves: [{ variantId: 'time', at: '2026-10-25T09:00:00.000Z', expectedAt: '2026-10-24T08:00:00.000Z' }],
       skipped: [
         { variantId: 'slot', reason: 'queue' },
         { variantId: 'out', reason: 'published' },
@@ -140,9 +141,9 @@ describe('moving posts by days or hours (#945)', () => {
     const moves = posts.flatMap((p) => planMove(p, { amount: 7, unit: 'days' }).moves);
     expect(moves).toHaveLength(24);
     for (const m of moves) expect(localTime(Date.parse(m.at), 'Europe/London')).toMatchObject(m.variantId.startsWith('a') ? { hour: 9, minute: 0 } : { hour: 18, minute: 30 });
-    expect(moves[0]).toEqual({ variantId: 'a0', at: '2026-10-20T08:00:00.000Z' });
+    expect(moves[0]).toEqual({ variantId: 'a0', at: '2026-10-20T08:00:00.000Z', expectedAt: '2026-10-13T08:00:00.000Z' });
     // 23 October, 09:00 BST, moves to 30 October, 09:00 GMT.
-    expect(moves.find((m) => m.variantId === 'a10')).toEqual({ variantId: 'a10', at: '2026-10-30T09:00:00.000Z' });
+    expect(moves.find((m) => m.variantId === 'a10')).toEqual({ variantId: 'a10', at: '2026-10-30T09:00:00.000Z', expectedAt: '2026-10-23T08:00:00.000Z' });
   });
 
   it('sends one reschedule per channel, goes on after a refusal, and reports each post', async () => {
@@ -152,7 +153,7 @@ describe('moving posts by days or hours (#945)', () => {
       post('none', v('e', 'published', '2026-10-01T02:00:00.000Z')),
       post('refused', v('f', 'scheduled', '2026-11-02T02:00:00.000Z'), v('g', 'scheduled', '2026-11-02T05:00:00.000Z')),
     ];
-    const sent: { variantId: string; at: string }[] = [];
+    const sent: { variantId: string; at: string; expectedAt: string }[] = [];
     const progress: number[] = [];
     const results = await runMove(
       posts,
@@ -164,11 +165,11 @@ describe('moving posts by days or hours (#945)', () => {
       (done, total) => progress.push(done * 10 + total),
     );
     expect(sent).toEqual([
-      { variantId: 'a', at: '2026-11-02T00:00:00.000Z' },
-      { variantId: 'b', at: '2026-11-02T01:00:00.000Z' },
-      { variantId: 'c', at: '2026-11-02T00:00:00.000Z' },
-      { variantId: 'f', at: '2026-11-02T00:00:00.000Z' },
-      { variantId: 'g', at: '2026-11-02T03:00:00.000Z' },
+      { variantId: 'a', at: '2026-11-02T00:00:00.000Z', expectedAt: '2026-11-02T02:00:00.000Z' },
+      { variantId: 'b', at: '2026-11-02T01:00:00.000Z', expectedAt: '2026-11-02T03:00:00.000Z' },
+      { variantId: 'c', at: '2026-11-02T00:00:00.000Z', expectedAt: '2026-11-02T02:00:00.000Z' },
+      { variantId: 'f', at: '2026-11-02T00:00:00.000Z', expectedAt: '2026-11-02T02:00:00.000Z' },
+      { variantId: 'g', at: '2026-11-02T03:00:00.000Z', expectedAt: '2026-11-02T05:00:00.000Z' },
     ]);
     expect(progress).toEqual([14, 24, 34, 44]);
     expect(results.map((r) => [r.postId, r.moved.map((m) => m.variantId), r.skipped.map((s) => `${s.variantId}:${s.reason}`), r.refused.map((x) => `${x.variantId}:${(x.error as Error).message}`)])).toEqual([
