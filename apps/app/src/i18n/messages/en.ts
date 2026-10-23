@@ -4227,7 +4227,7 @@ export const en = {
       AI_DRAFT_EMPTY: 'AI could not draft a post from this brief; describe it more clearly',
       AI_REWRITE_EMPTY: 'AI could not rewrite this text; try another way',
       AI_PROOFREAD_FAILED: 'AI could not proofread the text right now; try again later',
-      AI_PROOFREAD_CHANGED: 'AI also changed a link, hashtag, mention, number, price or emoji, so its fix was dropped; your text is unchanged',
+      AI_PROOFREAD_CHANGED: 'AI also changed a link, hashtag, mention, number, price or emoji, or added or dropped whole sentences, so its fix was dropped; your text is unchanged',
       BLUESKY_APP_PASSWORD: 'Use a Bluesky app password, not the account password',
       BLUESKY_APP_PASSWORD_PRIVILEGED: 'This app password can also read direct messages; create a new one without direct message access',
       BLUESKY_PDS_UNSUPPORTED: '{brand} cannot reach the server this Bluesky account lives on (its PDS must be a public domain over https)',

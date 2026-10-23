@@ -53,7 +53,7 @@ describe('proofreadChanges', () => {
 
   it('refuses one that dropped, added or reordered them, and names every kind it changed', () => {
     expect(proofreadChanges(['Xem https://a.vn và https://b.vn'], ['Xem https://b.vn và https://a.vn'])).toEqual(['link']);
-    expect(proofreadChanges(['Giá 99k #sale'], ['Giá 99k, rẻ nhất #sale #hot'])).toEqual(['hashtag']);
+    expect(proofreadChanges(['Giá 99k #sale'], ['Giá 99k, rẻ nhất #sale #hot'])).toEqual(['hashtag', 'wording']);
     expect(proofreadChanges(['Giá 99k #sale 🎉'], ['Giá 199k 🎁'])).toEqual(['hashtag', 'number', 'emoji']);
   });
 
@@ -64,5 +64,11 @@ describe('proofreadChanges', () => {
 
   it('treats composed and decomposed diacritics as the same text', () => {
     expect(proofreadChanges(['#khuyếnmãi'.normalize('NFD')], ['#khuyếnmãi'])).toEqual([]);
+  });
+
+  it('refuses one that added or dropped a sentence, the links and numbers kept', () => {
+    expect(proofreadChanges([POST], [FIXED])).toEqual([]);
+    expect(proofreadChanges([POST], [`${FIXED} Chính sách hoàn tiền trọn đời cho mọi đơn hàng.`])).toEqual(['wording']);
+    expect(proofreadChanges([POST], [FIXED.replace(' Gọi 0901 234 567 hoặc email ban@tiemcuaban.vn', '').replace('Khai trương chi nhánh Quận 3 ngày 20/10 🎉 ', 'Khai trương 20/10 🎉 ')])).toContain('wording');
   });
 });

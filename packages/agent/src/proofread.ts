@@ -4,8 +4,9 @@
 // before the member sees it. Pure functions, no model.
 
 export const PROTECTED_KINDS = ['link', 'hashtag', 'mention', 'number', 'emoji'] as const;
-export type ProtectedKind = (typeof PROTECTED_KINDS)[number];
-export type ProtectedTokens = Record<ProtectedKind, string[]>;
+// wording: the text grew or shrank more than fixing spelling, marks and spacing can (a sentence added or dropped).
+export type ProtectedKind = (typeof PROTECTED_KINDS)[number] | 'wording';
+export type ProtectedTokens = Record<(typeof PROTECTED_KINDS)[number], string[]>;
 
 // A proofread changed what it must keep; kinds says which, in PROTECTED_KINDS order.
 export class ProofreadChangedError extends Error {
@@ -83,6 +84,10 @@ export function protectedTokens(text: string): ProtectedTokens {
   return { link: links.found, hashtag: hashtags.found, mention: mentions.found, number: numbers.found, emoji };
 }
 
+// How far a proofread may change a text's length: a few characters of spacing and punctuation, or a tenth of a long text.
+const WORDING_SLACK = 12;
+const WORDING_RATIO = 0.1;
+
 const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
 
 // The kinds a proofread changed between these texts (a title and a body are compared each on its own); empty when it
@@ -93,6 +98,9 @@ export function proofreadChanges(before: readonly string[], after: readonly stri
     const a = protectedTokens(before[i] ?? '');
     const b = protectedTokens(after[i] ?? '');
     for (const kind of PROTECTED_KINDS) if (!same(a[kind], b[kind])) changed.add(kind);
+    const was = [...(before[i] ?? '').normalize('NFC')].length;
+    const now = [...(after[i] ?? '').normalize('NFC')].length;
+    if (Math.abs(now - was) > Math.max(WORDING_SLACK, Math.ceil(was * WORDING_RATIO))) changed.add('wording');
   }
-  return PROTECTED_KINDS.filter((k) => changed.has(k));
+  return [...PROTECTED_KINDS, 'wording' as const].filter((k) => changed.has(k));
 }
