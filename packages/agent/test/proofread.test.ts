@@ -57,6 +57,12 @@ describe('proofreadChanges', () => {
     expect(proofreadChanges(['Giá 99k #sale 🎉'], ['Giá 199k 🎁'])).toEqual(['hashtag', 'number', 'emoji']);
   });
 
+  it('keeps a price in billions, spelt tỷ or tỉ, and refuses one that lost its unit', () => {
+    expect(proofreadChanges(['Can ho gia 2 ty'], ['Căn hộ giá 2 tỷ'])).toEqual([]);
+    expect(proofreadChanges(['Căn hộ giá 2 tỉ'], ['Căn hộ giá 2 tỷ'])).toEqual([]);
+    expect(proofreadChanges(['Căn hộ giá 2 tỷ'], ['Căn hộ giá 2'])).toEqual(['number']);
+  });
+
   it('compares the title on its own', () => {
     expect(proofreadChanges(['Khai truong', 'Giam 20%'], ['Khai trương', 'Giảm 20%'])).toEqual([]);
     expect(proofreadChanges(['Khai truong', 'Giam 20%'], ['Khai trương', 'Giảm 30%'])).toEqual(['number']);

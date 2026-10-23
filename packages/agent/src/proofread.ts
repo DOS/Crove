@@ -36,10 +36,15 @@ const LINK = new RegExp(
 const LINK_TAIL = /[.,;:!?…)\]}>»"'“”‘’]+$/u;
 const HASHTAG = /(?<![\p{L}\p{M}\p{N}_&#])#[\p{L}\p{M}\p{N}_]+/gu;
 const MENTION = /(?<![\p{L}\p{M}\p{N}_.@])@[\p{L}\p{M}\p{N}_.]+/gu;
-// Units a number or price carries, longest first: Vietnamese prices (1.200.000đ, 99k, 2tr, 150 nghìn), percentages
+// A literal string inside a regular expression: every character with a meaning there escaped, the backslash included.
+function escapeRegExp(text: string): string {
+  return text.replace(/[\\^$.*+?()[\]{}|/-]/g, '\\$&');
+}
+
+// Units a number or price carries, longest first: Vietnamese prices (1.200.000đ, 99k, 2tr, 150 nghìn, 2 tỷ), percentages
 // and a few currencies. A space between the number and its unit may come or go: that is a spacing fix.
-const UNITS = ['vnđ', 'vnd', 'usd', 'đồng', 'dong', 'triệu', 'trieu', 'nghìn', 'nghin', 'ngàn', 'ngan', 'tr', 'đ', '₫', 'k', '%', '$'];
-const NUMBER = new RegExp(String.raw`(\d+(?:[.,:\/-]\d+)*)(?:[^\S\r\n]?(${UNITS.map((u) => u.replace(/[$]/g, '\\$')).join('|')})(?![\p{L}\p{M}\p{N}]))?`, 'giu');
+const UNITS = ['vnđ', 'vnd', 'usd', 'đồng', 'dong', 'triệu', 'trieu', 'nghìn', 'nghin', 'ngàn', 'ngan', 'tỷ', 'tỉ', 'ty', 'ti', 'tr', 'đ', '₫', 'k', '%', '$'];
+const NUMBER = new RegExp(String.raw`(\d+(?:[.,:\/-]\d+)*)(?:[^\S\r\n]?(${UNITS.map(escapeRegExp).join('|')})(?![\p{L}\p{M}\p{N}]))?`, 'giu');
 // A grapheme that is an emoji: a pictograph (with its skin tone, variation selector or joined parts), a flag, a keycap.
 const EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20E3/u;
 const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
@@ -52,7 +57,9 @@ function unitKey(unit: string): string {
     .replace(/₫/g, 'đ')
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
-    .replace(/đ/g, 'd');
+    .replace(/đ/g, 'd')
+    // tỷ and tỉ are one word (a billion) a proofread may spell either way; no other unit has a y.
+    .replace(/y/g, 'i');
 }
 
 // Takes every match of pattern out of text (each replaced by a space, so what is left cannot join across it).
