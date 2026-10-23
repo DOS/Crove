@@ -10,7 +10,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
-import { bestTimes, type PublishedSample } from '@crove/mod-social/contract';
+import { bestTimes, engagementRateOf, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { PEXELS_URL, StockCredit, StockPhotoSearch, pexelsHref, useStockPhotosEnabled } from '../components/social-stock-photos.tsx';
@@ -32,7 +32,7 @@ import { ReportSchedules } from '../components/social-report-schedules.tsx';
 import type { BulkAction } from '../lib/social-bulk.ts';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
-import { AccountGrowth, ChangeChip, ChannelTotals, TopPosts } from '../components/social-growth.tsx';
+import { AccountGrowth, ChangeChip, ChannelTotals, EngagementRateCard, TopPosts } from '../components/social-growth.tsx';
 import { FollowerAudiences } from '../components/social-audience.tsx';
 import { WhatWorks } from '../components/social-insights.tsx';
 import { OutsidePostCell, OutsideSwitch } from '../components/social-external-posts.tsx';
@@ -179,6 +179,8 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
                 {previous && <ChangeChip current={total(m)} previous={previous.metrics[m]} against={against} withPrevious className="mt-1" />}
               </Card>
             ))}
+            {/* The engagement rate over the channels that report reach (else impressions), never a mean of rates (#1157). */}
+            {totals.data && <EngagementRateCard current={engagementRateOf(totals.data.channels.map((c) => c.metrics))} previous={previous ? engagementRateOf(previous.channels.map((c) => c.metrics)) : null} against={against} />}
             {hasClicks && (
               <Card className="block p-4">
                 <p className="text-xs text-subtle-foreground">{t('metricsClicks')}</p>

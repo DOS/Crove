@@ -17,6 +17,7 @@ import { runAutoReply } from './auto-reply.ts';
 import { runRepost } from './repost.ts';
 import { autoReplyOf, repostRuleOf } from './domain/channels.ts';
 import { csvCell } from './domain/csv.ts';
+import { engagementRate, engagementRatePercent } from './domain/engagement-rate.ts';
 import { STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture } from './domain/story-metrics.ts';
 import { channelScope, connectionInScope, type ChannelScope } from './channel-access.ts';
 import { OUTPERFORM_AFTER_HOURS } from './domain/outperform.ts';
@@ -325,11 +326,17 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
 export { csvCell };
 
 // labelNames: each post's label names (#639), written as one cell joined by "; ". The Story counts (#1082), then a
-// Reel's watch time in milliseconds (#1147), come last, so the columns a sheet already reads keep their places.
+// Reel's watch time in milliseconds (#1147), then the engagement rate in percent (#1157: over reach, else over
+// impressions when the row has no reach, empty with neither), come last, so the columns a sheet already reads keep
+// their places.
 export function metricsCsv(rows: readonly (MetricsRow & { text?: string })[], channelNames: ReadonlyMap<string, string>, labelNames: ReadonlyMap<string, readonly string[]> = new Map()): string {
-  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', 'labels', ...POST_METRIC_NAMES, 'captured_at', ...STORY_METRIC_NAMES, ...REEL_METRIC_NAMES];
+  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', 'labels', ...POST_METRIC_NAMES, 'captured_at', ...STORY_METRIC_NAMES, ...REEL_METRIC_NAMES, 'engagement_rate_pct'];
+  const percent = (metrics: Readonly<Record<string, number>>) => {
+    const rate = engagementRate(metrics);
+    return rate ? engagementRatePercent(rate) : null;
+  };
   const lines = rows.map((r) =>
-    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, (labelNames.get(r.postId) ?? []).join('; '), ...POST_METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt, ...STORY_METRIC_NAMES.map((m) => r.metrics[m] ?? null), ...REEL_METRIC_NAMES.map((m) => r.metrics[m] ?? null)]
+    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, (labelNames.get(r.postId) ?? []).join('; '), ...POST_METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt, ...STORY_METRIC_NAMES.map((m) => r.metrics[m] ?? null), ...REEL_METRIC_NAMES.map((m) => r.metrics[m] ?? null), percent(r.metrics)]
       .map(csvCell)
       .join(','),
   );

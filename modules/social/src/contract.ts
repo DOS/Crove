@@ -15,6 +15,8 @@ export * from './domain/recurrence.ts';
 export * from './domain/banned-words.ts';
 // Monthly goals (#1056): the report page judges progress with the rules the Metrics tab uses.
 export * from './domain/goals.ts';
+// Engagement rate (#1157): the Metrics tab, the post page and the client report page work it out as the export does.
+export * from './domain/engagement-rate.ts';
 // White-label client reports (#1053): the settings form checks a logo and an accent with the rules the command applies.
 export * from './domain/report-branding.ts';
 // The team report (#1058): its rows, the median and the CSV file the Metrics tab saves, with the exports' quoting.

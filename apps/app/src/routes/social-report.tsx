@@ -3,7 +3,8 @@
 // prints cleanly to PDF from the browser. The token stays after the # and goes to the API in a POST body only.
 // With the org's white-label branding (#1053) it shows the agency's logo, name and accent instead of Crove's logo. A
 // link may carry the agency's note, shown as plain text, and a report of exactly one month shows the monthly goals
-// (#1056), and who follows each channel, from the latest weekly capture in the period (#1146).
+// (#1056), and who follows each channel, from the latest weekly capture in the period (#1146). The engagement rate
+// (#1157) of the period, each channel and each best post is worked out on the page from the counts it already gets.
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -11,7 +12,9 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { ReportAudiences } from '../components/social-audience.tsx';
 import { GoalList } from '../components/social-goals.tsx';
-import { ChangeChip } from '../components/social-growth.tsx';
+import { engagementRate, engagementRateOf } from '@crove/mod-social/contract';
+import { ChangeChip, EngagementRateCard, EngagementRateCell } from '../components/social-growth.tsx';
+import { useRatePhrase } from '../components/social-engagement-rate.tsx';
 import { OutsideChip } from '../components/social-external-posts.tsx';
 import { AccentRule, BrandMark, MadeWithCrove, accentStyle, useBrandTitle } from '../components/social-report-branding.tsx';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
@@ -106,11 +109,17 @@ export function ReportGoalsSection({ data, nowMs }: { data: Pick<ReportPage, 'go
 export function SocialReportPage() {
   const t = useTranslations('social.clientReport');
   const tm = useTranslations('social.metric');
+  const tr = useTranslations('social.engagementRate');
   const f = useFormat();
   const [token] = useState(tokenOf);
   const page = useQuery({ queryKey: ['client-report', token], queryFn: () => load(token as string), enabled: token !== null, retry: false });
   const data = page.data;
   const metrics = data ? shown(data.totals) : [];
+  // The engagement rate (#1157) from the channels' totals the page already has: the sum over the channels that report
+  // reach (else impressions), for this period and the one before.
+  const rate = data ? engagementRateOf(data.channels.map((c) => c.totals)) : null;
+  const rateBefore = data ? engagementRateOf(data.channels.map((c) => c.previous?.totals ?? {})) : null;
+  const rateLine = useRatePhrase('line');
   const against = t('against');
   const brand = data ? pageBrand(data.brand) : null;
   useBrandTitle(brand, data?.org ?? '');
@@ -170,6 +179,7 @@ export function SocialReportPage() {
                         <ChangeChip current={data.totals[m]} previous={data.previous?.totals[m]} against={against} withPrevious className="mt-1" />
                       </Card>
                     ))}
+                    <EngagementRateCard current={rate} previous={data.previous ? rateBefore : null} against={against} className="print:break-inside-avoid" />
                   </section>
                 )}
                 <section className="space-y-2 print:break-inside-avoid">
@@ -185,6 +195,7 @@ export function SocialReportPage() {
                               {tm(m)}
                             </th>
                           ))}
+                          <th className="px-3 py-2 text-right font-medium">{tr('label')}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -204,6 +215,7 @@ export function SocialReportPage() {
                                 <ChangeChip current={c.totals[m]} previous={c.previous?.totals[m]} against={against} />
                               </td>
                             ))}
+                            <EngagementRateCell current={c.totals} previous={c.previous?.totals} against={against} />
                           </tr>
                         ))}
                       </tbody>
@@ -227,6 +239,7 @@ export function SocialReportPage() {
                             .map((m) => `${tm(m)}: ${f.number(p.metrics[m] ?? 0)}`)
                             .join(' · ')}
                         </p>
+                        {engagementRate(p.metrics) && <p className="text-xs text-muted-foreground tabular-nums">{rateLine(engagementRate(p.metrics))}</p>}
                         {p.url && (
                           <a href={p.url} target="_blank" rel="noopener noreferrer nofollow" className="mt-1 inline-block text-xs text-link hover:underline print:hidden">
                             {t('open')}

@@ -1480,14 +1480,17 @@ const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string
 export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
 export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
 // What works (#705): a group of a channel's posts and its median engagement against the channel's; a format group also
-// the median average watch time in milliseconds of its posts that report one (#1147, Reels).
-const zInsightGroup = z.object({ key: z.string(), posts: z.number().int(), median: z.number(), ratio: z.number().nullable(), avgWatchTimeMs: z.number().optional() });
+// the median average watch time in milliseconds of its posts that report one (#1147, Reels). A group and a channel carry
+// their engagement rate (#1157) when their posts report reach or impressions.
+const zEngagementRate = z.object({ rate: z.number(), basis: z.enum(['reach', 'impressions']), engagement: z.number(), denominator: z.number() });
+const zInsightGroup = z.object({ key: z.string(), posts: z.number().int(), median: z.number(), ratio: z.number().nullable(), avgWatchTimeMs: z.number().optional(), rate: zEngagementRate.optional() });
 const zInsightPost = z.object({ variantId: zId, postId: zId, excerpt: z.string(), publishedAt: z.string().nullable(), externalUrl: z.string().nullable(), engagement: z.number() });
 export const zSocialChannelInsights = z.object({
   connectionId: zId,
   provider: z.string(),
   posts: z.number().int(),
   median: z.number(),
+  rate: zEngagementRate.optional(),
   best: z.array(zInsightPost),
   worst: z.array(zInsightPost),
   byLabel: z.array(zInsightGroup),

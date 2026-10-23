@@ -6,6 +6,8 @@ import { useTranslations } from 'use-intl';
 import { Card } from '@crove/ui/components/card';
 import { cn } from '@crove/ui/lib/utils';
 import { ErrorText, Spinner } from './ui.tsx';
+import { comparableRate, engagementRateOf, type EngagementRate } from '@crove/mod-social/contract';
+import { RateValue, useRateText } from './social-engagement-rate.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
 import { changeOf, engagementOf, growthOf, sparkline, topPosts } from '../lib/social-growth.ts';
@@ -64,14 +66,29 @@ export function AccountGrowth({ days, names }: { days: number; names: Map<string
 
 // A count's change against the period just before (#947): an up or down arrow and the percentage, green up and red
 // down, "-" when the period before has no data or is zero. against: that period in words ("30 ngày trước"), for the
-// label a screen reader reads. withPrevious: the count of the period before, written next to it.
-export function ChangeChip({ current, previous, against, withPrevious = false, className }: { current: number | null | undefined; previous: number | null | undefined; against: string; withPrevious?: boolean; className?: string }) {
+// label a screen reader reads. withPrevious: the count of the period before, written next to it, as format writes it
+// (a number by default; an engagement rate as a percentage, #1157).
+export function ChangeChip({
+  current,
+  previous,
+  against,
+  withPrevious = false,
+  format,
+  className,
+}: {
+  current: number | null | undefined;
+  previous: number | null | undefined;
+  against: string;
+  withPrevious?: boolean;
+  format?: (value: number) => string;
+  className?: string;
+}) {
   const t = useTranslations('social.growth.change');
   const f = useFormat();
   const change = changeOf(current, previous);
   const percent = change ? `${f.number(Math.abs(change.percent))}%` : '';
   const label = !change ? t('none', { against }) : t(change.direction, { percent, against });
-  const before = previous === null || previous === undefined ? null : t('previous', { value: f.number(previous) });
+  const before = previous === null || previous === undefined ? null : t('previous', { value: format ? format(previous) : f.number(previous) });
   return (
     <span className={cn('inline-flex flex-wrap items-center gap-1.5 text-xs tabular-nums', className)}>
       <span
@@ -89,6 +106,40 @@ export function ChangeChip({ current, previous, against, withPrevious = false, c
   );
 }
 
+// A period's engagement rate (#1157) as a totals card, on the Metrics tab and the client report: the sum over its
+// channels (engagementRateOf), with the change against the period before when that one is over the same basis.
+export function EngagementRateCard({ current, previous, against, className }: { current: EngagementRate | null; previous: EngagementRate | null | undefined; against: string; className?: string }) {
+  const t = useTranslations('social.engagementRate');
+  const text = useRateText();
+  const before = comparableRate(current, previous);
+  return (
+    <Card className={cn('block p-4', className)}>
+      <p className="text-xs text-subtle-foreground" title={t('hint')}>
+        {t('label')}
+      </p>
+      <div className="mt-1 text-xl font-semibold text-foreground tabular-nums">
+        <RateValue rate={current} />
+      </div>
+      <ChangeChip current={current?.rate} previous={before?.rate} against={against} withPrevious format={(rate) => text({ rate })} className="mt-1" />
+    </Card>
+  );
+}
+
+// A channel's engagement rate in a table cell, with its change against the period before over the same basis.
+export function EngagementRateCell({ current, previous, against }: { current: Readonly<Record<string, number>>; previous: Readonly<Record<string, number>> | undefined; against: string }) {
+  const text = useRateText();
+  const now = engagementRateOf([current]);
+  const then = comparableRate(now, previous ? engagementRateOf([previous]) : null);
+  return (
+    <td className="px-3 py-2 text-right tabular-nums">
+      <span className="block text-foreground">
+        <RateValue rate={now} />
+      </span>
+      <ChangeChip current={now?.rate} previous={then?.rate} against={against} format={(rate) => text({ rate })} />
+    </td>
+  );
+}
+
 interface ChannelTotal {
   connectionId: string;
   provider: string;
@@ -96,10 +147,12 @@ interface ChannelTotal {
   metrics: Record<string, number>;
 }
 
-// Each channel's posts, reach and engagement in the window (#947), with the change against the window just before;
-// current lists every channel that posted in either window, so one that posted only before shows 0 now.
+// Each channel's posts, reach, engagement and engagement rate (#1157) in the window (#947), with the change against
+// the window just before; current lists every channel that posted in either window, so one that posted only before
+// shows 0 now.
 export function ChannelTotals({ current, previous, days, names }: { current: readonly ChannelTotal[]; previous: readonly ChannelTotal[]; days: number; names: Map<string, string> }) {
   const t = useTranslations('social.growth');
+  const tr = useTranslations('social.engagementRate');
   const f = useFormat();
   const against = t('change.days', { days: String(days) });
   const before = new Map(previous.map((c) => [c.connectionId, c] as const));
@@ -123,6 +176,7 @@ export function ChannelTotals({ current, previous, days, names }: { current: rea
               <th className="px-3 py-2 text-right font-medium">{t('posts')}</th>
               <th className="px-3 py-2 text-right font-medium">{t('reachColumn')}</th>
               <th className="px-3 py-2 text-right font-medium">{t('engagementColumn')}</th>
+              <th className="px-3 py-2 text-right font-medium">{tr('label')}</th>
             </tr>
           </thead>
           <tbody>
@@ -137,6 +191,7 @@ export function ChannelTotals({ current, previous, days, names }: { current: rea
                   {cell(c.posts, then?.posts)}
                   {cell(c.metrics.reach, then?.metrics.reach)}
                   {cell(engagementOf(c.metrics), then ? engagementOf(then.metrics) : undefined)}
+                  <EngagementRateCell current={c.metrics} previous={then?.metrics} against={against} />
                 </tr>
               );
             })}

@@ -1979,6 +1979,15 @@ export const en = {
       reachColumn: 'Reach',
       engagementColumn: 'Engagement',
     },
+    // Engagement rate (#1157): engagement over reach, else over impressions, on the Metrics tab, the post page, What
+    // works and the client report.
+    engagementRate: {
+      label: 'Engagement rate',
+      byImpressions: 'by impressions',
+      hint: 'Reactions, comments, shares, saves and clicks divided by reach. The overall rate counts only the channels that report reach; when none does, it is divided by impressions.',
+      line: 'Engagement rate: {rate}',
+      inline: 'engagement rate {rate}',
+    },
     // Who follows a channel (#1146), on the Metrics tab and in the client report.
     audience: {
       title: 'Followers',

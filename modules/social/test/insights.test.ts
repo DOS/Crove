@@ -109,6 +109,25 @@ describe('what works (#705)', () => {
     expect(whatWorks([post('z', 0)], 'UTC')[0]?.byFormat).toEqual([{ key: 'text', posts: 1, median: 0, ratio: null }]);
   });
 
+  it('gives a channel and each group its engagement rate, a sum over the posts that report reach (#1157)', () => {
+    const samples = [
+      post('a', 10, { format: 'image', metrics: { reach: 100, reactions: 10 } }),
+      post('b', 20, { format: 'image', metrics: { reach: 1900, reactions: 20, clicks: 10 } }),
+      // No reach: left out of a rate over reach.
+      post('c', 30, { format: 'image', metrics: { impressions: 30, reactions: 30 } }),
+      post('d', 5, { format: 'text', metrics: { impressions: 500, reactions: 5 } }),
+      post('e', 5, { format: 'video', metrics: { views: 50, reactions: 5 } }),
+    ];
+    const [c] = whatWorks(samples, 'UTC');
+    // 40 / 2000 for the channel and its images, not the mean of 10% and 1.6%.
+    expect(c?.rate).toEqual({ rate: 0.02, basis: 'reach', engagement: 40, denominator: 2000 });
+    const byFormat = new Map(c?.byFormat.map((g) => [g.key, g.rate]));
+    expect(byFormat.get('image')).toEqual({ rate: 0.02, basis: 'reach', engagement: 40, denominator: 2000 });
+    expect(byFormat.get('text')).toEqual({ rate: 0.01, basis: 'impressions', engagement: 5, denominator: 500 });
+    // Neither reach nor impressions: no rate at all.
+    expect(c?.byFormat.find((g) => g.key === 'video')).not.toHaveProperty('rate');
+  });
+
   it("gives the Reels the median of their average watch time, from the Reels that report one (#1147)", () => {
     const reel = (id: string, avgWatchTimeMs?: number) => post(id, 10, { format: 'reel', metrics: { reactions: 10, ...(avgWatchTimeMs === undefined ? {} : { avgWatchTimeMs }) } });
     const [c] = whatWorks([reel('r1', 12300), reel('r2', 8000), reel('r3', 15000), reel('r4'), post('i1', 10, { format: 'image' })], 'UTC');
