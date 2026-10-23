@@ -3,6 +3,7 @@
 // Each capability is its own small interface, added by the step that first needs it.
 import { randomBytes } from 'node:crypto';
 import type { PostType } from './post-type.ts';
+import type { ChannelOptionsInput, ChannelOptionsResult } from './options.ts';
 
 export * from './oauth.ts';
 export * from './text.ts';
@@ -25,6 +26,7 @@ export * from './comment.ts';
 export * from './cover.ts';
 export * from './post-type.ts';
 export * from './recent.ts';
+export * from './options.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -345,6 +347,8 @@ export interface Publisher {
   playlist?(input: PlaylistInput): Promise<CommentResult>;
   // Providers that take a published post down (#860), when a person asks.
   remove?(input: RemoveInput): Promise<RemoveResult>;
+  // Providers whose channel offers options to pick from in the composer (#1120), read by the worker only.
+  options?(input: ChannelOptionsInput): Promise<ChannelOptionsResult>;
 }
 
 interface SandboxPost {
