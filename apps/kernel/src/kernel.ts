@@ -82,6 +82,7 @@ import { createTaxCodeLookup } from './tax-lookup.ts';
 import { createPortalSync } from './portal-sync.ts';
 import { createTaxPortalClient, testPortalAllowed } from './tax-portal.ts';
 import { startWorker } from './worker.ts';
+import { createPushSender, loadVapidKeys } from './web-push.ts';
 import { WORKER_LAG_EXIT_MS, WORKER_LAG_SUSTAIN_MS, startLagWatchdog } from './back-pressure.ts';
 
 // Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds. When
@@ -326,6 +327,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     const worker = role === 'worker' || role === 'all';
     // Both roles handle org exports (the worker seals them, the API opens them for download).
     assertExportKey(config);
+    // Browser push (#1238): both roles or neither; a partial or mismatched key set stops the start.
+    const vapid = loadVapidKeys(config);
     // The worker alone enters system context, so it never shares the API's login role (External-tenant gate T5).
     const workerUrl = config.WORKER_DATABASE_URL;
     if (worker && !workerUrl) throw new Error('WORKER_DATABASE_URL is required for the worker; connect it as crove_worker');
@@ -383,7 +386,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           ...(config.TAX_CODE_LOOKUP_URL ? { taxLookup: createTaxCodeLookup(config.TAX_CODE_LOOKUP_URL) } : {}),
           ...(config.TAX_PORTAL_SYNC === 'true' ? { portalSync: createPortalSync({ runtime, store, broker: resolved.broker, stepMs: config.TAX_PORTAL_STEP_SECONDS * 1000, client: createTaxPortalClient(config.TAX_PORTAL_URL ? { baseUrl: config.TAX_PORTAL_URL } : {}) }) } : {}),
           mailer: resolved.mail,
-          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL, ...(config.MEDIA_PEXELS_API_KEY ? { stockPhotos: createPexels({ apiKey: config.MEDIA_PEXELS_API_KEY, store }) } : {}) },
+          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL, ...(config.MEDIA_PEXELS_API_KEY ? { stockPhotos: createPexels({ apiKey: config.MEDIA_PEXELS_API_KEY, store }) } : {}), ...(vapid ? { push: { publicKey: vapid.publicKey } } : {}) },
           ...(stream ? { stream } : {}),
         });
         const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
@@ -431,6 +434,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             securityAlerts: securityAlerts(config),
             aiPrice: { inputPerMTok: config.AI_PRICE_INPUT_PER_MTOK, outputPerMTok: config.AI_PRICE_OUTPUT_PER_MTOK },
             outboxLagPauseSeconds: config.OUTBOX_LAG_PAUSE_SECONDS,
+            ...(vapid ? { push: { sender: createPushSender(vapid), brand: config.BRAND_NAME } } : {}),
           }),
         );
         // The worker watchdog (#894, plan §4.9): a loop blocked over 5 s for 30 s exits the process, which restarts.

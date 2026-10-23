@@ -322,7 +322,10 @@ export function contentSecurityPolicy(authUrl: string, storageOrigin: string | n
   // Trusted Types (#681, plan Decision 6): the DOM's HTML and script sinks (innerHTML, document.write, a script's src,
   // eval) refuse plain strings, and no policy may be created that would turn one into trusted HTML. The SPA needs
   // none: it renders through React and never sets raw HTML (apps/app/test/trusted-types.test.ts). A sink reached
-  // with a string throws instead of running markup an attacker smuggled into the page.
+  // with a string throws instead of running markup an attacker smuggled into the page. One named policy may be created,
+  // once (no 'allow-duplicates'): crove-sw, whose only method gives the service worker's fixed URL to
+  // navigator.serviceWorker.register() for browser push (#1238, apps/app/src/lib/push.ts). It has no createHTML or
+  // createScript, so the HTML and script sinks still refuse every string.
   return [
     "default-src 'self'",
     "script-src 'self'",
@@ -334,7 +337,7 @@ export function contentSecurityPolicy(authUrl: string, storageOrigin: string | n
     "form-action 'self'",
     "frame-ancestors 'none'",
     "require-trusted-types-for 'script'",
-    "trusted-types 'none'",
+    'trusted-types crove-sw',
   ].join('; ');
 }
 

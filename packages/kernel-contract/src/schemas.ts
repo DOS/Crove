@@ -2060,6 +2060,22 @@ export const zSocialNotifications = z.object({
   mailOff: z.boolean(),
 });
 
+// Browser push (#1238): the deployment's VAPID public key (null: push is off), the viewer's devices in the org and
+// whether the asking browser is one of them.
+export const zSocialPushStatus = z.object({
+  enabled: z.boolean(),
+  publicKey: z.string().nullable(),
+  subscribed: z.boolean(),
+  devices: z.array(z.object({ id: zId, label: z.string().nullable(), createdAt: z.string(), lastUsedAt: z.string().nullable(), current: z.boolean() })),
+});
+// A browser's push subscription as PushSubscription.toJSON() gives it; the command checks the URL and the keys.
+export const zSocialPushSubscribe = z.strictObject({
+  endpoint: z.string().min(12).max(2048),
+  p256dh: z.string().min(1).max(128),
+  auth: z.string().min(1).max(128),
+  label: z.string().max(200).optional(),
+});
+
 // Who follows a channel's account (#1146), as Instagram and Threads give it: shares of the followers by age bucket
 // ("18-24"), gender ("F", "M", "U"), city as the platform names it, and country (ISO 3166-1 alpha-2), each with how
 // many followers it holds. Cities and countries are the 10 largest. The bounds keep a snapshot well under the

@@ -312,7 +312,7 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     expect(await runRemoveJob(deps, o.orgId, asked.id, 'sandbox', null)).toEqual({ action: 'call', state: 'failed' });
     const second = (await failures()).at(-1);
     expect(second?.payload).toEqual({ post_id: asked.postId, variant_id: asked.id, provider: 'sandbox', code: 'NO_RIGHTS' });
-    expect(await dispatch(second?.id as string)).toEqual({ sent: 0, mailed: 0 });
+    expect(await dispatch(second?.id as string)).toEqual({ sent: 0, mailed: 0, push: [] });
     expect(await notices(asked.postId)).toEqual([]);
   });
 

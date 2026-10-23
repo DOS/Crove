@@ -17,6 +17,7 @@
 //   org-purge <org slug or id> --reason <text>
 //                 apply the offboarding deletion map to an org in offboarding whose export is old enough, and close
 //                 it (issue #1024); run it in the worker's container
+//   vapid-keys    print a new VAPID key pair for browser push (issue #1238): VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY
 // It wires the open-source default adapters into the composition root (createKernel, ADR-0030).
 import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
 import { liveAuthUrl, loadConfig, type Config } from './config.ts';
@@ -26,9 +27,10 @@ import { runPilotCheck } from './pilot-check.ts';
 import { runProber } from './prober.ts';
 import { describeStorage } from './storage.ts';
 import { runUsageReport } from './usage-report.ts';
+import { generateVapidKeys } from './web-push.ts';
 
-type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | 'org-purge' | ServerRole;
-const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable', 'org-purge'];
+type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | 'org-purge' | 'vapid-keys' | ServerRole;
+const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable', 'org-purge', 'vapid-keys'];
 
 async function runMigrate(config: Config) {
   const adminUrl = config.ADMIN_DATABASE_URL;
@@ -58,6 +60,13 @@ async function main() {
   if (role === 'usage-report') process.exit(await runUsageReport(process.argv.slice(3)));
   // Reads the raw settings, not loadConfig(), so it can report every problem instead of stopping at the first.
   if (role === 'pilot-check') process.exit(await runPilotCheck(process.argv.slice(3)));
+  // Needs no settings: a fresh key pair to put in the environment, never stored or logged anywhere else.
+  if (role === 'vapid-keys') {
+    const keys = generateVapidKeys();
+    console.log(`VAPID_PUBLIC_KEY=${keys.publicKey}
+VAPID_PRIVATE_KEY=${keys.privateKey}`);
+    return;
+  }
   const config = loadConfig();
   if (role === 'migrate') return runMigrate(config);
   if (role === 'auth-grants') return runAuthGrants(config);
