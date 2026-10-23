@@ -217,9 +217,10 @@ export function JournalPage() {
             <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 w-44" />
           </label>
         </div>
-        {/* The exports in their own row beside the range (#1264), shown once there is something to export: the empty
-            journal says what fills it instead of offering three disabled buttons. */}
-        {!nothingToExport && (
+        {/* The exports in their own row beside the range (#1264), hidden only once the journal is known to be empty: the
+            empty journal says what fills it instead of offering three disabled buttons, and a range being read again
+            keeps the row in place. */}
+        {!(journal.isSuccess && nothingToExport) && (
           <div role="group" aria-label={t('exportGroup')} className="flex flex-wrap items-center gap-2">
             <Button variant="outline" onClick={() => exportMisa.mutate()} disabled={exportMisa.isPending}>
               {exportMisa.isPending ? <Spinner className="text-current" /> : null}
