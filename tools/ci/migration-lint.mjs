@@ -393,13 +393,13 @@ function grantees(tokens, from) {
 // Raw text of tokens, for keys that must match placeholders (%I) as well as literal names.
 const text = (tokens) => tokens.map((token) => (token.t === 'qident' ? `"${token.v}"` : token.v)).join('');
 
-// "<policy>|<table>" for CREATE POLICY and DROP POLICY: the policy name and the table after ON.
+// "<policy> ON <table>" for CREATE POLICY and DROP POLICY: the policy name and the table after ON, as written.
 function policyKey(tokens, nameAt) {
   const on = findWord(tokens, nameAt, 'on');
   if (on === -1) return undefined;
   let end = on + 1;
   while (end < tokens.length && !isWord(tokens[end], 'as', 'for', 'to', 'using', 'with', 'cascade', 'restrict')) end++;
-  return `${text(tokens.slice(nameAt, on))}|${text(tokens.slice(on + 1, end))}`;
+  return `${text(tokens.slice(nameAt, on))} ON ${text(tokens.slice(on + 1, end))}`;
 }
 
 // --- Rules -------------------------------------------------------------------------------------------------------
@@ -497,7 +497,7 @@ export function lintMigration(file, sql, { existingFunctions = new Set(), waiver
     if (isWord(head, 'create') && isWord(tokens[1], 'policy')) {
       const key = policyKey(tokens, 2);
       if (key && !droppedPolicies.has(key)) {
-        report(head.line, 'policy-drop-first', `CREATE POLICY ${key.replace('|', ' ON ')} needs DROP POLICY IF EXISTS ${key.replace('|', ' ON ')} before it, so the file can be re-applied`);
+        report(head.line, 'policy-drop-first', `CREATE POLICY ${key} needs DROP POLICY IF EXISTS ${key} before it, so the file can be re-applied`);
       }
     }
 
