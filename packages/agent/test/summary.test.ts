@@ -1,7 +1,7 @@
 // The AI summary of a period (#1237) with a stand-in for the model: what it is told, and the check that refuses a
 // summary citing a number that is not among its figures.
 import { describe, expect, it } from 'vitest';
-import { SUMMARY_MAX, SocialWriter, SummaryFigureError, allowedNumbers, figureForms, formatFigure, numbersIn, summaryNumbersOutside, type SummaryGenerator, type SummaryRequest } from '../src/index.ts';
+import { SUMMARY_FIGURES_MAX, SUMMARY_MAX, SocialWriter, SummaryFigureError, allowedNumbers, figureForms, formatFigure, numbersIn, summaryNumbersOutside, type SummaryGenerator, type SummaryRequest } from '../src/index.ts';
 
 const CONFIG = { baseURL: 'http://localhost:1/v1', apiKey: null, model: 'test' };
 
@@ -114,6 +114,23 @@ describe('period summary figures (#1237)', () => {
     await expect(writer.summary(request('en'))).rejects.toMatchObject({ name: 'SummaryFigureError', numbers: ['1.234'] });
     const en = recorder('Reach was 45,210 (down 7.5%), with 1,234 interactions on the best post and a 3.45% engagement rate from September 1, 2026.');
     expect(await en.writer.summary(request('en'))).toContain('45,210');
+  });
+
+  it('tells a figure below zero as a loss, so a fall in followers is never written as a gain', async () => {
+    const { writer, asked } = recorder('Kỳ này trang mất 50 người theo dõi.');
+    const base = request();
+    await writer.summary({ ...base, figures: [...base.figures, { label: 'Monthly goal for the whole account: followers gained, actual (missed)', value: -50 }] });
+    const { system, prompt } = asked[0] ?? { system: '', prompt: '' };
+    expect(prompt).toContain('- Monthly goal for the whole account: followers gained, actual (missed): 50 below zero (a loss or fall: say so in words, never as a gain)');
+    expect(system).toContain('mất 50 người theo dõi');
+  });
+
+  it('allows only the figures the model is told', () => {
+    const base = request();
+    const many = Array.from({ length: SUMMARY_FIGURES_MAX + 1 }, (_, i) => ({ label: `Figure ${i}`, value: 100000 + i }));
+    const allowed = allowedNumbers({ ...base, figures: many });
+    expect(allowed.has(String(100000 + SUMMARY_FIGURES_MAX - 1))).toBe(true);
+    expect(allowed.has(String(100000 + SUMMARY_FIGURES_MAX))).toBe(false);
   });
 
   it('asks nothing without figures, gives null for an empty answer, and cuts to the note length before the check', async () => {
