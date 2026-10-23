@@ -1746,7 +1746,7 @@ function ChannelEditor({
         <Checkbox checked={own.customMedia} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, customMedia: checked === true, media: own.media.length > 0 ? own.media : base.media })} />
         {t('ownMedia')}
       </label>
-      {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
+      {own.customMedia && <MediaField media={own.media} disabled={disabled} onAiUsed={onAiUsed} connectionIds={connectionId ? [connectionId] : undefined} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       {isProvider(provider) && REPOST_PROVIDERS.has(provider) && postType !== 'story' && <RepostField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {/* A channel Crove cannot take a post down from shows the field only to clear a time set elsewhere (its issue says why). */}
@@ -1906,7 +1906,7 @@ function SharedFields({
         <Label htmlFor="social-link">{t('link')}</Label>
         <Input id="social-link" type="url" inputMode="url" value={base.linkUrl} disabled={disabled} placeholder="https://" onChange={(e) => onChange({ ...base, linkUrl: e.target.value })} />
       </div>
-      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} onChange={(media) => onChange({ ...base, media })} />
+      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} connectionIds={connectionIds} onChange={(media) => onChange({ ...base, media })} />
     </Card>
   );
 }

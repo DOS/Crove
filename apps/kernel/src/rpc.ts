@@ -3,8 +3,8 @@ import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
-import type { SocialWriter, WriterChannel } from '@crove/agent';
-import { CAPABILITIES, isProvider as isSocialProvider } from '@crove/mod-social/contract';
+import { ALT_TEXT_IMAGE_MAX_BYTES, ALT_TEXT_IMAGE_TYPES, type SocialWriter, type WriterChannel } from '@crove/agent';
+import { CAPABILITIES, isProvider as isSocialProvider, strictestAltTextLimit } from '@crove/mod-social/contract';
 import { voiceNotes, type BrandVoice } from '@crove/mod-social';
 import {
   clientOverviews,
@@ -72,8 +72,9 @@ interface CreatedInvite {
 // Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
 export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> &
   Partial<Pick<SocialWriter, 'hashtags'>> & {
-    // An image's alt text from its stored bytes (#817), when the deployment's model takes images (AI_VISION).
-    describeStored?: (file: { key: string; generation: string | null; sha256: string }, mime: string, language: 'vi' | 'en') => Promise<string | null>;
+    // An image's alt text from its stored bytes (#817), when the deployment's model takes images (AI_VISION), within
+    // maxChars when the chosen channels take less than the writer's own limit (#1121).
+    describeStored?: (file: { key: string; generation: string | null; sha256: string }, mime: string, language: 'vi' | 'en', maxChars?: number | null) => Promise<string | null>;
   };
 
 // The org's saved brand voices (#741) as notes for the writer: the org's, and each channel's by connection.
@@ -544,15 +545,33 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             return result;
           }),
         ),
+        // An alt text suggestion for one image (#817, #1121): a proposal the member keeps or edits, never saved here.
+        // The image is read only when it is the org's own Social upload, a JPG, PNG or WEBP of at most 10 MB, and goes
+        // only to the configured model; neither it nor the prompt is logged.
         describeImage: os.social.posts.describeImage.handler(({ context, input }) =>
           inSocial(context, async (orgId, actor) => {
             const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
             if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không soạn được bài');
-            if (!socialWriter?.describeStored) throw new DomainError('AI_VISION_OFF', 422, 'Mô hình AI của máy chủ chưa đọc được ảnh (AI_VISION)');
-            // The member's own org's file, an image, small enough to send: the same read a download makes.
-            const file = await runtime.query<{ content_type: string; storage_key: string; generation: string | null; sha256: string; size_bytes: string }>('kernel.file.get', { id: input.fileId }, { actor, orgId });
-            if (!file.content_type.startsWith('image/')) throw new DomainError('ALT_TEXT_IMAGE_ONLY', 422, 'Chỉ gợi ý mô tả cho ảnh');
-            if (Number(file.size_bytes) > 10 * 1024 * 1024) throw new DomainError('TOO_LARGE', 413, 'Ảnh quá lớn để AI đọc');
+            if (!socialWriter) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
+            if (!socialWriter.describeStored) throw new DomainError('AI_VISION_OFF', 422, 'Mô hình AI của máy chủ chưa đọc được ảnh (AI_VISION)');
+            const file = await runtime.query<{ storageKey: string; generation: string | null; sha256: string; contentType: string; sizeBytes: number }>('social.media.stored', { fileId: input.fileId }, { actor, orgId });
+            if (!ALT_TEXT_IMAGE_TYPES.includes(file.contentType)) throw new DomainError('ALT_TEXT_IMAGE_ONLY', 422, 'Chỉ gợi ý mô tả cho ảnh');
+            if (file.sizeBytes > ALT_TEXT_IMAGE_MAX_BYTES) throw new DomainError('ALT_TEXT_IMAGE_TOO_LARGE', 413, 'Ảnh lớn hơn 10 MB nên AI không đọc được');
+            // The post's channels, the org's own (a disconnected one of a saved post included): the suggestion keeps
+            // within their strictest alt-text limit.
+            let maxChars: number | null = null;
+            if (input.connectionIds && input.connectionIds.length > 0) {
+              const connections = await runtime.query<{ id: string; provider: string }[]>('kernel.channel.list', { includeRevoked: true }, { actor, orgId });
+              const own = new Map(connections.map((c) => [c.id, c.provider]));
+              const providers: string[] = [];
+              for (const id of input.connectionIds) {
+                const provider = own.get(id);
+                if (provider === undefined) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại');
+                providers.push(provider);
+              }
+              maxChars = strictestAltTextLimit(providers);
+            }
+            // The same budget as drafts: each ask is a paid model call (#386).
             const ticket = drafts.take(orgId, actor.userId);
             if (!ticket.allowed) {
               throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang chờ AI trả lời, hãy đợi xong rồi thử tiếp' : 'Đã dùng AI nhiều lần trong phút này, hãy thử lại sau ít phút', {
@@ -561,14 +580,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
             let altText: string | null;
             try {
-              altText = await socialWriter.describeStored({ key: file.storage_key, generation: file.generation, sha256: file.sha256 }, file.content_type, input.language);
+              altText = await socialWriter.describeStored({ key: file.storageKey, generation: file.generation, sha256: file.sha256 }, file.contentType, input.language, maxChars);
             } catch (error: unknown) {
               console.error('[social-ai] describe failed', error instanceof Error ? error.name : typeof error);
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
             } finally {
               ticket.release();
             }
-            if (!altText) throw new DomainError('AI_REWRITE_EMPTY', 422, 'AI không viết lại được đoạn này, hãy thử cách khác');
+            if (!altText) throw new DomainError('AI_ALT_TEXT_EMPTY', 422, 'AI không mô tả được ảnh này, bạn hãy tự viết mô tả');
             return { altText };
           }),
         ),

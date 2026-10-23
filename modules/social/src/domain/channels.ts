@@ -94,6 +94,28 @@ export const PHOTO_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { tik
 // A shorter text where a channel's posts with media take one (#747): a Telegram caption is 1,024 characters, where a
 // message's text is 4,096.
 export const MEDIA_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { telegram: 1024 };
+// How much alt text each channel's Crove adapter sends (#790, #801), in characters, the smallest over its media kinds
+// (Bluesky cuts a video's at 1000): the adapters cut a longer one. A channel missing here sends no alt text, or none
+// Crove cuts. An AI suggestion (#1121) keeps within the smallest of the chosen channels.
+export const ALT_TEXT_LIMITS: Readonly<Partial<Record<Provider, number>>> = {
+  x: 1000,
+  facebook_page: 1000,
+  instagram: 1000,
+  threads: 1000,
+  bluesky: 1000,
+  mastodon: 1500,
+  linkedin: 4086,
+  linkedin_page: 4086,
+  pinterest: 500,
+  discord: 1024,
+  wordpress: 1000,
+};
+
+// The smallest alt-text limit of these channels; null when none of them has one.
+export function strictestAltTextLimit(providers: readonly string[]): number | null {
+  const limits = providers.flatMap((p) => (isProvider(p) && ALT_TEXT_LIMITS[p] !== undefined ? [ALT_TEXT_LIMITS[p] as number] : []));
+  return limits.length === 0 ? null : Math.min(...limits);
+}
 
 // Where each adapter puts the post's link, so the checks count the text the platform receives:
 // - text: after a blank line at the end of the text, unless the text already holds it;
