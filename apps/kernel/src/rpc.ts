@@ -3,9 +3,9 @@ import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
-import { ALT_TEXT_IMAGE_MAX_BYTES, ALT_TEXT_IMAGE_TYPES, ProofreadChangedError, type DraftRequest, type DraftResult, type SocialWriter, type WriterChannel } from '@crove/agent';
+import { ALT_TEXT_IMAGE_MAX_BYTES, ALT_TEXT_IMAGE_TYPES, ProofreadChangedError, SummaryFigureError, type DraftRequest, type DraftResult, type SocialWriter, type WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider, strictestAltTextLimit } from '@crove/mod-social/contract';
-import { channelNotAllowed, voiceNotes, type BrandVoice } from '@crove/mod-social';
+import { channelNotAllowed, periodSummaryInput, voiceNotes, type BrandVoice, type PeriodSummaryData } from '@crove/mod-social';
 import {
   clientOverviews,
   createOrg,
@@ -72,7 +72,7 @@ interface CreatedInvite {
 
 // Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
 export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> &
-  Partial<Pick<SocialWriter, 'hashtags' | 'ideas'>> & {
+  Partial<Pick<SocialWriter, 'hashtags' | 'ideas' | 'summary'>> & {
     // An image's alt text from its stored bytes (#817), when the deployment's model takes images (AI_VISION), within
     // maxChars when the chosen channels take less than the writer's own limit (#1121). The read stops at the size the
     // file row records (#1126).
@@ -731,6 +731,48 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         external: os.social.metrics.external.handler(socialQuery('social.metrics.external')),
         insights: os.social.metrics.insights.handler(socialQuery('social.metrics.insights')),
         export: os.social.metrics.export.handler(socialCommand('social.metrics.export')),
+        // An AI summary of a period (#1237): the role gate, AI configured, the channels the member may use (#1081) and
+        // the budget (#386) before the one model call, in the org's voice (or the one chosen channel's). The figures are
+        // the tab's own totals; a summary citing another number is refused. Nothing is saved.
+        writeSummary: os.social.metrics.writeSummary.handler(({ context, input }) =>
+          inSocial(context, async (orgId, actor) => {
+            const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
+            if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không dùng được AI để viết tóm tắt');
+            if (!socialWriter?.summary) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
+            const connectionIds = [...new Set(input.connectionIds ?? [])];
+            await refuseChannelsOutside(runtime, actor, orgId, connectionIds);
+            const { language, ...period } = input;
+            // Reading the figures costs no model call: a period with nothing published takes no slot.
+            const data = await runtime.query<PeriodSummaryData>('social.metrics.summary_figures', period, { actor, orgId });
+            if (data.current.posts === 0 && data.previous.posts === 0) throw new DomainError('AI_SUMMARY_NO_DATA', 422, 'Kỳ này và kỳ trước chưa có bài nào đã đăng nên chưa có gì để tóm tắt');
+            const summaryInput = periodSummaryInput(data);
+            // The same budget as drafts: each summary is a paid model call (#386).
+            const ticket = drafts.take(orgId, actor.userId);
+            if (!ticket.allowed) {
+              throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang chờ AI trả lời, hãy đợi xong rồi thử tiếp' : 'Đã dùng AI nhiều lần trong phút này, hãy thử lại sau ít phút', {
+                retryAfterSeconds: ticket.retryAfterSeconds,
+              });
+            }
+            let text: string | null;
+            try {
+              const voices = await savedVoices(runtime, actor, orgId);
+              const only = connectionIds.length === 1 ? connectionIds[0] : undefined;
+              const voice = (only ? voices.byChannel.get(only) : undefined) ?? voices.org;
+              text = await socialWriter.summary({ ...summaryInput, language: language ?? 'vi', ...(voice ? { voice } : {}) });
+            } catch (error: unknown) {
+              // The check after the call found a number that is not one of the period's figures.
+              if (error instanceof SummaryFigureError) {
+                throw new DomainError('AI_SUMMARY_FIGURE_INVENTED', 422, 'AI đã viết một con số không có trong số liệu của kỳ nên bản tóm tắt bị bỏ; hãy thử lại', { numbers: error.numbers.length });
+              }
+              console.error('[social-ai] summary failed', error instanceof Error ? error.name : typeof error);
+              throw new DomainError('AI_SUMMARY_FAILED', 503, 'AI chưa viết được tóm tắt lúc này, hãy thử lại sau');
+            } finally {
+              ticket.release();
+            }
+            if (!text) throw new DomainError('AI_SUMMARY_EMPTY', 422, 'AI không viết được tóm tắt cho kỳ này, hãy thử lại');
+            return { text };
+          }),
+        ),
       },
       plan: {
         export: os.social.plan.export.handler(socialCommand('social.plan.export')),

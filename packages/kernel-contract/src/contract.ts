@@ -510,6 +510,27 @@ export const contract = {
       insights: oc
         .input(z.object({ days: z.number().int().min(1).max(365), labelId: zId.optional(), timeZone: z.string().min(1).max(64) }))
         .output(z.object({ channels: z.array(zSocialChannelInsights), truncated: z.boolean() })),
+      // An AI summary of a period (#1237) for the tab or a client report's note: the Metrics tab's window (days) or a
+      // report's period (periodStart, periodEnd), on the chosen channels, a label or with outside posts as the totals
+      // take them. Written from the period's figures only: a summary citing any other number is refused with
+      // AI_SUMMARY_FIGURE_INVENTED. Members and above, the same budget as AI drafting; nothing is saved (the note is
+      // saved with the report link).
+      writeSummary: oc
+        .input(
+          z
+            .strictObject({
+              days: z.number().int().min(1).max(365).optional(),
+              periodStart: z.iso.datetime({ offset: true }).optional(),
+              periodEnd: z.iso.datetime({ offset: true }).optional(),
+              connectionIds: z.array(zId).max(50).optional(),
+              labelId: zId.optional(),
+              includeExternal: z.boolean().optional(),
+              timeZone: z.string().min(1).max(64).optional(),
+              language: z.enum(['vi', 'en']).optional(),
+            })
+            .refine((i) => (i.days !== undefined) !== (i.periodStart !== undefined || i.periodEnd !== undefined) && (i.periodStart === undefined) === (i.periodEnd === undefined), 'days, or periodStart and periodEnd'),
+        )
+        .output(z.object({ text: z.string() })),
       // The window as a CSV file (UTF-8 with a byte order mark); every export is audited.
       export: oc
         .input(z.strictObject({ days: z.number().int().min(1).max(365), labelId: zId.optional() }))

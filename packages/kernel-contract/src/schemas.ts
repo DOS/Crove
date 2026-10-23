@@ -1854,8 +1854,11 @@ export const zSocialTeamReport = z.object({
 });
 
 // A window's totals of published posts (#397): variants out, the sum of each count, and the clicks on their short
-// links (null when none went out with one); and the same per channel, most posts first (#947).
-const zSocialTotals = z.object({ posts: z.number().int(), metrics: z.record(z.string(), z.number()), clicks: z.number().nullable() });
+// links (null when none went out with one); and the same per channel, most posts first (#947). rateBases (#1164): the
+// engagement and each rate denominator summed over the posts that report it, which the engagement rate is made of.
+const zRateSums = z.object({ engagement: z.number(), denominator: z.number() });
+export const zSocialRateBases = z.object({ reach: zRateSums.optional(), impressions: zRateSums.optional() });
+const zSocialTotals = z.object({ posts: z.number().int(), metrics: z.record(z.string(), z.number()), clicks: z.number().nullable(), rateBases: zSocialRateBases });
 export const zSocialWindowTotals = zSocialTotals.extend({ channels: z.array(zSocialTotals.extend({ connectionId: zId, provider: z.string() })) });
 
 export const zSocialQueue = z.object({
