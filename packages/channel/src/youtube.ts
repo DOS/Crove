@@ -12,12 +12,13 @@
 // First comment (#791): commentThreads.insert on the video, with the force-ssl scope (50 quota units).
 // Playlists (#1018): once the video is out, playlistItems.insert puts it into each of the channel's playlists the
 // variant names (settings.youtube.playlistIds, at most 5), one call each (50 quota units), with the force-ssl scope too.
-// A refused insert (a playlist deleted since) never touches the video. playlists() lists the channel's own playlists
+// A refused insert (a playlist deleted since) never touches the video. Removing a post (#1137): videos.delete (50 quota
+// units), with the force-ssl scope Crove already asks for. playlists() lists the channel's own playlists
 // (playlists.list mine=true, one quota unit a page) for the composer's picker, through options() (#1131).
 import { CHANNEL_OPTIONS_MAX, OptionList, optionCallSignal, optionName, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
-import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, PlaylistInput, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, PlaylistInput, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { coverImageType, videoCoverOf } from './cover.ts';
-import { commentResult } from './comment.ts';
+import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -113,7 +114,7 @@ class GoogleClient {
   }
 
   // timeoutMs: 30 seconds for a JSON call, more for the video bytes (the PUT of up to 100 MB).
-  async call<T>(method: 'GET' | 'POST' | 'PUT', url: string, token: string, options: { json?: unknown; bytes?: { data: Uint8Array; type: string }; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<{ body: T | null; location: string | null }> {
+  async call<T>(method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, token: string, options: { json?: unknown; bytes?: { data: Uint8Array; type: string }; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<{ body: T | null; location: string | null }> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     let body: string | Blob | undefined;
     if (options.json !== undefined) {
@@ -395,6 +396,26 @@ export class YouTubePublisher implements Publisher {
         return { kind: 'rejected', error: 'permission', code: 'PLAYLIST_NOT_ALLOWED', message: error.message };
       }
       return commentResult(publishResult(error));
+    }
+  }
+
+  // Deletes the channel's own video (#1137): videos.delete, answered 204 with no body, 50 quota units, with the
+  // force-ssl scope connect already asks for. A video YouTube no longer has (404 videoNotFound) is gone already. A grant
+  // without the scope (a channel connected before #791, or one that unticked it) is told apart (RECONNECT_FOR_REMOVE),
+  // so the post page says to reconnect; a quota refusal waits; any other 403 is YouTube refusing the delete.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = youtubeSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!VIDEO_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      await this.client.call('DELETE', `${API}/videos?id=${input.externalId}`, s.accessToken);
+      return { kind: 'removed' };
+    } catch (error) {
+      if (error instanceof YouTubeError && (error.status === 404 || error.status === 410)) return { kind: 'removed' };
+      if (error instanceof YouTubeError && error.status === 403 && (error.reason === 'insufficientPermissions' || error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT')) {
+        return { kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_REMOVE', message: error.message };
+      }
+      return removeResult(publishResult(error));
     }
   }
 

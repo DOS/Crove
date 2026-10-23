@@ -746,9 +746,11 @@ export function documentTitleOf(settings: Readonly<Record<string, unknown>> | un
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'linkedin_page', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord']);
 
-// The channels whose Crove adapter takes a published post down (#860); the others answer REMOVE_NOT_SUPPORTED until
-// their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of it.
-export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x', 'linkedin', 'linkedin_page', 'pinterest', 'wordpress', 'google_business']);
+// The channels whose Crove adapter takes a published post down (#860, #1137, #1138); the others answer
+// REMOVE_NOT_SUPPORTED until their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of
+// it. Threads stays out: its delete endpoint needs the threads_delete permission, which Crove's Threads connect does
+// not ask for.
+export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x', 'facebook_page', 'youtube', 'linkedin', 'linkedin_page', 'pinterest', 'wordpress', 'google_business']);
 
 // A post that comes down by itself (#861): `settings.removeAt`, a full ISO 8601 time with Z or an offset, on a channel
 // in REMOVE_READY. It must be at least REMOVE_AT_MIN_GAP_MS and at most the channel's window (REMOVE_WINDOW_MS, else

@@ -202,9 +202,9 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     const o = await org();
     const sandbox = new SandboxPublisher();
     const past = inVietnam(Date.now() - 60_000);
-    // A channel outside REMOVE_READY (as if it were a Facebook Page) with a takedown due.
+    // A channel outside REMOVE_READY (as if it were a Threads account) with a takedown due.
     const other = await publishedPost(o, sandbox, { removeAt: past, publishedAgoMs: 3_600_000 });
-    await admin((c) => c.query("UPDATE crove_social.post_variant SET provider = 'facebook_page' WHERE id = $1", [other.id]));
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET provider = 'threads' WHERE id = $1", [other.id]));
     // Published late, an hour after its takedown time: it stays up.
     const late = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 3_600_000), publishedAgoMs: 60_000 });
     // Not yet: tomorrow.
@@ -223,7 +223,7 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     // Planned exactly a year after the post, and swept half an hour late: still taken down.
     const yearly = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 1_800_000), publishedAgoMs: 365 * 86_400_000 + 1_800_000 });
 
-    await sweep(['sandbox', 'telegram', 'facebook_page']);
+    await sweep(['sandbox', 'telegram', 'threads']);
     expect(await requested(o, yearly.id)).toEqual([{ post_id: yearly.postId, variant_id: yearly.id, provider: 'sandbox', after: null }]);
     for (const v of [other, late, later, broken, garbled, close, far, stale]) {
       expect(await requested(o, v.id)).toEqual([]);

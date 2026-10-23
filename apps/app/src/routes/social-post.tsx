@@ -3142,8 +3142,8 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
   );
 }
 
-// The removal codes the post page explains in words; any other failure shows its code.
-const REMOVE_CODES = ['TELEGRAM_CANNOT_DELETE', 'REMOVE_NOT_RUN', 'WORDPRESS_TRASH_DISABLED', 'WORDPRESS_CANNOT_DELETE'] as const;
+// The removal answers the post page explains in words (#860, #1137, #1138); any other failure shows its code.
+const REMOVE_CODES = ['TELEGRAM_CANNOT_DELETE', 'FACEBOOK_CANNOT_DELETE', 'RECONNECT_FOR_REMOVE', 'REMOVE_NOT_RUN', 'WORDPRESS_TRASH_DISABLED', 'WORDPRESS_CANNOT_DELETE'] as const;
 
 // Another time for a scheduled channel, its approvals kept (#580): the calendar's drag, from the keyboard.
 function MoveTime({ variantId, connectionId, timeZone, at, onDone }: { variantId: string; connectionId: string; timeZone: string; at: string | null; onDone: () => void }) {

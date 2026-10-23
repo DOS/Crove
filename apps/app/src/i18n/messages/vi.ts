@@ -3251,6 +3251,8 @@ export const vi = {
       unknown: 'Chưa rõ bài đã được gỡ chưa; hãy xem trên kênh rồi thử lại',
       code: {
         TELEGRAM_CANNOT_DELETE: 'Telegram chỉ cho gỡ bài trong 48 giờ sau khi đăng; hãy gỡ trực tiếp trên Telegram',
+        FACEBOOK_CANNOT_DELETE: 'Facebook không cho {brand} gỡ bài này; hãy gỡ trực tiếp trên Trang',
+        RECONNECT_FOR_REMOVE: 'Hãy kết nối lại kênh YouTube và cho phép quản lý video, rồi thử gỡ lại',
         REMOVE_NOT_RUN: 'Yêu cầu gỡ chưa được xử lý; hãy thử lại',
         WORDPRESS_TRASH_DISABLED: 'Trang WordPress này đã tắt thùng rác nên không gỡ tạm được; hãy xóa bài trực tiếp trên trang',
         WORDPRESS_CANNOT_DELETE: 'Tài khoản WordPress đã kết nối không có quyền xóa bài này; hãy nhờ quản trị viên trang gỡ',
