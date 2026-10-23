@@ -46,6 +46,7 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
   const applied: string[] = [];
   try {
     await client.query("SELECT pg_advisory_lock(hashtext('crove_migrate'))");
+    // Once they exist, these statements change nothing, so the DDL watch has nothing to record before the mark below.
     await client.query(`
       CREATE SCHEMA IF NOT EXISTS crove_meta;
       CREATE TABLE IF NOT EXISTS crove_meta.schema_migrations (
@@ -53,7 +54,15 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
         name text NOT NULL,
         sha256 text NOT NULL,
         applied_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE TABLE IF NOT EXISTS crove_meta.pipeline_session (
+        pid integer NOT NULL,
+        backend_start timestamptz NOT NULL,
+        step text NOT NULL,
+        marked_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (pid, backend_start)
       );`);
+    await markPipelineSession(client, 'migrate');
     const { rows } = await client.query<{ version: string; sha256: string }>(
       'SELECT version, sha256 FROM crove_meta.schema_migrations',
     );
@@ -103,10 +112,89 @@ export async function migrate(options: MigrateOptions): Promise<string[]> {
       throw new Error(`database hardening check failed (External-tenant gate T17):\n  - ${violations.join('\n  - ')}`);
     }
   } finally {
+    await unmarkPipelineSession(client).catch(() => {});
     await client.query("SELECT pg_advisory_unlock(hashtext('crove_migrate'))").catch(() => {});
     await client.end();
   }
   return applied;
+}
+
+// The DDL watch (issue #1202): crove_kernel.ddl_watch() records DDL from every session except the pipeline's own,
+// which list their backend (pid and start time) in crove_meta.pipeline_session for as long as they run. Only the
+// runner's role (the owner of crove_meta) and superusers may write that table, so a login role cannot pass its own DDL
+// off as the pipeline's; a row a crashed run left behind matches no later session, since a reused pid has another
+// start time. Rows of sessions that are gone are cleared on the way. A role that may not write the table (an
+// auth-grants admin URL other than the runner's) marks nothing, and its DDL is recorded like any other.
+async function mayMarkPipelineSession(client: pg.ClientBase): Promise<boolean> {
+  const { rows } = await client.query<{ ok: boolean }>(
+    `SELECT pg_catalog.to_regclass('crove_meta.pipeline_session') IS NOT NULL
+            AND pg_catalog.has_table_privilege('crove_meta.pipeline_session', 'INSERT, DELETE') AS ok`,
+  );
+  return rows[0]?.ok === true;
+}
+
+async function markPipelineSession(client: pg.ClientBase, step: string): Promise<void> {
+  if (!(await mayMarkPipelineSession(client))) return;
+  await client.query(
+    `DELETE FROM crove_meta.pipeline_session m
+     WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity a WHERE a.pid = m.pid)`,
+  );
+  await client.query(
+    `INSERT INTO crove_meta.pipeline_session (pid, backend_start, step)
+     SELECT a.pid, a.backend_start, $1 FROM pg_catalog.pg_stat_activity a WHERE a.pid = pg_catalog.pg_backend_pid()
+     ON CONFLICT DO NOTHING`,
+    [step],
+  );
+}
+
+async function unmarkPipelineSession(client: pg.ClientBase): Promise<void> {
+  if (!(await mayMarkPipelineSession(client))) return;
+  await client.query('DELETE FROM crove_meta.pipeline_session m WHERE m.pid = pg_catalog.pg_backend_pid()');
+}
+
+export interface DdlWatchOptions {
+  adminUrl: string;
+  log?: (message: string) => void;
+}
+
+/**
+ * Creates (again) the event triggers of the DDL watch (issue #1202) on crove_kernel.ddl_watch(), which a migration
+ * defines: crove_ddl_watch on ddl_command_end and crove_ddl_watch_drop on sql_drop, both ENABLE ALWAYS so that a
+ * session in replica mode is recorded too. Creating an event trigger needs a superuser (or, on hosted Supabase, the
+ * supautils privileged role `postgres`), which the migration runner is not required to be (T17), so `migrate` runs this
+ * step after the files with the same admin URL. Idempotent: it drops and recreates both triggers in one transaction,
+ * which also repairs a trigger that was disabled or pointed elsewhere. Resolves to 'installed', or to 'skipped' when the
+ * role may not create event triggers (42501): the step logs why and the deployment runs without the watch.
+ */
+export async function installDdlWatch(options: DdlWatchOptions): Promise<'installed' | 'skipped'> {
+  const log = options.log ?? (() => {});
+  const client = new pg.Client({ connectionString: options.adminUrl, application_name: 'crove-migrate' });
+  await client.connect();
+  try {
+    await client.query('BEGIN');
+    try {
+      await client.query(`
+        DROP EVENT TRIGGER IF EXISTS crove_ddl_watch;
+        DROP EVENT TRIGGER IF EXISTS crove_ddl_watch_drop;
+        CREATE EVENT TRIGGER crove_ddl_watch ON ddl_command_end EXECUTE FUNCTION crove_kernel.ddl_watch();
+        CREATE EVENT TRIGGER crove_ddl_watch_drop ON sql_drop EXECUTE FUNCTION crove_kernel.ddl_watch();
+        ALTER EVENT TRIGGER crove_ddl_watch ENABLE ALWAYS;
+        ALTER EVENT TRIGGER crove_ddl_watch_drop ENABLE ALWAYS;`);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      if ((error as { code?: string }).code !== '42501') throw error;
+      log(
+        `DDL watch skipped: ${(error as Error).message}. Schema changes outside the migration pipeline are not recorded ` +
+          'on this database (docs/runbooks/alerts.md, "DDL outside the migration pipeline")',
+      );
+      return 'skipped';
+    }
+    log('DDL watch installed: schema changes outside the migration pipeline are recorded and alerted');
+    return 'installed';
+  } finally {
+    await client.end();
+  }
 }
 
 // The only accepted function settings. pg_catalog first so built-in names win; pg_temp last so the
@@ -381,6 +469,8 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
   const client = new pg.Client({ connectionString: options.adminUrl, application_name: 'crove-auth-grants' });
   await client.connect();
   try {
+    // Its grants and policies on the auth tables are the pipeline's own DDL (#1202).
+    await markPipelineSession(client, 'auth-grants');
     for (;;) {
       // Every column the checks read, not just the tables: Supabase Auth adds some (not_after) in later migrations.
       // Lists what is still missing: a table that does not exist by its name, a missing column as table.column.
@@ -452,6 +542,7 @@ export async function applyAuthGrants(options: AuthGrantsOptions): Promise<void>
     }
     log('crove_auth_reader may read auth.sessions (with oauth_client_id when present), auth.users and auth.mfa_factors (user_id, status)');
   } finally {
+    await unmarkPipelineSession(client).catch(() => {});
     await client.end();
   }
 }
