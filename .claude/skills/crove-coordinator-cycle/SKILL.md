@@ -21,6 +21,7 @@ All agents share one GitHub account, so comments on the coordinator log, https:/
 - Open PRs: `gh pr list --repo DOS/Crove --state open`.
 - Board items with Status `In progress`, in project 8 (`gh project item-list 8 --owner DOS`), and the last comment on each.
 - Your linked worker sessions: `list_sessions` with `linked: true`.
+- Issues missing from the board: open issues, and issues closed in the last day, that are not items of project 8. Add each one with its right Status. Use Backlog for an unclaimed follow-up, In progress for a claimed one, and Done for a closed one. The board is the shared view of who works on what, so an issue missing from it is invisible to every agent. On 2026-10-24, six such issues were found: four worker follow-ups and two Social issues.
 - Any worker notes that arrived since the last cycle.
 
 ## 2. Workers that reported back
@@ -37,7 +38,7 @@ For each worker that ended a turn:
   1. Check that the merge commit is on `main` and the issue is closed.
   2. Check that the PR's checks were green on the head that was merged.
   3. Post one or two lines to the owner: what merged, and what comes next. Keep the words opened, merged and deployed distinct, and say what was verified and what was not (`AGENTS.md`, "Writing to the owner").
-  4. Offer to archive the worker session only if the owner asks.
+  4. Once the worker's issue is closed and its last PR merged, archive the worker session (`archive_session`). The owner asked for this on 2026-10-24: finished sessions must not pile up in the sidebar. Archiving also removes a clean worktree. If the worktree is still listed afterwards and `git status` is clean, run `git worktree remove` on it and delete its local branch. A worker with a second PR still to open (a two-step change) stays until that PR merges too.
 - **Blocked:**
   - If the block is technical, decide it yourself and message the worker. Write the decision and its reason in the PR or the issue.
   - If it is a person's step (accounts, money, legal, real samples, irreversible steps), comment it on the issue with the `owner-action` label, release the claim, and collect it for the owner report.
@@ -88,7 +89,7 @@ Build issue https://github.com/DOS/Crove/issues/<n> end to end. Read the issue f
 2. Read `AGENTS.md` and follow it. Comment on #<n>: `Worker <name> started, branch <branch>` (the coordinator already claimed it).
 3. <Where the change goes, which paths to stay out of (other workers' files), local setup: own docker postgres:17 for DB tests, own compose project for stacks, invariant files with --no-file-parallelism.>
 4. Before every push: <the checks from AGENTS.md "Commands" that apply>. Windows-only unit failures (`C:\` paths, bash scripts) are noted, not fixed.
-5. Commit with `git -c user.email=5027251+JOY@users.noreply.github.com commit` (GitHub refuses the private email); messages end with the Co-Authored-By line; the PR says `Closes #<n>` and ends with the Claude Code line.
+5. Commit with `git -c user.email=5027251+JOY@users.noreply.github.com commit` (GitHub refuses the private email); messages end with the Co-Authored-By line; the PR says `Closes #<n>` and ends with the Claude Code line. Every follow-up issue you open goes on the board too (`gh issue create ... --project Crove`), with the milestone and labels AGENTS.md gives it.
 6. Protected path: write your own security review in the PR body, then, when CI is green on the final head, end your turn with `READY FOR COORDINATOR REVIEW: <PR url> head <sha>` and merge only after the coordinator replies `approved, merge head <sha>`. Not protected: merge yourself when green.
 7. Wait for CI with `gh pr checks <n> --repo DOS/Crove --watch` as a background command; never end a turn just to wait. Fix failures; reply to and resolve every thread.
 8. If `main` moves: `gh pr update-branch <n>` (auto mode blocks force-push). Merge with `gh pr merge <n> --squash --match-head-commit <sha>`. Comment on #<n> what merged; remove your worktree only if `git status` is clean.

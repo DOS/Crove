@@ -476,6 +476,12 @@ export const SOCIAL_REPORT_PERIODS = ['previous_week', 'previous_month', 'last_7
 export const SOCIAL_REPORT_RUN_KINDS = ['scheduled', 'test'] as const;
 // A banned or sensitive word (#1055): shown as a warning, or blocking submit, approval and scheduling.
 export const SOCIAL_BANNED_WORD_LEVELS = ['warn', 'block'] as const;
+// A suggested edit on a post comment (#1236): the text it changes (the post's own, or the comment's channel's own), and
+// where it stands.
+export const SOCIAL_SUGGEST_FIELDS = ['post', 'channel'] as const;
+export const SOCIAL_SUGGEST_STATES = ['open', 'accepted', 'skipped', 'outdated'] as const;
+export type SocialSuggestField = (typeof SOCIAL_SUGGEST_FIELDS)[number];
+export type SocialSuggestState = (typeof SOCIAL_SUGGEST_STATES)[number];
 export type SocialVariantStatus = (typeof SOCIAL_VARIANT_STATUSES)[number];
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 export type SocialActorOrigin = (typeof SOCIAL_ACTOR_ORIGINS)[number];
@@ -541,6 +547,7 @@ export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<Socia
 export type SocialReportScheduleTable = Refine<G.SocialReportScheduleTable, { cadence: SocialReportCadence; period: SocialReportPeriod }>;
 export type SocialReportScheduleRunTable = Refine<G.SocialReportScheduleRunTable, { kind: SocialReportRunKind }>;
 export type SocialBannedWordTable = Refine<G.SocialBannedWordTable, { level: SocialBannedWordLevel }>;
+export type SocialPostCommentTable = Refine<G.SocialPostCommentTable, { suggest_field: SocialSuggestField | null; suggest_state: SocialSuggestState | null }>;
 
 export type SocialPostApprovalTable = Refine<
   G.SocialPostApprovalTable,
@@ -606,6 +613,7 @@ type Refined = Tables<{
   'crove_social.report_schedule': SocialReportScheduleTable;
   'crove_social.report_schedule_run': SocialReportScheduleRunTable;
   'crove_social.banned_word': SocialBannedWordTable;
+  'crove_social.post_comment': SocialPostCommentTable;
 }>;
 
 // Every table crove_tenant may read: the generated table type, or its refinement above.

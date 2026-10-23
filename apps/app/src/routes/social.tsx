@@ -704,10 +704,11 @@ export function SocialPage() {
         </Card>
       )}
       <Tabs className="gap-4" value={tab} onValueChange={(value) => setTab(value as Tab)}>
-        {/* Nine tabs do not fit on one line at phone width: they wrap, so the page never scrolls sideways (#1043). */}
+        {/* Nine tabs do not fit on one line at phone width: they wrap, so the page never scrolls sideways (#1043). The
+            active tab's underline sits at the foot of its own tab, so on a first row it is not left in the gap (#1230). */}
         <TabsList variant="line" className="w-full flex-wrap justify-start gap-y-2 border-b group-data-horizontal/tabs:h-auto">
           {TABS.map((id) => (
-            <TabsTrigger key={id} value={id} className="h-8 flex-none px-3">
+            <TabsTrigger key={id} value={id} className="h-8 flex-none px-3 group-data-horizontal/tabs:after:bottom-0">
               {t(`tabs.${id}`)}
               {id === 'review' && reviewCount > 0 && <span className="ml-1.5 rounded-full bg-primary px-1.5 text-xs text-primary-foreground">{reviewCount}</span>}
               {id === 'attention' && attentionCount > 0 && <span className="ml-1.5 rounded-full bg-destructive px-1.5 text-xs text-primary-foreground">{attentionCount}</span>}

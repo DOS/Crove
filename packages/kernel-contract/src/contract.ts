@@ -13,6 +13,7 @@ import {
   zAiAmount,
   zChart,
   zClientOverviews,
+  zOrgOverview,
   zJobDescription,
   zModuleId,
   zPositionStatus,
@@ -96,6 +97,8 @@ import {
   zSocialActivityItem,
   zSocialCommentResolved,
   zSocialCommentPin,
+  zSocialSuggestion,
+  zSocialSuggestionDecided,
   zSocialQueueSet,
   zSocialQueueShuffle,
   zSocialQueueMoveToFront,
@@ -197,6 +200,8 @@ export const contract = {
     // A retry with the same idempotencyKey returns the org the first request created.
     create: oc.input(z.object({ name: z.string().trim().min(1).max(200), idempotencyKey: zId })).output(zOrgSummary),
     get: oc.output(zOrgDetail),
+    // The org's overview (#1249): its figures, the same as the multi-client home screen reads for it. Every role.
+    overview: oc.output(zOrgOverview),
     // Owners and admins (issue #313): the org's own tax code (MST), or null to clear it. Stored normalized; a value
     // that is not a Vietnamese tax code is refused. Invoices read from then on whose seller has it become sales.
     setTaxCode: oc.input(z.object({ taxCode: z.string().trim().max(20).nullable() })).output(z.object({ taxCode: z.string().nullable() })),
@@ -411,6 +416,14 @@ export const contract = {
       // Marks a comment as dealt with, or open again (#1168); the text stays.
       resolveComment: oc.input(z.strictObject({ commentId: zId })).output(zSocialCommentResolved),
       reopenComment: oc.input(z.strictObject({ commentId: zId })).output(zSocialCommentResolved),
+      // Suggested edits (#1236): words of the post's text or a channel's own text and the words suggested instead, as a
+      // comment with an optional note; accepted through the ordinary edit (revision: of the text the member saw) or
+      // skipped.
+      suggest: oc
+        .input(z.strictObject({ postId: zId, variantId: zId.optional(), body: z.string().trim().max(4000).optional(), suggestion: zSocialSuggestion }))
+        .output(z.object({ commentId: zId })),
+      acceptSuggestion: oc.input(z.strictObject({ commentId: zId, revision: z.number().int().positive() })).output(zSocialSuggestionDecided),
+      skipSuggestion: oc.input(z.strictObject({ commentId: zId })).output(zSocialSuggestionDecided),
       // The post's timeline, newest first: comments, decisions and what happened to it and its channels.
       activity: oc.input(z.object({ postId: zId })).output(z.object({ items: z.array(zSocialActivityItem), more: z.boolean() })),
       // The post's labels become exactly these (#639); its content and revision stay as they are.
