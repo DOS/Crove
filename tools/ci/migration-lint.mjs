@@ -110,9 +110,9 @@ export function lex(sql, firstLine = 1, comments = undefined) {
       const bodyLine = tokenLine + (sql.slice(i, start).split('\n').length - 1);
       tokens.push({ t: 'string', v: sql.slice(i, stop + tag.length), body: sql.slice(start, stop), line: tokenLine, bodyLine });
       advance(end === -1 ? n : stop + tag.length);
-    } else if (/[A-Za-z_\u0080-￿]/.test(c)) {
+    } else if (/[A-Za-z_\u0080-\uffff]/.test(c)) {
       let k = i + 1;
-      while (k < n && /[A-Za-z0-9_$\u0080-￿]/.test(sql[k])) k++;
+      while (k < n && /[A-Za-z0-9_$\u0080-\uffff]/.test(sql[k])) k++;
       tokens.push({ t: 'word', v: sql.slice(i, k).toLowerCase(), line });
       advance(k);
     } else if (/[0-9]/.test(c)) {
@@ -538,11 +538,12 @@ export function lintMigration(file, sql, { existingFunctions = new Set(), waiver
         for (const statement of statements) lintStatement(statement, true);
       }
     } else if (nested && isWord(head, 'execute')) {
-      for (const token of tokens) {
-        if (token.t !== 'string') continue;
-        const inner = lex(token.body, token.bodyLine);
-        if (inner[0]?.t === 'word' && COMMANDS.has(inner[0].v)) for (const statement of splitStatements(inner)) lintStatement(statement, false);
-      }
+      // Only the command string (EXECUTE '...' or the format string of EXECUTE format('...', ...)): later strings are
+      // arguments or USING values, which may read as a command word ('delete') without being one.
+      const using = findWord(tokens, 1, 'using');
+      const command = tokens.slice(0, using === -1 ? tokens.length : using).find((token) => token.t === 'string');
+      const inner = command === undefined ? [] : lex(command.body, command.bodyLine);
+      if (inner[0]?.t === 'word' && COMMANDS.has(inner[0].v)) for (const statement of splitStatements(inner)) lintStatement(statement, false);
     }
   };
 

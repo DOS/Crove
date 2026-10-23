@@ -82,6 +82,8 @@ describe('migration lint: banned statements', () => {
     expect(rules("DO $$ BEGIN\n  EXECUTE 'TRUNCATE crove_social.sample';\nEND $$;")).toEqual(['2 no-truncate']);
     expect(rules("DO $$ BEGIN\n  EXECUTE format('DROP SCHEMA %I', 'crove_social');\nEND $$;")).toEqual(['2 no-drop-schema']);
     expect(rules("DO $$ BEGIN RAISE NOTICE 'truncate later'; END $$;")).toEqual([]);
+    // Only the command string of an EXECUTE is SQL: format arguments and USING values are data.
+    expect(rules("DO $$ BEGIN\n  EXECUTE format('UPDATE crove_social.%I SET note = %L', 'sample', 'truncate');\n  EXECUTE 'UPDATE crove_social.sample SET note = $1' USING 'drop schema x';\nEND $$;")).toEqual([]);
   });
 
   it('refuses GRANTs to anon, authenticated and PUBLIC', () => {
