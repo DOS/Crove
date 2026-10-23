@@ -31,7 +31,7 @@ import { commentResult, removeResult } from './comment.ts';
 import { graphTime, pagingCursor, platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { videoCoverOf } from './cover.ts';
 import { postTypeOf } from './post-type.ts';
-import { holdsLink } from './text.ts';
+import { holdsLink, POSSIBLE_DUPLICATE } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const META_GRAPH_HOST = 'graph.facebook.com';
@@ -307,8 +307,8 @@ function asProviderErrorThrow(error: unknown): never {
 const TOKEN_CODES = new Set([102, 190, 463, 467]);
 const PERMISSION_CODES = new Set([3, 10]);
 const RATE_CODES = new Set([4, 17, 32, 613, 80001]);
-// 1 and 2: Meta's "unknown error" and "service unavailable"; 506: a duplicate of a post that went through.
-const UNCLEAR_CODES = new Set([1, 2, 506]);
+// 1 and 2: Meta's "unknown error" and "service unavailable". 506, a duplicate, is unclear too (graphPublishResult).
+const UNCLEAR_CODES = new Set([1, 2]);
 
 interface FeedAnswer {
   id?: unknown;
@@ -354,6 +354,8 @@ export function graphPublishResult(error: unknown): PublishResult {
   if (!(error instanceof GraphError)) return { kind: 'unknown', code: 'NETWORK' };
   const code = error.code;
   const base = { code: code === undefined ? `HTTP_${error.status}` : String(code), message: error.message, httpStatus: error.status };
+  // A duplicate (506) may be of Crove's own earlier attempt, so it stays unclear, with a code that says what Meta said (#1156).
+  if (code === 506) return { kind: 'unknown', code: POSSIBLE_DUPLICATE, message: base.message };
   if (error.status >= 500 || (code !== undefined && UNCLEAR_CODES.has(code))) return { kind: 'unknown', code: base.code, message: base.message };
   if ((code !== undefined && TOKEN_CODES.has(code)) || error.status === 401) return { kind: 'rejected', error: 'token_expired', ...base };
   if ((code !== undefined && (PERMISSION_CODES.has(code) || (code >= 200 && code <= 299))) || error.status === 403) return { kind: 'rejected', error: 'permission', ...base };

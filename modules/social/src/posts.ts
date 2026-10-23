@@ -78,6 +78,8 @@ import { versionQueries, withVersion } from './versions.ts';
 import { bannedChecker, bannedCheckerOf, bannedCommandBudget, bannedForView, bannedWordsOf, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords, type BannedWordsStatus } from './banned-words.ts';
 import type { BannedFieldMatch } from './domain/banned-words.ts';
 import { teamReportQueries } from './team-report.ts';
+import { duplicatesOf } from './duplicates.ts';
+import { refusesDuplicates, type DuplicateOf } from './domain/duplicate.ts';
 import { checklistFor, checklistForApproval, reviewChecklistCommands, reviewChecklistQueries, reviewChecksOf, tickedChecklist, type ReviewCheck } from './review-checklist.ts';
 import { channelAccessCommands, channelAccessQueries, channelNotAllowed, channelScope, connectionInScope, inScope, mayUse, postInScope, refuseChannels, refuseOutside, refusePostOutside } from './channel-access.ts';
 
@@ -1171,6 +1173,9 @@ export interface VariantView {
   // checked: the list above is complete; not_checked: a read that does not check them (the post list); too_complex:
   // the text or the word list was too large to check within the budget, and the list is empty.
   bannedWordsStatus: BannedWordsStatus;
+  // The newest other post on the same channel with the same text (#1156), published in the last 30 days or scheduled
+  // or queued there, while this channel can still change; null without one, and on reads that do not check (lists).
+  duplicateOf: DuplicateOf | null;
   latestDecision: { decision: SocialDecision; comment: string | null; decidedBy: string; at: string; revision: number; current: boolean } | null;
   // The review checklist of its channel (#1105): the org-wide items and the channel's, in order; empty without one.
   checklist: ReviewCheck[];
@@ -1230,7 +1235,7 @@ const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
 
 // The posts as the caller may see them (#1081): a member limited to some channels sees only the variants on those, and
 // not a post with none there.
-async function viewPosts(ctx: QueryContext, requested: string[], options: { bannedWords?: boolean } = {}): Promise<PostView[]> {
+async function viewPosts(ctx: QueryContext, requested: string[], options: { bannedWords?: boolean; duplicates?: boolean } = {}): Promise<PostView[]> {
   if (requested.length === 0) return [];
   const scope = await channelScope(ctx);
   const variants = await ctx.trx
@@ -1335,6 +1340,18 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
   // Lists and the other reads leave the words out ('not_checked'); one budget covers every variant of the view.
   const banned = options.bannedWords ? await bannedCheckerOf(ctx.trx, ctx.orgId) : null;
   const byPost = new Map(posts.map((p) => [p.id, p]));
+  // The same text again on a channel (#1156): only on the single post's reads, and only on the channels in view.
+  const duplicates = options.duplicates
+    ? await duplicatesOf(
+        ctx.trx,
+        ctx.orgId,
+        variants.map((v) => {
+          const p = byPost.get(v.post_id);
+          return { id: v.id, postId: v.post_id, connectionId: v.channel_connection_id, status: v.status, body: effectiveContent({ body: p?.body ?? '', title: null, linkUrl: null }, overrides(v), v.content_frozen).body };
+        }),
+        new Date(),
+      )
+    : new Map<string, DuplicateOf>();
   return postIds
     .map((id) => byPost.get(id))
     .filter((p): p is (typeof posts)[number] => p !== undefined)
@@ -1400,6 +1417,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
               error: v.error_kind || v.error_code || v.error_message ? { kind: v.error_kind, code: v.error_code, action: v.error_action, message: v.error_message, retryAt: iso(v.error_retry_at) } : null,
               issues: isProvider(v.provider) ? issuesOf(b, row) : [],
               ...(banned ? bannedForView(banned, b, row) : { bannedWords: [], bannedWordsStatus: 'not_checked' as const }),
+              duplicateOf: duplicates.get(v.id) ?? null,
               latestDecision: d
                 ? { decision: d.decision, comment: d.comment, decidedBy: d.decided_by, at: iso(d.created_at) ?? '', revision: d.revision, current: d.revision === v.revision && d.content_hash === v.content_hash }
                 : null,
@@ -1427,7 +1445,7 @@ export const postGet = defineQuery({
   access: ALL,
   handler: async (ctx, input): Promise<PostView> => {
     // The one read that checks the banned words (#1055): the composer, the post page and its review panel use it.
-    const [view] = await viewPosts(ctx, [input.postId], { bannedWords: true });
+    const [view] = await viewPosts(ctx, [input.postId], { bannedWords: true, duplicates: true });
     if (!view) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
     return { ...view, idea: await ideaOfPost(ctx.trx, ctx.orgId, view.id) };
   },
@@ -1544,6 +1562,15 @@ async function postTainted(ctx: CommandContext, postId: string): Promise<boolean
   return row?.tainted ?? true;
 }
 
+// The pre-review finding for a channel whose text another post on it already has (#1156), in the post's time zone.
+const DUPLICATE_STANDING = { published: 'đã đăng', scheduled: 'đã hẹn đăng', queued: 'đang chờ trong hàng đợi, dự kiến đăng' } as const;
+const DUPLICATE_PLATFORM: Readonly<Record<string, string>> = { x: 'X', linkedin: 'LinkedIn', linkedin_page: 'LinkedIn' };
+function duplicateFinding(provider: string, of: DuplicateOf, timeZone: string): string {
+  const when = of.at ? ` lúc ${new Intl.DateTimeFormat('vi-VN', { dateStyle: 'short', timeStyle: 'short', timeZone }).format(new Date(of.at))}` : '';
+  const same = `nội dung trùng với một bài ${DUPLICATE_STANDING[of.status]}${when} trên kênh này`;
+  return refusesDuplicates(provider) ? `${same}; ${DUPLICATE_PLATFORM[provider] ?? provider} sẽ từ chối bài trùng, cần sửa nội dung.` : `${same}; nên sửa để người theo dõi không thấy lặp lại.`;
+}
+
 // What a reviewer should look at before deciding (#799), from deterministic checks only: each waiting channel's rule
 // issues, the brand voice's words to avoid in its text, and images without a description. Members and the
 // social.content_manager agent read it; it changes nothing.
@@ -1554,7 +1581,7 @@ export const postPreReview = defineQuery({
   access: ALL,
   agent: { roles: [CONTENT_MANAGER_TEMPLATE] },
   handler: async (ctx, input): Promise<PreReview> => {
-    const [view] = await viewPosts(ctx, [input.postId]);
+    const [view] = await viewPosts(ctx, [input.postId], { duplicates: true });
     if (!view) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng này');
     const waiting = view.variants.filter((v) => v.status === 'in_review');
     const voices = await ctx.trx.selectFrom('crove_social.brand_voice').select(['channel_connection_id', 'avoid_words']).where('org_id', '=', ctx.orgId).execute();
@@ -1584,6 +1611,8 @@ export const postPreReview = defineQuery({
       // A PDF (#1119) goes out as a document with its title and takes no alt text.
       const undescribed = v.media.filter((m) => !m.altText && m.mime !== 'application/pdf').length;
       if (undescribed > 0) findings.push(`${name}: ${undescribed} ảnh hoặc video chưa có mô tả cho người đọc màn hình (alt text).`);
+      // The same text as another post on this channel (#1156): X and LinkedIn refuse it, elsewhere followers see it twice.
+      if (v.duplicateOf) findings.push(`${name}: ${duplicateFinding(v.provider, v.duplicateOf, view.timeZone)}`);
     }
     const title = view.title?.trim() || view.body.replace(/\s+/g, ' ').trim().slice(0, 120);
     return { postId: view.id, title, waiting: waiting.length, findings: findings.slice(0, PRE_REVIEW_FINDINGS_MAX) };

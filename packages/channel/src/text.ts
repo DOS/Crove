@@ -9,3 +9,10 @@ export function holdsLink(text: string, link: string): boolean {
   }
   return false;
 }
+
+// The platform refused a text identical to a recent post of the account (X's 403, LinkedIn's 422; #1156): nothing was
+// posted, and the same text fails again until it changes.
+export const DUPLICATE_CONTENT = 'DUPLICATE_CONTENT';
+// The platform called the post a duplicate, but the post it matched may be Crove's own earlier attempt (Facebook's 506;
+// #1156): the outcome stays unclear, and this code lets the needs-attention view say it may be a duplicate.
+export const POSSIBLE_DUPLICATE = 'POSSIBLE_DUPLICATE';

@@ -1312,6 +1312,9 @@ export const zSocialVariant = z.object({
   bannedWords: z.array(zSocialBannedMatch),
   // checked; not_checked (lists do not check them); too_complex (over the check's budget, so bannedWords is empty).
   bannedWordsStatus: z.enum(['checked', 'not_checked', 'too_complex']),
+  // The newest other post on the same channel with the same text (#1156): published in the last 30 days, scheduled or
+  // queued, with its time; null without one, and on reads that do not check (lists).
+  duplicateOf: z.object({ at: z.string().nullable(), status: z.enum(['published', 'scheduled', 'queued']) }).nullable(),
   latestDecision: z
     .object({ decision: z.enum(SOCIAL_DECISIONS), comment: z.string().nullable(), decidedBy: zId, at: z.string(), revision: z.number().int(), current: z.boolean() })
     .nullable(),

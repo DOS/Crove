@@ -205,7 +205,23 @@ describe('LinkedInPublisher', () => {
     const dead = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 401, body: { status: 401, serviceErrorCode: 65601, code: 'REVOKED_ACCESS_TOKEN', message: 'The token used in the request has been revoked by the user' } }] });
     expect(await new LinkedInPublisher({}, dead.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'REVOKED_ACCESS_TOKEN' });
     const dup = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 422, body: { status: 422, message: 'Content is a duplicate of urn:li:share:7100000000000000009' } }] });
-    expect(await new LinkedInPublisher({}, dup.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'bad_request' });
+    // The same text as a recent post (#1156): named, so the post page can say why and what to change.
+    expect(await new LinkedInPublisher({}, dup.fetchImpl).publish(input())).toEqual({
+      kind: 'rejected',
+      error: 'bad_request',
+      code: 'DUPLICATE_CONTENT',
+      message: 'Content is a duplicate of urn:li:share:7100000000000000009',
+      httpStatus: 422,
+    });
+    // Any other 422 keeps its plain refusal.
+    const invalid = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 422, body: { status: 422, code: 'UNPROCESSABLE_ENTITY', message: '/author does not match the member or organization URN pattern' } }] });
+    expect(await new LinkedInPublisher({}, invalid.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'UNPROCESSABLE_ENTITY', httpStatus: 422 });
+    // A 422 about a duplicate of something else (a mention, a media asset) is not a duplicate post.
+    const mention = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 422, body: { status: 422, message: 'Duplicate mention entities are not allowed' } }] });
+    expect(await new LinkedInPublisher({}, mention.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'HTTP_422' });
+    // A 403 that mentions a duplicate is still a permission refusal: only the 422 names the duplicate.
+    const denied = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 403, body: { status: 403, message: 'Not enough permissions to create a duplicate share' } }] });
+    expect(await new LinkedInPublisher({}, denied.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'permission', code: 'HTTP_403' });
     const down = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 504, body: {} }] });
     expect((await new LinkedInPublisher({}, down.fetchImpl).publish(input())).kind).toBe('unknown');
     const noId = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 201 }] });

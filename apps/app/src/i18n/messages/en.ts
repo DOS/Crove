@@ -3388,6 +3388,14 @@ export const en = {
     aiAssistedHint: 'Part of this text came from an AI suggestion; check the facts before approving.',
     aiRewriteOutdated: 'The text changed after you asked; ask AI again.',
     aiRewriteDrop: 'Discard',
+    // The same text as another post on the channel (#1156): refused on X and LinkedIn, advice elsewhere.
+    sameText: {
+      refused:
+        '{platform} refuses a post whose text matches one {status, select, published {published on this channel on {when}} scheduled {scheduled on this channel for {when}} other {waiting in this channel’s queue for {when}}}. Change the text before it goes out.',
+      advice:
+        'The same text is {status, select, published {already published on this channel, on {when}} scheduled {already scheduled on this channel for {when}} other {already in this channel’s queue for {when}}}, so followers would see it twice. Consider changing a few words.',
+      rewrite: 'Rewrite it with AI',
+    },
     ownMedia: 'Give this channel its own images or video',
     ownMediaEmpty: 'This channel will post without images or video.',
     ownTextPlaceholder: 'Text for this channel only',
@@ -3434,6 +3442,9 @@ export const en = {
       policyRaised: 'This channel now needs more approvals, so the post needs more reviewers.',
       policyRaisedReschedule: 'This channel now needs more approvals. Once they are given, the post goes out at its planned time if that is still ahead.',
       needsAttention: '{brand} cannot tell whether the post reached the channel. Check the page, then pick one of the options below.',
+      possibleDuplicate:
+        'Facebook called this post a duplicate: it may be this very post, which went up on an earlier try, or the same text posted before. Check the Page, then pick one of the options below.',
+      duplicateContent: '{platform} refused the post because the same text went out on this channel recently, so nothing was posted. Change the text (AI can rewrite it), then publish again.',
       paused: 'This channel needs reconnecting. The post is paused, not lost, and goes out once the channel is reconnected.',
       ownerLeft: 'The member who connected this channel has left the organization. Reconnect the channel to let the post go out.',
       revoked: 'This channel was disconnected, so the post cannot go out. Cancel this channel, then add the new one to the post if needed.',

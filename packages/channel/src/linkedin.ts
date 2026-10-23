@@ -13,7 +13,7 @@
 // Remove (#1138): DELETE /rest/posts/{urn}, when a person asks or at the post's planned takedown.
 import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { commentResult, removeResult } from './comment.ts';
-import { holdsLink } from './text.ts';
+import { DUPLICATE_CONTENT, holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 //
@@ -304,6 +304,9 @@ function publishResult(error: unknown): PublishResult {
   if (error.status === 401) return { kind: 'rejected', error: 'token_expired', code, message: error.message, httpStatus: error.status };
   if (error.status === 403) return { kind: 'rejected', error: 'permission', code, message: error.message, httpStatus: error.status };
   if (error.status === 429) return { kind: 'rejected', error: 'rate_limited', code, message: error.message, httpStatus: error.status };
+  // The same text as a recent post of the member or page (#1156): LinkedIn answers 422 "Content is a duplicate of
+  // urn:li:share:..." (public reports; confirm on a live account, #591). Nothing was posted; the text must change.
+  if (error.status === 422 && /\bis a duplicate of\b/i.test(error.message)) return { kind: 'rejected', error: 'bad_request', code: DUPLICATE_CONTENT, message: error.message, httpStatus: error.status };
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
 }
 

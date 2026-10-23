@@ -3387,6 +3387,14 @@ export const vi = {
     aiAssistedHint: 'Một phần nội dung được lấy từ gợi ý của AI; hãy kiểm tra kỹ các thông tin trước khi duyệt.',
     aiRewriteOutdated: 'Nội dung đã đổi sau khi nhờ AI; hãy nhờ AI viết lại lần nữa.',
     aiRewriteDrop: 'Bỏ qua',
+    // The same text as another post on the channel (#1156): refused on X and LinkedIn, advice elsewhere.
+    sameText: {
+      refused:
+        '{platform} không nhận bài có nội dung trùng với bài {status, select, published {đã đăng trên kênh này lúc {when}} scheduled {đã hẹn đăng trên kênh này lúc {when}} other {đang chờ trong hàng đợi của kênh này, dự kiến đăng lúc {when}}}. Hãy sửa nội dung trước khi bài được đăng.',
+      advice:
+        'Nội dung này trùng với bài {status, select, published {đã đăng trên kênh này lúc {when}} scheduled {đã hẹn đăng trên kênh này lúc {when}} other {đang chờ trong hàng đợi của kênh này, dự kiến đăng lúc {when}}}, người theo dõi sẽ thấy hai lần. Nên sửa vài chữ cho khác đi.',
+      rewrite: 'Nhờ AI viết lại',
+    },
     ownMedia: 'Ảnh hoặc video riêng cho kênh này',
     ownMediaEmpty: 'Kênh này sẽ đăng không kèm ảnh hay video.',
     ownTextPlaceholder: 'Nội dung riêng cho kênh này',
@@ -3433,6 +3441,9 @@ export const vi = {
       policyRaised: 'Kênh này vừa được đổi sang cần nhiều người duyệt hơn, nên bài cần thêm người duyệt.',
       policyRaisedReschedule: 'Kênh này vừa được đổi sang cần nhiều người duyệt hơn. Khi đủ người duyệt, bài sẽ đăng đúng giờ đã hẹn nếu giờ đó chưa qua.',
       needsAttention: '{brand} không xác định được bài đã lên kênh hay chưa. Hãy mở trang để kiểm tra, rồi chọn một trong các cách dưới đây.',
+      possibleDuplicate:
+        'Facebook báo bài này bị trùng: có thể chính bài này đã lên ở lần thử trước, hoặc cùng nội dung đã được đăng từ trước. Hãy mở Trang để kiểm tra, rồi chọn một trong các cách dưới đây.',
+      duplicateContent: '{platform} từ chối vì nội dung trùng với một bài đăng gần đây trên kênh này, nên chưa có gì được đăng. Hãy sửa nội dung (có thể nhờ AI viết lại), rồi đăng lại.',
       paused: 'Kênh cần được kết nối lại. Bài đang tạm dừng, không bị mất, và sẽ tự đăng sau khi kênh được kết nối lại.',
       ownerLeft: 'Người đã kết nối kênh này không còn trong tổ chức. Hãy kết nối lại kênh để bài tiếp tục đăng.',
       revoked: 'Kênh này đã bị ngắt kết nối nên bài không đăng được. Hãy hủy kênh này, rồi thêm kênh mới vào bài nếu cần.',

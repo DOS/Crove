@@ -19,6 +19,7 @@ import { approvalCovers, effectiveContent, type BaseContent } from './domain/app
 import { shortOfPolicy } from './policy.ts';
 import { PUBLISH_LIMITS, SENT_TO_APP, STATUS_PUBLISHES, isProvider, limitWait, WORDPRESS_DRAFT, WORDPRESS_PENDING } from './domain/channels.ts';
 import { sentLink, sentSettings } from './domain/utm.ts';
+import { POSSIBLE_DUPLICATE } from './domain/duplicate.ts';
 import { withShortLink } from './short-links.ts';
 import { nextAction, publishCallKey, type RetrySafety } from './domain/publish.ts';
 import { startsNewAttempt, type VariantEvent } from './domain/state.ts';
@@ -569,7 +570,10 @@ export const publishRecord = defineCommand({
       case 'missing':
       case 'unknowable': {
         if (input.phase !== 'reconcile') return { recorded: false as const, reason: 'invalid' };
-        await move(ctx, v, { type: 'reconciled', found: false }, failure('unknown', r.kind === 'missing' ? 'NOT_FOUND_ON_PLATFORM' : (r.code ?? 'RECONCILE_UNAVAILABLE'), null, null));
+        // A call the platform answered as a possible duplicate (Facebook's 506, #1156) keeps that code, so the post page
+        // can say the same text may have gone out before.
+        const code = v.error_code === POSSIBLE_DUPLICATE ? POSSIBLE_DUPLICATE : r.kind === 'missing' ? 'NOT_FOUND_ON_PLATFORM' : (r.code ?? 'RECONCILE_UNAVAILABLE');
+        await move(ctx, v, { type: 'reconciled', found: false }, failure('unknown', code, null, null));
         event = 'social.variant.needs_attention';
         break;
       }
