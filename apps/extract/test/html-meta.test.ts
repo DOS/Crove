@@ -1,5 +1,7 @@
 // A web page's head for a link preview (#641), and its main text for AI drafts (#779): which tags win, decoding, and
 // what is never read.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { EXTRACT_LIMITS, zExtractedPage } from '@crove/extract-contract';
 import { parse } from '../src/parse.ts';
@@ -73,6 +75,26 @@ describe('readHtmlMeta', () => {
     expect(Array.from(readHtmlMeta(page('', long)).text ?? '')).toHaveLength(EXTRACT_LIMITS.maxPageTextChars);
   });
 
+  it('reads a news page: the article with the most text, not a teaser card before it, nor the cards beside it (#1235)', async () => {
+    const html = readFileSync(join(import.meta.dirname, 'fixtures', 'news-article.html'));
+    const result = await parse('html_meta', new Uint8Array(html));
+    if (!result.ok || result.kind !== 'html_meta') throw new Error('not read');
+    expect(result.page.title).toBe('Giá cà phê tăng mạnh đầu vụ');
+    expect(result.page.text?.split('\n')).toEqual([
+      'Giá cà phê tăng mạnh đầu vụ',
+      'Sáng 22/10, giá cà phê nhân xô tại Đắk Lắk đạt 128.500 đồng/kg, tăng 2.000 đồng so với tuần trước.',
+      'Nông dân thu hoạch cà phê ở Buôn Ma Thuột.',
+      'Theo Hiệp hội Cà phê, sản lượng niên vụ 2026-2027 dự kiến giảm khoảng 8% do hạn hán kéo dài.',
+      'Các doanh nghiệp xuất khẩu cho biết đơn hàng sang châu Âu vẫn ổn định & giá có thể còn tăng.',
+      // A comment nested in the article stays part of it.
+      'Bình luận: giá vậy là tốt rồi.',
+    ]);
+    // Nested articles: the outer one is read whole, not cut at the inner one's end.
+    expect(readHtmlMeta(page('', '<article><p>Mở đầu</p><article><p>Trong</p></article><p>Kết luận</p></article>')).text).toBe('Mở đầu\nTrong\nKết luận');
+    // Of several <main>, the one with the most text.
+    expect(readHtmlMeta(page('', '<main><p>Ngắn</p></main><main><p>Phần dài hơn nhiều</p></main>')).text).toBe('Phần dài hơn nhiều');
+  });
+
   it('stays fast on hostile input', () => {
     const started = Date.now();
     readHtmlMeta(new TextEncoder().encode(`<html><head>${'<meta a="'.repeat(20_000)}${'<'.repeat(100_000)}`));
@@ -83,6 +105,8 @@ describe('readHtmlMeta', () => {
     readHtmlMeta(new TextEncoder().encode(`<html><body>${'<'.repeat(200_000)}`));
     readHtmlMeta(new TextEncoder().encode(`<html><body>${'<nav><p>x'.repeat(30_000)}`));
     readHtmlMeta(new TextEncoder().encode(`<html><body>${'<article><br x'.repeat(30_000)}`));
+    readHtmlMeta(new TextEncoder().encode(`<html><body>${'<article>x</article>'.repeat(25_000)}`));
+    readHtmlMeta(new TextEncoder().encode(`<html><body>${'<main><article'.repeat(30_000)}`));
     expect(Date.now() - started).toBeLessThan(2000);
   });
 });
