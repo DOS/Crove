@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -26,7 +26,7 @@ import { PostVersions } from '../components/social-post-versions.tsx';
 import { BannedWordHints, BannedWordReview, useBannedWords } from '../components/social-banned-words.tsx';
 import { ReviewChecklistTicks } from '../components/social-review-checklist.tsx';
 import { checksFor, fullyTicked } from '../lib/social-review-checklist.ts';
-import { LabelPicker } from '../components/social-labels.tsx';
+import { CampaignFindings, LabelPicker, useLabels } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
 import { BestTimeButton } from '../components/social-best-time.tsx';
 import { EmojiPicker } from '../components/social-emoji.tsx';
@@ -3303,6 +3303,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const [own, setOwn] = useState<Record<string, Own>>({});
   // The post's UTM tags as the screen shows them; changing them changes every editable channel's settings (#585).
   const [utm, setUtmState] = useState<UtmTags | null | undefined>(undefined);
+  // The org's labels, for a campaign label's tags and dates (#1169).
+  const labelList = useLabels();
   // An AI rewrite was taken into the text (#583): the next save marks the post AI-assisted.
   const [aiUsed, setAiUsed] = useState(false);
   // The server content the edits started from. A status change elsewhere (a teammate approving another channel, the
@@ -3600,7 +3602,49 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           )}
           {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} rewriteTarget={rewriteTarget} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
-          <LabelPicker slug={slug} postId={p.id} labelIds={p.labelIds} canWrite={canWrite} />
+          <LabelPicker
+            slug={slug}
+            postId={p.id}
+            labelIds={p.labelIds}
+            canWrite={canWrite}
+            // A campaign label fills the empty UTM fields (#1169) as an edit like any other: nothing is saved until Save,
+            // and saving changes the channels' settings, their content hash and their approval as any edit does.
+            // Each channel's own empty fields, and none while a save is on its way (it would settle over the fill).
+            onPut={(label) => {
+              if (!editable || !base.linkUrl.trim() || save.isPending) return false;
+              // Called once the label is saved: the edits made since are read from the latest state, never overwritten.
+              const fill = (from: Record<string, Own>) => {
+                const changed = { ...from };
+                let filled = false;
+                for (const v of p.variants) {
+                  if (!EDITABLE.includes(v.status)) continue;
+                  const mine = from[v.id] ?? ownOf(v);
+                  const tags = utmOf(mine.settings);
+                  const next = prefillUtm(tags ? { campaign: tags.campaign, medium: tags.medium ?? 'social' } : null, label);
+                  if (!next) continue;
+                  changed[v.id] = withUtm(mine, next);
+                  filled = true;
+                }
+                return filled ? changed : null;
+              };
+              if (!fill(own)) return false;
+              setOwn((latest) => fill(latest) ?? latest);
+              setUtmState((latest) => {
+                const shown = latest === undefined ? shownUtm : latest;
+                return prefillUtm(shown, label) ?? shown;
+              });
+              return true;
+            }}
+          />
+          <CampaignFindings
+            labelIds={p.labelIds}
+            labels={labelList.data ?? []}
+            // The channels still to go out, as edited here.
+            channels={p.variants
+              .filter((v) => EDITABLE.includes(v.status))
+              .map((v) => ({ name: names.get(v.connectionId) ?? providerName(v.provider), settings: (own[v.id] ?? ownOf(v)).settings, linkUrl: v.overrides.linkUrl ?? orNull(base.linkUrl), at: v.effectiveAt }))}
+            timeZone={p.timeZone}
+          />
           {canWrite && p.recurrence === null && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
           {/* One kind of repeat per post (#979); a copy of a series repeats with its series post. */}
           {canWrite && p.evergreenDays === null && p.recurrenceSourceId === null && (

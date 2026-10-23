@@ -1187,6 +1187,10 @@ export interface SocialLabelTable {
   color: Generated<string>;
   created_by: ColumnType<string, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  starts_on: string | null;
+  ends_on: string | null;
+  utm_campaign: string | null;
+  utm_medium: string | null;
 }
 
 /** crove_social.link_preview */

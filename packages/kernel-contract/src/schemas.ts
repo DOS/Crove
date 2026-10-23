@@ -1562,11 +1562,30 @@ export const zSocialFeed = z.object({
   drafts: z.number().int(),
   createdAt: z.string(),
 });
-// A label for posts (#639) and how many posts carry it.
-export const zSocialLabel = z.object({ id: zId, name: z.string(), color: z.enum(SOCIAL_LABEL_COLORS), createdBy: zId, postCount: z.number().int() });
+// A label for posts (#639) and how many posts carry it; a campaign label (#1169) also has its first and last day
+// (YYYY-MM-DD) and the UTM campaign and medium its posts' links should carry, null where it has none.
+export const zSocialLabel = z.object({
+  id: zId,
+  name: z.string(),
+  color: z.enum(SOCIAL_LABEL_COLORS),
+  createdBy: zId,
+  postCount: z.number().int(),
+  startsOn: z.string().nullable(),
+  endsOn: z.string().nullable(),
+  utmCampaign: z.string().nullable(),
+  utmMedium: z.string().nullable(),
+});
 const zLabelName = z.string().trim().min(1).max(50);
-export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS).optional() });
-export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS) });
+// Owners and admins only; absent leaves a field as it is, null (or an empty tag) clears it. The command checks the day
+// and the UTM tag rule.
+const zLabelCampaign = {
+  startsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  endsOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  utmCampaign: z.string().max(400).nullable().optional(),
+  utmMedium: z.string().max(400).nullable().optional(),
+};
+export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS).optional(), ...zLabelCampaign });
+export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS), ...zLabelCampaign });
 // Labels and the assignee on many posts at once (#1057): at most SOCIAL_BULK_EDIT_MAX posts per command, each once,
 // and why a post was left as it was: gone, published, not the caller's to change, already so, or over the ten labels a
 // post may carry. A find and replace (#1144) also leaves out a post where nothing matches, one with a channel going out

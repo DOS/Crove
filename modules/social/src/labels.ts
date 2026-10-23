@@ -2,6 +2,8 @@
 // the app's palette. Members create labels and put them on posts; owners and admins rename, recolour and delete them.
 // A post's labels sort and filter the lists, the calendar and the metrics; they are not part of its content, so
 // setting them never changes a revision, a content hash or an approval.
+// A label may also be a campaign (#1169): owners and admins give it the campaign's dates and the UTM campaign and medium
+// its posts' links should carry. Labels without them behave as before.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { SOCIAL_LABEL_COLORS, zId } from '@crove/kernel-contract';
@@ -9,6 +11,7 @@ import type { MemberRole, SocialLabelColor } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import type { Trx } from './variants.ts';
 import { refusePostOutside } from './channel-access.ts';
+import { isCalendarDay, labelUtmTag, type Campaign } from './domain/campaign.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -23,6 +26,11 @@ export interface Label {
   createdBy: string;
   // How many posts carry it.
   postCount: number;
+  // Its campaign (#1169): first and last day (YYYY-MM-DD, both included) and UTM tags; null where it has none.
+  startsOn: string | null;
+  endsOn: string | null;
+  utmCampaign: string | null;
+  utmMedium: string | null;
 }
 
 // NFC, so a name typed with combining marks matches the same name typed precomposed.
@@ -33,6 +41,42 @@ const zName = z
   // The length the table checks is the normalized one: NFC can lengthen a few characters.
   .pipe(z.string().min(1).max(50));
 const zColor = z.enum(SOCIAL_LABEL_COLORS);
+// A campaign's day, or null to clear it.
+const zDay = z.string().refine(isCalendarDay, 'not a date').nullable();
+// A UTM tag by the UTM_TAG rule of domain/utm.ts (as far as the table's CHECK can say it), kept NFC and trimmed; an
+// empty one clears it.
+const zTag = z
+  .string()
+  .max(400)
+  .transform((s, ctx) => {
+    const trimmed = s.normalize('NFC').trim();
+    if (trimmed === '') return null;
+    const tag = labelUtmTag(trimmed);
+    if (tag === null) ctx.addIssue({ code: 'custom', message: 'not a UTM tag' });
+    return tag;
+  })
+  .nullable();
+const zCampaign = { startsOn: zDay.optional(), endsOn: zDay.optional(), utmCampaign: zTag.optional(), utmMedium: zTag.optional() };
+type CampaignInput = { startsOn?: string | null | undefined; endsOn?: string | null | undefined; utmCampaign?: string | null | undefined; utmMedium?: string | null | undefined };
+type CampaignFields = Omit<Campaign, 'name'>;
+const NO_CAMPAIGN: CampaignFields = { startsOn: null, endsOn: null, utmCampaign: null, utmMedium: null };
+const setsCampaign = (input: CampaignInput) => [input.startsOn, input.endsOn, input.utmCampaign, input.utmMedium].some((v) => v !== undefined && v !== null);
+
+// The campaign a write leaves: the fields given replace the label's, absent ones stay. The table checks the same.
+function campaignOf(was: CampaignFields, input: CampaignInput): CampaignFields {
+  const next: CampaignFields = {
+    startsOn: input.startsOn === undefined ? was.startsOn : input.startsOn,
+    endsOn: input.endsOn === undefined ? was.endsOn : input.endsOn,
+    utmCampaign: input.utmCampaign === undefined ? was.utmCampaign : input.utmCampaign,
+    utmMedium: input.utmMedium === undefined ? was.utmMedium : input.utmMedium,
+  };
+  if (next.startsOn !== null && next.endsOn !== null && next.endsOn < next.startsOn) throw new DomainError('LABEL_CAMPAIGN_DATES', 422, 'Ngày kết thúc chiến dịch phải sau hoặc trùng ngày bắt đầu');
+  if (next.utmMedium !== null && next.utmCampaign === null) throw new DomainError('LABEL_UTM_MEDIUM', 422, 'Cần có UTM campaign trước khi đặt UTM medium');
+  return next;
+}
+
+const columns = (c: CampaignFields) => ({ starts_on: c.startsOn, ends_on: c.endsOn, utm_campaign: c.utmCampaign, utm_medium: c.utmMedium });
+const day = (d: Date | string | null) => (d === null ? null : typeof d === 'string' ? d.slice(0, 10) : d.toISOString().slice(0, 10));
 
 function requireUser(ctx: CommandContext): string {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -50,25 +94,35 @@ async function nameFree(ctx: CommandContext, name: string, except?: string) {
 }
 
 async function lockLabel(ctx: CommandContext, id: string) {
-  const label = await ctx.trx.selectFrom('crove_social.label').select('id').where('org_id', '=', ctx.orgId).where('id', '=', id).forUpdate().executeTakeFirst();
+  const label = await ctx.trx
+    .selectFrom('crove_social.label')
+    .select(['id', 'starts_on', 'ends_on', 'utm_campaign', 'utm_medium'])
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', id)
+    .forUpdate()
+    .executeTakeFirst();
   if (!label) throw new DomainError('LABEL_NOT_FOUND', 404, 'Không tìm thấy nhãn này');
-  return label;
+  const campaign: CampaignFields = { startsOn: day(label.starts_on), endsOn: day(label.ends_on), utmCampaign: label.utm_campaign, utmMedium: label.utm_medium };
+  return { id: label.id, campaign };
 }
 
 export const labelCreate = defineCommand({
   name: 'social.label.create',
-  input: z.strictObject({ name: zName, color: zColor.optional() }),
+  // A campaign's dates and tags (#1169) only from owners and admins; members create plain labels.
+  input: z.strictObject({ name: zName, color: zColor.optional(), ...zCampaign }),
   risk: 'R1',
   access: MEMBERS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
+    if (setsCampaign(input) && ctx.role !== 'owner' && ctx.role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu và quản trị viên mới đặt được ngày và UTM của chiến dịch');
+    const campaign = campaignOf(NO_CAMPAIGN, input);
     await lockOrg(ctx);
     const count = await ctx.trx.selectFrom('crove_social.label').select((eb) => eb.fn.countAll<string>().as('n')).where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
     if (Number(count.n) >= LABEL_LIMIT) throw new DomainError('LABEL_LIMIT', 409, `Mỗi tổ chức có tối đa ${LABEL_LIMIT} nhãn`);
     await nameFree(ctx, input.name);
     const row = await ctx.trx
       .insertInto('crove_social.label')
-      .values({ org_id: ctx.orgId, name: input.name, color: input.color ?? 'gray', created_by: userId, created_at: ctx.now })
+      .values({ org_id: ctx.orgId, name: input.name, color: input.color ?? 'gray', ...columns(campaign), created_by: userId, created_at: ctx.now })
       .returning('id')
       .executeTakeFirstOrThrow();
     return { labelId: row.id };
@@ -77,15 +131,22 @@ export const labelCreate = defineCommand({
 
 export const labelUpdate = defineCommand({
   name: 'social.label.update',
-  input: z.strictObject({ labelId: zId, name: zName, color: zColor }),
+  // The campaign's fields (#1169) are optional: absent ones stay as they are, null (or empty tags) clears one.
+  input: z.strictObject({ labelId: zId, name: zName, color: zColor, ...zCampaign }),
   risk: 'R1',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
     const label = await lockLabel(ctx, input.labelId);
+    const campaign = campaignOf(label.campaign, input);
     await lockOrg(ctx);
     await nameFree(ctx, input.name, label.id);
-    await ctx.trx.updateTable('crove_social.label').set({ name: input.name, color: input.color }).where('org_id', '=', ctx.orgId).where('id', '=', label.id).execute();
+    await ctx.trx
+      .updateTable('crove_social.label')
+      .set({ name: input.name, color: input.color, ...columns(campaign) })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', label.id)
+      .execute();
     return { labelId: label.id };
   },
 });
@@ -155,14 +216,24 @@ export const labelList = defineQuery({
     const rows = await ctx.trx
       .selectFrom('crove_social.label as l')
       .leftJoin('crove_social.post_label as pl', (j) => j.onRef('pl.org_id', '=', 'l.org_id').onRef('pl.label_id', '=', 'l.id'))
-      .select(['l.id', 'l.name', 'l.color', 'l.created_by', (eb) => eb.fn.count<string>('pl.id').as('posts')])
+      .select(['l.id', 'l.name', 'l.color', 'l.created_by', 'l.starts_on', 'l.ends_on', 'l.utm_campaign', 'l.utm_medium', (eb) => eb.fn.count<string>('pl.id').as('posts')])
       .where('l.org_id', '=', ctx.orgId)
       .groupBy(['l.org_id', 'l.id'])
       .orderBy(sql`lower(l.name)`)
       .orderBy('l.id')
       .limit(LABEL_LIMIT)
       .execute();
-    return rows.map((r) => ({ id: r.id, name: r.name, color: r.color, createdBy: r.created_by, postCount: Number(r.posts) }));
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      color: r.color,
+      createdBy: r.created_by,
+      postCount: Number(r.posts),
+      startsOn: day(r.starts_on),
+      endsOn: day(r.ends_on),
+      utmCampaign: r.utm_campaign,
+      utmMedium: r.utm_medium,
+    }));
   },
 });
 
@@ -182,6 +253,28 @@ export async function labelsOfPosts(trx: Trx, orgId: string, postIds: readonly s
   for (const r of rows) {
     const list = out.get(r.post_id) ?? [];
     list.push({ id: r.id, name: r.name });
+    out.set(r.post_id, list);
+  }
+  return out;
+}
+
+// The campaign labels (#1169) of each post: only labels with dates or a UTM campaign, by label name.
+export async function campaignsOfPosts(trx: Trx, orgId: string, postIds: readonly string[]): Promise<Map<string, Campaign[]>> {
+  const out = new Map<string, Campaign[]>();
+  if (postIds.length === 0) return out;
+  const rows = await trx
+    .selectFrom('crove_social.post_label as pl')
+    .innerJoin('crove_social.label as l', (j) => j.onRef('l.org_id', '=', 'pl.org_id').onRef('l.id', '=', 'pl.label_id'))
+    .select(['pl.post_id', 'l.name', 'l.starts_on', 'l.ends_on', 'l.utm_campaign', 'l.utm_medium'])
+    .where('pl.org_id', '=', orgId)
+    .where('pl.post_id', 'in', [...postIds])
+    .where((eb) => eb.or([eb('l.starts_on', 'is not', null), eb('l.ends_on', 'is not', null), eb('l.utm_campaign', 'is not', null)]))
+    .orderBy(sql`lower(l.name)`)
+    .orderBy('l.id')
+    .execute();
+  for (const r of rows) {
+    const list = out.get(r.post_id) ?? [];
+    list.push({ name: r.name, startsOn: day(r.starts_on), endsOn: day(r.ends_on), utmCampaign: r.utm_campaign, utmMedium: r.utm_medium });
     out.set(r.post_id, list);
   }
   return out;
