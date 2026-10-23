@@ -116,7 +116,7 @@ It reads usage as `crove_reporter` (set `CROVE_REPORTER_DB_PASSWORD`, applied by
 
 ## Security alerts
 
-Besides outages, the worker watches for signs of abuse (issue #996, plan §7.8 "Detective controls"). Every 5 minutes it asks the database for the signals below and, for each new one, logs `[security] ALERT <signal>: ...` and posts `[Crove] Security alert from <instance>: ...` to the same webhook as the prober (`ALERT_WEBHOOK_URL`, Telegram, Slack or Discord; set it on the worker too, as `docker-compose.yml` does). Without a webhook the alerts are in the worker's log only. The messages hold ids and counts, never an email, a name or a token.
+Besides outages, the worker watches for signs of abuse (issue #996, plan §7.8 "Detective controls"). Every 5 minutes it asks the database for the signals below and, for each new one, logs `[security] ALERT <signal>: ...` and posts `[Crove] Security alert from <instance>: ...` to the same webhook as the prober (`ALERT_WEBHOOK_URL`, Telegram, Slack or Discord; set it on the worker too, as `docker-compose.yml` does). Without a webhook the alerts are in the worker's log only. The messages hold ids and counts, never an email, a person's name or a token; the schema-change alert also names the database role, the command and the first changed object (schema and object name, never the statement text).
 
 | Signal | Fires when | What to do |
 |---|---|---|

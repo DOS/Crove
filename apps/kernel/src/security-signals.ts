@@ -7,7 +7,8 @@
 //   out_of_pipeline_ddl  schema changes made outside the migration pipeline (#1202), one alert per database session,
 //                        and out_of_pipeline_ddl_more for the sessions past the first 10 of a pass.
 // The database remembers what was alerted, so several workers alert once and a lasting signal repeats only after the
-// repeat interval. Messages hold ids and counts only: no email, name or token.
+// repeat interval. Messages hold ids and counts only: no email, name or token. The schema-change alerts also name the
+// database role, the command and the first changed object, never the statement text.
 import { sql } from 'kysely';
 import type { Db } from '@crove/db';
 import { postMessage, type WebhookTarget } from './alert.ts';
