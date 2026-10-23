@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -30,6 +30,7 @@ import { LabelPicker } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
 import { BestTimeButton } from '../components/social-best-time.tsx';
 import { EmojiPicker } from '../components/social-emoji.tsx';
+import { DuplicateNote, ownRewriteId, SHARED_REWRITE_ID } from '../components/social-duplicate.tsx';
 import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -1561,7 +1562,8 @@ const REWRITES = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi']
 
 // An AI rewrite of a text (#583): a proposal shown next to the text, which the member takes or leaves. Taking it marks
 // the post as AI-assisted.
-function AiRewrite({ text, title, connectionId, onAccept }: { text: string; title: string | null; connectionId?: string; onAccept: (next: { text: string; title: string | null }) => void }) {
+// id: the box's id, which the note about a text going out again on a channel links to (#1156).
+function AiRewrite({ id, text, title, connectionId, onAccept }: { id?: string; text: string; title: string | null; connectionId?: string; onAccept: (next: { text: string; title: string | null }) => void }) {
   const t = useTranslations('social');
   const [action, setAction] = useState<(typeof REWRITES)[number]>('shorten');
   // The text the proposal was made from: typed on since, it no longer fits and is not offered.
@@ -1575,7 +1577,7 @@ function AiRewrite({ text, title, connectionId, onAccept }: { text: string; titl
   const outdated = rewrite.data !== undefined && asked !== text;
   if (getConfig().aiEnabled !== true || !text.trim()) return null;
   return (
-    <div className="space-y-2 rounded-lg border border-dashed p-2">
+    <div id={id} className="space-y-2 rounded-lg border border-dashed p-2">
       <div className="flex flex-wrap items-center gap-2">
         <NativeSelect size="sm" value={action} aria-label={t('aiRewrite')} onChange={(e) => setAction(e.target.value as (typeof REWRITES)[number])}>
           {REWRITES.map((a) => (
@@ -1961,6 +1963,7 @@ function ChannelEditor({
   onAiUsed,
   slug,
   onRemoveAtAll,
+  duplicate,
 }: {
   provider: string;
   channel: string;
@@ -1979,6 +1982,8 @@ function ChannelEditor({
   slug?: string;
   // The same takedown time for every channel of the post that can take one (#861).
   onRemoveAtAll?: ((removeAt: string) => void) | undefined;
+  // Another post on this channel with the same text (#1156), and the text the server compared.
+  duplicate?: { of: DuplicateOf; checked: string } | null;
 }) {
   const t = useTranslations('social');
   // The link as the channel sends it, with its UTM tags (#585).
@@ -2058,6 +2063,7 @@ function ChannelEditor({
           </div>
           {!disabled && onAiUsed && (
             <AiRewrite
+              {...(connectionId ? { id: ownRewriteId(connectionId) } : {})}
               text={own.body}
               title={titled ? own.title || null : null}
               {...(connectionId ? { connectionId } : {})}
@@ -2120,6 +2126,14 @@ function ChannelEditor({
       />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
+      {/* Shown while the text is the one compared: changing a word clears it, and the next save checks again. */}
+      {duplicate && duplicateText(content.body) === duplicateText(duplicate.checked) && (
+        <DuplicateNote
+          provider={provider}
+          of={duplicate.of}
+          rewriteTarget={!disabled && onAiUsed && getConfig().aiEnabled === true ? (own.custom ? (connectionId ? ownRewriteId(connectionId) : null) : SHARED_REWRITE_ID) : null}
+        />
+      )}
       {!disabled && <BannedWordHints texts={ownTexts} words={banned} />}
       <PlatformPreview channel={channel} provider={provider} content={previewContent} readLink />
       {footer}
@@ -2224,6 +2238,7 @@ function SharedFields({
         {!disabled && <HashtagSuggestions text={base.body} connectionId={null} onAiUsed={onAiUsed} onPick={(tag) => onChange({ ...base, body: withHashtag(base.body, tag) })} />}
         {!disabled && onAiUsed && (
           <AiRewrite
+            id={SHARED_REWRITE_ID}
             text={base.body}
             title={needsTitle ? base.title || null : null}
             onAccept={(next) => {
@@ -2642,7 +2657,8 @@ function plannedRemoval(v: Variant): string | null {
   return at === null || at === 'invalid' ? null : at;
 }
 
-function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, string>; onDone: () => void }) {
+// rewriteTarget: the AI rewrite box of the text a channel sends, when the reviewer may use it (#1156).
+function ReviewPanel({ post, names, onDone, rewriteTarget }: { post: Post; names: Map<string, string>; onDone: () => void; rewriteTarget?: (v: Variant) => string | null }) {
   const t = useTranslations('social');
   const f = useFormat();
   const me = useQuery(orpc.me.get.queryOptions());
@@ -2714,6 +2730,10 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
       {waiting.map((v) => (
         <BannedWordReview key={`banned-${v.id}`} channel={names.get(v.connectionId) ?? providerName(v.provider)} matches={v.bannedWords} status={v.bannedWordsStatus} content={v.effective} settings={v.settings} />
       ))}
+      {/* The same text as another post on the channel (#1156): refused on X and LinkedIn, advice elsewhere. */}
+      {waiting.map((v) =>
+        v.duplicateOf ? <DuplicateNote key={`duplicate-${v.id}`} provider={v.provider} of={v.duplicateOf} channel={names.get(v.connectionId) ?? providerName(v.provider)} rewriteTarget={rewriteTarget?.(v) ?? null} /> : null,
+      )}
       {/* The review checklist (#1105): every item of the channels being approved, which the Approve button needs. */}
       <ReviewChecklistTicks variants={approvable} names={names} ticked={checked} onChange={setChecked} />
       {/* What changed since each channel's last decision (#944); nothing on a first review. */}
@@ -3008,7 +3028,8 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
     case 'ambiguous':
       return <p className="text-warning">{t('outcome.ambiguous')}</p>;
     case 'needs_attention':
-      return <p className="text-warning">{t('outcome.needsAttention')}</p>;
+      // Facebook called the post a duplicate (#1156): it may be this post from an earlier try, or the same text before.
+      return <p className="text-warning">{t(v.error?.code === POSSIBLE_DUPLICATE ? 'outcome.possibleDuplicate' : 'outcome.needsAttention')}</p>;
     case 'paused':
       return (
         <div className="space-y-1">
@@ -3041,6 +3062,15 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
       }
       // Discord refused a forum post or a thread before posting it (#1103): what to change.
       if (v.error?.code && v.error.code in DISCORD_OUTCOMES) return <p className="text-destructive">{t(`outcome.${DISCORD_OUTCOMES[v.error.code] as DiscordOutcome}`)}</p>;
+      // X or LinkedIn refused the same text as a recent post on the channel (#1156): change the text, then publish again.
+      if (v.error?.code === DUPLICATE_CONTENT) {
+        return (
+          <div className="space-y-1">
+            <p className="text-destructive">{t('outcome.duplicateContent', { platform: providerName(v.provider) })}</p>
+            {said}
+          </div>
+        );
+      }
       // Kept by the org's publishing hold until more than an hour past its time (#946): nothing was sent.
       if (v.error?.code === 'HELD_TOO_LONG') return <p className="text-warning">{t('outcome.heldTooLong')}</p>;
       // TikTok refused an inbox upload for the missing video.upload grant (#903): a reconnect fixes it.
@@ -3419,6 +3449,9 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const metricsOf = new Map((metrics.data ?? []).map((r) => [r.variantId, r]));
   const error = save.error ?? submit.error ?? retryComment.error ?? retryThread.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
   const reviewable = !dirty && !stale;
+  // The AI rewrite box of the text a channel sends (#1156): its own text's, or the shared text's.
+  const rewriteTarget = (v: Variant): string | null =>
+    getConfig().aiEnabled === true && canWrite && EDITABLE.includes(v.status) && !save.isPending ? ((own[v.id] ?? ownOf(v)).custom ? ownRewriteId(v.connectionId) : SHARED_REWRITE_ID) : null;
 
   return (
     <div onKeyDown={onKey}>
@@ -3543,7 +3576,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
               <UtmFields utm={shownUtm} onChange={setUtm} disabled={save.isPending} />
             </Card>
           )}
-          {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} />}
+          {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} rewriteTarget={rewriteTarget} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           <LabelPicker slug={slug} postId={p.id} labelIds={p.labelIds} canWrite={canWrite} />
           {canWrite && p.recurrence === null && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
@@ -3591,6 +3624,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 statusError={v.error}
                 onChange={(next) => setOwn({ ...own, [v.id]: next })}
                 onRemoveAtAll={!frozen && p.variants.filter((x) => EDITABLE.includes(x.status)).length > 1 ? setRemoveAtAll : undefined}
+                duplicate={v.duplicateOf ? { of: v.duplicateOf, checked: v.effective.body } : null}
                 footer={
                   <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
                     {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (

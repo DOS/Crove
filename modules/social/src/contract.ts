@@ -22,3 +22,5 @@ export * from './domain/team-report.ts';
 export { csvCell } from './domain/csv.ts';
 // One draft per library file (#1080): the caption a file's name gives, as the command makes it.
 export * from './domain/bulk-drafts.ts';
+// The same text again on a channel (#1156): the composer compares as the member types, as social.post.get does.
+export * from './domain/duplicate.ts';

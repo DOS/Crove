@@ -513,6 +513,25 @@ suite('social publishing on PostgreSQL (S4)', () => {
     await expect(exec(o, 'social.variant.resolve', { variantIds: [variants[0]], outcome: 'dropped' })).rejects.toMatchObject({ code: 'VARIANT_STATE' });
   });
 
+  it("keeps Facebook's possible duplicate through a reconcile that finds nothing, so the page can say so (#1156)", async () => {
+    const o = await org();
+    const platform = new FakePlatform('reconcile_only');
+    platform.answers.push({ kind: 'unknown', code: 'POSSIBLE_DUPLICATE', message: 'Duplicate status message' }, { kind: 'unknown', code: 'TIMEOUT' });
+    const { postId, variants } = await duePost(o, 2);
+    for (const id of variants) expect(await run(o, id, platform)).toEqual({ action: 'call', status: 'ambiguous' });
+    // Nothing of this post is on the platform: the post the duplicate matched was an earlier one.
+    platform.posts = [];
+    for (const id of variants) {
+      await age(id, 90);
+      expect(await run(o, id, platform)).toEqual({ action: 'reconcile', status: 'needs_attention' });
+    }
+    const post = await get(o, postId);
+    expect(post.variants.map((v) => [v.status, v.error?.code])).toEqual([
+      ['needs_attention', 'POSSIBLE_DUPLICATE'],
+      ['needs_attention', 'NOT_FOUND_ON_PLATFORM'],
+    ]);
+  });
+
   it('treats a thrown or timed-out call as unknown, never as a failure to retry', async () => {
     const o = await org();
     const platform = new FakePlatform('reconcile_only');

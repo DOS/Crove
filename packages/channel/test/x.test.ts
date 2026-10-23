@@ -249,6 +249,18 @@ describe('XPublisher', () => {
     expect(await new XPublisher(APP, dead.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired' });
     const long = x({ 'POST api.x.com/2/tweets': [{ status: 403, body: { title: 'Forbidden', detail: 'Your Tweet text is too long.', type: 'about:blank', status: 403 } }] });
     expect(await new XPublisher(APP, long.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG' });
+    // The same text as a recent post (#1156), as public reports record X's answer: named, a fix of the text.
+    const dup = x({ 'POST api.x.com/2/tweets': [{ status: 403, body: { detail: 'You are not allowed to create a Tweet with duplicate content.', type: 'about:blank', title: 'Forbidden', status: 403 } }] });
+    expect(await new XPublisher(APP, dup.fetchImpl).publish(input())).toEqual({
+      kind: 'rejected',
+      error: 'bad_request',
+      code: 'DUPLICATE_CONTENT',
+      message: 'You are not allowed to create a Tweet with duplicate content.',
+      httpStatus: 403,
+    });
+    // Any other 403 stays a permission refusal.
+    const denied = x({ 'POST api.x.com/2/tweets': [{ status: 403, body: { detail: 'You are not permitted to perform this action.', type: 'about:blank', title: 'Forbidden', status: 403 } }] });
+    expect(await new XPublisher(APP, denied.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'permission', code: 'HTTP_403', httpStatus: 403 });
     const upload = x({ 'POST api.x.com/2/media/upload': [{ status: 503, body: {} }] });
     expect(await new XPublisher(APP, upload.fetchImpl).publish(input({ content: { ...input().content, media: [image] } }))).toMatchObject({ kind: 'rejected', error: 'transient' });
     expect(upload.calls.map((c) => c.route)).toEqual(['POST api.x.com/2/media/upload']);

@@ -127,6 +127,9 @@ describe('FacebookPagePublisher.publish', () => {
     for (const answer of [graphError(500, 2, 'Service temporarily unavailable'), graphError(400, 1, 'An unknown error occurred'), graphError(400, 506, 'Duplicate status message'), { body: {} }, new TypeError('fetch failed')]) {
       expect((await fake(answer).publisher.publish(input())).kind).toBe('unknown');
     }
+    // The duplicate keeps a code of its own (#1156), so the needs-attention view can say it may be one.
+    expect(await fake(graphError(400, 506, 'Duplicate status message')).publisher.publish(input())).toEqual({ kind: 'unknown', code: 'POSSIBLE_DUPLICATE', message: 'Duplicate status message' });
+    expect(await fake(graphError(400, 1, 'An unknown error occurred')).publisher.publish(input())).toEqual({ kind: 'unknown', code: '1', message: 'An unknown error occurred' });
   });
 
   it('refuses locally without calling Meta: no Page token, a malformed Page id, an empty post', async () => {

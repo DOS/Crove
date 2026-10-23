@@ -9,7 +9,7 @@
 // The post may carry a poll (never with media) and who may reply (#948), as poll and reply_settings.
 import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { commentResult, removeResult } from './comment.ts';
-import { holdsLink } from './text.ts';
+import { DUPLICATE_CONTENT, holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const X_HOSTS = ['api.x.com'] as const;
@@ -218,6 +218,9 @@ function publishResult(error: unknown): PublishResult {
   if (error.status === 429 || code === 'usage-capped') return { kind: 'rejected', error: 'rate_limited', code, message: error.message, httpStatus: error.status, ...(error.resetAt ? { retryAt: error.resetAt } : {}) };
   // Text over the account's limit (the checks cannot see the link the adapter appends): fix the post, not the account.
   if (/too long|shorter/i.test(error.message)) return { kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG', message: error.message, httpStatus: error.status };
+  // The same text as a recent post of the account (#1156): fix the text, not the account. X answers 403 with the detail
+  // "You are not allowed to create a Tweet with duplicate content." (public reports; confirm on a live account, #591).
+  if (error.status === 403 && /\bduplicate content\b/i.test(error.message)) return { kind: 'rejected', error: 'bad_request', code: DUPLICATE_CONTENT, message: error.message, httpStatus: error.status };
   // 402: the app's account has no credit left for posts; 403: the app or the account may not post this.
   if (error.status === 402 || error.status === 403) return { kind: 'rejected', error: 'permission', code, message: error.message, httpStatus: error.status };
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
