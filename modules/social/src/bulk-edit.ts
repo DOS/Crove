@@ -41,6 +41,7 @@ import { FROZEN, IN_FLIGHT } from './domain/state.ts';
 import { bannedChecker, bannedCommandBudget, bannedTooComplex, bannedWordsOf, type BannedCheck } from './banned-words.ts';
 import { channelScope, mayUse, type ChannelScope } from './channel-access.ts';
 import { MAX_LABELS_PER_POST } from './labels.ts';
+import { coverProblem } from './cover-check.ts';
 import { POST_COLUMNS, VARIANT_COLUMNS, base, hashOf, issuesOf, loadPostMedia, lockVariants, settingsOf, type PostRow, type Trx, type VariantRow } from './variants.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -330,12 +331,29 @@ async function planReplace(ctx: Pick<QueryContext, 'trx' | 'orgId' | 'actor' | '
   const scope = await channelScope(ctx);
   const check = bannedChecker(await bannedWordsOf(ctx.trx, ctx.orgId), bannedCommandBudget());
   const options = optionsOf(input);
+  let plans: ReplacePlan[];
   try {
-    return byId(input.postIds).map((postId) => planPost(postId, loaded.get(postId), scope, check, options));
+    plans = byId(input.postIds).map((postId) => planPost(postId, loaded.get(postId), scope, check, options));
   } catch (error) {
     if (error instanceof BannedWordsTooComplex) throw bannedTooComplex();
     throw error;
   }
+  // A channel's settings edit (its first comment) checks the channel's cover again; one whose cover no longer passes
+  // (its file gone, or no longer an image the channel takes) leaves the post out here, rather than refusing the whole
+  // command from a later nested edit.
+  for (const plan of plans) {
+    if (plan.skip !== null) continue;
+    const variants = loaded.get(plan.postId)?.variants ?? [];
+    for (const { variantId, edit } of plan.variants) {
+      const provider = variants.find((v) => v.id === variantId)?.provider;
+      if (edit.settings === undefined || provider === undefined) continue;
+      if (await coverProblem(ctx, provider, { ...edit.settings })) {
+        Object.assign(plan, { skip: 'over_limit', post: null, variants: [] });
+        break;
+      }
+    }
+  }
+  return plans;
 }
 
 // The refusals of a post's first nested edit that leave only that post out.

@@ -293,6 +293,21 @@ suite('social find and replace on PostgreSQL (#1144)', () => {
     expect((await get(o, dots)).body).toBe('$& axb [y]');
   });
 
+  // A first comment edit checks the channel's cover again: one whose file is gone leaves that post out before anything
+  // changes, and the others go on, rather than the whole command refusing.
+  it('leaves out a post whose channel cover no longer passes, and goes on with the others', async () => {
+    const o = await org();
+    const covered = await post(o, [o.a], { body: 'Có ảnh bìa' });
+    const plain = await post(o, [o.a], { body: 'Không ảnh bìa' });
+    for (const postId of [covered, plain]) await own(o, postId, o.a, { settings: { firstComment: 'Xem AB' } });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET settings = settings || jsonb_build_object('cover', jsonb_build_object('fileId', $3::text)) WHERE org_id = $1 AND post_id = $2", [o.orgId, covered, randomUUID()]));
+    const seen = await preview(o, o.member, { postIds: [covered, plain], find: 'AB', replace: 'CD' });
+    expect(Object.fromEntries(seen.posts.map((p) => [p.postId, p.skip]))).toEqual({ [covered]: 'over_limit', [plain]: null });
+    expect(await replace(o, o.member, { postIds: [covered, plain], find: 'AB', replace: 'CD' })).toEqual(expected(seen));
+    expect((await variantOn(o, covered, o.a)).settings.firstComment).toBe('Xem AB');
+    expect((await variantOn(o, plain, o.a)).settings.firstComment).toBe('Xem CD');
+  });
+
   it('refuses viewers and input past its bounds, changing nothing', async () => {
     const o = await org();
     const a = await post(o, [o.a], { body: 'Bài AB' });
