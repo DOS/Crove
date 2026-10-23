@@ -17,17 +17,23 @@ export type Suggestion = NonNullable<Item['suggestion']>;
 
 const MAX = 4000;
 
-/** The selection of a text box, followed as it changes (mouse, keyboard, typing); null when nothing is selected. */
+/**
+ * The selection of a text box, followed as it changes (mouse, keyboard, typing); null when nothing is selected. The
+ * events are read on the document and matched by the box's id, so a box that is shown again (another channel, another
+ * tab) is still followed.
+ */
 function useSelection(targetId: string): SelectedRange | null {
   const [range, setRange] = useState<SelectedRange | null>(null);
   useEffect(() => {
-    const box = document.getElementById(targetId);
-    if (!(box instanceof HTMLTextAreaElement)) return;
-    const read = () => setRange(selectedRange(box.value, box.selectionStart, box.selectionEnd));
+    const read = (event: Event) => {
+      const box = event.target;
+      if (!(box instanceof HTMLTextAreaElement) || box.id !== targetId) return;
+      setRange(selectedRange(box.value, box.selectionStart, box.selectionEnd));
+    };
     const events = ['select', 'keyup', 'mouseup', 'input', 'focus'] as const;
-    for (const e of events) box.addEventListener(e, read);
+    for (const e of events) document.addEventListener(e, read, true);
     return () => {
-      for (const e of events) box.removeEventListener(e, read);
+      for (const e of events) document.removeEventListener(e, read, true);
     };
   }, [targetId]);
   return range;
