@@ -3,13 +3,13 @@
 // nothing was found. Rendered on the server, with the query answered from a seeded cache.
 import { QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi as mock } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../src/i18n/provider.tsx';
 import { setActiveLocale } from '../src/i18n/runtime.ts';
 
-const client = mock.hoisted(() => ({ current: null as unknown as import('@tanstack/react-query').QueryClient }));
+const client = vi.hoisted(() => ({ current: null as unknown as import('@tanstack/react-query').QueryClient }));
 
-mock.mock('../src/lib/api.ts', async () => {
+vi.mock('../src/lib/api.ts', async () => {
   const { QueryClient: QC } = await import('@tanstack/react-query');
   client.current = new QC();
   // orpc.<a>.<b>.queryOptions(): keys are the path, nothing is ever fetched.
