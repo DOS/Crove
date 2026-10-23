@@ -12,6 +12,8 @@ CREATE INDEX IF NOT EXISTS post_variant_post_idx ON crove_social.post_variant (o
 CREATE INDEX IF NOT EXISTS watermark_file_idx ON crove_social.watermark (org_id, file_id);
 
 -- Replaces post_comment_variant_idx, a prefix of it with the same predicate, so writes keep one index and not two.
+-- Dropped first: its ACCESS EXCLUSIVE lock then covers the build, instead of upgrading from the build's SHARE lock,
+-- which can deadlock with a transaction already waiting on the table.
+DROP INDEX IF EXISTS crove_social.post_comment_variant_idx;
 CREATE INDEX IF NOT EXISTS post_comment_variant_post_idx
   ON crove_social.post_comment (org_id, variant_id, post_id) WHERE variant_id IS NOT NULL;
-DROP INDEX IF EXISTS crove_social.post_comment_variant_idx;
