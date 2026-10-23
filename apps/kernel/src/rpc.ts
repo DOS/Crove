@@ -439,6 +439,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         setLabels: os.social.posts.setLabels.handler(socialCommand('social.post.set_labels')),
         bulkLabels: os.social.posts.bulkLabels.handler(socialCommand('social.post.bulk_labels')),
         bulkAssign: os.social.posts.bulkAssign.handler(socialCommand('social.post.bulk_assign')),
+        bulkReplacePreview: os.social.posts.bulkReplacePreview.handler(socialQuery('social.post.bulk_replace_preview')),
+        bulkReplace: os.social.posts.bulkReplace.handler(socialCommand('social.post.bulk_replace')),
         createFromMedia: os.social.posts.createFromMedia.handler(({ context, input }) =>
           inSocial(context, (orgId, actor) => {
             const { idempotencyKey, ...rest } = input;

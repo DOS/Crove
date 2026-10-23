@@ -1517,9 +1517,11 @@ export const zSocialLabelCreate = z.strictObject({ name: zLabelName, color: z.en
 export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelName, color: z.enum(SOCIAL_LABEL_COLORS) });
 // Labels and the assignee on many posts at once (#1057): at most SOCIAL_BULK_EDIT_MAX posts per command, each once,
 // and why a post was left as it was: gone, published, not the caller's to change, already so, or over the ten labels a
-// post may carry.
+// post may carry. A find and replace (#1144) also leaves out a post where nothing matches, one with a channel going out
+// that the change would reach, one the change would take over a length or channel limit, one whose link would no longer
+// be a link, and one the change would give a blocked word.
 export const SOCIAL_BULK_EDIT_MAX = 100;
-export const SOCIAL_BULK_SKIP_REASONS = ['not_found', 'published', 'not_allowed', 'unchanged', 'too_many_labels'] as const;
+export const SOCIAL_BULK_SKIP_REASONS = ['not_found', 'published', 'not_allowed', 'unchanged', 'too_many_labels', 'no_match', 'in_flight', 'over_limit', 'invalid_link', 'banned_words'] as const;
 export type SocialBulkSkipReason = (typeof SOCIAL_BULK_SKIP_REASONS)[number];
 const unique = (ids: readonly string[]) => new Set(ids).size === ids.length;
 const zBulkPostIds = z.array(zId).min(1).max(SOCIAL_BULK_EDIT_MAX).refine(unique, 'each post once');
@@ -1533,6 +1535,37 @@ export const zSocialBulkLabels = z
 // The assignee (null: nobody) of every post; dueAt null clears the due date, left out keeps each post's own.
 export const zSocialBulkAssign = z.strictObject({ postIds: zBulkPostIds, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable().optional() });
 export const zSocialBulkResult = z.object({ done: z.array(zId), skipped: z.array(z.object({ postId: zId, reason: z.enum(SOCIAL_BULK_SKIP_REASONS) })) });
+// Find and replace across posts (#1144): literal text, never a pattern language, in at most SOCIAL_BULK_REPLACE_MAX
+// posts per command (each post may take a change of its base content and of each channel's own), a search as long as
+// the post list's search, a replacement as long as a link may be.
+export const SOCIAL_BULK_REPLACE_MAX = 50;
+export const SOCIAL_REPLACE_FIND_MAX = 200;
+export const SOCIAL_REPLACE_WITH_MAX = 2000;
+// Where a match is: the text, the title, the link, or a channel's first comment.
+export const SOCIAL_REPLACE_FIELDS = ['body', 'title', 'link', 'first_comment'] as const;
+export type SocialReplaceField = (typeof SOCIAL_REPLACE_FIELDS)[number];
+// No lone surrogate, so a match never starts or ends inside a character.
+const wellFormed = (s: string) => !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+export const zSocialBulkReplace = z.strictObject({
+  postIds: z.array(zId).min(1).max(SOCIAL_BULK_REPLACE_MAX).refine(unique, 'each post once'),
+  find: z.string().min(1).max(SOCIAL_REPLACE_FIND_MAX).refine(wellFormed, 'a broken character'),
+  replace: z.string().max(SOCIAL_REPLACE_WITH_MAX).refine(wellFormed, 'a broken character'),
+  caseSensitive: z.boolean().optional(),
+  wholeWord: z.boolean().optional(),
+});
+// One field's matches: on the post (variantId null) or on a channel's own content, how many, and the first in its
+// context, as the preview shows it.
+export const zSocialReplaceMatch = z.object({
+  variantId: zId.nullable(),
+  connectionId: zId.nullable(),
+  field: z.enum(SOCIAL_REPLACE_FIELDS),
+  count: z.number().int(),
+  before: z.string(),
+  match: z.string(),
+  after: z.string(),
+});
+// Per post, in the order the command changes them (by id): the matches, and why it would be left out (null: it changes).
+export const zSocialBulkReplacePreview = z.object({ posts: z.array(z.object({ postId: zId, skip: z.enum(SOCIAL_BULK_SKIP_REASONS).nullable(), matches: z.array(zSocialReplaceMatch) })) });
 // One draft per library file (#1080): at most SOCIAL_DRAFTS_FROM_MEDIA_MAX files, each once and in the order given,
 // for the channels named or a saved channel set; the caption is nothing, the file's name or a snippet's text; with
 // queue, each draft holds the next free slot of each channel's queue, in file order.

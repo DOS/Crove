@@ -593,8 +593,9 @@ export function SocialPage() {
         : listTab === 'attention'
           ? canDecide ? ['move', 'cancel'] : ['cancel']
           : [];
-  // Labels and the assignee on many posts at once (#1057), for members and above, in the lists, the board and the calendar.
-  const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign'] : [];
+  // Labels and the assignee on many posts at once (#1057), and find and replace (#1144), for members and above, in the
+  // lists, the board and the calendar.
+  const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign', 'replace'] : [];
   const listActions = bulkActions.length > 0 ? [...bulkActions, ...editActions] : [];
   const agendaActions: readonly BulkAction[] = [...(canDecide ? (['move'] as const) : []), ...editActions];
   const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: canWrite });
@@ -736,6 +737,7 @@ export function SocialPage() {
                 channelName={channelName}
                 labelOptions={labelList}
                 members={members}
+                findHint={search.q}
                 onClear={() => setPicked(new Set())}
               />
             </div>
@@ -768,6 +770,7 @@ export function SocialPage() {
                           channelName={channelName}
                           labelOptions={labelList}
                           members={members}
+                          findHint={search.q}
                           onClear={clear}
                         />
                       )
@@ -799,6 +802,7 @@ export function SocialPage() {
                         channelName={channelName}
                         labelOptions={labelList}
                         members={members}
+                        findHint={search.q}
                         onClear={() => setPicked(new Set())}
                       />
                     </div>
@@ -849,6 +853,7 @@ export function SocialPage() {
                       channelName={channelName}
                       labelOptions={labelList}
                       members={members}
+                      findHint={search.q}
                       onClear={() => setPicked(new Set())}
                     />
                     {/* One client review link for the posts selected (#902). */}

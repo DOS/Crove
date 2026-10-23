@@ -1,19 +1,20 @@
 // The bulk bar over the Social lists (#635, #945) as each role sees it: owners and admins get the move by days or hours,
 // members do not (social.variant.reschedule is theirs alone, and the server refuses anyone else anyway). Labels and the
-// assignee (#1057) are offered to members too; labels only once the org has one. Rendered on the server.
+// assignee (#1057) are offered to members too; labels only once the org has one. Find and replace (#1144) is offered to
+// members, and its preview shows each match with what replaces it and why a post is left out. Rendered on the server.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
 import { describe, expect, it, vi } from 'vitest';
-import { SOCIAL_BULK_SKIP_REASONS } from '@crove/kernel-contract';
+import { SOCIAL_BULK_SKIP_REASONS, SOCIAL_REPLACE_FIELDS } from '@crove/kernel-contract';
 import { en as enMessages } from '../src/i18n/messages/en.ts';
 import { vi as viMessages } from '../src/i18n/messages/vi.ts';
-import type { BulkAction, BulkPost } from '../src/lib/social-bulk.ts';
+import type { BulkAction, BulkPost, ReplacePreviewPost } from '../src/lib/social-bulk.ts';
 import { catalog } from '../src/i18n/runtime.ts';
 
 vi.mock('../src/lib/api.ts', () => ({ client: {}, queryClient: { invalidateQueries: () => undefined }, errorMessage: (e: unknown) => String(e) }));
 
-const { BulkBar } = await import('../src/components/social-bulk.tsx');
+const { BulkBar, ReplacePreview } = await import('../src/components/social-bulk.tsx');
 const t = viMessages.social.bulk;
 
 const posts: BulkPost[] = [
@@ -60,6 +61,47 @@ describe('BulkBar', () => {
     const html = bar(false, ['labels', 'assign']);
     expect(html).not.toContain(t.action.labels);
     expect(html).toContain(t.action.assign);
+  });
+
+  it('offers members find and replace', () => {
+    const html = bar(false, ['labels', 'assign', 'replace']);
+    expect(html).toContain(t.action.replace);
+  });
+
+  it('previews each match with what replaces it, and says why a post is left out', () => {
+    const vb = '00000000-0000-4000-8000-000000000010';
+    const posts: ReplacePreviewPost[] = [
+      {
+        postId: 'p1',
+        skip: null,
+        matches: [
+          { variantId: null, connectionId: null, field: 'body', count: 2, before: 'Mua tại ', match: 'XUAN2026', after: ' nhé' },
+          { variantId: vb, connectionId: 'cb', field: 'first_comment', count: 1, before: '', match: 'XUAN2026', after: '' },
+        ],
+      },
+      { postId: 'p2', skip: 'banned_words', matches: [{ variantId: null, connectionId: null, field: 'title', count: 1, before: '', match: 'XUAN2026', after: '' }] },
+      { postId: 'p3', skip: 'no_match', matches: [] },
+    ];
+    const html = renderToStaticMarkup(
+      <IntlProvider locale="vi" messages={catalog('vi')} timeZone="Asia/Ho_Chi_Minh">
+        <ReplacePreview posts={posts} replacement="HE2026" postName={(id) => 'Bài ' + id} channelName={() => 'Fanpage'} />
+      </IntlProvider>,
+    );
+    expect(html).toContain('1 bài sẽ được thay (3 chỗ), 2 bài giữ nguyên.');
+    expect(html).toContain('Nội dung của bài (2 chỗ):');
+    expect(html).toContain('Bình luận đầu tiên riêng của Fanpage (1 chỗ):');
+    expect(html).toContain('<del class="rounded-sm bg-destructive/10 line-through decoration-destructive">XUAN2026</del><ins class="rounded-sm bg-success/15 text-foreground no-underline">HE2026</ins> nhé');
+    expect(html).toContain('giữ nguyên vì ' + t.edit.skip.banned_words);
+    expect(html).toContain('giữ nguyên vì ' + t.edit.skip.no_match);
+    // A post left out shows its match, and no replacement.
+    expect(html.match(/<ins/g)).toHaveLength(2);
+  });
+
+  it('names every field a match can be in, in both languages', () => {
+    for (const field of SOCIAL_REPLACE_FIELDS) {
+      expect(t.replace.field[field]).toBeTruthy();
+      expect(enMessages.social.bulk.replace.field[field]).toBeTruthy();
+    }
   });
 
   it('names every skip reason the server gives, in both languages', () => {

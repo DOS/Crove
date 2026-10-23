@@ -24,6 +24,8 @@ import {
   zOAuthState,
   zSocialBulkAssign,
   zSocialBulkLabels,
+  zSocialBulkReplace,
+  zSocialBulkReplacePreview,
   zSocialBulkResult,
   channelsOrSet,
   zSocialDraftsFromMediaFields,
@@ -392,6 +394,10 @@ export const contract = {
       bulkLabels: oc.input(zSocialBulkLabels).output(zSocialBulkResult),
       // The assignee, and optionally the due date, of up to 100 posts at once (#1057), with the same answer.
       bulkAssign: oc.input(zSocialBulkAssign).output(zSocialBulkResult),
+      // Find and replace across up to 50 posts (#1144): the preview lists each post's matches and why a post would be
+      // left out; the replace changes each post through its single edits and answers as the bulk edits do.
+      bulkReplacePreview: oc.input(zSocialBulkReplace).output(zSocialBulkReplacePreview),
+      bulkReplace: oc.input(zSocialBulkReplace).output(zSocialBulkResult),
       // One draft per library file (#1080), all or none: every file is checked against every channel first, and a file
       // that does not fit one is reported with nothing saved. A retry with the same idempotencyKey returns the first answer.
       createFromMedia: oc.input(zSocialDraftsFromMediaFields.extend({ idempotencyKey: zId }).refine(channelsOrSet, 'channels or a channel set')).output(zSocialDraftsFromMediaResult),
