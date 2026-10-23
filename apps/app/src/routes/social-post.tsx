@@ -24,6 +24,7 @@ import { ReviewLinks } from '../components/social-review-links.tsx';
 import { PostActivity } from '../components/social-activity.tsx';
 import { boardMedia } from '../components/social-comment-pins.tsx';
 import { ReviewChanges } from '../components/social-review-diff.tsx';
+import { PreReviewFindings } from '../components/social-pre-review.tsx';
 import { PostVersions } from '../components/social-post-versions.tsx';
 import { BannedWordHints, BannedWordReview, useBannedWords } from '../components/social-banned-words.tsx';
 import { ReviewChecklistTicks } from '../components/social-review-checklist.tsx';
@@ -2794,6 +2795,8 @@ function ReviewPanel({ post, names, onDone, rewriteTarget }: { post: Post; names
       {waiting.map((v) =>
         v.duplicateOf ? <DuplicateNote key={`duplicate-${v.id}`} provider={v.provider} of={v.duplicateOf} channel={names.get(v.connectionId) ?? providerName(v.provider)} rewriteTarget={rewriteTarget?.(v) ?? null} /> : null,
       )}
+      {/* The automatic checks the content agent reads (#1193): its task holds counts only. */}
+      <PreReviewFindings postId={post.id} waiting={waiting} />
       {/* The review checklist (#1105): every item of the channels being approved, which the Approve button needs. */}
       <ReviewChecklistTicks variants={approvable} names={names} ticked={checked} onChange={setChecked} />
       {/* What changed since each channel's last decision (#944); nothing on a first review. */}

@@ -458,6 +458,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         list: os.social.posts.list.handler(socialQuery('social.post.list')),
         get: os.social.posts.get.handler(socialQuery('social.post.get')),
         reviewDiff: os.social.posts.reviewDiff.handler(socialQuery('social.post.review_diff')),
+        preReview: os.social.posts.preReview.handler(socialQuery('social.post.pre_review')),
         versions: os.social.posts.versions.handler(socialQuery('social.post.versions')),
         restoreVersion: os.social.posts.restoreVersion.handler(socialCommand('social.post.restore_version')),
         assign: os.social.posts.assign.handler(socialCommand('social.post.assign')),

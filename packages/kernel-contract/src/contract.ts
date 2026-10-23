@@ -36,6 +36,7 @@ import {
   zSocialPost,
   zSocialRecurrence,
   zSocialReviewDiff,
+  zSocialPreReview,
   zSocialPostVersions,
   zSocialPostCreate,
   zSocialPostUpdate,
@@ -345,6 +346,8 @@ export const contract = {
       get: oc.input(z.object({ postId: zId })).output(zSocialPost),
       // Per channel, the content of its last review decision next to its content now (#944), for the review panel's diff.
       reviewDiff: oc.input(z.strictObject({ postId: zId })).output(zSocialReviewDiff),
+      // What the automatic checks found on the channels waiting for review (#1193), as the content agent reads it.
+      preReview: oc.input(z.strictObject({ postId: zId })).output(zSocialPreReview),
       // The post's saved versions, newest first (#1021), at most 50.
       versions: oc.input(z.strictObject({ postId: zId })).output(zSocialPostVersions),
       // Saves a version again as a new edit (#1021): changed channels go back to draft; channels that are history keep

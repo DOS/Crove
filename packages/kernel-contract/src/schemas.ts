@@ -1402,6 +1402,14 @@ export const zSocialReviewDiff = z.object({
   ),
 });
 
+// What the deterministic checks of social.post.pre_review found for the channels waiting for review (#799), shown in
+// the post page's review panel (#1193): channels still waiting, and each finding as a sentence (at most 30).
+export const zSocialPreReview = z.object({
+  postId: zId,
+  waiting: z.number().int().nonnegative(),
+  findings: z.array(z.string()),
+});
+
 // A post's saved versions, newest first (#1021): who saved each and when, and per channel of the version what it showed.
 // createdBy is null for the content a post had before its first saved version.
 export const zSocialPostVersions = z.object({

@@ -159,7 +159,7 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
   await refreshPostStatus(ctx, post.id);
   ctx.audit({ post_id: post.id, ...(options.repostOf ? { repost_of: source.id } : { copy_of: source.id }), variants: created.length });
   await ctx.emit('social.post.created', { post_id: post.id, ...(options.repostOf ? { repost_of: source.id } : { copy_of: source.id }) });
-  if (submitted.length > 0) await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: submitted, agent_task: await agentTaskOf(ctx, post.id) });
+  if (submitted.length > 0) await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: submitted, agent_task: await agentTaskOf(ctx, post.id, submitted.length) });
   return { postId: post.id, submitted: submitted.length };
 }
 
