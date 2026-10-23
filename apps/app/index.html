@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- The installable app and its share target (issue #1235); under /assets, which the kernel serves, like theme-boot.js. -->
+    <link rel="manifest" href="/assets/manifest.webmanifest" />
     <!-- Applies the stored theme before the first paint (issue #484); under /assets because the kernel serves only that
          folder and the favicon from the build. -->
     <script src="/assets/theme-boot.js"></script>

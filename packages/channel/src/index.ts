@@ -323,6 +323,27 @@ export type RemoveResult =
   | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string; retryAt?: Date }
   | { kind: 'unknown'; code?: string };
 
+// Correcting a published post's text on its platform (#1223). content: the post as it goes out after the edit, built
+// as for publishing (the new text with its signature, the link with its UTM tags or short link, and the media it went
+// out with, by file, never read again); only the text changes on the platform, and the adapter keeps everything else
+// the post has there (its media, buttons, content warning, thread). Text only: a poll, a Story or a Reel is refused
+// before any call. The same text twice is harmless, so an edit may be asked again after a failed or unclear one.
+export interface EditInput {
+  externalAccountId: string;
+  secret: string;
+  // The published post's id, as publish returned it.
+  externalId: string;
+  content: PublishContent;
+  settings: Readonly<Record<string, unknown>>;
+  // The external_call key of this edit.
+  callKey: string;
+}
+// edited: the platform confirmed the new text; rejected: the post shows what it showed before; unknown: it may show
+// either.
+export type EditResult =
+  | { kind: 'edited' }
+  | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string }
+  | { kind: 'unknown'; code?: string };
 
 export interface Publisher {
   readonly provider: ChannelProviderId;
@@ -359,6 +380,8 @@ export interface Publisher {
   playlist?(input: PlaylistInput): Promise<CommentResult>;
   // Providers that take a published post down (#860), when a person asks.
   remove?(input: RemoveInput): Promise<RemoveResult>;
+  // Providers that correct a published post's text (#1223), when a person asks. Never retried by itself.
+  edit?(input: EditInput): Promise<EditResult>;
   // Providers whose channel offers options to pick from in the composer (#1120), read by the worker only.
   options?(input: ChannelOptionsInput): Promise<ChannelOptionsResult>;
 }
@@ -421,6 +444,16 @@ export class SandboxPublisher implements Publisher {
     const posts = this.accounts.get(input.externalAccountId) ?? [];
     this.accounts.set(input.externalAccountId, posts.filter((p) => p.id !== input.externalId));
     return { kind: 'removed' };
+  }
+
+  // Changes the text of a post the sandbox holds (#1223); one it no longer holds cannot be edited.
+  async edit(input: EditInput): Promise<EditResult> {
+    const accessToken = (JSON.parse(input.secret) as { accessToken?: unknown }).accessToken;
+    if (typeof accessToken !== 'string' || !accessToken.startsWith('sbx_')) return { kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' };
+    const post = (this.accounts.get(input.externalAccountId) ?? []).find((p) => p.id === input.externalId);
+    if (!post) return { kind: 'rejected', error: 'bad_request', code: 'NO_SUCH_POST' };
+    post.body = input.content.body;
+    return { kind: 'edited' };
   }
 
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {

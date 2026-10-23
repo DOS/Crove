@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head><title>Thẻ ẩn</title></head>
+<body>
+  <!-- <article><p>Bình luận cũ trong comment, rất dài, rất dài, rất dài, rất dài, rất dài, rất dài</p> -->
+  <script>document.write('<article><p>Văn bản do script viết ra, rất dài, rất dài, rất dài</p>');</script>
+  <article>
+    <h1>Bài chính</h1>
+    <script>var tpl = '</article><article><p>Không phải bài</p></article>';</script>
+    <style>main::after { content: "</main>"; }</style>
+    <template><article><p>Mẫu ẩn, rất dài, rất dài, rất dài, rất dài, rất dài</p></article></template>
+    <noscript><article><p>Chỉ khi tắt script</p></article></noscript>
+    <p>Đoạn thứ nhất của bài.</p>
+    <!-- </article> -->
+    <p>Đoạn thứ hai của bài.</p>
+  </article>
+</body>
+</html>

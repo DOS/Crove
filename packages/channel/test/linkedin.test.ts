@@ -778,3 +778,54 @@ describe('LinkedIn remove (#1138)', () => {
     expect(JSON.stringify(result)).not.toContain('li-token-1');
   });
 });
+
+describe('LinkedIn edit (#1223)', () => {
+  const URN = 'urn:li:share:6844785523593134080';
+  const ROUTE = `POST api.linkedin.com/rest/posts/${encodeURIComponent(URN)}`;
+  const edit = (fetchImpl: Fetch, over: { body?: string; settings?: Record<string, unknown>; externalId?: string } = {}) =>
+    new LinkedInPublisher({}, fetchImpl).edit({
+      externalAccountId: MEMBER,
+      secret: SECRET,
+      externalId: over.externalId ?? URN,
+      content: { body: over.body ?? 'Giá đúng (Q1): #khaitruong', title: null, linkUrl: 'https://example.com/a', media: [image('a')] },
+      settings: over.settings ?? {},
+      callKey: 'edit-1',
+    });
+
+  it('sets the commentary alone with a Rest.li PARTIAL_UPDATE, escaped as at publish, answered 204', async () => {
+    const { fetchImpl, calls } = linkedin({ [ROUTE]: [{ status: 204 }] });
+    expect(await edit(fetchImpl)).toEqual({ kind: 'edited' });
+    expect(calls.map((c) => c.route)).toEqual([ROUTE]);
+    expect(calls[0]?.body).toEqual({ patch: { $set: { commentary: littleText('Giá đúng (Q1): #khaitruong\n\nhttps://example.com/a') } } });
+    const headers = calls[0]?.headers;
+    expect(headers?.get('x-restli-method')).toBe('PARTIAL_UPDATE');
+    expect(headers?.get('linkedin-version')).toBe(LINKEDIN_VERSION);
+    expect(headers?.get('x-restli-protocol-version')).toBe('2.0.0');
+    expect(headers?.get('authorization')).toBe('Bearer li-token-1');
+  });
+
+  it('edits a page post with the same call', async () => {
+    const ugc = 'urn:li:ugcPost:6856810298419044352';
+    const route = `POST api.linkedin.com/rest/posts/${encodeURIComponent(ugc)}`;
+    const { fetchImpl, calls } = linkedin({ [route]: [{ status: 204 }] });
+    expect(await new LinkedInPagePublisher({}, fetchImpl).edit({ externalAccountId: '2414183', secret: SECRET, externalId: ugc, content: { body: 'Sửa lại', title: null, linkUrl: null, media: [] }, settings: {}, callKey: 'edit-1' })).toEqual({ kind: 'edited' });
+    expect(calls.map((c) => c.route)).toEqual([route]);
+  });
+
+  it('maps a post gone, a refusal, a conflict and an outage, and calls nothing for a poll or a malformed id', async () => {
+    const gone = linkedin({ [ROUTE]: [{ status: 404, body: { status: 404, code: 'NOT_FOUND', message: 'Not Found' } }] });
+    expect(await edit(gone.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    const denied = linkedin({ [ROUTE]: [{ status: 403, body: { status: 403, code: 'ACCESS_DENIED', message: 'Not enough permissions' } }] });
+    expect(await edit(denied.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'ACCESS_DENIED' });
+    const long = linkedin({ [ROUTE]: [{ status: 400, body: { status: 400, code: 'FIELD_LENGTH_TOO_LONG', message: 'commentary length exceeds the allowed maximum' } }] });
+    expect(await edit(long.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'FIELD_LENGTH_TOO_LONG' });
+    const conflict = linkedin({ [ROUTE]: [{ status: 409, body: { status: 409, code: 'CONFLICT', message: 'A write conflict occurred' } }] });
+    expect(await edit(conflict.fetchImpl)).toEqual({ kind: 'rejected', error: 'transient', code: 'CONFLICT' });
+    const down = linkedin({ [ROUTE]: [{ status: 503, body: { status: 503, code: 'SERVICE_UNAVAILABLE', message: 'Service Unavailable' } }] });
+    expect(await edit(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'SERVICE_UNAVAILABLE' });
+    const none = linkedin({});
+    expect(await edit(none.fetchImpl, { settings: { poll: { options: ['Có', 'Không'], durationMinutes: 1440 } } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(await edit(none.fetchImpl, { externalId: 'urn:li:person:yrZCpj2Z12' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(none.calls).toHaveLength(0);
+  });
+});

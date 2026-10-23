@@ -73,8 +73,10 @@ const versionRow = (orgId: string, postId: string, state: SavedState, number: nu
 
 // Appends the post's content as the save left it, when it differs from the content before the save. A post with no
 // version yet first keeps the content before (number 1, no author, dated when the post last changed). The caller holds
-// the post's row lock, so numbers never race; versions past the newest MAX_VERSIONS_PER_POST are deleted here.
-export async function recordVersion(ctx: CommandContext, postId: string, before: SavedState): Promise<number | null> {
+// the post's row lock, so numbers never race; versions past the newest MAX_VERSIONS_PER_POST are deleted here. by: the
+// person the version is theirs, when the save is the worker's on their behalf (a correction of a published text the
+// platform confirmed, #1223); else the caller.
+export async function recordVersion(ctx: CommandContext, postId: string, before: SavedState, by?: string | null): Promise<number | null> {
   const after = await readSnapshot(ctx.trx, ctx.orgId, postId);
   if (sameSnapshot(before.snapshot, after.snapshot)) return null;
   const latest = await ctx.trx
@@ -84,7 +86,7 @@ export async function recordVersion(ctx: CommandContext, postId: string, before:
     .where('post_id', '=', postId)
     .executeTakeFirst();
   const { baseline, next, pruneUpTo } = versionNumbers(latest?.n ?? null);
-  const author = ctx.actor.type === 'user' ? ctx.actor.userId : null;
+  const author = by !== undefined ? by : ctx.actor.type === 'user' ? ctx.actor.userId : null;
   const rows = [...(baseline === null ? [] : [versionRow(ctx.orgId, postId, before, baseline, null, before.updatedAt)]), versionRow(ctx.orgId, postId, after, next, author, ctx.now)];
   await ctx.trx.insertInto('crove_social.post_version').values(rows).execute();
   if (pruneUpTo > 0) {
@@ -94,10 +96,10 @@ export async function recordVersion(ctx: CommandContext, postId: string, before:
 }
 
 // Runs a save of a post whose row lock the caller holds, and appends a version when the save changed its content.
-export async function withVersion<T>(ctx: CommandContext, postId: string, save: () => Promise<T>): Promise<T> {
+export async function withVersion<T>(ctx: CommandContext, postId: string, save: () => Promise<T>, by?: string | null): Promise<T> {
   const before = await readSnapshot(ctx.trx, ctx.orgId, postId);
   const result = await save();
-  await recordVersion(ctx, postId, before);
+  await recordVersion(ctx, postId, before, by);
   return result;
 }
 

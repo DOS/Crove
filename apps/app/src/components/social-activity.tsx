@@ -93,12 +93,12 @@ function Entry({ item, channel, canWrite, pinNumber, onBoard }: { item: Item; ch
       data-resolved={resolved || undefined}
     >
       <p className="text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{item.kind === 'published' || item.kind === 'failed' || item.kind === 'cancelled' || item.kind === 'auto_replied' || item.kind === 'auto_reply_failed' || item.kind === 'reposted' || item.kind === 'repost_failed' ? (channel ?? t('channel')) : who}</span>{' '}
+        <span className="font-medium text-foreground">{item.kind === 'published' || item.kind === 'failed' || item.kind === 'cancelled' || item.kind === 'auto_replied' || item.kind === 'auto_reply_failed' || item.kind === 'reposted' || item.kind === 'repost_failed' || item.kind === 'live_edited' || item.kind === 'live_edit_failed' ? (channel ?? t('channel')) : who}</span>{' '}
         {what}
-        {channel && !['published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed'].includes(item.kind) ? ` · ${channel}` : ''} · <time dateTime={item.at}>{f.dateTime(item.at)}</time>
+        {channel && !['published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'live_edited', 'live_edit_failed'].includes(item.kind) ? ` · ${channel}` : ''} · <time dateTime={item.at}>{f.dateTime(item.at)}</time>
         {item.editedAt ? ` · ${t('edited')}` : ''}
       </p>
-      {(item.kind === 'failed' || item.kind === 'auto_reply_failed' || item.kind === 'repost_failed') && item.code && <p className="font-mono text-xs text-warning">{item.code}</p>}
+      {(item.kind === 'failed' || item.kind === 'auto_reply_failed' || item.kind === 'repost_failed' || item.kind === 'live_edit_failed') && item.code && <p className="font-mono text-xs text-warning">{item.code}</p>}
       {/* The review checklist items the reviewer ticked when approving (#1105). */}
       {item.kind === 'decision' && <TickedChecks items={item.checklist} />}
       {item.kind === 'published' && item.url && /^https?:\/\//.test(item.url) && (

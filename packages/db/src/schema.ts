@@ -440,6 +440,9 @@ export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed
 // Why a channel's daily account snapshot has no counts (#645), and why a bring-in of its outside posts found none (#1054).
 export const SOCIAL_ACCOUNT_SNAPSHOT_ERRORS = ['no_answer', 'token_expired', 'permission'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
+// Where a correction of a published variant's text stands (#1223): on its way, refused, or unclear.
+export const SOCIAL_EDIT_STATES = ['pending', 'failed', 'unknown'] as const;
+export type SocialEditState = (typeof SOCIAL_EDIT_STATES)[number];
 // A link preview card (#641): waiting for the worker, read, or not readable and why.
 export const SOCIAL_LINK_PREVIEW_STATUSES = ['pending', 'ready', 'failed'] as const;
 export const SOCIAL_LINK_PREVIEW_ERRORS = ['invalid_url', 'blocked', 'dns', 'timeout', 'too_large', 'redirects', 'encoding', 'network', 'http', 'not_html'] as const;
@@ -505,6 +508,7 @@ export type SocialPostVariantTable = Refine<
   {
     status: Generated<SocialVariantStatus>;
     error_kind: (typeof SOCIAL_ERROR_KINDS)[number] | null;
+    edit_state: SocialEditState | null;
   }
 >;
 export type SocialReviewFeedbackTable = Refine<G.SocialReviewFeedbackTable, { verdict: ColumnType<SocialReviewVerdict, never, never> }>;

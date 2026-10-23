@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runEditJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
@@ -249,6 +249,15 @@ interface SocialRemoveJob {
   variantId: string;
   provider: string;
   // The last remove call the person saw when they asked (null: none was made).
+  after: string | null;
+}
+
+// A person asked for a published variant's text to be corrected on its platform (#1223).
+interface SocialEditJob {
+  orgId: string;
+  variantId: string;
+  provider: string;
+  // The last edit call the person saw when they asked (null: none was made).
   after: string | null;
 }
 
@@ -714,6 +723,13 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const done = await runRemoveJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, after);
       console.log(`[social-remove] ${provider.slice(0, 32)} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
     });
+    // Corrections of published text (#1223): one job per ask, on its own queue like removals.
+    await boss.work<SocialEditJob>(QUEUES.socialEdit, { batchSize: 1 }, async ([job]) => {
+      if (!job || !channels) return;
+      const { orgId, variantId, provider, after } = job.data;
+      const done = await runEditJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store, ...(deps.publicUrl ? { publicUrl: deps.publicUrl } : {}) }, orgId, variantId, provider, after);
+      console.log(`[social-edit] ${provider.slice(0, 32)} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
+    });
     // A channel's options for the composer (#1120): the token is opened here and goes to the adapter only. A few lists
     // are read at once (#1131), so one slow platform or site, within the list's deadline, does not hold every other
     // org's pickers behind it.
@@ -1166,6 +1182,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 const after = typeof row.payload.after === 'string' ? row.payload.after : null;
                 return boss.send(QUEUES.socialRemove, { orgId: row.org_id, variantId, provider, after } satisfies SocialRemoveJob, {
                   singletonKey: `${row.org_id}:${variantId}:remove:${after ?? '-'}`,
+                  retryLimit: 0,
+                });
+              }
+              // A person asked for a published post's text to be corrected (#1223): one job per ask, keyed by the call it saw.
+              if (social && row.type === 'social.variant.edit_requested') {
+                const provider = String(row.payload.provider);
+                const variantId = String(row.payload.variant_id);
+                const after = typeof row.payload.after === 'string' ? row.payload.after : null;
+                return boss.send(QUEUES.socialEdit, { orgId: row.org_id, variantId, provider, after } satisfies SocialEditJob, {
+                  singletonKey: `${row.org_id}:${variantId}:edit:${after ?? '-'}`,
                   retryLimit: 0,
                 });
               }
