@@ -334,7 +334,7 @@ export class TelegramPublisher implements Publisher {
     const poll = telegramPollOf(input.settings);
     if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
     if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
-    if (poll && (!text || utf16(text.normalize('NFC')) > TELEGRAM_POLL_QUESTION_MAX)) return { kind: 'rejected', error: 'bad_request', code: 'POLL_QUESTION_LENGTH' };
+    if (poll && (!text || utf16(text.normalize('NFC')) > TELEGRAM_POLL_QUESTION_MAX)) return { kind: 'rejected', error: 'bad_request', code: 'POLL_TEXT_LENGTH' };
     // Every file is read before the first call, so a read failure posts nothing.
     const files = new Map<string, { bytes: Uint8Array; mime: string }>();
     for (const [i, m] of media.entries()) {

@@ -272,8 +272,8 @@ describe('Telegram publish', () => {
       const publisher = new TelegramPublisher(fetchImpl);
       const poll = { options: ['Phở', 'Bún chả'] };
       expect(await publisher.publish(input({ content: { body: 'Món mới', title: null, linkUrl: null, media: [photo('f1')] }, settings: { poll } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' });
-      expect(await publisher.publish(asked({ poll }, 'x'.repeat(301)))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_QUESTION_LENGTH' });
-      expect(await publisher.publish(asked({ poll }, 'x'.repeat(290), 'https://example.com/menu'))).toMatchObject({ code: 'POLL_QUESTION_LENGTH' });
+      expect(await publisher.publish(asked({ poll }, 'x'.repeat(301)))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_TEXT_LENGTH' });
+      expect(await publisher.publish(asked({ poll }, 'x'.repeat(290), 'https://example.com/menu'))).toMatchObject({ code: 'POLL_TEXT_LENGTH' });
       for (const bad of [{ options: ['Phở'] }, { options: Array.from({ length: 13 }, (_, i) => String(i)) }, { options: ['Phở', 'x'.repeat(101)] }, { options: ['Phở', ' '] }, { ...poll, durationMinutes: 43_801 }, { ...poll, durationMinutes: 0 }, { ...poll, hideTotals: 'yes' }, 'có']) {
         expect(await publisher.publish(asked({ poll: bad }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' });
       }

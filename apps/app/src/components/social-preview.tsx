@@ -252,7 +252,7 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
       {title && <p className="mt-3 text-sm font-semibold text-foreground">{title}</p>}
       {content.topicTag && <p className="mt-2 text-xs font-medium text-link">{content.topicTag}</p>}
       <div className="mt-2">{body}</div>
-      {content.poll && content.poll.length > 0 && content.pollQuestion !== undefined && <p className="mt-2 text-sm font-semibold text-foreground">{content.pollQuestion.trim() || ' '}</p>}
+      {content.poll && content.poll.length > 0 && typeof content.pollQuestion === 'string' && <p className="mt-2 text-sm font-semibold text-foreground">{content.pollQuestion.trim() || ' '}</p>}
       {content.poll && content.poll.length > 0 && (
         <ul className="mt-2 space-y-1" aria-label={t('previewPoll')}>
           {content.poll.map((option, i) => (
