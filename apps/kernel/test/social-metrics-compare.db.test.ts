@@ -180,4 +180,15 @@ suite('social metrics against the window before (#947)', () => {
     expect(await totals(o, { days: 7, labelId })).toMatchObject({ posts: 1, metrics: { reach: 300 }, previous: { posts: 1, metrics: { reach: 100 } } });
     expect(await totals(o, { days: 7 })).toMatchObject({ posts: 1, metrics: { reach: 300 }, previous: { posts: 2, metrics: { reach: 5100 } } });
   });
+
+  // #1147: a Reel's total watch time adds up over posts; its average watch time does not, so the totals leave it out.
+  it('sums the Reels watch time but never their averages', async () => {
+    const o = await org();
+    const ig = await connection(o.orgId, o.owner, 'Instagram');
+    await published(o, ig, 1, { views: 100, avgWatchTimeMs: 12300, totalWatchTimeMs: 1_230_000 });
+    await published(o, ig, 2, { views: 50, avgWatchTimeMs: 8000, totalWatchTimeMs: 400_000 });
+    const t = await totals(o, { days: 7 });
+    expect(t.metrics).toEqual({ views: 150, totalWatchTimeMs: 1_630_000 });
+    expect(t.channels[0]?.metrics).toEqual({ views: 150, totalWatchTimeMs: 1_630_000 });
+  });
 });

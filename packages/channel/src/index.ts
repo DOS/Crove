@@ -189,13 +189,19 @@ export const POST_METRIC_NAMES = ['impressions', 'reach', 'reactions', 'comments
 // What a Story reports besides (#1082, Instagram's Story insights): replies, the taps forward and back, the exits and the
 // swipes to the next story (its navigation), the follows it brought and the profile visits from it.
 export const STORY_METRIC_NAMES = ['replies', 'tapsForward', 'tapsBack', 'exits', 'nextStory', 'follows', 'profileVisits'] as const;
-export const METRIC_NAMES = [...POST_METRIC_NAMES, ...STORY_METRIC_NAMES] as const;
+// What a Reel reports besides (#1147, Instagram's Reels insights), in milliseconds: the average time a play lasted and
+// the time it was played in all, replays included.
+export const REEL_METRIC_NAMES = ['avgWatchTimeMs', 'totalWatchTimeMs'] as const;
+// The names that are an average per post, not a count: a sum over posts means nothing, so totals leave them out.
+export const AVERAGE_METRIC_NAMES: readonly string[] = ['avgWatchTimeMs'];
+export const METRIC_NAMES = [...POST_METRIC_NAMES, ...STORY_METRIC_NAMES, ...REEL_METRIC_NAMES] as const;
 export type MetricName = (typeof METRIC_NAMES)[number];
 export interface MetricsInput {
   externalAccountId: string;
   secret: string;
   externalId: string;
-  // The variant's post type when it is not a feed post (#1082): a Story is asked for the Story metrics.
+  // The variant's post type when it is not a feed post (#1082): a Story is asked for the Story metrics, a Reel for its
+  // watch time besides (#1147).
   postType?: PostType;
 }
 export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extra?: Record<string, unknown> } | { refused: 'token_expired' | 'gone' } | null;

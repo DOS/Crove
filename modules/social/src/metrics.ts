@@ -6,7 +6,7 @@ import { sql, type RawBuilder } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { METRIC_NAMES, POST_METRIC_NAMES, STORY_METRIC_NAMES, postTypeOf, type PostType, type Publisher } from '@crove/channel';
+import { AVERAGE_METRIC_NAMES, METRIC_NAMES, POST_METRIC_NAMES, REEL_METRIC_NAMES, STORY_METRIC_NAMES, postTypeOf, type PostType, type Publisher } from '@crove/channel';
 import type { Db } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import type { Trx } from './variants.ts';
@@ -221,7 +221,8 @@ async function totalsWhere(trx: Trx, orgId: string, published: RawBuilder<unknow
       ${outsideCounts}
     ), sums AS (
       SELECT latest.conn, e.key, sum((e.value #>> '{}')::numeric) AS total FROM latest, jsonb_each(latest.metrics) e
-      WHERE jsonb_typeof(e.value) = 'number' GROUP BY latest.conn, e.key
+      -- An average per post (a Reel's average watch time, #1147) adds up to nothing: left out of the sums.
+      WHERE jsonb_typeof(e.value) = 'number' AND NOT (e.key = ANY(${[...AVERAGE_METRIC_NAMES]}::text[])) GROUP BY latest.conn, e.key
     ), clicks AS (
       SELECT v.conn, coalesce(sum(c.clicks), 0) AS clicks FROM v
       JOIN crove_social.short_link l ON l.org_id = v.org_id AND l.variant_id = v.id
@@ -304,12 +305,12 @@ async function latestMetrics(trx: Trx, orgId: string, input: MetricsFilter, limi
 // A cell as a spreadsheet reads it (domain/csv.ts, which the app shares through the contract).
 export { csvCell };
 
-// labelNames: each post's label names (#639), written as one cell joined by "; ". The Story counts (#1082) come last,
-// so the columns a sheet already reads keep their places.
+// labelNames: each post's label names (#639), written as one cell joined by "; ". The Story counts (#1082), then a
+// Reel's watch time in milliseconds (#1147), come last, so the columns a sheet already reads keep their places.
 export function metricsCsv(rows: readonly (MetricsRow & { text?: string })[], channelNames: ReadonlyMap<string, string>, labelNames: ReadonlyMap<string, readonly string[]> = new Map()): string {
-  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', 'labels', ...POST_METRIC_NAMES, 'captured_at', ...STORY_METRIC_NAMES];
+  const head = ['post_id', 'channel', 'provider', 'published_at', 'url', 'text', 'labels', ...POST_METRIC_NAMES, 'captured_at', ...STORY_METRIC_NAMES, ...REEL_METRIC_NAMES];
   const lines = rows.map((r) =>
-    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, (labelNames.get(r.postId) ?? []).join('; '), ...POST_METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt, ...STORY_METRIC_NAMES.map((m) => r.metrics[m] ?? null)]
+    [r.postId, channelNames.get(r.connectionId) ?? '', r.provider, r.publishedAt, r.externalUrl, r.text ?? r.excerpt, (labelNames.get(r.postId) ?? []).join('; '), ...POST_METRIC_NAMES.map((m) => r.metrics[m] ?? null), r.capturedAt, ...STORY_METRIC_NAMES.map((m) => r.metrics[m] ?? null), ...REEL_METRIC_NAMES.map((m) => r.metrics[m] ?? null)]
       .map(csvCell)
       .join(','),
   );

@@ -1436,8 +1436,9 @@ export const zSocialSnippet = z.object({
 const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string().trim().min(1).max(10_000), provider: z.string().min(1).max(32).nullable(), isTemplate: z.boolean() };
 export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
 export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
-// What works (#705): a group of a channel's posts and its median engagement against the channel's.
-const zInsightGroup = z.object({ key: z.string(), posts: z.number().int(), median: z.number(), ratio: z.number().nullable() });
+// What works (#705): a group of a channel's posts and its median engagement against the channel's; a format group also
+// the median average watch time in milliseconds of its posts that report one (#1147, Reels).
+const zInsightGroup = z.object({ key: z.string(), posts: z.number().int(), median: z.number(), ratio: z.number().nullable(), avgWatchTimeMs: z.number().optional() });
 const zInsightPost = z.object({ variantId: zId, postId: zId, excerpt: z.string(), publishedAt: z.string().nullable(), externalUrl: z.string().nullable(), engagement: z.number() });
 export const zSocialChannelInsights = z.object({
   connectionId: zId,

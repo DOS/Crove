@@ -108,4 +108,13 @@ describe('what works (#705)', () => {
     expect(c2).toMatchObject({ connectionId: 'c2', posts: 1, best: [{ variantId: 'w1', engagement: 50 }], worst: [] });
     expect(whatWorks([post('z', 0)], 'UTC')[0]?.byFormat).toEqual([{ key: 'text', posts: 1, median: 0, ratio: null }]);
   });
+
+  it("gives the Reels the median of their average watch time, from the Reels that report one (#1147)", () => {
+    const reel = (id: string, avgWatchTimeMs?: number) => post(id, 10, { format: 'reel', metrics: { reactions: 10, ...(avgWatchTimeMs === undefined ? {} : { avgWatchTimeMs }) } });
+    const [c] = whatWorks([reel('r1', 12300), reel('r2', 8000), reel('r3', 15000), reel('r4'), post('i1', 10, { format: 'image' })], 'UTC');
+    expect(c?.byFormat).toEqual([
+      { key: 'reel', posts: 4, median: 10, ratio: 1, avgWatchTimeMs: 12300 },
+      { key: 'image', posts: 1, median: 10, ratio: 1 },
+    ]);
+  });
 });

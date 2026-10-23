@@ -36,7 +36,8 @@ import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { clearDraft, loadDraft, saveDraft, type StoredDraft } from '../lib/social-draft.ts';
 import { canMoveToFront } from '../lib/social-queue-order.ts';
-import { STORY_METRICS } from '../lib/social-insights.ts';
+import { reelCounts, STORY_METRICS } from '../lib/social-insights.ts';
+import { WatchTimeItems } from '../components/social-reel-metrics.tsx';
 import { useChannelScope } from '../components/social-channel-access.tsx';
 import {
   CANCELLABLE,
@@ -3205,7 +3206,7 @@ function MoveToFront({ variantId, queueSlotAt, onDone }: { variantId: string; qu
   );
 }
 
-// Then a Story's own counts (#1082).
+// Then a Story's own counts (#1082); a Reel's watch time (#1147) comes after them, in its own units.
 const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks', ...STORY_METRICS] as const;
 
 // A published channel's latest counts, as the platform reported them; a count it does not report is left out.
@@ -3214,7 +3215,7 @@ function VariantMetrics({ row }: { row: { metrics: Record<string, number>; captu
   const f = useFormat();
   if (!row?.capturedAt) return <p className="text-subtle-foreground">{t('metricsNotYet')}</p>;
   const shown = POST_METRICS.filter((m) => row.metrics[m] !== undefined);
-  if (shown.length === 0) return <p className="text-subtle-foreground">{t('metricsNone', { when: f.dateTime(row.capturedAt) })}</p>;
+  if (shown.length === 0 && reelCounts(row.metrics).length === 0) return <p className="text-subtle-foreground">{t('metricsNone', { when: f.dateTime(row.capturedAt) })}</p>;
   return (
     <div className="space-y-1">
       <dl className="flex flex-wrap gap-x-4 gap-y-1">
@@ -3224,6 +3225,7 @@ function VariantMetrics({ row }: { row: { metrics: Record<string, number>; captu
             <dd className="font-medium text-foreground tabular-nums">{f.number(row.metrics[m] ?? 0)}</dd>
           </div>
         ))}
+        <WatchTimeItems metrics={row.metrics} />
       </dl>
       <p className="text-subtle-foreground">{t('metricsAt', { when: f.dateTime(row.capturedAt) })}</p>
     </div>
