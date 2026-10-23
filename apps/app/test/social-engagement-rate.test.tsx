@@ -24,7 +24,7 @@ vi.mock('../src/lib/api.ts', async () => {
   return { orpc: node([]), client: {}, queryClient: client.current, errorMessage: (e: unknown) => String(e), fetchFile: () => Promise.reject(new Error('not fetched')), uploadFiles: () => Promise.reject(new Error('not uploaded')) };
 });
 
-const { engagementRateOf } = await import('@crove/mod-social/contract');
+const { engagementRateOf, rateBasesOf } = await import('@crove/mod-social/contract');
 const { EngagementRateItem } = await import('../src/components/social-engagement-rate.tsx');
 const { ChannelTotals, EngagementRateCard } = await import('../src/components/social-growth.tsx');
 const { WhatWorks } = await import('../src/components/social-insights.tsx');
@@ -94,17 +94,27 @@ describe('engagement rate on the screens (#1157)', () => {
 
     it(`adds a rate column to the channels table, each channel over its own basis (${locale})`, () => {
       const current = [
-        { connectionId: 'c1', provider: 'facebook_page', posts: 3, metrics: REACH },
-        { connectionId: 'c2', provider: 'x', posts: 2, metrics: SHOWN },
-        { connectionId: 'c3', provider: 'bluesky', posts: 0, metrics: {} },
+        { connectionId: 'c1', provider: 'facebook_page', posts: 3, metrics: REACH, rateBases: rateBasesOf([REACH]) },
+        { connectionId: 'c2', provider: 'x', posts: 2, metrics: SHOWN, rateBases: rateBasesOf([SHOWN]) },
+        { connectionId: 'c3', provider: 'bluesky', posts: 0, metrics: {}, rateBases: {} },
       ];
-      const previous = [{ connectionId: 'c1', provider: 'facebook_page', posts: 2, metrics: { reach: 1000, reactions: 23 } }];
+      const previous = [{ connectionId: 'c1', provider: 'facebook_page', posts: 2, metrics: { reach: 1000, reactions: 23 }, rateBases: rateBasesOf([{ reach: 1000, reactions: 23 }]) }];
       const html = text(render(<ChannelTotals current={current} previous={previous} days={30} names={new Map([['c1', 'Trang A'], ['c2', 'X A'], ['c3', 'Bluesky A']])} />, locale));
       expect(html).toContain(w.label);
       // 3,45% against 2,3%: up 50%.
       expect(html).toContain(`${w.reach} ↑ 50%`);
       expect(html).toContain(`${w.shown} ${w.byImpressions}`);
       expect(html).not.toMatch(/Infinity|NaN/);
+    });
+
+    it(`takes a channel's rate from the posts that report reach when it mixes posts with and without reach (#1164, ${locale})`, () => {
+      // One post with reach and one without (an older capture): the plain sums would give 60 over 2000 (3%); the rate
+      // is the reached post's own 40 over 2000 (2%).
+      const posts = [{ reach: 2000, reactions: 40 }, { reactions: 20 }];
+      const sums = { reach: 2000, reactions: 60 };
+      const html = text(render(<ChannelTotals current={[{ connectionId: 'c1', provider: 'facebook_page', posts: 2, metrics: sums, rateBases: rateBasesOf(posts) }]} previous={[]} days={30} names={new Map([['c1', 'Trang A']])} />, locale));
+      expect(html).toContain(' 2%');
+      expect(html).not.toContain(' 3%');
     });
 
     it(`shows each What works group's and channel's rate when its posts report reach or impressions (${locale})`, () => {
@@ -167,6 +177,30 @@ describe('engagement rate on the screens (#1157)', () => {
       expect(html).toContain(`${w.shown} ${w.byImpressions}`);
       expect(html).toContain(`${w.label}: 2%`);
       expect(html).not.toMatch(/Infinity|NaN/);
+    });
+
+    it(`takes the client report's rate from its rate sums when the server sends them (#1164, ${locale})`, () => {
+      // The page's channel mixes a post with reach (40 over 2000) and one without (20): 2%, not the 3% of the sums.
+      client.current.setQueryData(['client-report', 'd'.repeat(43)], {
+        org: 'Cửa hàng Hoa Mai',
+        brand: null,
+        title: null,
+        periodStart: '2026-09-30T17:00:00.000Z',
+        periodEnd: '2026-10-31T17:00:00.000Z',
+        expiresAt: '2026-12-01T00:00:00.000Z',
+        posts: 2,
+        totals: { reach: 2000, reactions: 60 },
+        rateBases: { reach: { engagement: 40, denominator: 2000 } },
+        previous: { periodStart: '2026-08-30T17:00:00.000Z', periodEnd: '2026-09-30T17:00:00.000Z', posts: 0, totals: {}, rateBases: {} },
+        channels: [{ channel: 'Trang Hoa Mai', provider: 'facebook_page', posts: 2, totals: { reach: 2000, reactions: 60 }, rateBases: { reach: { engagement: 40, denominator: 2000 } }, previous: { posts: 0, totals: {}, rateBases: {} } }],
+        top: [],
+        note: null,
+        goals: null,
+      });
+      setActiveLocale(locale);
+      const html = text(render(<SocialReportPage />, locale));
+      expect(html).toContain(`${w.label} 2%`);
+      expect(html).not.toContain(`${w.label} 3%`);
     });
   }
 });

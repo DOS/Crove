@@ -10,6 +10,7 @@ export * from './errors.ts';
 export * from './eval.ts';
 export * from './proofread.ts';
 export * from './social.ts';
+export * from './summary.ts';
 
 export interface AiConfig {
   baseURL: string;

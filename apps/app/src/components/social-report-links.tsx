@@ -1,7 +1,8 @@
 // Client report links on the Metrics tab (#643): owners and admins make a link to a report of a period, on every
 // channel or the ones they pick, shown once to copy and send; the list says which are live, and revokes them. A link
 // may count only one label's posts (#1159, a campaign report; the client never sees the label's name) and may leave out
-// who follows the channels (#1155).
+// who follows the channels (#1155). Its note may start from an AI summary of the period (#1237), written into the field
+// and saved only with the link.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -21,6 +22,7 @@ import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { lastMonth, reportPeriod, reportUrl } from '../lib/social-report.ts';
 import { labelPeriod } from '../lib/social-labels.ts';
 import { providerName } from '../lib/social.ts';
+import { browserTimeZone, useCanSummarize, useSummaryLanguage } from './social-summary.tsx';
 
 const DAYS = [7, 30, 90] as const;
 
@@ -62,12 +64,35 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
       });
     },
     onSuccess: (r) => {
+      setNoteBefore(null);
       setMade({ url: reportUrl(window.location.origin, r.token), expiresAt: r.expiresAt });
       setCopied(false);
       refresh();
     },
   });
   const revoke = useMutation({ mutationFn: (linkId: string) => client.social.reportLinks.revoke({ linkId }), onSuccess: refresh });
+  // An AI summary of the period as the link would count it (its channels, label and outside posts), put in the note;
+  // the note it replaced can be brought back.
+  const canSummarize = useCanSummarize();
+  const language = useSummaryLanguage();
+  const [noteBefore, setNoteBefore] = useState<string | null>(null);
+  const summarize = useMutation({
+    mutationFn: () => {
+      if (!range) throw new Error(t('periodInvalid'));
+      const zone = browserTimeZone();
+      return client.social.metrics.writeSummary({
+        ...range,
+        ...(picked.size > 0 ? { connectionIds: [...picked] } : {}),
+        ...(labelId ? { labelId } : outside ? { includeExternal: true } : {}),
+        ...(zone ? { timeZone: zone } : {}),
+        language,
+      });
+    },
+    onSuccess: (r) => {
+      setNoteBefore(note.trim() ? note : null);
+      setNote(r.text);
+    },
+  });
   const copy = async () => {
     if (!made) return;
     try {
@@ -134,9 +159,31 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
         </div>
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor="report-note">{t('note')}</Label>
-        <Textarea id="report-note" value={note} maxLength={2000} rows={3} placeholder={t('notePlaceholder')} onChange={(e) => setNote(e.target.value)} />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Label htmlFor="report-note">{t('note')}</Label>
+          {canSummarize && (
+            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={!range || summarize.isPending} onClick={() => summarize.mutate()}>
+              {summarize.isPending ? t('summarizing') : t('summarize')}
+            </Button>
+          )}
+        </div>
+        <Textarea id="report-note" value={note} maxLength={2000} rows={summarize.data ? 6 : 3} placeholder={t('notePlaceholder')} onChange={(e) => setNote(e.target.value)} />
         <p className="text-xs text-subtle-foreground">{t('noteHint', { used: note.length })}</p>
+        {canSummarize && <p className="text-xs text-subtle-foreground">{t('summaryHint')}</p>}
+        {summarize.error && <ErrorText>{errorMessage(summarize.error)}</ErrorText>}
+        {noteBefore !== null && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-xs"
+            onClick={() => {
+              setNote(noteBefore);
+              setNoteBefore(null);
+            }}
+          >
+            {t('summaryUndo')}
+          </Button>
+        )}
       </div>
       {channels.length > 1 && (
         <fieldset className="space-y-1.5">

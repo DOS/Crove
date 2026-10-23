@@ -21,12 +21,24 @@ export interface EngagementRate {
   denominator: number;
 }
 
-/** The rate of a set of counts sets (posts, channels): reach first, impressions as the fallback; null without either. */
-export function engagementRateOf(units: readonly Readonly<Record<string, number>>[]): EngagementRate | null {
+// What a rate is made of (#1164), per basis: the engagement and the denominator summed over the posts that report that
+// denominator above 0 and at least one engagement count. A channel's or a period's totals sum each count over all its
+// posts, so when some posts report reach and others do not (older captures, posts published outside Crove), the
+// summed engagement holds posts the summed reach does not, and a rate from the totals reads high: rates come from these
+// sums instead, which the totals query and the client report carry next to the plain sums.
+export interface RateSums {
+  engagement: number;
+  denominator: number;
+}
+export type RateBases = { [B in EngagementRateBasis]?: RateSums | undefined };
+
+/** The rate sums of a set of posts' counts: only the posts that report each denominator count towards it. */
+export function rateBasesOf(posts: readonly Readonly<Record<string, number>>[]): RateBases {
+  const out: RateBases = {};
   for (const basis of ENGAGEMENT_RATE_BASES) {
     let engagement = 0;
     let denominator = 0;
-    for (const metrics of units) {
+    for (const metrics of posts) {
       const seen = metrics[basis];
       if (typeof seen !== 'number' || !Number.isFinite(seen) || seen <= 0) continue;
       const done = goalEngagement(metrics);
@@ -34,12 +46,43 @@ export function engagementRateOf(units: readonly Readonly<Record<string, number>
       engagement += done;
       denominator += seen;
     }
-    if (denominator > 0) {
-      const rate = engagement / denominator;
-      return Number.isFinite(rate) ? { rate, basis, engagement, denominator } : null;
+    if (denominator > 0) out[basis] = { engagement, denominator };
+  }
+  return out;
+}
+
+/** The sums of several units (channels, periods) added up, basis by basis. */
+export function addRateBases(units: readonly (RateBases | null | undefined)[]): RateBases {
+  const out: RateBases = {};
+  for (const basis of ENGAGEMENT_RATE_BASES) {
+    let engagement = 0;
+    let denominator = 0;
+    for (const unit of units) {
+      const sums = unit?.[basis];
+      if (!sums || !Number.isFinite(sums.denominator) || sums.denominator <= 0 || !Number.isFinite(sums.engagement)) continue;
+      engagement += sums.engagement;
+      denominator += sums.denominator;
     }
+    if (denominator > 0) out[basis] = { engagement, denominator };
+  }
+  return out;
+}
+
+/** The rate of units' sums (channels' rateBases): reach first, impressions as the fallback; null without either. */
+export function engagementRateOfBases(units: readonly (RateBases | null | undefined)[]): EngagementRate | null {
+  const sums = addRateBases(units);
+  for (const basis of ENGAGEMENT_RATE_BASES) {
+    const s = sums[basis];
+    if (!s) continue;
+    const rate = s.engagement / s.denominator;
+    return Number.isFinite(rate) ? { rate, basis, engagement: s.engagement, denominator: s.denominator } : null;
   }
   return null;
+}
+
+/** The rate of a set of posts' counts: reach first, impressions as the fallback; null without either. */
+export function engagementRateOf(units: readonly Readonly<Record<string, number>>[]): EngagementRate | null {
+  return engagementRateOfBases([rateBasesOf(units)]);
 }
 
 /** The rate of one post's or one channel's counts. */

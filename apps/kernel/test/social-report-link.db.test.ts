@@ -19,6 +19,19 @@ const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 const suite = ADMIN ? describe : describe.skip;
 
+// The rate sums (#1164) a report carries next to its totals, its previous period's and each channel's, left out: the
+// tests below that compare exact totals, and those that compare with the definitions before them, predate them.
+const withoutRates = <T,>(channels: readonly T[]): T[] =>
+  channels.map((c) => {
+    const { rateBases: _r, previous, ...rest } = c as T & { rateBases?: unknown; previous?: { rateBases?: unknown } };
+    if (!previous) return rest as T;
+    const { rateBases: _p, ...before } = previous;
+    return { ...rest, previous: before } as T;
+  });
+// SQL: a report_link_view answer without its rate sums.
+const WITHOUT_RATES = (page: string) =>
+  `((${page}) - 'rateBases' || pg_catalog.jsonb_build_object('previous', ((${page}) -> 'previous') - 'rateBases', 'channels', (SELECT coalesce(pg_catalog.jsonb_agg((x.c - 'rateBases') || pg_catalog.jsonb_build_object('previous', (x.c -> 'previous') - 'rateBases') ORDER BY x.n), '[]'::jsonb) FROM pg_catalog.jsonb_array_elements((${page}) -> 'channels') WITH ORDINALITY x(c, n))))`;
+
 suite('social report links on PostgreSQL (#643)', () => {
   const dbName = `crove_test_social_report_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   let adminUrl = '';
@@ -132,7 +145,7 @@ suite('social report links on PostgreSQL (#643)', () => {
     expect(page).toMatchObject({ title: 'Báo cáo tháng 10', posts: 3, totals: { reach: 1700, reactions: 135, comments: 10, shares: 5, views: 900 } });
     expect(page.org).toMatch(/^Cửa hàng /);
     expect(page.totals).not.toHaveProperty('secret_internal');
-    expect(page.channels).toEqual([
+    expect(withoutRates(page.channels)).toEqual([
       // The post of 28 September is in the 31 days before the period (#947).
       { channel: 'Trang Facebook', provider: 'sandbox', posts: 2, totals: { reach: 1400, reactions: 55, comments: 10, shares: 5 }, previous: { posts: 1, totals: { reach: 5000 } } },
       { channel: 'Zalo OA', provider: 'sandbox', posts: 1, totals: { reach: 300, reactions: 80, views: 900 }, previous: { posts: 0, totals: {} } },
@@ -173,7 +186,7 @@ suite('social report links on PostgreSQL (#643)', () => {
     const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { periodStart: '2026-10-01T00:00:00+07:00', periodEnd: '2026-11-01T00:00:00+07:00' });
     const page = (await view(token)) as ReportPage;
     expect(page.totals).toEqual({ reach: 150, reactions: 10, linkClicks: 12 });
-    expect(page.channels).toEqual([
+    expect(withoutRates(page.channels)).toEqual([
       { channel: 'Trang Facebook', provider: 'sandbox', posts: 1, totals: { reach: 100, reactions: 1, linkClicks: 12 }, previous: { posts: 0, totals: {} } },
       { channel: 'Zalo OA', provider: 'sandbox', posts: 1, totals: { reach: 50, reactions: 9, linkClicks: 0 }, previous: { posts: 0, totals: {} } },
     ]);
@@ -218,7 +231,7 @@ suite('social report links on PostgreSQL (#643)', () => {
     expect(Object.keys(page.previous.totals).sort()).toEqual(['linkClicks', 'reach', 'reactions']);
     expect(Date.parse(page.previous.periodStart)).toBe(Date.parse('2026-08-30T17:00:00Z'));
     expect(Date.parse(page.previous.periodEnd)).toBe(Date.parse(page.periodStart));
-    expect(page.channels).toEqual([
+    expect(withoutRates(page.channels)).toEqual([
       { channel: 'Trang Facebook', provider: 'sandbox', posts: 1, totals: { reach: 1200, reactions: 30 }, previous: { posts: 2, totals: { reach: 1200, reactions: 40, linkClicks: 4 } } },
       { channel: 'Zalo OA', provider: 'sandbox', posts: 1, totals: { reach: 100 }, previous: { posts: 0, totals: {} } },
       // Every channel that posted in either period, so the channels add up to both totals.
@@ -262,7 +275,7 @@ suite('social report links on PostgreSQL (#643)', () => {
     const page = (await view(token)) as ReportPage;
     const storyCounts = { replies: 7, tapsForward: 120, tapsBack: 15, exits: 30, nextStory: 12, follows: 3, profileVisits: 9 };
     expect(page.totals).toEqual({ reach: 400, views: 420, shares: 2, reactions: 5, ...storyCounts });
-    expect(page.channels).toEqual([{ channel: 'Instagram shop', provider: 'sandbox', posts: 2, totals: { reach: 400, views: 420, shares: 2, reactions: 5, ...storyCounts }, previous: { posts: 0, totals: {} } }]);
+    expect(withoutRates(page.channels)).toEqual([{ channel: 'Instagram shop', provider: 'sandbox', posts: 2, totals: { reach: 400, views: 420, shares: 2, reactions: 5, ...storyCounts }, previous: { posts: 0, totals: {} } }]);
     // The feed post's 5 reactions beat the Story's 2 shares: replies, taps and the rest do not make a post do better.
     expect(page.top.map((p) => [p.excerpt, p.metrics])).toEqual([
       ['Bài thường', { reach: 100, reactions: 5 }],
@@ -294,7 +307,7 @@ suite('social report links on PostgreSQL (#643)', () => {
       const read = async () => (await c.query<{ page: string }>('SELECT crove_social.report_link_view($1)::text AS page', [token])).rows[0]?.page;
       // The audience list (#1146) and the Reels (#1151) came after: left out of today's answer, which has the audience
       // empty here.
-      const current = (await c.query<{ page: string; audience: string }>("SELECT (crove_social.report_link_view($1) - ARRAY['audience', 'reels'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience", [token])).rows[0];
+      const current = (await c.query<{ page: string; audience: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
       expect(current?.audience).toEqual([]);
       await c.query('BEGIN');
       try {
@@ -366,7 +379,7 @@ suite('social report links on PostgreSQL (#643)', () => {
     const previous = readFileSync(join(MIGRATIONS, '20261028240000_crove_social_story_report.sql'), 'utf8');
     const [now, audience, before] = await admin(async (c) => {
       // The Reels (#1151) came after.
-      const current = (await c.query<{ page: string; audience: unknown }>("SELECT (crove_social.report_link_view($1) - ARRAY['audience', 'reels'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience", [token])).rows[0];
+      const current = (await c.query<{ page: string; audience: unknown }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
       await c.query('BEGIN');
       try {
         await c.query(previous);
@@ -415,7 +428,7 @@ suite('social report links on PostgreSQL (#643)', () => {
     const page = (await view(token)) as ReportPage;
     expect(page).toMatchObject({ title: 'Chiến dịch tháng 10', posts: 2, totals: { reach: 1300, reactions: 70, linkClicks: 5 }, includesExternal: false, goals: null });
     expect(page.previous).toMatchObject({ posts: 1, totals: { reach: 400, reactions: 10 } });
-    expect(page.channels).toEqual([
+    expect(withoutRates(page.channels)).toEqual([
       { channel: 'Trang Facebook', provider: 'sandbox', posts: 1, totals: { reach: 1000, reactions: 50, linkClicks: 5 }, previous: { posts: 1, totals: { reach: 400, reactions: 10 } } },
       { channel: 'Zalo OA', provider: 'sandbox', posts: 1, totals: { reach: 300, reactions: 20 }, previous: { posts: 0, totals: {} } },
     ]);
@@ -568,7 +581,9 @@ suite('social report links on PostgreSQL (#643)', () => {
     const previous = readFileSync(join(MIGRATIONS, '20261029100000_crove_social_follower_demographics.sql'), 'utf8');
     const pages = await admin(async (c) => {
       const read = async (token: string, without: string) => (await c.query<{ page: string }>(`SELECT (crove_social.report_link_view($1) - ${without})::text AS page`, [token])).rows[0]?.page;
-      const now = [await read(plain.token, "'reels'"), await read(outside.token, "'reels'")];
+      // The rate sums (#1164) came after: left out of today's answer.
+      const readNow = async (token: string) => (await c.query<{ page: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - 'reels')::text AS page`, [token])).rows[0]?.page;
+      const now = [await readNow(plain.token), await readNow(outside.token)];
       const reels = (await c.query<{ reels: unknown }>("SELECT crove_social.report_link_view($1) -> 'reels' AS reels", [plain.token])).rows[0]?.reels;
       await c.query('BEGIN');
       try {

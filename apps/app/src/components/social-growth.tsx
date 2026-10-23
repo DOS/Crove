@@ -6,7 +6,7 @@ import { useTranslations } from 'use-intl';
 import { Card } from '@crove/ui/components/card';
 import { cn } from '@crove/ui/lib/utils';
 import { ErrorText, Spinner } from './ui.tsx';
-import { comparableRate, engagementRateOf, type EngagementRate } from '@crove/mod-social/contract';
+import { comparableRate, engagementRateOfBases, type EngagementRate, type RateBases } from '@crove/mod-social/contract';
 import { RateValue, useRateText } from './social-engagement-rate.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
@@ -107,7 +107,8 @@ export function ChangeChip({
 }
 
 // A period's engagement rate (#1157) as a totals card, on the Metrics tab and the client report: the sum over its
-// channels (engagementRateOf), with the change against the period before when that one is over the same basis.
+// channels' rate sums (engagementRateOfBases, #1164), with the change against the period before when that one is over
+// the same basis.
 export function EngagementRateCard({ current, previous, against, className }: { current: EngagementRate | null; previous: EngagementRate | null | undefined; against: string; className?: string }) {
   const t = useTranslations('social.engagementRate');
   const text = useRateText();
@@ -125,11 +126,12 @@ export function EngagementRateCard({ current, previous, against, className }: { 
   );
 }
 
-// A channel's engagement rate in a table cell, with its change against the period before over the same basis.
-export function EngagementRateCell({ current, previous, against }: { current: Readonly<Record<string, number>>; previous: Readonly<Record<string, number>> | undefined; against: string }) {
+// A channel's engagement rate in a table cell, from its rate sums (#1164: the posts that report reach, not the plain
+// sums), with its change against the period before over the same basis.
+export function EngagementRateCell({ current, previous, against }: { current: RateBases; previous: RateBases | undefined; against: string }) {
   const text = useRateText();
-  const now = engagementRateOf([current]);
-  const then = comparableRate(now, previous ? engagementRateOf([previous]) : null);
+  const now = engagementRateOfBases([current]);
+  const then = comparableRate(now, previous ? engagementRateOfBases([previous]) : null);
   return (
     <td className="px-3 py-2 text-right tabular-nums">
       <span className="block text-foreground">
@@ -145,6 +147,7 @@ interface ChannelTotal {
   provider: string;
   posts: number;
   metrics: Record<string, number>;
+  rateBases: RateBases;
 }
 
 // Each channel's posts, reach, engagement and engagement rate (#1157) in the window (#947), with the change against
@@ -191,7 +194,7 @@ export function ChannelTotals({ current, previous, days, names }: { current: rea
                   {cell(c.posts, then?.posts)}
                   {cell(c.metrics.reach, then?.metrics.reach)}
                   {cell(engagementOf(c.metrics), then ? engagementOf(then.metrics) : undefined)}
-                  <EngagementRateCell current={c.metrics} previous={then?.metrics} against={against} />
+                  <EngagementRateCell current={c.rateBases} previous={then?.rateBases} against={against} />
                 </tr>
               );
             })}
