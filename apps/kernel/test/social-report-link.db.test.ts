@@ -292,8 +292,9 @@ suite('social report links on PostgreSQL (#643)', () => {
     const previous = readFileSync(join(MIGRATIONS, '20261028200000_crove_social_report_external.sql'), 'utf8');
     const [now, before] = await admin(async (c) => {
       const read = async () => (await c.query<{ page: string }>('SELECT crove_social.report_link_view($1)::text AS page', [token])).rows[0]?.page;
-      // The audience list (#1146) came after: left out of today's answer, which has it empty here.
-      const current = (await c.query<{ page: string; audience: string }>("SELECT (crove_social.report_link_view($1) - 'audience')::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience", [token])).rows[0];
+      // The audience list (#1146) and the Reels (#1151) came after: left out of today's answer, which has the audience
+      // empty here.
+      const current = (await c.query<{ page: string; audience: string }>("SELECT (crove_social.report_link_view($1) - ARRAY['audience', 'reels'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience", [token])).rows[0];
       expect(current?.audience).toEqual([]);
       await c.query('BEGIN');
       try {
@@ -364,7 +365,8 @@ suite('social report links on PostgreSQL (#643)', () => {
     const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { periodStart: '2026-10-01T00:00:00+07:00', periodEnd: '2026-11-01T00:00:00+07:00' });
     const previous = readFileSync(join(MIGRATIONS, '20261028240000_crove_social_story_report.sql'), 'utf8');
     const [now, audience, before] = await admin(async (c) => {
-      const current = (await c.query<{ page: string; audience: unknown }>("SELECT (crove_social.report_link_view($1) - 'audience')::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience", [token])).rows[0];
+      // The Reels (#1151) came after.
+      const current = (await c.query<{ page: string; audience: unknown }>("SELECT (crove_social.report_link_view($1) - ARRAY['audience', 'reels'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience", [token])).rows[0];
       await c.query('BEGIN');
       try {
         await c.query(previous);
@@ -376,6 +378,209 @@ suite('social report links on PostgreSQL (#643)', () => {
     expect(audience).toEqual([]);
     expect(now).toBeTruthy();
     expect(now).toBe(before);
+  });
+
+  // A campaign report (#1159): a link of one label counts only the Crove posts with it, in the period and the one before.
+  const label = async (o: { orgId: string; owner: string }, name: string) => (await exec<{ labelId: string }>(o, o.owner, 'social.label.create', { name })).labelId;
+  const tag = (o: { orgId: string; owner: string }, postId: string, labelIds: string[]) => exec(o, o.owner, 'social.post.set_labels', { postId, labelIds });
+  const OCT = { periodStart: '2026-10-01T00:00:00+07:00', periodEnd: '2026-11-01T00:00:00+07:00' };
+
+  it("counts only the posts with the link's label, in both periods, without outside posts or goals (#1159)", async () => {
+    const o = await org();
+    const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
+    const zalo = await connection(o.orgId, o.owner, 'Zalo OA');
+    const sale = await label(o, 'Khuyến mãi tháng 10');
+    const other = await label(o, 'Tuyển dụng');
+    const a = await published(o, fb, 'Giảm giá 50%', '2026-10-05T03:00:00Z', { reach: 1000, reactions: 50 });
+    const b = await published(o, zalo, 'Mã giảm giá Zalo', '2026-10-12T03:00:00Z', { reach: 300, reactions: 20 });
+    const c = await published(o, fb, 'Tuyển nhân viên', '2026-10-15T03:00:00Z', { reach: 5000, reactions: 900 });
+    await published(o, fb, 'Không nhãn', '2026-10-20T03:00:00Z', { reach: 7000, reactions: 700 });
+    const before = await published(o, fb, 'Khuyến mãi tháng 9', '2026-09-10T03:00:00Z', { reach: 400, reactions: 10 });
+    await published(o, fb, 'Tháng 9 không nhãn', '2026-09-12T03:00:00Z', { reach: 9000 });
+    await tag(o, a, [sale]);
+    await tag(o, b, [sale, other]);
+    await tag(o, c, [other]);
+    await tag(o, before, [sale]);
+    await shortLink(o, a, 1, { '2026-10-08': 5 });
+    // An outside post and a goal of the month: neither is in a label's report.
+    await admin((x) =>
+      x.query(
+        "INSERT INTO crove_social.external_post (org_id, channel_connection_id, external_post_id, excerpt, published_at, metrics) VALUES ($1, $2, 'ext_1', 'Bài ngoài', '2026-10-07T03:00:00Z', '{\"reach\": 800, \"reactions\": 80}')",
+        [o.orgId, fb],
+      ),
+    );
+    await exec(o, o.owner, 'social.goal.set', { connectionId: null, targets: { posts: 3 }, timeZone: 'Asia/Ho_Chi_Minh' });
+
+    const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, labelId: sale, title: 'Chiến dịch tháng 10' });
+    const page = (await view(token)) as ReportPage;
+    expect(page).toMatchObject({ title: 'Chiến dịch tháng 10', posts: 2, totals: { reach: 1300, reactions: 70, linkClicks: 5 }, includesExternal: false, goals: null });
+    expect(page.previous).toMatchObject({ posts: 1, totals: { reach: 400, reactions: 10 } });
+    expect(page.channels).toEqual([
+      { channel: 'Trang Facebook', provider: 'sandbox', posts: 1, totals: { reach: 1000, reactions: 50, linkClicks: 5 }, previous: { posts: 1, totals: { reach: 400, reactions: 10 } } },
+      { channel: 'Zalo OA', provider: 'sandbox', posts: 1, totals: { reach: 300, reactions: 20 }, previous: { posts: 0, totals: {} } },
+    ]);
+    expect(page.top.map((p) => p.excerpt)).toEqual(['Giảm giá 50%', 'Mã giảm giá Zalo']);
+    // The label is the agency's own word: its name is nowhere on the page.
+    expect(JSON.stringify(page)).not.toContain('Khuyến mãi');
+    expect(JSON.stringify(page)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    // A label with no posts in the period opens an empty report, never one of every post.
+    const empty = await label(o, 'Chưa dùng');
+    const none = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, labelId: empty });
+    expect(await view(none.token)).toMatchObject({ posts: 0, totals: {}, channels: [], top: [], previous: { posts: 0, totals: {} } });
+    // Without the label: every post, the outside one (when asked for) and the goals.
+    const all = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, includeExternal: true });
+    expect(await view(all.token)).toMatchObject({ posts: 5, includesExternal: true, goals: { month: '2026-10' } });
+    // A label link may not ask for outside posts, and the table refuses one that does.
+    await expect(exec(o, o.owner, 'social.report_link.create', { ...OCT, labelId: sale, includeExternal: true })).rejects.toMatchObject({ code: 'REPORT_LABEL_EXTERNAL', status: 422 });
+    await expect(
+      admin((x) =>
+        x.query(
+          "INSERT INTO crove_social.report_link (org_id, token_sha256, period_start, period_end, created_by, expires_at, label_id, include_external) VALUES ($1, repeat('a', 64), now(), now() + interval '1 day', $2, now() + interval '1 day', $3, true)",
+          [o.orgId, o.owner, sale],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '23514' });
+    // The list says which label each link reports on.
+    const list = await rt.query<ReportLinkView[]>('social.report_link.list', {}, { actor: asUser(o.member), orgId: o.orgId });
+    expect(list.map((l) => [l.labelId, l.includeAudience])).toEqual([
+      [null, true],
+      [empty, true],
+      [sale, true],
+    ]);
+  });
+
+  it("refuses another org's label, and a deleted label takes its links with it, never widening them (#1159)", async () => {
+    const o = await org();
+    const stranger = await org();
+    const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
+    const sale = await label(o, 'Khuyến mãi');
+    const keep = await label(o, 'Giữ lại');
+    const theirs = await label(stranger, 'Của họ');
+    const post = await published(o, fb, 'Giảm giá', '2026-10-05T03:00:00Z', { reach: 100 });
+    await published(o, fb, 'Bài khác', '2026-10-06T03:00:00Z', { reach: 9000 });
+    await tag(o, post, [sale, keep]);
+    await expect(exec(o, o.owner, 'social.report_link.create', { ...OCT, labelId: theirs })).rejects.toMatchObject({ code: 'LABEL_NOT_FOUND', status: 404 });
+    // The table refuses it too: the FK names the link's own org.
+    await expect(
+      admin((x) =>
+        x.query(
+          "INSERT INTO crove_social.report_link (org_id, token_sha256, period_start, period_end, created_by, expires_at, label_id) VALUES ($1, repeat('b', 64), now(), now() + interval '1 day', $2, now() + interval '1 day', $3)",
+          [o.orgId, o.owner, theirs],
+        ),
+      ),
+    ).rejects.toMatchObject({ code: '23503' });
+
+    const gone = await exec<{ token: string; linkId: string }>(o, o.owner, 'social.report_link.create', { ...OCT, labelId: sale });
+    const kept = await exec<{ token: string; linkId: string }>(o, o.owner, 'social.report_link.create', { ...OCT, labelId: keep });
+    const plain = await exec<{ token: string; linkId: string }>(o, o.owner, 'social.report_link.create', OCT);
+    expect(await view(gone.token)).toMatchObject({ posts: 1, totals: { reach: 100 } });
+    await exec(o, o.owner, 'social.label.delete', { labelId: sale });
+    // The link went with its label: its token opens nothing, as a revoked one's.
+    expect(await view(gone.token)).toBeNull();
+    const rows = await admin(async (x) => (await x.query<{ id: string }>('SELECT id FROM crove_social.report_link WHERE org_id = $1 ORDER BY id', [o.orgId])).rows.map((r) => r.id));
+    expect(rows).toEqual([kept.linkId, plain.linkId].sort());
+    expect(await view(kept.token)).toMatchObject({ posts: 1, totals: { reach: 100 } });
+    expect(await view(plain.token)).toMatchObject({ posts: 2 });
+    // No tenant transaction can point a link at another label or clear it.
+    const columns = await admin(async (x) =>
+      (
+        await x.query<{ column_name: string }>(
+          "SELECT column_name FROM information_schema.column_privileges WHERE grantee = 'crove_tenant' AND table_schema = 'crove_social' AND table_name = 'report_link' AND privilege_type = 'UPDATE' ORDER BY 1",
+        )
+      ).rows.map((r) => r.column_name),
+    );
+    expect(columns).toEqual(['revoked_at', 'revoked_by']);
+  });
+
+  it('leaves out who follows the channels when the link says so (#1155)', async () => {
+    const o = await org();
+    const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
+    await published(o, fb, 'Khai trương', '2026-10-05T03:00:00Z', { reach: 700 });
+    await snapshot(o.orgId, fb, '2026-10-22', AUDIENCE);
+    const off = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, includeAudience: false });
+    const on = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', OCT);
+    const without = (await view(off.token)) as ReportPage;
+    expect(without.audience).toEqual([]);
+    expect(JSON.stringify(without)).not.toContain('Hanoi');
+    expect(without).toMatchObject({ posts: 1, totals: { reach: 700 } });
+    expect(((await view(on.token)) as ReportPage).audience).toEqual([{ channel: 'Trang Facebook', provider: 'sandbox', day: '2026-10-22', audience: AUDIENCE }]);
+    const list = await rt.query<ReportLinkView[]>('social.report_link.list', {}, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(list.map((l) => l.includeAudience)).toEqual([true, false]);
+  });
+
+  it("shows the period's Reels with the median of their average watch time, never summed (#1151)", async () => {
+    const o = await org();
+    const ig = await connection(o.orgId, o.owner, 'Instagram shop');
+    const reel = async (body: string, at: string, metrics: Record<string, unknown>) => {
+      const id = await published(o, ig, body, at, metrics);
+      await admin((c) => c.query(`UPDATE crove_social.post_variant SET settings = settings || '{"postType":"reel"}'::jsonb WHERE post_id = $1`, [id]));
+      return id;
+    };
+    await reel('Reel một', '2026-10-05T03:00:00Z', { views: 1000, avgWatchTimeMs: 12_000, totalWatchTimeMs: 3_000_000 });
+    await reel('Reel hai', '2026-10-06T03:00:00Z', { views: 500, avgWatchTimeMs: 8_001, totalWatchTimeMs: 1_000_000 });
+    await reel('Reel ba', '2026-10-07T03:00:00Z', { views: 200, avgWatchTimeMs: 4_000, totalWatchTimeMs: 200_000 });
+    await reel('Reel bốn', '2026-10-08T03:00:00Z', { views: 300, avgWatchTimeMs: 30_000 });
+    // A Reel without watch time counts as a Reel, not in the median; a malformed one is not a number.
+    await reel('Reel chưa đo', '2026-10-09T03:00:00Z', { views: 10, avgWatchTimeMs: 'x' });
+    // A feed post with a watch time of its own is not a Reel; a Reel of the period before is not this period's.
+    await published(o, ig, 'Video thường', '2026-10-10T03:00:00Z', { views: 50, avgWatchTimeMs: 99_000, totalWatchTimeMs: 50_000 });
+    await reel('Reel tháng 9', '2026-09-10T03:00:00Z', { views: 70, avgWatchTimeMs: 1, totalWatchTimeMs: 7_000 });
+    const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', OCT);
+    const page = (await view(token)) as ReportPage;
+    // The median of 4000, 8001, 12000 and 30000 is (8001 + 12000) / 2, in whole milliseconds.
+    expect(page.reels).toEqual({ posts: 5, medianAvgWatchTimeMs: 10_001 });
+    // The total watch time adds up; the average never does.
+    expect(page.totals).toEqual({ views: 2060, totalWatchTimeMs: 4_250_000 });
+    expect(page.previous.totals).toEqual({ views: 70, totalWatchTimeMs: 7_000 });
+    expect(page.channels[0]?.totals).toEqual({ views: 2060, totalWatchTimeMs: 4_250_000 });
+    expect(page.top.find((p) => p.excerpt === 'Reel một')?.metrics).toEqual({ views: 1000, totalWatchTimeMs: 3_000_000 });
+    // No Reel: no posts and a null median.
+    const stranger = await org();
+    const theirs = await exec<{ token: string }>(stranger, stranger.owner, 'social.report_link.create', OCT);
+    expect(((await view(theirs.token)) as ReportPage).reels).toEqual({ posts: 0, medianAvgWatchTimeMs: null });
+  });
+
+  // #1159 re-created report_link_view with the label, the audience choice and the Reels added: a link as every link was
+  // before (no label, with the audience) on posts without watch time gives byte for byte what the previous definition
+  // (migration 20261029100000) gives, but for the new 'reels' object.
+  it('gives exactly the previous output, but for the Reels, for a link without a label (#1159)', async () => {
+    const o = await org();
+    const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
+    const zalo = await connection(o.orgId, o.owner, 'Zalo OA');
+    const all = { impressions: 900, reach: 700, reactions: 40, comments: 8, shares: 6, saves: 4, clicks: 3, views: 1200, replies: 2 };
+    const first = await published(o, fb, 'Khai trương', '2026-10-05T03:00:00Z', { ...all, secret_internal: 99 });
+    await published(o, zalo, 'Tin Zalo', '2026-10-06T03:00:00Z', { reach: 50, views: 80 });
+    await published(o, fb, 'Tháng trước', '2026-09-20T03:00:00Z', { reach: 30, reactions: 2 });
+    await tag(o, first, [await label(o, 'Khai trương')]);
+    await shortLink(o, first, 1, { '2026-10-08': 5 });
+    await snapshot(o.orgId, fb, '2026-10-22', AUDIENCE);
+    await admin((x) =>
+      x.query(
+        "INSERT INTO crove_social.external_post (org_id, channel_connection_id, external_post_id, excerpt, published_at, metrics) VALUES ($1, $2, 'ext_2', 'Bài ngoài', '2026-10-07T03:00:00Z', '{\"reach\": 800}')",
+        [o.orgId, fb],
+      ),
+    );
+    await exec(o, o.owner, 'social.goal.set', { connectionId: null, targets: { posts: 3, reach: 1000 }, timeZone: 'Asia/Ho_Chi_Minh' });
+    const plain = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, title: 'Tháng 10' });
+    const outside = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, includeExternal: true, connectionIds: [fb] });
+    const previous = readFileSync(join(MIGRATIONS, '20261029100000_crove_social_follower_demographics.sql'), 'utf8');
+    const pages = await admin(async (c) => {
+      const read = async (token: string, without: string) => (await c.query<{ page: string }>(`SELECT (crove_social.report_link_view($1) - ${without})::text AS page`, [token])).rows[0]?.page;
+      const now = [await read(plain.token, "'reels'"), await read(outside.token, "'reels'")];
+      const reels = (await c.query<{ reels: unknown }>("SELECT crove_social.report_link_view($1) -> 'reels' AS reels", [plain.token])).rows[0]?.reels;
+      await c.query('BEGIN');
+      try {
+        await c.query(previous);
+        return { now, reels, before: [await read(plain.token, "'none'"), await read(outside.token, "'none'")] };
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    expect(pages.reels).toEqual({ posts: 0, medianAvgWatchTimeMs: null });
+    expect(pages.now[0]).toBeTruthy();
+    expect(JSON.parse(pages.now[0] as string)).toMatchObject({ posts: 2, audience: [{ channel: 'Trang Facebook' }], goals: { month: '2026-10' } });
+    expect(JSON.parse(pages.now[1] as string)).toMatchObject({ posts: 2, includesExternal: true });
+    expect(pages.now).toEqual(pages.before);
   });
 
   it('lets only owners and admins make and revoke links, within the limits, and lists them without tokens', async () => {

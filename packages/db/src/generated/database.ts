@@ -1478,6 +1478,8 @@ export interface SocialReportLinkTable {
   mail_message_id: ColumnType<string | null, string | null, NotGranted>;
   note: ColumnType<string | null, string | null, NotGranted>;
   include_external: ColumnType<boolean, boolean | undefined, NotGranted>;
+  label_id: ColumnType<string | null, string | null, NotGranted>;
+  include_audience: ColumnType<boolean, boolean | undefined, NotGranted>;
 }
 
 /** crove_social.report_schedule_run */

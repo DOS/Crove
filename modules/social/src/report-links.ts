@@ -3,7 +3,8 @@
 // the counts per channel and the posts that did best. The token is shown once, to the person who made the link; the
 // database keeps only its SHA-256. The public side is the migration's definer (report_link_view), which the HTTP edge
 // calls with the token. The design is the client review link's (#589). A link may carry the agency's note (#1056), and a
-// report of exactly one month shows the org's monthly goals (goals.ts).
+// report of exactly one month shows the org's monthly goals (goals.ts). A link may report on one label's posts only
+// (#1159, a campaign recap; the page never shows the label's name), and may leave out who follows the channels (#1155).
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
@@ -76,6 +77,10 @@ export const reportLinkCreate = defineCommand({
     // Count the posts the channels published outside Crove (#1054); fixed for the link's life.
     includeExternal: z.boolean().optional(),
     note: zReportNote.optional(),
+    // Only the posts with this label of the org (#1159), in both periods; no outside posts and no goals then.
+    labelId: zId.optional(),
+    // Show who follows the channels (#1155); on unless false.
+    includeAudience: z.boolean().optional(),
   }),
   risk: 'R2',
   access: ADMINS,
@@ -90,6 +95,12 @@ export const reportLinkCreate = defineCommand({
     if (ids.length > 0) {
       const found = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', ids).execute();
       if (found.length !== ids.length) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
+    }
+    if (input.labelId) {
+      if (input.includeExternal === true) throw new DomainError('REPORT_LABEL_EXTERNAL', 422, 'Báo cáo theo nhãn không tính bài đăng ngoài');
+      // Held until the commit, so the label cannot go between this check and the insert (its FK cascades to the link).
+      const label = await ctx.trx.selectFrom('crove_social.label').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.labelId).forShare().executeTakeFirst();
+      if (!label) throw new DomainError('LABEL_NOT_FOUND', 404, 'Không tìm thấy nhãn này');
     }
     const live = await ctx.trx
       .selectFrom('crove_social.report_link')
@@ -114,6 +125,8 @@ export const reportLinkCreate = defineCommand({
         period_end: end,
         connection_ids: ids,
         include_external: input.includeExternal === true,
+        label_id: input.labelId ?? null,
+        include_audience: input.includeAudience !== false,
         created_by: userId,
         created_at: ctx.now,
         expires_at: expiresAt,
@@ -153,6 +166,9 @@ export interface ReportLinkView {
   expiresAt: string;
   revokedAt: string | null;
   includeExternal: boolean;
+  // The label the link reports on (#1159), or null for every post.
+  labelId: string | null;
+  includeAudience: boolean;
 }
 
 // The org's report links, newest first (never their tokens); the ones a schedule made per mail are not listed.
@@ -163,7 +179,7 @@ export const reportLinkList = defineQuery({
   handler: async (ctx): Promise<ReportLinkView[]> => {
     const rows = await ctx.trx
       .selectFrom('crove_social.report_link')
-      .select(['id', 'title', 'note', 'period_start', 'period_end', 'connection_ids', 'created_by', 'created_at', 'expires_at', 'revoked_at', 'include_external'])
+      .select(['id', 'title', 'note', 'period_start', 'period_end', 'connection_ids', 'created_by', 'created_at', 'expires_at', 'revoked_at', 'include_external', 'label_id', 'include_audience'])
       .where('org_id', '=', ctx.orgId)
       .where('schedule_id', 'is', null)
       .orderBy('created_at', 'desc')
@@ -181,6 +197,8 @@ export const reportLinkList = defineQuery({
       expiresAt: r.expires_at.toISOString(),
       revokedAt: r.revoked_at?.toISOString() ?? null,
       includeExternal: r.include_external,
+      labelId: r.label_id,
+      includeAudience: r.include_audience,
     }));
   },
 });

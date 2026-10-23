@@ -5,6 +5,8 @@
 // link may carry the agency's note, shown as plain text, and a report of exactly one month shows the monthly goals
 // (#1056), and who follows each channel, from the latest weekly capture in the period (#1146). The engagement rate
 // (#1157) of the period, each channel and each best post is worked out on the page from the counts it already gets.
+// A campaign report (#1159) counts one label's posts and shows only the link's title, never the label; a link may
+// leave out the audience (an empty list), and the period's Reels show their watch time (#1151).
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -23,6 +25,7 @@ import { errorMessage } from '../lib/api.ts';
 import { apiErrorFromResponse } from '../lib/errors.ts';
 import { usePrintInLight } from '../lib/print.ts';
 import { REPORT_METRICS } from '../lib/social-report.ts';
+import { reportReels, watchDuration, watchSeconds } from '../lib/social-insights.ts';
 import { reportGoalGroups, type ReportGoals } from '../lib/social-goals.ts';
 import { pageBrand } from '../lib/social-report-branding.ts';
 import { providerName } from '../lib/social.ts';
@@ -52,6 +55,9 @@ interface ReportPage {
   // Who follows each channel (#1146): the latest capture in the period; absent from a server without it. Read again by
   // ReportAudiences.
   audience?: unknown;
+  // The period's Reels (#1151): how many and the median of their average watch time; absent from a server without it.
+  // Read again by ReportReels.
+  reels?: unknown;
 }
 
 const tokenOf = () => {
@@ -103,6 +109,33 @@ export function ReportGoalsSection({ data, nowMs }: { data: Pick<ReportPage, 'go
         ))}
       </div>
     </section>
+  );
+}
+
+// The period's Reels (#1151): how many went out, the median of their average watch time (never a sum of averages) and
+// their total watch time against the period before. Nothing when the period has no Reel or the server sends none.
+export function ReportReels({ reels, total, previous, against }: { reels: unknown; total: number | undefined; previous: number | undefined; against: string }) {
+  const t = useTranslations('social');
+  const f = useFormat();
+  const r = reportReels(reels);
+  if (!r) return null;
+  const duration = (ms: number) => {
+    const d = watchDuration(ms);
+    return t(`watch.${d.unit}`, { value: f.number(d.value) });
+  };
+  return (
+    <Card className="block space-y-1 p-4 print:break-inside-avoid">
+      <h2 className="text-base font-semibold">{t('clientReport.reels')}</h2>
+      <p className="text-sm text-muted-foreground">{t('clientReport.reelsCount', { count: r.posts })}</p>
+      {r.medianAvgWatchTimeMs !== null && (
+        <p className="text-sm text-muted-foreground tabular-nums">{t('clientReport.reelsAverage', { time: t('watch.seconds', { value: f.number(watchSeconds(r.medianAvgWatchTimeMs)) }) })}</p>
+      )}
+      {typeof total === 'number' && Number.isFinite(total) && total >= 0 && (
+        <p className="text-sm text-muted-foreground tabular-nums">
+          {t('clientReport.reelsTotal', { time: duration(total) })} <ChangeChip current={total} previous={previous} against={against} withPrevious format={duration} />
+        </p>
+      )}
+    </Card>
   );
 }
 
@@ -182,6 +215,7 @@ export function SocialReportPage() {
                     <EngagementRateCard current={rate} previous={data.previous ? rateBefore : null} against={against} className="print:break-inside-avoid" />
                   </section>
                 )}
+                <ReportReels reels={data.reels} total={data.totals.totalWatchTimeMs} previous={data.previous?.totals.totalWatchTimeMs} against={against} />
                 <section className="space-y-2 print:break-inside-avoid">
                   <h2 className="text-base font-semibold">{t('byChannel')}</h2>
                   <div className="overflow-x-auto rounded-xl border print:overflow-visible">
