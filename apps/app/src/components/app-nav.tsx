@@ -95,7 +95,7 @@ export interface ShellNavProps {
 }
 
 // What the sidebar and the phone drawer both hold: the org switch, the palette button, the grouped menu and the
-// account menu.
+// account menu. Every control is at least 44px tall in the phone drawer (below md) and 24px in the sidebar.
 export function ShellNav({ slug, groups, badges, orgs, email, onOpenPalette, paletteKeys, onNavigate }: ShellNavProps) {
   const t = useTranslations('nav');
   const tp = useTranslations('palette');
@@ -105,7 +105,7 @@ export function ShellNav({ slug, groups, badges, orgs, email, onOpenPalette, pal
     <>
       <div className="px-2">
         {orgs.length > 1 && (
-          <Link to="/clients" onClick={onNavigate} className="mb-3 block text-sm text-link hover:underline">
+          <Link to="/clients" onClick={onNavigate} className="mb-3 flex min-h-11 items-center text-sm text-link hover:underline md:min-h-6">
             {t('allClients')}
           </Link>
         )}
@@ -128,14 +128,14 @@ export function ShellNav({ slug, groups, badges, orgs, email, onOpenPalette, pal
           ))}
         </NativeSelect>
         {/* A firm adds its next client company from here (issue #324). */}
-        <Link to="/onboarding" onClick={onNavigate} className="mt-1 inline-block text-xs text-link">
+        <Link to="/onboarding" onClick={onNavigate} className="mt-1 inline-flex min-h-11 items-center text-xs text-link md:min-h-6">
           {t('addOrg')}
         </Link>
       </div>
       <button
         type="button"
         onClick={onOpenPalette}
-        className="mt-4 flex items-center justify-between gap-1.5 rounded-lg border bg-background px-2.5 py-1.5 text-left text-sm text-subtle-foreground hover:text-foreground"
+        className="mt-4 flex min-h-11 items-center justify-between gap-1.5 rounded-lg border bg-background px-2.5 py-1.5 text-left text-sm text-subtle-foreground hover:text-foreground md:min-h-0"
       >
         <span className="min-w-0 truncate">{tp('open')}</span>
         <kbd className="shrink-0 rounded-sm border px-1 font-mono text-[11px] whitespace-nowrap">{paletteKeys}</kbd>
@@ -166,7 +166,7 @@ export function ShellNav({ slug, groups, badges, orgs, email, onOpenPalette, pal
                         to={item.to}
                         params={{ slug }}
                         onClick={onNavigate}
-                        className="flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                        className="flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground md:min-h-0"
                         activeProps={{ className: 'bg-primary/15 !text-foreground' }}
                       >
                         <NavIcon name={item.label} />
@@ -193,21 +193,21 @@ function AccountMenu({ email }: { email: string | undefined }) {
   const tc = useTranslations('common');
   return (
     <div className="mt-3 shrink-0 border-t pt-2">
-      <SupportLink className="mb-1 block px-2 text-sm text-link" />
+      <SupportLink className="mb-1 flex min-h-11 items-center px-2 text-sm text-link md:min-h-6" />
       <details className="group">
-        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 md:min-h-0 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground [&::-webkit-details-marker]:hidden">
           <span className="sr-only">{t('account')}: </span>
           <span className="min-w-0 flex-1 truncate">{email}</span>
           <NavIcon name="expand" className="transition-transform group-open:rotate-180 motion-reduce:transition-none" />
         </summary>
         <div className="mt-2 flex flex-col gap-2 px-2 pb-1 text-xs text-subtle-foreground">
-          <StatusLink className="text-sm text-link" />
+          <StatusLink className="flex min-h-11 items-center text-sm text-link md:min-h-6" />
           {/* One per row: side by side, both names were cut off at the sidebar's width. */}
           <LocaleSwitcher className="w-full text-muted-foreground" />
           <ThemeSwitcher className="w-full text-muted-foreground" />
         </div>
       </details>
-      <button type="button" className="mt-1 px-2 text-xs text-subtle-foreground hover:text-muted-foreground" onClick={() => void signOut()}>
+      <button type="button" className="mt-1 inline-flex min-h-11 items-center px-2 text-xs text-subtle-foreground hover:text-muted-foreground md:min-h-6" onClick={() => void signOut()}>
         {tc('signOut')}
       </button>
     </div>
@@ -248,7 +248,7 @@ export function NavDrawer({ open, onOpenChange, children }: { open: boolean; onO
           <button
             type="button"
             onClick={() => onOpenChange(false)}
-            className="rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+            className="grid size-11 place-items-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
             aria-label={t('closeMenu')}
           >
             <NavIcon name="close" className="size-5" />

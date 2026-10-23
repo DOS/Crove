@@ -210,13 +210,13 @@ export function OrgLayout() {
             type="button"
             onClick={() => setMenuOpen(true)}
             aria-label={t('openMenu')}
-            className="relative rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+            className="relative grid size-11 place-items-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
           >
             <NavIcon name="menu" className="size-5" />
-            {inboxCount > 0 && <span className="absolute top-0.5 right-0.5 size-2 rounded-full bg-primary" aria-hidden="true" />}
+            {inboxCount > 0 && <span className="absolute top-2 right-2 size-2 rounded-full bg-primary" aria-hidden="true" />}
           </button>
           <span className="min-w-0 flex-1 truncate text-sm font-medium">{org?.name ?? <Logo />}</span>
-          <button type="button" onClick={() => setPaletteOpen(true)} className="rounded-lg border px-2 py-1 text-xs text-subtle-foreground">
+          <button type="button" onClick={() => setPaletteOpen(true)} className="min-h-11 rounded-lg border px-2 text-xs text-subtle-foreground">
             {tp('open')}
           </button>
         </header>

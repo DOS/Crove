@@ -82,7 +82,7 @@ export const vi = {
     closeMenu: 'Đóng menu',
     account: 'Tài khoản',
     alertsShort: 'Thông báo',
-    socialNotifications: 'Thông báo bài đăng',
+    socialNotifications: 'Cập nhật bài đăng',
     groups: {
       work: 'Việc cần làm',
       accounting: 'Kế toán',

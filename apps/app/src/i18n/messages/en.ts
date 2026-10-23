@@ -84,7 +84,7 @@ export const en = {
     closeMenu: 'Close the menu',
     account: 'Account',
     alertsShort: 'Notifications',
-    socialNotifications: 'Post notifications',
+    socialNotifications: 'Post updates',
     groups: {
       work: 'To do',
       accounting: 'Accounting',
