@@ -177,7 +177,7 @@ export function bannedChecker(words: readonly BannedWord[], budget: BannedBudget
       found.set(key, byText);
     }
     const memo = byText;
-    const content = effectiveContent(post, overrides(v), v.content_frozen);
+    const content = effectiveContent(post, overrides(v), v.content_frozen, settingsOf(v));
     return variantTexts(content, settingsOf(v)).flatMap(({ field, text }) => {
       let list = memo.get(text);
       if (!list) {

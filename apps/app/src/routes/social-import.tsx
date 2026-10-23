@@ -31,12 +31,16 @@ export function SocialImportPage() {
   // One key per set of rows sent: a retry after a lost answer returns the first import.
   const attempt = useRef<{ key: string; payload: string } | null>(null);
   const byId = new Map((channels.data ?? []).map((c) => [c.id, c]));
+  // Each channel's signature (#1190), which the import adds to every draft on it: the checks count it.
+  const policies = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
+  const signatures = new Map((policies.data ?? []).map((p) => [p.connectionId, p.signature]));
   // A row is ready when the sheet gave it no problem and every channel takes it as it is.
   const issuesOf = (r: ImportRow) =>
     r.connectionIds.flatMap((id) => {
       const c = byId.get(id);
       // The title goes to every channel, as the import sends it: one without titles says so.
-      return c ? draftIssues(c.provider, { body: r.body, title: r.title || null, linkUrl: r.link || null }).map((i) => ({ channel: c, issue: i })) : [];
+      const signature = signatures.get(id);
+      return c ? draftIssues(c.provider, { body: r.body, title: r.title || null, linkUrl: r.link || null, ...(signature ? { settings: { signature } } : {}) }).map((i) => ({ channel: c, issue: i })) : [];
     });
   const ready = tooMany ? [] : (rows ?? []).filter((r) => r.problems.length === 0);
 

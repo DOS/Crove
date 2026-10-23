@@ -72,7 +72,8 @@ import { pinCallsOf, pinCommands, pinStatus, wantsPin, type PinStatus } from './
 import { gateCallsOf, gateCommands, gateStatus, wantsGate, type GateStatus } from './gate.ts';
 import { playlistCallsOf, playlistCommands, playlistsOf, playlistStatus, type PlaylistStatus } from './playlists.ts';
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
-import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
+import { approvalsRequired, channelSignatures, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
+import { withChannelSignature } from './domain/signature.ts';
 import { clientReviewCommands } from './client-review.ts';
 import { CLEAR_ERROR, MAX_CHANNELS_PER_POST, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, takenSlots, variantPost, type PostRow, type QueueState, type VariantRow } from './variants.ts';
 import { queueOrderCommands } from './queue-order.ts';
@@ -187,7 +188,11 @@ async function liveConnections(ctx: CommandContext, ids: readonly string[]): Pro
   return map;
 }
 
-export async function insertVariants(ctx: CommandContext, post: PostRow, channels: z.infer<typeof zChannel>[], startAt: number) {
+// Every path that adds a channel to a post comes here (create, add channels, the bulk add, the import, drafts from media,
+// feeds, an idea's or the AI's draft), and the channel's signature (#1190) is copied into the variant's settings unless
+// they say already. A copy of a post (copy: true: a duplicate, a repost, a recurring or evergreen copy) keeps its
+// source's settings as they are, with or without one.
+export async function insertVariants(ctx: CommandContext, post: PostRow, channels: z.infer<typeof zChannel>[], startAt: number, options: { copy?: boolean } = {}) {
   // A member limited to some channels (#1081) adds a variant on those only.
   await refuseChannels(
     ctx,
@@ -197,6 +202,13 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
     ctx,
     channels.map((c) => c.connectionId),
   );
+  const signatures = options.copy
+    ? new Map<string, string>()
+    : await channelSignatures(
+        ctx.trx,
+        ctx.orgId,
+        channels.map((c) => c.connectionId),
+      );
   const created: Array<{ variantId: string; connectionId: string }> = [];
   for (const [i, c] of channels.entries()) {
     const own = c.media ? await resolveMedia(ctx, c.media) : null;
@@ -207,7 +219,7 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
       body: c.body ?? null,
       title: c.title ?? null,
       link_url: c.linkUrl ?? null,
-      settings: c.settings ?? {},
+      settings: withChannelSignature(c.settings ?? {}, signatures.get(c.connectionId)),
       media: own,
     };
     const inserted = await ctx.trx
@@ -742,7 +754,7 @@ export const variantDecide = defineCommand({
         }
       }
       const checklist = input.decision === 'approved' ? tickedChecklist(checks, v, saw.checks) : null;
-      const content = effectiveContent(base(post), overrides(v), v.content_frozen);
+      const content = effectiveContent(base(post), overrides(v), v.content_frozen, settingsOf(v));
       await ctx.trx
         .insertInto('crove_social.post_approval')
         .values({
@@ -1359,7 +1371,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
         ctx.orgId,
         variants.map((v) => {
           const p = byPost.get(v.post_id);
-          return { id: v.id, postId: v.post_id, connectionId: v.channel_connection_id, status: v.status, body: effectiveContent({ body: p?.body ?? '', title: null, linkUrl: null }, overrides(v), v.content_frozen).body };
+          return { id: v.id, postId: v.post_id, connectionId: v.channel_connection_id, status: v.status, body: effectiveContent({ body: p?.body ?? '', title: null, linkUrl: null }, overrides(v), v.content_frozen, settingsOf(v)).body };
         }),
         new Date(),
       )
@@ -1405,7 +1417,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
               position: v.position,
               overrides: overrides(v),
               ownMedia: !v.content_frozen && mediaOf(v.media) !== null,
-              effective: effectiveContent(b, overrides(v), v.content_frozen),
+              effective: effectiveContent(b, overrides(v), v.content_frozen, settingsOf(v)),
               media: mediaView(mediaFor(b, v), names),
               settings: settingsOf(v),
               revision: v.revision,

@@ -3,6 +3,7 @@
 // not change it, while any change a reader could see does.
 import { createHash } from 'node:crypto';
 import type { Provider } from './channels.ts';
+import { withSignature } from './signature.ts';
 
 export interface HashedMedia {
   // Kernel file id and the object version its bytes were written as (ADR-0013; null on files from before it), so
@@ -127,8 +128,19 @@ export function effectiveMedia(base: readonly PostMedia[], own: readonly PostMed
   return own ?? base;
 }
 
-// A frozen variant (history) keeps its own content: its columns hold it, and null there means "none".
-export function effectiveContent(base: BaseContent, overrides: ContentOverrides, frozen = false): BaseContent {
+// A variant's own content as written: the base with its overrides, without the signature. A frozen variant (history)
+// keeps its own content: its columns hold it, and null there means "none". What copies (a repost, a duplicate) and
+// history keep, with the settings that carry the signature beside it.
+export function inheritedContent(base: BaseContent, overrides: ContentOverrides, frozen = false): BaseContent {
   if (frozen) return { body: overrides.body ?? '', title: overrides.title, linkUrl: overrides.linkUrl };
   return { body: overrides.body ?? base.body, title: overrides.title ?? base.title, linkUrl: overrides.linkUrl ?? base.linkUrl };
+}
+
+// The content a variant sends (#1190): its own content with its signature (settings.signature) appended to the text,
+// before any link an adapter adds. The one resolver behind the content hash, the channel checks, the banned words, the
+// duplicate check, the previews and the publish. A variant without a signature in its settings (every post from before
+// signatures) gets exactly its own content, so its hash and its approvals stay as they were.
+export function effectiveContent(base: BaseContent, overrides: ContentOverrides, frozen: boolean, settings: Readonly<Record<string, unknown>> | null | undefined): BaseContent {
+  const own = inheritedContent(base, overrides, frozen);
+  return { ...own, body: withSignature(own.body, settings) };
 }

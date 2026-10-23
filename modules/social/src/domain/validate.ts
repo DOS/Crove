@@ -1,7 +1,8 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, pinterestSectionOf } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, pinterestSectionOf, IG_HASHTAGS_MAX, IG_MENTIONS_MAX, captionHashtags, captionMentions } from './channels.ts';
+import { SIGNATURE_MAX, signatureOf, withSignature } from './signature.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -33,6 +34,11 @@ export type IssueCode =
   | 'IG_COLLABORATORS_INVALID'
   | 'IG_USER_TAGS_INVALID'
   | 'IG_TAGS_NOT_SUPPORTED'
+  // An Instagram caption (#1190) with more than IG_HASHTAGS_MAX hashtags or IG_MENTIONS_MAX @ tags, as it is sent.
+  | 'IG_TOO_MANY_HASHTAGS'
+  | 'IG_TOO_MANY_MENTIONS'
+  // The variant's signature (#1190), settings.signature: neither a text of 1 to SIGNATURE_MAX characters nor false.
+  | 'SIGNATURE_INVALID'
   // Where an Instagram Reel shows (#1019): settings.instagram on another channel; not { reelFeed, trialGraduation? }
   // with known values (a graduation only on a trial); set on a post that is not a Reel (a Story, images, a carousel).
   | 'INSTAGRAM_NOT_SUPPORTED'
@@ -288,8 +294,11 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   // A caption's own limit, where posts with media take one (#747).
   const mediaMax = MEDIA_BODY_MAX[variant.provider];
   const caps = mediaMax !== undefined && variant.media.length > 0 ? { ...withPhotos, body: { ...withPhotos.body, max: mediaMax } } : withPhotos;
+  // The text with the signature (#1190), before the link: effectiveContent appends it already, and appending it again
+  // changes nothing.
+  const body = withSignature(variant.body, variant.settings);
   // No channel takes an empty post: it needs text or media.
-  if (variant.body.trim() === '' && variant.media.length === 0) issues.push({ code: 'CONTENT_REQUIRED', field: 'body', limit: null, actual: null });
+  if (body.trim() === '' && variant.media.length === 0) issues.push({ code: 'CONTENT_REQUIRED', field: 'body', limit: null, actual: null });
   // The text as the adapter sends it, with the link it appends.
   // The link as the channel sends it, with its UTM tags (#585), counted where the channel counts it.
   // The post type (#644): a Story sends no text or link, so neither is checked; a Reel's text is checked as a post's.
@@ -301,8 +310,15 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   const supported = postType !== null && (postType === 'feed' || Boolean(POST_TYPE_RULES[variant.provider]?.includes(postType)));
   const story = supported && postType === 'story';
   const reel = supported && postType === 'reel';
-  const sent = story ? '' : sentText(variant.provider, variant.body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, variant.body), variant.media.length);
+  const sent = story ? '' : sentText(variant.provider, body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, body), variant.media.length);
   if (!story) checkText(issues, 'body', sent, caps.body);
+  if (variant.provider === 'instagram' && !story) {
+    const hashtags = captionHashtags(sent);
+    if (hashtags > IG_HASHTAGS_MAX) issues.push({ code: 'IG_TOO_MANY_HASHTAGS', field: 'body', limit: IG_HASHTAGS_MAX, actual: hashtags });
+    const mentions = captionMentions(sent);
+    if (mentions > IG_MENTIONS_MAX) issues.push({ code: 'IG_TOO_MANY_MENTIONS', field: 'body', limit: IG_MENTIONS_MAX, actual: mentions });
+  }
+  if (signatureOf(variant.settings) === 'invalid') issues.push({ code: 'SIGNATURE_INVALID', field: 'settings.signature', limit: SIGNATURE_MAX, actual: null });
   // A Discord forum post (#1103) takes the post's title as its name, cut to Discord's limit by the adapter.
   const titleRule = caps.title ?? (isDiscordForum(variant.provider, variant.settings) ? DISCORD_FORUM_TITLE : null);
   if (story) {

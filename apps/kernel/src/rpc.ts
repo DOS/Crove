@@ -888,6 +888,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         set: os.social.policies.set.handler(socialCommand('social.channel.set_policy')),
         setReminders: os.social.policies.setReminders.handler(socialCommand('social.channel.set_reminders')),
         setShortLinks: os.social.policies.setShortLinks.handler(socialCommand('social.channel.set_short_links')),
+        setSignature: os.social.policies.setSignature.handler(socialCommand('social.channel.set_signature')),
         setFourEyes: os.social.policies.setFourEyes.handler(socialCommand('social.channel.set_four_eyes')),
         setClientApproval: os.social.policies.setClientApproval.handler(socialCommand('social.channel.set_client_approval')),
       },

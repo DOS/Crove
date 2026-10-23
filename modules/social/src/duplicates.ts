@@ -6,7 +6,8 @@
 import { sql } from 'kysely';
 import type { SocialVariantStatus } from '@crove/db';
 import { DUPLICATE_SCAN_MAX, DUPLICATE_WINDOW_DAYS, duplicateText, newestDuplicate, type DuplicateCandidate, type DuplicateOf } from './domain/duplicate.ts';
-import type { Trx } from './variants.ts';
+import { withSignature } from './domain/signature.ts';
+import { settingsOf, type Trx } from './variants.ts';
 
 // The channels a person may still change before they go out; a published, removed or cancelled one is not checked.
 const OPEN: readonly SocialVariantStatus[] = ['draft', 'in_review', 'changes_requested', 'approved', 'scheduled', 'failed', 'paused'];
@@ -16,7 +17,7 @@ export interface DuplicateSubject {
   postId: string;
   connectionId: string;
   status: SocialVariantStatus;
-  // The text the channel sends (its own, else the post's).
+  // The text the channel sends (its own, else the post's, with its signature: effectiveContent).
   body: string;
 }
 
@@ -28,7 +29,7 @@ export async function duplicatesOf(trx: Trx, orgId: string, subjects: readonly D
     const rows = await trx
       .selectFrom('crove_social.post_variant as v')
       .innerJoin('crove_social.post as p', (j) => j.onRef('p.org_id', '=', 'v.org_id').onRef('p.id', '=', 'v.post_id'))
-      .select(['v.status', 'v.body', 'v.content_frozen', 'v.published_at', 'v.scheduled_at', 'v.queue_slot_at', 'v.error_retry_at', 'p.body as post_body', 'p.scheduled_at as post_scheduled_at'])
+      .select(['v.status', 'v.body', 'v.settings', 'v.content_frozen', 'v.published_at', 'v.scheduled_at', 'v.queue_slot_at', 'v.error_retry_at', 'p.body as post_body', 'p.scheduled_at as post_scheduled_at'])
       .where('v.org_id', '=', orgId)
       .where('v.channel_connection_id', '=', s.connectionId)
       .where('v.status', 'in', ['published', 'scheduled'])
@@ -40,8 +41,9 @@ export async function duplicatesOf(trx: Trx, orgId: string, subjects: readonly D
       .limit(DUPLICATE_SCAN_MAX)
       .execute();
     const candidates: DuplicateCandidate[] = rows.map((r) => ({
-      // A published channel keeps the text it went out with (#335); a scheduled one sends its own or the post's.
-      text: r.content_frozen ? (r.body ?? '') : (r.body ?? r.post_body),
+      // A published channel keeps the text it went out with (#335); a scheduled one sends its own or the post's. Either
+      // with its signature (#1190), as effectiveContent appends it.
+      text: withSignature(r.content_frozen ? (r.body ?? '') : (r.body ?? r.post_body), settingsOf(r)),
       at: r.status === 'published' ? r.published_at : (r.error_retry_at ?? r.queue_slot_at ?? r.scheduled_at ?? r.post_scheduled_at),
       status: r.status === 'published' ? 'published' : r.queue_slot_at !== null && r.scheduled_at === null && r.error_retry_at === null ? 'queued' : 'scheduled',
     }));
