@@ -38,6 +38,7 @@ import { clearDraft, loadDraft, saveDraft, type StoredDraft } from '../lib/socia
 import { canMoveToFront } from '../lib/social-queue-order.ts';
 import { reelCounts, STORY_METRICS } from '../lib/social-insights.ts';
 import { WatchTimeItems } from '../components/social-reel-metrics.tsx';
+import { EngagementRateItem } from '../components/social-engagement-rate.tsx';
 import { useChannelScope } from '../components/social-channel-access.tsx';
 import {
   CANCELLABLE,
@@ -3210,7 +3211,8 @@ function MoveToFront({ variantId, queueSlotAt, onDone }: { variantId: string; qu
 // Then a Story's own counts (#1082); a Reel's watch time (#1147) comes after them, in its own units.
 const POST_METRICS = ['reach', 'impressions', 'views', 'reactions', 'comments', 'shares', 'saves', 'clicks', ...STORY_METRICS] as const;
 
-// A published channel's latest counts, as the platform reported them; a count it does not report is left out.
+// A published channel's latest counts, as the platform reported them; a count it does not report is left out. Its
+// engagement rate (#1157) follows the counts.
 function VariantMetrics({ row }: { row: { metrics: Record<string, number>; capturedAt: string | null } | undefined }) {
   const t = useTranslations('social');
   const f = useFormat();
@@ -3226,6 +3228,7 @@ function VariantMetrics({ row }: { row: { metrics: Record<string, number>; captu
             <dd className="font-medium text-foreground tabular-nums">{f.number(row.metrics[m] ?? 0)}</dd>
           </div>
         ))}
+        {shown.length > 0 && <EngagementRateItem metrics={row.metrics} />}
         <WatchTimeItems metrics={row.metrics} />
       </dl>
       <p className="text-subtle-foreground">{t('metricsAt', { when: f.dateTime(row.capturedAt) })}</p>

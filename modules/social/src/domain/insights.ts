@@ -1,6 +1,7 @@
 // Posting-time suggestions from history (Social plan v1.x): for each channel, the weekday and hour its published posts
 // drew the most engagement, from the latest metrics of each post. A plain average per hour slot, in the viewer's time
 // zone; a slot needs a few posts and a channel needs enough of them, or it suggests nothing rather than noise.
+import { engagementRateOf, type EngagementRate } from './engagement-rate.ts';
 
 export interface PublishedSample {
   connectionId: string;
@@ -88,6 +89,8 @@ export function bestTimes(samples: readonly PublishedSample[], timeZone: string,
 // shares and saves), which every platform reports; a rate over reach would leave out the channels that report none.
 // Medians, so one viral post does not tilt a group. A post without a capture yet is left out. A format group also
 // carries the median average watch time of its posts that report one (#1147, Reels): how long the format holds viewers.
+// A channel and each group also carry their engagement rate (#1157, engagementRateOf over their posts' counts: the
+// report's engagement over the reach of the posts that report it, else over impressions), absent when neither is there.
 export type PostFormat = 'text' | 'image' | 'carousel' | 'video' | 'document' | 'story' | 'reel';
 export const POST_FORMATS: readonly PostFormat[] = ['text', 'image', 'carousel', 'video', 'document', 'story', 'reel'];
 
@@ -111,12 +114,14 @@ export interface InsightGroup {
   // By format only (#1147): the median of the average watch time (milliseconds) of the group's posts that report one,
   // Reels on Instagram; absent when none does.
   avgWatchTimeMs?: number | undefined;
+  rate?: EngagementRate | undefined;
 }
 
 export interface ChannelInsights {
   connectionId: string;
   posts: number;
   median: number;
+  rate?: EngagementRate | undefined;
   best: { variantId: string; engagement: number }[];
   worst: { variantId: string; engagement: number }[];
   byLabel: InsightGroup[];
@@ -184,6 +189,12 @@ export function median(values: readonly number[]): number {
   return s.length % 2 === 1 ? (s[mid] as number) : ((s[mid - 1] as number) + (s[mid] as number)) / 2;
 }
 
+// The rate of these posts on a group or channel, left off when they have none.
+function withRate<T extends object>(target: T, posts: readonly { s: InsightSample }[]): T & { rate?: EngagementRate } {
+  const rate = engagementRateOf(posts.map((p) => p.s.metrics));
+  return rate ? { ...target, rate } : target;
+}
+
 export function whatWorks(samples: readonly InsightSample[], timeZone: string, options: WhatWorksOptions = {}): ChannelInsights[] {
   const minTag = options.minHashtagPosts ?? 3;
   const top = options.top ?? 5;
@@ -208,27 +219,25 @@ export function whatWorks(samples: readonly InsightSample[], timeZone: string, o
   for (const [connectionId, posts] of byChannel) {
     const all = median(posts.map((p) => p.engagement));
     const group = (keyOf: (p: (typeof posts)[number]) => readonly string[], min = 1): InsightGroup[] => {
-      const groups = new Map<string, number[]>();
+      const groups = new Map<string, (typeof posts)[number][]>();
       for (const p of posts) {
         for (const key of keyOf(p)) {
           const list = groups.get(key);
-          if (list) list.push(p.engagement);
-          else groups.set(key, [p.engagement]);
+          if (list) list.push(p);
+          else groups.set(key, [p]);
         }
       }
       return [...groups.entries()]
-        .filter(([, values]) => values.length >= min)
-        .map(([key, values]) => {
-          const m = median(values);
-          return { key, posts: values.length, median: m, ratio: all > 0 ? m / all : null };
+        .filter(([, members]) => members.length >= min)
+        .map(([key, members]) => {
+          const m = median(members.map((p) => p.engagement));
+          return withRate({ key, posts: members.length, median: m, ratio: all > 0 ? m / all : null }, members);
         })
         .sort((a, b) => b.median - a.median || b.posts - a.posts || a.key.localeCompare(b.key));
     };
     const ranked = [...posts].sort((a, b) => b.engagement - a.engagement || a.variantId.localeCompare(b.variantId));
     out.push({
-      connectionId,
-      posts: posts.length,
-      median: all,
+      ...withRate({ connectionId, posts: posts.length, median: all }, posts),
       best: ranked.slice(0, top).map((p) => ({ variantId: p.variantId, engagement: p.engagement })),
       worst: ranked.length > top ? ranked.slice(-top).reverse().map((p) => ({ variantId: p.variantId, engagement: p.engagement })) : [],
       byLabel: group((p) => p.s.labelIds),

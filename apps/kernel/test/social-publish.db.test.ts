@@ -1550,8 +1550,10 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(await api.query<MetricsRow[]>('social.metrics.summary', { postId: randomUUID() }, { actor: asUser(o.owner), orgId: o.orgId })).toEqual([]);
     const file = await api.execute<{ filename: string; csv: string; truncated: boolean }>('social.metrics.export', { days: 30 }, { actor: asUser(o.owner), orgId: o.orgId });
     const lines = file.csv.replace(/^﻿/, '').trim().split('\r\n');
-    expect(lines[0]).toBe('post_id,channel,provider,published_at,url,text,labels,impressions,reach,reactions,comments,shares,saves,clicks,views,captured_at,replies,tapsForward,tapsBack,exits,nextStory,follows,profileVisits,avgWatchTimeMs,totalWatchTimeMs');
+    expect(lines[0]).toBe('post_id,channel,provider,published_at,url,text,labels,impressions,reach,reactions,comments,shares,saves,clicks,views,captured_at,replies,tapsForward,tapsBack,exits,nextStory,follows,profileVisits,avgWatchTimeMs,totalWatchTimeMs,engagement_rate_pct');
     expect(lines[1]).toContain(`${postId},Trang thử,sandbox,`);
+    // The engagement rate in percent, last (#1157): 3 reactions over a reach of 30.
+    expect(lines[1]?.split(',').at(-1)).toBe('10');
     const audits = await admin(async (c) => (await c.query<{ detail: Record<string, unknown> }>("SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'social.metrics.export' AND outcome = 'ok'", [o.orgId])).rows);
     expect(audits).toHaveLength(1);
     expect(audits[0]?.detail).toMatchObject({ days: 30, rows: 1, truncated: false });

@@ -1978,6 +1978,15 @@ export const vi = {
       reachColumn: 'Người tiếp cận',
       engagementColumn: 'Tương tác',
     },
+    // Engagement rate (#1157): engagement over reach, else over impressions, on the Metrics tab, the post page, What
+    // works and the client report.
+    engagementRate: {
+      label: 'Tỷ lệ tương tác',
+      byImpressions: 'theo lượt hiển thị',
+      hint: 'Tổng cảm xúc, bình luận, chia sẻ, lượt lưu và lượt nhấp chia cho số người tiếp cận; kênh nào không có số người tiếp cận thì chia cho lượt hiển thị.',
+      line: 'Tỷ lệ tương tác: {rate}',
+      inline: 'tỷ lệ tương tác {rate}',
+    },
     // Who follows a channel (#1146), on the Metrics tab and in the client report.
     audience: {
       title: 'Người theo dõi',
