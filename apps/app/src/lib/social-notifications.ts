@@ -8,7 +8,7 @@ export const DIGEST_KIND = 'weekly_digest' satisfies NotificationKind;
 export type InAppKind = Exclude<NotificationKind, typeof DIGEST_KIND>;
 export const NOTIFICATION_KINDS: readonly InAppKind[] = SOCIAL_NOTIFICATION_KINDS.filter((k): k is InAppKind => k !== DIGEST_KIND);
 
-export type NotificationTarget = { to: 'post'; postId: string } | { to: 'channels' } | { to: 'feeds' } | { to: 'compose'; channelId: string };
+export type NotificationTarget = { to: 'post'; postId: string } | { to: 'channels' } | { to: 'feeds' } | { to: 'compose'; channelId: string } | { to: 'mine' };
 
 // What an item opens: its post, or the channels page for a channel that needs connecting again or a publishing hold.
 export function notificationTarget(item: { kind: NotificationKind; postId: string | null; connectionId?: string | null }): NotificationTarget | null {
@@ -20,6 +20,8 @@ export function notificationTarget(item: { kind: NotificationKind; postId: strin
   if (item.kind === 'publishing_hold') return { to: 'channels' };
   // A queue running low (#1079): a new post for its channel, to fill it; the channels page when the channel is gone.
   if (item.kind === 'queue_low') return item.connectionId ? { to: 'compose', channelId: item.connectionId } : { to: 'channels' };
+  // Several posts assigned at once (#1062): the posts assigned to the viewer.
+  if (item.kind === 'assigned') return { to: 'mine' };
   return null;
 }
 

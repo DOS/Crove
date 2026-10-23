@@ -1594,9 +1594,23 @@ export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelNam
 // and why a post was left as it was: gone, published, not the caller's to change, already so, or over the ten labels a
 // post may carry. A find and replace (#1144) also leaves out a post where nothing matches, one with a channel going out
 // that the change would reach, one the change would take over a length or channel limit, one whose link would no longer
-// be a link, and one the change would give a blocked word.
+// be a link, and one the change would give a blocked word. Adding a channel (#1178) also leaves out a post already on
+// that channel and one with as many channels as a post may have.
 export const SOCIAL_BULK_EDIT_MAX = 100;
-export const SOCIAL_BULK_SKIP_REASONS = ['not_found', 'published', 'not_allowed', 'unchanged', 'too_many_labels', 'no_match', 'in_flight', 'over_limit', 'invalid_link', 'banned_words'] as const;
+export const SOCIAL_BULK_SKIP_REASONS = [
+  'not_found',
+  'published',
+  'not_allowed',
+  'unchanged',
+  'too_many_labels',
+  'no_match',
+  'in_flight',
+  'over_limit',
+  'invalid_link',
+  'banned_words',
+  'already_on',
+  'too_many_channels',
+] as const;
 export type SocialBulkSkipReason = (typeof SOCIAL_BULK_SKIP_REASONS)[number];
 const unique = (ids: readonly string[]) => new Set(ids).size === ids.length;
 const zBulkPostIds = z.array(zId).min(1).max(SOCIAL_BULK_EDIT_MAX).refine(unique, 'each post once');
@@ -1610,6 +1624,10 @@ export const zSocialBulkLabels = z
 // The assignee (null: nobody) of every post; dueAt null clears the due date, left out keeps each post's own.
 export const zSocialBulkAssign = z.strictObject({ postIds: zBulkPostIds, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable().optional() });
 export const zSocialBulkResult = z.object({ done: z.array(zId), skipped: z.array(z.object({ postId: zId, reason: z.enum(SOCIAL_BULK_SKIP_REASONS) })) });
+// One channel added to every post (#1178), as a draft with the post's content and planned time; the answer also says,
+// per channel added, what its rules still miss (an empty list: it already fits them).
+export const zSocialBulkAddChannel = z.strictObject({ postIds: zBulkPostIds, connectionId: zId });
+export const zSocialBulkAddChannelResult = zSocialBulkResult.extend({ added: z.array(z.object({ postId: zId, variantId: zId, issues: z.array(zSocialIssue) })) });
 // Find and replace across posts (#1144): literal text, never a pattern language, in at most SOCIAL_BULK_REPLACE_MAX
 // posts per command (each post may take a change of its base content and of each channel's own), a search as long as
 // the post list's search, a replacement as long as a link may be.

@@ -1,14 +1,16 @@
 // Acting on many posts at once from the Social home lists (#635). Each post still goes through its own command, on
 // what the list shows: one refused post does not stop the others, and the result says what was done and what was
-// refused, with the reason.
+// refused, with the reason. Sending drafts to review (#1178) works the same way, post by post.
 import { SOCIAL_BULK_EDIT_MAX, SOCIAL_BULK_REPLACE_MAX, SOCIAL_REPLACE_FIND_MAX, SOCIAL_REPLACE_WITH_MAX, type SocialBulkSkipReason, type SocialReplaceField } from '@crove/kernel-contract';
+import type { IssueCode } from '@crove/mod-social/contract';
 import { localTime, zonedToEpoch } from '@crove/mod-social/contract';
 import { CANCELLABLE } from './social.ts';
 import { MAX_LABELS_PER_POST } from './social-labels.ts';
 
-export type BulkAction = 'approve' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign' | 'replace';
-// The edits the server makes for many posts in one command: labels and the assignee (#1057), find and replace (#1144).
-export type EditAction = 'labels' | 'assign' | 'replace';
+export type BulkAction = 'approve' | 'submit' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign' | 'replace' | 'addChannel';
+// The edits the server makes for many posts in one command: labels and the assignee (#1057), find and replace (#1144),
+// a channel added (#1178).
+export type EditAction = 'labels' | 'assign' | 'replace' | 'addChannel';
 // The actions that send one command per post; a move sends one per channel (runMove).
 export type PostAction = Exclude<BulkAction, 'move' | EditAction>;
 
@@ -31,9 +33,12 @@ export interface BulkPost {
 
 // Owners and admins approve, schedule and cancel anything; members cancel what nobody approved yet.
 const SIGNED_OFF = ['approved', 'scheduled', 'paused'];
+// What social.post.submit sends to review by default (#1178): drafts and channels sent back.
+const SUBMITTABLE = ['draft', 'changes_requested', 'rejected'];
 
 export type BulkRequest =
   | { action: 'approve'; postId: string; variants: { variantId: string; revision: number; contentHash: string }[] }
+  | { action: 'submit'; postId: string }
   | { action: 'queue'; postId: string; variantIds: string[] }
   | { action: 'cancel'; postId: string; variantIds: string[] };
 
@@ -44,6 +49,8 @@ export function bulkRequest(post: BulkPost, action: PostAction, canDecide: boole
     const variants = post.variants.filter((v) => v.status === 'in_review').map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash }));
     return variants.length > 0 ? { action, postId: post.id, variants } : null;
   }
+  // Members and above; the server sends the channels the member may use (#1081).
+  if (action === 'submit') return post.variants.some((v) => SUBMITTABLE.includes(v.status)) ? { action, postId: post.id } : null;
   if (action === 'queue') {
     if (!canDecide) return null;
     const variantIds = post.variants.filter((v) => v.status === 'approved').map((v) => v.id);
@@ -76,6 +83,49 @@ export async function runBulk(posts: readonly BulkPost[], action: PostAction, ca
     }
   }
   return result;
+}
+
+// Drafts sent to review in bulk (#1178): runBulk's answer, with the posts the server refused for a reason the person
+// can fix told apart: nothing left to send (NOTHING_TO_SUBMIT counts as nothing to do), channels that do not fit their
+// rules yet (VARIANT_INVALID, with each channel's issues) and a blocked word (BANNED_WORDS, with the words).
+export interface SubmitIssue {
+  code: IssueCode;
+  field: string;
+  limit: number | null;
+  actual: number | null;
+}
+export interface SubmitResult extends BulkResult {
+  invalid: { postId: string; variants: { variantId: string; issues: SubmitIssue[] }[] }[];
+  blocked: { postId: string; phrases: string[] }[];
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+export function submitResult(result: BulkResult): SubmitResult {
+  const out: SubmitResult = { done: result.done, skipped: [...result.skipped], refused: [], invalid: [], blocked: [] };
+  for (const r of result.refused) {
+    const e = isRecord(r.error) ? r.error : {};
+    const variants = isRecord(e.data) && Array.isArray(e.data.variants) ? e.data.variants.filter(isRecord) : [];
+    if (e.code === 'NOTHING_TO_SUBMIT') out.skipped.push(r.postId);
+    else if (e.code === 'VARIANT_INVALID' && variants.length > 0) {
+      out.invalid.push({
+        postId: r.postId,
+        variants: variants.map((v) => ({
+          variantId: String(v.variantId ?? ''),
+          issues: (Array.isArray(v.issues) ? v.issues.filter(isRecord) : []).map((i) => ({
+            code: String(i.code ?? '') as IssueCode,
+            field: String(i.field ?? ''),
+            limit: typeof i.limit === 'number' ? i.limit : null,
+            actual: typeof i.actual === 'number' ? i.actual : null,
+          })),
+        })),
+      });
+    } else if (e.code === 'BANNED_WORDS') {
+      const words = variants.flatMap((v) => (Array.isArray(v.words) ? v.words.filter(isRecord) : []));
+      out.blocked.push({ postId: r.postId, phrases: [...new Set(words.map((w) => w.phrase).filter((x): x is string => typeof x === 'string'))] });
+    } else out.refused.push(r);
+  }
+  return out;
 }
 
 // Moving the selected posts by days or hours (#945): each channel scheduled at a time moves by the same amount through
@@ -251,6 +301,41 @@ export async function runEdit(
   }
   return result;
 }
+
+// One channel added to the selected posts (#1178), in batches of up to SOCIAL_BULK_EDIT_MAX posts: the server's answer
+// for each batch, and per channel added what its rules still miss.
+export interface AddedChannel {
+  postId: string;
+  variantId: string;
+  issues: SubmitIssue[];
+}
+export interface AddChannelResult extends EditResult {
+  added: AddedChannel[];
+}
+
+export async function runAddChannel(
+  postIds: readonly string[],
+  send: (postIds: string[]) => Promise<EditAnswer & { added: { postId: string; variantId: string; issues: { code: string; field: string; limit: number | null; actual: number | null }[] }[] }>,
+  progress?: (done: number, total: number) => void,
+): Promise<AddChannelResult> {
+  const added: AddedChannel[] = [];
+  const result = await runEdit(
+    postIds,
+    async (batch) => {
+      const answer = await send(batch);
+      added.push(...answer.added.map((a) => ({ ...a, issues: a.issues.map((i) => ({ ...i, code: i.code as IssueCode })) })));
+      return answer;
+    },
+    progress,
+  );
+  return { ...result, added };
+}
+
+// The channels added that already fit their rules, and those that need edits before review.
+export const addedSummary = (added: readonly AddedChannel[]): { fits: number; needsEdits: number } => {
+  const needsEdits = added.filter((a) => a.issues.length > 0).length;
+  return { fits: added.length - needsEdits, needsEdits };
+};
 
 // Find and replace across the selected posts (#1144): the server previews, per post, where the text matches and why a
 // post would be left out, then replaces in batches of up to SOCIAL_BULK_REPLACE_MAX posts. The pattern is plain text.

@@ -29,6 +29,8 @@ export { csvCell } from './domain/csv.ts';
 export * from './domain/bulk-drafts.ts';
 // The same text again on a channel (#1156): the composer compares as the member types, as social.post.get does.
 export * from './domain/duplicate.ts';
+// Bold and italic text (#1179): the composer styles a selection with the letters the matchers fold back.
+export * from './domain/text-styles.ts';
 // Campaign labels (#1169): the label's tag rule, the UTM fields a campaign label fills in, and the two findings the post
 // page shows as social.post.pre_review does.
 export * from './domain/campaign.ts';

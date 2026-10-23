@@ -3,6 +3,9 @@
 // (a move, one per channel); the result says what was done, what had nothing to do, and what was refused and why.
 // Labels and the assignee (#1057) are set on up to 100 posts per command, and the result names each post left out.
 // Find and replace (#1144) shows the server's preview of every match first; the replace changes what it listed.
+// Drafts go to review post by post as approvals do, and the result tells apart what had nothing to send, what does not
+// fit its channel yet and what holds a blocked word; one channel is added to up to 100 posts per command, and the
+// result says which added channels already fit their rules (#1178).
 import { useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -16,23 +19,28 @@ import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, queryClient } from '../lib/api.ts';
 import { fromLocalInput } from '../lib/social-assign.ts';
+import { mediaNumber } from '../lib/social-bulk-drafts.ts';
 import {
   BULK_REPLACE_MAX,
   MOVE_MAX,
   REPLACE_FIND_MAX,
   REPLACE_WITH_MAX,
+  addedSummary,
   assignInput,
   moveSummary,
   previewSummary,
   replaceKey,
+  runAddChannel,
   runBulk,
   runEdit,
   runMove,
   runReplacePreview,
+  submitResult,
   toggleEditLabel,
   validLabelEdit,
   validMove,
   validReplace,
+  type AddChannelResult,
   type AssignEdit,
   type BulkAction,
   type BulkMove,
@@ -47,13 +55,17 @@ import {
   type PostAction,
   type ReplaceEdit,
   type ReplacePreviewPost,
+  type SubmitIssue,
+  type SubmitResult,
 } from '../lib/social-bulk.ts';
 import { LABEL_TONE, type LabelColor } from '../lib/social-labels.ts';
 
 const send = (r: BulkRequest) =>
   r.action === 'approve'
     ? client.social.variants.decide({ postId: r.postId, decision: 'approved', variants: r.variants })
-    : r.action === 'queue'
+    : r.action === 'submit'
+      ? client.social.posts.submit({ postId: r.postId })
+      : r.action === 'queue'
       ? client.social.variants.schedule({ postId: r.postId, variantIds: r.variantIds, queue: true })
       : client.social.variants.cancel({ variantIds: r.variantIds });
 
@@ -67,12 +79,25 @@ const editAssign = (input: AssignInput) => (postIds: string[]) => client.social.
 // Find and replace (#1144): the preview and the replace take the same input.
 const previewReplace = (edit: ReplaceEdit) => (postIds: string[]) => client.social.posts.bulkReplacePreview({ postIds, ...edit });
 const editReplace = (edit: ReplaceEdit) => (postIds: string[]) => client.social.posts.bulkReplace({ postIds, ...edit });
+// One channel on every post (#1178).
+const editAddChannel = (connectionId: string) => (postIds: string[]) => client.social.posts.bulkAddChannel({ postIds, connectionId });
 
-type Outcome = { action: PostAction; result: BulkResult } | { action: 'move'; move: BulkMove; results: MovePostResult[] } | { action: EditAction; result: EditResult };
-type Job = { action: PostAction } | { action: 'move'; move: BulkMove } | { action: 'labels'; edit: LabelEdit } | { action: 'assign'; input: AssignInput } | { action: 'replace'; edit: ReplaceEdit };
+type Outcome =
+  | { action: Exclude<PostAction, 'submit'>; result: BulkResult }
+  | { action: 'submit'; result: SubmitResult }
+  | { action: 'move'; move: BulkMove; results: MovePostResult[] }
+  | { action: Exclude<EditAction, 'addChannel'>; result: EditResult }
+  | { action: 'addChannel'; connectionId: string; result: AddChannelResult };
+type Job =
+  | { action: PostAction }
+  | { action: 'move'; move: BulkMove }
+  | { action: 'labels'; edit: LabelEdit }
+  | { action: 'assign'; input: AssignInput }
+  | { action: 'replace'; edit: ReplaceEdit }
+  | { action: 'addChannel'; connectionId: string };
 // The forms the bar opens under its buttons.
 type Form = 'move' | EditAction;
-const FORMS: readonly BulkAction[] = ['move', 'labels', 'assign', 'replace'];
+const FORMS: readonly BulkAction[] = ['move', 'labels', 'assign', 'replace', 'addChannel'];
 
 export interface BulkLabelOption {
   id: string;
@@ -81,6 +106,11 @@ export interface BulkLabelOption {
 }
 export interface BulkMember {
   userId: string;
+  name: string;
+}
+// A channel that can be added to the posts (#1178): live, and one the member may use.
+export interface BulkChannelOption {
+  id: string;
   name: string;
 }
 
@@ -92,6 +122,7 @@ export function BulkBar({
   channelName,
   labelOptions = [],
   members = [],
+  channelOptions = [],
   findHint = '',
   onClear,
 }: {
@@ -105,11 +136,14 @@ export function BulkBar({
   labelOptions?: readonly BulkLabelOption[];
   // The org's members, for assigning.
   members?: readonly BulkMember[];
+  // The channels the member may add to the posts; without any, the bar does not offer it.
+  channelOptions?: readonly BulkChannelOption[];
   // What the find and replace starts searching for: the list's search, when there is one.
   findHint?: string | undefined;
   onClear: () => void;
 }) {
   const t = useTranslations('social.bulk');
+  const ts = useTranslations('social');
   const f = useFormat();
   const [result, setResult] = useState<Outcome | null>(null);
   // The posts' text and the channels' names as they were when the action ran: a refused post may have left the list since.
@@ -130,6 +164,8 @@ export function BulkBar({
   // Find and replace (#1144): the form, and the preview with what it was made for.
   const [replaceEdit, setReplaceEdit] = useState<ReplaceEdit>({ find: findHint ?? '', replace: '', caseSensitive: false, wholeWord: false });
   const [preview, setPreview] = useState<{ key: string; posts: ReplacePreviewPost[] } | null>(null);
+  // The channel to add (#1178).
+  const [addChannelId, setAddChannelId] = useState('');
   const ids = posts.map((p) => p.id);
   const fresh = preview !== null && preview.key === replaceKey(replaceEdit, ids);
   const summary = preview ? previewSummary(preview.posts) : { changes: 0, matches: 0, skipped: 0 };
@@ -147,6 +183,8 @@ export function BulkBar({
       if (job.action === 'labels') return { action: 'labels', result: await runEdit(ids, editLabels(job.edit), step) };
       if (job.action === 'assign') return { action: 'assign', result: await runEdit(ids, editAssign(job.input), step) };
       if (job.action === 'replace') return { action: 'replace', result: await runEdit(ids, editReplace(job.edit), step, BULK_REPLACE_MAX) };
+      if (job.action === 'addChannel') return { action: 'addChannel', connectionId: job.connectionId, result: await runAddChannel(ids, editAddChannel(job.connectionId), step) };
+      if (job.action === 'submit') return { action: 'submit', result: submitResult(await runBulk(posts, 'submit', canDecide, send)) };
       return { action: job.action, result: await runBulk(posts, job.action, canDecide, send) };
     },
     onSuccess: (r) => {
@@ -174,7 +212,7 @@ export function BulkBar({
     setChannels(new Map(posts.flatMap((p) => p.variants.map((v) => [v.id, channelName(v.connectionId)] as const))));
   };
   const start = (action: BulkAction) => {
-    if (action === 'move' || action === 'labels' || action === 'assign' || action === 'replace') {
+    if (action === 'move' || action === 'labels' || action === 'assign' || action === 'replace' || action === 'addChannel') {
       // An empty search box starts from the list's search.
       if (action === 'replace' && replaceEdit.find === '' && findHint) setReplaceEdit({ ...replaceEdit, find: findHint });
       setForm((open) => (open === action ? null : action));
@@ -199,6 +237,11 @@ export function BulkBar({
     snapshot();
     run.mutate({ action: 'assign', input: assignment });
   };
+  const applyAddChannel = () => {
+    if (!channelOptions.some((c) => c.id === addChannelId)) return;
+    snapshot();
+    run.mutate({ action: 'addChannel', connectionId: addChannelId });
+  };
   const showPreview = () => {
     if (!validReplace(replaceEdit)) return;
     snapshot();
@@ -212,8 +255,10 @@ export function BulkBar({
   };
   const postName = (postId: string) => labels.get(postId) ?? excerptOf(postId);
   const channel = (variantId: string) => channels.get(variantId) ?? variantId;
-  // Owners and admins only, as social.variant.reschedule (R2); the server refuses anyone else anyway. Labels need a label.
-  const shown = actions.filter((a) => (a !== 'move' || canDecide) && (a !== 'labels' || labelOptions.length > 0));
+  const issueText = (issue: SubmitIssue) => ts(`issues.${issue.code}`, { limit: issue.limit ?? 0, actual: issue.actual ?? 0, n: mediaNumber(issue.field) });
+  // Owners and admins only, as social.variant.reschedule (R2); the server refuses anyone else anyway. Labels need a label,
+  // adding a channel a channel to add.
+  const shown = actions.filter((a) => (a !== 'move' || canDecide) && (a !== 'labels' || labelOptions.length > 0) && (a !== 'addChannel' || channelOptions.length > 0));
   const labelRow = (side: keyof LabelEdit) => (
     <div className="space-y-1">
       <p className="text-subtle-foreground">{t(`labels.${side}`)}</p>
@@ -339,6 +384,28 @@ export function BulkBar({
               <p className="w-full text-muted-foreground">{t('assign.hint')}</p>
             </div>
           )}
+          {form === 'addChannel' && channelOptions.length > 0 && (
+            <div className="flex flex-wrap items-end gap-2 text-xs">
+              <label>
+                <span className="text-subtle-foreground">{t('addChannel.channel')}</span>
+                <NativeSelect className="mt-1 w-56" value={addChannelId} onChange={(e) => setAddChannelId(e.target.value)}>
+                  <NativeSelectOption value="">{t('addChannel.pick')}</NativeSelectOption>
+                  {channelOptions.map((c) => (
+                    <NativeSelectOption key={c.id} value={c.id}>
+                      {c.name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </label>
+              <Button size="sm" disabled={busy || !channelOptions.some((c) => c.id === addChannelId)} onClick={applyAddChannel}>
+                {t('addChannel.apply')}
+              </Button>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setForm(null)}>
+                {t('move.close')}
+              </Button>
+              <p className="w-full text-muted-foreground">{t('addChannel.hint')}</p>
+            </div>
+          )}
           {form === 'replace' && (
             <div className="space-y-2 text-xs">
               <div className="flex flex-wrap items-end gap-2">
@@ -377,7 +444,7 @@ export function BulkBar({
           )}
           {progress && (
             <p className="text-xs text-muted-foreground">
-              {t(previewing.isPending ? 'replace.progress' : form === 'labels' || form === 'assign' || form === 'replace' ? 'edit.progress' : 'move.progress', { done: progress.done, total: progress.total })}
+              {t(previewing.isPending ? 'replace.progress' : form === 'labels' || form === 'assign' || form === 'replace' || form === 'addChannel' ? 'edit.progress' : 'move.progress', { done: progress.done, total: progress.total })}
             </p>
           )}
         </Card>
@@ -408,6 +475,71 @@ export function BulkBar({
                 </p>
               ))}
             </div>
+          ))}
+        </Card>
+      )}
+      {result?.action === 'addChannel' && (
+        <Card className="block space-y-1 p-3 text-sm">
+          <p className="text-foreground">
+            {t('addChannel.result', {
+              channel: channelOptions.find((c) => c.id === result.connectionId)?.name ?? channelName(result.connectionId),
+              done: result.result.done.length,
+              skipped: result.result.skipped.length,
+              refused: result.result.refused.length,
+              ...addedSummary(result.result.added),
+            })}
+          </p>
+          {result.result.added
+            .filter((a) => a.issues.length > 0)
+            .map((a) => (
+              <p key={a.variantId} className="text-xs text-muted-foreground">
+                <span className="text-foreground">{postName(a.postId)}</span>: {t('addChannel.needsEdits', { issues: a.issues.map(issueText).join('; ') })}
+              </p>
+            ))}
+          {result.result.skipped.map((s) => (
+            <p key={s.postId} className="text-xs text-muted-foreground">
+              <span className="text-foreground">{postName(s.postId)}</span>: {t(`edit.skip.${s.reason}`)}
+            </p>
+          ))}
+          {result.result.refused.map((r) => (
+            <p key={r.postId} className="text-xs text-muted-foreground">
+              <span className="text-foreground">{postName(r.postId)}</span>: <span className="text-warning">{errorMessage(r.error)}</span>
+            </p>
+          ))}
+        </Card>
+      )}
+      {result?.action === 'submit' && (
+        <Card className="block space-y-1 p-3 text-sm">
+          <p className="text-foreground">
+            {t('submit.result', {
+              done: result.result.done.length,
+              skipped: result.result.skipped.length,
+              invalid: result.result.invalid.length,
+              blocked: result.result.blocked.length,
+              refused: result.result.refused.length,
+            })}
+          </p>
+          {result.result.invalid.map((x) => (
+            <div key={x.postId} className="space-y-0.5 text-xs text-muted-foreground">
+              <p>
+                <span className="text-foreground">{postName(x.postId)}</span>: {t('submit.invalid')}
+              </p>
+              {x.variants.map((v) => (
+                <p key={v.variantId} className="pl-3">
+                  {channel(v.variantId)}: {v.issues.map(issueText).join('; ')}
+                </p>
+              ))}
+            </div>
+          ))}
+          {result.result.blocked.map((x) => (
+            <p key={x.postId} className="text-xs text-muted-foreground">
+              <span className="text-foreground">{postName(x.postId)}</span>: <span className="text-warning">{t('submit.blocked', { words: x.phrases.map((w) => `«${w}»`).join(', ') })}</span>
+            </p>
+          ))}
+          {result.result.refused.map((r) => (
+            <p key={r.postId} className="text-xs text-muted-foreground">
+              <span className="text-foreground">{postName(r.postId)}</span>: <span className="text-warning">{errorMessage(r.error)}</span>
+            </p>
           ))}
         </Card>
       )}

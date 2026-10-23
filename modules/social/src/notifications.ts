@@ -3,8 +3,9 @@
 // and never trusts the job): a post sent to review tells the owners and admins; a review decision tells the author; a
 // channel that failed or needs attention tells the owners, the admins and the author; an expired channel tells the
 // owners and admins; an internal comment or a client's answer tells the author and the people who commented before;
-// an assignment tells the assignee; a reminder of a post still waiting for review (#703) tells the owners and admins who
-// have not approved its current content yet; a publishing hold put on or taken off (#946) tells the whole team; a
+// an assignment tells the assignee, once for all the posts of a bulk assignment (#1062); a reminder of a post still
+// waiting for review (#703) tells the owners and admins who have not approved its current content yet; a publishing
+// hold put on or taken off (#946) tells the whole team; a
 // channel's queue running low (#1079) tells the owners, admins and members, who can fill it; a post doing much better
 // than usual (#1132) tells its author and its assignee, who can boost or reuse it. Never the person who acted, never a
 // kind the person turned off, and only people who are members when it is written. Each member reads and marks only
@@ -23,7 +24,7 @@ import { createMailMessage } from '@crove/kernel';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { approvalsInRound } from './domain/approval.ts';
 import { decisionsOf } from './policy.ts';
-import { channelScope, connectionInScope, postInScope, usersInScope } from './channel-access.ts';
+import { channelScope, connectionInScope, postInScope, postsVisibleTo, usersInScope } from './channel-access.ts';
 import { RATIO_LABEL } from './domain/outperform.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -47,6 +48,8 @@ export const NOTIFYING_EVENTS = [
   'social.post.mentioned',
   'social.review.answered',
   'social.post.assigned',
+  // A bulk assignment (#1062): one notification for all its posts.
+  'social.post.bulk_assigned',
   'social.review.reminder',
   'social.feed.paused',
   // The org's publishing held and released (#946): the whole team is told.
@@ -189,11 +192,31 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
       return { ...base, kind: 'client_answer', users: await threadOf(ctx, e.data.post_id, p.author), postId: e.data.post_id, detail: { verdict: f.verdict, name: f.reviewer_name } };
     }
     case 'social.post.assigned': {
-      const e = z.object({ post_id: zId, assignee_user_id: zId.nullable() }).safeParse(payload);
-      if (!e.success || !e.data.assignee_user_id) return null;
+      const e = z.object({ post_id: zId, assignee_user_id: zId.nullable(), bulk: z.literal(true).optional() }).safeParse(payload);
+      // A post of a bulk assignment is told of with the others, by social.post.bulk_assigned.
+      if (!e.success || !e.data.assignee_user_id || e.data.bulk) return null;
       // Gone since (deleted): nothing to open.
       if (!(await authorOf(ctx, e.data.post_id))) return null;
       return { ...base, kind: 'assigned', users: [e.data.assignee_user_id], postId: e.data.post_id };
+    }
+    // A bulk assignment (#1062): one notification of the posts the assignee may see (#1081) and that are still there; a
+    // single post reads as a single assignment, several open the assignee's own posts (detail count).
+    case 'social.post.bulk_assigned': {
+      const e = z.object({ post_ids: z.array(zId).min(1).max(100), assignee_user_id: zId }).safeParse(payload);
+      if (!e.success) return null;
+      const there = await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', e.data.post_ids).execute();
+      const ids = new Set(there.map((p) => p.id));
+      const shown = await postsVisibleTo(
+        ctx.trx,
+        ctx.orgId,
+        e.data.assignee_user_id,
+        e.data.post_ids.filter((id) => ids.has(id)),
+      );
+      const [only] = shown;
+      if (only === undefined) return null;
+      return shown.length === 1
+        ? { ...base, kind: 'assigned', users: [e.data.assignee_user_id], postId: only }
+        : { ...base, kind: 'assigned', users: [e.data.assignee_user_id], postId: null, detail: { count: String(shown.length) } };
     }
     case 'social.feed.paused': {
       const e = z.object({ feed_id: zId }).safeParse(payload);
