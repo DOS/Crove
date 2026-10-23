@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
@@ -115,6 +115,12 @@ interface LinkPreviewJob {
   previewId: string;
 }
 const LINK_PREVIEW_RETRY_LIMIT = 2;
+
+interface ChannelOptionJob {
+  orgId: string;
+  optionId: string;
+}
+const CHANNEL_OPTION_RETRY_LIMIT = 2;
 
 interface ExtractJob {
   orgId: string;
@@ -706,6 +712,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const done = await runRemoveJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, after);
       console.log(`[social-remove] ${provider.slice(0, 32)} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
     });
+    // A channel's options for the composer (#1120): the token is opened here and goes to the adapter only.
+    await boss.work<ChannelOptionJob>(QUEUES.socialChannelOption, { batchSize: 1 }, async ([job]) => {
+      if (!job || !channels) return;
+      const done = await runChannelOptionJob({ runtime: deps.runtime, broker: channels.broker, publishers }, job.data.orgId, job.data.optionId);
+      if (done !== 'none') console.log(`[social-channel-option] ${job.data.optionId.slice(0, 8)}: ${done}`);
+    });
   }
   let sweeping = false;
   const socialSweep = async () => {
@@ -1151,6 +1163,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 return boss.send(QUEUES.socialRemove, { orgId: row.org_id, variantId, provider, after } satisfies SocialRemoveJob, {
                   singletonKey: `${row.org_id}:${variantId}:remove:${after ?? '-'}`,
                   retryLimit: 0,
+                });
+              }
+              // A channel's options for the composer (#1120): read by the worker with the channel's token.
+              if (social && row.type === 'social.channel_option.requested') {
+                const optionId = String(row.payload.option_id);
+                return boss.send(QUEUES.socialChannelOption, { orgId: row.org_id, optionId } satisfies ChannelOptionJob, {
+                  singletonKey: `${row.org_id}:${optionId}`,
+                  retryLimit: CHANNEL_OPTION_RETRY_LIMIT,
+                  retryDelay: 10,
+                  retryBackoff: true,
                 });
               }
               if (social && row.type === 'social.link_preview.requested') {

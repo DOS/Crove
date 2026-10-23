@@ -12,10 +12,14 @@
 // back (its S3 upload host, the only one allowed), waits until the media is processed, then pins it with a cover frame.
 // An unclear answer is checked by listing the board's
 // latest pins, matched by title and description and their time.
+// Sections (#1120): the composer picks one of the board's sections (GET /v5/boards/{board_id}/sections, boards:read),
+// kept as settings.pinterest.sectionId. Publishing lists the board's sections again first and sends board_section_id
+// only for one that is still there; a pin without a section is sent exactly as before.
 // Metrics: impressions, saves and clicks of a pin from its pin_metrics.
 import type { ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
 import { videoCoverOf } from './cover.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
+import { CHANNEL_OPTIONS_MAX, optionName, type ChannelOption, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
 
 export const PINTEREST_HOSTS = ['api.pinterest.com'] as const;
 // Where Pinterest takes a video's bytes (the upload_url of POST /v5/media).
@@ -37,6 +41,28 @@ const IMAGE_TYPES = ['image/jpeg', 'image/png'];
 const CAROUSEL_MAX = 5;
 // Boards one connect lists at most (a page of 250, as Pinterest pages them).
 const BOARDS_MAX = 250;
+// Sections asked for per page; the pages read stop at CHANNEL_OPTIONS_MAX sections.
+const SECTIONS_PAGE = 250;
+// The longest paging bookmark followed; a longer one ends the list.
+const BOOKMARK_MAX = 2048;
+
+// The section a pin goes into (#1120): settings.pinterest.sectionId, one of the board's sections. null when there is
+// none, 'invalid' when settings.pinterest is not an object holding only a section id.
+export const PINTEREST_SECTION_ID = /^\d{1,32}$/;
+export function pinterestSectionOf(settings: Readonly<Record<string, unknown>> | undefined): string | 'invalid' | null {
+  const raw = settings?.pinterest;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== 'sectionId')) return 'invalid';
+  if (r.sectionId === undefined) return null;
+  return typeof r.sectionId === 'string' && PINTEREST_SECTION_ID.test(r.sectionId) ? r.sectionId : 'invalid';
+}
+// What publish answers for a section that is not (or no longer) one of the board's, and for settings it cannot read.
+export const PINTEREST_SECTION_NOT_FOUND = 'PINTEREST_SECTION_NOT_FOUND';
+export const PINTEREST_SECTION_INVALID = 'PINTEREST_SECTION_INVALID';
+// The board's sections could not be listed before pinning: nothing was sent, and the attempt is tried again.
+export const PINTEREST_SECTIONS_UNREADABLE = 'PINTEREST_SECTIONS_UNREADABLE';
 
 export interface PinterestAppConfig {
   appId: string;
@@ -231,6 +257,13 @@ function publishResult(error: unknown): PublishResult {
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
 }
 
+// A pin into a section that Pinterest no longer finds ("Board or section not found", 404): the section went between
+// the check and the pin, and nothing was posted.
+function pinResult(error: unknown, sectionId: string | null): PublishResult {
+  if (sectionId && error instanceof PinterestError && error.status === 404) return { kind: 'rejected', error: 'bad_request', code: PINTEREST_SECTION_NOT_FOUND, message: sectionId, httpStatus: 404 };
+  return publishResult(error);
+}
+
 // Cut by code points, never inside a character.
 const clip = (s: string, max: number) => Array.from(s).slice(0, max).join('');
 const titleOf = (content: { title: string | null }) => clip((content.title ?? '').trim(), TITLE_MAX);
@@ -298,13 +331,67 @@ export class PinterestPublisher implements Publisher {
     }
   }
 
+  // The board's sections, at most CHANNEL_OPTIONS_MAX, following Pinterest's bookmark from page to page. It only reads.
+  private async listSections(boardId: string, token: string): Promise<ChannelOptionsResult> {
+    const options: ChannelOption[] = [];
+    const seen = new Set<string>();
+    let bookmark: string | null = null;
+    try {
+      for (let page = 0; page < Math.ceil(CHANNEL_OPTIONS_MAX / SECTIONS_PAGE); page += 1) {
+        const query: string = `page_size=${SECTIONS_PAGE}${bookmark ? `&bookmark=${encodeURIComponent(bookmark)}` : ''}`;
+        const answer = await this.client.call<{ items?: unknown; bookmark?: unknown }>('GET', `/boards/${boardId}/sections?${query}`, token);
+        if (!answer || !Array.isArray(answer.items)) return null;
+        for (const item of answer.items as ({ id?: unknown; name?: unknown } | null)[]) {
+          if (!item || typeof item.id !== 'string' || !PINTEREST_SECTION_ID.test(item.id) || seen.has(item.id)) continue;
+          seen.add(item.id);
+          options.push({ id: item.id, name: (typeof item.name === 'string' ? optionName(item.name) : '') || item.id });
+          if (options.length >= CHANNEL_OPTIONS_MAX) return { options };
+        }
+        bookmark = typeof answer.bookmark === 'string' && answer.bookmark && answer.bookmark.length <= BOOKMARK_MAX ? answer.bookmark : null;
+        if (!bookmark) break;
+      }
+      return { options };
+    } catch (error) {
+      if (error instanceof PinterestError && error.status === 401) return { refused: 'token_expired' };
+      if (error instanceof PinterestError && error.status === 403) return { refused: 'permission' };
+      if (error instanceof PinterestError && error.status === 404) return { refused: 'not_found' };
+      return null;
+    }
+  }
+
+  // The composer's list of the board's sections (#1120), read by the worker with the board's token.
+  async options(input: ChannelOptionsInput): Promise<ChannelOptionsResult> {
+    const s = pinterestSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (input.kind !== 'pinterest_section' || !ID.test(input.externalAccountId)) return { refused: 'not_found' };
+    return this.listSections(input.externalAccountId, s.accessToken);
+  }
+
+  // The section a pin goes into, checked against the board's sections as they are now; nothing is posted before.
+  private async sectionFor(input: PublishInput, token: string): Promise<{ sectionId: string | null } | { rejected: PublishResult }> {
+    const sectionId = pinterestSectionOf(input.settings);
+    if (sectionId === null) return { sectionId: null };
+    if (sectionId === 'invalid') return { rejected: { kind: 'rejected', error: 'bad_request', code: PINTEREST_SECTION_INVALID } };
+    const listed = await this.listSections(input.externalAccountId, token);
+    if (listed === null) return { rejected: { kind: 'rejected', error: 'transient', code: PINTEREST_SECTIONS_UNREADABLE } };
+    if ('refused' in listed) {
+      if (listed.refused === 'token_expired') return { rejected: { kind: 'rejected', error: 'token_expired', code: PINTEREST_SECTIONS_UNREADABLE } };
+      if (listed.refused === 'permission') return { rejected: { kind: 'rejected', error: 'permission', code: PINTEREST_SECTIONS_UNREADABLE } };
+      return { rejected: { kind: 'rejected', error: 'bad_request', code: 'BOARD_NOT_FOUND' } };
+    }
+    if (!listed.options.some((o) => o.id === sectionId)) return { rejected: { kind: 'rejected', error: 'bad_request', code: PINTEREST_SECTION_NOT_FOUND, message: sectionId } };
+    return { sectionId };
+  }
+
   async publish(input: PublishInput): Promise<PublishResult> {
     const s = pinterestSecretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
     if (!ID.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_BOARD_ID' };
+    const section = await this.sectionFor(input, s.accessToken);
+    if ('rejected' in section) return section.rejected;
     const { media } = input.content;
     const video = media.find((m) => m.mime.startsWith('video/'));
-    if (video) return this.publishVideo(input, s.accessToken, video);
+    if (video) return this.publishVideo(input, s.accessToken, video, section.sectionId);
     if (media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_REQUIRED' };
     if (media.length > CAROUSEL_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_IMAGES' };
     if (media.some((m) => !IMAGE_TYPES.includes(m.mime))) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TYPE' };
@@ -324,6 +411,7 @@ export class PinterestPublisher implements Publisher {
     const alt = media[0]?.altText ? clip(media[0].altText, ALT_TEXT_MAX) : null;
     const pin = {
       board_id: input.externalAccountId,
+      ...(section.sectionId ? { board_section_id: section.sectionId } : {}),
       ...(title ? { title } : {}),
       ...(description ? { description } : {}),
       ...(link ? { link } : {}),
@@ -339,12 +427,12 @@ export class PinterestPublisher implements Publisher {
       if (typeof id !== 'string' || !ID.test(id)) return { kind: 'unknown', code: 'NO_PIN_ID' };
       return { kind: 'accepted', externalId: id, url: pinUrl(id) };
     } catch (error) {
-      return publishResult(error);
+      return pinResult(error, section.sectionId);
     }
   }
 
   // A video pin (#813): one video alone, with its cover frame (the composer's cover time, else its first frame).
-  private async publishVideo(input: PublishInput, token: string, video: PublishInput['content']['media'][number]): Promise<PublishResult> {
+  private async publishVideo(input: PublishInput, token: string, video: PublishInput['content']['media'][number], sectionId: string | null): Promise<PublishResult> {
     const started = Date.now();
     if (input.content.media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_ALONE' };
     if (!VIDEO_TYPES.includes(video.mime)) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TYPE' };
@@ -364,6 +452,7 @@ export class PinterestPublisher implements Publisher {
     const description = descriptionOf(input.content);
     const pin = {
       board_id: input.externalAccountId,
+      ...(sectionId ? { board_section_id: sectionId } : {}),
       ...(title ? { title } : {}),
       ...(description ? { description } : {}),
       ...(link ? { link } : {}),
@@ -376,7 +465,7 @@ export class PinterestPublisher implements Publisher {
       if (typeof id !== 'string' || !ID.test(id)) return { kind: 'unknown', code: 'NO_PIN_ID' };
       return { kind: 'accepted', externalId: id, url: pinUrl(id) };
     } catch (error) {
-      return publishResult(error);
+      return pinResult(error, sectionId);
     }
   }
 

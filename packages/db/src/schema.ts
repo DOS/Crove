@@ -445,6 +445,13 @@ export const SOCIAL_LINK_PREVIEW_STATUSES = ['pending', 'ready', 'failed'] as co
 export const SOCIAL_LINK_PREVIEW_ERRORS = ['invalid_url', 'blocked', 'dns', 'timeout', 'too_large', 'redirects', 'encoding', 'network', 'http', 'not_html'] as const;
 export type SocialLinkPreviewStatus = (typeof SOCIAL_LINK_PREVIEW_STATUSES)[number];
 export type SocialLinkPreviewError = (typeof SOCIAL_LINK_PREVIEW_ERRORS)[number];
+// A channel's options for the composer (#1120): what a list holds, where its read stands and why it failed.
+export const SOCIAL_CHANNEL_OPTION_KINDS = ['pinterest_section'] as const;
+export const SOCIAL_CHANNEL_OPTION_STATUSES = ['pending', 'ready', 'failed'] as const;
+export const SOCIAL_CHANNEL_OPTION_ERRORS = ['token_expired', 'permission', 'not_found', 'no_answer'] as const;
+export type SocialChannelOptionKind = (typeof SOCIAL_CHANNEL_OPTION_KINDS)[number];
+export type SocialChannelOptionStatus = (typeof SOCIAL_CHANNEL_OPTION_STATUSES)[number];
+export type SocialChannelOptionError = (typeof SOCIAL_CHANNEL_OPTION_ERRORS)[number];
 // The palette a label's colour comes from (#639); the app maps each name to a theme tone.
 export const SOCIAL_LABEL_COLORS = ['gray', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'purple', 'pink'] as const;
 // The corner of an image the org's logo watermark goes in (#834).
@@ -502,6 +509,14 @@ export type SocialLinkPreviewTable = Refine<
   {
     status: ColumnType<SocialLinkPreviewStatus, SocialLinkPreviewStatus, SocialLinkPreviewStatus>;
     error: ColumnType<SocialLinkPreviewError | null, SocialLinkPreviewError | null | undefined, SocialLinkPreviewError | null>;
+  }
+>;
+export type SocialChannelOptionTable = Refine<
+  G.SocialChannelOptionTable,
+  {
+    kind: ColumnType<SocialChannelOptionKind, SocialChannelOptionKind, never>;
+    status: ColumnType<SocialChannelOptionStatus, SocialChannelOptionStatus, SocialChannelOptionStatus>;
+    error: ColumnType<SocialChannelOptionError | null, SocialChannelOptionError | null | undefined, SocialChannelOptionError | null>;
   }
 >;
 export type SocialNotificationTable = Refine<G.SocialNotificationTable, { kind: ColumnType<SocialNotificationKind, SocialNotificationKind, never> }>;
@@ -567,6 +582,7 @@ type Refined = Tables<{
   'crove_social.account_snapshot': SocialAccountSnapshotTable;
   'crove_social.external_import': SocialExternalImportTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
+  'crove_social.channel_option': SocialChannelOptionTable;
   'crove_social.notification': SocialNotificationTable;
   'crove_social.notification_mute': SocialNotificationMuteTable;
   'crove_social.calendar_note': SocialCalendarNoteTable;

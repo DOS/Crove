@@ -53,6 +53,8 @@ import {
   YOUTUBE_PLAYLIST_ID,
   youtubePlaylistIdFrom,
   youtubePlaylistsOf,
+  pinterestSectionOf,
+  PINTEREST_SECTION_ID,
   youtubeTagsLength,
   type CallState,
   type HashedVariant,
@@ -328,6 +330,23 @@ describe('validateVariant', () => {
     expect(youtubePlaylistsOf({})).toBeNull();
     // The same shape the adapter sends.
     expect(YOUTUBE_PLAYLIST_ID.source).toBe(channel.YOUTUBE_PLAYLIST_ID.source);
+  });
+
+  it('takes one board section on Pinterest only, in settings.pinterest (#1120)', () => {
+    const SALE = '5027630990032166911';
+    const on = (provider: 'pinterest' | 'instagram', settings: Record<string, unknown>) =>
+      validateVariant({ provider, body: 'Bánh mì', title: 'Thực đơn', media: [{ kind: 'image', mime: 'image/jpeg', sizeBytes: 100_000, durationSeconds: null }], settings }).filter((i) => i.field.startsWith('settings.pinterest'));
+    expect(on('pinterest', {})).toEqual([]);
+    expect(on('pinterest', { pinterest: { sectionId: SALE } })).toEqual([]);
+    expect(on('pinterest', { pinterest: {} })).toEqual([]);
+    const invalid = [{ code: 'PINTEREST_SECTION_INVALID', field: 'settings.pinterest.sectionId', limit: null, actual: null }];
+    for (const pinterest of [{ sectionId: 'Khuyến mãi' }, { sectionId: 12345 }, { sectionId: SALE, boardId: '1' }, [SALE], null, SALE]) expect(on('pinterest', { pinterest })).toEqual(invalid);
+    expect(on('instagram', { pinterest: { sectionId: SALE } })).toEqual([{ code: 'PINTEREST_NOT_SUPPORTED', field: 'settings.pinterest', limit: null, actual: null }]);
+    expect(pinterestSectionOf({ pinterest: { sectionId: SALE } })).toBe(SALE);
+    expect(pinterestSectionOf({})).toBeNull();
+    // The same shape, and the same reading, as the adapter's.
+    expect(PINTEREST_SECTION_ID.source).toBe(channel.PINTEREST_SECTION_ID.source);
+    for (const settings of [{}, { pinterest: { sectionId: SALE } }, { pinterest: { sectionId: 'x' } }, { pinterest: {} }]) expect(pinterestSectionOf(settings)).toBe(channel.pinterestSectionOf(settings));
   });
 
   it('reads the playlist id from what a person pastes (#1018)', () => {

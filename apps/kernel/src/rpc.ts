@@ -744,6 +744,10 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         request: os.social.linkPreviews.request.handler(socialCommand('social.link_preview.request')),
         get: os.social.linkPreviews.get.handler(socialQuery('social.link_preview.get')),
       },
+      channelOptions: {
+        request: os.social.channelOptions.request.handler(socialCommand('social.channel_option.request')),
+        get: os.social.channelOptions.get.handler(socialQuery('social.channel_option.get')),
+      },
       notifications: {
         list: os.social.notifications.list.handler(socialQuery('social.notification.list')),
         read: os.social.notifications.read.handler(socialCommand('social.notification.read')),

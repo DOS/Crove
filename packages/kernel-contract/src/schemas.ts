@@ -1831,6 +1831,17 @@ export const zSocialLinkPreview = z.object({
   fetchedAt: z.string().nullable(),
 });
 
+// A channel's options for the composer (#1120), first a Pinterest board's sections: pending until the worker read
+// them; failed with why. Options only once they are read; their names are the platform's text, shown as text.
+export const zSocialChannelOptions = z.object({
+  connectionId: zId,
+  kind: z.enum(['pinterest_section']),
+  status: z.enum(['pending', 'ready', 'failed']),
+  options: z.array(z.object({ id: z.string(), name: z.string() })),
+  error: z.enum(['token_expired', 'permission', 'not_found', 'no_answer']).nullable(),
+  fetchedAt: z.string().nullable(),
+});
+
 // In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.
 export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold', 'queue_low', 'weekly_digest'] as const;
 export const zSocialNotificationKind = z.enum(SOCIAL_NOTIFICATION_KINDS);

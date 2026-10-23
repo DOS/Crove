@@ -64,6 +64,7 @@ export * from './playlists.ts';
 export * from './remove.ts';
 export * from './accounts.ts';
 export * from './link-preview.ts';
+export * from './channel-options.ts';
 export * from './notifications.ts';
 export * from './reminders.ts';
 export * from './channel-access.ts';

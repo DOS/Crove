@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, pinterestSectionOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -285,6 +285,82 @@ function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<st
       </div>
       <TagsField tags={tags} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, tags: next } : without('tags'))} />
       <PlaylistsField ids={playlists} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, youtube: { playlistIds: next } } : without('youtube'))} />
+    </div>
+  );
+}
+
+// A pin's board section on Pinterest (#1120): one of the board's sections as the worker listed them with the board's
+// token, kept as settings.pinterest.sectionId; none is the board itself, as before, and is not stored. The names are
+// Pinterest's text, shown as text only. Publishing checks the section against the board again.
+function PinterestSettings({ connectionId, settings, onChange, disabled }: { connectionId: string | null; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const chosen = pinterestSectionOf(settings);
+  const sectionId = chosen !== null && chosen !== 'invalid' ? chosen : null;
+  const { pinterest: _section, ...others } = settings;
+  const on = connectionId !== null;
+  const asked = useQuery({
+    queryKey: ['social-channel-options', 'request', connectionId],
+    queryFn: () => client.social.channelOptions.request({ connectionId: connectionId as string }),
+    enabled: on,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+  const waiting = asked.data?.status === 'pending';
+  const read = useQuery({
+    queryKey: ['social-channel-options', 'get', connectionId],
+    queryFn: () => client.social.channelOptions.get({ connectionId: connectionId as string }),
+    enabled: on && waiting,
+    retry: false,
+    // About a minute, then the picker says Pinterest did not answer.
+    refetchInterval: (q) => (q.state.data && q.state.data.status !== 'pending') || q.state.dataUpdateCount >= 40 ? false : 1500,
+  });
+  const latest = read.data ?? asked.data ?? null;
+  const ready = latest?.status === 'ready';
+  const options = ready ? latest.options : [];
+  const known = sectionId === null || options.some((o) => o.id === sectionId);
+  // Still pending when the polling above stops.
+  const stalled = latest?.status === 'pending' && read.data?.status === 'pending' && read.dataUpdatedAt - asked.dataUpdatedAt > 55_000;
+  const reload = () => {
+    void queryClient.resetQueries({ queryKey: ['social-channel-options', 'get', connectionId] });
+    void asked.refetch();
+  };
+  const reloadButton = (
+    <Button variant="ghost" size="sm" disabled={asked.isFetching} onClick={reload}>
+      {t('pinSectionReload')}
+    </Button>
+  );
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={`${id}-section`} className="text-xs">
+        {t('pinSection')}
+      </Label>
+      <NativeSelect
+        id={`${id}-section`}
+        size="sm"
+        className="w-full max-w-xs"
+        value={sectionId ?? ''}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value ? { ...others, pinterest: { sectionId: e.target.value } } : others)}
+      >
+        <NativeSelectOption value="">{t('pinSectionNone')}</NativeSelectOption>
+        {sectionId !== null && !known && <NativeSelectOption value={sectionId}>{ready ? t('pinSectionGone') : sectionId}</NativeSelectOption>}
+        {options.map((o) => (
+          <NativeSelectOption key={o.id} value={o.id}>
+            {o.name}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      {on && (asked.isLoading || (latest?.status === 'pending' && !stalled)) && <p className="text-xs text-subtle-foreground">{t('pinSectionLoading')}</p>}
+      {(asked.isError || stalled || latest?.status === 'failed') && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-warning">{latest?.status === 'failed' && latest.error ? t(`pinSectionFailed.${latest.error}`) : stalled ? t('pinSectionFailed.no_answer') : errorMessage(asked.error)}</p>
+          {!disabled && reloadButton}
+        </div>
+      )}
+      {ready && options.length === 0 && <p className="text-xs text-subtle-foreground">{t('pinSectionEmpty')}</p>}
+      {ready && !known && <p className="text-xs text-warning">{t('pinSectionGone')}</p>}
+      <p className="text-xs text-subtle-foreground">{t('pinSectionHint')}</p>
     </div>
   );
 }
@@ -602,6 +678,7 @@ function ProviderSettings({
   reel = false,
   photo = false,
   threadNameDefault = '',
+  connectionId = null,
 }: {
   provider: string;
   settings: Record<string, unknown>;
@@ -612,8 +689,10 @@ function ProviderSettings({
   reel?: boolean;
   photo?: boolean;
   threadNameDefault?: string;
+  connectionId?: string | null;
 }) {
   const t = useTranslations('social');
+  if (provider === 'pinterest') return <PinterestSettings connectionId={connectionId} settings={settings} onChange={onChange} disabled={disabled} />;
   if (provider === 'discord') return <DiscordSettings settings={settings} onChange={onChange} disabled={disabled} threadNameDefault={threadNameDefault} />;
   // Telegram (#982): a silent post, and a pin to the top of the channel once it is out; link buttons under it (#1017).
   // Only what is on is stored, so a variant left as it was keeps its content hash.
@@ -1779,6 +1858,7 @@ function ChannelEditor({
         reel={provider === 'instagram' && isInstagramReel(content.media.map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const) })), own.settings)}
         photo={content.media.length > 0 && content.media.every((m) => m.mime.startsWith('image/'))}
         threadNameDefault={provider === 'discord' ? discordThreadName(null, content.title || null, content.body) : ''}
+        connectionId={connectionId ?? null}
         onChange={(settings) => onChange({ ...own, settings })}
       />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
@@ -2696,6 +2776,8 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
     case 'failed':
       // A draft for the TikTok app on a deployment that has not turned inbox mode on (#903).
       if (v.error?.code === 'TIKTOK_INBOX_NOT_ENABLED') return <p className="text-destructive">{t('outcome.inboxNotEnabled')}</p>;
+      // A board section Pinterest no longer has (#1120): nothing was pinned.
+      if (v.error?.code === 'PINTEREST_SECTION_NOT_FOUND') return <p className="text-destructive">{t('outcome.pinterestSectionNotFound')}</p>;
       // A category or tag the WordPress site refused before anything was posted (#981); the message is its name.
       if (v.error?.code && v.error.code in WORDPRESS_TERM_OUTCOMES) {
         return <p className="text-destructive [overflow-wrap:anywhere]">{t(`outcome.${WORDPRESS_TERM_OUTCOMES[v.error.code] as WordPressTermOutcome}`, { name: v.error.message ?? '' })}</p>;
