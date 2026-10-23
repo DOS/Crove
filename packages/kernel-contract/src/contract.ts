@@ -32,6 +32,8 @@ import {
   channelsOrSet,
   zSocialDraftsFromMediaFields,
   zSocialDraftsFromMediaResult,
+  zSocialPostDuplicate,
+  zSocialPostDuplicateResult,
   zSocialDecide,
   zSocialPost,
   zSocialRecurrence,
@@ -428,8 +430,10 @@ export const contract = {
       // One draft per library file (#1080), all or none: every file is checked against every channel first, and a file
       // that does not fit one is reported with nothing saved. A retry with the same idempotencyKey returns the first answer.
       createFromMedia: oc.input(zSocialDraftsFromMediaFields.extend({ idempotencyKey: zId }).refine(channelsOrSet, 'channels or a channel set')).output(zSocialDraftsFromMediaResult),
-      // A copy of any post as a new draft, for the channels still connected (#575).
-      duplicate: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
+      // A copy of any post as a new draft, for the channels still connected that the caller may use (#575, #1081),
+      // with its labels; planned for scheduledAt when given (in the future), else undated (#1192). The bulk bar sends
+      // one per post.
+      duplicate: oc.input(zSocialPostDuplicate).output(zSocialPostDuplicateResult),
       // Repost a published post every N days (7 to 365), each repost sent to review; null stops it.
       setEvergreen: oc.input(z.strictObject({ postId: zId, days: z.number().int().min(7).max(365).nullable() })).output(z.object({ postId: zId, evergreenDays: z.number().int().nullable() })),
       // Repeat a post on fixed weekdays at a local time (#979): after each publish the worker makes the next copy, planned

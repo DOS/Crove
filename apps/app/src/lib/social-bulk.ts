@@ -1,18 +1,20 @@
 // Acting on many posts at once from the Social home lists (#635). Each post still goes through its own command, on
 // what the list shows: one refused post does not stop the others, and the result says what was done and what was
-// refused, with the reason. Sending drafts to review (#1178) works the same way, post by post.
+// refused, with the reason. Sending drafts to review (#1178) and copying posts moved by days or weeks (#1192) work the
+// same way, post by post.
 import { SOCIAL_BULK_EDIT_MAX, SOCIAL_BULK_REPLACE_MAX, SOCIAL_REPLACE_FIND_MAX, SOCIAL_REPLACE_WITH_MAX, type SocialBulkSkipReason, type SocialReplaceField } from '@crove/kernel-contract';
 import type { IssueCode } from '@crove/mod-social/contract';
 import { localTime, zonedToEpoch } from '@crove/mod-social/contract';
 import { CANCELLABLE } from './social.ts';
 import { MAX_LABELS_PER_POST } from './social-labels.ts';
 
-export type BulkAction = 'approve' | 'submit' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign' | 'replace' | 'addChannel';
+export type BulkAction = 'approve' | 'submit' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign' | 'replace' | 'addChannel' | 'duplicate';
 // The edits the server makes for many posts in one command: labels and the assignee (#1057), find and replace (#1144),
 // a channel added (#1178).
 export type EditAction = 'labels' | 'assign' | 'replace' | 'addChannel';
-// The actions that send one command per post; a move sends one per channel (runMove).
-export type PostAction = Exclude<BulkAction, 'move' | EditAction>;
+// The actions that send one command per post; a move sends one per channel (runMove), and copies (#1192) one per post
+// with its planned time (runDuplicate).
+export type PostAction = Exclude<BulkAction, 'move' | 'duplicate' | EditAction>;
 
 export interface BulkVariant {
   id: string;
@@ -28,6 +30,8 @@ export interface BulkPost {
   id: string;
   // The post's IANA time zone: a move by days keeps the local clock time there.
   timeZone: string;
+  // Its planned time, which a copy moves from when no channel has a time (#1192).
+  scheduledAt?: string | null;
   variants: readonly BulkVariant[];
 }
 
@@ -391,3 +395,93 @@ export function previewSummary(posts: readonly ReplacePreviewPost[]): { changes:
 
 // What a preview was made for: another search, replacement, option or selection needs a new preview first.
 export const replaceKey = (edit: ReplaceEdit, postIds: readonly string[]): string => JSON.stringify([edit.find, edit.replace, edit.caseSensitive, edit.wholeWord, [...postIds].sort()]);
+
+// Copies of the selected posts moved by days or weeks (#1192), as agencies copy last week's set and then edit each copy.
+// One social.post.duplicate per post, as the other per-post actions: each copy is a draft that goes through review
+// again, on the source's channels the member may use and that are still connected, with its labels. Zero gives undated
+// drafts.
+export type DuplicateUnit = 'days' | 'weeks';
+// amount is a whole number from 0.
+export interface BulkDuplicate {
+  amount: number;
+  unit: DuplicateUnit;
+}
+
+export function validDuplicate(d: BulkDuplicate): boolean {
+  return Number.isInteger(d.amount) && d.amount >= 0 && d.amount <= MOVE_MAX;
+}
+
+// What a copy moves from: the earliest time a channel of the post goes out or went out (effectiveAt: its sent time,
+// else its retry, queue slot or own time, else the post's), else the post's planned time.
+export function sourceTime(post: BulkPost): number | null {
+  const times = post.variants.filter((v) => v.status !== 'cancelled' && v.effectiveAt).map((v) => Date.parse(v.effectiveAt as string));
+  if (times.length > 0) return Math.min(...times);
+  return post.scheduledAt ? Date.parse(post.scheduledAt) : null;
+}
+
+// Why a post gets no copy. Before anything is sent: it has no time to move from, or its copy would land in the past.
+// From the server: no channel of theirs is still connected, or none of its channels is one they may use.
+export type DuplicateSkip = 'undated' | 'past' | 'noChannel' | 'notAllowed';
+
+// The copy's planned time (null: undated), or why there is none. Days and weeks keep the local clock time and the
+// weekday in the post's time zone, so 09:00 on a Monday stays 09:00 on a Monday across a daylight-saving change.
+export function duplicateTime(post: BulkPost, d: BulkDuplicate, nowMs: number): { at: string | null } | { skip: DuplicateSkip } {
+  if (d.amount === 0) return { at: null };
+  const from = sourceTime(post);
+  if (from === null) return { skip: 'undated' };
+  const at = shiftTime(from, { amount: d.unit === 'weeks' ? d.amount * 7 : d.amount, unit: 'days' }, post.timeZone);
+  return at <= nowMs ? { skip: 'past' } : { at: new Date(at).toISOString() };
+}
+
+// A copy's channel on X or LinkedIn whose text matches another post there (#1156): those platforms would refuse it.
+export interface DuplicateRepeat {
+  variantId: string;
+  connectionId: string;
+  provider: string;
+  at: string | null;
+  status: 'published' | 'scheduled' | 'queued';
+}
+export type DuplicatePostResult =
+  | { postId: string; outcome: 'done'; copyId: string; at: string | null; repeats: DuplicateRepeat[] }
+  | { postId: string; outcome: 'skipped'; reason: DuplicateSkip }
+  | { postId: string; outcome: 'refused'; error: unknown };
+
+// The server's refusals that say why a post has no copy, rather than a failure.
+const DUPLICATE_SKIPS: Readonly<Record<string, DuplicateSkip>> = { NOTHING_TO_DUPLICATE: 'noChannel', CHANNEL_NOT_ALLOWED: 'notAllowed', DUPLICATE_IN_PAST: 'past' };
+
+// One post after another, never stopping at a refusal; progress counts the posts finished.
+export async function runDuplicate(
+  posts: readonly BulkPost[],
+  d: BulkDuplicate,
+  send: (request: { postId: string; scheduledAt: string | null }) => Promise<{ postId: string; repeats: DuplicateRepeat[] }>,
+  nowMs: number,
+  progress?: (done: number, total: number) => void,
+): Promise<DuplicatePostResult[]> {
+  const results: DuplicatePostResult[] = [];
+  for (const post of posts) {
+    const time = duplicateTime(post, d, nowMs);
+    if ('skip' in time) results.push({ postId: post.id, outcome: 'skipped', reason: time.skip });
+    else {
+      try {
+        const copy = await send({ postId: post.id, scheduledAt: time.at });
+        results.push({ postId: post.id, outcome: 'done', copyId: copy.postId, at: time.at, repeats: copy.repeats });
+      } catch (error) {
+        const code = isRecord(error) && typeof error.code === 'string' ? error.code : '';
+        const reason = DUPLICATE_SKIPS[code];
+        results.push(reason ? { postId: post.id, outcome: 'skipped', reason } : { postId: post.id, outcome: 'refused', error });
+      }
+    }
+    progress?.(results.length, posts.length);
+  }
+  return results;
+}
+
+// The counts the result line shows, with the copies whose text X or LinkedIn would refuse.
+export function duplicateSummary(results: readonly DuplicatePostResult[]): { done: number; skipped: number; refused: number; repeats: number } {
+  return {
+    done: results.filter((r) => r.outcome === 'done').length,
+    skipped: results.filter((r) => r.outcome === 'skipped').length,
+    refused: results.filter((r) => r.outcome === 'refused').length,
+    repeats: results.filter((r) => r.outcome === 'done' && r.repeats.length > 0).length,
+  };
+}

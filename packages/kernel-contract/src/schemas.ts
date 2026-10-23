@@ -1699,6 +1699,13 @@ export const zSocialDraftsFromMediaResult = z.discriminatedUnion('status', [
   }),
   z.object({ status: z.literal('invalid'), files: z.array(z.object({ fileId: zId, issues: z.array(zSocialDraftIssue) })) }),
 ]);
+// A copy of a post as a new draft (#575), planned for a time in the future or undated (#1192). repeats: the copy's
+// channels on X or LinkedIn whose text matches another post there (#1156), which those platforms would refuse.
+export const zSocialPostDuplicate = z.strictObject({ postId: zId, scheduledAt: zInstant.nullable().optional() });
+export const zSocialPostDuplicateResult = z.object({
+  postId: zId,
+  repeats: z.array(z.object({ variantId: zId, connectionId: zId, provider: z.string(), at: z.string().nullable(), status: z.enum(['published', 'scheduled', 'queued']) })),
+});
 // Client review links (#589): the team's view of a post's links and what clients said through them.
 // A plan link (#902) the post is in is listed too, with the posts it covers and its own cap of answers per post.
 export const zSocialReviewLinks = z.object({
