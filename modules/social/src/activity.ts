@@ -13,7 +13,8 @@ import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
 import { mentionsOf } from './domain/mentions.ts';
 import { NOT_PUBLIC_NOTES } from './domain/channels.ts';
 import { QUEUE_ORDER_COMMANDS, reorderCode } from './queue-order.ts';
-import { channelScope, connectionInScope, postsInScope, refuseChannels, refusePostOutside } from './channel-access.ts';
+import { channelScope, connectionInScope, postsInScope, refuseChannels, refusePostOutside, type ChannelScope } from './channel-access.ts';
+import type { Trx } from './variants.ts';
 import { tickedOf, type TickedCheck } from './review-checklist.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -113,6 +114,86 @@ export const commentEdit = defineCommand({
   },
 });
 
+// Resolving a comment (#1168) marks a requested change as dealt with; reopening takes that back. Who may: the comment's
+// author, the post's author or assignee, and owners and admins, on a post and a channel they may use (#1081), as for
+// adding one. The text and the edit window stay as they are; resolving a resolved comment (or reopening an open one)
+// changes nothing.
+async function setResolved(ctx: CommandContext, commentId: string, resolved: boolean) {
+  const userId = requireUser(ctx);
+  const c = await ctx.trx
+    .selectFrom('crove_social.post_comment')
+    .select(['id', 'post_id', 'variant_id', 'author_user_id', 'resolved_at', 'resolved_by'])
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', commentId)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!c) throw new DomainError('COMMENT_NOT_FOUND', 404, 'Không tìm thấy bình luận này');
+  const post = await ctx.trx.selectFrom('crove_social.post').select(['author_user_id', 'assignee_user_id']).where('org_id', '=', ctx.orgId).where('id', '=', c.post_id).executeTakeFirstOrThrow();
+  await refusePostOutside(ctx, c.post_id);
+  if (c.variant_id) {
+    const v = await ctx.trx.selectFrom('crove_social.post_variant').select('channel_connection_id').where('org_id', '=', ctx.orgId).where('id', '=', c.variant_id).executeTakeFirst();
+    if (v) await refuseChannels(ctx, [v.channel_connection_id]);
+  }
+  const may = ctx.role === 'owner' || ctx.role === 'admin' || [c.author_user_id, post.author_user_id, post.assignee_user_id].includes(userId);
+  if (!may) throw new DomainError('FORBIDDEN', 403, 'Chỉ người viết bình luận, người viết hoặc người phụ trách bài, chủ sở hữu hoặc quản trị viên mới đánh dấu được bình luận này');
+  let at = c.resolved_at;
+  let by = c.resolved_by;
+  if (resolved !== (c.resolved_at !== null)) {
+    at = resolved ? ctx.now : null;
+    by = resolved ? userId : null;
+    await ctx.trx.updateTable('crove_social.post_comment').set({ resolved_at: at, resolved_by: by }).where('org_id', '=', ctx.orgId).where('id', '=', c.id).execute();
+  }
+  ctx.audit({ post_id: c.post_id, changed: at !== c.resolved_at });
+  return { commentId: c.id, postId: c.post_id, resolvedAt: at?.toISOString() ?? null, resolvedBy: by };
+}
+
+export const commentResolve = defineCommand({
+  name: 'social.post_comment.resolve',
+  input: z.strictObject({ commentId: zId }),
+  risk: 'R1',
+  access: MEMBERS,
+  target: (input) => ({ type: 'social.post_comment', id: input.commentId }),
+  handler: (ctx, input) => setResolved(ctx, input.commentId, true),
+});
+
+export const commentReopen = defineCommand({
+  name: 'social.post_comment.reopen',
+  input: z.strictObject({ commentId: zId }),
+  risk: 'R1',
+  access: MEMBERS,
+  target: (input) => ({ type: 'social.post_comment', id: input.commentId }),
+  handler: (ctx, input) => setResolved(ctx, input.commentId, false),
+});
+
+// The comments not resolved yet of each of these posts (#1168), as the caller may see them: on the whole post, or on
+// a channel they may use (#1081). One grouped count, for a page of posts at a time.
+export async function openCommentsOf(trx: Trx, orgId: string, scope: ChannelScope, postIds: readonly string[]): Promise<Map<string, number>> {
+  if (postIds.length === 0) return new Map();
+  let q = trx
+    .selectFrom('crove_social.post_comment as c')
+    .select(['c.post_id', (eb) => eb.fn.countAll<string>().as('n')])
+    .where('c.org_id', '=', orgId)
+    .where('c.post_id', 'in', [...new Set(postIds)])
+    .where('c.resolved_at', 'is', null);
+  if (scope !== null) {
+    q = q.where((eb) =>
+      eb.or([
+        eb('c.variant_id', 'is', null),
+        eb.exists(
+          eb
+            .selectFrom('crove_social.post_variant as v')
+            .select(sql`1`.as('one'))
+            .whereRef('v.org_id', '=', 'c.org_id')
+            .whereRef('v.id', '=', 'c.variant_id')
+            .where(connectionInScope(scope, 'v.channel_connection_id')),
+        ),
+      ]),
+    );
+  }
+  const rows = await q.groupBy('c.post_id').execute();
+  return new Map(rows.map((r) => [r.post_id, Number(r.n)]));
+}
+
 export const ACTIVITY_KINDS = [
   'created',
   'comment',
@@ -168,6 +249,12 @@ export interface ActivityItem {
   code: string | null;
   // On an approval: the review checklist items the reviewer ticked (#1105); null otherwise or without a checklist.
   checklist: TickedCheck[] | null;
+  // On a resolved comment (#1168): when, by whom and their name (null name: no longer a member); null while it is open.
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolvedByName: string | null;
+  // The viewer may resolve or reopen this comment.
+  resolvable: boolean;
 }
 
 // The audited commands the timeline shows, by what they did. Decisions come from the decision rows, which carry the
@@ -195,7 +282,7 @@ export const postActivity = defineQuery({
   handler: async (ctx, input): Promise<{ items: ActivityItem[]; more: boolean }> => {
     const post = await ctx.trx
       .selectFrom('crove_social.post')
-      .select(['id', 'author_user_id', 'origin', 'created_at'])
+      .select(['id', 'author_user_id', 'assignee_user_id', 'origin', 'created_at'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.postId)
       .executeTakeFirst();
@@ -214,7 +301,7 @@ export const postActivity = defineQuery({
     const [comments, decisions, audited, reorders] = await Promise.all([
       ctx.trx
         .selectFrom('crove_social.post_comment')
-        .select(['id', 'variant_id', 'author_user_id', 'body', 'created_at', 'edited_at'])
+        .select(['id', 'variant_id', 'author_user_id', 'body', 'created_at', 'edited_at', 'resolved_at', 'resolved_by'])
         .where('org_id', '=', ctx.orgId)
         .where('post_id', '=', post.id)
         .orderBy('created_at', 'desc')
@@ -249,7 +336,10 @@ export const postActivity = defineQuery({
     const reposts = await repostCallsOf(ctx.trx, ctx.orgId, keyed);
     const viewer = ctx.actor.type === 'user' ? ctx.actor.userId : null;
     const now = Date.now();
-    const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null, checklist: null };
+    const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null, checklist: null, resolvedAt: null, resolvedBy: null, resolvedByName: null, resolvable: false };
+    // As social.post_comment.resolve decides it; a viewer never writes.
+    const writer = viewer !== null && ctx.role !== null && MEMBERS.includes(ctx.role);
+    const resolver = writer && (ctx.role === 'owner' || ctx.role === 'admin' || viewer === post.author_user_id || viewer === post.assignee_user_id);
     const items: ActivityItem[] = [
       { ...none, id: `created:${post.id}`, kind: 'created', at: post.created_at.toISOString(), userId: post.author_user_id, code: post.origin === 'ai' ? 'ai' : null },
       ...comments.map((c) => ({
@@ -262,6 +352,9 @@ export const postActivity = defineQuery({
         body: c.body,
         editedAt: c.edited_at?.toISOString() ?? null,
         editable: c.author_user_id === viewer && now - c.created_at.getTime() <= COMMENT_EDIT_MS,
+        resolvedAt: c.resolved_at?.toISOString() ?? null,
+        resolvedBy: c.resolved_by,
+        resolvable: resolver || (writer && c.author_user_id === viewer),
       })),
       ...decisions.map((d) => ({ ...none, id: d.id, kind: 'decision' as const, at: d.created_at.toISOString(), userId: d.decided_by, variantId: d.variant_id, body: d.comment, decision: d.decision, checklist: tickedOf(d.checklist) })),
       ...audited.rows.map((a) => ({
@@ -308,7 +401,7 @@ export const postActivity = defineQuery({
     kept.sort((a, b) => b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
     const shown = kept.slice(0, ACTIVITY_LIMIT);
     // Names of the people, while they are members (crove_kernel.member_profiles answers only members of the org).
-    const ids = [...new Set(shown.map((i) => i.userId).filter((u): u is string => u !== null))];
+    const ids = [...new Set(shown.flatMap((i) => [i.userId, i.resolvedBy]).filter((u): u is string => u !== null))];
     const names = new Map<string, string>();
     if (ids.length > 0) {
       const { rows } = await sql<{ user_id: string; email: string; display_name: string | null }>`
@@ -316,11 +409,11 @@ export const postActivity = defineQuery({
       for (const r of rows) names.set(r.user_id, r.display_name ?? r.email);
     }
     return {
-      items: shown.map((i) => ({ ...i, name: i.userId ? (names.get(i.userId) ?? null) : null })),
+      items: shown.map((i) => ({ ...i, name: i.userId ? (names.get(i.userId) ?? null) : null, resolvedByName: i.resolvedBy ? (names.get(i.resolvedBy) ?? null) : null })),
       more: kept.length > ACTIVITY_LIMIT || comments.length === ACTIVITY_LIMIT || decisions.length === ACTIVITY_LIMIT || audited.rows.length === ACTIVITY_LIMIT || reorders.rows.length === ACTIVITY_LIMIT,
     };
   },
 });
 
-export const activityCommands = [commentAdd, commentEdit];
+export const activityCommands = [commentAdd, commentEdit, commentResolve, commentReopen];
 export const activityQueries = [postActivity];

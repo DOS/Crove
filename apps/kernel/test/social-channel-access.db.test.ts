@@ -360,6 +360,43 @@ suite('social channels per member on PostgreSQL (#1081)', () => {
     expect(await query<ChannelAccessEntry[]>(o, o.admin, 'social.channel_access.list', {})).toEqual([]);
   });
 
+  it('a limited member resolves comments on their channels only, and counts the open ones there (#1168)', async () => {
+    const o = await org();
+    await limit(o, o.member, [o.a]);
+    // The owner's post on both channels, assigned to the member, with a note on the whole post and one per channel.
+    const shared = await post(o, o.owner, [o.a, o.b]);
+    await exec(o, o.owner, 'social.post.assign', { postId: shared, assigneeUserId: o.member, dueAt: null });
+    const va = await variantOn(o, shared, o.a);
+    const vb = await variantOn(o, shared, o.b);
+    const note = async (postId: string, body: string, variantId?: string) =>
+      (await exec<{ commentId: string }>(o, o.owner, 'social.post_comment.add', { postId, body, ...(variantId ? { variantId } : {}) })).commentId;
+    const whole = await note(shared, 'Cả bài');
+    const onA = await note(shared, 'Kênh A', va.id);
+    const onB = await note(shared, 'Kênh B', vb.id);
+    expect((await get(o, o.owner, shared)).openComments).toBe(3);
+    expect((await get(o, o.member, shared)).openComments).toBe(2);
+    await exec(o, o.owner, 'social.post.submit', { postId: shared });
+    const inbox = async (user: string) => (await list(o, user, { stage: 'review' })).find((p) => p.id === shared)?.openComments;
+    expect(await inbox(o.owner)).toBe(3);
+    expect(await inbox(o.member)).toBe(2);
+
+    // The assignee may resolve, but not a note on a channel they may not use.
+    await expect(exec(o, o.member, 'social.post_comment.resolve', { commentId: onB })).rejects.toMatchObject(notAllowed);
+    await exec(o, o.member, 'social.post_comment.resolve', { commentId: onA });
+    await exec(o, o.member, 'social.post_comment.resolve', { commentId: whole });
+    expect(await inbox(o.member)).toBe(0);
+    expect(await inbox(o.owner)).toBe(1);
+    // A post only on B is not theirs to touch, even assigned to them.
+    const theirs = await post(o, o.owner, [o.b]);
+    await exec(o, o.owner, 'social.post.assign', { postId: theirs, assigneeUserId: o.member, dueAt: null });
+    const hidden = await note(theirs, 'Chỉ kênh B');
+    await expect(exec(o, o.member, 'social.post_comment.resolve', { commentId: hidden })).rejects.toMatchObject(notAllowed);
+    await expect(exec(o, o.member, 'social.post_comment.reopen', { commentId: onB })).rejects.toMatchObject(notAllowed);
+    // An admin is never limited.
+    await exec(o, o.admin, 'social.post_comment.resolve', { commentId: onB });
+    expect((await get(o, o.owner, shared)).openComments).toBe(0);
+  });
+
   it('a limited member hears only of their channels, and their rows go with them', async () => {
     const o = await org();
     await limit(o, o.member, [o.a]);

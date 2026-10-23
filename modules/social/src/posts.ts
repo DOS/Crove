@@ -37,6 +37,7 @@ import { bulkDraftCommands } from './bulk-drafts.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
 import { labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
+import { openCommentsOf } from './activity.ts';
 import { ideaCommands, ideaOfPost, ideaQueries, linkIdeaToPost } from './ideas.ts';
 import { bioCommands, bioQueries } from './bio-page.ts';
 import { feedCommands, feedQueries } from './feeds.ts';
@@ -1227,6 +1228,8 @@ export interface PostView {
   variants: VariantView[];
   // Its labels (#639), by label name.
   labelIds: string[];
+  // Its internal comments not resolved yet (#1168), on the whole post or a channel the caller may use.
+  openComments: number;
   // The idea it was made from (#701); on a single post's read only.
   idea?: { id: string; title: string } | null;
 }
@@ -1335,6 +1338,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
       : (await ctx.trx.selectFrom('crove_kernel.file').select(['id', 'filename']).where('org_id', '=', ctx.orgId).where('id', 'in', [...pdfIds]).execute()).map((r) => [r.id, r.filename] as const),
   );
   const labels = await labelsOfPosts(ctx.trx, ctx.orgId, postIds);
+  const openComments = await openCommentsOf(ctx.trx, ctx.orgId, scope, postIds);
   // The review checklist (#1105), read once for every variant of the view.
   const checks = variants.length > 0 ? await reviewChecksOf(ctx.trx, ctx.orgId) : [];
   // Lists and the other reads leave the words out ('not_checked'); one budget covers every variant of the view.
@@ -1380,6 +1384,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
         createdAt: iso(p.created_at) ?? '',
         updatedAt: iso(p.updated_at) ?? '',
         labelIds: (labels.get(p.id) ?? []).map((l) => l.id),
+        openComments: openComments.get(p.id) ?? 0,
         variants: variants
           .filter((v) => v.post_id === p.id)
           .map((v) => {
@@ -1600,6 +1605,8 @@ export const postPreReview = defineQuery({
       ).map((c) => [c.id, c.display_name]),
     );
     const findings: string[] = [];
+    // Notes of the team not dealt with yet (#1168), first: the reviewer should know what is still open.
+    if (view.openComments > 0) findings.push(`${view.openComments} bình luận nội bộ chưa xử lý.`);
     for (const v of waiting) {
       const name = names.get(v.connectionId) ?? v.provider;
       const codes = [...new Set(v.issues.map((i) => i.code))];

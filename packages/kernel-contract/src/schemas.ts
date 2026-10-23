@@ -1370,6 +1370,8 @@ export const zSocialPost = z.object({
   variants: z.array(zSocialVariant),
   // The post's labels (#639), by label name.
   labelIds: z.array(zId),
+  // Its internal comments not resolved yet (#1168), on the whole post or a channel the caller may use.
+  openComments: z.number().int().min(0),
   // The idea it was made from (#701); on a single post's read only.
   idea: z.object({ id: zId, title: z.string() }).nullable().optional(),
 });
@@ -1705,7 +1707,16 @@ export const zSocialActivityItem = z.object({
   code: z.string().nullable(),
   // On an approval: the checklist items the reviewer ticked (#1105); null otherwise or without a checklist.
   checklist: z.array(zSocialTickedCheck).nullable(),
+  // On a resolved comment (#1168): when and by whom; null while it is open. resolvable: the viewer may resolve or
+  // reopen it.
+  resolvedAt: z.string().nullable(),
+  resolvedBy: zId.nullable(),
+  resolvedByName: z.string().nullable(),
+  resolvable: z.boolean(),
 });
+
+// A comment after social.post_comment.resolve or .reopen (#1168).
+export const zSocialCommentResolved = z.object({ commentId: zId, postId: zId, resolvedAt: z.string().nullable(), resolvedBy: zId.nullable() });
 
 export const zSocialLibraryUse = z.object({ postId: zId, status: z.string(), excerpt: z.string(), updatedAt: z.string() });
 
