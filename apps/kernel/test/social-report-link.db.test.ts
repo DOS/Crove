@@ -522,17 +522,19 @@ suite('social report links on PostgreSQL (#643)', () => {
     await reel('Reel bốn', '2026-10-08T03:00:00Z', { views: 300, avgWatchTimeMs: 30_000 });
     // A Reel without watch time counts as a Reel, not in the median; a malformed one is not a number.
     await reel('Reel chưa đo', '2026-10-09T03:00:00Z', { views: 10, avgWatchTimeMs: 'x' });
-    // A feed post with a watch time of its own is not a Reel; a Reel of the period before is not this period's.
+    // A feed post of one video went out on Instagram as a Reel and has its watch time (#1147): counted as one; a
+    // feed post without one is not a Reel; a Reel of the period before is not this period's.
     await published(o, ig, 'Video thường', '2026-10-10T03:00:00Z', { views: 50, avgWatchTimeMs: 99_000, totalWatchTimeMs: 50_000 });
+    await published(o, ig, 'Ảnh thường', '2026-10-11T03:00:00Z', { views: 40 });
     await reel('Reel tháng 9', '2026-09-10T03:00:00Z', { views: 70, avgWatchTimeMs: 1, totalWatchTimeMs: 7_000 });
     const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', OCT);
     const page = (await view(token)) as ReportPage;
-    // The median of 4000, 8001, 12000 and 30000 is (8001 + 12000) / 2, in whole milliseconds.
-    expect(page.reels).toEqual({ posts: 5, medianAvgWatchTimeMs: 10_001 });
+    // The median of 4000, 8001, 12000, 30000 and 99000 is 12000.
+    expect(page.reels).toEqual({ posts: 6, medianAvgWatchTimeMs: 12_000 });
     // The total watch time adds up; the average never does.
-    expect(page.totals).toEqual({ views: 2060, totalWatchTimeMs: 4_250_000 });
+    expect(page.totals).toEqual({ views: 2100, totalWatchTimeMs: 4_250_000 });
     expect(page.previous.totals).toEqual({ views: 70, totalWatchTimeMs: 7_000 });
-    expect(page.channels[0]?.totals).toEqual({ views: 2060, totalWatchTimeMs: 4_250_000 });
+    expect(page.channels[0]?.totals).toEqual({ views: 2100, totalWatchTimeMs: 4_250_000 });
     expect(page.top.find((p) => p.excerpt === 'Reel một')?.metrics).toEqual({ views: 1000, totalWatchTimeMs: 3_000_000 });
     // No Reel: no posts and a null median.
     const stranger = await org();

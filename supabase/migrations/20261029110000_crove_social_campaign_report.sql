@@ -286,7 +286,8 @@ BEGIN
         ) a
         JOIN crove_kernel.channel_connection c ON c.org_id = v_link.org_id AND c.id = a.conn
       ), '[]'::jsonb),
-      -- The period's Reels (#1151): Crove's posts of type reel (settings.postType, as postTypeOf reads it), and the
+      -- The period's Reels (#1151): Crove's posts of type reel (settings.postType, as postTypeOf reads it) or with a
+      -- Reels watch time (asked of Reels only, a feed post of one video included, which Instagram publishes as one; #1147), and the
       -- median of their average watch time, in whole milliseconds, over those that report one (null when none does). An
       -- average per post is never summed; the total watch time is among the summed counts above.
       'reels', (
@@ -300,7 +301,7 @@ BEGIN
                       THEN LEAST((v.metrics ->> 'avgWatchTimeMs')::numeric, 1e15)::double precision END AS avg_ms
           FROM v
           JOIN crove_social.post_variant pv ON pv.org_id = v_link.org_id AND pv.id = v.id
-          WHERE v.cur AND NOT v.external AND pv.settings ->> 'postType' = 'reel'
+          WHERE v.cur AND NOT v.external AND (pv.settings ->> 'postType' = 'reel' OR v.metrics ? 'avgWatchTimeMs')
         ) r
       ),
       'top', coalesce((
