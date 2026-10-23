@@ -36,7 +36,8 @@ import { coverProblem } from './cover-check.ts';
 import { bulkDraftCommands } from './bulk-drafts.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
-import { labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
+import { campaignsOfPosts, labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
+import { campaignFindings, type CampaignFinding } from './domain/campaign.ts';
 import { openCommentsOf } from './activity.ts';
 import { ideaCommands, ideaOfPost, ideaQueries, linkIdeaToPost } from './ideas.ts';
 import { bioCommands, bioQueries } from './bio-page.ts';
@@ -1576,6 +1577,18 @@ function duplicateFinding(provider: string, of: DuplicateOf, timeZone: string): 
   return refusesDuplicates(provider) ? `${same}; ${DUPLICATE_PLATFORM[provider] ?? provider} sẽ từ chối bài trùng, cần sửa nội dung.` : `${same}; nên sửa để người theo dõi không thấy lặp lại.`;
 }
 
+// The pre-review finding for a channel that does not follow its campaign label (#1169), days as dd/mm/yyyy.
+const viDay = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
+function campaignFindingText(f: CampaignFinding): string {
+  if (f.kind === 'utm_campaign') {
+    return f.actual === null
+      ? `${f.channel}: liên kết chưa gắn UTM campaign "${f.expected}" của nhãn "${f.label}".`
+      : `${f.channel}: UTM campaign "${f.actual}" khác với "${f.expected}" của nhãn "${f.label}", số liệu chiến dịch sẽ bị tách làm hai.`;
+  }
+  const range = f.startsOn && f.endsOn ? `từ ${viDay(f.startsOn)} đến ${viDay(f.endsOn)}` : f.startsOn ? `từ ${viDay(f.startsOn)}` : `đến ${viDay(f.endsOn ?? '')}`;
+  return `${f.channel}: hẹn đăng ngày ${viDay(f.day)}, ngoài thời gian chiến dịch "${f.label}" (${range}).`;
+}
+
 // What a reviewer should look at before deciding (#799), from deterministic checks only: each waiting channel's rule
 // issues, the brand voice's words to avoid in its text, and images without a description. Members and the
 // social.content_manager agent read it; it changes nothing.
@@ -1620,6 +1633,13 @@ export const postPreReview = defineQuery({
       if (undescribed > 0) findings.push(`${name}: ${undescribed} ảnh hoặc video chưa có mô tả cho người đọc màn hình (alt text).`);
       // The same text as another post on this channel (#1156): X and LinkedIn refuse it, elsewhere followers see it twice.
       if (v.duplicateOf) findings.push(`${name}: ${duplicateFinding(v.provider, v.duplicateOf, view.timeZone)}`);
+    }
+    // A waiting channel whose link has another UTM campaign than a campaign label of the post, or that goes out outside
+    // the label's dates (#1169); plain labels find nothing.
+    if (waiting.length > 0) {
+      const campaigns = (await campaignsOfPosts(ctx.trx, ctx.orgId, [view.id])).get(view.id) ?? [];
+      const channels = waiting.map((v) => ({ name: names.get(v.connectionId) ?? v.provider, settings: v.settings, linkUrl: v.effective.linkUrl, at: v.effectiveAt }));
+      for (const f of campaignFindings(campaigns, channels, view.timeZone)) findings.push(campaignFindingText(f));
     }
     const title = view.title?.trim() || view.body.replace(/\s+/g, ' ').trim().slice(0, 120);
     return { postId: view.id, title, waiting: waiting.length, findings: findings.slice(0, PRE_REVIEW_FINDINGS_MAX) };

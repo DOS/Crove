@@ -1,5 +1,6 @@
 // Labels for posts (#639): the org's campaigns, clients or topics to sort posts by. Members add labels; owners and
-// admins rename, recolour and delete them. A label is put on a post on the post screen.
+// admins rename, recolour and delete them. A label is put on a post on the post screen. Owners and admins may make a
+// label a campaign (#1169): its first and last day and the UTM campaign and medium its posts' links should carry.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -8,18 +9,38 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
-import { ColorChoice, LabelChip, refreshLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
+import { CampaignLine, ColorChoice, LabelChip, refreshLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
-import { DEFAULT_LABEL_COLOR, type LabelColor } from '../lib/social-labels.ts';
+import { DEFAULT_LABEL_COLOR, campaignInput, campaignProblem, type CampaignDraft, type LabelColor } from '../lib/social-labels.ts';
 
-type Draft = { name: string; color: LabelColor };
-const EMPTY: Draft = { name: '', color: DEFAULT_LABEL_COLOR };
+// The campaign's fields as typed: '' for none.
+type Draft = { name: string; color: LabelColor } & CampaignDraft;
+const EMPTY: Draft = { name: '', color: DEFAULT_LABEL_COLOR, startsOn: '', endsOn: '', utmCampaign: '', utmMedium: '' };
+const draftOf = (l: SocialLabel): Draft => ({ name: l.name, color: l.color, startsOn: l.startsOn ?? '', endsOn: l.endsOn ?? '', utmCampaign: l.utmCampaign ?? '', utmMedium: l.utmMedium ?? '' });
 
-function LabelForm({ id, initial, onSave, onCancel, pending, error }: { id: string; initial: Draft; onSave: (d: Draft) => void; onCancel?: () => void; pending: boolean; error: unknown }) {
+// campaign: the caller may set the campaign's dates and tags (owners and admins).
+function LabelForm({
+  id,
+  initial,
+  campaign,
+  onSave,
+  onCancel,
+  pending,
+  error,
+}: {
+  id: string;
+  initial: Draft;
+  campaign: boolean;
+  onSave: (d: Draft) => void;
+  onCancel?: () => void;
+  pending: boolean;
+  error: unknown;
+}) {
   const t = useTranslations('social.labels');
   const [d, setD] = useState(initial);
-  const valid = d.name.trim() !== '';
+  const problem = campaign ? campaignProblem(d) : null;
+  const valid = d.name.trim() !== '' && problem === null;
   return (
     <form
       className="space-y-3"
@@ -40,6 +61,46 @@ function LabelForm({ id, initial, onSave, onCancel, pending, error }: { id: stri
         <span className="text-xs text-subtle-foreground">{t('preview')}</span>
         <LabelChip label={{ name: d.name.trim() || t('namePlaceholder'), color: d.color }} />
       </div>
+      {campaign && (
+        <fieldset className="space-y-2 rounded-lg border p-3">
+          <legend className="px-1 text-sm font-medium text-foreground">{t('campaign')}</legend>
+          <p className="text-xs text-subtle-foreground">{t('campaignHint')}</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor={`${id}-from`} className="text-xs">
+                {t('startsOn')}
+              </Label>
+              <Input id={`${id}-from`} type="date" value={d.startsOn} disabled={pending} onChange={(e) => setD({ ...d, startsOn: e.target.value })} className="w-44" />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${id}-to`} className="text-xs">
+                {t('endsOn')}
+              </Label>
+              <Input id={`${id}-to`} type="date" value={d.endsOn} min={d.startsOn || undefined} disabled={pending} onChange={(e) => setD({ ...d, endsOn: e.target.value })} className="w-44" />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${id}-utm-campaign`} className="text-xs">
+                {t('utmCampaign')}
+              </Label>
+              <Input
+                id={`${id}-utm-campaign`}
+                value={d.utmCampaign}
+                maxLength={100}
+                disabled={pending}
+                placeholder={t('utmCampaignPlaceholder')}
+                onChange={(e) => setD({ ...d, utmCampaign: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`${id}-utm-medium`} className="text-xs">
+                {t('utmMedium')}
+              </Label>
+              <Input id={`${id}-utm-medium`} value={d.utmMedium} maxLength={100} disabled={pending} placeholder="social" onChange={(e) => setD({ ...d, utmMedium: e.target.value })} />
+            </div>
+          </div>
+          {problem && <p className="text-xs text-warning">{t(`campaignProblem.${problem}`)}</p>}
+        </fieldset>
+      )}
       {error ? <ErrorText>{errorMessage(error)}</ErrorText> : null}
       <div className="flex gap-2">
         <Button type="submit" disabled={!valid || pending}>
@@ -60,7 +121,7 @@ function Row({ label, canManage }: { label: SocialLabel; canManage: boolean }) {
   const t = useTranslations('social.labels');
   const [editing, setEditing] = useState(false);
   const update = useMutation({
-    mutationFn: (d: Draft) => client.social.labels.update({ labelId: label.id, name: d.name.trim(), color: d.color }),
+    mutationFn: (d: Draft) => client.social.labels.update({ labelId: label.id, name: d.name.trim(), color: d.color, ...campaignInput(d) }),
     onSuccess: () => {
       setEditing(false);
       refreshLabels();
@@ -70,7 +131,15 @@ function Row({ label, canManage }: { label: SocialLabel; canManage: boolean }) {
   if (editing) {
     return (
       <Card className="block p-4">
-        <LabelForm id={`label-${label.id}`} initial={{ name: label.name, color: label.color }} onSave={(d) => update.mutate(d)} onCancel={() => setEditing(false)} pending={update.isPending} error={update.error} />
+        <LabelForm
+          id={`label-${label.id}`}
+          initial={draftOf(label)}
+          campaign={canManage}
+          onSave={(d) => update.mutate(d)}
+          onCancel={() => setEditing(false)}
+          pending={update.isPending}
+          error={update.error}
+        />
       </Card>
     );
   }
@@ -97,6 +166,7 @@ function Row({ label, canManage }: { label: SocialLabel; canManage: boolean }) {
           </div>
         )}
       </div>
+      <CampaignLine label={label} />
       {remove.error && <ErrorText>{errorMessage(remove.error)}</ErrorText>}
     </Card>
   );
@@ -112,7 +182,8 @@ export function SocialLabelsPage() {
   const list = useLabels();
   const [formKey, setFormKey] = useState(0);
   const create = useMutation({
-    mutationFn: (d: Draft) => client.social.labels.create({ name: d.name.trim(), color: d.color }),
+    // A member's form has no campaign fields, so it sends none.
+    mutationFn: (d: Draft) => client.social.labels.create({ name: d.name.trim(), color: d.color, ...(canManage ? campaignInput(d) : {}) }),
     onSuccess: () => {
       setFormKey((k) => k + 1);
       refreshLabels();
@@ -132,7 +203,7 @@ export function SocialLabelsPage() {
       {canWrite && (
         <Card className="block p-4">
           <h3 className="mb-3 text-sm font-medium text-foreground">{t('new')}</h3>
-          <LabelForm key={formKey} id="label-new" initial={EMPTY} onSave={(d) => create.mutate(d)} pending={create.isPending} error={create.error} />
+          <LabelForm key={formKey} id="label-new" initial={EMPTY} campaign={canManage} onSave={(d) => create.mutate(d)} pending={create.isPending} error={create.error} />
         </Card>
       )}
       {!canManage && canWrite && <p className="text-xs text-subtle-foreground">{t('membersHint')}</p>}

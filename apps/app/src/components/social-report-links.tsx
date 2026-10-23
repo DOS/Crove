@@ -19,6 +19,7 @@ import { useLabels } from './social-labels.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { lastMonth, reportPeriod, reportUrl } from '../lib/social-report.ts';
+import { labelPeriod } from '../lib/social-labels.ts';
 import { providerName } from '../lib/social.ts';
 
 const DAYS = [7, 30, 90] as const;
@@ -38,6 +39,8 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [outside, setOutside] = useState(false);
   const [labelId, setLabelId] = useState('');
+  // The campaign label whose dates the period was set to, while they are the ones shown.
+  const [datesFrom, setDatesFrom] = useState<string | null>(null);
   const [audience, setAudience] = useState(true);
   const labels = useLabels();
   const [made, setMade] = useState<{ url: string; expiresAt: string } | null>(null);
@@ -79,6 +82,15 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
   const links = list.data ?? [];
   const names = new Map(channels.map((c) => [c.id, c.displayName]));
   const labelNames = new Map((labels.data ?? []).map((l) => [l.id, l.name]));
+  // A campaign label (#1169) sets the period to its dates; the dates can still be changed after.
+  const pickLabel = (id: string) => {
+    setLabelId(id);
+    const label = (labels.data ?? []).find((l) => l.id === id);
+    if (label && (label.startsOn || label.endsOn)) {
+      setPeriod(labelPeriod(label, period));
+      setDatesFrom(label.name);
+    } else setDatesFrom(null);
+  };
   const toggle = (id: string) => {
     const next = new Set(picked);
     if (next.has(id)) next.delete(id);
@@ -94,11 +106,11 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="report-from">{t('from')}</Label>
-          <Input id="report-from" type="date" value={period.from} onChange={(e) => setPeriod({ ...period, from: e.target.value })} />
+          <Input id="report-from" type="date" value={period.from} onChange={(e) => (setPeriod({ ...period, from: e.target.value }), setDatesFrom(null))} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="report-to">{t('to')}</Label>
-          <Input id="report-to" type="date" value={period.to} onChange={(e) => setPeriod({ ...period, to: e.target.value })} />
+          <Input id="report-to" type="date" value={period.to} onChange={(e) => (setPeriod({ ...period, to: e.target.value }), setDatesFrom(null))} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="report-title">{t('name')}</Label>
@@ -137,7 +149,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
       {(labels.data ?? []).length > 0 && (
         <div className="space-y-1.5">
           <Label htmlFor="report-label">{t('label')}</Label>
-          <NativeSelect id="report-label" value={labelId} onChange={(e) => setLabelId(e.target.value)}>
+          <NativeSelect id="report-label" value={labelId} onChange={(e) => pickLabel(e.target.value)}>
             <NativeSelectOption value="">{t('labelAll')}</NativeSelectOption>
             {(labels.data ?? []).map((l) => (
               <NativeSelectOption key={l.id} value={l.id}>
@@ -146,6 +158,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
             ))}
           </NativeSelect>
           <p className="text-xs text-subtle-foreground">{t('labelHint')}</p>
+          {datesFrom && <p className="text-xs text-muted-foreground">{t('labelDates', { name: datesFrom })}</p>}
         </div>
       )}
       <div className="space-y-0.5">

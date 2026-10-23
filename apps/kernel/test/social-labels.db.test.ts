@@ -279,7 +279,123 @@ suite('social labels on PostgreSQL (#639)', () => {
           )
         ).rows.map((r) => r.column_name),
       );
-    expect(await updatable('label')).toEqual(['color', 'name']);
+    // The name and colour, and the campaign's dates and tags (#1169).
+    expect(await updatable('label')).toEqual(['color', 'ends_on', 'name', 'starts_on', 'utm_campaign', 'utm_medium']);
     expect(await updatable('post_label')).toEqual([]);
+    const asTenant = (statement: string, params: unknown[]) =>
+      admin(async (c) => {
+        await c.query('BEGIN');
+        try {
+          await c.query('SET LOCAL ROLE crove_tenant');
+          await c.query(statement, params);
+        } finally {
+          await c.query('ROLLBACK');
+        }
+      });
+    await expect(asTenant('UPDATE crove_social.label SET created_by = $1 WHERE id = $2', [o.owner, labelId])).rejects.toThrow(/permission denied/);
+    await expect(asTenant('UPDATE crove_social.label SET created_at = now() WHERE id = $1', [labelId])).rejects.toThrow(/permission denied/);
+    await expect(asTenant('UPDATE crove_social.label SET org_id = $1 WHERE id = $2', [stranger.orgId, labelId])).rejects.toThrow(/permission denied/);
+    // The campaign's columns are writable (RLS still keeps the row to its org; this transaction sets none, so it sees
+    // and changes nothing).
+    await asTenant("UPDATE crove_social.label SET starts_on = '2027-01-01', ends_on = '2027-01-31', utm_campaign = 'tet', utm_medium = 'social' WHERE id = $1", [labelId]);
+  });
+
+  it('keeps a campaign label to real dates and UTM tags, whoever writes it (#1169)', async () => {
+    const o = await org();
+    const labelId = await create(o, o.member, 'Thường');
+    const set = (columns: string, values: unknown[]) => admin((c) => c.query(`UPDATE crove_social.label SET ${columns} WHERE id = $1`, [labelId, ...values]));
+    // A label without a campaign keeps NULL in all four.
+    expect(
+      await admin(async (c) => (await c.query('SELECT starts_on, ends_on, utm_campaign, utm_medium FROM crove_social.label WHERE id = $1', [labelId])).rows[0]),
+    ).toEqual({ starts_on: null, ends_on: null, utm_campaign: null, utm_medium: null });
+    await set("starts_on = '2027-02-01', ends_on = '2027-02-01'", []);
+    await set("starts_on = NULL, ends_on = '2027-02-01'", []);
+    await expect(set("starts_on = '2027-02-02', ends_on = '2027-02-01'", [])).rejects.toThrow(/label_campaign_dates_check/);
+    for (const ok of ['tet-2027', 'Tết Nguyên Đán 2027', 'q1_sale/vn+hcm', "a.b,c:d;e!f?g'h(i)&j%k@l#m", '中文活动', 'x'.repeat(100)]) {
+      await set('utm_campaign = $2, utm_medium = $2', [ok]);
+    }
+    for (const bad of ['a*b', 'a"b', 'a<b>', 'a=b', 'a|b', 'a\tb', 'a\nb', '😀', ' lead', 'trail ', '', 'x'.repeat(101), 'Tết'.normalize('NFD')]) {
+      await expect(set('utm_campaign = $2', [bad])).rejects.toThrow(/label_utm_campaign_check/);
+      await expect(set("utm_campaign = 'ok', utm_medium = $2", [bad])).rejects.toThrow(/label_utm_medium_check/);
+    }
+    // A medium only with a campaign.
+    await expect(set("utm_campaign = NULL, utm_medium = 'email'", [])).rejects.toThrow(/label_utm_medium_check/);
+  });
+
+  it('lets owners and admins give a label its campaign, and members only plain labels (#1169)', async () => {
+    const o = await org();
+    const find = async (id: string) => (await labels(o, o.viewer)).find((l) => l.id === id);
+    const tet = (await exec<{ labelId: string }>(o, o.owner, 'social.label.create', { name: 'Tết', startsOn: '2027-01-20', endsOn: '2027-02-15', utmCampaign: '  Tết 2027 '.normalize('NFD'), utmMedium: 'social' })).labelId;
+    // Kept NFC and trimmed, as the links carry it.
+    expect(await find(tet)).toMatchObject({ startsOn: '2027-01-20', endsOn: '2027-02-15', utmCampaign: 'Tết 2027', utmMedium: 'social' });
+    const plain = await create(o, o.member, 'Khách A');
+    expect(await find(plain)).toMatchObject({ startsOn: null, endsOn: null, utmCampaign: null, utmMedium: null });
+    await expect(exec(o, o.member, 'social.label.create', { name: 'Hè', utmCampaign: 'he' })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    await expect(exec(o, o.member, 'social.label.create', { name: 'Hè', startsOn: '2027-06-01' })).rejects.toMatchObject({ status: 403 });
+    // Explicit nulls from a member are no campaign.
+    await exec(o, o.member, 'social.label.create', { name: 'Hè', startsOn: null, utmCampaign: null });
+    await expect(exec(o, o.admin, 'social.label.create', { name: 'Thu', startsOn: '2027-09-30', endsOn: '2027-09-01' })).rejects.toMatchObject({ code: 'LABEL_CAMPAIGN_DATES', status: 422 });
+    await expect(exec(o, o.admin, 'social.label.create', { name: 'Thu', startsOn: '2027-02-30' })).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(exec(o, o.admin, 'social.label.create', { name: 'Thu', utmCampaign: 'a*b' })).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(exec(o, o.admin, 'social.label.create', { name: 'Thu', utmCampaign: '½ giá' })).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(exec(o, o.admin, 'social.label.create', { name: 'Thu', utmMedium: 'email' })).rejects.toMatchObject({ code: 'LABEL_UTM_MEDIUM' });
+
+    // A rename alone keeps the campaign; null or an empty tag clears a field; members still change nothing.
+    await exec(o, o.admin, 'social.label.update', { labelId: tet, name: 'Tết 2027', color: 'red' });
+    expect(await find(tet)).toMatchObject({ name: 'Tết 2027', startsOn: '2027-01-20', endsOn: '2027-02-15', utmCampaign: 'Tết 2027', utmMedium: 'social' });
+    await exec(o, o.owner, 'social.label.update', { labelId: tet, name: 'Tết 2027', color: 'red', endsOn: null, utmMedium: '' });
+    expect(await find(tet)).toMatchObject({ startsOn: '2027-01-20', endsOn: null, utmCampaign: 'Tết 2027', utmMedium: null });
+    await expect(exec(o, o.owner, 'social.label.update', { labelId: tet, name: 'Tết 2027', color: 'red', endsOn: '2027-01-01' })).rejects.toMatchObject({ code: 'LABEL_CAMPAIGN_DATES' });
+    await expect(exec(o, o.owner, 'social.label.update', { labelId: tet, name: 'Tết 2027', color: 'red', utmCampaign: null, utmMedium: 'email' })).rejects.toMatchObject({ code: 'LABEL_UTM_MEDIUM' });
+    await expect(exec(o, o.member, 'social.label.update', { labelId: tet, name: 'Tết 2027', color: 'red', utmCampaign: 'x' })).rejects.toMatchObject({ status: 403 });
+    await exec(o, o.admin, 'social.label.update', { labelId: plain, name: 'Khách A', color: 'gray', utmCampaign: 'khach-a' });
+    expect(await find(plain)).toMatchObject({ startsOn: null, endsOn: null, utmCampaign: 'khach-a', utmMedium: null });
+  });
+
+  it("flags a waiting channel that misses its campaign label's UTM campaign or dates in pre_review (#1169)", async () => {
+    const o = await org();
+    const second = randomUUID();
+    await admin((c) =>
+      c.query('INSERT INTO crove_kernel.channel_connection (org_id, id, provider, external_account_id, display_name, connected_by) VALUES ($1, $2, $3, $4, $5, $6)', [
+        o.orgId,
+        second,
+        'sandbox',
+        `acct-${second.slice(0, 8)}`,
+        'Trang hai',
+        o.owner,
+      ]),
+    );
+    const tet = (await exec<{ labelId: string }>(o, o.owner, 'social.label.create', { name: 'Tết', startsOn: '2099-01-20', endsOn: '2099-02-15', utmCampaign: 'tet-2099' })).labelId;
+    const plain = await create(o, o.member, 'Khách A');
+    // Noon in Hồ Chí Minh City on 10 March 2099, after the campaign.
+    const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', {
+      body: 'Ưu đãi',
+      linkUrl: 'https://shop.example/uu-dai',
+      timeZone: 'Asia/Ho_Chi_Minh',
+      scheduledAt: '2099-03-10T05:00:00Z',
+      channels: [
+        { connectionId: o.connection, settings: { utm: { campaign: 'Tet-2099', medium: 'social' } } },
+        { connectionId: second, settings: { utm: { campaign: 'tet-2099', medium: 'social' } } },
+      ],
+    });
+    type Review = { findings: string[] };
+    const review = async () => (await query<Review>(o, o.owner, 'social.post.pre_review', { postId })).findings;
+    // Before review nothing waits; with a plain label, nothing about campaigns.
+    await exec(o, o.member, 'social.post.set_labels', { postId, labelIds: [plain] });
+    await exec(o, o.member, 'social.post.submit', { postId });
+    expect((await review()).filter((f) => f.includes('chiến dịch') || f.includes('UTM'))).toEqual([]);
+
+    await exec(o, o.member, 'social.post.set_labels', { postId, labelIds: [plain, tet] });
+    const found = (await review()).filter((f) => f.includes('chiến dịch') || f.includes('UTM'));
+    expect(found).toEqual([
+      'Trang thử: UTM campaign "Tet-2099" khác với "tet-2099" của nhãn "Tết", số liệu chiến dịch sẽ bị tách làm hai.',
+      'Trang thử: hẹn đăng ngày 10/03/2099, ngoài thời gian chiến dịch "Tết" (từ 20/01/2099 đến 15/02/2099).',
+      'Trang hai: hẹn đăng ngày 10/03/2099, ngoài thời gian chiến dịch "Tết" (từ 20/01/2099 đến 15/02/2099).',
+    ]);
+    // Inside the dates and with the label's campaign, nothing.
+    await exec(o, o.owner, 'social.label.update', { labelId: tet, name: 'Tết', color: 'gray', utmCampaign: 'Tet-2099', endsOn: '2099-03-10' });
+    expect((await review()).filter((f) => f.includes('chiến dịch') || f.includes('UTM'))).toEqual([
+      'Trang hai: UTM campaign "tet-2099" khác với "Tet-2099" của nhãn "Tết", số liệu chiến dịch sẽ bị tách làm hai.',
+    ]);
   });
 });

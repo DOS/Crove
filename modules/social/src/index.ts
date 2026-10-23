@@ -36,6 +36,7 @@ export * from './domain/bulk-drafts.ts';
 export * from './bulk-drafts.ts';
 export * from './snippets.ts';
 export * from './labels.ts';
+export * from './domain/campaign.ts';
 export * from './calendar-notes.ts';
 export * from './calendar-feed.ts';
 export * from './agent.ts';
