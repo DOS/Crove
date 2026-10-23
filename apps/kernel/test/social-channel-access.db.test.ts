@@ -274,8 +274,8 @@ suite('social channels per member on PostgreSQL (#1081)', () => {
     const both = await post(o, o.owner, [o.a, o.b], 'Nháp hai kênh');
     const undated = (user: string) => list(o, user, { undated: true }).then((views) => views.map((v) => v.id).sort());
     expect(await undated(o.owner)).toEqual([onA, onB, both].sort());
-    expect(await undated(o.member)).toEqual([onA, both].sort());
-    // Planning the shared draft would move channel B's planned time too.
+    // The shared draft is left out: planning it would move channel B's planned time too, which the member may not.
+    expect(await undated(o.member)).toEqual([onA]);
     const at = new Date(Date.now() + 26 * HOUR).toISOString();
     const shared = await get(o, o.member, both);
     await expect(exec(o, o.member, 'social.post.update', { postId: both, revision: shared.revision, scheduledAt: at })).rejects.toMatchObject(notAllowed);
@@ -283,6 +283,9 @@ suite('social channels per member on PostgreSQL (#1081)', () => {
     await expect(exec(o, o.member, 'social.post.update', { postId: onB, revision: other.revision, scheduledAt: at })).rejects.toMatchObject(notAllowed);
     const own = await get(o, o.member, onA);
     await exec(o, o.member, 'social.post.update', { postId: onA, revision: own.revision, scheduledAt: at });
+    expect(await undated(o.member)).toEqual([]);
+    // Once channel B is cancelled, the draft is the member's to plan.
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET status = 'cancelled' WHERE org_id = $1 AND post_id = $2 AND channel_connection_id = $3", [o.orgId, both, o.b]));
     expect(await undated(o.member)).toEqual([both]);
   });
 

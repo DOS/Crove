@@ -1626,6 +1626,11 @@ export const postList = defineQuery({
         .where(
           sql<boolean>`NOT EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status NOT IN ('cancelled', 'rejected') AND (v.status NOT IN ('draft', 'in_review', 'changes_requested', 'approved') OR v.scheduled_at IS NOT NULL OR v.queue_slot_at IS NOT NULL))`,
         );
+      // A limited member may plan a post only when no open channel of it is another's (editPost refuses the time
+      // otherwise), so the list offers them only those.
+      if (scope !== null) {
+        q = q.where(sql<boolean>`NOT EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND NOT ${mine} AND v.status NOT IN ('published', 'cancelled', 'removed'))`);
+      }
     }
     if (input.labelId) q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = p.org_id AND pl.post_id = p.id AND pl.label_id = ${input.labelId}::uuid)`);
     if (input.search) {
