@@ -11,7 +11,9 @@
 // none), an event (title, start and end) or an offer (an event's schedule plus a coupon code, terms and a redeem link);
 // one photo at most, which Google fetches from its URL. Product posts cannot be made through the API. The answer
 // names the post; an unclear answer is checked by listing the location's newest posts, matched by text and time.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
+// Remove (#1138): DELETE https://mybusiness.googleapis.com/v4/{name} of the localPost, with the same business.manage grant.
+import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { removeResult } from './comment.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const GOOGLE_BUSINESS_HOSTS = ['oauth2.googleapis.com', 'mybusinessaccountmanagement.googleapis.com', 'mybusinessbusinessinformation.googleapis.com', 'mybusiness.googleapis.com'] as const;
@@ -100,7 +102,7 @@ class GoogleBusinessClient {
     return json as TokenAnswer;
   }
 
-  async call<T>(method: 'GET' | 'POST', url: string, token: string, json?: unknown): Promise<T> {
+  async call<T>(method: 'GET' | 'POST' | 'DELETE', url: string, token: string, json?: unknown): Promise<T> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     if (json !== undefined) headers['content-type'] = 'application/json; charset=UTF-8';
     const response = await this.fetch(url, { method, headers, signal: AbortSignal.timeout(30_000), ...(json === undefined ? {} : { body: JSON.stringify(json) }) });
@@ -349,6 +351,23 @@ export class GoogleBusinessPublisher implements Publisher {
     if (!name) return { kind: 'unknown', code: 'NO_POST_NAME' };
     const url = typeof answer.searchUrl === 'string' && answer.searchUrl.startsWith('https://') ? answer.searchUrl : null;
     return { kind: 'accepted', externalId: name, url };
+  }
+
+  // Deletes the local post (#1138): DELETE /v4/{accounts/*/locations/*/localPosts/*}, answered with an empty object,
+  // under business.manage as publishing. Google answers NOT_FOUND (404) for a post it no longer has: gone already.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = googleBusinessSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!LOCATION.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_LOCATION' };
+    // Only a post of this location.
+    if (!POST_NAME.test(input.externalId) || !input.externalId.startsWith(`${input.externalAccountId}/localPosts/`)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      await this.client.call('DELETE', `https://mybusiness.googleapis.com/v4/${input.externalId}`, s.accessToken);
+      return { kind: 'removed' };
+    } catch (error) {
+      if (error instanceof GoogleBusinessError && error.status === 404) return { kind: 'removed' };
+      return removeResult(publishResult(error));
+    }
   }
 
   // The location's newest posts, matched by their text within the call's time window.

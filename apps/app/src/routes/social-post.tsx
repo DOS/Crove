@@ -3070,9 +3070,9 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
   }
 }
 
-// Takes a published channel down from its platform (#860), after a confirmation with an optional reason. again: an
-// earlier ask failed or its outcome is unclear.
-function RemoveFromChannel({ variantId, channel, again, onDone }: { variantId: string; channel: string; again: boolean; onDone: () => void }) {
+// Takes a published channel down from its platform (#860), after a confirmation with an optional reason (WordPress: to
+// the site's trash, #1138). again: an earlier ask failed or its outcome is unclear.
+function RemoveFromChannel({ variantId, provider, channel, again, onDone }: { variantId: string; provider: string; channel: string; again: boolean; onDone: () => void }) {
   const t = useTranslations('social');
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -3094,7 +3094,8 @@ function RemoveFromChannel({ variantId, channel, again, onDone }: { variantId: s
   }
   return (
     <div className="w-full space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
-      <p className="text-sm text-foreground">{t('remove.confirm', { channel })}</p>
+      {/* WordPress keeps the post in the site's trash (#1138), where it can be restored; elsewhere it is gone. */}
+      <p className="text-sm text-foreground">{t(provider === 'wordpress' ? 'remove.confirmTrash' : 'remove.confirm', { channel })}</p>
       <Label htmlFor={`${id}-reason`}>{t('remove.reason')}</Label>
       <Textarea id={`${id}-reason`} rows={2} maxLength={500} value={reason} placeholder={t('remove.reasonHint')} onChange={(e) => setReason(e.target.value)} />
       <div className="flex flex-wrap gap-2">
@@ -3654,7 +3655,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                         </Button>
                       )}
                       {canDecide && v.status === 'published' && isProvider(v.provider) && REMOVE_READY.has(v.provider) && v.removal?.state !== 'pending' && (
-                        <RemoveFromChannel variantId={v.id} channel={names.get(v.connectionId) ?? providerName(v.provider)} again={v.removal !== null} onDone={refresh} />
+                        <RemoveFromChannel variantId={v.id} provider={v.provider} channel={names.get(v.connectionId) ?? providerName(v.provider)} again={v.removal !== null} onDone={refresh} />
                       )}
                       {canWrite && CANCELLABLE.includes(v.status) && (canDecide || !['approved', 'scheduled', 'paused'].includes(v.status)) && (
                         <Button variant="ghost" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(v.id)}>

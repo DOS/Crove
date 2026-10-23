@@ -3238,6 +3238,7 @@ export const en = {
     remove: {
       action: 'Remove from channel',
       confirm: 'The post will be deleted on {channel}. This cannot be undone: to post it again, make a new post.',
+      confirmTrash: 'The post will be moved to the trash on {channel}. You can still restore it from the trash in the WordPress dashboard.',
       reason: 'Reason (optional)',
       reasonHint: 'Note why it comes down, so the whole team knows',
       submit: 'Remove post',

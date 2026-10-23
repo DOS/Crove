@@ -150,3 +150,38 @@ describe('GoogleBusinessPublisher', () => {
     expect(gbpSettingsOf({ gbp: 'yes' })).toBeNull();
   });
 });
+
+describe('Google Business remove (#1138)', () => {
+  const POST = `${LOCATION}/localPosts/abc123`;
+  const DELETE = `DELETE mybusiness.googleapis.com/v4/${POST}`;
+  const remove = (fetchImpl: Fetch, externalId = POST, secret = SECRET) => new GoogleBusinessPublisher(APP, fetchImpl).remove({ externalAccountId: LOCATION, secret, externalId });
+
+  it('deletes the local post by its name with the location token', async () => {
+    const { fetchImpl, calls } = google({ [DELETE]: [{ body: {} }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.route, c.auth])).toEqual([[DELETE, 'Bearer ya29.token-1']]);
+  });
+
+  it('counts a post Google no longer has as removed', async () => {
+    const { fetchImpl } = google({ [DELETE]: [{ status: 404, body: { error: { code: 404, message: 'Requested entity was not found.', status: 'NOT_FOUND' } } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+  });
+
+  it('maps a refusal to a code, an outage to unclear, and calls nothing for a post of another location', async () => {
+    const expired = google({ [DELETE]: [{ status: 401, body: { error: { code: 401, message: 'Request had invalid authentication credentials.', status: 'UNAUTHENTICATED' } } }] });
+    const refused = await remove(expired.fetchImpl);
+    expect(refused).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'UNAUTHENTICATED' });
+    expect(JSON.stringify(refused)).not.toContain('ya29.token-1');
+    const denied = google({ [DELETE]: [{ status: 403, body: { error: { code: 403, message: 'The caller does not have permission', status: 'PERMISSION_DENIED' } } }] });
+    expect(await remove(denied.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'PERMISSION_DENIED' });
+    const limited = google({ [DELETE]: [{ status: 429, body: { error: { code: 429, message: 'Quota exceeded', status: 'RESOURCE_EXHAUSTED' } } }] });
+    expect(await remove(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const down = google({ [DELETE]: [{ status: 503, body: { error: { code: 503, message: 'The service is currently unavailable.', status: 'UNAVAILABLE' } } }] });
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'UNAVAILABLE' });
+    const none = google({});
+    expect(await remove(none.fetchImpl, 'accounts/1001/locations/9999/localPosts/abc123')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await remove(none.fetchImpl, `${LOCATION}/localPosts/../../x`)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await remove(none.fetchImpl, POST, '{}')).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
+    expect(none.calls).toHaveLength(0);
+  });
+});

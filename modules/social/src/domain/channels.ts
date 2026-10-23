@@ -748,7 +748,7 @@ export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 
 
 // The channels whose Crove adapter takes a published post down (#860); the others answer REMOVE_NOT_SUPPORTED until
 // their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of it.
-export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x']);
+export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x', 'linkedin', 'linkedin_page', 'pinterest', 'wordpress', 'google_business']);
 
 // A post that comes down by itself (#861): `settings.removeAt`, a full ISO 8601 time with Z or an offset, on a channel
 // in REMOVE_READY. It must be at least REMOVE_AT_MIN_GAP_MS and at most the channel's window (REMOVE_WINDOW_MS, else

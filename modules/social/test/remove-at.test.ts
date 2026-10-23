@@ -30,7 +30,7 @@ describe('a post taken down at a set time (#861)', () => {
     for (const provider of REMOVE_READY) expect(issues(provider, { removeAt: '2026-10-21T22:00:00+07:00' })).toEqual([]);
     expect(issues('bluesky', { removeAt: '22:00' })).toEqual([['REMOVE_AT_INVALID', 'settings.removeAt']]);
     // A channel outside REMOVE_READY is refused whatever the value, as reposts are.
-    for (const provider of ['facebook_page', 'instagram', 'linkedin', 'threads', 'youtube'] as const) {
+    for (const provider of ['facebook_page', 'instagram', 'tiktok', 'threads', 'youtube'] as const) {
       expect(issues(provider, { removeAt: '2026-10-21T22:00:00Z' })).toEqual([['REMOVE_AT_NOT_SUPPORTED', 'settings.removeAt']]);
       expect(issues(provider, { removeAt: 'soon' })).toEqual([['REMOVE_AT_NOT_SUPPORTED', 'settings.removeAt']]);
     }

@@ -3237,6 +3237,7 @@ export const vi = {
     remove: {
       action: 'Gỡ khỏi kênh',
       confirm: 'Bài sẽ bị xóa trên {channel}. Việc này không hoàn tác được: muốn đăng lại thì phải tạo bài mới.',
+      confirmTrash: 'Bài sẽ được chuyển vào thùng rác trên {channel}. Bạn vẫn khôi phục được bài từ thùng rác trong trang quản trị WordPress.',
       reason: 'Lý do (không bắt buộc)',
       reasonHint: 'Ghi lại vì sao gỡ bài, để cả nhóm cùng biết',
       submit: 'Gỡ bài',

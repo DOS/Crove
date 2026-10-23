@@ -699,3 +699,66 @@ describe('LinkedIn documents (#1119)', () => {
     });
   });
 });
+
+describe('LinkedIn remove (#1138)', () => {
+  const URN = 'urn:li:share:6844785523593134080';
+  const DELETE = `DELETE api.linkedin.com/rest/posts/${encodeURIComponent(URN)}`;
+  const remove = (fetchImpl: Fetch, externalId = URN) => new LinkedInPublisher({}, fetchImpl).remove({ externalAccountId: MEMBER, secret: SECRET, externalId });
+
+  it('deletes the member post by its encoded urn with the versioned Rest.li headers', async () => {
+    const { fetchImpl, calls } = linkedin({ [DELETE]: [{ status: 204 }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => c.route)).toEqual([DELETE]);
+    const headers = calls[0]?.headers;
+    expect(headers?.get('authorization')).toBe('Bearer li-token-1');
+    expect(headers?.get('linkedin-version')).toBe(LINKEDIN_VERSION);
+    expect(headers?.get('x-restli-protocol-version')).toBe('2.0.0');
+    expect(headers?.get('x-restli-method')).toBe('DELETE');
+  });
+
+  it('deletes a page post with the same call', async () => {
+    const ugc = 'urn:li:ugcPost:6856810298419044352';
+    const route = `DELETE api.linkedin.com/rest/posts/${encodeURIComponent(ugc)}`;
+    const { fetchImpl, calls } = linkedin({ [route]: [{ status: 204 }] });
+    expect(await new LinkedInPagePublisher({}, fetchImpl).remove({ externalAccountId: '2414183', secret: SECRET, externalId: ugc })).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => c.route)).toEqual([route]);
+    // A page is a number; a member id is not one.
+    expect(await new LinkedInPagePublisher({}, fetchImpl).remove({ externalAccountId: MEMBER, secret: SECRET, externalId: ugc })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' });
+  });
+
+  it('counts a post LinkedIn no longer has as removed', async () => {
+    // Deletes are idempotent (204 again), and a post it cannot find is gone too.
+    const again = linkedin({ [DELETE]: [{ status: 204 }] });
+    expect(await remove(again.fetchImpl)).toEqual({ kind: 'removed' });
+    const gone = linkedin({ [DELETE]: [{ status: 404, body: { status: 404, serviceErrorCode: 100, code: 'NOT_FOUND', message: 'Not Found' } }] });
+    expect(await remove(gone.fetchImpl)).toEqual({ kind: 'removed' });
+  });
+
+  it('maps a refusal to a code, an outage to unclear, and calls nothing for a malformed id', async () => {
+    const expired = linkedin({ [DELETE]: [{ status: 401, body: { status: 401, serviceErrorCode: 65601, code: 'REVOKED_ACCESS_TOKEN', message: 'The token used in the request has been revoked by the user' } }] });
+    expect(await remove(expired.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'REVOKED_ACCESS_TOKEN' });
+    const denied = linkedin({ [DELETE]: [{ status: 403, body: { status: 403, serviceErrorCode: 100, code: 'ACCESS_DENIED', message: 'Not enough permissions to access: partnerApiPosts.DELETE.20260401' } }] });
+    expect(await remove(denied.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'ACCESS_DENIED' });
+    const limited = linkedin({ [DELETE]: [{ status: 429, body: { status: 429, code: 'TOO_MANY_REQUESTS', message: 'Resource level throttle limit reached' } }] });
+    expect(await remove(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const conflict = linkedin({ [DELETE]: [{ status: 409, body: { status: 409, code: 'CONFLICT', message: 'A write conflict occurred' } }] });
+    expect(await remove(conflict.fetchImpl)).toEqual({ kind: 'rejected', error: 'transient', code: 'CONFLICT' });
+    const down = linkedin({ [DELETE]: [{ status: 503, body: { status: 503, code: 'SERVICE_UNAVAILABLE', message: 'Service Unavailable' } }] });
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'SERVICE_UNAVAILABLE' });
+    const none = linkedin({});
+    expect(await remove(none.fetchImpl, 'urn:li:person:yrZCpj2Z12')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await new LinkedInPublisher({}, none.fetchImpl).remove({ externalAccountId: MEMBER, secret: '{}', externalId: URN })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('sends nothing to a host outside LinkedIn and puts no token in its answer', async () => {
+    const hosts: string[] = [];
+    const fetchImpl: Fetch = async (input) => {
+      hosts.push(new URL(input).host);
+      return new Response(JSON.stringify({ status: 401, message: 'Invalid access token' }), { status: 401, headers: { 'content-type': 'application/json' } });
+    };
+    const result = await remove(fetchImpl);
+    expect([...new Set(hosts)]).toEqual(['api.linkedin.com']);
+    expect(JSON.stringify(result)).not.toContain('li-token-1');
+  });
+});
