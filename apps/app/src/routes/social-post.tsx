@@ -3565,12 +3565,21 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   // this post was in review here; after an approval through *Duyệt và sang bài tiếp* or A, the next post still waiting
   // for this reviewer opens, or the end of the list shows.
   const reviewInput = { stage: 'review' as const, limit: 200 };
-  const reviewList = useQuery({ ...orpc.social.posts.list.queryOptions({ input: reviewInput }), enabled: canDecide });
   const [reviewing, setReviewing] = useState(false);
+  const reviewList = useQuery({ ...orpc.social.posts.list.queryOptions({ input: reviewInput }), enabled: canDecide && reviewing });
   useEffect(() => {
     if (post.data?.variants.some((v) => v.status === 'in_review')) setReviewing(true);
   }, [post.data]);
   const [noneLeft, setNoneLeft] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  // A reply that comes back after the reviewer has moved on (J or K meanwhile) opens nothing.
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
   const openPost = (id: string) => void navigate({ to: '/o/$slug/social/$id', params: { slug, id } });
   const reviewRows = reviewList.data ?? [];
   const nextId = canDecide && reviewing ? nextPendingId(reviewRows, postId) : null;
@@ -3582,8 +3591,12 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const moveOn = async () => {
     const before = reviewRows.filter((r) => awaitsApprovalBy(r, userId));
     // The list as it is now: the post just approved has left it, or waits for another person.
-    const fresh = await queryClient.fetchQuery({ ...orpc.social.posts.list.queryOptions({ input: reviewInput }), staleTime: 0 }).catch(() => null);
-    if (!fresh) return;
+    setMoveError(null);
+    const fresh = await queryClient.fetchQuery({ ...orpc.social.posts.list.queryOptions({ input: reviewInput }), staleTime: 0 }).catch((error: unknown) => {
+      if (live.current) setMoveError(errorMessage(error));
+      return null;
+    });
+    if (!fresh || !live.current) return;
     const target = nextAfterDecision(before, fresh.filter((r) => awaitsApprovalBy(r, userId)), postId);
     if (target) openPost(target);
     else setNoneLeft(true);
@@ -3758,6 +3771,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             </Card>
           )}
           {noneLeft && <NoneLeftToReview slug={slug} />}
+          {moveError && <ErrorText>{moveError}</ErrorText>}
           {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} rewriteTarget={rewriteTarget} onApproved={() => void moveOn()} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           <LabelPicker

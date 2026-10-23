@@ -105,6 +105,7 @@ interface KeyLike {
   altKey: boolean;
   repeat?: boolean;
   defaultPrevented?: boolean;
+  isComposing?: boolean;
   target: EventTarget | null;
 }
 
@@ -112,14 +113,17 @@ function editable(target: EventTarget | null): boolean {
   const el = target as { tagName?: string; isContentEditable?: boolean } | null;
   if (!el) return false;
   const tag = el.tagName?.toUpperCase();
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true) return true;
+  // A key pressed in an open dialog, list box or menu belongs to it, not to the page behind.
+  const closest = (target as { closest?: (selector: string) => unknown }).closest;
+  return typeof closest === 'function' && closest.call(target, 'dialog[open], [role="dialog"], [role="listbox"], [role="menu"], [role="combobox"]') != null;
 }
 
 // The review action a key press asks for: J or N the next pending item, K or P the previous one, A approve, E edit, R
 // reject or ask for changes. Never while typing in a field, with a modifier (browser and system shortcuts), or for a
 // held-down key. A page acts only on the actions it has a handler for.
 export function reviewShortcut(event: KeyLike): ReviewAction | null {
-  if (event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.defaultPrevented) return null;
+  if (event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.defaultPrevented || event.isComposing) return null;
   if (editable(event.target)) return null;
   return Object.hasOwn(KEYS, event.key.toLowerCase()) ? (KEYS[event.key.toLowerCase()] as ReviewAction) : null;
 }

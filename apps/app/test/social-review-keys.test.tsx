@@ -55,10 +55,10 @@ describe('reviewing Social posts by keyboard (#1221)', () => {
 
   it('lists the shortcuts in the review panel', () => {
     expect(text(render(<ReviewKeysHint />))).toBe(
-      'Phím tắt: J hoặc N sang bài sau · K hoặc P về bài trước · A duyệt và sang bài tiếp (nếu còn mục kiểm tra chưa đánh dấu, A đưa bạn tới mục đó) · R yêu cầu sửa. Phím tắt không chạy khi đang gõ trong ô nhập.',
+      'Phím tắt: J hoặc N sang bài tiếp · K hoặc P về bài trước · A duyệt và sang bài tiếp (nếu còn mục kiểm tra chưa đánh dấu, A đưa bạn tới mục đó) · R viết lý do yêu cầu sửa. Phím tắt không có tác dụng khi bạn đang gõ chữ.',
     );
     expect(text(render(<ReviewKeysHint />, 'en'))).toBe(
-      'Shortcuts: J or N next post · K or P previous post · A approve and open the next post (with checklist items left to tick, A takes you to the first one) · R request changes. Shortcuts do nothing while you type in a field.',
+      'Shortcuts: J or N next post · K or P previous post · A approve and open the next post (with checklist items left to tick, A takes you to the first one) · R write why changes are needed. Shortcuts do nothing while you type in a field.',
     );
   });
 

@@ -2419,7 +2419,7 @@ export const en = {
     // Reviewing posts one after another by keyboard (#1221).
     reviewKeys: {
       approveNext: 'Approve and open the next post',
-      shortcuts: 'Shortcuts: J or N next post · K or P previous post · A approve and open the next post (with checklist items left to tick, A takes you to the first one) · R request changes. Shortcuts do nothing while you type in a field.',
+      shortcuts: 'Shortcuts: J or N next post · K or P previous post · A approve and open the next post (with checklist items left to tick, A takes you to the first one) · R write why changes are needed. Shortcuts do nothing while you type in a field.',
       noneLeft: 'No posts left to review',
       noneLeftHint: 'No post is waiting for your approval. New posts sent for review show in the To review tab.',
       backToReview: 'Back to the review list',

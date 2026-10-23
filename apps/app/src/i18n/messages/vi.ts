@@ -2418,7 +2418,7 @@ export const vi = {
     // Reviewing posts one after another by keyboard (#1221).
     reviewKeys: {
       approveNext: 'Duyệt và sang bài tiếp',
-      shortcuts: 'Phím tắt: J hoặc N sang bài sau · K hoặc P về bài trước · A duyệt và sang bài tiếp (nếu còn mục kiểm tra chưa đánh dấu, A đưa bạn tới mục đó) · R yêu cầu sửa. Phím tắt không chạy khi đang gõ trong ô nhập.',
+      shortcuts: 'Phím tắt: J hoặc N sang bài tiếp · K hoặc P về bài trước · A duyệt và sang bài tiếp (nếu còn mục kiểm tra chưa đánh dấu, A đưa bạn tới mục đó) · R viết lý do yêu cầu sửa. Phím tắt không có tác dụng khi bạn đang gõ chữ.',
       noneLeft: 'Hết bài chờ duyệt',
       noneLeftHint: 'Không còn bài nào chờ bạn duyệt. Bài mới gửi duyệt sẽ hiện trong mục Cần duyệt.',
       backToReview: 'Về mục Cần duyệt',
@@ -2816,7 +2816,7 @@ export const vi = {
       reopen: 'Mở lại',
       resolvedBy: 'Đã xử lý · {name} · {when}',
       pinsTitle: 'Ghim trên ảnh và video',
-      pinsHint: 'Bấm vào đúng chỗ trên ảnh để ghim bình luận vào đó. Với video, dừng ở đúng lúc cần góp ý rồi bấm Ghim. Dùng bàn phím: nhấn Enter trên ảnh để ghim vào giữa, rồi dùng các phím mũi tên để dịch chỗ ghim (giữ Shift để dịch xa hơn).',
+      pinsHint: 'Bấm vào đúng chỗ trên ảnh để ghim bình luận vào đó. Với video, dừng ở đúng lúc cần góp ý rồi bấm Ghim. Dùng bàn phím: nhấn Enter trên ảnh để ghim vào giữa ảnh, rồi dùng các phím mũi tên để dịch chỗ ghim (giữ Shift để dịch xa hơn).',
       draftAt: 'Chỗ sẽ ghim: {x, number}% từ trái sang, {y, number}% từ trên xuống',
       pinImage: 'Ghim bình luận vào một chỗ trên {media}',
       pinVideoHere: 'Ghim tại {time}',

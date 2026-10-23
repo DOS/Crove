@@ -150,7 +150,7 @@ describe('pinned comments (#1180)', () => {
     const vi = board('vi', { x: 0.52, y: 0.4801 });
     expect(live(vi)?.[0]).toContain('aria-live="polite"');
     expect(live(vi)?.[1]).toBe('Chỗ sẽ ghim: 52% từ trái sang, 48% từ trên xuống');
-    expect(text(vi)).toContain('nhấn Enter trên ảnh để ghim vào giữa, rồi dùng các phím mũi tên để dịch chỗ ghim');
+    expect(text(vi)).toContain('nhấn Enter trên ảnh để ghim vào giữa ảnh, rồi dùng các phím mũi tên để dịch chỗ ghim');
     expect(attr([...vi.matchAll(/<button[^>]*data-testid="pin-draft"[^>]*>/g)][0]?.[0] ?? '', 'style')).toContain('left:52%');
     // Empty but there before a pin is placed, so the first move is read out.
     expect(live(board('vi', null))?.[1]).toBe('');
