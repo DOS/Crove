@@ -2341,6 +2341,8 @@ export function SocialComposePage() {
     const i = idea.data;
     if (!i || ideaTaken.current) return;
     ideaTaken.current = true;
+    // An idea kept from the AI's suggestions (#1181): the draft is AI-assisted (the server marks it so as well).
+    if (i.origin === 'ai') setAiUsed(true);
     setBase({
       body: i.note ? `${i.title}\n\n${i.note}` : i.title,
       title: '',

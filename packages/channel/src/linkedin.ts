@@ -44,6 +44,8 @@ const API = 'https://api.linkedin.com';
 // The Posts and Images APIs are versioned by month (Linkedin-Version: YYYYMM); each version is served for a year.
 export const LINKEDIN_VERSION = '202604';
 const MEMBER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+// How much alt text this adapter sends; ALT_TEXT_LIMITS of the Social module follows it (alt-text-limits.test.ts, #1126).
+export const LINKEDIN_ALT_TEXT_MAX = 4086;
 // An organization's id is a number (urn:li:organization:2414183).
 const ORGANIZATION_ID = /^\d{1,32}$/;
 const ORGANIZATION_URN = /^urn:li:organization:(\d{1,32})$/;
@@ -494,7 +496,7 @@ class LinkedInPosting {
         const image = init.body?.value?.image;
         if (typeof uploadUrl !== 'string' || typeof image !== 'string' || !image.startsWith('urn:li:image:')) return { kind: 'rejected', error: 'transient', code: 'NO_UPLOAD_URL' };
         await this.client.upload(uploadUrl, token, bytes, m.mime);
-        images.push({ id: image, ...(m.altText ? { altText: m.altText.slice(0, 4086) } : {}) });
+        images.push({ id: image, ...(m.altText ? { altText: m.altText.slice(0, LINKEDIN_ALT_TEXT_MAX) } : {}) });
       } catch (error) {
         return beforePost(publishResult(error));
       }

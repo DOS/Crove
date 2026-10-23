@@ -1,23 +1,29 @@
 // The ideas board (#701): ideas for posts before they are posts, in three columns (new, planned, drafted) and an
 // archive. Members add, change and move ideas; "Write a draft" opens the composer with the idea's text, link and
 // media, and the post saved there is linked to the idea. On a phone the columns stack.
+// "Suggest ideas" (#1181) asks the AI for a few ideas from a theme; the member ticks the ones to keep, which are added
+// as new ideas marked as AI suggestions. A draft written from one of them is AI-assisted and needs a person's approval.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
 import { useState } from 'react';
-import { useTranslations } from 'use-intl';
+import { useLocale, useTranslations } from 'use-intl';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
+import { useChannelScope } from '../components/social-channel-access.tsx';
 import { LabelChip, useLabels, type SocialLabel } from '../components/social-labels.tsx';
 import { MediaField, Thumb, type MediaItem } from '../components/social-media.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
-import { BOARD_STAGES, linkHost, type IdeaStage } from '../lib/social-ideas.ts';
+import { getConfig } from '../lib/auth.ts';
+import { providerName } from '../lib/social.ts';
+import { BOARD_STAGES, OCCASION_MAX, SUGGEST_COUNTS, SUGGEST_DEFAULT_COUNT, THEME_MAX, ideasOccasion, linkHost, type IdeaStage } from '../lib/social-ideas.ts';
 
 type Idea = Awaited<ReturnType<typeof client.social.ideas.list>>['ideas'][number];
 type Draft = { title: string; note: string; linkUrl: string; media: MediaItem[]; labelIds: string[] };
@@ -32,6 +38,156 @@ const draftOf = (i: Idea): Draft => ({
   labelIds: i.labelIds,
 });
 const fieldsOf = (d: Draft) => ({ title: d.title.trim(), note: d.note.trim() || null, linkUrl: d.linkUrl.trim() || null, fileIds: d.media.map((m) => m.fileId), labelIds: d.labelIds });
+
+type Suggestion = Awaited<ReturnType<typeof client.social.ideas.suggest>>['ideas'][number];
+
+// Ideas from the AI (#1181): a theme, an optional label or occasion, how many, and whose voice; the answer is a list to
+// pick from, and only the ideas ticked are added to the board (as new ideas marked as AI suggestions, with the label).
+function SuggestPanel({ labels, onClose }: { labels: readonly SocialLabel[]; onClose: () => void }) {
+  const t = useTranslations('social.ideas.suggest');
+  const locale = useLocale();
+  const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  // A member limited to some channels (#1081) may take only those channels' voices.
+  const scope = useChannelScope();
+  const live = (channels.data ?? []).filter((c) => c.status === 'active' && scope.allows(c.id));
+  const [theme, setTheme] = useState('');
+  const [labelId, setLabelId] = useState('');
+  const [occasion, setOccasion] = useState('');
+  const [count, setCount] = useState<number>(SUGGEST_DEFAULT_COUNT);
+  const [connectionId, setConnectionId] = useState('');
+  const [kept, setKept] = useState<number[]>([]);
+  // The suggestions already on the board: kept once, never offered again (a retry after a failure saves only the rest).
+  const [saved, setSaved] = useState<number[]>([]);
+  const label = labels.find((l) => l.id === labelId) ?? null;
+  const ask = useMutation({
+    mutationFn: () => {
+      const forWhat = ideasOccasion(label, occasion);
+      return client.social.ideas.suggest({
+        theme: theme.trim(),
+        count,
+        language: locale === 'en' ? 'en' : 'vi',
+        ...(forWhat ? { occasion: forWhat } : {}),
+        ...(connectionId ? { connectionId } : {}),
+      });
+    },
+    onSuccess: () => {
+      setKept([]);
+      setSaved([]);
+    },
+  });
+  const ideas: Suggestion[] = ask.data?.ideas ?? [];
+  const keep = useMutation({
+    mutationFn: async (picked: number[]) => {
+      // One at a time, in the order shown; an idea kept before a failure stays on the board and leaves the picks.
+      for (const i of [...picked].sort((a, b) => a - b)) {
+        const idea = ideas[i];
+        if (!idea) continue;
+        await client.social.ideas.create({ title: idea.title, note: idea.note, origin: 'ai', ...(label ? { labelIds: [label.id] } : {}) });
+        setSaved((s) => [...s, i]);
+        setKept((k) => k.filter((x) => x !== i));
+      }
+    },
+    onSettled: refresh,
+    onSuccess: onClose,
+  });
+  const busy = ask.isPending || keep.isPending;
+  return (
+    <Card className="block space-y-4 p-4" role="region" aria-label={t('title')}>
+      <div>
+        <h3 className="text-sm font-medium text-foreground">{t('title')}</h3>
+        <p className="text-xs text-subtle-foreground">{t('hint')}</p>
+      </div>
+      <form
+        className="space-y-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (theme.trim() && !busy) ask.mutate();
+        }}
+      >
+        <div className="space-y-1.5">
+          <Label htmlFor="ideas-suggest-theme">{t('theme')}</Label>
+          <Textarea id="ideas-suggest-theme" value={theme} maxLength={THEME_MAX} rows={3} placeholder={t('themePlaceholder')} onChange={(e) => setTheme(e.target.value)} />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {labels.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="ideas-suggest-label">{t('label')}</Label>
+              <NativeSelect id="ideas-suggest-label" className="w-full" value={labelId} onChange={(e) => setLabelId(e.target.value)}>
+                <NativeSelectOption value="">{t('noLabel')}</NativeSelectOption>
+                {labels.map((l) => (
+                  <NativeSelectOption key={l.id} value={l.id}>
+                    {l.name}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="ideas-suggest-occasion">{t('occasion')}</Label>
+            <Input id="ideas-suggest-occasion" value={occasion} maxLength={OCCASION_MAX} placeholder={t('occasionPlaceholder')} onChange={(e) => setOccasion(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="ideas-suggest-count">{t('count')}</Label>
+            <NativeSelect id="ideas-suggest-count" className="w-full" value={String(count)} onChange={(e) => setCount(Number(e.target.value))}>
+              {SUGGEST_COUNTS.map((n) => (
+                <NativeSelectOption key={n} value={String(n)}>
+                  {t('countOption', { n })}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+          {live.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="ideas-suggest-voice">{t('voice')}</Label>
+              <NativeSelect id="ideas-suggest-voice" className="w-full" value={connectionId} onChange={(e) => setConnectionId(e.target.value)}>
+                <NativeSelectOption value="">{t('voiceOrg')}</NativeSelectOption>
+                {live.map((c) => (
+                  <NativeSelectOption key={c.id} value={c.id}>
+                    {c.displayName} · {providerName(c.provider)}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
+          )}
+        </div>
+        {ask.error ? <ErrorText>{errorMessage(ask.error)}</ErrorText> : null}
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={!theme.trim() || busy}>
+            {ask.isPending ? <Spinner className="text-current" /> : null}
+            {ask.data ? t('again') : t('ask')}
+          </Button>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            {t('close')}
+          </Button>
+        </div>
+      </form>
+      {ideas.length > 0 && (
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium text-foreground">{t('results')}</legend>
+          <p className="text-xs text-subtle-foreground">{t('resultsHint')}</p>
+          <ul className="space-y-1.5">
+            {ideas.map((idea, i) => (
+              <li key={`${i}-${idea.title}`}>
+                <label className="flex items-start gap-2 rounded-lg border border-dashed p-2 text-sm">
+                  <Checkbox className="mt-0.5" checked={kept.includes(i) || saved.includes(i)} disabled={keep.isPending || saved.includes(i)} onCheckedChange={() => setKept(kept.includes(i) ? kept.filter((x) => x !== i) : [...kept, i])} />
+                  <span className="min-w-0 space-y-0.5">
+                    <span className="block font-medium break-words text-foreground">{idea.title}</span>
+                    {idea.note && <span className="block text-xs break-words whitespace-pre-line text-muted-foreground">{idea.note}</span>}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+          {keep.error ? <ErrorText>{errorMessage(keep.error)}</ErrorText> : null}
+          <Button type="button" disabled={kept.length === 0 || busy} onClick={() => keep.mutate(kept)}>
+            {keep.isPending ? <Spinner className="text-current" /> : null}
+            {t('keep', { count: kept.length })}
+          </Button>
+        </fieldset>
+      )}
+    </Card>
+  );
+}
 
 function IdeaForm({ id, initial, labels, onSave, onCancel, pending, error }: { id: string; initial: Draft; labels: readonly SocialLabel[]; onSave: (d: Draft) => void; onCancel?: () => void; pending: boolean; error: unknown }) {
   const t = useTranslations('social.ideas');
@@ -121,6 +277,7 @@ function IdeaCard({ idea, labels, canWrite }: { idea: Idea; labels: readonly Soc
   return (
     <Card className="block space-y-2 p-3" data-testid="idea-card">
       <p className="text-sm font-medium break-words text-foreground">{idea.title}</p>
+      {idea.origin === 'ai' && <p className="text-xs text-subtle-foreground">{t('fromAi')}</p>}
       {idea.note && <p className="line-clamp-3 text-xs break-words whitespace-pre-line text-muted-foreground">{idea.note}</p>}
       {host && (
         <a href={idea.linkUrl ?? undefined} target="_blank" rel="noreferrer noopener" className="block truncate text-xs text-link hover:underline">
@@ -217,6 +374,8 @@ export function SocialIdeasPage() {
   const labels = useLabels().data ?? [];
   const list = useQuery(orpc.social.ideas.list.queryOptions({ input: { archived, ...(labelId ? { labelId } : {}) } }));
   const [adding, setAdding] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
+  const canSuggest = canWrite && getConfig().aiEnabled === true;
   const create = useMutation({
     mutationFn: (d: Draft) => client.social.ideas.create(fieldsOf(d)),
     onSuccess: () => {
@@ -232,6 +391,11 @@ export function SocialIdeasPage() {
         subtitle={t('subtitle')}
         actions={
           <>
+            {canSuggest && !suggesting && (
+              <Button variant="outline" onClick={() => setSuggesting(true)}>
+                {t('suggest.open')}
+              </Button>
+            )}
             {canWrite && !adding && <Button onClick={() => setAdding(true)}>{t('new')}</Button>}
             <Link to="/o/$slug/social" params={{ slug }} className="inline-flex h-9 items-center px-2.5 text-sm text-muted-foreground hover:text-foreground">
               {t('back')}
@@ -239,6 +403,7 @@ export function SocialIdeasPage() {
           </>
         }
       />
+      {suggesting && <SuggestPanel labels={labels} onClose={() => setSuggesting(false)} />}
       {adding && (
         <Card className="block p-4">
           <h3 className="mb-3 text-sm font-medium text-foreground">{t('new')}</h3>

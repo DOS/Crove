@@ -1166,17 +1166,18 @@ export interface SocialIdeaLabelTable {
 
 /** crove_social.idea */
 export interface SocialIdeaTable {
-  org_id: string;
-  id: Generated<string>;
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
   title: string;
   note: string | null;
   link_url: string | null;
   file_ids: Generated<string[]>;
   stage: Generated<string>;
   post_id: string | null;
-  created_by: string;
-  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  origin: ColumnType<string, string | undefined, NotGranted>;
 }
 
 /** crove_social.label */

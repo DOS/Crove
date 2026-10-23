@@ -22,7 +22,8 @@ const USERNAME = /^[A-Za-z0-9_]{1,15}$/;
 // X shows at most 4 images in a post.
 const MAX_IMAGES = 4;
 // X takes at most 1000 characters of alt text per image.
-const ALT_TEXT_MAX = 1000;
+// How much alt text this adapter sends; ALT_TEXT_LIMITS of the Social module follows it (alt-text-limits.test.ts, #1126).
+export const X_ALT_TEXT_MAX = 1000;
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
 export interface XAppConfig {
@@ -375,7 +376,7 @@ export class XPublisher implements Publisher {
         const id = uploaded?.data?.id;
         if (typeof id !== 'string' || !MEDIA_ID.test(id)) return { kind: 'rejected', error: 'transient', code: 'NO_MEDIA_ID' };
         // The image's description for screen readers (#790), set before the post names the image: still nothing visible.
-        if (f.altText) await this.client.call('POST', '/media/metadata', s.accessToken, { json: { id, metadata: { alt_text: { text: f.altText.slice(0, ALT_TEXT_MAX) } } } });
+        if (f.altText) await this.client.call('POST', '/media/metadata', s.accessToken, { json: { id, metadata: { alt_text: { text: f.altText.slice(0, X_ALT_TEXT_MAX) } } } });
         mediaIds.push(id);
       } catch (error) {
         return beforePost(publishResult(error));

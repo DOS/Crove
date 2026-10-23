@@ -4,10 +4,12 @@
 // "Turn into a draft" opens the composer with the idea's text, link and media; the post it saves names the idea
 // (social.post.create with ideaId), which links them, copies the idea's labels onto the post and moves the idea to
 // drafted (linkIdeaToPost, called inside that command).
+// An idea kept from the AI's suggestions (#1181, social.posts.suggestIdeas) has origin 'ai', set when it is created and
+// never changed; a draft made from it is tainted like any AI text, so a person approves what goes out.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { SOCIAL_IDEA_STAGES, SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
-import type { MemberRole, SocialIdeaStage } from '@crove/db';
+import type { MemberRole, SocialIdeaOrigin, SocialIdeaStage } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -84,7 +86,7 @@ async function setLabels(ctx: CommandContext, ideaId: string, labelIds: readonly
 async function lockIdea(ctx: CommandContext, id: string) {
   const idea = await ctx.trx
     .selectFrom('crove_social.idea')
-    .select(['id', 'stage', 'post_id', 'title'])
+    .select(['id', 'stage', 'post_id', 'title', 'origin'])
     .where('org_id', '=', ctx.orgId)
     .where('id', '=', id)
     .forUpdate()
@@ -95,7 +97,9 @@ async function lockIdea(ctx: CommandContext, id: string) {
 
 export const ideaCreate = defineCommand({
   name: 'social.idea.create',
-  input: z.strictObject({ ...zFields, stage: z.enum(['new', 'planned']).optional() }),
+  // origin 'ai': kept from the AI's suggestions. It can only mark an idea as AI, never clear the mark: the column takes
+  // no update.
+  input: z.strictObject({ ...zFields, stage: z.enum(['new', 'planned']).optional(), origin: z.literal('ai').optional() }),
   risk: 'R1',
   access: MEMBERS,
   handler: async (ctx, input) => {
@@ -110,6 +114,7 @@ export const ideaCreate = defineCommand({
         link_url: input.linkUrl ?? null,
         file_ids: input.fileIds ?? [],
         stage: input.stage ?? 'new',
+        origin: input.origin ?? 'human',
         created_by: userId,
         created_at: ctx.now,
         updated_at: ctx.now,
@@ -117,7 +122,7 @@ export const ideaCreate = defineCommand({
       .returning('id')
       .executeTakeFirstOrThrow();
     await setLabels(ctx, row.id, input.labelIds ?? []);
-    ctx.audit({ idea_id: row.id });
+    ctx.audit({ idea_id: row.id, ...(input.origin ? { origin: input.origin } : {}) });
     return { ideaId: row.id };
   },
 });
@@ -169,7 +174,8 @@ export const ideaMove = defineCommand({
 });
 
 // Called by social.post.create when the post is made from an idea: the idea must still be waiting for its draft.
-export async function linkIdeaToPost(ctx: CommandContext, ideaId: string, postId: string): Promise<void> {
+// Returns where the idea came from, so a draft of an AI idea is tainted (#1181).
+export async function linkIdeaToPost(ctx: CommandContext, ideaId: string, postId: string): Promise<SocialIdeaOrigin> {
   const idea = await lockIdea(ctx, ideaId);
   if (idea.post_id) throw new DomainError('IDEA_DRAFTED', 409, 'Ý tưởng này đã có bài nháp', { postId: idea.post_id });
   if (idea.stage === 'archived') throw new DomainError('IDEA_ARCHIVED', 409, 'Ý tưởng này đã được lưu trữ');
@@ -180,6 +186,7 @@ export async function linkIdeaToPost(ctx: CommandContext, ideaId: string, postId
     SELECT org_id, ${postId}::uuid, label_id, ${ctx.now}::timestamptz FROM crove_social.idea_label
     WHERE org_id = ${ctx.orgId} AND idea_id = ${idea.id}
     ON CONFLICT (org_id, post_id, label_id) DO NOTHING`.execute(ctx.trx);
+  return idea.origin;
 }
 
 export interface IdeaMedia {
@@ -199,6 +206,8 @@ export interface Idea {
   media: IdeaMedia[];
   labelIds: string[];
   stage: SocialIdeaStage;
+  // 'ai': kept from the AI's suggestions (#1181).
+  origin: SocialIdeaOrigin;
   postId: string | null;
   createdBy: string;
   createdAt: string;
@@ -212,6 +221,7 @@ type IdeaRow = {
   link_url: string | null;
   file_ids: string[];
   stage: SocialIdeaStage;
+  origin: SocialIdeaOrigin;
   post_id: string | null;
   created_by: string;
   created_at: Date;
@@ -242,6 +252,7 @@ async function toIdeas(ctx: { trx: CommandContext['trx']; orgId: string }, rows:
     media: r.file_ids.map((id) => files.get(id)).filter((m): m is IdeaMedia => m !== undefined),
     labelIds: r.label_ids ?? [],
     stage: r.stage,
+    origin: r.origin,
     postId: r.post_id,
     createdBy: r.created_by,
     createdAt: r.created_at.toISOString(),
@@ -250,7 +261,7 @@ async function toIdeas(ctx: { trx: CommandContext['trx']; orgId: string }, rows:
 }
 
 const IDEA_SELECT = sql`
-  SELECT i.id, i.title, i.note, i.link_url, i.file_ids, i.stage, i.post_id, i.created_by, i.created_at, i.updated_at,
+  SELECT i.id, i.title, i.note, i.link_url, i.file_ids, i.stage, i.origin, i.post_id, i.created_by, i.created_at, i.updated_at,
          (SELECT array_agg(l.label_id ORDER BY l.created_at, l.label_id) FROM crove_social.idea_label l WHERE l.org_id = i.org_id AND l.idea_id = i.id) AS label_ids
   FROM crove_social.idea i`;
 

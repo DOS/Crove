@@ -292,7 +292,11 @@ export const postCreate = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     const { post, variants, media } = await createPost(ctx, input);
-    if (input.ideaId) await linkIdeaToPost(ctx, input.ideaId, post.id);
+    // A draft of an idea kept from the AI's suggestions (#1181) is tainted like any AI help, whatever the client says.
+    const ideaOrigin = input.ideaId ? await linkIdeaToPost(ctx, input.ideaId, post.id) : null;
+    if (ideaOrigin === 'ai' && input.origin !== 'ai' && input.aiAssisted !== true) {
+      await ctx.trx.updateTable('crove_social.post').set({ tainted: true }).where('org_id', '=', ctx.orgId).where('id', '=', post.id).execute();
+    }
     ctx.audit({ post_id: post.id, variants: variants.length, media: media.length, origin: input.origin ?? 'human', ...(input.ideaId ? { idea_id: input.ideaId } : {}) });
     return { postId: post.id, revision: post.revision, variants };
   },

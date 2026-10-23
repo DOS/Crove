@@ -1102,6 +1102,8 @@ export const SOCIAL_CHAT_ALERT_TARGETS = ['telegram', 'discord'] as const;
 export const SOCIAL_CHAT_ALERT_KINDS = ['needs_approval', 'failed', 'published', 'client_answered'] as const;
 // The stages of an idea on the ideas board (#701).
 export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
+// Where an idea came from (#1181): a person, or an AI suggestion the member kept.
+export const SOCIAL_IDEA_ORIGINS = ['human', 'ai'] as const;
 
 const zSocialText = z.string().max(100_000);
 const zSocialTitle = z.string().max(500);
@@ -1513,6 +1515,7 @@ export const zSocialIdea = z.object({
   media: z.array(z.object({ fileId: zId, mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable() })),
   labelIds: z.array(zId),
   stage: z.enum(SOCIAL_IDEA_STAGES),
+  origin: z.enum(SOCIAL_IDEA_ORIGINS),
   postId: zId.nullable(),
   createdBy: zId,
   createdAt: z.string(),
@@ -1525,7 +1528,8 @@ const zIdeaFields = {
   fileIds: z.array(zId).max(10).optional(),
   labelIds: z.array(zId).max(10).optional(),
 };
-export const zSocialIdeaCreate = z.strictObject({ ...zIdeaFields, stage: z.enum(['new', 'planned']).optional() });
+// origin 'ai' (#1181): an idea kept from the AI's suggestions; it marks the idea, and nothing clears the mark.
+export const zSocialIdeaCreate = z.strictObject({ ...zIdeaFields, stage: z.enum(['new', 'planned']).optional(), origin: z.literal('ai').optional() });
 export const zSocialIdeaUpdate = z.strictObject({ ideaId: zId, ...zIdeaFields });
 // An org's link-in-bio page (#707) and its clicks of the last 30 days, by button:<index> or post:<id>.
 export const zSocialBioPage = z.object({

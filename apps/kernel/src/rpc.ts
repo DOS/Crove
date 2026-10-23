@@ -72,10 +72,11 @@ interface CreatedInvite {
 
 // Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
 export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> &
-  Partial<Pick<SocialWriter, 'hashtags'>> & {
+  Partial<Pick<SocialWriter, 'hashtags' | 'ideas'>> & {
     // An image's alt text from its stored bytes (#817), when the deployment's model takes images (AI_VISION), within
-    // maxChars when the chosen channels take less than the writer's own limit (#1121).
-    describeStored?: (file: { key: string; generation: string | null; sha256: string }, mime: string, language: 'vi' | 'en', maxChars?: number | null) => Promise<string | null>;
+    // maxChars when the chosen channels take less than the writer's own limit (#1121). The read stops at the size the
+    // file row records (#1126).
+    describeStored?: (file: { key: string; generation: string | null; sha256: string; sizeBytes: number }, mime: string, language: 'vi' | 'en', maxChars?: number | null) => Promise<string | null>;
   };
 
 // A member limited to some channels (#1081) may not have AI write for another one (#1099): refused before the paid model
@@ -604,9 +605,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             if (!ALT_TEXT_IMAGE_TYPES.includes(file.contentType)) throw new DomainError('ALT_TEXT_IMAGE_ONLY', 422, 'Chỉ gợi ý mô tả cho ảnh');
             if (file.sizeBytes > ALT_TEXT_IMAGE_MAX_BYTES) throw new DomainError('ALT_TEXT_IMAGE_TOO_LARGE', 413, 'Ảnh lớn hơn 10 MB nên AI không đọc được');
             // The post's channels, the org's own (a disconnected one of a saved post included): the suggestion keeps
-            // within their strictest alt-text limit.
+            // within their strictest alt-text limit. A member limited to some channels (#1081) names only theirs (#1175),
+            // checked before the budget and the model call.
             let maxChars: number | null = null;
             if (input.connectionIds && input.connectionIds.length > 0) {
+              await refuseChannelsOutside(runtime, actor, orgId, input.connectionIds);
               const connections = await runtime.query<{ id: string; provider: string }[]>('kernel.channel.list', { includeRevoked: true }, { actor, orgId });
               const own = new Map(connections.map((c) => [c.id, c.provider]));
               const providers: string[] = [];
@@ -626,7 +629,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
             let altText: string | null;
             try {
-              altText = await socialWriter.describeStored({ key: file.storageKey, generation: file.generation, sha256: file.sha256 }, file.contentType, input.language, maxChars);
+              altText = await socialWriter.describeStored({ key: file.storageKey, generation: file.generation, sha256: file.sha256, sizeBytes: file.sizeBytes }, file.contentType, input.language, maxChars);
             } catch (error: unknown) {
               console.error('[social-ai] describe failed', error instanceof Error ? error.name : typeof error);
               throw new DomainError('AI_ALT_TEXT_FAILED', 503, 'AI chưa gợi ý được mô tả ảnh lúc này, hãy thử lại sau');
@@ -644,6 +647,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             if (!socialWriter?.hashtags) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
             let channel: WriterChannel | undefined;
             if (input.connectionId) {
+              // A member limited to some channels (#1081) may not have another channel's name and limits go into the
+              // prompt (#1175): refused before the budget and the model call.
+              await refuseChannelsOutside(runtime, actor, orgId, [input.connectionId]);
               const connections = await runtime.query<{ id: string; provider: string; displayName: string; status: string }[]>('kernel.channel.list', {}, { actor, orgId });
               const found = connections.find((c) => c.id === input.connectionId && c.status !== 'revoked');
               if (!found) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
@@ -715,6 +721,40 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         create: os.social.ideas.create.handler(socialCommand('social.idea.create')),
         update: os.social.ideas.update.handler(socialCommand('social.idea.update')),
         move: os.social.ideas.move.handler(socialCommand('social.idea.move')),
+        // Post ideas from a theme (#1181): the same role gate, budget and brand voice as AI drafting; nothing is saved.
+        suggest: os.social.ideas.suggest.handler(({ context, input }) =>
+          inSocial(context, async (orgId, actor) => {
+            const { role } = await resolveMembership(runtime, context.user, context.orgSlug);
+            if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không soạn được bài');
+            if (!socialWriter?.ideas) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
+            // A channel's voice: only a channel the member may write for (#1081), and one of the org's.
+            if (input.connectionId) {
+              await refuseChannelsOutside(runtime, actor, orgId, [input.connectionId]);
+              const connections = await runtime.query<{ id: string; status: string }[]>('kernel.channel.list', {}, { actor, orgId });
+              if (!connections.some((c) => c.id === input.connectionId && c.status !== 'revoked')) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
+            }
+            // The same budget as drafts: each ask is a paid model call (#386).
+            const ticket = drafts.take(orgId, actor.userId);
+            if (!ticket.allowed) {
+              throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang chờ AI trả lời, hãy đợi xong rồi thử tiếp' : 'Đã dùng AI nhiều lần trong phút này, hãy thử lại sau ít phút', {
+                retryAfterSeconds: ticket.retryAfterSeconds,
+              });
+            }
+            let ideas: Awaited<ReturnType<NonNullable<SocialDrafter['ideas']>>>;
+            try {
+              const voices = await savedVoices(runtime, actor, orgId);
+              const voice = (input.connectionId ? voices.byChannel.get(input.connectionId) : undefined) ?? voices.org;
+              ideas = await socialWriter.ideas({ theme: input.theme, occasion: input.occasion ?? null, count: input.count, language: input.language ?? 'vi', ...(voice ? { voice } : {}) });
+            } catch (error: unknown) {
+              console.error('[social-ai] ideas failed', error instanceof Error ? error.name : typeof error);
+              throw new DomainError('AI_IDEAS_FAILED', 503, 'AI chưa gợi ý được ý tưởng lúc này, hãy thử lại sau');
+            } finally {
+              ticket.release();
+            }
+            if (ideas.length === 0) throw new DomainError('AI_IDEAS_EMPTY', 422, 'AI không nghĩ ra ý tưởng nào từ chủ đề này, hãy viết rõ hơn');
+            return { ideas };
+          }),
+        ),
       },
       bio: {
         get: os.social.bio.get.handler(socialQuery('social.bio.get')),

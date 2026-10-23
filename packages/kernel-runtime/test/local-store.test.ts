@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BlobConflictError, BlobNotFoundError, LocalDiskStore, fileKey, inboundKey, newInboundBlobId, sha256Hex } from '../src/index.ts';
+import { BlobConflictError, BlobNotFoundError, BlobTooLargeError, LocalDiskStore, fileKey, inboundKey, newInboundBlobId, readVerified, sha256Hex } from '../src/index.ts';
 
 const encode = (s: string) => new TextEncoder().encode(s);
 
@@ -33,6 +33,22 @@ describe('LocalDiskStore', () => {
     expect(await new LocalDiskStore(root).get(key)).toEqual(bytes);
     await expect(store.put(fileKey(orgId, sha256Hex('other')), bytes)).rejects.toThrow(/does not match/);
     await expect(store.put('inbound/../escape', bytes)).rejects.toThrow(/invalid storage key/);
+  });
+
+  it('refuses a capped read of a larger file before reading it, and readVerified checks the cap (#1126)', async () => {
+    const bytes = encode(`<HDon>${randomUUID()}</HDon>`);
+    const sha256 = sha256Hex(bytes);
+    const key = fileKey(orgId, sha256);
+    await store.put(key, bytes);
+    expect(await store.get(key, null, bytes.byteLength)).toEqual(bytes);
+    await expect(store.get(key, null, bytes.byteLength - 1)).rejects.toBeInstanceOf(BlobTooLargeError);
+    await expect(readVerified(store, { key, generation: null, sha256 }, bytes.byteLength)).resolves.toEqual(bytes);
+    await expect(readVerified(store, { key, generation: null, sha256 }, bytes.byteLength - 1)).rejects.toBeInstanceOf(BlobTooLargeError);
+    await expect(store.get(fileKey(orgId, sha256Hex('missing')), null, 10)).rejects.toBeInstanceOf(BlobNotFoundError);
+    // A store that ignores the cap is still checked after the read.
+    const ignoring = { get: async () => bytes, put: async () => 'content:x', delete: async () => undefined };
+    await expect(readVerified(ignoring, { key, generation: null, sha256 }, 3)).rejects.toBeInstanceOf(BlobTooLargeError);
+    await expect(readVerified(store, { key, generation: null, sha256 }, -1)).rejects.toThrow(/invalid read cap/);
   });
 
   it('never overwrites: the same bytes dedupe, different bytes conflict and the original stays', async () => {

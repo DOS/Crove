@@ -531,6 +531,20 @@ export const contract = {
       get: oc.input(z.object({ ideaId: zId })).output(zSocialIdea),
       create: oc.input(zSocialIdeaCreate).output(z.object({ ideaId: zId })),
       update: oc.input(zSocialIdeaUpdate).output(z.object({ ideaId: zId })),
+      // Post ideas the writer suggests from a theme (#1181), in the brand voice (a channel's when connectionId names
+      // one), for a label or occasion; the same role gate and budget as AI drafting. Nothing is saved: the member keeps
+      // the ones they want with create and origin 'ai'.
+      suggest: oc
+        .input(
+          z.strictObject({
+            theme: z.string().trim().min(1).max(2000),
+            occasion: z.string().trim().max(200).optional(),
+            count: z.number().int().min(3).max(10),
+            language: z.enum(['vi', 'en']).optional(),
+            connectionId: zId.optional(),
+          }),
+        )
+        .output(z.object({ ideas: z.array(z.object({ title: z.string(), note: z.string().nullable() })) })),
       move: oc.input(z.strictObject({ ideaId: zId, stage: z.enum(['new', 'planned', 'archived']) })).output(z.object({ ideaId: zId, stage: z.string() })),
     },
     // The org's link-in-bio page (#707): everyone reads it and its clicks; owners and admins save it.

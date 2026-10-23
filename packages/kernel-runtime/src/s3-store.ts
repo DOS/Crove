@@ -179,6 +179,35 @@ function isMissingObject(error: unknown): boolean {
   return name === 'NoSuchKey' || name === 'NotFound' || name === 'NoSuchVersion' || (httpStatus(error) === 404 && name !== 'NoSuchBucket');
 }
 
+// A body's bytes, at most maxBytes of them (#1126): a larger declared length is refused before anything is read, and
+// a body that runs past the cap (undeclared, or longer than declared) is cut off there.
+async function cappedBytes(stream: ReadableStream<Uint8Array>, declared: number | undefined, key: string, maxBytes: number): Promise<Uint8Array> {
+  if (declared !== undefined && declared > maxBytes) {
+    await stream.cancel().catch(() => undefined);
+    throw new BlobTooLargeError(key, maxBytes);
+  }
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  const reader = stream.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new BlobTooLargeError(key, maxBytes);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, at);
+    at += chunk.byteLength;
+  }
+  return bytes;
+}
+
 // RFC 6266 attachment with the UTF-8 filename.
 function attachment(filename: string): string {
   return `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`;
@@ -357,14 +386,17 @@ export class S3BlobStore implements BlobStore {
     }
   }
 
-  private async fetch(key: string, versionId?: string | null): Promise<Fetched> {
+  // maxBytes: a larger object is refused (BlobTooLargeError) by its declared length, or while it streams, never read
+  // past the cap.
+  private async fetch(key: string, versionId?: string | null, maxBytes?: number): Promise<Fetched> {
     assertStorageKey(key);
     try {
       const out = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key, ...(versionId ? { VersionId: versionId } : {}) }));
       if (!out.Body) throw new BlobNotFoundError(key);
-      return { bytes: await out.Body.transformToByteArray(), versionId: out.VersionId, retainUntil: out.ObjectLockRetainUntilDate };
+      const bytes = maxBytes === undefined ? await out.Body.transformToByteArray() : await cappedBytes(out.Body.transformToWebStream(), out.ContentLength, key, maxBytes);
+      return { bytes, versionId: out.VersionId, retainUntil: out.ObjectLockRetainUntilDate };
     } catch (error) {
-      if (error instanceof BlobNotFoundError) throw error;
+      if (error instanceof BlobNotFoundError || error instanceof BlobTooLargeError) throw error;
       if (isMissingObject(error)) throw new BlobNotFoundError(key);
       if (httpStatus(error) === 403) throw new BlobStoreAccessError(this.bucket, key, error);
       throw error;
@@ -372,8 +404,8 @@ export class S3BlobStore implements BlobStore {
   }
 
   // A versioned generation reads exactly that version; a missing version is a missing blob, never the current one.
-  async get(key: string, generation?: string | null): Promise<Uint8Array> {
-    return (await this.fetch(key, this.pinned(generation))).bytes;
+  async get(key: string, generation?: string | null, maxBytes?: number): Promise<Uint8Array> {
+    return (await this.fetch(key, this.pinned(generation), maxBytes)).bytes;
   }
 
   async delete(key: string): Promise<void> {

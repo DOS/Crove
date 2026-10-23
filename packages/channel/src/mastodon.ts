@@ -23,6 +23,8 @@ const ACCOUNT_ID = /^[0-9A-Za-z]{1,64}@[a-z0-9.-]{1,253}$/;
 // How long a video may take to process before the post is given up (nothing was posted yet).
 const MEDIA_WAIT_MS = 120_000;
 const MEDIA_POLL_MS = 2_000;
+// How much alt text this adapter sends; ALT_TEXT_LIMITS of the Social module follows it (alt-text-limits.test.ts, #1126).
+export const MASTODON_ALT_TEXT_MAX = 1500;
 export const MASTODON_VISIBILITIES = ['public', 'unlisted'] as const;
 export type MastodonVisibility = (typeof MASTODON_VISIBILITIES)[number];
 
@@ -265,7 +267,7 @@ export class MastodonPublisher implements Publisher {
       if (!bytes) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
       const form = new FormData();
       form.append('file', new Blob([bytes as Uint8Array<ArrayBuffer>], { type: m.mime }), m.mime.startsWith('video/') ? 'video' : 'image');
-      if (m.altText) form.append('description', m.altText.slice(0, 1500));
+      if (m.altText) form.append('description', m.altText.slice(0, MASTODON_ALT_TEXT_MAX));
       try {
         const { status, data } = await this.client.call<{ id?: unknown; url?: unknown }>(s, 'POST', '/api/v2/media', { form });
         if (typeof data.id !== 'string' || !STATUS_ID.test(data.id)) return { kind: 'rejected', error: 'transient', code: 'NO_MEDIA_ID' };
