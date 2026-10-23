@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { addRateBases, engagementRateOf, engagementRateOfBases, rateBasesOf } from '../src/contract.ts';
-import { changeFigure, periodSummaryInput, type PeriodSummaryData } from '../src/index.ts';
+import { REPORT_PERIOD_MAX_DAYS, changeFigure, periodSummaryInput, reportPeriodBounds, type PeriodSummaryData } from '../src/index.ts';
 
 describe('rate sums (#1164)', () => {
   it('sums engagement and each denominator over the posts that report it', () => {
@@ -86,5 +86,26 @@ describe('period summary figures (#1237)', () => {
     expect(labels.some((l) => l.startsWith('Engagement rate') && l.includes('previous period'))).toBe(false);
     expect(labels.some((l) => l.startsWith('Monthly goal'))).toBe(false);
     expect(input.posts).toEqual([]);
+  });
+});
+
+describe('report period bounds (#1237)', () => {
+  it('takes a period that ends after it starts, up to the longest a report takes with the daylight saving slack', () => {
+    expect(reportPeriodBounds('2026-09-01T00:00:00+07:00', '2026-10-01T00:00:00+07:00')).toEqual({ startMs: Date.parse('2026-08-31T17:00:00Z'), endMs: Date.parse('2026-09-30T17:00:00Z') });
+    const start = Date.parse('2026-01-01T00:00:00Z');
+    const longest = new Date(start + REPORT_PERIOD_MAX_DAYS * 86_400_000 + 2 * 3_600_000).toISOString();
+    expect(reportPeriodBounds(new Date(start).toISOString(), longest).endMs).toBe(Date.parse(longest));
+    expect(() => reportPeriodBounds(new Date(start).toISOString(), new Date(Date.parse(longest) + 1).toISOString())).toThrow(expect.objectContaining({ code: 'REPORT_PERIOD_INVALID' }));
+    expect(() => reportPeriodBounds('2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')).toThrow(expect.objectContaining({ code: 'REPORT_PERIOD_INVALID' }));
+  });
+
+  it('refuses a time that does not parse instead of passing NaN on', () => {
+    for (const [from, to] of [
+      ['not a date', '2026-10-01T00:00:00Z'],
+      ['2026-09-01T00:00:00Z', 'not a date'],
+      ['', ''],
+    ]) {
+      expect(() => reportPeriodBounds(from as string, to as string)).toThrow(expect.objectContaining({ code: 'REPORT_PERIOD_INVALID', status: 422 }));
+    }
   });
 });

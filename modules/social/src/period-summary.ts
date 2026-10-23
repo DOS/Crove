@@ -16,13 +16,11 @@ import { SUMMARY_TOP_MAX } from './domain/period-summary.ts';
 import { isValidTimeZone, localTime } from './domain/queue.ts';
 import { reportGoals } from './goals.ts';
 import { channelKept, currentAndPrevious, inSpan, spanTotals, type Span, type SpanFilter } from './metrics.ts';
-import { REPORT_PERIOD_MAX_DAYS } from './report-links.ts';
+import { reportPeriodBounds } from './report-links.ts';
 import type { Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const DAY_MS = 86_400_000;
-// Days picked in a zone with daylight saving can be an hour longer than 24 h, as for report links.
-const DST_SLACK_MS = 2 * 3_600_000;
 const zInstant = z.iso.datetime({ offset: true });
 
 export const zSummaryFiguresInput = z
@@ -73,11 +71,8 @@ export const summaryFigures = defineQuery({
       endMs = now;
       startMs = now - input.days * DAY_MS;
     } else {
-      startMs = Date.parse(input.periodStart as string);
-      endMs = Date.parse(input.periodEnd as string);
-      if (endMs <= startMs || endMs - startMs > REPORT_PERIOD_MAX_DAYS * DAY_MS + DST_SLACK_MS) {
-        throw new DomainError('REPORT_PERIOD_INVALID', 422, `Kỳ báo cáo phải kết thúc sau ngày bắt đầu và dài tối đa ${REPORT_PERIOD_MAX_DAYS} ngày`);
-      }
+      // The input schema takes ISO instants only; the bounds are the report links' own rule (reportPeriodBounds).
+      ({ startMs, endMs } = reportPeriodBounds(input.periodStart as string, input.periodEnd as string));
       span = { start: new Date(startMs), end: new Date(endMs) };
       before = { start: new Date(startMs - (endMs - startMs)), end: new Date(startMs) };
     }
