@@ -70,7 +70,7 @@ export async function ingestFileRow(ctx: CommandContext, input: IngestFile, crea
     // Files are deduplicated by content, so the same bytes can arrive as a document and as an image for a Social
     // post (#372). A document is never offered for publishing: an image upload of a document's bytes is refused.
     if (input.source === 'social' && existing.source !== 'social') {
-      throw new DomainError('FILE_IS_DOCUMENT', 409, 'Ảnh này đã có trong chứng từ kế toán của tổ chức, hãy dùng ảnh khác cho bài đăng');
+      throw new DomainError('FILE_IS_DOCUMENT', 409, 'Tệp này đã có trong chứng từ kế toán của tổ chức, hãy dùng tệp khác cho bài đăng');
     }
     // A spreadsheet stored for an import (#465) and a document are told apart by how they were first stored, and the
     // file row keeps that (#506). Bytes first stored as an import are recorded as an .xlsx workbook, so reading them

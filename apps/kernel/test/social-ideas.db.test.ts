@@ -157,8 +157,8 @@ suite('social ideas board on PostgreSQL (#701)', () => {
     await expect(exec(b, b.member, 'social.idea.move', { ideaId: foreignIdea, stage: 'planned' })).rejects.toMatchObject({ code: 'IDEA_NOT_FOUND' });
     await expect(exec(b, b.member, 'social.post.create', { body: 'x', ideaId: foreignIdea, channels: [{ connectionId: conn }] })).rejects.toMatchObject({ code: 'IDEA_NOT_FOUND' });
     expect((await board(b, b.owner)).ideas).toEqual([]);
-    // A document file of the org is not a library file.
-    const doc = await socialFile(b.orgId, b.owner, 'application/pdf');
+    // A file of a type posts never take is not a library file (a PDF is one since #1119).
+    const doc = await socialFile(b.orgId, b.owner, 'application/xml');
     await expect(exec(b, b.member, 'social.idea.create', { title: 'x', fileIds: [doc] })).rejects.toMatchObject({ code: 'MEDIA_NOT_FOUND' });
     // crove_tenant holds no DELETE on ideas.
     const { rows } = await admin((c) => c.query<{ ok: boolean }>("SELECT has_table_privilege('crove_tenant', 'crove_social.idea', 'DELETE') AS ok"));

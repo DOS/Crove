@@ -10,7 +10,7 @@
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
 import { withCallSignal, type Publisher, type PublishResult, type ReconcileResult } from '@crove/channel';
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { COVER_RULES, THREAD_PARTS_MAX, VIDEO_READY, YOUTUBE_PLAYLISTS_MAX, coverKind, coverOf, isProvider, scopeNeeded, type Provider } from './domain/channels.ts';
+import { COVER_RULES, DOCUMENT_PROVIDERS, THREAD_PARTS_MAX, VIDEO_READY, YOUTUBE_PLAYLISTS_MAX, coverKind, coverOf, isProvider, mediaKindOf, scopeNeeded, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 import type { CommentWork } from './comments.ts';
 import type { PinWork } from './pin.ts';
@@ -139,6 +139,8 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
     // The exact version the post was approved with, checked against its hash.
     return readVerified(deps.store, { key: file.storageKey, generation: file.generation, sha256: file.sha256 });
   };
+  // The name a file was uploaded under (a LinkedIn document's default title, #1119).
+  const mediaName = async (fileId: string): Promise<string | null> => (await mediaFile(fileId)).filename || null;
   // The content as it goes out: with its short link (#706) when it has one.
   const short = work.shortLink && deps.publicUrl ? { target: work.shortLink.target, url: shortUrl(deps.publicUrl, work.shortLink.code) } : null;
   const content = short ? shortened(work.content, short) : work.content;
@@ -150,6 +152,10 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         // The channel rules hold a video back from a channel whose adapter cannot post it; this keeps it so if a rule changed.
         if (!VIDEO_READY.has(publisher.provider as Provider) && work.content.media.some((m) => m.mime.startsWith('video/'))) {
           return fromPublish({ kind: 'rejected', error: 'bad_request', code: 'VIDEO_NOT_SUPPORTED' });
+        }
+        // And a PDF (#1119) on a channel that shows no documents: its adapter would take it for an image.
+        if (!DOCUMENT_PROVIDERS.has(publisher.provider as Provider) && work.content.media.some((m) => mediaKindOf(m.mime) === 'document')) {
+          return fromPublish({ kind: 'rejected', error: 'bad_request', code: 'DOCUMENT_NOT_SUPPORTED' });
         }
         // Likewise a cover the channel's adapter cannot send (#642): refused, never published without it.
         if (cover && !COVER_RULES[publisher.provider as Provider]?.includes(coverKind(cover))) {
@@ -165,7 +171,7 @@ async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, w
         if (scope && !work.scopes.includes(scope)) return { kind: 'blocked', code: 'CHANNEL_SCOPE_MISSING' };
         return fromPublish(
           await withTimeout(timeout, () =>
-            publisher.publish({ ...credential, content, readMedia, mediaUrl, settings, callKey: work.callKey, contentHash: work.contentHash }),
+            publisher.publish({ ...credential, content, readMedia, mediaUrl, mediaName, settings, callKey: work.callKey, contentHash: work.contentHash }),
           ),
         );
       }

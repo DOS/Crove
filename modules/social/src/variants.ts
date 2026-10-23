@@ -5,7 +5,7 @@ import type { Transaction } from 'kysely';
 import type { Database, SocialVariantStatus } from '@crove/db';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
 import { contentHash, effectiveContent, effectiveMedia, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { REMOVE_AT_MIN_GAP_MS, isProvider, removeAtFit } from './domain/channels.ts';
+import { REMOVE_AT_MIN_GAP_MS, isProvider, mediaKindOf, removeAtFit, type MediaKind } from './domain/channels.ts';
 import type { QueueSpec } from './domain/queue.ts';
 import { postStatus, transitionVariant, type VariantEvent } from './domain/state.ts';
 import { validateVariant, type Issue } from './domain/validate.ts';
@@ -108,8 +108,8 @@ export function mediaOf(value: unknown): PostMedia[] | null {
   });
 }
 
-// A post file is a video or an image, by its type (the server read it from the bytes).
-export const mediaKind = (mime: string): 'image' | 'video' => (mime.startsWith('video/') ? 'video' : 'image');
+// A post file is a video, a document (#1119) or an image, by its type (the server read it from the bytes).
+export const mediaKind = (mime: string): MediaKind => mediaKindOf(mime);
 
 // The images a variant shows.
 export const mediaFor = (post: PostContent, v: { media?: unknown; content_frozen?: boolean }) => effectiveMedia(post.media, mediaOf(v.media), v.content_frozen ?? false);

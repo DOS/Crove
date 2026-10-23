@@ -65,7 +65,7 @@ async function libraryFiles(ctx: CommandContext, ids: readonly string[]): Promis
     const f = byId.get(id);
     // Only files uploaded for posts: an accounting document of the org is never published, whatever its type.
     if (!f || f.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này', { fileId: id });
-    if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP và video MP4, MOV', { fileId: id });
+    if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP, video MP4, MOV và tệp PDF', { fileId: id });
     return {
       id: f.id,
       filename: f.filename,

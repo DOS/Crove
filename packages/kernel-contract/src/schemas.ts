@@ -1121,7 +1121,8 @@ export const zSocialChannelInput = z.strictObject({
   media: zSocialMediaInput.nullable().optional(),
 });
 
-export const zSocialMedia = z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable() });
+// filename: a PDF's name, for its document card (#1119); null for images and videos.
+export const zSocialMedia = z.object({ fileId: zId, altText: z.string().nullable(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), filename: z.string().nullable().optional() });
 
 export const zSocialPostCreate = z.strictObject({
   body: zSocialText,

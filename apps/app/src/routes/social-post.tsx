@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -1274,6 +1274,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
       // In milliseconds on the issue, in seconds for the person.
       case 'COVER_OUT_OF_RANGE':
         return t('COVER_OUT_OF_RANGE', { limit: limit / 1000, actual: actual / 1000 });
+      case 'DOCUMENT_TITLE_INVALID':
+        return t('DOCUMENT_TITLE_INVALID', { limit });
       default:
         return t(issue.code);
     }
@@ -1678,6 +1680,34 @@ function GbpField({ provider, settings, onChange, disabled }: { provider: string
   );
 }
 
+// A LinkedIn document's title (#1119), on a channel whose post holds a PDF (or still has a title set, so it can be
+// cleared). Empty, nothing is stored and the adapter sends the file's name (the placeholder).
+function DocumentTitleField({ id, settings, placeholder, disabled, onChange }: { id: string; settings: Record<string, unknown>; placeholder: string; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const own = settings.linkedin !== null && typeof settings.linkedin === 'object' && !Array.isArray(settings.linkedin) ? (settings.linkedin as Record<string, unknown>) : {};
+  const value = typeof own.documentTitle === 'string' ? own.documentTitle : '';
+  const save = (text: string) => {
+    const { linkedin: _old, ...rest } = settings;
+    const { documentTitle: _title, ...others } = own;
+    const next = text === '' ? others : { ...others, documentTitle: text };
+    onChange(Object.keys(next).length > 0 ? { ...rest, linkedin: next } : rest);
+  };
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={id} className="text-xs">
+          {t('documentTitle')}
+        </Label>
+        <span className="text-xs text-subtle-foreground tabular-nums">
+          {value.trim().normalize('NFC').length}/{DOCUMENT_TITLE_MAX}
+        </span>
+      </div>
+      <Input id={id} value={value} disabled={disabled} placeholder={placeholder} onChange={(e) => save(e.target.value)} />
+      <p className="text-xs text-subtle-foreground">{t('documentTitleHint')}</p>
+    </div>
+  );
+}
+
 function ChannelEditor({
   provider,
   channel,
@@ -1750,6 +1780,12 @@ function ChannelEditor({
     ...(linkedinVisibility ? { visibility: linkedinVisibility } : {}),
     ...(Array.isArray(telegramButtons) ? { buttons: telegramButtons } : {}),
   };
+  // The PDF the channel posts as a LinkedIn document (#1119), if any, and the title it goes out with: the one set, else
+  // the post's title, else the file's name. The preview's card shows that title.
+  const pdf = content.media.find((m) => mediaKindOf(m.mime) === 'document');
+  const setTitle = documentTitleOf(own.settings);
+  const documentTitle = pdf && isProvider(provider) && DOCUMENT_PROVIDERS.has(provider) ? (typeof setTitle === 'string' ? setTitle : content.title?.trim() || pdf.filename || null) : null;
+  const previewContent = documentTitle ? { ...content, media: content.media.map((m) => (m === pdf ? { ...m, filename: documentTitle } : m)) } : content;
   // A Discord forum post (#1103) takes the post's title as its name.
   const titled = takesTitle(provider, own.settings);
   const issues = draftIssues(provider, { body: content.body, title: titled ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
@@ -1801,6 +1837,15 @@ function ChannelEditor({
       </label>
       {own.customMedia && <MediaField media={own.media} disabled={disabled} onAiUsed={onAiUsed} connectionIds={connectionId ? [connectionId] : undefined} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
+      {isProvider(provider) && DOCUMENT_PROVIDERS.has(provider) && (pdf || own.settings.linkedin !== undefined) && (
+        <DocumentTitleField
+          id={`social-document-title-${connectionId ?? provider}`}
+          settings={own.settings}
+          placeholder={content.title?.trim() || pdf?.filename || 'Document'}
+          disabled={disabled}
+          onChange={(settings) => onChange({ ...own, settings })}
+        />
+      )}
       {isProvider(provider) && REPOST_PROVIDERS.has(provider) && postType !== 'story' && <RepostField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {/* A channel Crove cannot take a post down from shows the field only to clear a time set elsewhere (its issue says why). */}
       {((isProvider(provider) && REMOVE_READY.has(provider) && postType !== 'story') || own.settings.removeAt !== undefined) && (
@@ -1829,7 +1874,7 @@ function ChannelEditor({
         disabled={disabled}
         inboxOffered={scopes?.includes('video.upload') ?? false}
         pinAllowed={scopes?.includes(TELEGRAM_PIN_SCOPE) ?? false}
-        reel={provider === 'instagram' && isInstagramReel(content.media.map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const) })), own.settings)}
+        reel={provider === 'instagram' && isInstagramReel(content.media.map((m) => ({ kind: mediaKindOf(m.mime) })), own.settings)}
         photo={content.media.length > 0 && content.media.every((m) => m.mime.startsWith('image/'))}
         threadNameDefault={provider === 'discord' ? discordThreadName(null, content.title || null, content.body) : ''}
         onChange={(settings) => onChange({ ...own, settings })}
@@ -1837,7 +1882,7 @@ function ChannelEditor({
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       {!disabled && <BannedWordHints texts={ownTexts} words={banned} />}
-      <PlatformPreview channel={channel} provider={provider} content={content} readLink />
+      <PlatformPreview channel={channel} provider={provider} content={previewContent} readLink />
       {footer}
     </Card>
   );
@@ -1966,8 +2011,8 @@ function SharedFields({
 
 const orNull = (value: string) => (value.trim() === '' ? null : value);
 const mediaInput = (media: readonly MediaItem[]) => media.map((m) => ({ fileId: m.fileId, altText: orNull(m.altText) }));
-const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number; durationMs: number | null; width: number | null; height: number | null }[]): MediaItem[] =>
-  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs, width: m.width, height: m.height }));
+const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number; durationMs: number | null; width: number | null; height: number | null; filename?: string | null | undefined }[]): MediaItem[] =>
+  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs, width: m.width, height: m.height, filename: m.filename ?? null }));
 
 // ---------------------------------------------------------------------------------------------------------------------
 // New post

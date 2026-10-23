@@ -6,6 +6,7 @@ import { useLocale, useTranslations } from 'use-intl';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { MAX_TAGS_PER_FILE, MEDIA_TAG_MAX_LENGTH, mediaTagKey, splitMediaTags } from '@crove/mod-social/contract';
 import { Button } from '@crove/ui/components/button';
+import { DocumentIcon } from '@crove/ui/components/document-icon';
 import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
 import { client, errorMessage, fetchFile, orpc, queryClient, uploadFiles } from '../lib/api.ts';
@@ -24,6 +25,8 @@ export interface MediaItem {
   // An image's size as shown (#636): read by the server at upload, measured here until the post is saved.
   width?: number | null | undefined;
   height?: number | null | undefined;
+  // The name it was uploaded under, for a PDF's document card (#1119); unknown (null or absent) for an older post.
+  filename?: string | null | undefined;
 }
 
 export const MAX_POST_MEDIA = 20;
@@ -172,7 +175,7 @@ export function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; o
   const items = all.filter((item) => !only || only.includes(item.mime));
   const chosen = new Set(media.map((m) => m.fileId));
   const toggle = (item: LibraryItem) =>
-    onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes, durationMs: item.durationMs, width: item.width, height: item.height }]);
+    onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes, durationMs: item.durationMs, width: item.width, height: item.height, filename: item.filename }]);
   return (
     <div className="space-y-3 rounded-xl border bg-muted/40 p-3">
       <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('librarySearch')} aria-label={t('librarySearch')} className="h-8 max-w-xs text-sm" />
@@ -198,7 +201,7 @@ export function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; o
                   chosen.has(item.fileId) && 'ring-2 ring-primary',
                 )}
               >
-                <Thumb fileId={item.fileId} alt={item.filename} mime={item.mime} durationMs={item.durationMs} className="aspect-square" />
+                <Thumb fileId={item.fileId} alt={item.filename} name={item.filename} mime={item.mime} durationMs={item.durationMs} className="aspect-square" />
                 <span className="sr-only">{t(chosen.has(item.fileId) ? 'libraryChosen' : 'libraryChoose', { name: item.filename })}</span>
               </button>
             </li>
@@ -218,10 +221,10 @@ export function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; o
 export const FileSource = createContext<{ key: string; fetch: (fileId: string) => Promise<Blob> }>({ key: 'social-media', fetch: fetchFile });
 
 // A stored image, fetched once per file while it is shown (the bytes of a file id never change). Each thumbnail makes
-// its own object URL and revokes it when it goes away.
-function useImageUrl(fileId: string) {
+// its own object URL and revokes it when it goes away. enabled false: nothing is fetched (a document shows a card).
+function useImageUrl(fileId: string, enabled = true) {
   const source = useContext(FileSource);
-  const blob = useQuery({ queryKey: [source.key, fileId], queryFn: () => source.fetch(fileId), staleTime: Infinity });
+  const blob = useQuery({ queryKey: [source.key, fileId], queryFn: () => source.fetch(fileId), staleTime: Infinity, enabled });
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     if (!blob.data) return;
@@ -237,10 +240,27 @@ const clock = (ms: number) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
-// An image, or a video's first frame (or the frame at frameMs, its cover) with its length, from the stored file.
-export function Thumb({ fileId, alt, className, mime, durationMs, frameMs }: { fileId: string; alt: string; className?: string; mime?: string; durationMs?: number | null | undefined; frameMs?: number | undefined }) {
-  const url = useImageUrl(fileId);
+// A PDF (#1119), which LinkedIn posts as a document: shown as a card, never fetched to be drawn.
+export const isDocument = (mime: string | null | undefined) => mime === 'application/pdf';
+
+// A document's card: its icon, its name (or the label given) and its kind.
+function DocumentCard({ label, className }: { label: string; className?: string | undefined }) {
+  return (
+    <div role="img" aria-label={label} className={cn('flex flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border bg-muted p-2 text-center', className)}>
+      <DocumentIcon className="size-8 text-muted-foreground" />
+      <span className="line-clamp-2 w-full text-xs break-all text-foreground">{label}</span>
+      <span className="rounded bg-background/80 px-1.5 text-xs font-medium tracking-wide text-subtle-foreground uppercase">PDF</span>
+    </div>
+  );
+}
+
+// An image, or a video's first frame (or the frame at frameMs, its cover) with its length, from the stored file; a PDF
+// as a document card with its name (name, else alt).
+export function Thumb({ fileId, alt, className, mime, durationMs, frameMs, name }: { fileId: string; alt: string; className?: string; mime?: string; durationMs?: number | null | undefined; frameMs?: number | undefined; name?: string | null | undefined }) {
+  const pdf = isDocument(mime);
+  const url = useImageUrl(fileId, !pdf);
   const video = mime?.startsWith('video/') ?? false;
+  if (pdf) return <DocumentCard label={name || alt} className={className} />;
   return (
     <div className={cn('relative overflow-hidden rounded-lg border bg-muted', className)}>
       {!url.url ? (
@@ -268,7 +288,7 @@ export function MediaPreview({ media }: { media: readonly MediaItem[] }) {
     <div className={cn('mt-3 grid gap-1', shown.length === 1 ? 'grid-cols-1' : 'grid-cols-2')}>
       {shown.map((m, i) => (
         <div key={m.fileId} className="relative">
-          <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 1) })} mime={m.mime} durationMs={m.durationMs} className={shown.length === 1 ? 'aspect-[4/3]' : 'aspect-square'} />
+          <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 1) })} name={m.filename} mime={m.mime} durationMs={m.durationMs} className={shown.length === 1 ? 'aspect-[4/3]' : 'aspect-square'} />
           {i === 3 && media.length > 4 && (
             <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/70 text-lg font-semibold text-foreground">+{media.length - 4}</span>
           )}
@@ -357,7 +377,7 @@ export function MediaField({
       const chosen = files.slice(0, Math.max(0, room));
       const { files: stored } = await uploadFiles(chosen, 'social');
       const sizes = await Promise.all(chosen.map(measure));
-      return stored.map((s, i) => ({ fileId: s.fileId, altText: '', mime: chosen[i]?.type ?? '', sizeBytes: chosen[i]?.size ?? 0, ...sizes[i] }));
+      return stored.map((s, i) => ({ fileId: s.fileId, altText: '', mime: chosen[i]?.type ?? '', sizeBytes: chosen[i]?.size ?? 0, filename: chosen[i]?.name ?? null, ...sizes[i] }));
     },
     onSuccess: (added) => {
       onChange([...media, ...added.filter((a) => !media.some((m) => m.fileId === a.fileId))]);
@@ -382,16 +402,19 @@ export function MediaField({
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {media.map((m, i) => (
             <li key={m.fileId} className="space-y-1.5">
-              <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 1) })} mime={m.mime} durationMs={m.durationMs} className="aspect-square" />
-              <Input
-                value={m.altText}
-                disabled={disabled}
-                maxLength={1000}
-                aria-label={t('altText', { n: String(i + 1) })}
-                placeholder={t('altTextPlaceholder')}
-                className="h-7 text-xs"
-                onChange={(e) => onChange(media.map((x, j) => (j === i ? { ...x, altText: e.target.value } : x)))}
-              />
+              <Thumb fileId={m.fileId} alt={m.altText || t('imageAlt', { n: String(i + 1) })} name={m.filename} mime={m.mime} durationMs={m.durationMs} className="aspect-square" />
+              {/* A PDF (#1119) goes out as a LinkedIn document with its title, so it takes no alt text, crop or watermark. */}
+              {!isDocument(m.mime) && (
+                <Input
+                  value={m.altText}
+                  disabled={disabled}
+                  maxLength={1000}
+                  aria-label={t('altText', { n: String(i + 1) })}
+                  placeholder={t('altTextPlaceholder')}
+                  className="h-7 text-xs"
+                  onChange={(e) => onChange(media.map((x, j) => (j === i ? { ...x, altText: e.target.value } : x)))}
+                />
+              )}
               {canDescribe && m.mime.startsWith('image/') && !disabled && (
                 <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" title={t('altTextAiHint')} disabled={describe.isPending} onClick={() => describe.mutate(m.fileId)}>
                   {describe.isPending && describe.variables === m.fileId ? <Spinner className="text-current" /> : null}
@@ -405,12 +428,12 @@ export function MediaField({
                 <Button variant="ghost" size="sm" disabled={disabled || i === media.length - 1} aria-label={t('moveLater')} onClick={() => move(i, 1)}>
                   →
                 </Button>
-                {!m.mime.startsWith('video/') && (
+                {m.mime.startsWith('image/') && (
                   <Button variant="ghost" size="sm" disabled={disabled} aria-expanded={cropping === m.fileId} onClick={() => setCropping(cropping === m.fileId ? null : m.fileId)}>
                     {t('crop.open')}
                   </Button>
                 )}
-                {watermark.data && !m.mime.startsWith('video/') && (
+                {watermark.data && m.mime.startsWith('image/') && (
                   <Button variant="ghost" size="sm" disabled={disabled || stamp.isPending} onClick={() => stamp.mutate(m)}>
                     {stamp.isPending && stamp.variables?.fileId === m.fileId ? <Spinner className="text-current" /> : null}
                     {t('watermark.apply')}

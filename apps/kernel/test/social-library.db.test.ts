@@ -109,7 +109,7 @@ suite('social media library on PostgreSQL (S9)', () => {
     const fresh = await file(o, 'khuyen-mai.png', { contentType: 'image/png', at: '2026-10-10T08:00:00Z' });
     // An accounting document and another kind of file are not post images.
     await file(o, 'hoa-don.jpg', { source: 'upload' });
-    await file(o, 'ghi-chu.pdf', { contentType: 'application/pdf' });
+    await file(o, 'ghi-chu.xml', { contentType: 'application/xml' });
     const conn = await connection(o);
     await rt.execute('social.post.create', { body: 'Khai trương', media: [{ fileId: old }], channels: [{ connectionId: conn }] }, { actor: asUser(o.owner), orgId: o.orgId });
     const { postId: second } = await rt.execute<{ postId: string }>('social.post.create', { body: 'Tuần lễ vàng', media: [{ fileId: old }, { fileId: fresh }], channels: [{ connectionId: await connection(o) }] }, { actor: asUser(o.owner), orgId: o.orgId });
@@ -149,6 +149,17 @@ suite('social media library on PostgreSQL (S9)', () => {
     const last = first.items.at(-1) as LibraryItem;
     const next = await list(o, { limit: 4, before: { createdAt: last.createdAt, fileId: last.fileId } });
     expect([next.items.map((i) => i.filename), next.more]).toEqual([['anh-1.jpg', 'anh-0.jpg'], false]);
+  });
+
+  it('lists a PDF for a LinkedIn document with the images, but never an accounting one (#1119)', async () => {
+    const o = await org();
+    await file(o, 'anh.jpg', { at: '2026-10-01T08:00:00Z' });
+    await file(o, 'bao-gia-q4.pdf', { contentType: 'application/pdf', at: '2026-10-02T08:00:00Z' });
+    await file(o, 'hoa-don.pdf', { contentType: 'application/pdf', source: 'upload', at: '2026-10-03T08:00:00Z' });
+    expect((await list(o)).items.map((i) => [i.filename, i.mime])).toEqual([
+      ['bao-gia-q4.pdf', 'application/pdf'],
+      ['anh.jpg', 'image/jpeg'],
+    ]);
   });
 
   it('shows nothing of another org', async () => {

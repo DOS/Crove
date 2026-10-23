@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -61,6 +61,16 @@ export type IssueCode =
   | 'VIDEO_LENGTH_UNKNOWN'
   // The platform takes video, Crove's adapter for it does not yet.
   | 'VIDEO_NOT_SUPPORTED_YET'
+  // Documents (#1119): a PDF on a channel that shows none (only LinkedIn does); a document beside other files (a
+  // document is the post's only file); one over the channel's size (limit, actual: bytes).
+  | 'DOCUMENT_NOT_SUPPORTED'
+  | 'DOCUMENT_ALONE'
+  | 'DOCUMENT_TOO_LARGE'
+  // A LinkedIn document's title (#1119), settings.linkedin: set on another channel; not { documentTitle } with 1 to
+  // DOCUMENT_TITLE_MAX characters (limit, actual: characters, null when not text); a title on a post with no document.
+  | 'LINKEDIN_NOT_SUPPORTED'
+  | 'DOCUMENT_TITLE_INVALID'
+  | 'DOCUMENT_TITLE_NEEDS_DOCUMENT'
   // TikTok: the person posting picks who sees the video; there is no default. Not in inbox mode (#903), where the
   // creator picks it in TikTok.
   | 'PRIVACY_REQUIRED'
@@ -310,15 +320,20 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     issues.push({ code: 'TOO_MANY_VIDEOS', field: 'media', limit: rule.maxVideos, actual: videos });
   }
   const allowedKinds = media.every((m) => rule.kinds.includes(m.kind));
-  if (!rule.mixed && allowedKinds && videos > 0 && videos < media.length) issues.push({ code: 'MEDIA_MIX_NOT_ALLOWED', field: 'media', limit: null, actual: null });
+  // A document goes alone (#1119): said once for the post, instead of a mix of images and video.
+  const documents = media.filter((m) => m.kind === 'document').length;
+  if (documents > 0 && media.length > 1 && rule.kinds.includes('document')) issues.push({ code: 'DOCUMENT_ALONE', field: 'media', limit: 1, actual: media.length });
+  else if (!rule.mixed && allowedKinds && videos > 0 && videos < media.length) issues.push({ code: 'MEDIA_MIX_NOT_ALLOWED', field: 'media', limit: null, actual: null });
 
   media.forEach((m, i) => {
     const field = `media.${i}`;
     if (!rule.kinds.includes(m.kind)) {
-      issues.push({ code: 'MEDIA_KIND_NOT_ALLOWED', field, limit: null, actual: null });
+      issues.push({ code: m.kind === 'document' ? 'DOCUMENT_NOT_SUPPORTED' : 'MEDIA_KIND_NOT_ALLOWED', field, limit: null, actual: null });
       return;
     }
-    if (m.kind === 'image') {
+    if (m.kind === 'document') {
+      if (rule.maxDocumentBytes !== undefined && m.sizeBytes > rule.maxDocumentBytes) issues.push({ code: 'DOCUMENT_TOO_LARGE', field, limit: rule.maxDocumentBytes, actual: m.sizeBytes });
+    } else if (m.kind === 'image') {
       if (VIDEO_ONLY_ADAPTERS.has(variant.provider)) issues.push({ code: 'IMAGES_NOT_SUPPORTED_YET', field, limit: null, actual: null });
       if (rule.imageTypes.length > 0 && !rule.imageTypes.includes(m.mime.toLowerCase())) {
         issues.push({ code: 'IMAGE_TYPE_NOT_ALLOWED', field, limit: null, actual: null });
@@ -413,6 +428,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   if (linkedinValues && variant.settings?.visibility !== undefined && !(linkedinValues as readonly unknown[]).includes(variant.settings.visibility)) {
     issues.push({ code: 'VISIBILITY_INVALID', field: 'settings.visibility', limit: null, actual: null });
   }
+  checkDocumentTitle(issues, variant);
   if (variant.provider === 'instagram') checkInstagramPeople(issues, variant);
   // Instagram Reels (#1019): in the feed too unless chosen.
   const reelOptions = instagramReelOf(variant.settings);
@@ -459,6 +475,18 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     if (links > caps.maxLinks) issues.push({ code: 'TOO_MANY_LINKS', field: 'body', limit: caps.maxLinks, actual: links });
   }
   return issues;
+}
+
+// A LinkedIn document's title (#1119). Absent, the adapter sends the post's title or the file's name.
+function checkDocumentTitle(issues: Issue[], variant: VariantDraft): void {
+  const title = documentTitleOf(variant.settings);
+  if (title === null) return;
+  if (!DOCUMENT_PROVIDERS.has(variant.provider)) return void issues.push({ code: 'LINKEDIN_NOT_SUPPORTED', field: 'settings.linkedin', limit: null, actual: null });
+  if (title === 'invalid') {
+    const raw = (variant.settings?.linkedin as { documentTitle?: unknown } | undefined)?.documentTitle;
+    return void issues.push({ code: 'DOCUMENT_TITLE_INVALID', field: 'settings.linkedin.documentTitle', limit: DOCUMENT_TITLE_MAX, actual: typeof raw === 'string' ? raw.trim().normalize('NFC').length : null });
+  }
+  if (!variant.media.some((m) => m.kind === 'document')) issues.push({ code: 'DOCUMENT_TITLE_NEEDS_DOCUMENT', field: 'settings.linkedin.documentTitle', limit: null, actual: null });
 }
 
 const DISCORD_FORUM_TITLE: TextRule = { max: null, count: 'utf16', required: false };
