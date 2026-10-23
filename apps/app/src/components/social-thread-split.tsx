@@ -3,7 +3,7 @@
 // thread parts (#742), as an unsaved edit saved like any other, after a preview of each post with its count. The split
 // is the module's splitThread, with the channel's own count and room for the signature and link of the first post.
 // *Gộp lại* reverses it: back to the text as it was when nothing was changed since, else the parts joined again.
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Checkbox } from '@crove/ui/components/checkbox';
@@ -67,6 +67,12 @@ export function ThreadSplitField({
   const t = useTranslations('social.threadSplit');
   const [numbered, setNumbered] = useState(false);
   const [snapshot, setSnapshot] = useState<SplitSnapshot | null>(null);
+  const source = value.custom ? value.body : baseBody;
+  // Cut only while the text is too long and nothing is split yet; the count of every cut point is not cheap.
+  const split = useMemo(
+    () => (tooLong && threadPartsOf(value.settings) === null && isProvider(provider) && THREAD_SPLIT_PROVIDERS.has(provider) ? splitThread(provider, source, { settings, linkUrl, mediaCount, numbered }) : null),
+    [tooLong, value.settings, provider, source, settings, linkUrl, mediaCount, numbered],
+  );
   if (disabled || !isProvider(provider) || !THREAD_SPLIT_PROVIDERS.has(provider)) return null;
   const hasParts = threadPartsOf(value.settings) !== null;
   if (hasParts) {
@@ -81,7 +87,6 @@ export function ThreadSplitField({
     );
   }
   if (!tooLong) return null;
-  const split = splitThread(provider, value.custom ? value.body : baseBody, { settings, linkUrl, mediaCount, numbered });
   if (!split || split.posts.length < 2) return null;
   const maxPosts = 1 + THREAD_PARTS_MAX;
   return (
