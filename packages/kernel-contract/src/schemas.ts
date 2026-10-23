@@ -1161,12 +1161,33 @@ export const zSocialVariantUpdate = z.strictObject({
   media: zSocialMediaInput.nullable().optional(),
 });
 
+// The org's review checklist (#1105): at most 10 items in all, org-wide (connectionId null) or for one channel.
+export const SOCIAL_REVIEW_CHECKS_MAX = 10;
+export const SOCIAL_REVIEW_CHECK_LABEL_MAX = 120;
+export const zSocialReviewCheck = z.object({ id: zId, connectionId: zId.nullable(), position: z.number().int(), label: z.string() });
+// Replaces the whole list; the items' order is the order reviewers see them in. An empty list removes the checklist.
+export const zSocialReviewChecklistSet = z.strictObject({
+  items: z
+    .array(z.strictObject({ connectionId: zId.nullable(), label: z.string().trim().min(1).max(SOCIAL_REVIEW_CHECK_LABEL_MAX) }))
+    .max(SOCIAL_REVIEW_CHECKS_MAX),
+});
+// An item an approval was given with, as the database copied it then.
+export const zSocialTickedCheck = z.object({ id: zId, label: z.string() });
+
 export const zSocialDecide = z.strictObject({
   postId: zId,
   decision: z.enum(SOCIAL_DECISIONS),
   comment: z.string().trim().max(2000).optional(),
   variants: z
-    .array(z.strictObject({ variantId: zId, revision: z.number().int().positive(), contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/) }))
+    .array(
+      z.strictObject({
+        variantId: zId,
+        revision: z.number().int().positive(),
+        contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+        // The checklist items the reviewer ticked (#1105), by id; an approval needs every item of the channel's list.
+        checks: z.array(zId).max(SOCIAL_REVIEW_CHECKS_MAX).optional(),
+      }),
+    )
     .min(1)
     .max(20),
 });
@@ -1290,6 +1311,8 @@ export const zSocialVariant = z.object({
   latestDecision: z
     .object({ decision: z.enum(SOCIAL_DECISIONS), comment: z.string().nullable(), decidedBy: zId, at: z.string(), revision: z.number().int(), current: z.boolean() })
     .nullable(),
+  // The review checklist of its channel (#1105): the org-wide items and the channel's, in order; empty without one.
+  checklist: z.array(zSocialReviewCheck),
   // Approvals the channel needs (S9) and who approved the current content in the open review round.
   // client: the channel also waits for the client's approval on a review link (#770); clientVerdict: the client's
   // standing answer for the content as it is now.
@@ -1380,7 +1403,15 @@ export const zSocialPostVersions = z.object({
       createdAt: z.string(),
       createdBy: zId.nullable(),
       createdByName: z.string().nullable(),
-      variants: z.array(z.object({ variantId: zId, content: zSocialReviewContent })),
+      // approvals: the approvals given to this content of the channel, oldest first, with the checklist items each
+      // reviewer ticked (#1105); checklist null for an approval without a checklist.
+      variants: z.array(
+        z.object({
+          variantId: zId,
+          content: zSocialReviewContent,
+          approvals: z.array(z.object({ decidedBy: zId, decidedByName: z.string().nullable(), at: z.string(), checklist: z.array(zSocialTickedCheck).nullable() })),
+        }),
+      ),
     }),
   ),
 });
@@ -1588,6 +1619,8 @@ export const zSocialActivityItem = z.object({
   editable: z.boolean(),
   url: z.string().nullable(),
   code: z.string().nullable(),
+  // On an approval: the checklist items the reviewer ticked (#1105); null otherwise or without a checklist.
+  checklist: z.array(zSocialTickedCheck).nullable(),
 });
 
 export const zSocialLibraryUse = z.object({ postId: zId, status: z.string(), excerpt: z.string(), updatedAt: z.string() });

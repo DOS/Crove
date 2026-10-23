@@ -45,6 +45,25 @@ function canonical(value: unknown): string {
 // Whether two snapshots hold the same content: a save that leaves it as it was makes no version.
 export const sameSnapshot = (a: VersionSnapshot, b: VersionSnapshot): boolean => canonical(a) === canonical(b);
 
+// A channel's content as one string, to find the approvals given to a version's content (#1105): equal content, equal
+// key, whatever the key order of its settings.
+export const contentKey = (c: VersionContent): string =>
+  canonical({ body: c.body, title: c.title, linkUrl: c.linkUrl, media: c.media.map((m) => [m.fileId, m.altText]), settings: c.settings });
+
+// The content an approval's snapshot holds (social.variant.decide writes it), as contentKey reads it. Read defensively:
+// a field it lacks reads as empty.
+export function snapshotContentKey(raw: unknown): string {
+  const s = isRecord(raw) ? raw : {};
+  const media = Array.isArray(s.media) ? s.media.filter(isRecord).filter((m) => typeof m.file_id === 'string') : [];
+  return contentKey({
+    body: typeof s.body === 'string' ? s.body : '',
+    title: textOrNull(s.title),
+    linkUrl: textOrNull(s.link_url),
+    media: media.map((m) => ({ fileId: m.file_id as string, altText: textOrNull(m.alt_text) })),
+    settings: isRecord(s.settings) ? s.settings : {},
+  });
+}
+
 // A media list as a version stores it. Read defensively: an entry without a file id is dropped.
 export function versionMedia(raw: unknown): VersionMedia[] {
   if (!Array.isArray(raw)) return [];

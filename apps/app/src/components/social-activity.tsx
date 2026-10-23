@@ -9,6 +9,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, mentionsForEditing, mentionsForStoring } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { CommentBody, MentionBox, useMemberNames, type Picked } from './social-mentions.tsx';
+import { TickedChecks } from './social-review-checklist.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -53,6 +54,8 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
         {item.editedAt ? ` · ${t('edited')}` : ''}
       </p>
       {(item.kind === 'failed' || item.kind === 'auto_reply_failed' || item.kind === 'repost_failed') && item.code && <p className="font-mono text-xs text-warning">{item.code}</p>}
+      {/* The review checklist items the reviewer ticked when approving (#1105). */}
+      {item.kind === 'decision' && <TickedChecks items={item.checklist} />}
       {item.kind === 'published' && item.url && /^https?:\/\//.test(item.url) && (
         <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-xs text-link hover:underline">
           {t('open')}

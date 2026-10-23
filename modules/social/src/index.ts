@@ -12,6 +12,7 @@ export * from './domain/versions.ts';
 export * from './versions.ts';
 export * from './domain/banned-words.ts';
 export * from './banned-words.ts';
+export * from './review-checklist.ts';
 export * from './metrics.ts';
 export * from './domain/story-metrics.ts';
 export * from './external-posts.ts';

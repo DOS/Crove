@@ -11,7 +11,7 @@
 // - Scheduling needs the variant's latest decision to be an approval of its current revision and hash.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
+import { SOCIAL_IMAGE_TYPES, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
@@ -74,6 +74,7 @@ import { versionQueries, withVersion } from './versions.ts';
 import { bannedChecker, bannedCheckerOf, bannedCommandBudget, bannedForView, bannedWordsOf, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords, type BannedWordsStatus } from './banned-words.ts';
 import type { BannedFieldMatch } from './domain/banned-words.ts';
 import { teamReportQueries } from './team-report.ts';
+import { checklistFor, checklistForApproval, reviewChecklistCommands, reviewChecklistQueries, reviewChecksOf, tickedChecklist, type ReviewCheck } from './review-checklist.ts';
 import { channelAccessCommands, channelAccessQueries, channelNotAllowed, channelScope, connectionInScope, inScope, mayUse, postInScope, refuseChannels, refuseOutside, refusePostOutside } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -671,7 +672,15 @@ export const variantDecide = defineCommand({
     decision: z.enum(['approved', 'changes_requested', 'rejected']),
     comment: z.string().trim().max(2000).optional(),
     variants: z
-      .array(z.strictObject({ variantId: zId, revision: z.number().int().positive(), contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/) }))
+      .array(
+        z.strictObject({
+          variantId: zId,
+          revision: z.number().int().positive(),
+          contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+          // The review checklist items the reviewer ticked (#1105); only an approval reads them.
+          checks: z.array(zId).max(SOCIAL_REVIEW_CHECKS_MAX).optional(),
+        }),
+      )
       .min(1)
       .max(MAX_CHANNELS_PER_POST),
   }),
@@ -711,6 +720,9 @@ export const variantDecide = defineCommand({
     // "Approved" on a review link, unless it was given for this content already.
     const clientOn = input.decision === 'approved' ? await clientApprovalOn(ctx.trx, ctx.orgId, chosen.map((v) => v.channel_connection_id)) : new Set<string>();
     const client = clientOn.size > 0 ? await clientVerdict(ctx.trx, ctx.orgId, post.id) : null;
+    // The review checklist (#1105): an approval needs every item of the channel's list ticked, read now, in this
+    // transaction; the items it keeps are copied from that list.
+    const checks: readonly ReviewCheck[] = input.decision === 'approved' ? await checklistForApproval(ctx) : [];
     const waiting: string[] = [];
     const rescheduled: string[] = [];
     for (const v of chosen) {
@@ -728,6 +740,7 @@ export const variantDecide = defineCommand({
           waiting.push(v.id);
         }
       }
+      const checklist = input.decision === 'approved' ? tickedChecklist(checks, v, saw.checks) : null;
       const content = effectiveContent(base(post), overrides(v), v.content_frozen);
       await ctx.trx
         .insertInto('crove_social.post_approval')
@@ -750,6 +763,7 @@ export const variantDecide = defineCommand({
             media: mediaFor(base(post), v).map((m) => ({ file_id: m.fileId, generation: m.generation, alt_text: m.altText })),
             settings: settingsOf(v),
           }),
+          checklist: checklist === null ? null : JSON.stringify(checklist),
         })
         .execute();
       // The approval that completes the count may put a variant a raised policy took out of the schedule back on it;
@@ -1136,6 +1150,8 @@ export interface VariantView {
   // the text or the word list was too large to check within the budget, and the list is empty.
   bannedWordsStatus: BannedWordsStatus;
   latestDecision: { decision: SocialDecision; comment: string | null; decidedBy: string; at: string; revision: number; current: boolean } | null;
+  // The review checklist of its channel (#1105): the org-wide items and the channel's, in order; empty without one.
+  checklist: ReviewCheck[];
   // The approvals its channel needs (S9) and who approved its current content in the open review round.
   // client: the channel also waits for the client's approval (#770); clientVerdict: the client's standing answer.
   review: { required: number; approvedBy: string[]; fourEyes: boolean; client: boolean; clientVerdict: 'approved' | 'changes_requested' | null };
@@ -1279,6 +1295,8 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
     mediaByPost.set(r.post_id, list);
   }
   const labels = await labelsOfPosts(ctx.trx, ctx.orgId, postIds);
+  // The review checklist (#1105), read once for every variant of the view.
+  const checks = variants.length > 0 ? await reviewChecksOf(ctx.trx, ctx.orgId) : [];
   // Lists and the other reads leave the words out ('not_checked'); one budget covers every variant of the view.
   const banned = options.bannedWords ? await bannedCheckerOf(ctx.trx, ctx.orgId) : null;
   const byPost = new Map(posts.map((p) => [p.id, p]));
@@ -1350,6 +1368,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
               latestDecision: d
                 ? { decision: d.decision, comment: d.comment, decidedBy: d.decided_by, at: iso(d.created_at) ?? '', revision: d.revision, current: d.revision === v.revision && d.content_hash === v.content_hash }
                 : null,
+              checklist: checklistFor(checks, v.channel_connection_id),
               review: {
                 required: required.get(v.channel_connection_id) ?? 1,
                 // The author may not approve on this channel (#740).
@@ -1729,6 +1748,7 @@ export const socialCommands = [
   ...notificationCommands,
   ...reminderCommands,
   ...channelAccessCommands,
+  ...reviewChecklistCommands,
   ...queueLowCommands,
   ...digestCommands,
 ];
@@ -1773,4 +1793,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries];
