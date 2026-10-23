@@ -1198,6 +1198,9 @@ export const zSocialSchedule = z.strictObject({
   variantIds: z.array(zId).min(1).max(20).optional(),
   at: zInstant.optional(),
   queue: z.literal(true).optional(),
+  // Exactly this open slot of the queue (#1158), with queue and one variant: refused as SLOT_NOT_IN_QUEUE, SLOT_TAKEN
+  // or SLOT_KEPT_FOR_LABEL when it is not one the variant may take.
+  slotAt: zInstant.optional(),
   // A time per channel (#576), instead of variantIds and at.
   times: z
     .array(z.strictObject({ variantId: zId, at: zInstant }))
@@ -1779,6 +1782,20 @@ export const zSocialQueue = z.object({
   // The low-queue warning (#1079): its number of days, and whether the queue is low by it now.
   lowDays: z.number().int().nullable(),
   low: z.boolean(),
+});
+
+// The open slots of a channel's queue in a range of at most 31 days (#1158), each with the label it is kept for (#745);
+// capped: more than 500, the first 500 shown.
+export const zSocialQueueOpenSlotsInput = z
+  .strictObject({ connectionId: zId, from: zInstant, to: zInstant })
+  .refine((x) => Date.parse(x.from) < Date.parse(x.to), 'the range ends after it starts')
+  .refine((x) => Date.parse(x.to) - Date.parse(x.from) <= 31 * 86_400_000, 'at most 31 days');
+export const zSocialQueueOpenSlots = z.object({
+  connectionId: zId,
+  timeZone: z.string().nullable(),
+  paused: z.boolean(),
+  slots: z.array(z.object({ at: z.string(), labelId: zId.nullable(), label: z.string().nullable() })),
+  capped: z.boolean(),
 });
 
 // A client report link of a period (#643); its token is in the create answer only.

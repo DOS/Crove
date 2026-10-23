@@ -49,6 +49,7 @@ function seeded() {
     socialPost: orpc.social.posts.get.queryKey({ input: { postId: SOCIAL } }),
     socialOther: orpc.social.posts.get.queryKey({ input: { postId: '0190a000-0000-7000-8000-0000000000c2' } }),
     socialQueue: orpc.social.queues.get.queryKey({ input: { connectionId: '0190a000-0000-7000-8000-0000000000c3' } }),
+    socialSlots: orpc.social.queues.openSlots.queryKey({ input: { connectionId: '0190a000-0000-7000-8000-0000000000c3', from: '2026-10-23T00:00:00.000Z', to: '2026-10-30T00:00:00.000Z' } }),
     socialNotifications: orpc.social.notifications.list.queryKey({ input: {} }),
   };
   // Partial records: invalidateHint reads only the ids, so the seeds skip the rest of each response's shape.
@@ -94,7 +95,7 @@ describe('invalidateHint', () => {
   it('social_post: the calendar, that post and the queues', async () => {
     const { qc, stale } = seeded();
     await invalidateHint(qc, { type: 'social_post', id: SOCIAL });
-    expect(stale()).toEqual(['socialList', 'socialPost', 'socialQueue']);
+    expect(stale()).toEqual(['socialList', 'socialPost', 'socialQueue', 'socialSlots']);
   });
 
   it('social_notification: only the notification list (#637)', async () => {

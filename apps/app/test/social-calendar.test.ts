@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { calendarItems, dayId, DROP_HOURS, followsPlan, localMoment, notesByDay, onDay, planDrop, plannedAt, startOfWeek, viewDays, type CalendarItem } from '../src/lib/social-calendar.ts';
+import { calendarItems, DAY_MS, dayId, DROP_HOURS, followsPlan, localMoment, notesByDay, onDay, planDrop, plannedAt, SLOT_RANGE_DAYS, slotDrop, slotRange, slotsByDay, slotVariant, startOfWeek, viewDays, type CalendarItem } from '../src/lib/social-calendar.ts';
 
 type Post = Parameters<typeof calendarItems>[0][number];
 
@@ -84,5 +84,73 @@ it('puts a note on every day it covers, both ends included (#794)', () => {
     const byDay = notesByDay([{ id: 'sale', startsOn: '2026-10-20', endsOn: '2026-10-22' }, { id: 'later', startsOn: '2026-11-01', endsOn: '2026-11-01' }], days);
     expect([...byDay.keys()]).toEqual(['2026-10-20', '2026-10-21', '2026-10-22']);
     expect(byDay.get('2026-10-21')?.map((n) => n.id)).toEqual(['sale']);
+  });
+});
+describe('open queue slots on the Social calendar (#1158)', () => {
+  const ch = (id: string, status: string, connectionId: string, extra: Record<string, unknown> = {}) => ({ id, status, connectionId, effectiveAt: null, queueSlotAt: null, queuePaused: false, ...extra }) as unknown as Post['variants'][number];
+  const full = (variants: Post['variants'], extra: Record<string, unknown> = {}) => ({ id: 'p', revision: 4, scheduledAt: null, labelIds: [], variants, ...extra }) as unknown as Post;
+  const slot = (at: Date, labelId: string | null = null) => ({ at: at.toISOString(), labelId, label: labelId ? 'Khuyến mãi' : null });
+  const now = new Date(2026, 9, 21, 14, 10);
+  const owner = { canDecide: true, canWrite: true };
+  const member = { canDecide: false, canWrite: true };
+
+  it('draws only the filtered channel of a post (#1044)', () => {
+    const posts = [full([ch('a', 'scheduled', 'A', { effectiveAt: '2026-10-22T02:00:00.000Z' }), ch('b', 'scheduled', 'B', { effectiveAt: '2026-10-22T02:00:00.000Z' })])];
+    expect(calendarItems(posts).map((i) => i.v.id)).toEqual(['a', 'b']);
+    expect(calendarItems(posts, 'B').map((i) => i.v.id)).toEqual(['b']);
+  });
+
+  it('asks for what the view shows from now on, at most 31 days', () => {
+    const iso = (d: Date) => d.toISOString();
+    // This month: from now to the end of the six weeks shown, cut at 31 days.
+    expect(slotRange('month', viewDays('month', now), now, now)).toEqual({ from: iso(now), to: iso(new Date(2026, 10, 9)) });
+    const early = new Date(2026, 9, 1, 0, 30);
+    expect(slotRange('month', viewDays('month', early), early, early)).toEqual({ from: iso(early), to: iso(new Date(early.getTime() + SLOT_RANGE_DAYS * DAY_MS)) });
+    // A later month: from its 1st, so all its days fit.
+    const december = new Date(2026, 11, 1);
+    const range = slotRange('month', viewDays('month', december), december, now);
+    expect(range?.from).toBe(iso(december));
+    expect(Date.parse(range?.to as string)).toBeGreaterThanOrEqual(new Date(2027, 0, 1).getTime());
+    // A week: its seven days, from now when it is this week; a past week asks nothing.
+    const week = viewDays('week', now);
+    expect(slotRange('week', week, now, now)).toEqual({ from: iso(now), to: iso(new Date(2026, 9, 26)) });
+    expect(slotRange('week', viewDays('week', new Date(2026, 9, 7)), new Date(2026, 9, 7), now)).toBeNull();
+    const byDay = slotsByDay([slot(new Date(2026, 9, 22, 9)), slot(new Date(2026, 9, 22, 20)), slot(new Date(2026, 9, 24, 9))]);
+    expect([...byDay.keys()]).toEqual(['2026-10-22', '2026-10-24']);
+    expect(byDay.get('2026-10-22')).toHaveLength(2);
+  });
+
+  it('schedules an approved or scheduled channel of the queue into the slot, for owners and admins', () => {
+    const at = new Date(2026, 9, 22, 19);
+    const approved = full([ch('v', 'approved', 'A'), ch('w', 'draft', 'B')]);
+    // An undated draft with an approved channel there: that channel goes into the slot.
+    expect(slotDrop({ post: approved, item: null }, slot(at), 'A', owner, now)).toEqual({ kind: 'schedule', postId: 'p', variantId: 'v', slotAt: at.toISOString() });
+    // A scheduled chip moves there; one already in that slot, or held by a paused queue, does not.
+    const [scheduled] = calendarItems([full([ch('s', 'scheduled', 'A', { effectiveAt: '2026-10-23T02:00:00.000Z', queueSlotAt: '2026-10-23T02:00:00.000Z' })])]);
+    const target = { post: (scheduled as CalendarItem).post, item: scheduled as CalendarItem };
+    expect(slotDrop(target, slot(at), 'A', owner, now)).toMatchObject({ kind: 'schedule', variantId: 's' });
+    expect(slotDrop(target, slot(new Date('2026-10-23T02:00:00.000Z')), 'A', owner, now)).toBeNull();
+    const [held] = calendarItems([full([ch('h', 'scheduled', 'A', { effectiveAt: '2026-10-23T02:00:00.000Z', queuePaused: true })])]);
+    expect(slotVariant({ post: (held as CalendarItem).post, item: held as CalendarItem }, 'A')).toBeNull();
+    // A slot kept for a label the post lacks, or a time gone, is refused with nothing sent.
+    expect(slotDrop({ post: approved, item: null }, slot(at, 'promo'), 'A', owner, now)).toBe('label');
+    expect(slotDrop({ post: full([ch('v', 'approved', 'A')], { labelIds: ['promo'] }), item: null }, slot(at, 'promo'), 'A', owner, now)).toMatchObject({ kind: 'schedule' });
+    expect(slotDrop({ post: approved, item: null }, slot(new Date(2026, 9, 21, 9)), 'A', owner, now)).toBe('past');
+  });
+
+  it('plans a draft at the slot’s time otherwise, as a drop on a day does (#1145)', () => {
+    const at = new Date(2026, 9, 22, 19);
+    const draft = full([ch('d', 'draft', 'A')]);
+    const plan = { kind: 'plan', request: { postId: 'p', revision: 4, scheduledAt: at.toISOString() } };
+    expect(slotDrop({ post: draft, item: null }, slot(at), 'A', member, now)).toEqual(plan);
+    expect(slotDrop({ post: draft, item: null }, slot(at), 'A', owner, now)).toEqual(plan);
+    // A member does not schedule an approved channel; the draft's planned time takes the slot instead.
+    expect(slotDrop({ post: full([ch('v', 'approved', 'A')]), item: null }, slot(at), 'A', member, now)).toEqual(plan);
+    // A planned draft at its post's time moves there; a viewer, or a draft with a time of its own, does nothing.
+    const [planned] = calendarItems([full([ch('d', 'draft', 'A', { effectiveAt: '2026-10-25T02:00:00.000Z' })], { scheduledAt: '2026-10-25T02:00:00.000Z' })]);
+    expect(slotDrop({ post: (planned as CalendarItem).post, item: planned as CalendarItem }, slot(at), 'A', member, now)).toEqual(plan);
+    expect(slotDrop({ post: draft, item: null }, slot(at), 'A', { canDecide: false, canWrite: false }, now)).toBeNull();
+    const [own] = calendarItems([full([ch('r', 'in_review', 'A', { effectiveAt: '2026-10-26T02:00:00.000Z' })], { scheduledAt: '2026-10-25T02:00:00.000Z' })]);
+    expect(slotDrop({ post: (own as CalendarItem).post, item: own as CalendarItem }, slot(at), 'A', member, now)).toBeNull();
   });
 });

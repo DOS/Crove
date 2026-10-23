@@ -60,8 +60,8 @@ export function hintMatches(hint: StreamHint, query: Query): boolean {
       return path === 'inbox.get' && (result?.documentId === id || result?.voidedDocumentId === id);
     }
     case 'social_post': {
-      // The calendar, that post, and the queues whose free slots a schedule change moves.
-      if (path === 'social.posts.list' || path === 'social.queues.get') return true;
+      // The calendar, that post, and the queues whose free slots a schedule change moves (and the calendar's open slots, #1158).
+      if (path === 'social.posts.list' || path === 'social.queues.get' || path === 'social.queues.openSlots') return true;
       const options = query.queryKey[1] as { input?: { postId?: unknown } } | undefined;
       return path === 'social.posts.get' && options?.input?.postId === id;
     }

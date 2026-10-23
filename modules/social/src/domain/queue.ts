@@ -183,6 +183,30 @@ export function slotLabel(queue: QueueSpec, epochMs: number): string | null | un
   return e ? e.labelId : undefined;
 }
 
+// The open slots of a queue in (fromMs, toMs] (#1158): its slot instants no post holds, each with the label it is kept
+// for, in time order, at most `limit` of them.
+export function openSlots(queue: QueueSpec, fromMs: number, toMs: number, taken: ReadonlySet<number>, limit: number): { at: number; labelId: string | null }[] {
+  const out: { at: number; labelId: string | null }[] = [];
+  for (const e of slotEntriesBetween(queue, fromMs, toMs)) {
+    if (out.length >= limit) break;
+    if (!taken.has(e.at)) out.push(e);
+  }
+  return out;
+}
+
+// Why a post with these labels may not take one exact slot of the queue (#1158), the calendar's drop on an open slot;
+// null when it may. The slot must be one of the queue's instants after now within the horizon nextFreeSlot looks at,
+// held by no other post, and open or kept for one of the post's labels (#745).
+export type SlotRefusal = 'not_in_queue' | 'past' | 'taken' | 'label';
+export function slotRefusal(queue: QueueSpec, atMs: number, nowMs: number, taken: ReadonlySet<number>, labels: ReadonlySet<string>, horizonDays = 366): SlotRefusal | null {
+  const label = slotLabel(queue, atMs);
+  if (label === undefined || atMs > nowMs + horizonDays * DAY) return 'not_in_queue';
+  if (atMs <= nowMs) return 'past';
+  if (taken.has(atMs)) return 'taken';
+  if (!fits(label, labels)) return 'label';
+  return null;
+}
+
 export interface QueuedPost {
   id: string;
   slotAt: number | null;
