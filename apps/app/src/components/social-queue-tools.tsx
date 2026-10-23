@@ -56,6 +56,8 @@ export interface CopyRow {
   error: string | null;
   slots: number | null;
   replaced: number | null;
+  // Queued posts that would find no free slot and leave the queue.
+  unqueued?: number;
   // The post list came back full: the count is at least this many.
   partial: boolean;
 }
@@ -71,7 +73,7 @@ export function QueueCopyConfirm({ source, zone, slots, rows, pending, onConfirm
         {rows.map((r) => (
           <li key={r.connectionId}>
             <span className="font-medium text-foreground">{r.name}</span>:{' '}
-            {r.loading ? t('copyLoading') : r.error !== null ? <span className="text-destructive">{r.error}</span> : `${t('copyTargetSlots', { slots: r.slots ?? 0 })}; ${r.partial ? t('copyTargetReplacedAtLeast', { count: r.replaced ?? 0 }) : t('copyTargetReplaced', { count: r.replaced ?? 0 })}.`}
+            {r.loading ? t('copyLoading') : r.error !== null ? <span className="text-destructive">{r.error}</span> : `${t('copyTargetSlots', { slots: r.slots ?? 0 })}; ${r.partial ? t('copyTargetReplacedAtLeast', { count: r.replaced ?? 0 }) : t('copyTargetReplaced', { count: r.replaced ?? 0 })}${(r.unqueued ?? 0) > 0 ? `; ${t('copyTargetUnqueued', { count: r.unqueued ?? 0 })}` : ''}.`}
           </li>
         ))}
       </ul>
@@ -142,13 +144,15 @@ export function QueueCopy({ source, saved, targets, unsaved, canEdit }: { source
     const l = lists[i];
     const error = q?.error ?? l?.error ?? null;
     const before = q?.data ? (q.data.queueId && q.data.timeZone ? { timeZone: q.data.timeZone, slots: q.data.slots.filter((s) => s.active).map((s) => ({ weekday: s.weekday, minute: s.minute, labelId: s.labelId })) } : null) : undefined;
+    const counts = before !== undefined && l?.data && next && reviewAt !== null ? replacedCount(l.data, connectionId, before, next, reviewAt) : null;
     return {
       connectionId,
       name: names.get(connectionId) ?? connectionId,
       loading: !error && (!q?.data || !l?.data),
       error: error ? errorMessage(error) : null,
       slots: q?.data ? q.data.slots.length : null,
-      replaced: before !== undefined && l?.data && next && reviewAt !== null ? replacedCount(l.data, connectionId, before, next, reviewAt) : null,
+      replaced: counts?.moved ?? null,
+      unqueued: counts?.unqueued ?? 0,
       partial: (l?.data?.length ?? 0) >= COPY_POSTS_LIMIT,
     };
   });

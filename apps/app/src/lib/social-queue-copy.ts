@@ -29,10 +29,11 @@ interface ListedPost {
   variants: readonly { id: string; connectionId: string; status: string; queueSlotAt: string | null }[];
 }
 
-// How many of the target's queued posts the new queue places again: those `social.queue.set` would move, as it moves
-// them. before: the target's queue now (null without one, which no post can be queued on).
-export function replacedCount(posts: readonly ListedPost[], connectionId: string, before: QueueSpec | null, next: QueueSpec, nowMs: number): number {
-  if (!before) return 0;
+// How many of the target's queued posts the new queue places again, and how many find no slot and leave the queue:
+// those `social.queue.set` would move, as it moves them (its answer counts them the same two ways). before: the
+// target's queue now (null without one, which no post can be queued on).
+export function replacedCount(posts: readonly ListedPost[], connectionId: string, before: QueueSpec | null, next: QueueSpec, nowMs: number): { moved: number; unqueued: number } {
+  if (!before) return { moved: 0, unqueued: 0 };
   const holders = new Map<string, { id: string; at: number; status: string; labelIds: readonly string[] }>();
   for (const p of posts) {
     for (const v of p.variants) {
@@ -43,7 +44,7 @@ export function replacedCount(posts: readonly ListedPost[], connectionId: string
   }
   // In-flight variants and ones already due keep their slot, and nobody else takes it.
   const movable = [...holders.values()].filter((h) => MOVABLE.has(h.status) && h.at > nowMs);
-  const reserved = new Set([...holders.values()].filter((h) => !movable.includes(h)).map((h) => h.at));
+  const reserved = new Set([...holders.values()].filter((h) => !MOVABLE.has(h.status) || h.at <= nowMs).map((h) => h.at));
   const zoneChanged = before.timeZone !== next.timeZone;
   const placed = placeQueued(
     next,
@@ -52,7 +53,9 @@ export function replacedCount(posts: readonly ListedPost[], connectionId: string
     reserved,
   );
   const was = new Map(movable.map((h) => [h.id, h.at]));
-  return placed.filter((p) => p.slotAt !== was.get(p.id)).length;
+  const changed = placed.filter((p) => p.slotAt !== was.get(p.id));
+  const unqueued = changed.filter((p) => p.slotAt === null).length;
+  return { moved: changed.length - unqueued, unqueued };
 }
 
 export type CopyResult = { connectionId: string; ok: true; moved: number; unqueued: number } | { connectionId: string; ok: false; message: string };

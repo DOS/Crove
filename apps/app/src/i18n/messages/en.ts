@@ -3061,6 +3061,7 @@ export const en = {
       copyConfirmTitle: "Replace the slots of {count, plural, one {# channel} other {# channels}} with {channel}'s {slots, plural, one {# slot} other {# slots}} ({zone}):",
       copyTargetSlots: '{slots, plural, =0 {no slots yet} one {# slot now} other {# slots now}}',
       copyTargetReplaced: '{count, plural, =0 {no queued post moves} one {# queued post will be placed again} other {# queued posts will be placed again}}',
+      copyTargetUnqueued: '{count, plural, one {# post will find no free slot and leave the queue} other {# posts will find no free slot and leave the queue}}',
       copyTargetReplacedAtLeast: 'at least {count, plural, one {# queued post} other {# queued posts}} will be placed again',
       copyLoading: 'reading the queue…',
       copyConfirmHint: "A queued post keeps its time when that slot is in the new queue (after a time zone change it keeps the same clock time in the new zone, which counts as placed again); the others move to the earliest free slots. Each channel's pause and low-queue warning stay as they are.",

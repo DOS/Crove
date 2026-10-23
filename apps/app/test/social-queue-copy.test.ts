@@ -38,9 +38,9 @@ describe('queued posts a copy places again', () => {
 
   it('counts the posts whose slot the new queue lacks', () => {
     const posts = [{ variants: [v('v1', MON_9), v('v2', WED_20)] }];
-    expect(replacedCount(posts, 'c1', before, spec(HCM, [{ weekday: 1, minute: 540 }]), NOW)).toBe(1);
-    expect(replacedCount(posts, 'c1', before, spec(HCM, [{ weekday: 1, minute: 540 }, { weekday: 3, minute: 1200 }, { weekday: 5, minute: 480 }]), NOW)).toBe(0);
-    expect(replacedCount(posts, 'c1', before, spec(HCM, [{ weekday: 2, minute: 480 }]), NOW)).toBe(2);
+    expect(replacedCount(posts, 'c1', before, spec(HCM, [{ weekday: 1, minute: 540 }]), NOW).moved).toBe(1);
+    expect(replacedCount(posts, 'c1', before, spec(HCM, [{ weekday: 1, minute: 540 }, { weekday: 3, minute: 1200 }, { weekday: 5, minute: 480 }]), NOW).moved).toBe(0);
+    expect(replacedCount(posts, 'c1', before, spec(HCM, [{ weekday: 2, minute: 480 }]), NOW).moved).toBe(2);
   });
 
   it('leaves out other channels, freed slots, posts in flight and ones already due', () => {
@@ -49,7 +49,7 @@ describe('queued posts a copy places again', () => {
       { variants: [v('v6', WED_20, 'in_review')] },
     ];
     // v6 waits for review in a slot the new queue lacks; v3 holds the same time in flight, so it is not v6's to keep.
-    expect(replacedCount(posts, 'c1', before, spec(HCM, [{ weekday: 1, minute: 540 }]), NOW)).toBe(1);
+    expect(replacedCount(posts, 'c1', before, spec(HCM, [{ weekday: 1, minute: 540 }]), NOW).moved).toBe(1);
   });
 
   it('moves a post out of a slot kept for a label it lacks', () => {
@@ -58,19 +58,19 @@ describe('queued posts a copy places again', () => {
       { weekday: 1, minute: 540, labelId: LABEL },
       { weekday: 3, minute: 1200, labelId: LABEL },
     ]);
-    expect(replacedCount(posts, 'c1', before, next, NOW)).toBe(1);
+    expect(replacedCount(posts, 'c1', before, next, NOW).moved).toBe(1);
   });
 
   it('counts the posts a time zone change moves to the same local clock time, as the set reports them', () => {
     const posts = [{ variants: [v('v1', MON_9), v('v2', WED_20)] }];
     // Bangkok has the same offset as Ho Chi Minh City: the instants stay.
-    expect(replacedCount(posts, 'c1', before, spec(BKK, before.slots), NOW)).toBe(0);
+    expect(replacedCount(posts, 'c1', before, spec(BKK, before.slots), NOW).moved).toBe(0);
     // Tokyo is two hours ahead: 09:00 and 20:00 there are other instants.
-    expect(replacedCount(posts, 'c1', before, spec(TOKYO, before.slots), NOW)).toBe(2);
+    expect(replacedCount(posts, 'c1', before, spec(TOKYO, before.slots), NOW).moved).toBe(2);
   });
 
   it('is nothing on a channel without a queue', () => {
-    expect(replacedCount([{ variants: [v('v1', MON_9)] }], 'c1', null, spec(HCM, []), NOW)).toBe(0);
+    expect(replacedCount([{ variants: [v('v1', MON_9)] }], 'c1', null, spec(HCM, []), NOW).moved).toBe(0);
   });
 });
 

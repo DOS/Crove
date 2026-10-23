@@ -3060,6 +3060,7 @@ export const vi = {
       copyConfirmTitle: 'Thay khung giờ của {count, plural, other {# kênh}} bằng {slots, plural, other {# khung giờ}} của {channel} (múi giờ {zone}):',
       copyTargetSlots: '{slots, plural, =0 {chưa có khung giờ nào} other {đang có # khung giờ}}',
       copyTargetReplaced: '{count, plural, =0 {không bài nào phải xếp lại} other {# bài đang chờ sẽ được xếp lại vào khung giờ mới}}',
+      copyTargetUnqueued: '{count, plural, other {# bài sẽ không còn khung giờ trống và rời hàng đợi}}',
       copyTargetReplacedAtLeast: 'ít nhất {count, plural, other {# bài}} đang chờ sẽ được xếp lại vào khung giờ mới',
       copyLoading: 'đang đọc hàng đợi…',
       copyConfirmHint: 'Bài đang chờ vẫn giữ giờ cũ nếu khung giờ đó còn trong hàng đợi mới (khi đổi múi giờ, bài giữ đúng giờ trên đồng hồ theo múi giờ mới, nên cũng tính là được xếp lại); bài khác chuyển sang khung giờ trống sớm nhất. Việc tạm dừng hàng đợi và lời báo khi hàng đợi sắp hết bài của từng kênh vẫn giữ nguyên.',
