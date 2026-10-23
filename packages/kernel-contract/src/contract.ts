@@ -51,6 +51,10 @@ import {
   zSocialLibraryItem,
   zSocialLibraryUse,
   zSocialMediaTagCount,
+  zSocialStockResults,
+  zSocialStockSave,
+  zSocialStockSaved,
+  zSocialStockSearch,
   zSocialReportLink,
   zSocialReportSchedule,
   zSocialReportScheduleSave,
@@ -738,6 +742,14 @@ export const contract = {
       tags: oc.input(z.object({})).output(z.array(zSocialMediaTagCount)),
       tag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
       untag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
+    },
+    // Stock photos from Pexels (#1106), when the deployment set MEDIA_PEXELS_API_KEY: status says whether they are
+    // offered; search and save are for members and above, and answer STOCK_PHOTOS_DISABLED without the key. The key
+    // stays on the server, and so does every request to Pexels: thumbnails come back as data: URLs.
+    stockPhotos: {
+      status: oc.input(z.object({})).output(z.object({ enabled: z.boolean(), provider: z.literal('pexels') })),
+      search: oc.input(zSocialStockSearch).output(zSocialStockResults),
+      save: oc.input(zSocialStockSave).output(zSocialStockSaved),
     },
     variants: {
       update: oc.input(zSocialVariantUpdate).output(z.object({ variantId: zId, revision: z.number().int(), changed: z.boolean() })),

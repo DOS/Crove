@@ -14,6 +14,7 @@ import { getConfig } from '../lib/auth.ts';
 import { drawWatermark, watermarkName } from '../lib/social-watermark.ts';
 import { ErrorText, Spinner } from './ui.tsx';
 import { CropPanel } from './social-crop.tsx';
+import { StockPhotoSearch, useStockPhotosEnabled } from './social-stock-photos.tsx';
 
 export interface MediaItem {
   fileId: string;
@@ -165,7 +166,7 @@ export function MediaTagEditor({ fileId, tags: initial, canWrite }: { fileId: st
 export const sizeLabel = (bytes: number) => (bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
 // Images from the library to add to a post: a click adds one, a second click takes it out again. only: the file types
-// offered (a video's cover takes JPEG or PNG images).
+// offered (a video's cover takes JPEG or PNG images). A stock photo comes with its description as alt text (#1106).
 export function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; only?: readonly string[] }) {
   const t = useTranslations('social');
   const [search, setSearch] = useState('');
@@ -175,7 +176,7 @@ export function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; o
   const items = all.filter((item) => !only || only.includes(item.mime));
   const chosen = new Set(media.map((m) => m.fileId));
   const toggle = (item: LibraryItem) =>
-    onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: '', mime: item.mime, sizeBytes: item.sizeBytes, durationMs: item.durationMs, width: item.width, height: item.height, filename: item.filename }]);
+    onChange(chosen.has(item.fileId) ? media.filter((m) => m.fileId !== item.fileId) : media.length >= MAX_POST_MEDIA ? media : [...media, { fileId: item.fileId, altText: item.credit?.altText ?? '', mime: item.mime, sizeBytes: item.sizeBytes, durationMs: item.durationMs, width: item.width, height: item.height, filename: item.filename }]);
   return (
     <div className="space-y-3 rounded-xl border bg-muted/40 p-3">
       <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('librarySearch')} aria-label={t('librarySearch')} className="h-8 max-w-xs text-sm" />
@@ -368,6 +369,9 @@ export function MediaField({
   });
   const picker = useRef<HTMLInputElement>(null);
   const [browsing, setBrowsing] = useState(false);
+  // Free photos from Pexels (#1106), when the server offers them.
+  const stockEnabled = useStockPhotosEnabled();
+  const [stock, setStock] = useState(false);
   // The image being cropped (#636), by its file: moving or removing images while the panel is open never retargets it.
   const [cropping, setCropping] = useState<string | null>(null);
   const croppingItem = cropping === null ? undefined : media.find((m) => m.fileId === cropping);
@@ -478,7 +482,23 @@ export function MediaField({
       <Button variant="ghost" size="sm" disabled={disabled} aria-expanded={browsing} onClick={() => setBrowsing(!browsing)}>
         {t(browsing ? 'libraryClose' : 'libraryOpen')}
       </Button>
+      {stockEnabled && (
+        <Button variant="ghost" size="sm" disabled={disabled} aria-expanded={stock} onClick={() => setStock(!stock)}>
+          {t(stock ? 'stock.close' : 'stock.open')}
+        </Button>
+      )}
       {browsing && !disabled && <LibraryPicker media={media} onChange={onChange} />}
+      {stock && stockEnabled && !disabled && (
+        <StockPhotoSearch
+          mode="post"
+          disabled={media.length >= MAX_POST_MEDIA}
+          onSaved={(saved) => {
+            // Saved to the library, and added to the post with the photo's description as its alt text, to edit.
+            if (media.some((m) => m.fileId === saved.fileId) || media.length >= MAX_POST_MEDIA) return;
+            onChange([...media, { fileId: saved.fileId, altText: saved.altText ?? '', mime: saved.mime, sizeBytes: saved.sizeBytes, width: saved.width, height: saved.height, filename: saved.filename }]);
+          }}
+        />
+      )}
       <p className="text-xs text-subtle-foreground">{t('imagesHint')}</p>
       {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
       {describe.error && <ErrorText>{errorMessage(describe.error)}</ErrorText>}

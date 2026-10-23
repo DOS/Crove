@@ -27,6 +27,8 @@ export * from './recurring.ts';
 export * from './library.ts';
 export * from './domain/media-tags.ts';
 export * from './media-tags.ts';
+export * from './domain/stock-photos.ts';
+export * from './stock-photos.ts';
 export * from './policy.ts';
 export * from './assign.ts';
 export * from './bulk-edit.ts';

@@ -28,6 +28,7 @@ import { BlueskyLoginBudget } from './bluesky-login-limit.ts';
 import { ChatAlertSaveBudget, ChatAlertTestBudget, requestChatAlertTest, saveChatAlert } from './chat-alert-save.ts';
 import { actorOf, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter } from './concurrency.ts';
+import type { StockPhotos } from './stock-photos.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 import type { Delivery, DeliveryResult } from './mail.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
@@ -178,6 +179,10 @@ export interface RpcChannels {
   connectors?: Readonly<Partial<Record<string, OAuthConnector>>>;
   // PUBLIC_URL: the provider sends the browser back to PUBLIC_URL/channels/oauth/:provider/callback.
   publicUrl?: string;
+  // Stock photos from Pexels for the media library (#1106, MEDIA_PEXELS_API_KEY); unset: off, and no Pexels call is
+  // made. Not a channel: it rides on this object because the HTTP edge hands it to the RPC handler unchanged, so the
+  // feature needs no change to http.ts.
+  stockPhotos?: StockPhotos;
 }
 
 // A provider's refusal or failure during the code exchange, as the answer the user sees. Never the provider's own
@@ -269,6 +274,21 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     if (!social) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun mạng xã hội chưa được bật' });
     const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
     return { orgId, actor: actorOf(context.user), role };
+  };
+  // Stock photos (#1106): members and above, in an org with Social, on a deployment with the key, within the budget;
+  // the order makes every refusal happen before any call to Pexels.
+  const stockScope = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor, stock: StockPhotos) => Promise<T>) => {
+    if (!social) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun mạng xã hội chưa được bật' });
+    return guard(async () => {
+      const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
+      const stock = channels?.stockPhotos;
+      if (!stock) throw new DomainError('STOCK_PHOTOS_DISABLED', 404, 'Ảnh từ Pexels chưa được bật trên máy chủ này');
+      if (role === 'viewer') throw new DomainError('FORBIDDEN', 403, 'Người xem không tìm hoặc lưu được ảnh vào thư viện');
+      const actor = actorOf(context.user);
+      const ticket = stock.budget.take(orgId, actor.userId);
+      if (!ticket.allowed) throw new DomainError('RATE_LIMITED', 429, 'Bạn đã tìm hoặc lưu nhiều ảnh trong phút này, hãy thử lại sau ít phút', { retryAfterSeconds: ticket.retryAfterSeconds });
+      return fn(orgId, actor, stock);
+    });
   };
   const oauthRedirectUri = (provider: string) => `${(channels?.publicUrl ?? '').replace(/\/$/, '')}/channels/oauth/${provider}/callback`;
 
@@ -791,6 +811,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         tags: os.social.media.tags.handler(socialQuery('social.media.tags')),
         tag: os.social.media.tag.handler(socialCommand('social.media.tag')),
         untag: os.social.media.untag.handler(socialCommand('social.media.untag')),
+      },
+      stockPhotos: {
+        status: os.social.stockPhotos.status.handler(({ context }) => inSocial(context, async () => ({ enabled: Boolean(channels?.stockPhotos), provider: 'pexels' as const }))),
+        search: os.social.stockPhotos.search.handler(({ context, input }) => stockScope(context, (_orgId, _actor, stock) => stock.search(input))),
+        save: os.social.stockPhotos.save.handler(({ context, input }) => stockScope(context, (orgId, actor, stock) => stock.save(runtime, actor, orgId, input))),
       },
       policies: {
         list: os.social.policies.list.handler(socialQuery('social.channel.policies')),

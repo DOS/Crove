@@ -53,6 +53,7 @@ import { reviewInboxQueries } from './review-inbox.ts';
 import { attentionInboxQueries } from './attention-inbox.ts';
 import { libraryQueries, likeTerm } from './library.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
+import { stockPhotoCommands } from './stock-photos.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
 import { externalPostCommands, externalPostQueries } from './external-posts.ts';
 import { planExportCommands } from './plan-export.ts';
@@ -1742,6 +1743,7 @@ export const socialCommands = [
   ...bulkEditCommands,
   ...bulkDraftCommands,
   ...mediaTagCommands,
+  ...stockPhotoCommands,
   ...ideaCommands,
   ...bioCommands,
   ...feedCommands,
