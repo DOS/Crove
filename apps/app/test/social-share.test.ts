@@ -153,12 +153,16 @@ describe('a share waiting for sign-in', () => {
   });
 });
 
+// The bookmarklet's scheme, and its code once a browser percent-decodes the address.
+const SCHEME = /^javascript:/;
+const sourceOf = (code: string) => decodeURIComponent(code.replace(SCHEME, ''));
+
 describe('the bookmarklet', () => {
   // Runs the bookmarklet as a browser would: the javascript: address percent-decoded, on a page with this address,
   // title and selection. Returns what it asked window.open for.
   function run(code: string, page: { href: string; title: string; selection: string }): { url: string; target: string; features: string } {
-    expect(code.startsWith('javascript:')).toBe(true);
-    const source = decodeURIComponent(code.slice('javascript:'.length));
+    expect(code).toMatch(SCHEME);
+    const source = sourceOf(code);
     const open = vi.fn();
     const fakeWindow = { getSelection: () => ({ toString: () => page.selection }), open };
     new Function('window', 'document', 'location', source)(fakeWindow, { title: page.title }, { href: page.href });
@@ -195,7 +199,7 @@ describe('the bookmarklet', () => {
   });
 
   it('carries no token, session or anything of the app but its address and the org', () => {
-    const code = decodeURIComponent(bookmarklet('https://app.example/some/page?x=1', 'acme'));
+    const code = sourceOf(bookmarklet('https://app.example/some/page?x=1', 'acme'));
     expect(code).not.toMatch(/token|session|cookie|localStorage|sessionStorage|fetch|XMLHttpRequest/i);
     expect(code).toContain('"https://app.example/-/share#org=acme&"');
     expect(code).not.toContain('x=1');
@@ -203,7 +207,7 @@ describe('the bookmarklet', () => {
 
   it('escapes what a javascript: address would decode or cut', () => {
     const code = bookmarklet('https://app.example', 'acme');
-    expect(code.slice('javascript:'.length)).not.toMatch(/#|%(?!25|23)/);
+    expect(code.replace(SCHEME, '')).not.toMatch(/#|%(?!25|23)/);
   });
 });
 

@@ -8,6 +8,11 @@ const TITLE = 'Giá cà phê tăng mạnh đầu vụ';
 const TEXT = 'Đoạn đáng chú ý: tăng 2.000 đồng/kg & còn tăng';
 const URL_SHARED = 'https://news.example/ca-phe?id=7';
 
+// Text as HTML: every &, < and > escaped.
+const html = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+// The bookmarklet's scheme.
+const SCHEME = /^javascript:/;
+
 // Every request the page makes from now on, with its Referer.
 function recordRequests(page: Page): Array<{ url: string; referer: string }> {
   const seen: Array<{ url: string; referer: string }> = [];
@@ -38,9 +43,14 @@ test('a page shared to the installed app lands in a new draft, and the shared va
   const carrying = requests.filter((r) => r.url.includes('news.example') || r.url.includes('title=') || r.referer.includes('news.example') || r.referer.includes('title='));
   expect(carrying.map((r) => new URL(r.url).pathname)).toEqual(['/-/share']);
 
-  // Back goes to where the person was (past the composer's question about the unsaved draft), not to a page holding
-  // the share.
-  page.once('dialog', (dialog) => void dialog.accept());
+  // The router's later navigations do not bring the fragment back: away to the channels page (past the composer's
+  // question about the unsaved draft), back to the composer, then back to where the person was.
+  page.on('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('main').getByRole('link', { name: 'Kết nối kênh', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/o/${slug}/social/channels$`));
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`/o/${slug}/social/new$`));
+  expect(await page.evaluate(() => location.hash)).toBe('');
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`/o/${slug}/inbox$`));
 });
@@ -50,12 +60,12 @@ test('the bookmarklet from the Social settings opens a draft with the page link,
   const slug = await createOrg(page, 'Công ty Dấu Trang');
   await page.goto(`/o/${slug}/social/channels`);
   const code = await page.getByLabel('Mã nút chia sẻ').inputValue();
-  expect(code.startsWith('javascript:')).toBe(true);
+  expect(code).toMatch(SCHEME);
   expect(code).not.toMatch(/token|session/i);
 
   // A third-party page, served by the test: the bookmarklet runs there as a browser runs a javascript: bookmark.
   await page.route('https://news.example/**', (route) =>
-    route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html><head><title>${TITLE}</title></head><body><p id="quote">${TEXT.replace('&', '&amp;')}</p></body></html>` }),
+    route.fulfill({ contentType: 'text/html; charset=utf-8', body: `<!doctype html><html><head><title>${html(TITLE)}</title></head><body><p id="quote">${html(TEXT)}</p></body></html>` }),
   );
   await page.goto(URL_SHARED);
   await page.evaluate(() => {
@@ -64,7 +74,7 @@ test('the bookmarklet from the Social settings opens a draft with the page link,
     window.getSelection()?.addRange(range);
   });
   const popup = context.waitForEvent('page');
-  await page.evaluate((source) => new Function(source)(), decodeURIComponent(code.slice('javascript:'.length)));
+  await page.evaluate((source) => new Function(source)(), decodeURIComponent(code.replace(SCHEME, '')));
   const draft = await popup;
   await expect(draft).toHaveURL(new RegExp(`/o/${slug}/social/new$`));
   await expect(draft.getByLabel('Nội dung chung')).toHaveValue(`${TITLE}\n\n${TEXT}`);

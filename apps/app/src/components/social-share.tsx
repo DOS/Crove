@@ -2,7 +2,7 @@
 // this org, to copy into a bookmark, and how the installed app shows in a phone's share menu. The bookmarklet holds
 // the org's address only, no token: anyone may copy it, and it opens the composer only for a member who signs in.
 import { useParams } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -14,12 +14,18 @@ export function ShareCard() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const code = bookmarklet(window.location.origin, slug);
   const [copied, setCopied] = useState(false);
+  const field = useRef<HTMLInputElement>(null);
+  // Without the clipboard API (a page not served over https or localhost), or when it refuses, the code is selected
+  // for the person to copy.
   const copy = async () => {
     try {
+      if (!navigator.clipboard) throw new Error('no clipboard');
       await navigator.clipboard.writeText(code);
       setCopied(true);
     } catch {
       setCopied(false);
+      field.current?.focus();
+      field.current?.select();
     }
   };
   return (
@@ -31,7 +37,7 @@ export function ShareCard() {
       <div className="space-y-1.5">
         <p className="text-xs font-medium text-foreground">{t('bookmarkletTitle')}</p>
         <div className="flex gap-2">
-          <Input readOnly value={code} aria-label={t('bookmarkletLabel')} className="min-w-0 font-mono text-xs" onFocus={(e) => e.target.select()} />
+          <Input ref={field} readOnly value={code} aria-label={t('bookmarkletLabel')} className="min-w-0 font-mono text-xs" onFocus={(e) => e.target.select()} />
           <Button size="sm" variant="outline" onClick={() => void copy()}>
             {copied ? t('copied') : t('copy')}
           </Button>

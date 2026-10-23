@@ -95,6 +95,11 @@ describe('readHtmlMeta', () => {
     expect(readHtmlMeta(page('', '<main><p>Ngắn</p></main><main><p>Phần dài hơn nhiều</p></main>')).text).toBe('Phần dài hơn nhiều');
   });
 
+  it('never lets an article or main tag inside a comment, script, style, template or noscript move the matching', () => {
+    const html = readFileSync(join(import.meta.dirname, 'fixtures', 'hidden-tags.html'));
+    expect(readHtmlMeta(new Uint8Array(html)).text).toBe('Bài chính\nĐoạn thứ nhất của bài.\nĐoạn thứ hai của bài.');
+  });
+
   it('stays fast on hostile input', () => {
     const started = Date.now();
     readHtmlMeta(new TextEncoder().encode(`<html><head>${'<meta a="'.repeat(20_000)}${'<'.repeat(100_000)}`));

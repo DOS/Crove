@@ -187,7 +187,8 @@ function linesOf(scope: string): string[] {
 
 // The page's main text: lines of plain text, at most maxPageTextChars; null when there is none. It comes from the
 // <article> with the most text (a page often has teaser cards of other articles before or after its own, #1235),
-// else the <main> with the most, else the body.
+// else the <main> with the most, else the body. html comes without its comments, scripts, styles, noscript and
+// templates (readHtmlMeta strips them first), so a tag inside one of them never moves the article and main matching.
 function mainText(html: string): string | null {
   const bodyAt = html.search(/<body\b/i);
   const body = bodyAt >= 0 ? html.slice(bodyAt) : html;

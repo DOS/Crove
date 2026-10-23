@@ -2365,7 +2365,10 @@ export function SocialComposePage() {
   const navigate = useNavigate();
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
   // A page shared into a draft (#1235): its link and text come in the fragment (#link=&text=), read once; the
-  // fragment then leaves the address bar.
+  // fragment then leaves the address bar. Through history.replaceState, keeping the router's history state, rather
+  // than navigate({ hash: '' }): a navigation would ask the leave question of the draft just filled (useBlocker) and
+  // run the route's loaders again. The router does not bring it back: a navigation takes a hash only when told to
+  // (e2e social-share.spec.ts leaves and comes back).
   const [shared] = useState(() => readShareFragment(window.location.hash));
   useEffect(() => {
     if (window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search);
