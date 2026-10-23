@@ -299,6 +299,19 @@ content_address_mismatches() {
   done
 }
 
+# Checks the blobs under <dir> against <sums> (sha256sum lines, paths relative to <dir>). An empty list is a run taken
+# while no file existed: it is valid when <dir> holds no file either. `sha256sum -c` alone refuses an empty list ("no
+# properly formatted checksum lines"), which made such a run impossible to restore.
+check_blob_sums() {
+  local dir="$1" sums="$2"
+  if [ -s "$sums" ]; then
+    (cd "$dir" && sha256sum --quiet -c "$sums")
+    return
+  fi
+  # `find | head` rather than GNU-only -quit, so BSD find (macOS) works too.
+  [ ! -d "$dir" ] || [ -z "$(find "$dir" -type f | head -n 1)" ]
+}
+
 # sha256sum lines in text mode ("<hash>  <name>"): sha256sum on Windows (Git Bash) marks binary mode with "*", which
 # the checks here and a Linux `sha256sum -c` would otherwise read as part of the name.
 normalize_sums() { sed 's/^\([0-9a-f]\{64\}\) [ *]/\1  /'; }
