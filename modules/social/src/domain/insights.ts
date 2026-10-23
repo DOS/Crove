@@ -86,7 +86,8 @@ export function bestTimes(samples: readonly PublishedSample[], timeZone: string,
 // What works (#705): for each channel, the posts' engagement against the channel's own median, broken down by label,
 // format, weekday, hour and hashtag, plus its best and worst posts. Engagement is engagementOf (reactions, comments,
 // shares and saves), which every platform reports; a rate over reach would leave out the channels that report none.
-// Medians, so one viral post does not tilt a group. A post without a capture yet is left out.
+// Medians, so one viral post does not tilt a group. A post without a capture yet is left out. A format group also
+// carries the median average watch time of its posts that report one (#1147, Reels): how long the format holds viewers.
 export type PostFormat = 'text' | 'image' | 'carousel' | 'video' | 'document' | 'story' | 'reel';
 export const POST_FORMATS: readonly PostFormat[] = ['text', 'image', 'carousel', 'video', 'document', 'story', 'reel'];
 
@@ -107,6 +108,9 @@ export interface InsightGroup {
   median: number;
   // median / the channel's median; null when the channel's median is 0.
   ratio: number | null;
+  // By format only (#1147): the median of the average watch time (milliseconds) of the group's posts that report one,
+  // Reels on Instagram; absent when none does.
+  avgWatchTimeMs?: number | undefined;
 }
 
 export interface ChannelInsights {
@@ -228,7 +232,10 @@ export function whatWorks(samples: readonly InsightSample[], timeZone: string, o
       best: ranked.slice(0, top).map((p) => ({ variantId: p.variantId, engagement: p.engagement })),
       worst: ranked.length > top ? ranked.slice(-top).reverse().map((p) => ({ variantId: p.variantId, engagement: p.engagement })) : [],
       byLabel: group((p) => p.s.labelIds),
-      byFormat: group((p) => [p.s.format]),
+      byFormat: group((p) => [p.s.format]).map((g) => {
+        const watched = posts.filter((p) => p.s.format === g.key && Number.isFinite(p.s.metrics.avgWatchTimeMs)).map((p) => p.s.metrics.avgWatchTimeMs as number);
+        return watched.length === 0 ? g : { ...g, avgWatchTimeMs: median(watched) };
+      }),
       byWeekday: group((p) => (p.weekday === null ? [] : [String(p.weekday)])),
       byHour: group((p) => (p.hour === null ? [] : [String(p.hour)])),
       byHashtag: group((p) => hashtagsOf(p.s.text), minTag),

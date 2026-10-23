@@ -529,6 +529,79 @@ describe('InstagramPublisher metrics', () => {
     expect(await new InstagramPublisher(APP, partial.fetchImpl).metrics(story)).toEqual({ metrics: { reach: 12 } });
   });
 
+  // A recorded Reel answer (#1147), shaped as Meta's media insights reference shows it: the feed metrics, then the watch
+  // time in milliseconds in a call of its own.
+  it('asks a Reel for its average and total watch time besides the feed metrics', async () => {
+    const { fetchImpl, calls } = graph({
+      'GET /18000000000000042': [{ body: { like_count: 40, comments_count: 6, id: '18000000000000042' } }],
+      'GET /18000000000000042/insights': [
+        {
+          body: {
+            data: [
+              { name: 'reach', period: 'lifetime', values: [{ value: 900 }] },
+              { name: 'saved', period: 'lifetime', values: [{ value: 11 }] },
+              { name: 'shares', period: 'lifetime', values: [{ value: 8 }] },
+              { name: 'views', period: 'lifetime', values: [{ value: 1500 }] },
+            ],
+          },
+        },
+        {
+          body: {
+            data: [
+              { name: 'ig_reels_avg_watch_time', period: 'lifetime', values: [{ value: 12345 }], title: 'Average watch time', id: '18000000000000042/insights/ig_reels_avg_watch_time/lifetime' },
+              { name: 'ig_reels_video_view_total_time', period: 'lifetime', values: [{ value: 18517500 }], title: 'Watch time', id: '18000000000000042/insights/ig_reels_video_view_total_time/lifetime' },
+            ],
+          },
+        },
+      ],
+    });
+    expect(await new InstagramPublisher(APP, fetchImpl).metrics({ ...metricsInput, postType: 'reel' })).toEqual({
+      metrics: { reactions: 40, comments: 6, reach: 900, saves: 11, shares: 8, views: 1500, avgWatchTimeMs: 12345, totalWatchTimeMs: 18517500 },
+    });
+    expect(calls.map((c) => [c.route, paramsOf(c.query)])).toEqual([
+      ['GET /18000000000000042', { fields: 'like_count,comments_count' }],
+      ['GET /18000000000000042/insights', { metric: 'reach,saved,shares,views' }],
+      ['GET /18000000000000042/insights', { metric: 'ig_reels_avg_watch_time,ig_reels_video_view_total_time' }],
+    ]);
+  });
+
+  it('never asks a feed video for the Reels watch time', async () => {
+    const { fetchImpl, calls } = graph({
+      'GET /18000000000000042': [{ body: { like_count: 3, comments_count: 1 } }],
+      'GET /18000000000000042/insights': [{ body: { data: [{ name: 'views', period: 'lifetime', values: [{ value: 75 }] }] } }],
+    });
+    expect(await new InstagramPublisher(APP, fetchImpl).metrics({ ...metricsInput, postType: 'feed' })).toEqual({ metrics: { reactions: 3, comments: 1, views: 75 } });
+    expect(calls.map((c) => [c.route, paramsOf(c.query)])).toEqual([
+      ['GET /18000000000000042', { fields: 'like_count,comments_count' }],
+      ['GET /18000000000000042/insights', { metric: 'reach,saved,shares,views' }],
+    ]);
+  });
+
+  it('leaves out a watch time metric Meta refuses and keeps the others', async () => {
+    const unsupported = {
+      status: 400,
+      body: { error: { message: '(#100) The Media Insights API does not support the ig_reels_video_view_total_time metric for this media product type.', code: 100, type: 'OAuthException' } },
+    };
+    const { fetchImpl, calls } = graph({
+      'GET /18000000000000042': [{ body: { like_count: 9, comments_count: 2 } }],
+      'GET /18000000000000042/insights': [
+        { body: { data: [{ name: 'reach', values: [{ value: 300 }] }, { name: 'views', values: [{ value: 420 }] }] } },
+        unsupported,
+        { body: { data: [{ name: 'ig_reels_avg_watch_time', values: [{ value: 8200 }] }] } },
+        unsupported,
+      ],
+    });
+    expect(await new InstagramPublisher(APP, fetchImpl).metrics({ ...metricsInput, postType: 'reel' })).toEqual({ metrics: { reactions: 9, comments: 2, reach: 300, views: 420, avgWatchTimeMs: 8200 } });
+    expect(calls.slice(2).map((c) => paramsOf(c.query).metric)).toEqual(['ig_reels_avg_watch_time,ig_reels_video_view_total_time', 'ig_reels_avg_watch_time', 'ig_reels_video_view_total_time']);
+    // Any other failure of the watch time call: the other counts stand, and nothing is asked one by one.
+    const down = graph({
+      'GET /18000000000000042': [{ body: { like_count: 9, comments_count: 2 } }],
+      'GET /18000000000000042/insights': [{ body: { data: [{ name: 'reach', values: [{ value: 300 }] }] } }, { status: 500, body: { error: { message: 'An unknown error has occurred.', code: 1 } } }],
+    });
+    expect(await new InstagramPublisher(APP, down.fetchImpl).metrics({ ...metricsInput, postType: 'reel' })).toEqual({ metrics: { reactions: 9, comments: 2, reach: 300 } });
+    expect(down.calls).toHaveLength(3);
+  });
+
   it('keeps the plain counts when the insights are refused (no insights permission)', async () => {
     const { fetchImpl } = graph({
       'GET /18000000000000042': [{ body: { like_count: 5, comments_count: 0 } }],

@@ -443,7 +443,29 @@ export class InstagramPublisher implements Publisher {
     } catch {
       // No insights for this post or this connection: the plain counts stand.
     }
+    if (input.postType === 'reel') await this.reelWatchTime(input.externalId, s.accessToken, metrics);
     return { metrics };
+  }
+
+  // A Reel's watch time (#1147), in milliseconds, asked in a call of its own so a refusal never costs the other counts.
+  // Meta refuses a whole call over one metric it will not give (error 100; the total is still "in development" in its
+  // reference), so a refused pair is asked again one by one: a metric refused is left out, never zero.
+  private async reelWatchTime(id: string, token: string, metrics: Partial<Record<MetricName, number>>): Promise<void> {
+    const ask = async (names: readonly string[]) => {
+      const insights = await this.graph.call<InsightsAnswer>('GET', `${id}/insights`, { token, params: { metric: names.join(',') } });
+      for (const row of insights.data ?? []) {
+        const name = typeof row.name === 'string' && Object.hasOwn(REEL_INSIGHT_NAMES, row.name) ? REEL_INSIGHT_NAMES[row.name] : undefined;
+        const value = count(row.values?.[0]?.value ?? row.total_value?.value);
+        if (name && value !== undefined) metrics[name] = Math.round(value);
+      }
+    };
+    const names = Object.keys(REEL_INSIGHT_NAMES);
+    try {
+      await ask(names);
+    } catch (error) {
+      if (!(error instanceof GraphError && error.code === 100 && error.subcode !== 33)) return;
+      for (const name of names) await ask([name]).catch(() => undefined);
+    }
   }
 
   // A Story (#1082) has no likes or comments and refuses the feed metrics (saved among them): it is asked for the Story
@@ -555,6 +577,8 @@ interface InsightsAnswer {
   data?: { name?: unknown; values?: { value?: unknown }[]; total_value?: { value?: unknown; breakdowns?: { results?: { dimension_values?: unknown[]; value?: unknown }[] }[] } }[];
 }
 const INSIGHT_NAMES: Record<string, MetricName> = { reach: 'reach', saved: 'saves', shares: 'shares', views: 'views' };
+// A Reel's watch time in Meta's media insights reference (#1147), both in milliseconds.
+const REEL_INSIGHT_NAMES: Record<string, MetricName> = { ig_reels_avg_watch_time: 'avgWatchTimeMs', ig_reels_video_view_total_time: 'totalWatchTimeMs' };
 // The Story metrics of Meta's media insights reference (#1082); impressions is deprecated and saved is not a Story's.
 const STORY_METRICS = 'reach,views,replies,shares,follows,profile_visits';
 const STORY_INSIGHT_NAMES: Record<string, MetricName> = { reach: 'reach', views: 'views', replies: 'replies', shares: 'shares', follows: 'follows', profile_visits: 'profileVisits' };
