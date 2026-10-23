@@ -271,3 +271,18 @@ describe('Sandbox remove (#860)', () => {
     expect(await sandbox.remove({ externalAccountId: 'sandbox-a', secret: JSON.stringify({ accessToken: 'other' }), externalId })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' });
   });
 });
+
+describe('Sandbox edit (#1223)', () => {
+  it('changes the text of a post it holds, and refuses one it no longer holds or a token it never issued', async () => {
+    const sandbox = new SandboxPublisher();
+    const secret = JSON.stringify({ accessToken: 'sbx_test' });
+    const published = await sandbox.publish({ externalAccountId: 'sandbox-a', secret, content: { body: 'Giá 54.000đ', title: null, linkUrl: null, media: [] }, readMedia: async () => new Uint8Array(), mediaUrl: async () => null, settings: {}, callKey: 'k-1', contentHash: `sha256:${'0'.repeat(64)}` });
+    const externalId = published.kind === 'accepted' ? published.externalId : '';
+    const edit = (over: { secret?: string; externalId?: string } = {}) => sandbox.edit({ externalAccountId: 'sandbox-a', secret: over.secret ?? secret, externalId: over.externalId ?? externalId, content: { body: 'Giá 45.000đ', title: null, linkUrl: null, media: [] }, settings: {}, callKey: 'k-edit' });
+    expect(await edit()).toEqual({ kind: 'edited' });
+    expect(sandbox.posts('sandbox-a').map((p) => p.body)).toEqual(['Giá 45.000đ']);
+    expect(await edit({ secret: JSON.stringify({ accessToken: 'other' }) })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'SANDBOX_TOKEN' });
+    await sandbox.remove({ externalAccountId: 'sandbox-a', secret, externalId });
+    expect(await edit()).toEqual({ kind: 'rejected', error: 'bad_request', code: 'NO_SUCH_POST' });
+  });
+});

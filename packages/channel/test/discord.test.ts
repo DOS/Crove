@@ -388,3 +388,38 @@ describe('Discord remove (#860)', () => {
     expect(none.calls).toHaveLength(0);
   });
 });
+
+describe('Discord edit (#1223)', () => {
+  const MESSAGE = '1234567890123456790';
+  const edit = (fetchImpl: Fetch, settings: Record<string, unknown> = {}, externalId = MESSAGE) =>
+    new DiscordPublisher(fetchImpl).edit({ externalAccountId: HOOK, secret: SECRET, externalId, content: content('Giá đúng: 45.000đ @everyone', [photo('a')]), settings, callKey: 'edit-1' });
+
+  it('patches the webhook message with the new content only, so its files stay, and mentions are never parsed', async () => {
+    const { fetchImpl, calls } = discord([{ body: { id: MESSAGE, content: 'Giá đúng: 45.000đ @everyone' } }]);
+    expect(await edit(fetchImpl)).toEqual({ kind: 'edited' });
+    expect(calls).toEqual([{ method: 'PATCH', url: new URL(`https://discord.com/api/v10/webhooks/${HOOK}/${TOKEN}/messages/${MESSAGE}`), json: { content: 'Giá đúng: 45.000đ @everyone', allowed_mentions: { parse: [] } }, form: null }]);
+  });
+
+  it('edits a message in its thread: the one named, or a forum post in its own thread', async () => {
+    const named = discord([{ body: { id: MESSAGE } }]);
+    expect(await edit(named.fetchImpl, { discord: { threadId: '1111111111111111111' } })).toEqual({ kind: 'edited' });
+    expect(named.calls[0]?.url.searchParams.get('thread_id')).toBe('1111111111111111111');
+    const forum = discord([{ body: { id: MESSAGE } }]);
+    expect(await edit(forum.fetchImpl, { discord: { forum: true } })).toEqual({ kind: 'edited' });
+    expect(forum.calls[0]?.url.searchParams.get('thread_id')).toBe(MESSAGE);
+  });
+
+  it('maps a message gone, a webhook gone, a rate limit and a server error, and calls nothing for a malformed id', async () => {
+    const gone = discord([fail(404, 10008, 'Unknown Message')]);
+    expect(await edit(gone.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    const hook = discord([fail(404, 10015, 'Unknown Webhook')]);
+    expect(await edit(hook.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'DISCORD_10015' });
+    const limited = discord([fail(429, 0, 'You are being rate limited.', { retry_after: 1.5 })]);
+    expect(await edit(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const down = discord([{ status: 502, body: { code: 0, message: 'Bad Gateway' } }]);
+    expect(await edit(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'DISCORD_502' });
+    const none = discord([]);
+    expect(await edit(none.fetchImpl, {}, '../../x')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(none.calls).toHaveLength(0);
+  });
+});

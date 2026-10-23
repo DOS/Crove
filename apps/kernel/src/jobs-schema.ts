@@ -35,6 +35,8 @@ export const QUEUES = {
   socialNotify: 'social-notify',
   // Created by the Social remove migration (20261023141000).
   socialRemove: 'social-remove',
+  // Created by the Social edit published migration (20261029170000).
+  socialEdit: 'social-edit',
   // Created by the team chat alert migration (20261023143000).
   socialChatAlert: 'social-chat-alert',
   // Created by the WORM archive migration (20261023230000).

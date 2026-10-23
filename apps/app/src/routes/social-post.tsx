@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature, editRefusal } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { AiPhotoPicker, aiDraftInput } from '../components/social-ai-photos.tsx';
@@ -3269,6 +3269,90 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
   );
 }
 
+// Whether owners and admins may correct a published channel's text from here (#1223): its adapter edits, it is not a
+// poll, a Story or a Reel (nor a Facebook video), and its channel needs one person's approval only, as the command
+// decides; the command refuses anything else all the same.
+const canEditLive = (v: Variant) =>
+  v.status === 'published' &&
+  editRefusal(v.provider, v.settings, v.media.map((m) => mediaKindOf(m.mime))) === null &&
+  v.review.required <= 1 &&
+  !v.review.fourEyes &&
+  !v.review.client &&
+  v.liveEdit?.state !== 'pending';
+
+// A published channel's text corrected on its platform (#1223): the form starts from the text as it went out (or from
+// an edit that did not go through), says the channel's signature is added as at publish, and asks for the review
+// checklist's ticks, as an approval does.
+function EditPublished({ variant: v, channel, names, onDone }: { variant: Variant; channel: string; names: ReadonlyMap<string, string>; onDone: () => void }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const own = v.overrides.body ?? '';
+  const [open, setOpen] = useState(false);
+  const [body, setBody] = useState(own);
+  const [ticked, setTicked] = useState<Set<string>>(() => new Set());
+  const signature = signatureText(v.settings);
+  const edit = useMutation({
+    mutationFn: () => client.social.variants.editPublished({ variantId: v.id, revision: v.revision, body, ...(v.checklist.length > 0 ? { checks: checksFor(v, ticked) } : {}) }),
+    onSuccess: () => {
+      setOpen(false);
+      onDone();
+    },
+  });
+  if (!open) {
+    return (
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          setBody(v.liveEdit?.body ?? own);
+          setTicked(new Set());
+          edit.reset();
+          setOpen(true);
+        }}
+      >
+        {t(v.liveEdit ? 'liveEdit.again' : 'liveEdit.action')}
+      </Button>
+    );
+  }
+  return (
+    <div className="w-full space-y-2 rounded-lg border border-border p-3">
+      <p className="text-sm text-foreground">{t('liveEdit.intro', { channel })}</p>
+      <Label htmlFor={`${id}-body`}>{t('liveEdit.body')}</Label>
+      <Textarea id={`${id}-body`} rows={6} value={body} onChange={(e) => setBody(e.target.value)} />
+      {signature && <p className="whitespace-pre-wrap text-xs text-subtle-foreground [overflow-wrap:anywhere]">{t('liveEdit.signature', { signature })}</p>}
+      <ReviewChecklistTicks variants={[v]} names={names} ticked={ticked} onChange={setTicked} />
+      <div className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={edit.isPending || body === own || !fullyTicked([v], ticked)} onClick={() => edit.mutate()}>
+          {t('liveEdit.submit')}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>
+          {t('liveEdit.cancel')}
+        </Button>
+      </div>
+      {edit.error && <ErrorText>{errorMessage(edit.error)}</ErrorText>}
+    </div>
+  );
+}
+
+// Where a correction of a published channel's text stands (#1223), until the platform shows it: on its way, refused (the
+// channel keeps the text it went out with) or unclear; with the text that was sent.
+function LiveEditNote({ variant: v }: { variant: Variant }) {
+  const t = useTranslations('social');
+  if (v.status !== 'published' || !v.liveEdit) return null;
+  const e = v.liveEdit;
+  const known = LIVE_EDIT_CODES.find((c) => c === e.code) ?? null;
+  return (
+    <div className="space-y-1">
+      <p className={e.state === 'pending' ? '' : 'text-warning'}>{t(`liveEdit.${e.state}`)}</p>
+      {known ? <p className="text-subtle-foreground">{t(`liveEdit.code.${known}`)}</p> : e.state === 'failed' && e.code ? <p className="font-mono text-subtle-foreground">{e.code}</p> : null}
+      <p className="whitespace-pre-wrap text-subtle-foreground [overflow-wrap:anywhere]">{t('liveEdit.sent', { text: e.body })}</p>
+    </div>
+  );
+}
+
+// The edit answers the post page explains in words (#1223); any other failure shows its code.
+const LIVE_EDIT_CODES = ['TELEGRAM_CANNOT_EDIT', 'POST_NOT_FOUND', 'EDIT_NOT_RUN'] as const;
+
 // The removal answers the post page explains in words (#860, #1137, #1138); any other failure shows its code.
 const REMOVE_CODES = ['TELEGRAM_CANNOT_DELETE', 'FACEBOOK_CANNOT_DELETE', 'RECONNECT_FOR_REMOVE', 'REMOVE_NOT_RUN', 'WORDPRESS_TRASH_DISABLED', 'WORDPRESS_CANNOT_DELETE'] as const;
 
@@ -3375,7 +3459,11 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   const f = useFormat();
   const { canDecide, canWrite, userId } = useRole(slug);
   const navigate = useNavigate();
-  const post = useQuery(orpc.social.posts.get.queryOptions({ input: { postId } }));
+  const post = useQuery({
+    ...orpc.social.posts.get.queryOptions({ input: { postId } }),
+    // A correction of the published text on its way (#1223): read again every few seconds until the platform answers.
+    refetchInterval: (q) => (q.state.data?.variants.some((v) => v.liveEdit?.state === 'pending') ? 3000 : false),
+  });
   // The latest counts of each published channel (#578).
   const metrics = useQuery({ ...orpc.social.metrics.summary.queryOptions({ input: { postId } }), enabled: post.data?.variants.some((v) => v.status === 'published') ?? false });
   const channels = useQuery(orpc.channels.list.queryOptions({ input: { includeRevoked: true } }));
@@ -3789,6 +3877,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                     {v.status === 'in_review' && v.review.client && <p>{t(v.review.clientVerdict === 'approved' ? 'clientApproved' : 'clientWaiting')}</p>}
                     <Outcome variant={v} slug={slug} />
                     <RemovalNote variant={v} />
+                    <LiveEditNote variant={v} />
                     {v.externalUrl && v.status !== 'removed' && (
                       <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
                         {t('openPost')}
@@ -3847,6 +3936,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                           {t('unschedule')}
                         </Button>
                       )}
+                      {canDecide && canEditLive(v) && <EditPublished variant={v} channel={names.get(v.connectionId) ?? providerName(v.provider)} names={names} onDone={refresh} />}
                       {canDecide && v.status === 'published' && isProvider(v.provider) && REMOVE_READY.has(v.provider) && v.removal?.state !== 'pending' && (
                         <RemoveFromChannel variantId={v.id} provider={v.provider} channel={names.get(v.connectionId) ?? providerName(v.provider)} again={v.removal !== null} onDone={refresh} />
                       )}

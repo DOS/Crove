@@ -11,6 +11,8 @@ import type {
   CommentInput,
   CommentResult,
   ConnectedAccount,
+  EditInput,
+  EditResult,
   AccountMetricsInput,
   AccountMetricsResult,
   MetricsInput,
@@ -27,7 +29,7 @@ import type {
   RemoveResult,
   RetrySafety,
 } from './index.ts';
-import { commentResult, removeResult } from './comment.ts';
+import { commentResult, EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { graphTime, pagingCursor, platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { videoCoverOf } from './cover.ts';
 import { postTypeOf } from './post-type.ts';
@@ -575,6 +577,31 @@ export class FacebookPagePublisher implements Publisher {
     } catch (error) {
       if (error instanceof GraphError && error.code === 100 && error.subcode === 33) return this.removedAlready(input.externalId, token);
       return removeResult(graphPublishResult(error));
+    }
+  }
+
+  // Corrects the text of the Page's own post (#1223): `POST /{page-post-id}` with `message` and the Page token
+  // (pages_manage_posts, which connect requires), answered { success: true } (Graph API Page Post reference, Updating).
+  // The text is built as publish builds it (feedMessage, the link at the end on a post with photos); the photos and the
+  // link preview stay as they are. Only a feed post of text, a link or photos: a Story has no text, and a video's or a
+  // Reel's text is its video's description, which this call does not reach, so those are refused before any call, as
+  // the module refuses them first. Only an id of this Page is sent. Code 100 with subcode 33: the post is gone, or the
+  // token cannot load it.
+  async edit(input: EditInput): Promise<EditResult> {
+    const token = pageToken(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
+    const id = /^(\d{1,32})_\d{1,32}$/.exec(input.externalId);
+    if (!id || id[1] !== input.externalAccountId) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    if (postTypeOf(input.settings) !== 'feed' || input.content.media.some((m) => m.mime.startsWith('video/'))) return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
+    const message = feedMessage(input.content);
+    if (!message) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    try {
+      const answer = await this.graph.call<{ success?: unknown }>('POST', input.externalId, { token, form: { message } });
+      // 200 without success: Meta may or may not have changed it.
+      return answer.success === true ? { kind: 'edited' } : { kind: 'unknown', code: 'NOT_CONFIRMED' };
+    } catch (error) {
+      if (error instanceof GraphError && error.code === 100 && error.subcode === 33) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      return editResult(graphPublishResult(error));
     }
   }
 

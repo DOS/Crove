@@ -40,6 +40,7 @@ import {
   SOCIAL_ACTOR_ORIGINS,
   SOCIAL_BANNED_WORD_LEVELS,
   SOCIAL_DECISIONS,
+  SOCIAL_EDIT_STATES,
   SOCIAL_LINK_PREVIEW_ERRORS,
   SOCIAL_LINK_PREVIEW_STATUSES,
   SOCIAL_NOTIFICATION_KINDS,
@@ -188,6 +189,7 @@ const UNIONS = unions({
   'crove_social.link_preview.error': SOCIAL_LINK_PREVIEW_ERRORS,
   'crove_social.notification.kind': SOCIAL_NOTIFICATION_KINDS,
   'crove_social.notification_mute.kind': SOCIAL_NOTIFICATION_KINDS,
+  'crove_social.post_variant.edit_state': SOCIAL_EDIT_STATES,
   'crove_social.post_variant.error_kind': SOCIAL_ERROR_KINDS,
   'crove_social.post_variant.status': SOCIAL_VARIANT_STATUSES,
 });

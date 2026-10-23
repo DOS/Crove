@@ -237,3 +237,52 @@ describe('Mastodon remove (#860)', () => {
     expect(none.calls).toHaveLength(0);
   });
 });
+
+describe('Mastodon edit (#1223)', () => {
+  const ID = '109302436954721999';
+  const GET = `GET mastodon.example/api/v1/statuses/${ID}`;
+  const PUT = `PUT mastodon.example/api/v1/statuses/${ID}`;
+  const LIMITS = 'GET mastodon.example/api/v2/instance';
+  const edit = (fetchImpl: Fetch, over: { body?: string; settings?: Record<string, unknown> } = {}) =>
+    new MastodonPublisher(fetchImpl).edit({
+      externalAccountId: ACCOUNT,
+      secret: SECRET,
+      externalId: ID,
+      content: { body: over.body ?? 'Giá đúng: 45.000đ', title: null, linkUrl: 'https://example.com/menu', media: [] },
+      settings: over.settings ?? {},
+      callKey: 'edit-1',
+    });
+  const status = (over: Record<string, unknown> = {}) => ({ body: { id: ID, sensitive: false, language: 'vi', poll: null, media_attachments: [{ id: '111' }, { id: '112' }], ...over } });
+
+  it('reads the status, then puts the new text back with its media, flag, language and content warning', async () => {
+    const { fetchImpl, calls } = instance({ [GET]: [status({ sensitive: true })], [LIMITS]: [limits()], [PUT]: [{ body: { id: ID, edited_at: '2026-10-23T10:00:00Z' } }] });
+    expect(await edit(fetchImpl, { settings: { contentWarning: 'Giá' } })).toEqual({ kind: 'edited' });
+    expect(calls.map((c) => c.route)).toEqual([GET, LIMITS, PUT]);
+    expect(calls[2]?.json).toEqual({ status: 'Giá đúng: 45.000đ\n\nhttps://example.com/menu', media_ids: ['111', '112'], sensitive: true, spoiler_text: 'Giá', language: 'vi' });
+    expect(calls[2]?.auth).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it('refuses a poll, read before the call or from the status, with nothing changed', async () => {
+    const none = instance({});
+    expect(await edit(none.fetchImpl, { settings: { poll: { options: ['Có', 'Không'] } } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(none.calls).toHaveLength(0);
+    const poll = instance({ [GET]: [status({ poll: { id: '9', options: [] }, media_attachments: [] })] });
+    expect(await edit(poll.fetchImpl)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(poll.calls.map((c) => c.route)).toEqual([GET]);
+  });
+
+  it('maps a status gone, a failed read, a refused text and a server error on the edit', async () => {
+    const gone = instance({ [GET]: [{ status: 404, body: { error: 'Record not found' } }] });
+    expect(await edit(gone.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    // A read that fails changed nothing: a failure to retry, never an unclear edit.
+    const unread = instance({ [GET]: [{ status: 503, body: { error: 'Service Unavailable' } }] });
+    expect(await edit(unread.fetchImpl)).toEqual({ kind: 'rejected', error: 'transient', code: 'MASTODON_503' });
+    const long = instance({ [GET]: [status()], [LIMITS]: [limits({ max_characters: 10 })] });
+    expect(await edit(long.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG' });
+    expect(long.calls.map((c) => c.route)).toEqual([GET, LIMITS]);
+    const refused = instance({ [GET]: [status()], [LIMITS]: [limits()], [PUT]: [{ status: 422, body: { error: "Validation failed: Text can't be blank" } }] });
+    expect(await edit(refused.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'MASTODON_422' });
+    const down = instance({ [GET]: [status()], [LIMITS]: [limits()], [PUT]: [{ status: 502, body: { error: 'Bad Gateway' } }] });
+    expect(await edit(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'MASTODON_502' });
+  });
+});

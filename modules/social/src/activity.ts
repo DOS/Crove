@@ -11,6 +11,7 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
 import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
+import { EDIT_STALE_MS, editCallsOf } from './edit-published.ts';
 import { mentionsOf } from './domain/mentions.ts';
 import { NOT_PUBLIC_NOTES } from './domain/channels.ts';
 import { QUEUE_ORDER_COMMANDS, reorderCode } from './queue-order.ts';
@@ -249,6 +250,11 @@ export const ACTIVITY_KINDS = [
   'repost_failed',
   // Taken down from its platform (#860), by the member who asked, with their reason.
   'removed',
+  // A correction of the published text (#1223): asked for by a member, confirmed by the platform, or not (its code
+  // says why, OUTCOME_UNKNOWN when unclear).
+  'live_edit',
+  'live_edited',
+  'live_edit_failed',
   // Moved in its channel's queue (#1020); its code says how: shuffle, front (put first) or shifted (one place later).
   'queue_moved',
   // An earlier version saved again as a new edit (#1021).
@@ -320,6 +326,7 @@ const AUDITED: Record<string, ActivityKind> = {
   // A bulk edit (#1057) runs these once per post, so each post's timeline shows its own change.
   'social.post.set_labels': 'labeled',
   'social.post.assign': 'assigned',
+  'social.variant.edit_published': 'live_edit',
 };
 
 export const postActivity = defineQuery({
@@ -394,9 +401,10 @@ export const postActivity = defineQuery({
       const f = pinFiles.get(c.file_id);
       return { fileId: c.file_id, mime: f?.mime ?? '', filename: f?.filename ?? '', x: c.pin_x, y: c.pin_y, atSeconds: c.pin_seconds, current: current.has(c.file_id) };
     };
-    const keyed = await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'revision', 'attempt']).where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).where(connectionInScope(scope, 'channel_connection_id')).execute();
+    const keyed = await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'revision', 'published_revision', 'attempt']).where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).where(connectionInScope(scope, 'channel_connection_id')).execute();
     const replies = await autoReplyCallsOf(ctx.trx, ctx.orgId, keyed);
     const reposts = await repostCallsOf(ctx.trx, ctx.orgId, keyed);
+    const edits = await editCallsOf(ctx.trx, ctx.orgId, keyed);
     const viewer = ctx.actor.type === 'user' ? ctx.actor.userId : null;
     const now = Date.now();
     const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null, checklist: null, resolvedAt: null, resolvedBy: null, resolvedByName: null, resolvable: false, pin: null };
@@ -451,6 +459,14 @@ export const postActivity = defineQuery({
         call.state === 'started' && now - call.started_at.getTime() <= REPOST_STALE_MS
           ? []
           : [{ ...none, id: `repost:${variantId}`, kind: call.state === 'succeeded' ? 'reposted' : 'repost_failed', at: (call.finished_at ?? call.started_at).toISOString(), variantId, code: call.state === 'succeeded' ? null : call.state === 'started' ? 'OUTCOME_UNKNOWN' : (call.error_code ?? 'OUTCOME_UNKNOWN') }],
+      ),
+      // Each edit call's answer (#1223); one still on its way shows nothing yet, one that went quiet is unclear.
+      ...[...edits].flatMap(([variantId, calls]) =>
+        calls.flatMap((call): ActivityItem[] =>
+          call.state === 'started' && now - call.started_at.getTime() <= EDIT_STALE_MS
+            ? []
+            : [{ ...none, id: `edit:${call.key}`, kind: call.state === 'succeeded' ? 'live_edited' : 'live_edit_failed', at: (call.finished_at ?? call.started_at).toISOString(), variantId, code: call.state === 'succeeded' ? null : call.state === 'failed' ? call.error_code : (call.error_code ?? 'OUTCOME_UNKNOWN') }],
+        ),
       ),
       ...[...replies].flatMap(([variantId, call]): ActivityItem[] =>
         // A call still on its way shows nothing yet; one that went quiet is unclear.

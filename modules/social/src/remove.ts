@@ -12,7 +12,7 @@ import { zId } from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { REMOVE_READY, isProvider, removeAtFit, removeAtOf, removeWindowMs } from './domain/channels.ts';
-import { publishCallKey } from './domain/publish.ts';
+import { callRevision, publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
 import { lockPost, lockVariants, refreshPostStatus, setVariant, settingsOf, step, variantPost, type Trx, type VariantRow } from './variants.ts';
 import { refuseChannels } from './channel-access.ts';
@@ -28,8 +28,8 @@ export type RemoveWork =
   | { action: 'none'; reason: string }
   | { action: 'call'; variantId: string; provider: string; connectionId: string; callKey: string; externalId: string; settings: Record<string, unknown> };
 
-type RemoveVariant = Pick<VariantRow, 'id' | 'revision' | 'attempt'>;
-const removePrefix = (v: RemoveVariant) => publishCallKey(v.id, v.revision, v.attempt, REMOVE_STEP);
+type RemoveVariant = Pick<VariantRow, 'id' | 'revision' | 'published_revision' | 'attempt'>;
+const removePrefix = (v: RemoveVariant) => publishCallKey(v.id, callRevision(v), v.attempt, REMOVE_STEP);
 
 // The remove calls of each variant's current publish, oldest first, in one query.
 export async function removeCallsOf(trx: Trx, orgId: string, variants: readonly RemoveVariant[]): Promise<Map<string, CommentCall[]>> {
@@ -127,7 +127,7 @@ export const removeBegin = defineCommand({
     const calls = (await removeCallsOf(ctx.trx, ctx.orgId, [v])).get(v.id) ?? [];
     if ((calls.at(-1)?.key ?? null) !== input.after) return { action: 'none', reason: 'stale' };
     const stepName = calls.length === 0 ? REMOVE_STEP : `${REMOVE_STEP}_${calls.length + 1}`;
-    const callKey = publishCallKey(v.id, v.revision, v.attempt, stepName);
+    const callKey = publishCallKey(v.id, callRevision(v), v.attempt, stepName);
     // Idempotent: the platform answers a post already gone like a removal.
     await ctx.trx
       .insertInto('crove_kernel.external_call')

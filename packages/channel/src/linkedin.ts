@@ -11,8 +11,8 @@
 // members. A post may be a poll instead of images or a video (#1118, content.poll), or one PDF shown as a document
 // (#1119: the Documents API, then content.media with the document and its title).
 // Remove (#1138): DELETE /rest/posts/{urn}, when a person asks or at the post's planned takedown.
-import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
-import { commentResult, removeResult } from './comment.ts';
+import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, EditInput, EditResult, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { commentResult, EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { DUPLICATE_CONTENT, holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -114,11 +114,13 @@ class LinkedInClient {
   }
 
   // A JSON call to the versioned REST API (or /v2/userinfo). Returns the body and the x-restli-id header.
-  async call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, token: string, json?: unknown): Promise<{ body: T | null; id: string | null; status: number }> {
+  // restli: the Rest.li method a POST stands for (a PARTIAL_UPDATE, #1223), sent in its header.
+  async call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, token: string, json?: unknown, restli?: 'PARTIAL_UPDATE'): Promise<{ body: T | null; id: string | null; status: number }> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json', 'X-Restli-Protocol-Version': '2.0.0' };
     if (path.startsWith('/rest/')) headers['Linkedin-Version'] = this.version;
     // Rest.li names a delete in a header of its own, as the Posts API's sample does.
     if (method === 'DELETE') headers['X-RestLi-Method'] = 'DELETE';
+    if (method === 'POST' && restli) headers['X-RestLi-Method'] = restli;
     if (json !== undefined) headers['content-type'] = 'application/json';
     const response = await this.fetch(`${API}${path}`, { method, headers, ...(json === undefined ? {} : { body: JSON.stringify(json) }) });
     const text = await response.text().catch(() => '');
@@ -659,6 +661,30 @@ class LinkedInPosting {
       if (error instanceof LinkedInError && (error.status === 404 || error.status === 410)) return { kind: 'removed' };
       if (error instanceof LinkedInError && error.status === 409) return { kind: 'rejected', error: 'transient', code: error.code ?? 'HTTP_409' };
       return removeResult(publishResult(error));
+    }
+  }
+
+  // Corrects the post's text (#1223): POST /rest/posts/{encoded urn} with X-RestLi-Method PARTIAL_UPDATE and
+  // { patch: { $set: { commentary } } }, answered 204 (Posts API, Update Posts), with the grant that made it
+  // (w_member_social for a member, w_organization_social for a page). The text is built and escaped as publish does
+  // (littleText); the post's images, video, document and visibility stay, since nothing else is set. A poll is refused
+  // before any call, as the module refuses it first. A post LinkedIn does not find (404) is not edited; a write conflict
+  // (409) changed nothing.
+  async edit(input: EditInput): Promise<EditResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!AUTHORS[this.author].id.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    if (!POST_URN.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    if (linkedinPollOf(input.settings) !== null) return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
+    const text = textOf(input.content);
+    if (!text && input.content.media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    try {
+      await this.client.call('POST', `/rest/posts/${encodeURIComponent(input.externalId)}`, token, { patch: { $set: { commentary: littleText(text) } } }, 'PARTIAL_UPDATE');
+      return { kind: 'edited' };
+    } catch (error) {
+      if (error instanceof LinkedInError && (error.status === 404 || error.status === 410)) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      if (error instanceof LinkedInError && error.status === 409) return { kind: 'rejected', error: 'transient', code: error.code ?? 'HTTP_409' };
+      return editResult(publishResult(error));
     }
   }
 

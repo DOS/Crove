@@ -66,6 +66,7 @@ export * from './pin.ts';
 export * from './gate.ts';
 export * from './playlists.ts';
 export * from './remove.ts';
+export * from './edit-published.ts';
 export * from './accounts.ts';
 export * from './link-preview.ts';
 export * from './channel-options.ts';
