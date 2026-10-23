@@ -36,7 +36,8 @@ const API = 'https://api.pinterest.com/v5';
 const ID = /^\d{1,32}$/;
 const TITLE_MAX = 100;
 const DESCRIPTION_MAX = 800;
-const ALT_TEXT_MAX = 500;
+// How much alt text this adapter sends; ALT_TEXT_LIMITS of the Social module follows it (alt-text-limits.test.ts, #1126).
+export const PINTEREST_ALT_TEXT_MAX = 500;
 // The types an image_base64 source takes.
 const IMAGE_TYPES = ['image/jpeg', 'image/png'];
 // A carousel pin holds 2 to 5 images.
@@ -420,7 +421,7 @@ export class PinterestPublisher implements Publisher {
     const link = linkOf(input.content);
     const title = titleOf(input.content);
     const description = descriptionOf(input.content);
-    const alt = media[0]?.altText ? clip(media[0].altText, ALT_TEXT_MAX) : null;
+    const alt = media[0]?.altText ? clip(media[0].altText, PINTEREST_ALT_TEXT_MAX) : null;
     const pin = {
       board_id: input.externalAccountId,
       ...(section.sectionId ? { board_section_id: section.sectionId } : {}),
@@ -468,7 +469,7 @@ export class PinterestPublisher implements Publisher {
       ...(title ? { title } : {}),
       ...(description ? { description } : {}),
       ...(link ? { link } : {}),
-      ...(video.altText ? { alt_text: clip(video.altText, ALT_TEXT_MAX) } : {}),
+      ...(video.altText ? { alt_text: clip(video.altText, PINTEREST_ALT_TEXT_MAX) } : {}),
       media_source: { source_type: 'video_id', media_id: uploaded.mediaId, cover_image_key_frame_time: cover && 'atMs' in cover ? Math.round(cover.atMs / 1000) : 0 },
     };
     try {

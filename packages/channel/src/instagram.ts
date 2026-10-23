@@ -53,6 +53,8 @@ const CHECK_AFTER_SECONDS = 30;
 // How long the upload of one video's bytes may take (#772): a 100 MB file on a slow link.
 const UPLOAD_MS = 300_000;
 const NUMERIC_ID = /^\d{1,32}$/;
+// How much alt text this adapter sends; ALT_TEXT_LIMITS of the Social module follows it (alt-text-limits.test.ts, #1126).
+export const INSTAGRAM_ALT_TEXT_MAX = 1000;
 
 interface InstagramSecret {
   accessToken: string;
@@ -132,7 +134,7 @@ function peopleOf(settings: Readonly<Record<string, unknown>>, key: 'collaborato
 const userTagsForm = (names: readonly string[]) =>
   names.length === 0 ? {} : { user_tags: JSON.stringify(names.map((username, i) => ({ username, x: Number(((i + 1) / (names.length + 1)).toFixed(3)), y: 0.9 }))) };
 const collaboratorsForm = (names: readonly string[]) => (names.length === 0 ? {} : { collaborators: JSON.stringify(names) });
-const altOf = (m: { mime: string; altText?: string | null }) => (m.altText && !isVideo(m) ? { alt_text: m.altText.slice(0, 1000) } : {});
+const altOf = (m: { mime: string; altText?: string | null }) => (m.altText && !isVideo(m) ? { alt_text: m.altText.slice(0, INSTAGRAM_ALT_TEXT_MAX) } : {});
 // Where a Reel shows (#1019), in `settings.instagram`: { reelFeed, trialGraduation? }, as the composer stores it (the
 // Social module's instagramReelOf). feed (the default) sends share_to_feed true, as before: the Reel shows in the feed
 // and on the profile grid. reels_only sends share_to_feed false: the Reels tab only. trial sends trial_params with its

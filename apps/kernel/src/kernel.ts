@@ -114,7 +114,7 @@ export interface KernelAdapters {
   // The AI invoice reader; null runs without AI (e-invoice XML still works, PDF and images do not).
   ai: InvoiceReader | null;
   // Drafts Social posts (Social plan S7) through the same endpoint; null runs without AI drafting.
-  writer?: (Pick<SocialWriter, 'draft' | 'rewrite'> & Partial<Pick<SocialWriter, 'hashtags' | 'describeImage'>>) | null;
+  writer?: (Pick<SocialWriter, 'draft' | 'rewrite'> & Partial<Pick<SocialWriter, 'hashtags' | 'describeImage' | 'ideas'>>) | null;
   storage: BlobStore;
   // Outbound mail (member invites, issue #129); the default logs that nothing was sent.
   mail?: MailProvider;
@@ -494,15 +494,19 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
   return { config, modules: config.CROVE_MODULES, adapters: resolved, start, rebindExports, setUserStatus, purgeOrg };
 }
 
-// The Social writer as the API uses it: drafts, rewrites and hashtags as they are, and with an image-capable model
-// (AI_VISION) an image's alt text from its stored bytes, read and checked like a download (#817).
+// The Social writer as the API uses it: drafts, rewrites, hashtags and post ideas (#1181) as they are, and with an
+// image-capable model (AI_VISION) an image's alt text from its stored bytes, read and checked like a download (#817),
+// never more of them than the file row records (#1126).
 export function socialDrafter(writer: NonNullable<KernelAdapters['writer']>, store: BlobStore | null): SocialDrafter {
   const describe = writer.describeImage?.bind(writer);
   return {
     draft: (request) => writer.draft(request),
     rewrite: (request) => writer.rewrite(request),
     ...(writer.hashtags ? { hashtags: writer.hashtags.bind(writer) } : {}),
-    ...(store && describe ? { describeStored: async (file, mime, language, maxChars) => describe({ image: await readVerified(store, file), mime, language, maxChars: maxChars ?? null }) } : {}),
+    ...(writer.ideas ? { ideas: writer.ideas.bind(writer) } : {}),
+    ...(store && describe
+      ? { describeStored: async (file, mime, language, maxChars) => describe({ image: await readVerified(store, file, file.sizeBytes), mime, language, maxChars: maxChars ?? null }) }
+      : {}),
   };
 }
 

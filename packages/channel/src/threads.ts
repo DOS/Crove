@@ -26,6 +26,8 @@ const API = 'https://graph.threads.net';
 const VERSION = 'v1.0';
 const WAIT_MS = 15_000;
 const POLL_MS = 2_000;
+// How much alt text this adapter sends; ALT_TEXT_LIMITS of the Social module follows it (alt-text-limits.test.ts, #1126).
+export const THREADS_ALT_TEXT_MAX = 1000;
 // How long a reply waits for its text container; a text container is usually ready at once, and the comment job's
 // call timeout (60 s) leaves room for the two calls around the wait.
 const COMMENT_WAIT_MS = 10_000;
@@ -371,7 +373,7 @@ export class ThreadsPublisher implements Publisher {
     // (#790), which Threads takes on both, up to 1000 characters.
     const mediaForm = async (m: { fileId: string; mime: string; altText?: string | null }) => ({
       ...(m.mime.startsWith('video/') ? { media_type: 'VIDEO', video_url: await urlOf(m.fileId) } : { media_type: 'IMAGE', image_url: await urlOf(m.fileId) }),
-      ...(m.altText ? { alt_text: m.altText.slice(0, 1000) } : {}),
+      ...(m.altText ? { alt_text: m.altText.slice(0, THREADS_ALT_TEXT_MAX) } : {}),
     });
     let container: string;
     try {

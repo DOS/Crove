@@ -1,7 +1,8 @@
 // AI alt text suggestions through the API (#817, #1121): a recorded model answer fills the suggestion from the stored
 // image, within the chosen channels' strictest limit; a viewer, a server without AI or without a vision model, a file
-// that is not the org's own Social image, a channel of another org and a spent budget are refused before the model is
-// asked; and the route writes nothing. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
+// that is not the org's own Social image, a channel of another org, a channel outside a limited member's (#1175), an
+// object larger than its file row records (#1126) and a spent budget are refused before the model is asked; and the
+// route writes nothing. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -258,6 +259,38 @@ suite('AI alt text suggestions through the API (#1121)', () => {
     expect(await rpc('social/posts/describeImage', await tokenFor(other), { fileId: files.photo, language: 'vi' }, { slug: otherOrg.slug })).toMatchObject({ status: 404, body: { code: 'MEDIA_NOT_FOUND' } });
     expect(asked).toHaveLength(count);
     expect(await snapshot()).toEqual(before);
+  });
+
+  it("refuses a limited member's ask with another channel before the budget and the model (#1081, #1175)", async () => {
+    const member: Account = { subject: randomUUID(), email: `member-${randomUUID().slice(0, 8)}@alt-text.test`, session: randomUUID(), userId: '' };
+    member.userId = String((await rpc('me/get', await tokenFor(member), undefined, { slug: null })).body?.userId);
+    const mine = await connection(org.orgId, 'mastodon', owner.userId);
+    await admin(async (c) => {
+      await c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [org.orgId, member.userId]);
+      await c.query('INSERT INTO crove_social.channel_access (org_id, user_id, channel_connection_id, created_by) VALUES ($1, $2, $3, $4)', [org.orgId, member.userId, mine, owner.userId]);
+    });
+    const count = asked.length;
+    const token = await tokenFor(member);
+    expect(await rpc('social/posts/describeImage', token, { fileId: files.photo, language: 'vi', connectionIds: [mine, channels.pinterest] })).toMatchObject({
+      status: 403,
+      body: { code: 'CHANNEL_NOT_ALLOWED', data: { connectionIds: [channels.pinterest] } },
+    });
+    expect(asked).toHaveLength(count);
+    // Their own channel still works.
+    expect(await rpc('social/posts/describeImage', token, { fileId: files.photo, language: 'vi', connectionIds: [mine] })).toMatchObject({ status: 200 });
+    expect(asked).toHaveLength(count + 1);
+  });
+
+  it('reads no more of the stored image than its file row records (#1126)', async () => {
+    // The row says one byte less than the object holds, as if the object had been swapped for a larger one.
+    const short = await file(org.orgId, { bytes: new Uint8Array([...photo, 0x42]), sizeBytes: photo.byteLength });
+    const count = asked.length;
+    // Another org member's ask, so the owner's budget the next test counts stays untouched.
+    const member: Account = { subject: randomUUID(), email: `capped-${randomUUID().slice(0, 8)}@alt-text.test`, session: randomUUID(), userId: '' };
+    member.userId = String((await rpc('me/get', await tokenFor(member), undefined, { slug: null })).body?.userId);
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [org.orgId, member.userId]));
+    expect(await rpc('social/posts/describeImage', await tokenFor(member), { fileId: short, language: 'vi' })).toMatchObject({ status: 503, body: { code: 'AI_ALT_TEXT_FAILED' } });
+    expect(asked).toHaveLength(count);
   });
 
   it('counts against the AI drafting budget and refuses once it is spent, without asking the model', async () => {

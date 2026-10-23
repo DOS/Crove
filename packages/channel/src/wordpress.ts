@@ -34,7 +34,8 @@ const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 const TITLE_MAX = 200;
 // A title made from the text's first line.
 const FIRST_LINE_MAX = 100;
-const ALT_TEXT_MAX = 1000;
+// How much alt text this adapter sends; ALT_TEXT_LIMITS of the Social module follows it (alt-text-limits.test.ts, #1126).
+export const WORDPRESS_ALT_TEXT_MAX = 1000;
 // Posts one reconcile reads (WordPress pages up to 100).
 const RECONCILE_PAGE = 20;
 // The post call and some slack fit between the upload budget and callTimeoutMs.
@@ -398,7 +399,7 @@ export class WordPressPublisher implements Publisher {
         const url = mediaUrl(s.site, uploaded.source_url);
         // A site that names its media over plain http on another host: a retry would only upload them again.
         if (!url) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_NOT_HTTPS' };
-        const alt = m.altText ? [...m.altText.trim()].slice(0, ALT_TEXT_MAX).join('') : '';
+        const alt = m.altText ? [...m.altText.trim()].slice(0, WORDPRESS_ALT_TEXT_MAX).join('') : '';
         if (alt) await this.client.call(s, 'POST', `/wp/v2/media/${id}`, { json: { alt_text: alt } });
         images.push({ id, url, alt });
       } catch (error) {

@@ -440,6 +440,36 @@ describe('generations (ADR-0013)', () => {
     const original = fakeStore(() => ({ Body: body(bytes) }));
     await expect(readVerified(original.store, { key, generation: 's3:v1', sha256 })).resolves.toEqual(bytes);
   });
+
+  it('caps a verified read at the recorded size, by the declared length or while streaming (#1126)', async () => {
+    const ref = { key, generation: 's3:v1', sha256 };
+    const larger = new Uint8Array(bytes.byteLength * 4);
+    // A swapped, larger object that declares its length is refused before its body is read.
+    let cancelled = false;
+    const declared = fakeStore(() => ({
+      Body: {
+        transformToByteArray: async () => larger,
+        transformToWebStream: () =>
+          new ReadableStream<Uint8Array>({
+            cancel() {
+              cancelled = true;
+            },
+          }),
+      },
+      ContentLength: larger.byteLength,
+    }));
+    await expect(readVerified(declared.store, ref, bytes.byteLength)).rejects.toBeInstanceOf(BlobTooLargeError);
+    expect(cancelled).toBe(true);
+    // One that does not declare it (or lies) is cut off at the cap.
+    const undeclared = fakeStore(() => ({ Body: body(larger, [larger.slice(0, 8), larger.slice(8)]) }));
+    await expect(readVerified(undeclared.store, ref, bytes.byteLength)).rejects.toBeInstanceOf(BlobTooLargeError);
+    const lying = fakeStore(() => ({ Body: body(larger, [larger]), ContentLength: 1 }));
+    await expect(readVerified(lying.store, ref, bytes.byteLength)).rejects.toBeInstanceOf(BlobTooLargeError);
+    // The original, streamed in chunks, reads back whole and verified.
+    const half = bytes.byteLength >> 1;
+    const original = fakeStore(() => ({ Body: body(bytes, [bytes.slice(0, half), bytes.slice(half)]), ContentLength: bytes.byteLength }));
+    await expect(readVerified(original.store, ref, bytes.byteLength)).resolves.toEqual(bytes);
+  });
 });
 
 describe('staged reads (plan §7.6 step 2)', () => {

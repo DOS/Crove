@@ -465,6 +465,8 @@ export const SOCIAL_CHAT_ALERT_TARGETS = ['telegram', 'discord'] as const;
 export const SOCIAL_CHAT_ALERT_KINDS = ['needs_approval', 'failed', 'published', 'client_answered'] as const;
 // The stages of an idea on the ideas board (#701).
 export const SOCIAL_IDEA_STAGES = ['new', 'planned', 'drafted', 'archived'] as const;
+// Where an idea came from (#1181): a person, or an AI suggestion the member kept. Set at insert only.
+export const SOCIAL_IDEA_ORIGINS = ['human', 'ai'] as const;
 // Scheduled client report mail (#704): how often, the period each mail covers, and a run's kind.
 export const SOCIAL_REPORT_CADENCES = ['weekly', 'monthly'] as const;
 export const SOCIAL_REPORT_PERIODS = ['previous_week', 'previous_month', 'last_7_days', 'last_30_days'] as const;
@@ -481,6 +483,7 @@ export type SocialAccountSnapshotError = (typeof SOCIAL_ACCOUNT_SNAPSHOT_ERRORS)
 export type SocialNotificationKind = (typeof SOCIAL_NOTIFICATION_KINDS)[number];
 export type SocialLabelColor = (typeof SOCIAL_LABEL_COLORS)[number];
 export type SocialIdeaStage = (typeof SOCIAL_IDEA_STAGES)[number];
+export type SocialIdeaOrigin = (typeof SOCIAL_IDEA_ORIGINS)[number];
 export type SocialWatermarkCorner = (typeof SOCIAL_WATERMARK_CORNERS)[number];
 export type SocialChatAlertTarget = (typeof SOCIAL_CHAT_ALERT_TARGETS)[number];
 export type SocialChatAlertKind = (typeof SOCIAL_CHAT_ALERT_KINDS)[number];
@@ -530,7 +533,7 @@ export type SocialMediaAttributionTable = Refine<G.SocialMediaAttributionTable, 
 export type SocialWatermarkTable = Refine<G.SocialWatermarkTable, { corner: SocialWatermarkCorner }>;
 export type SocialChatAlertTable = Refine<G.SocialChatAlertTable, { kind: SocialChatAlertTarget; events: SocialChatAlertKind[] }>;
 export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
-export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<SocialIdeaStage> }>;
+export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<SocialIdeaStage>; origin: ColumnType<SocialIdeaOrigin, SocialIdeaOrigin | undefined, never> }>;
 export type SocialReportScheduleTable = Refine<G.SocialReportScheduleTable, { cadence: SocialReportCadence; period: SocialReportPeriod }>;
 export type SocialReportScheduleRunTable = Refine<G.SocialReportScheduleRunTable, { kind: SocialReportRunKind }>;
 export type SocialBannedWordTable = Refine<G.SocialBannedWordTable, { level: SocialBannedWordLevel }>;

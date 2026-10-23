@@ -23,6 +23,8 @@ const PLC_DIRECTORY = 'https://plc.directory';
 const VIDEO_SERVICE = 'https://video.bsky.app';
 // One MP4 per post, as the channel rules allow (Bluesky's service takes more; the rules keep the smaller limit).
 const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
+// How much alt text this adapter sends with a video (an image's goes as it is); ALT_TEXT_LIMITS of the Social module follows it (alt-text-limits.test.ts, #1126).
+export const BLUESKY_VIDEO_ALT_TEXT_MAX = 1000;
 // How long a publish waits for the video service; with the upload it stays inside callTimeoutMs.
 const VIDEO_WAIT_MS = 300_000;
 const VIDEO_CALL_MARGIN_MS = 90_000;
@@ -590,7 +592,7 @@ export class BlueskyPublisher implements Publisher {
       }
       const uploaded = await this.uploadVideo(session, bytes, started);
       if ('rejected' in uploaded) return uploaded.rejected;
-      videoEmbed = { $type: 'app.bsky.embed.video', video: uploaded.blob, ...(video.altText ? { alt: video.altText.slice(0, 1000) } : {}) };
+      videoEmbed = { $type: 'app.bsky.embed.video', video: uploaded.blob, ...(video.altText ? { alt: video.altText.slice(0, BLUESKY_VIDEO_ALT_TEXT_MAX) } : {}) };
     }
     // Images are uploaded as blobs first; a blob nobody references is never shown, so a failure here posted nothing.
     const images: { alt: string; image: unknown }[] = [];

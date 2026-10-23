@@ -20,8 +20,9 @@ export interface BlobStore {
   put(key: string, bytes: Uint8Array, contentType: string): Promise<string>;
   // Throws BlobNotFoundError when nothing is stored under the key. With a versioned generation (s3:, gcs:) the store
   // reads that exact version; content: and null read the current object. Callers that hold a file reference use
-  // readVerified, which also checks the sha256.
-  get(key: string, generation?: string | null): Promise<Uint8Array>;
+  // readVerified, which also checks the sha256. With maxBytes the store refuses a larger object (BlobTooLargeError)
+  // without reading more than that; a store that ignores it is checked by readVerified after the read.
+  get(key: string, generation?: string | null, maxBytes?: number): Promise<Uint8Array>;
   // Removes the blob; a missing key is not an error.
   delete(key: string): Promise<void>;
   // Present when browsers transfer bytes to and from the store directly (S3 presigned URLs); absent for local
@@ -138,10 +139,11 @@ export class BlobIntegrityError extends Error {
 
 // A staged upload is larger than its grant allows. S3 enforces the presigned POST's content-length-range; the
 // server checks again while it streams, so a store that ignores the condition cannot pass a larger file.
+// Also a stored object larger than a capped read allows (readVerified with maxBytes, #1126).
 export class BlobTooLargeError extends Error {
   readonly key: string;
   constructor(key: string, maxBytes: number) {
-    super(`staged object exceeds ${maxBytes} bytes: ${key}`);
+    super(`${key.startsWith('staging/') ? 'staged' : 'stored'} object exceeds ${maxBytes} bytes: ${key}`);
     this.name = 'BlobTooLargeError';
     this.key = key;
   }
@@ -156,8 +158,12 @@ export async function putFile(store: BlobStore, key: string, bytes: Uint8Array, 
 }
 
 // Reads the object a file row references and fails closed unless its bytes hash to the recorded sha256.
-export async function readVerified(store: BlobStore, ref: BlobRef): Promise<Uint8Array> {
-  const bytes = await store.get(ref.key, ref.generation);
+// maxBytes (#1126): the size the row records, or a caller's cap. A swapped object larger than that is refused
+// (BlobTooLargeError) before it is read whole, rather than read in full and then refused by its hash.
+export async function readVerified(store: BlobStore, ref: BlobRef, maxBytes?: number): Promise<Uint8Array> {
+  if (maxBytes !== undefined && !(Number.isSafeInteger(maxBytes) && maxBytes >= 0)) throw new Error('invalid read cap');
+  const bytes = await store.get(ref.key, ref.generation, maxBytes);
+  if (maxBytes !== undefined && bytes.byteLength > maxBytes) throw new BlobTooLargeError(ref.key, maxBytes);
   if (sha256Hex(bytes) !== ref.sha256) throw new BlobIntegrityError(ref);
   return bytes;
 }
@@ -429,11 +435,19 @@ export class LocalDiskStore implements BlobStore {
     return removed;
   }
 
-  // One copy per key (see put), so the generation selects nothing; readVerified checks the bytes.
-  async get(key: string): Promise<Uint8Array> {
+  // One copy per key (see put), so the generation selects nothing; readVerified checks the bytes. With maxBytes, a
+  // larger file is refused by its size before it is read (a blob is never rewritten in place, see put).
+  async get(key: string, _generation?: string | null, maxBytes?: number): Promise<Uint8Array> {
     const target = this.path(key);
     try {
-      return new Uint8Array(await readFile(target));
+      if (maxBytes === undefined) return new Uint8Array(await readFile(target));
+      const handle = await open(target, 'r');
+      try {
+        if ((await handle.stat()).size > maxBytes) throw new BlobTooLargeError(key, maxBytes);
+        return new Uint8Array(await handle.readFile());
+      } finally {
+        await handle.close();
+      }
     } catch (error) {
       if (errorCode(error) === 'ENOENT') throw new BlobNotFoundError(key);
       throw error;

@@ -28,7 +28,8 @@ export const DISCORD_FILE_MAX_BYTES = 10 * 1024 * 1024;
 // The whole request, every file together.
 export const DISCORD_MESSAGE_MAX_BYTES = 25 * 1024 * 1024;
 const FILES_MAX = 10;
-const DESCRIPTION_MAX = 1024;
+// How much alt text (an attachment description) this adapter sends; ALT_TEXT_LIMITS of the Social module follows it (alt-text-limits.test.ts, #1126).
+export const DISCORD_ALT_TEXT_MAX = 1024;
 // The hosts a webhook URL is copied from; every call goes to discord.com whatever the URL said.
 const URL_HOSTS = new Set(['discord.com', 'discordapp.com', 'canary.discord.com', 'ptb.discord.com']);
 const WEBHOOK_PATH = /^\/api(?:\/v\d{1,2})?\/webhooks\/(\d{17,20})\/([A-Za-z0-9_-]{60,100})\/?$/;
@@ -266,7 +267,7 @@ export class DiscordPublisher implements Publisher {
       const bytes = await input.readMedia(m.fileId).catch(() => null);
       if (!bytes) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
       if (bytes.byteLength > DISCORD_FILE_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_TOO_LARGE' };
-      const description = m.altText?.trim() ? m.altText.trim().slice(0, DESCRIPTION_MAX) : null;
+      const description = m.altText?.trim() ? m.altText.trim().slice(0, DISCORD_ALT_TEXT_MAX) : null;
       files.push({ bytes, mime: m.mime, filename: `${kindOf(m.mime) as string}-${i + 1}.${extensionOf(m.mime)}`, description });
     }
     // The whole message on what was read, not on the sizes stored.
