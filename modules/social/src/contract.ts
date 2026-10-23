@@ -36,3 +36,5 @@ export * from './domain/text-styles.ts';
 export * from './domain/campaign.ts';
 // A channel's signature (#1190): the composer, the counter and the previews append it as effectiveContent does.
 export * from './domain/signature.ts';
+// A long text split into a thread (#1222): the composer splits with the channel's own count and the thread rules.
+export * from './domain/thread-split.ts';
