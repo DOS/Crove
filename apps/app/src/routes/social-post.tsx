@@ -1770,6 +1770,10 @@ function DocumentTitleField({ id, settings, placeholder, disabled, onChange }: {
   const t = useTranslations('social');
   const own = settings.linkedin !== null && typeof settings.linkedin === 'object' && !Array.isArray(settings.linkedin) ? (settings.linkedin as Record<string, unknown>) : {};
   const value = typeof own.documentTitle === 'string' ? own.documentTitle : '';
+  // A title typed but blank once trimmed, or over the limit, is refused; the error sits under the field.
+  const size = value.trim().normalize('NFC').length;
+  const invalid = value !== '' && (size === 0 || size > DOCUMENT_TITLE_MAX);
+  const errorId = `${id}-error`;
   const save = (text: string) => {
     const { linkedin: _old, ...rest } = settings;
     const { documentTitle: _title, ...others } = own;
@@ -1783,10 +1787,15 @@ function DocumentTitleField({ id, settings, placeholder, disabled, onChange }: {
           {t('documentTitle')}
         </Label>
         <span className="text-xs text-subtle-foreground tabular-nums">
-          {value.trim().normalize('NFC').length}/{DOCUMENT_TITLE_MAX}
+          {size}/{DOCUMENT_TITLE_MAX}
         </span>
       </div>
-      <Input id={id} value={value} disabled={disabled} placeholder={placeholder} onChange={(e) => save(e.target.value)} />
+      <Input id={id} value={value} disabled={disabled} placeholder={placeholder} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={(e) => save(e.target.value)} />
+      {invalid && (
+        <p id={errorId} className="text-xs text-destructive">
+          {t('issues.DOCUMENT_TITLE_INVALID', { limit: DOCUMENT_TITLE_MAX })}
+        </p>
+      )}
       <p className="text-xs text-subtle-foreground">{t('documentTitleHint')}</p>
     </div>
   );
@@ -1925,7 +1934,7 @@ function ChannelEditor({
         <DocumentTitleField
           id={`social-document-title-${connectionId ?? provider}`}
           settings={own.settings}
-          placeholder={content.title?.trim() || pdf?.filename || 'Document'}
+          placeholder={content.title?.trim() || pdf?.filename || t('documentTitleFallback')}
           disabled={disabled}
           onChange={(settings) => onChange({ ...own, settings })}
         />

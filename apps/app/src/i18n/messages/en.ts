@@ -3455,6 +3455,7 @@ export const en = {
     linkedinVisibility: 'Who can see it',
     documentTitle: 'Document title',
     documentTitleHint: 'LinkedIn shows this title on the PDF. Left empty, the file name is used.',
+    documentTitleFallback: 'Document',
     linkedinVisibilityOption: { public: 'Anyone, on or off LinkedIn', connections: 'Connections only', loggedIn: 'Signed-in LinkedIn members only' },
     igCollaborators: 'Collaborators (optional)',
     igCollaboratorsHint: 'Up to 3 Instagram accounts, such as @partner. The post shows on their profile too once they accept the invitation in Instagram.',

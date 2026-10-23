@@ -3454,6 +3454,7 @@ export const vi = {
     linkedinVisibility: 'Ai xem được bài',
     documentTitle: 'Tiêu đề tài liệu',
     documentTitleHint: 'LinkedIn hiện tiêu đề này trên tài liệu PDF. Để trống thì dùng tên tệp.',
+    documentTitleFallback: 'Tài liệu',
     linkedinVisibilityOption: { public: 'Bất kỳ ai, kể cả ngoài LinkedIn', connections: 'Chỉ những người đã kết nối với bạn', loggedIn: 'Chỉ người đã đăng nhập LinkedIn' },
     igCollaborators: 'Cộng tác viên (không bắt buộc)',
     igCollaboratorsHint: 'Tối đa 3 tài khoản Instagram, ví dụ @doitac. Bài hiện cả trên trang của họ sau khi họ chấp nhận lời mời trong Instagram.',
