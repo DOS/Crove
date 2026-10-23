@@ -29,19 +29,20 @@ export function TextStyleButtons({ targetId, value, onChange, disabled }: { targ
   if (disabled) return null;
   const apply = (style: TextStyle | null) => {
     const el = document.getElementById(targetId) as HTMLTextAreaElement | null;
-    const start = el?.selectionStart ?? 0;
-    const end = el?.selectionEnd ?? 0;
+    if (!el) return;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
     if (start === end) {
       setPickFirst(true);
-      el?.focus();
+      el.focus();
       return;
     }
     setPickFirst(false);
     const next = styleSelection(value, start, end, style);
     if (next.text !== value) onChange(next.text);
     requestAnimationFrame(() => {
-      el?.focus();
-      el?.setSelectionRange(next.start, next.end);
+      el.focus();
+      el.setSelectionRange(next.start, next.end);
     });
   };
   return (

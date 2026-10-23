@@ -144,8 +144,12 @@ function endOfUnit(text: string, i: number): number {
  * they are when styling. An empty selection changes nothing.
  */
 export function styleSelection(text: string, start: number, end: number, style: TextStyle | null): { text: string; start: number; end: number } {
-  const from = startOfUnit(text, Math.max(0, Math.min(start, end, text.length)));
-  const to = endOfUnit(text, Math.max(from, Math.min(Math.max(start, end), text.length)));
+  // An empty selection changes nothing, even one inside a letter and its marks.
+  const lo = Math.max(0, Math.min(start, end, text.length));
+  const hi = Math.max(0, Math.min(Math.max(start, end), text.length));
+  if (lo === hi) return { text, start: lo, end: hi };
+  const from = startOfUnit(text, lo);
+  const to = endOfUnit(text, Math.max(from, hi));
   if (from === to) return { text, start: from, end: to };
   let out = '';
   let at = from;
