@@ -58,7 +58,8 @@ describe('queued posts a copy places again', () => {
       { weekday: 1, minute: 540, labelId: LABEL },
       { weekday: 3, minute: 1200, labelId: LABEL },
     ]);
-    expect(replacedCount(posts, 'c1', before, next, NOW).moved).toBe(1);
+    // The unlabelled post finds no slot it may take and leaves the queue, as social.queue.set answers it.
+    expect(replacedCount(posts, 'c1', before, next, NOW)).toEqual({ moved: 0, unqueued: 1 });
   });
 
   it('counts the posts a time zone change moves to the same local clock time, as the set reports them', () => {
