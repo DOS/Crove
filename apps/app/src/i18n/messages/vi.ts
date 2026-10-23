@@ -3159,7 +3159,7 @@ export const vi = {
       dayPick: 'Chọn',
       plannedTime: 'giờ dự kiến',
       busy: 'Đang dời một bài, hãy chờ xong rồi kéo tiếp.',
-      groupDone: '{count, plural, =0 {Chưa dời được kênh nào} other {Đã dời # kênh}} sang {when}.',
+      groupDone: '{count, plural, =0 {Chưa dời được kênh nào.} other {Đã dời # kênh sang {when}.}}',
       groupStayed: '{channel}: giữ nguyên vì {reason}.',
       groupRefused: '{channel}: không dời được.',
       stay: {

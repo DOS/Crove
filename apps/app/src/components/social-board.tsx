@@ -37,6 +37,9 @@ import {
   type BoardRefusal,
 } from '../lib/social-board.ts';
 
+// Channels already out or gone, which a move of the card leaves alone.
+const GONE: ReadonlySet<string> = new Set(['published', 'removed', 'cancelled']);
+
 type Post = Awaited<ReturnType<typeof orpc.social.posts.list.call>>[number];
 
 // The existing calls, one per move.
@@ -99,9 +102,9 @@ function Card({
   const f = useFormat();
   const ref = useRef<HTMLDivElement>(null);
   const othersId = useId();
-  // The post's channels outside the filter, which a move of the card acts on too.
+  // The post's channels outside the filter that a move of the card acts on too (not those already out or gone).
   const others = filtered
-    ? [...new Set(post.variants.filter((v) => v.status !== 'cancelled' && v.connectionId !== filtered).map((v) => (names.get(v.connectionId) ? `${providerName(v.provider)} (${names.get(v.connectionId)})` : providerName(v.provider))))]
+    ? [...new Set(post.variants.filter((v) => !GONE.has(v.status) && v.connectionId !== filtered).map((v) => (names.get(v.connectionId) ? `${providerName(v.provider)} (${names.get(v.connectionId)})` : providerName(v.provider))))]
     : [];
   // After a move by keyboard, the card takes the focus once it shows in its new column, and only then.
   useEffect(() => {

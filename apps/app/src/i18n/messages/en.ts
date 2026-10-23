@@ -3178,7 +3178,7 @@ export const en = {
       dayPick: 'Select',
       plannedTime: 'planned time',
       busy: 'A move is still running; wait for it to finish, then drag again.',
-      groupDone: '{count, plural, =0 {No channel moved} one {Moved # channel} other {Moved # channels}} to {when}.',
+      groupDone: '{count, plural, =0 {No channel moved.} one {Moved # channel to {when}.} other {Moved # channels to {when}.}}',
       groupStayed: '{channel}: left as it is because {reason}.',
       groupRefused: '{channel}: not moved.',
       stay: {
