@@ -15,6 +15,7 @@ import { IntakePanel, useIntake } from '../components/intake.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
+import { SM_UP, useMediaQuery } from '../lib/media.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
@@ -37,8 +38,9 @@ interface BulkRun {
 // Expired proposals (#876) waited past the org's expiry; their author may ask for them again.
 type Tab = 'pending' | 'executed' | 'rejected' | 'expired';
 
-
+// One proposal as the Inbox lists it.
 type InboxItem = Awaited<ReturnType<typeof client.inbox.list>>[number];
+
 const TABS: Tab[] = ['pending', 'executed', 'rejected', 'expired'];
 
 const FILE_STATUS = { processing: 'brand', waiting: 'warning', proposed: 'success', duplicate: 'warning', failed: 'destructive', expanded: 'success' } as const;
@@ -238,6 +240,7 @@ export function InboxPage() {
   const bulkRefused = bulk?.progress.results.flatMap((r) => (r.outcome === 'refused' ? [r] : [])) ?? [];
   const bulkNotSent = bulk ? bulk.total - bulk.progress.results.length : 0;
 
+  const wide = useMediaQuery(SM_UP);
   // The bulk checkbox and the check badges of one proposal, for the table and the phone's blocks alike (#1270).
   const selectBox = (item: InboxItem) =>
     bulkSelectable(item, REVERSAL_KIND) ? (
@@ -526,9 +529,47 @@ export function InboxPage() {
             }
           />
         ) : (
-          <>
-            {/* A phone reads each proposal as one block (#1270); the table needs more width than it has. */}
-            <ul className="space-y-2 sm:hidden">
+          // The table from sm up; a phone reads each proposal as one block (#1270), the table needing more width
+          // than it has. One layout is rendered, so each proposal is on the page once.
+          wide ? (
+            <DataTable
+              numeric={[bulkEnabled ? 3 : 2]}
+              head={[
+                ...(bulkEnabled ? [''] : []),
+                t('columns.document'),
+                t('columns.issueDate'),
+                t('columns.total'),
+                t('columns.checks'),
+                t('columns.received'),
+              ]}
+            >
+              {items.data?.map((item) => (
+                <TableRow key={item.id}>
+                  {bulkEnabled && (
+                    <TableCell className="w-10 px-4 py-3">
+                      {selectBox(item)}
+                    </TableCell>
+                  )}
+                  <TableCell className="px-4 py-3">
+                    <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
+                      {proposalName(item)}
+                    </Link>
+                    <p className="text-xs text-subtle-foreground">{item.title}</p>
+                    {item.status === 'expired' && item.expiredAfterDays !== null && (
+                      <p className="text-xs text-warning">{t('expiredReason', { days: item.expiredAfterDays })}</p>
+                    )}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-muted-foreground">{f.date(item.issueDate)}</TableCell>
+                  <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(item.total)}</TableCell>
+                  <TableCell className="px-4 py-3">
+                    {checkBadges(item)}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-xs text-subtle-foreground">{f.dateTime(item.createdAt)}</TableCell>
+                </TableRow>
+              ))}
+            </DataTable>
+          ) : (
+            <ul className="space-y-2">
               {items.data?.map((item) => (
                 <li key={item.id} className="flex gap-3 rounded-xl border bg-card p-3">
                   {bulkEnabled && <div className="pt-0.5">{selectBox(item)}</div>}
@@ -549,45 +590,7 @@ export function InboxPage() {
                 </li>
               ))}
             </ul>
-            <div className="hidden sm:block">
-              <DataTable
-                numeric={[bulkEnabled ? 3 : 2]}
-                head={[
-                  ...(bulkEnabled ? [''] : []),
-                  t('columns.document'),
-                  t('columns.issueDate'),
-                  t('columns.total'),
-                  t('columns.checks'),
-                  t('columns.received'),
-                ]}
-              >
-                {items.data?.map((item) => (
-                  <TableRow key={item.id}>
-                    {bulkEnabled && (
-                      <TableCell className="w-10 px-4 py-3">
-                        {selectBox(item)}
-                      </TableCell>
-                    )}
-                    <TableCell className="px-4 py-3">
-                      <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
-                        {proposalName(item)}
-                      </Link>
-                      <p className="text-xs text-subtle-foreground">{item.title}</p>
-                      {item.status === 'expired' && item.expiredAfterDays !== null && (
-                        <p className="text-xs text-warning">{t('expiredReason', { days: item.expiredAfterDays })}</p>
-                      )}
-                    </TableCell>
-                    <TableCell className="px-4 py-3 text-muted-foreground">{f.date(item.issueDate)}</TableCell>
-                    <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(item.total)}</TableCell>
-                    <TableCell className="px-4 py-3">
-                      {checkBadges(item)}
-                    </TableCell>
-                    <TableCell className="px-4 py-3 text-xs text-subtle-foreground">{f.dateTime(item.createdAt)}</TableCell>
-                  </TableRow>
-                ))}
-              </DataTable>
-            </div>
-          </>
+          )
         )}
       </TabsContent>
       </Tabs>
