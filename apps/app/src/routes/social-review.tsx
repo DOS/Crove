@@ -6,6 +6,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
+import { withSignature } from '@crove/mod-social/contract';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
@@ -23,7 +24,8 @@ import { pageBrand, type ReportBrand } from '../lib/social-report-branding.ts';
 
 type Verdict = 'approved' | 'changes_requested' | 'comment';
 type Answer = { name: string; verdict: Verdict; body: string | null; at: string };
-type Channel = { provider: string; channel: string; status: string; body: string; title: string | null; linkUrl: string | null };
+// signature (#1190): the channel's signature, or null; shown after the body as it is sent (fullText).
+type Channel = { provider: string; channel: string; status: string; body: string; signature: string | null; title: string | null; linkUrl: string | null };
 interface ReviewPage {
   kind?: undefined;
   org: string;
@@ -46,6 +48,10 @@ interface PlanPage {
   posts: PlanPost[];
 }
 type FileFetcher = { key: string; fetch: (fileId: string) => Promise<Blob> };
+
+// The text a channel sends (#1190): its body with its signature after it, as effectiveContent appends it, so the client
+// approves the whole text. Plain text, in the same preview as the body.
+const fullText = (c: Channel) => withSignature(c.body, { signature: c.signature ?? null });
 
 const NAME_KEY = 'crove.review.name';
 const tokenOf = () => {
@@ -133,7 +139,7 @@ function PlanPostCard({ token, item, index, name, files, onAnswered }: { token: 
             <PlatformPreview
               channel={c.channel}
               provider={c.provider}
-              content={{ body: c.body, title: c.title ?? '', linkUrl: c.linkUrl ?? '', media: c.media.map((m) => ({ fileId: m.id, altText: '', mime: m.type, sizeBytes: 0 })) }}
+              content={{ body: fullText(c), title: c.title ?? '', linkUrl: c.linkUrl ?? '', media: c.media.map((m) => ({ fileId: m.id, altText: '', mime: m.type, sizeBytes: 0 })) }}
             />
           </FileSource.Provider>
         ))}
@@ -259,7 +265,7 @@ export function SocialReviewPage() {
                     <PlatformPreview
                       channel={c.channel}
                       provider={c.provider}
-                      content={{ body: c.body, title: c.title ?? '', linkUrl: c.linkUrl ?? '', media: (media.data?.channels[i] ?? []).map((m) => ({ fileId: m.id, altText: '', mime: m.type, sizeBytes: 0 })) }}
+                      content={{ body: fullText(c), title: c.title ?? '', linkUrl: c.linkUrl ?? '', media: (media.data?.channels[i] ?? []).map((m) => ({ fileId: m.id, altText: '', mime: m.type, sizeBytes: 0 })) }}
                     />
                   </FileSource.Provider>
                   {c.mediaCount > 0 && !media.data && <p className="text-xs text-subtle-foreground">{t('media', { count: c.mediaCount })}</p>}

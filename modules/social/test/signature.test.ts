@@ -16,6 +16,7 @@ import {
   validateVariant,
   withChannelSignature,
   withSignature,
+  withoutSignature,
 } from '../src/index.ts';
 import { freezeValues, hashOf, issuesOf, type PostRow, type VariantRow } from '../src/variants.ts';
 
@@ -144,8 +145,25 @@ describe('the signature in validateVariant', () => {
     expect(validateVariant({ provider: 'x', body: 'a', title: null, media: [], settings: { signature: 7 } })).toContainEqual({ code: 'SIGNATURE_INVALID', field: 'settings.signature', limit: SIGNATURE_MAX, actual: null });
   });
 
-  it('gives a post with no text a text of its signature', () => {
-    expect(validateVariant({ provider: 'x', body: '', title: null, media: [], settings: { signature: SIGNATURE } }).map((i) => i.code)).not.toContain('CONTENT_REQUIRED');
+  it('never lets a post with no text and no media go out as its signature alone', () => {
+    const codes = (body: string, media: { kind: 'image'; mime: string; sizeBytes: number; durationSeconds: null }[] = []) =>
+      validateVariant({ provider: 'x', body, title: null, media, settings: { signature: SIGNATURE } }).map((i) => i.code);
+    // The text without the signature (a caller that passes the member's own text) and with it (effectiveContent's).
+    expect(codes('')).toContain('CONTENT_REQUIRED');
+    expect(codes(' \n ')).toContain('CONTENT_REQUIRED');
+    expect(codes(withSignature('', { signature: SIGNATURE }))).toContain('CONTENT_REQUIRED');
+    expect(codes(`\n${SIGNATURE.normalize('NFD')}\n`)).toContain('CONTENT_REQUIRED');
+    // Text of the member's own, or media, is a post: the signature goes after it, or is the images' caption.
+    expect(codes('Bánh mới')).not.toContain('CONTENT_REQUIRED');
+    expect(codes(withSignature('Bánh mới', { signature: SIGNATURE }))).not.toContain('CONTENT_REQUIRED');
+    expect(codes('', [{ kind: 'image', mime: 'image/jpeg', sizeBytes: 1000, durationSeconds: null }])).not.toContain('CONTENT_REQUIRED');
+  });
+
+  it('takes the text before the signature as the member wrote it', () => {
+    expect(withoutSignature(`Bánh mới\n\n${SIGNATURE}\n`, { signature: SIGNATURE })).toBe('Bánh mới\n\n');
+    expect(withoutSignature(SIGNATURE, { signature: SIGNATURE })).toBe('');
+    expect(withoutSignature('Bánh mới ', { signature: SIGNATURE })).toBe('Bánh mới ');
+    for (const settings of [undefined, {}, { signature: false }, { signature: 3 }]) expect(withoutSignature(SIGNATURE, settings)).toBe(SIGNATURE);
   });
 });
 

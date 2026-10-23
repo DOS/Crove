@@ -1,8 +1,11 @@
 // A default signature per channel (#1190) on PostgreSQL 17: owners and admins set it, a channel added to a post copies
 // it into the variant, the text sent ends with it, a later change leaves existing posts and their approvals alone,
-// leaving it off changes the content hash, and Instagram's hashtag and @ tag caps are checked before review. Set
-// CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
+// leaving it off changes the content hash, Instagram's hashtag and @ tag caps are checked before review, and the client
+// review link shows the signature, so a client approves the whole text. Set CROVE_TEST_ADMIN_URL to a superuser URL;
+// each run makes its own database.
 import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -10,7 +13,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
-import { socialCommands, socialQueries, type PostView } from '@crove/mod-social';
+import { socialCommands, socialQueries, withSignature, type PostView } from '@crove/mod-social';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -266,5 +269,83 @@ suite('social channel signatures on PostgreSQL (#1190)', () => {
     // Another text is not, though both end with the same signature.
     const other = (await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Bánh mới', channels: [{ connectionId: conn }] })).postId;
     expect((await get(o, other)).variants[0]?.duplicateOf).toBeNull();
+  });
+
+  // The client review link (#1190): each channel's signature beside its body, so the page shows the text that is sent.
+  type ReviewChannel = { channel: string; body: string; signature: string | null };
+  type ReviewPage = { kind?: 'plan'; channels?: ReviewChannel[]; posts?: { id: string; channels?: ReviewChannel[] }[] };
+  const review = async (token: string) => (await pool.query<{ page: ReviewPage | null }>('SELECT crove_social.review_link_view($1) AS page', [token])).rows[0]?.page ?? null;
+  // A post on a signed channel, a channel without one and a signed channel left off, with an answer.
+  async function reviewed(o: Org) {
+    const signed = await connection(o.orgId, o.owner);
+    const plain = await connection(o.orgId, o.owner);
+    const left = await connection(o.orgId, o.owner);
+    await sign(o, o.owner, signed, SIGNATURE);
+    await sign(o, o.owner, left, 'Không hiện');
+    const { postId } = await exec<{ postId: string }>(o, o.member, 'social.post.create', {
+      body: 'Bánh mới ra lò',
+      scheduledAt: new Date(Date.now() + 86_400_000).toISOString(),
+      channels: [{ connectionId: signed }, { connectionId: plain, body: 'Riêng kênh này' }, { connectionId: left, settings: { signature: false } }],
+    });
+    const single = await exec<{ token: string }>(o, o.owner, 'social.review_link.create', { postId });
+    const plan = await exec<{ token: string }>(o, o.owner, 'social.review_link.create_plan', { postIds: [postId] });
+    await pool.query("SELECT crove_social.review_feedback_add($1, 'Khách', 'comment', 'Xem giúp')", [single.token]);
+    return { postId, single: single.token, plan: plan.token };
+  }
+
+  it('shows each channel signature on the client review link, so the client approves the text that is sent', async () => {
+    const o = await org();
+    const { postId, single, plan } = await reviewed(o);
+    const sent = (await get(o, postId)).variants.map((v) => v.effective.body);
+    expect(sent[0]).toBe(`Bánh mới ra lò\n\n${SIGNATURE}`);
+    for (const channels of [(await review(single))?.channels, (await review(plan))?.posts?.[0]?.channels]) {
+      expect(channels?.map((c) => ({ body: c.body, signature: c.signature }))).toEqual([
+        { body: 'Bánh mới ra lò', signature: SIGNATURE },
+        { body: 'Riêng kênh này', signature: null },
+        { body: 'Bánh mới ra lò', signature: null },
+      ]);
+      // The page's text, the body with its signature as effectiveContent appends it, is the text sent.
+      expect(channels?.map((c) => withSignature(c.body, { signature: c.signature }))).toEqual(sent);
+    }
+    // A signature that is not a text (a hand-written setting) shows as none, as it is never appended.
+    await admin((c) => c.query(`UPDATE crove_social.post_variant SET settings = '{"signature": 7}' WHERE org_id = $1 AND post_id = $2 AND settings->>'signature' = $3`, [o.orgId, postId, SIGNATURE]));
+    expect((await review(single))?.channels?.[0]?.signature).toBeNull();
+  });
+
+  // The migration re-created review_plan_page and review_link_view with only 'signature' added: both kinds of link give
+  // byte for byte what the previous definitions (migrations 20261023233000 and 20261028150000) give, but for it.
+  it('gives exactly the previous review link output, but for the signature', async () => {
+    const o = await org();
+    const { single, plan } = await reviewed(o);
+    const previous = (file: string, name: string) => {
+      const text = readFileSync(join(MIGRATIONS, file), 'utf8');
+      const start = text.indexOf(`CREATE OR REPLACE FUNCTION ${name}(`);
+      const end = text.indexOf('$$;', start);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      return text.slice(start, end + 3);
+    };
+    const planPage = previous('20261023233000_crove_social_plan_review_link.sql', 'crove_social.review_plan_page');
+    const linkView = previous('20261028150000_crove_social_report_branding.sql', 'crove_social.review_link_view');
+    const pages = await admin(async (c) => {
+      const read = async (token: string) => (await c.query<{ page: string }>('SELECT crove_social.review_link_view($1)::text AS page', [token])).rows[0]?.page as string;
+      const now = [await read(single), await read(plan)];
+      await c.query('BEGIN');
+      try {
+        await c.query(planPage);
+        await c.query(linkView);
+        return { now, before: [await read(single), await read(plan)] };
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    const withoutSignatures = (page: string): unknown => JSON.parse(page, (key, value: unknown) => (key === 'signature' ? undefined : value));
+    // The new field is there now, on every channel, and was not before.
+    for (const page of pages.now) expect(page.match(/"signature": /g)?.length).toBe(3);
+    for (const page of pages.before) expect(page).not.toContain('"signature"');
+    expect(JSON.parse(pages.now[0] as string)).toMatchObject({ channels: [{ signature: SIGNATURE }, { signature: null }, { signature: null }], feedback: [{ body: 'Xem giúp' }] });
+    expect(pages.now.map(withoutSignatures)).toEqual(pages.before.map((page) => JSON.parse(page) as unknown));
+    // The live definitions are back after the rollback.
+    expect((await review(single))?.channels?.[0]?.signature).toBe(SIGNATURE);
   });
 });

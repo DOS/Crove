@@ -38,6 +38,16 @@ export function withSignature(body: string, settings: Readonly<Record<string, un
   return text === '' ? signature : `${text}\n\n${signature}`;
 }
 
+// The text before the variant's signature: what the member wrote, given the text with or without the signature. A
+// text that does not end with it, or a variant without one, is returned as it is. Compared in NFC, as withSignature.
+export function withoutSignature(body: string, settings: Readonly<Record<string, unknown>> | null | undefined): string {
+  const signature = signatureText(settings);
+  if (signature === null) return body;
+  const text = body.trimEnd().normalize('NFC');
+  const sign = signature.normalize('NFC');
+  return text.endsWith(sign) ? text.slice(0, text.length - sign.length) : body;
+}
+
 // The settings of a variant a channel is added with: the channel's signature copied in, unless the settings say
 // already (a signature of their own, or false). A channel without one adds nothing, so its posts hash as before.
 export function withChannelSignature<T extends Readonly<Record<string, unknown>>>(settings: T, signature: string | null | undefined): T | (T & { signature: string }) {
