@@ -200,3 +200,4 @@
 20261029130000_crove_social_label_campaign.sql
 20261029140000_crove_social_comment_pin.sql
 20261029150000_crove_social_idea_origin.sql
+20261029160000_crove_social_channel_signature.sql
