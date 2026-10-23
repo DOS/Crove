@@ -1922,6 +1922,7 @@ export const vi = {
         client_changes_requested: 'Khách {name} muốn sửa bài',
         client_comment: 'Khách {name} đã góp ý',
         assigned: '{actor} giao cho bạn một bài',
+        assigned_many: '{actor} giao cho bạn {count, number} bài',
         feed_paused: 'Nguồn tin {feed} không đọc được 5 lần liền nên đã tạm dừng',
         reminder_waiting: 'Có bài đã chờ bạn duyệt hơn 24 giờ',
         reminder_due: 'Có bài sắp đến giờ đăng nhưng chưa được duyệt',
@@ -2868,7 +2869,7 @@ export const vi = {
       selectAll: 'Chọn mọi bài đang hiện',
       selected: 'Đã chọn {count, number} bài',
       clear: 'Bỏ chọn',
-      action: { approve: 'Duyệt', queue: 'Đưa vào hàng đợi', cancel: 'Hủy bài', move: 'Dời lịch', labels: 'Gắn nhãn', assign: 'Giao việc', replace: 'Tìm và thay' },
+      action: { approve: 'Duyệt', submit: 'Gửi duyệt', queue: 'Đưa vào hàng đợi', cancel: 'Hủy bài', move: 'Dời lịch', labels: 'Gắn nhãn', assign: 'Giao việc', replace: 'Tìm và thay', addChannel: 'Thêm kênh' },
       confirmCancel: 'Hủy {count, number} bài trên mọi kênh chưa đăng?',
       result: '{action}: xong {done, number}, {skipped, number} bài không có gì để làm, {refused, number} bài bị từ chối.',
       move: {
@@ -2908,7 +2909,22 @@ export const vi = {
         dueClear: 'Bỏ hạn',
         dueAt: 'Hạn mới',
         apply: 'Giao các bài',
-        hint: 'Chủ sở hữu và quản trị viên giao được mọi bài; thành viên chỉ giao được bài mình viết. Bài đã đăng được giữ nguyên. Người được giao nhận thông báo cho từng bài.',
+        hint: 'Chủ sở hữu và quản trị viên giao được mọi bài; thành viên chỉ giao được bài mình viết. Bài đã đăng được giữ nguyên. Người được giao chỉ nhận một thông báo cho cả đợt giao.',
+      },
+      addChannel: {
+        channel: 'Kênh cần thêm',
+        pick: 'Chọn một kênh',
+        apply: 'Thêm vào các bài',
+        hint: 'Kênh được thêm dưới dạng bản nháp, dùng nội dung chung và giờ đăng dự kiến của từng bài, rồi gửi duyệt như mọi bản nháp khác. Bài đã đăng, đang đăng, đã có kênh này hoặc đã đủ 20 kênh được giữ nguyên.',
+        result:
+          'Thêm {channel}: {done, number} bài đã có thêm kênh ({fits, number} bài đạt yêu cầu của kênh, {needsEdits, number} bài cần sửa thêm), {skipped, number} bài giữ nguyên, {refused, number} bài bị từ chối.',
+        needsEdits: 'cần sửa trước khi gửi duyệt: {issues}',
+      },
+      submit: {
+        result:
+          'Gửi duyệt: {done, number} bài đã gửi, {skipped, number} bài không có gì để gửi, {invalid, number} bài có kênh chưa đạt yêu cầu, {blocked, number} bài có từ bị cấm, {refused, number} bài bị từ chối.',
+        invalid: 'có kênh chưa đạt yêu cầu của nền tảng',
+        blocked: 'bài có từ bị cấm: {words}',
       },
       replace: {
         find: 'Tìm',
@@ -2941,6 +2957,8 @@ export const vi = {
           over_limit: 'nội dung sau khi thay vượt giới hạn',
           invalid_link: 'liên kết sau khi thay không còn hợp lệ',
           banned_words: 'nội dung sau khi thay có từ bị cấm',
+          already_on: 'bài đã có kênh này',
+          too_many_channels: 'bài đã đủ 20 kênh',
         },
       },
     },

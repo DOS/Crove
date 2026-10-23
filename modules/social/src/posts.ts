@@ -74,7 +74,7 @@ import { playlistCallsOf, playlistCommands, playlistsOf, playlistStatus, type Pl
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { clientReviewCommands } from './client-review.ts';
-import { CLEAR_ERROR, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, takenSlots, variantPost, type PostRow, type QueueState, type VariantRow } from './variants.ts';
+import { CLEAR_ERROR, MAX_CHANNELS_PER_POST, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, takenSlots, variantPost, type PostRow, type QueueState, type VariantRow } from './variants.ts';
 import { queueOrderCommands } from './queue-order.ts';
 import { versionQueries, withVersion } from './versions.ts';
 import { bannedChecker, bannedCheckerOf, bannedCommandBudget, bannedForView, bannedWordsOf, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords, type BannedWordsStatus } from './banned-words.ts';
@@ -88,7 +88,7 @@ import { channelAccessCommands, channelAccessQueries, channelNotAllowed, channel
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
-export const MAX_CHANNELS_PER_POST = 20;
+export { MAX_CHANNELS_PER_POST };
 const MAX_SLOTS = 100;
 
 
@@ -373,9 +373,12 @@ export const postAddChannels = defineCommand({
       throw new DomainError('TOO_MANY_CHANNELS', 422, `Một bài đăng có tối đa ${MAX_CHANNELS_PER_POST} kênh`);
     }
     const start = existing.reduce((max, v) => Math.max(max, v.position + 1), 0);
-    const variants = await insertVariants(ctx, post, input.channels, start);
-    await refreshPostStatus(ctx, post.id);
-    return { postId: post.id, variants };
+    // A new channel is a change of the post's content: the version history shows it (#1178).
+    return withVersion(ctx, post.id, async () => {
+      const variants = await insertVariants(ctx, post, input.channels, start);
+      await refreshPostStatus(ctx, post.id);
+      return { postId: post.id, variants };
+    });
   },
 });
 
