@@ -1,6 +1,8 @@
 // One draft per library file on PostgreSQL 17 (#1080): files in order become drafts in order, a file a channel cannot
 // take is reported per file with nothing saved, queueing takes the next free slots, and the refusals (another org's
-// file, a viewer, more than 50 files). Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
+// file, a viewer, more than 50 files, a channel set over the per-post channel limit), and a draft failing mid-loop
+// leaves no draft and no slot held (#1088). Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own
+// database.
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -233,5 +235,72 @@ suite('social drafts from library files on PostgreSQL (#1080)', () => {
     const result = await fromMedia<Created>(o, o.owner, { fileIds: fifty, connectionIds: [sandbox] });
     expect(result.posts).toHaveLength(50);
     expect(await postCount(o)).toBe(50);
+  });
+
+  it('refuses a channel set with more live channels than a post takes, up front and with the counts (#1088)', async () => {
+    const o = await org();
+    const channels: string[] = [];
+    for (let i = 0; i < 21; i++) channels.push(await connection(o, 'sandbox'));
+    // Sets hold at most 20 channels today (the command and the table's CHECK); the refusal guards against the two caps
+    // drifting apart, so this run lifts the table's for one set.
+    const setId = randomUUID();
+    await admin(async (c) => {
+      await c.query('ALTER TABLE crove_social.channel_set DROP CONSTRAINT channel_set_connection_ids_check');
+      await c.query('INSERT INTO crove_social.channel_set (org_id, id, name, connection_ids, updated_by) VALUES ($1, $2, $3, $4::uuid[], $5)', [o.orgId, setId, 'Mọi kênh', channels, o.owner]);
+    });
+    try {
+      const photo = await file(o, 'anh.jpg');
+      await expect(fromMedia(o, o.member, { fileIds: [photo], channelSetId: setId, queue: true })).rejects.toMatchObject({ code: 'CHANNEL_SET_TOO_LARGE', status: 422, details: { limit: 20, actual: 21 } });
+      expect(await postCount(o)).toBe(0);
+      // One of them disconnected: the 20 left fit one post.
+      await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET status = 'revoked' WHERE id = $1", [channels[0]]));
+      const result = await fromMedia<Created>(o, o.member, { fileIds: [photo], channelSetId: setId });
+      expect(result.posts[0]?.variants).toHaveLength(20);
+    } finally {
+      await admin(async (c) => {
+        await c.query('DELETE FROM crove_social.channel_set WHERE org_id = $1 AND id = $2', [o.orgId, setId]);
+        await c.query('ALTER TABLE crove_social.channel_set ADD CONSTRAINT channel_set_connection_ids_check CHECK (cardinality(connection_ids) <= 20)');
+      });
+    }
+  });
+
+  it('leaves no draft and no slot held when a draft fails mid-loop (#1088)', async () => {
+    const o = await org();
+    const sandbox = await connection(o, 'sandbox');
+    await exec(o, o.owner, 'social.queue.set', { connectionId: sandbox, timeZone: 'Asia/Ho_Chi_Minh', slots: daily(540) });
+    const free = async () => (await rt.query<{ nextFree: string[] }>('social.queue.get', { connectionId: sandbox }, { actor: asUser(o.viewer), orgId: o.orgId })).nextFree;
+    const before = await free();
+    const files = [await file(o, 'mot.jpg'), await file(o, 'hong_giua_chung.jpg'), await file(o, 'ba.jpg')];
+    // The second draft fails inside its nested create, and only once the first has been made and holds its slot in the
+    // same transaction (as a slot taken meanwhile would fail it); without that the trigger lets it through.
+    await admin(async (c) => {
+      await c.query(`CREATE FUNCTION public.t1088_fail() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
+        BEGIN
+          IF NEW.body = 'hong giua chung' AND EXISTS (
+            SELECT 1 FROM crove_social.post p JOIN crove_social.post_variant v ON v.org_id = p.org_id AND v.post_id = p.id
+             WHERE p.org_id = NEW.org_id AND p.body = 'mot' AND v.queue_slot_at IS NOT NULL
+          ) THEN
+            RAISE EXCEPTION 'forced failure mid-loop';
+          END IF;
+          RETURN NEW;
+        END $$`);
+      await c.query('CREATE TRIGGER t1088_fail BEFORE INSERT ON crove_social.post FOR EACH ROW EXECUTE FUNCTION public.t1088_fail()');
+    });
+    try {
+      await expect(fromMedia(o, o.member, { fileIds: files, connectionIds: [sandbox], caption: { kind: 'filename' }, queue: true })).rejects.toMatchObject({ status: 500 });
+    } finally {
+      await admin(async (c) => {
+        await c.query('DROP TRIGGER t1088_fail ON crove_social.post');
+        await c.query('DROP FUNCTION public.t1088_fail()');
+      });
+    }
+    expect(await postCount(o)).toBe(0);
+    const held = await admin(async (c) => (await c.query('SELECT id FROM crove_social.post_variant WHERE org_id = $1 AND queue_slot_at IS NOT NULL', [o.orgId])).rows);
+    expect(held).toEqual([]);
+    expect(await audits(o, 'social.post.create')).toHaveLength(0);
+    expect(await free()).toEqual(before);
+    // The same batch goes through once nothing fails, from the first free slot.
+    const result = await fromMedia<Created>(o, o.member, { fileIds: files, connectionIds: [sandbox], caption: { kind: 'filename' }, queue: true });
+    expect(result.posts.map((p) => p.variants[0]?.queueSlotAt)).toEqual(before.slice(0, 3));
   });
 });

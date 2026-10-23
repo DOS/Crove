@@ -5,7 +5,9 @@
 // Find and replace (#1144) shows the server's preview of every match first; the replace changes what it listed.
 // Drafts go to review post by post as approvals do, and the result tells apart what had nothing to send, what does not
 // fit its channel yet and what holds a blocked word; one channel is added to up to 100 posts per command, and the
-// result says which added channels already fit their rules (#1178).
+// result says which added channels already fit their rules (#1178). Copies of the posts moved by days or weeks (#1192)
+// are made post by post, and the result names each copy, each post left out and why, and each copy whose text X or
+// LinkedIn would refuse as a repeat.
 import { useMutation } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -27,26 +29,32 @@ import {
   REPLACE_WITH_MAX,
   addedSummary,
   assignInput,
+  duplicateSummary,
   moveSummary,
   previewSummary,
   replaceKey,
   runAddChannel,
   runBulk,
+  runDuplicate,
   runEdit,
   runMove,
   runReplacePreview,
   submitResult,
   toggleEditLabel,
+  validDuplicate,
   validLabelEdit,
   validMove,
   validReplace,
   type AddChannelResult,
   type AssignEdit,
   type BulkAction,
+  type BulkDuplicate,
   type BulkMove,
   type BulkPost,
   type BulkRequest,
   type BulkResult,
+  type DuplicatePostResult,
+  type DuplicateUnit,
   type EditAction,
   type EditResult,
   type LabelEdit,
@@ -72,6 +80,9 @@ const send = (r: BulkRequest) =>
 // The same call as the post page's "Move the time" and the calendar's drag.
 const reschedule = (m: { variantId: string; at: string }) => client.social.variants.reschedule({ variantId: m.variantId, at: m.at });
 
+// A copy of one post, planned for that time or undated (#1192): the same call as the post page's Duplicate.
+const duplicatePost = (r: { postId: string; scheduledAt: string | null }) => client.social.posts.duplicate({ postId: r.postId, scheduledAt: r.scheduledAt });
+
 // One command per batch of posts (#1057).
 type AssignInput = { assigneeUserId: string | null; dueAt?: string | null };
 const editLabels = (edit: LabelEdit) => (postIds: string[]) => client.social.posts.bulkLabels({ postIds, add: edit.add, remove: edit.remove });
@@ -86,18 +97,20 @@ type Outcome =
   | { action: Exclude<PostAction, 'submit'>; result: BulkResult }
   | { action: 'submit'; result: SubmitResult }
   | { action: 'move'; move: BulkMove; results: MovePostResult[] }
+  | { action: 'duplicate'; duplicate: BulkDuplicate; results: DuplicatePostResult[] }
   | { action: Exclude<EditAction, 'addChannel'>; result: EditResult }
   | { action: 'addChannel'; connectionId: string; result: AddChannelResult };
 type Job =
   | { action: PostAction }
   | { action: 'move'; move: BulkMove }
+  | { action: 'duplicate'; duplicate: BulkDuplicate }
   | { action: 'labels'; edit: LabelEdit }
   | { action: 'assign'; input: AssignInput }
   | { action: 'replace'; edit: ReplaceEdit }
   | { action: 'addChannel'; connectionId: string };
 // The forms the bar opens under its buttons.
-type Form = 'move' | EditAction;
-const FORMS: readonly BulkAction[] = ['move', 'labels', 'assign', 'replace', 'addChannel'];
+type Form = 'move' | 'duplicate' | EditAction;
+const FORMS: readonly BulkAction[] = ['move', 'duplicate', 'labels', 'assign', 'replace', 'addChannel'];
 
 export interface BulkLabelOption {
   id: string;
@@ -161,6 +174,10 @@ export function BulkBar({
   const [unit, setUnit] = useState<MoveUnit>('days');
   const [earlier, setEarlier] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  // The copies' shift (#1192): one week by default, as a weekly set is copied to the next week.
+  const [copyAmount, setCopyAmount] = useState('1');
+  const [copyUnit, setCopyUnit] = useState<DuplicateUnit>('weeks');
+  const copyShift: BulkDuplicate = { amount: copyAmount.trim() === '' ? Number.NaN : Number(copyAmount), unit: copyUnit };
   // Find and replace (#1144): the form, and the preview with what it was made for.
   const [replaceEdit, setReplaceEdit] = useState<ReplaceEdit>({ find: findHint ?? '', replace: '', caseSensitive: false, wholeWord: false });
   const [preview, setPreview] = useState<{ key: string; posts: ReplacePreviewPost[] } | null>(null);
@@ -180,6 +197,7 @@ export function BulkBar({
     mutationFn: async (job: Job): Promise<Outcome> => {
       const step = (done: number, total: number) => setProgress({ done, total });
       if (job.action === 'move') return { action: 'move', move: job.move, results: await runMove(posts, job.move, reschedule, step) };
+      if (job.action === 'duplicate') return { action: 'duplicate', duplicate: job.duplicate, results: await runDuplicate(posts, job.duplicate, duplicatePost, Date.now(), step) };
       if (job.action === 'labels') return { action: 'labels', result: await runEdit(ids, editLabels(job.edit), step) };
       if (job.action === 'assign') return { action: 'assign', result: await runEdit(ids, editAssign(job.input), step) };
       if (job.action === 'replace') return { action: 'replace', result: await runEdit(ids, editReplace(job.edit), step, BULK_REPLACE_MAX) };
@@ -212,7 +230,7 @@ export function BulkBar({
     setChannels(new Map(posts.flatMap((p) => p.variants.map((v) => [v.id, channelName(v.connectionId)] as const))));
   };
   const start = (action: BulkAction) => {
-    if (action === 'move' || action === 'labels' || action === 'assign' || action === 'replace' || action === 'addChannel') {
+    if (action === 'move' || action === 'duplicate' || action === 'labels' || action === 'assign' || action === 'replace' || action === 'addChannel') {
       // An empty search box starts from the list's search.
       if (action === 'replace' && replaceEdit.find === '' && findHint) setReplaceEdit({ ...replaceEdit, find: findHint });
       setForm((open) => (open === action ? null : action));
@@ -226,6 +244,11 @@ export function BulkBar({
     if (!validMove(move)) return;
     snapshot();
     run.mutate({ action: 'move', move });
+  };
+  const applyDuplicate = () => {
+    if (!validDuplicate(copyShift)) return;
+    snapshot();
+    run.mutate({ action: 'duplicate', duplicate: copyShift });
   };
   const applyLabels = () => {
     if (!validLabelEdit(labelEdit)) return;
@@ -327,6 +350,28 @@ export function BulkBar({
                 {t('move.close')}
               </Button>
               <p className="w-full text-muted-foreground">{t('move.hint')}</p>
+            </div>
+          )}
+          {form === 'duplicate' && (
+            <div className="flex flex-wrap items-end gap-2 text-xs">
+              <label>
+                <span className="text-subtle-foreground">{t('duplicate.amount')}</span>
+                <Input type="number" inputMode="numeric" min={0} max={MOVE_MAX} step={1} className="mt-1 w-24" value={copyAmount} onChange={(e) => setCopyAmount(e.target.value)} />
+              </label>
+              <label>
+                <span className="text-subtle-foreground">{t('duplicate.unit')}</span>
+                <NativeSelect className="mt-1 w-28" value={copyUnit} onChange={(e) => setCopyUnit(e.target.value === 'days' ? 'days' : 'weeks')}>
+                  <NativeSelectOption value="days">{t('duplicate.days')}</NativeSelectOption>
+                  <NativeSelectOption value="weeks">{t('duplicate.weeks')}</NativeSelectOption>
+                </NativeSelect>
+              </label>
+              <Button size="sm" disabled={busy || !validDuplicate(copyShift)} onClick={applyDuplicate}>
+                {t('duplicate.apply')}
+              </Button>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => setForm(null)}>
+                {t('move.close')}
+              </Button>
+              <p className="w-full text-muted-foreground">{t('duplicate.hint')}</p>
             </div>
           )}
           {form === 'labels' && labelOptions.length > 0 && (
@@ -444,7 +489,7 @@ export function BulkBar({
           )}
           {progress && (
             <p className="text-xs text-muted-foreground">
-              {t(previewing.isPending ? 'replace.progress' : form === 'labels' || form === 'assign' || form === 'replace' || form === 'addChannel' ? 'edit.progress' : 'move.progress', { done: progress.done, total: progress.total })}
+              {t(previewing.isPending ? 'replace.progress' : form === 'duplicate' ? 'duplicate.progress' : form === 'labels' || form === 'assign' || form === 'replace' || form === 'addChannel' ? 'edit.progress' : 'move.progress', { done: progress.done, total: progress.total })}
             </p>
           )}
         </Card>
@@ -478,6 +523,7 @@ export function BulkBar({
           ))}
         </Card>
       )}
+      {result?.action === 'duplicate' && <DuplicateOutcome duplicate={result.duplicate} results={result.results} postName={postName} channelName={channelName} />}
       {result?.action === 'addChannel' && (
         <Card className="block space-y-1 p-3 text-sm">
           <p className="text-foreground">
@@ -569,6 +615,57 @@ export function BulkBar({
         </Card>
       )}
     </div>
+  );
+}
+
+// What copying the posts did (#1192): per post its new draft and the time it is planned for, or why it has none, and the
+// copy's channels on X or LinkedIn whose text matches another post there, which those platforms refuse as a repeat.
+export function DuplicateOutcome({
+  duplicate,
+  results,
+  postName,
+  channelName,
+}: {
+  duplicate: BulkDuplicate;
+  results: readonly DuplicatePostResult[];
+  postName: (postId: string) => string;
+  channelName: (connectionId: string) => string;
+}) {
+  const t = useTranslations('social.bulk');
+  const f = useFormat();
+  return (
+    <Card className="block space-y-2 p-3 text-sm">
+      <p className="text-foreground">
+        {t('duplicate.result', {
+          ...duplicateSummary(results),
+          span: duplicate.amount === 0 ? t('duplicate.spanNone') : t(duplicate.unit === 'weeks' ? 'duplicate.spanWeeks' : 'duplicate.spanDays', { amount: duplicate.amount }),
+        })}
+      </p>
+      {results.map((r) => (
+        <div key={r.postId} className="space-y-0.5 text-xs text-muted-foreground">
+          <p>
+            <span className="text-foreground">{postName(r.postId)}</span>:{' '}
+            {r.outcome === 'done' ? (
+              r.at ? (
+                t('duplicate.copied', { when: f.dateTime(r.at) })
+              ) : (
+                t('duplicate.undated')
+              )
+            ) : r.outcome === 'skipped' ? (
+              t('duplicate.skipped', { reason: t(`duplicate.skip.${r.reason}`) })
+            ) : (
+              <span className="text-warning">{errorMessage(r.error)}</span>
+            )}
+          </p>
+          {r.outcome === 'done' &&
+            r.repeats.map((x) => (
+              <p key={x.variantId} className="pl-3 text-warning">
+                {t('duplicate.repeat', { channel: channelName(x.connectionId), status: x.status })}
+              </p>
+            ))}
+        </div>
+      ))}
+    </Card>
   );
 }
 
