@@ -15,6 +15,7 @@
 // Link buttons (#1017): settings.telegram.buttons go under a text, photo or video post as reply_markup.inline_keyboard
 // (URL buttons). A media group takes no keyboard, so an album with buttons is refused with nothing sent, never posted
 // without them; validation says so first.
+// Polls (#1118): settings.poll makes the post one sendPoll, the text its question (telegramPollOf).
 import type { CommentResult, ConnectedAccount, PinInput, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
@@ -81,6 +82,51 @@ function httpsUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+// A poll (#1118), as the variant's settings carry it (`settings.poll`: { options, durationMinutes?, multiple?,
+// hideTotals? }, the shape X, Threads and Mastodon read). The post is then one sendPoll whose question is the post's
+// text with its link (1 to 300 characters), so it stays a single message that takes the buttons, silence, pin and
+// deletion of any post; options are 2 to 12 InputPollOption texts of 1 to 100 characters (Telegram takes one since
+// Bot API 10.0, Crove asks for two like every channel). durationMinutes goes as open_period in seconds (5 to 2,628,000
+// allowed, so 1 to 43,800 minutes); unsaid, the poll stays open until stopped in Telegram. multiple goes as
+// allows_multiple_answers and hideTotals as hide_results_until_closes, each only when true. Always anonymous, as
+// Telegram defaults to: the docs do not say a channel takes a public poll. Never with media. null for none, 'invalid'
+// for any other shape.
+export const TELEGRAM_POLL_QUESTION_MAX = 300;
+const POLL_OPTIONS_MAX = 12;
+const POLL_OPTION_MAX = 100;
+const POLL_MINUTES_MAX = 43_800;
+export interface TelegramPoll {
+  options: { text: string }[];
+  open_period?: number;
+  allows_multiple_answers?: true;
+  hide_results_until_closes?: true;
+}
+export function telegramPollOf(settings: Readonly<Record<string, unknown>> | undefined): TelegramPoll | null | 'invalid' {
+  const poll = settings?.poll;
+  if (poll === undefined || poll === null) return null;
+  if (typeof poll !== 'object' || Array.isArray(poll)) return 'invalid';
+  const { options, durationMinutes, multiple, hideTotals } = poll as { options?: unknown; durationMinutes?: unknown; multiple?: unknown; hideTotals?: unknown };
+  if (!Array.isArray(options) || options.length < 2 || options.length > POLL_OPTIONS_MAX) return 'invalid';
+  const texts: { text: string }[] = [];
+  for (const option of options) {
+    const text = typeof option === 'string' ? option.trim() : '';
+    if (text.length < 1 || utf16(text.normalize('NFC')) > POLL_OPTION_MAX) return 'invalid';
+    texts.push({ text });
+  }
+  const unsaid = durationMinutes === undefined || durationMinutes === null;
+  if (!unsaid && (typeof durationMinutes !== 'number' || !Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > POLL_MINUTES_MAX)) return 'invalid';
+  const flag = (v: unknown) => (v === undefined || v === null ? false : typeof v === 'boolean' ? v : 'invalid');
+  const many = flag(multiple);
+  const hidden = flag(hideTotals);
+  if (many === 'invalid' || hidden === 'invalid') return 'invalid';
+  return {
+    options: texts,
+    ...(unsaid ? {} : { open_period: (durationMinutes as number) * 60 }),
+    ...(many ? { allows_multiple_answers: true as const } : {}),
+    ...(hidden ? { hide_results_until_closes: true as const } : {}),
+  };
 }
 
 // settings.telegram.silent (#982): true sends the post without a sound; anything else is a post as usual.
@@ -284,6 +330,11 @@ export class TelegramPublisher implements Publisher {
     if (keyboard === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'BUTTONS_INVALID' };
     if (keyboard && media.length > 1) return { kind: 'rejected', error: 'bad_request', code: 'BUTTONS_ON_ALBUM' };
     const markup = keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {};
+    // A poll (#1118): the post's text is its question, in one sendPoll; refused with nothing sent when it cannot be.
+    const poll = telegramPollOf(input.settings);
+    if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
+    if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
+    if (poll && (!text || utf16(text.normalize('NFC')) > TELEGRAM_POLL_QUESTION_MAX)) return { kind: 'rejected', error: 'bad_request', code: 'POLL_QUESTION_LENGTH' };
     // Every file is read before the first call, so a read failure posts nothing.
     const files = new Map<string, { bytes: Uint8Array; mime: string }>();
     for (const [i, m] of media.entries()) {
@@ -299,7 +350,9 @@ export class TelegramPublisher implements Publisher {
     const quiet = silentOf(input.settings) ? { disable_notification: true } : {};
     let messageId: unknown;
     try {
-      if (media.length === 0) {
+      if (poll) {
+        messageId = (await client.call<{ message_id?: unknown }>(s.botToken, 'sendPoll', { chat_id: chat, question: text, ...poll, is_anonymous: true, ...quiet, ...markup })).message_id;
+      } else if (media.length === 0) {
         messageId = (await client.call<{ message_id?: unknown }>(s.botToken, 'sendMessage', { chat_id: chat, text, ...quiet, ...markup })).message_id;
       } else if (media.length === 1) {
         const one = media[0] as { mime: string };

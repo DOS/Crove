@@ -8,7 +8,7 @@
 // names them), then one POST /rest/posts. A member app cannot list the member's posts, so an unclear answer cannot be
 // checked: publishSafety 'never', and such a post waits for a person.
 // Who sees the post (#983): the post's visibility, PUBLIC unless the variant's settings choose connections or signed-in
-// members.
+// members. A post may be a poll instead of images or a video (#1118, content.poll).
 import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
@@ -318,6 +318,42 @@ export function linkedinVisibilityOf(settings: Readonly<Record<string, unknown>>
 }
 type Visibility = Exclude<ReturnType<typeof linkedinVisibilityOf>, 'invalid'>;
 
+// A poll (#1118), as the variant's settings carry it (`settings.poll`: { question, options, durationMinutes? }, the shape
+// the other channels read, with the question LinkedIn asks for apart from the commentary): the Posts API's content.poll
+// with a question of 1 to 140 characters, 2 to 4 options of 1 to 30 characters ({ text }) and settings.duration, one of
+// ONE_DAY, THREE_DAYS, SEVEN_DAYS (when unsaid) or FOURTEEN_DAYS. The same for a member and a Company Page. A poll is
+// the post's content, so it never goes with images or video. One answer per voter (SINGLE_VOTE, LinkedIn's default and
+// only value so far), so a poll asking for several answers or hidden counts is refused. null for none, 'invalid' for
+// any other shape.
+const POLL_DURATIONS: Readonly<Record<number, string>> = { 1440: 'ONE_DAY', 4320: 'THREE_DAYS', 10_080: 'SEVEN_DAYS', 20_160: 'FOURTEEN_DAYS' };
+export interface LinkedInPoll {
+  question: string;
+  options: { text: string }[];
+  settings: { duration: string };
+}
+export function linkedinPollOf(settings: Readonly<Record<string, unknown>> | undefined): LinkedInPoll | null | 'invalid' {
+  const poll = settings?.poll;
+  if (poll === undefined || poll === null) return null;
+  if (typeof poll !== 'object' || Array.isArray(poll)) return 'invalid';
+  const { question, options, durationMinutes, multiple, hideTotals } = poll as { question?: unknown; options?: unknown; durationMinutes?: unknown; multiple?: unknown; hideTotals?: unknown };
+  // Counted as validation counts them: UTF-16 units of the NFC form, a Vietnamese letter with its marks as one.
+  const size = (t: string) => t.normalize('NFC').length;
+  const asked = typeof question === 'string' ? question.trim() : '';
+  if (size(asked) < 1 || size(asked) > 140) return 'invalid';
+  if (!Array.isArray(options) || options.length < 2 || options.length > 4) return 'invalid';
+  const texts: { text: string }[] = [];
+  for (const option of options) {
+    const text = typeof option === 'string' ? option.trim() : '';
+    if (size(text) < 1 || size(text) > 30) return 'invalid';
+    texts.push({ text });
+  }
+  const minutes = durationMinutes === undefined || durationMinutes === null ? 10_080 : durationMinutes;
+  const duration = typeof minutes === 'number' && Object.hasOwn(POLL_DURATIONS, minutes) ? POLL_DURATIONS[minutes] : undefined;
+  if (!duration) return 'invalid';
+  if ((multiple !== undefined && multiple !== null && multiple !== false) || (hideTotals !== undefined && hideTotals !== null && hideTotals !== false)) return 'invalid';
+  return { question: asked, options: texts, settings: { duration } };
+}
+
 const VIDEO_URN = /^urn:li:video:[A-Za-z0-9_-]{1,64}$/;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // How long a publish waits for LinkedIn to process a video; with the upload it stays inside callTimeoutMs.
@@ -387,6 +423,15 @@ class LinkedInPosting {
     const visibility = linkedinVisibilityOf(input.settings);
     if (visibility === 'invalid' || (this.author === 'organization' && visibility === 'CONNECTIONS')) return { kind: 'rejected', error: 'bad_request', code: 'VISIBILITY_INVALID' };
     const author = kind.urn(input.externalAccountId);
+    // A poll (#1118) is the post's whole content: checked before any call, then posted with the commentary.
+    const poll = linkedinPollOf(input.settings);
+    if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
+    if (poll && input.content.media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
+    if (poll) {
+      const text = textOf(input.content);
+      if (!text) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+      return this.post(token, author, text, { poll }, visibility);
+    }
     if (input.content.media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token, author, visibility);
     if (input.content.media.length > MAX_IMAGES) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_IMAGES' };
     const images: { id: string; altText?: string }[] = [];

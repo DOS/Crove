@@ -123,6 +123,51 @@ describe('Mastodon publish', () => {
     expect(calls.every((c) => c.route.startsWith('GET'))).toBe(true);
   });
 
+  it('posts a poll instead of media, the text as its question, in seconds and with its choices only when on (#1118)', async () => {
+    const status = (id: string) => ({ body: { id, url: `${INSTANCE}/@quanpho/${id}` } });
+    const { fetchImpl, calls } = instance({
+      'GET mastodon.example/api/v2/instance': [limits(), limits(), limits()],
+      'POST mastodon.example/api/v1/statuses': [status('103254962155278891'), status('103254962155278892'), status('103254962155278893')],
+    });
+    const publisher = new MastodonPublisher(fetchImpl);
+    const asked = (settings: Record<string, unknown>) => input({ content: { body: 'Bạn thích món nào?', title: null, linkUrl: null, media: [] }, settings });
+    expect(await publisher.publish(asked({ poll: { options: [' Phở ', 'Bún chả'] } }))).toEqual({ kind: 'accepted', externalId: '103254962155278891', url: `${INSTANCE}/@quanpho/103254962155278891` });
+    await publisher.publish(asked({ visibility: 'unlisted', poll: { options: ['Phở', 'Bún chả', 'Cơm tấm', 'Bánh mì'], durationMinutes: 10_080, multiple: true, hideTotals: true } }));
+    await publisher.publish(asked({ poll: { options: ['Phở', 'Bún chả'], durationMinutes: 5, multiple: false, hideTotals: false } }));
+    const sent = calls.filter((c) => c.route.endsWith('/api/v1/statuses'));
+    // A day when unsaid, and no media_ids, which Mastodon refuses with a poll.
+    expect(sent[0]?.json).toEqual({ status: 'Bạn thích món nào?', visibility: 'public', poll: { options: ['Phở', 'Bún chả'], expires_in: 86_400 } });
+    expect(sent[1]?.json).toEqual({ status: 'Bạn thích món nào?', visibility: 'unlisted', poll: { options: ['Phở', 'Bún chả', 'Cơm tấm', 'Bánh mì'], expires_in: 604_800, multiple: true, hide_totals: true } });
+    expect(sent[2]?.json).toEqual({ status: 'Bạn thích món nào?', visibility: 'public', poll: { options: ['Phở', 'Bún chả'], expires_in: 300 } });
+    expect(sent.every((c) => c.idempotency === 'social.publish:v:1:1:publish')).toBe(true);
+  });
+
+  it('sends a status without a poll exactly as before (#1118)', async () => {
+    const { fetchImpl, calls } = instance({ 'GET mastodon.example/api/v2/instance': [limits()], 'POST mastodon.example/api/v1/statuses': [{ body: { id: '103254962155278894', url: null } }] });
+    await new MastodonPublisher(fetchImpl).publish(input());
+    const status = calls.find((c) => c.route.endsWith('/api/v1/statuses'));
+    expect(status?.json).toEqual({ status: 'Khai trương!', media_ids: [], visibility: 'public' });
+  });
+
+  it('refuses a poll the instance cannot take, with media, or of another shape, before any post (#1118)', async () => {
+    const polls = (over: Record<string, unknown>) => ({ body: { configuration: { ...limits().body.configuration, polls: { max_options: 4, max_characters_per_option: 50, min_expiration: 300, max_expiration: 2_629_746, ...over } } } });
+    const { fetchImpl, calls } = instance({ 'GET mastodon.example/api/v2/instance': [polls({ max_options: 3 }), polls({ max_characters_per_option: 5 }), polls({ min_expiration: 3600 }), polls({ max_expiration: 86_400 })] });
+    const publisher = new MastodonPublisher(fetchImpl);
+    const asked = (poll: unknown, media: PublishInput['content']['media'] = []) => input({ content: { body: 'Bạn thích món nào?', title: null, linkUrl: null, media }, settings: { poll } });
+    expect(await publisher.publish(asked({ options: ['a', 'b', 'c', 'd'] }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POLL_TOO_MANY_OPTIONS' });
+    expect(await publisher.publish(asked({ options: ['Bún chả', 'b'] }))).toMatchObject({ kind: 'rejected', code: 'POLL_OPTION_TOO_LONG' });
+    expect(await publisher.publish(asked({ options: ['a', 'b'], durationMinutes: 30 }))).toMatchObject({ kind: 'rejected', code: 'POLL_DURATION' });
+    expect(await publisher.publish(asked({ options: ['a', 'b'], durationMinutes: 2880 }))).toMatchObject({ kind: 'rejected', code: 'POLL_DURATION' });
+    const reads = calls.length;
+    expect(await publisher.publish(asked({ options: ['a', 'b'] }, [image]))).toMatchObject({ kind: 'rejected', code: 'POLL_WITH_MEDIA' });
+    for (const bad of [{ options: ['a'] }, { options: ['a', ' '] }, { options: ['a', 'b'], durationMinutes: '60' }, { options: ['a', 'b'], multiple: 'yes' }, 'có']) {
+      expect(await publisher.publish(asked(bad))).toMatchObject({ kind: 'rejected', code: 'POLL_INVALID' });
+    }
+    // Only the instance reads of the first four: nothing uploaded or posted, and nothing read for the others.
+    expect(calls.length).toBe(reads);
+    expect(calls.every((c) => c.route === 'GET mastodon.example/api/v2/instance')).toBe(true);
+  });
+
   it('maps answers: a refused token, a missing right, a rate limit, a validation error, and an unclear server error', async () => {
     const statuses = [
       { status: 401, body: { error: 'The access token was revoked' } },

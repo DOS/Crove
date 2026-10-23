@@ -246,17 +246,76 @@ export function autoReplyOf(settings: Readonly<Record<string, unknown>> | undefi
 // Threads poll always runs a day. `settings.topicTag` is one tag of 1 to 50 characters with no period or ampersand (a
 // leading # is dropped). The Threads and X adapters read the same shapes. Options count in code points (X's schema
 // maxLength, Threads' text count).
+//
+// Mastodon, Telegram and LinkedIn (#1118) read the same `settings.poll`, with what each platform adds:
+// - Mastodon (POST /api/v1/statuses poll[options][], poll[expires_in], poll[multiple], poll[hide_totals]): the status
+//   text is the question; 2 to 4 options of up to 50 characters and 5 minutes to about a month (mastodon.social's
+//   GET /api/v2/instance configuration.polls, which the adapter reads again from the account's own instance before it
+//   posts); `multiple` lets a voter pick several, `hideTotals` hides the counts until the poll ends; a day when unsaid.
+// - Telegram (sendPoll): the post's text, link included, is the question (1 to 300 characters), so the poll is the post,
+//   one message, with its buttons, silence and pin as any post; 2 to 12 options of up to 100 characters (Telegram also
+//   takes one, Crove asks for two like every channel); `durationMinutes` up to 43,800 (open_period, 5 to 2,628,000
+//   seconds), open until stopped in Telegram when unsaid; `multiple` (allows_multiple_answers) and `hideTotals`
+//   (hide_results_until_closes). Always anonymous, Telegram's default: the docs do not say a channel takes a public
+//   poll, so Crove offers none.
+// - LinkedIn, member and Company Page (Posts API content.poll): a question of its own (`question`, 1 to 140
+//   characters), the post's text staying its commentary; 2 to 4 options of up to 30 characters; 1, 3, 7 or 14 days
+//   (settings.duration ONE_DAY, THREE_DAYS, SEVEN_DAYS, FOURTEEN_DAYS), a week when unsaid; one answer per voter.
+// Every poll goes on a post without images or video: Mastodon and LinkedIn refuse both together, and Crove sends a
+// Telegram poll without media.
 export interface PollRule {
   minOptions: number;
   maxOptions: number;
   maxChars: number;
-  // The poll's length in whole minutes, on channels that take one; absent where the platform sets it.
-  duration?: { min: number; max: number; default: number };
+  // How an option is counted; code points when unsaid.
+  count?: CountMode;
+  // The poll's length in whole minutes, on channels that take one; absent where the platform sets it. default null: an
+  // unsaid length leaves the poll open until it is stopped (Telegram). choices: the only lengths the platform takes.
+  duration?: { min: number; max: number; default: number | null; choices?: readonly number[] };
+  // Voters may pick several options (`settings.poll.multiple`), and the counts may stay hidden until the poll ends
+  // (`settings.poll.hideTotals`).
+  multiple?: boolean;
+  hideTotals?: boolean;
+  // A question of its own (`settings.poll.question`, required); without it the post's text is the question.
+  question?: { maxChars: number; count: CountMode };
+  // The post's text as the question has its own limit (Telegram): 1 to maxChars, counted as the channel's text.
+  textAsQuestion?: { maxChars: number };
 }
+// The member's and the page's polls go through the same Posts API.
+const LINKEDIN_POLL: PollRule = {
+  minOptions: 2,
+  maxOptions: 4,
+  maxChars: 30,
+  count: 'utf16',
+  duration: { min: 1440, max: 20_160, default: 10_080, choices: [1440, 4320, 10_080, 20_160] },
+  question: { maxChars: 140, count: 'utf16' },
+};
 export const POLL_RULES: Readonly<Partial<Record<Provider, PollRule>>> = {
   threads: { minOptions: 2, maxOptions: 4, maxChars: 25 },
   x: { minOptions: 2, maxOptions: 4, maxChars: 25, duration: { min: 5, max: 10_080, default: 1440 } },
+  mastodon: { minOptions: 2, maxOptions: 4, maxChars: 50, duration: { min: 5, max: 43_829, default: 1440 }, multiple: true, hideTotals: true },
+  telegram: { minOptions: 2, maxOptions: 12, maxChars: 100, count: 'utf16', duration: { min: 1, max: 43_800, default: null }, multiple: true, hideTotals: true, textAsQuestion: { maxChars: 300 } },
+  linkedin: LINKEDIN_POLL,
+  linkedin_page: LINKEDIN_POLL,
 };
+
+// A choice of a variant's poll (`multiple`, `hideTotals`): false when unsaid, 'invalid' when it is not true or false.
+export function pollFlagOf(settings: Readonly<Record<string, unknown>> | undefined, key: 'multiple' | 'hideTotals'): boolean | 'invalid' {
+  const poll = settings?.poll;
+  if (!poll || typeof poll !== 'object') return false;
+  const value = (poll as Record<string, unknown>)[key];
+  if (value === undefined || value === null) return false;
+  return typeof value === 'boolean' ? value : 'invalid';
+}
+
+// The poll's own question, trimmed: null when unsaid, 'invalid' when it is not text.
+export function pollQuestionOf(settings: Readonly<Record<string, unknown>> | undefined): string | null | 'invalid' {
+  const poll = settings?.poll;
+  if (!poll || typeof poll !== 'object') return null;
+  const value = (poll as { question?: unknown }).question;
+  if (value === undefined || value === null) return null;
+  return typeof value === 'string' ? value.trim() : 'invalid';
+}
 
 // The poll's length in a variant's settings: null when unsaid, 'invalid' when it is not a whole number of minutes.
 export function pollDurationOf(settings: Readonly<Record<string, unknown>> | undefined): number | null | 'invalid' {
