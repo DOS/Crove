@@ -9,8 +9,12 @@ The coordinator picks work, starts worker sessions, reviews what they ship and k
 
 ## 0. Lock
 
-1. Read the last comments on the coordinator log, https://github.com/DOS/Crove/issues/1210.
-2. If another coordinator session posted there in the last 2 hours, stop. Tell the owner, in Vietnamese, which session holds the lock. All agents share one GitHub account, so this comment is the only way to tell two coordinators apart.
+All agents share one GitHub account, so comments on the coordinator log, https://github.com/DOS/Crove/issues/1210, are the only way to tell two coordinators apart. GitHub has no atomic lock, so the earliest comment wins:
+
+1. Read the comments of the last 2 hours. If another coordinator session's `Lock` or `Cycle` comment is there, stop. Tell the owner, in Vietnamese, which session holds the lock.
+2. Otherwise post `Lock <UTC time>, session <your session id>`, then read the comments again.
+3. If another session posted a `Lock` in the last 2 hours earlier than yours, it wins. Delete your own lock comment, stop, and tell the owner.
+4. Only the winner goes on to section 1.
 
 ## 1. Read the state
 
@@ -37,7 +41,7 @@ For each worker that ended a turn:
 - **Blocked:**
   - If the block is technical, decide it yourself and message the worker. Write the decision and its reason in the PR or the issue.
   - If it is a person's step (accounts, money, legal, real samples, irreversible steps), comment it on the issue with the `owner-action` label, release the claim, and collect it for the owner report.
-- **Silent for 4 hours or more with no push or comment:** message the worker once. If its session is stopped or gone (check `list_sessions`), release its claim (`Taking over the stale claim of <session>`) and treat the issue as free. This shorter check applies only to worker sessions this coordinator started, whose state it can see; a claim by any other agent stays live for the 48 hours `AGENTS.md` sets.
+- **Silent for 4 hours or more with no push, PR update or comment:** message the worker once. If its session is stopped or gone (check `list_sessions`), release its claim (`Taking over the stale claim of <session>`) and treat the issue as free. This shorter check applies only to worker sessions this coordinator started, whose state it can see; a claim by any other agent stays live for the 48 hours `AGENTS.md` sets.
 
 ## 3. Keep the workers busy
 
@@ -50,11 +54,14 @@ Keep at most 3 issues `In progress` across all agents, at least 2 of them in the
 3. Never run two workers on overlapping files. Check the issue's "Files" section against the other running workers, and name the other workers' issues and paths in each brief, so a worker knows what is changing beside it.
 4. Claim the issue:
    1. Set Status to `In progress`.
-   2. Comment `Claimed by the coordinator for worker session <name>`.
+   2. Comment `Claimed by the coordinator for worker session <name>`. The worker comments its branch as its first step, which completes the `AGENTS.md` claim (the branch is named only when the session starts).
    3. Read the comments again; if someone else claimed first, pick another issue.
 5. Start the worker:
    - Use `start_session` with `initiation: "user_asked"`, `context: "fresh"`, `use_worktree: true` and `wake_when_done: true`, and the brief in section 5.
-   - The app allows this only on the owner's own turn, or a side-session event chained from it. On a `/loop` or other automated turn the call is refused. Then propose it with `initiation: "own_initiative"`, tell the owner one card is waiting, and do not retry.
+   - The app allows this only on the owner's own turn, or on a side-session event chained from it. On a `/loop` or other automated turn the call is refused. If it is refused:
+     1. Release the claim at once: set Status back to `Backlog` and comment `Claim released: the worker could not start on an automated turn`.
+     2. Propose the worker with `initiation: "own_initiative"`.
+     3. Tell the owner one card is waiting. Do not retry.
 
 ## 4. Log and end the cycle
 
