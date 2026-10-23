@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.channel_option',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -652,6 +653,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       return {
         setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
         row: { org_id: o.id, id: randomUUID(), user_id: o.owner, channel_connection_id: connection.id, created_by: o.owner },
+      };
+    },
+  },
+  // A channel's options for the composer (#1120, a Pinterest board's sections), cached per connection and kind: asked
+  // for by a member, filled in by the worker. One row per connection and kind, so each row gets its own fresh
+  // connection however many rows an org gets.
+  'crove_social.channel_option': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, kind: 'pinterest_section', status: 'pending', requested_at: new Date().toISOString() },
       };
     },
   },
