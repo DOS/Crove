@@ -11,7 +11,7 @@
 // - Scheduling needs the variant's latest decision to be an approval of its current revision and hash.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
+import { SOCIAL_IMAGE_TYPES, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
@@ -24,9 +24,11 @@ import { accountCommands, accountQueries } from './accounts.ts';
 import { reportLinkCommands, reportLinkQueries } from './report-links.ts';
 import { goalCommands, goalQueries } from './goals.ts';
 import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
+import { channelOptionCommands, channelOptionQueries } from './channel-options.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
 import { reminderCommands } from './reminders.ts';
 import { QUEUE_LOW_DAYS_MAX, QUEUE_LOW_DAYS_MIN, queueLowCommands } from './queue-low.ts';
+import { digestCommands } from './digest.ts';
 import { assignCommands } from './assign.ts';
 import { bulkEditCommands } from './bulk-edit.ts';
 import { bulkDraftCommands } from './bulk-drafts.ts';
@@ -62,6 +64,7 @@ import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
 import { repostCommands } from './repost.ts';
 import { pinCallsOf, pinCommands, pinStatus, wantsPin, type PinStatus } from './pin.ts';
+import { gateCallsOf, gateCommands, gateStatus, wantsGate, type GateStatus } from './gate.ts';
 import { playlistCallsOf, playlistCommands, playlistsOf, playlistStatus, type PlaylistStatus } from './playlists.ts';
 import { removeCallsOf, removeCommands, removeState, type RemoveState } from './remove.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
@@ -72,6 +75,7 @@ import { versionQueries, withVersion } from './versions.ts';
 import { bannedChecker, bannedCheckerOf, bannedCommandBudget, bannedForView, bannedWordsOf, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords, type BannedWordsStatus } from './banned-words.ts';
 import type { BannedFieldMatch } from './domain/banned-words.ts';
 import { teamReportQueries } from './team-report.ts';
+import { checklistFor, checklistForApproval, reviewChecklistCommands, reviewChecklistQueries, reviewChecksOf, tickedChecklist, type ReviewCheck } from './review-checklist.ts';
 import { channelAccessCommands, channelAccessQueries, channelNotAllowed, channelScope, connectionInScope, inScope, mayUse, postInScope, refuseChannels, refuseOutside, refusePostOutside } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -124,7 +128,7 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
     const f = byId.get(m.fileId);
     // Only images uploaded for posts: an accounting document of the org is never published, whatever its type.
     if (!f || f.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
-    if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP và video MP4, MOV');
+    if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP, video MP4, MOV và tệp PDF');
     return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes), durationMs: f.duration_ms === null ? null : Number(f.duration_ms), width: f.image_width ?? null, height: f.image_height ?? null };
   });
 }
@@ -669,7 +673,15 @@ export const variantDecide = defineCommand({
     decision: z.enum(['approved', 'changes_requested', 'rejected']),
     comment: z.string().trim().max(2000).optional(),
     variants: z
-      .array(z.strictObject({ variantId: zId, revision: z.number().int().positive(), contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/) }))
+      .array(
+        z.strictObject({
+          variantId: zId,
+          revision: z.number().int().positive(),
+          contentHash: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+          // The review checklist items the reviewer ticked (#1105); only an approval reads them.
+          checks: z.array(zId).max(SOCIAL_REVIEW_CHECKS_MAX).optional(),
+        }),
+      )
       .min(1)
       .max(MAX_CHANNELS_PER_POST),
   }),
@@ -709,6 +721,9 @@ export const variantDecide = defineCommand({
     // "Approved" on a review link, unless it was given for this content already.
     const clientOn = input.decision === 'approved' ? await clientApprovalOn(ctx.trx, ctx.orgId, chosen.map((v) => v.channel_connection_id)) : new Set<string>();
     const client = clientOn.size > 0 ? await clientVerdict(ctx.trx, ctx.orgId, post.id) : null;
+    // The review checklist (#1105): an approval needs every item of the channel's list ticked, read now, in this
+    // transaction; the items it keeps are copied from that list.
+    const checks: readonly ReviewCheck[] = input.decision === 'approved' ? await checklistForApproval(ctx) : [];
     const waiting: string[] = [];
     const rescheduled: string[] = [];
     for (const v of chosen) {
@@ -726,6 +741,7 @@ export const variantDecide = defineCommand({
           waiting.push(v.id);
         }
       }
+      const checklist = input.decision === 'approved' ? tickedChecklist(checks, v, saw.checks) : null;
       const content = effectiveContent(base(post), overrides(v), v.content_frozen);
       await ctx.trx
         .insertInto('crove_social.post_approval')
@@ -748,6 +764,7 @@ export const variantDecide = defineCommand({
             media: mediaFor(base(post), v).map((m) => ({ file_id: m.fileId, generation: m.generation, alt_text: m.altText })),
             settings: settingsOf(v),
           }),
+          checklist: checklist === null ? null : JSON.stringify(checklist),
         })
         .execute();
       // The approval that completes the count may put a variant a raised policy took out of the schedule back on it;
@@ -1109,6 +1126,8 @@ export interface VariantView {
   commentStatus: CommentStatus | null;
   // The pin of a published Telegram channel that asks for one (#982); null without one.
   pinStatus: PinStatus | null;
+  // Who may reply to and quote a published Bluesky post that limits either (#1102); null without a limit.
+  gateStatus: GateStatus | null;
   // The playlists of a published YouTube video that names some (#1018): how many took it, of how many; null without any.
   playlistStatus: PlaylistStatus | null;
   // The thread of a published channel (#742): how many parts are out (the post counts as one) and the next one's state.
@@ -1132,6 +1151,8 @@ export interface VariantView {
   // the text or the word list was too large to check within the budget, and the list is empty.
   bannedWordsStatus: BannedWordsStatus;
   latestDecision: { decision: SocialDecision; comment: string | null; decidedBy: string; at: string; revision: number; current: boolean } | null;
+  // The review checklist of its channel (#1105): the org-wide items and the channel's, in order; empty without one.
+  checklist: ReviewCheck[];
   // The approvals its channel needs (S9) and who approved its current content in the open review round.
   // client: the channel also waits for the client's approval (#770); clientVerdict: the client's standing answer.
   review: { required: number; approvedBy: string[]; fourEyes: boolean; client: boolean; clientVerdict: 'approved' | 'changes_requested' | null };
@@ -1145,9 +1166,12 @@ export interface MediaView {
   durationMs: number | null;
   width: number | null;
   height: number | null;
+  // A PDF's name (#1119), for its document card; null for images and videos.
+  filename: string | null;
 }
 
-const mediaView = (list: readonly PostMedia[]): MediaView[] => list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs ?? null, width: m.width ?? null, height: m.height ?? null }));
+const mediaView = (list: readonly PostMedia[], names: ReadonlyMap<string, string>): MediaView[] =>
+  list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs ?? null, width: m.width ?? null, height: m.height ?? null, filename: names.get(m.fileId) ?? null }));
 
 export interface PostView {
   id: string;
@@ -1239,6 +1263,10 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
   const pinned = variants.filter((v) => v.status === 'published' && v.external_post_id && wantsPin(v));
   const pinCalls = await pinCallsOf(ctx.trx, ctx.orgId, pinned);
   const pins = new Map<string, PinStatus>(pinned.map((v) => [v.id, pinStatus(pinCalls.get(v.id), now, v.published_at)]));
+  // The reply and quote gates of each published channel that asks for them (#1102).
+  const gated = variants.filter((v) => v.status === 'published' && v.external_post_id && wantsGate(v));
+  const gateCalls = await gateCallsOf(ctx.trx, ctx.orgId, gated);
+  const gates = new Map<string, GateStatus>(gated.map((v) => [v.id, gateStatus(gateCalls.get(v.id), now, v.published_at)]));
   // The playlists of each published channel that names some (#1018).
   const listed = variants.filter((v) => v.status === 'published' && v.external_post_id && playlistsOf(v));
   const listCalls = await playlistCallsOf(ctx.trx, ctx.orgId, listed);
@@ -1270,7 +1298,19 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
     list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms), width: r.image_width ?? null, height: r.image_height ?? null });
     mediaByPost.set(r.post_id, list);
   }
+  // The names of the PDFs the view shows (#1119), the post's and its channels' own, read once.
+  const pdfIds = new Set([
+    ...mediaRows.filter((r) => r.content_type === 'application/pdf').map((r) => r.file_id),
+    ...variants.flatMap((v) => (mediaOf(v.media) ?? []).filter((m) => m.mime === 'application/pdf').map((m) => m.fileId)),
+  ]);
+  const names = new Map<string, string>(
+    pdfIds.size === 0
+      ? []
+      : (await ctx.trx.selectFrom('crove_kernel.file').select(['id', 'filename']).where('org_id', '=', ctx.orgId).where('id', 'in', [...pdfIds]).execute()).map((r) => [r.id, r.filename] as const),
+  );
   const labels = await labelsOfPosts(ctx.trx, ctx.orgId, postIds);
+  // The review checklist (#1105), read once for every variant of the view.
+  const checks = variants.length > 0 ? await reviewChecksOf(ctx.trx, ctx.orgId) : [];
   // Lists and the other reads leave the words out ('not_checked'); one budget covers every variant of the view.
   const banned = options.bannedWords ? await bannedCheckerOf(ctx.trx, ctx.orgId) : null;
   const byPost = new Map(posts.map((p) => [p.id, p]));
@@ -1284,7 +1324,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
         body: p.body,
         title: p.title,
         linkUrl: p.link_url,
-        media: mediaView(b.media),
+        media: mediaView(b.media, names),
         evergreenDays: p.evergreen_days,
         repostOf: p.repost_of,
         recurrence: parseRecurrence(p.recurrence),
@@ -1315,7 +1355,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
               overrides: overrides(v),
               ownMedia: !v.content_frozen && mediaOf(v.media) !== null,
               effective: effectiveContent(b, overrides(v), v.content_frozen),
-              media: mediaView(mediaFor(b, v)),
+              media: mediaView(mediaFor(b, v), names),
               settings: settingsOf(v),
               revision: v.revision,
               contentHash: v.content_hash,
@@ -1324,6 +1364,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
               queueSlotAt: iso(v.queue_slot_at),
               commentStatus: comments.get(v.id) ?? null,
               pinStatus: pins.get(v.id) ?? null,
+              gateStatus: gates.get(v.id) ?? null,
               playlistStatus: lists.get(v.id) ?? null,
               threadStatus: threads.get(v.id) ?? null,
               // As the publisher decides it (queuePaused in publishing.ts): a retry time goes out whatever the queue does.
@@ -1341,6 +1382,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
               latestDecision: d
                 ? { decision: d.decision, comment: d.comment, decidedBy: d.decided_by, at: iso(d.created_at) ?? '', revision: d.revision, current: d.revision === v.revision && d.content_hash === v.content_hash }
                 : null,
+              checklist: checklistFor(checks, v.channel_connection_id),
               review: {
                 required: required.get(v.channel_connection_id) ?? 1,
                 // The author may not approve on this channel (#740).
@@ -1518,7 +1560,8 @@ export const postPreReview = defineQuery({
       const avoid = voices.filter((x) => x.channel_connection_id === null || x.channel_connection_id === v.connectionId).flatMap((x) => x.avoid_words);
       const used = [...new Set(avoid.map((w) => w.trim()).filter((w) => w && text.includes(w.toLowerCase())))];
       if (used.length > 0) findings.push(`${name}: có từ nên tránh theo giọng thương hiệu (${used.slice(0, 5).join(', ')}).`);
-      const undescribed = v.media.filter((m) => !m.altText).length;
+      // A PDF (#1119) goes out as a document with its title and takes no alt text.
+      const undescribed = v.media.filter((m) => !m.altText && m.mime !== 'application/pdf').length;
       if (undescribed > 0) findings.push(`${name}: ${undescribed} ảnh hoặc video chưa có mô tả cho người đọc màn hình (alt text).`);
     }
     const title = view.title?.trim() || view.body.replace(/\s+/g, ' ').trim().slice(0, 120);
@@ -1688,6 +1731,7 @@ export const socialCommands = [
   ...autoReplyCommands,
   ...repostCommands,
   ...pinCommands,
+  ...gateCommands,
   ...playlistCommands,
   ...removeCommands,
   ...policyCommands,
@@ -1716,10 +1760,13 @@ export const socialCommands = [
   ...reportLinkCommands,
   ...goalCommands,
   ...linkPreviewCommands,
+  ...channelOptionCommands,
   ...notificationCommands,
   ...reminderCommands,
   ...channelAccessCommands,
+  ...reviewChecklistCommands,
   ...queueLowCommands,
+  ...digestCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
 // org shows, or a variant's video cover, so the job never reads another kind of file through it.
@@ -1762,4 +1809,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries];

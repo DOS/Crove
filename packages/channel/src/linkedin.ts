@@ -8,7 +8,8 @@
 // names them), then one POST /rest/posts. A member app cannot list the member's posts, so an unclear answer cannot be
 // checked: publishSafety 'never', and such a post waits for a person.
 // Who sees the post (#983): the post's visibility, PUBLIC unless the variant's settings choose connections or signed-in
-// members.
+// members. A post may be a poll instead of images or a video (#1118, content.poll), or one PDF shown as a document
+// (#1119: the Documents API, then content.media with the document and its title).
 import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
@@ -53,6 +54,14 @@ const NAME_BATCH = 50;
 const DEFAULT_LIFETIME_SECONDS = 60 * 86_400;
 // LinkedIn shows at most 20 images in a post.
 const MAX_IMAGES = 20;
+// Documents (#1119): LinkedIn takes PDF, PPT, PPTX, DOC and DOCX of at most 100 MB and 300 pages (Documents API); Crove's
+// library stores PDFs only, so a document post is one PDF.
+export const LINKEDIN_DOCUMENT_TYPES: readonly string[] = ['application/pdf'];
+export const LINKEDIN_DOCUMENT_MAX_BYTES = 100 * 1024 * 1024;
+// The title LinkedIn shows on a document (content.media.title, required for documents). The docs give no limit; 58
+// characters is the limit schedulers that post documents hold to, counted as LinkedIn counts its text (UTF-16 units of
+// the NFC form).
+export const LINKEDIN_DOCUMENT_TITLE_MAX = 58;
 
 export interface LinkedInAppConfig {
   clientId: string;
@@ -318,7 +327,70 @@ export function linkedinVisibilityOf(settings: Readonly<Record<string, unknown>>
 }
 type Visibility = Exclude<ReturnType<typeof linkedinVisibilityOf>, 'invalid'>;
 
+// A poll (#1118), as the variant's settings carry it (`settings.poll`: { question, options, durationMinutes? }, the shape
+// the other channels read, with the question LinkedIn asks for apart from the commentary): the Posts API's content.poll
+// with a question of 1 to 140 characters, 2 to 4 options of 1 to 30 characters ({ text }) and settings.duration, one of
+// ONE_DAY, THREE_DAYS, SEVEN_DAYS (when unsaid) or FOURTEEN_DAYS. The same for a member and a Company Page. A poll is
+// the post's content, so it never goes with images or video. One answer per voter (SINGLE_VOTE, LinkedIn's default and
+// only value so far), so a poll asking for several answers or hidden counts is refused. null for none, 'invalid' for
+// any other shape.
+const POLL_DURATIONS: Readonly<Record<number, string>> = { 1440: 'ONE_DAY', 4320: 'THREE_DAYS', 10_080: 'SEVEN_DAYS', 20_160: 'FOURTEEN_DAYS' };
+export interface LinkedInPoll {
+  question: string;
+  options: { text: string }[];
+  settings: { duration: string };
+}
+export function linkedinPollOf(settings: Readonly<Record<string, unknown>> | undefined): LinkedInPoll | null | 'invalid' {
+  const poll = settings?.poll;
+  if (poll === undefined || poll === null) return null;
+  if (typeof poll !== 'object' || Array.isArray(poll)) return 'invalid';
+  const { question, options, durationMinutes, multiple, hideTotals } = poll as { question?: unknown; options?: unknown; durationMinutes?: unknown; multiple?: unknown; hideTotals?: unknown };
+  // Counted as validation counts them: UTF-16 units of the NFC form, a Vietnamese letter with its marks as one.
+  const size = (t: string) => t.normalize('NFC').length;
+  const asked = typeof question === 'string' ? question.trim() : '';
+  if (size(asked) < 1 || size(asked) > 140) return 'invalid';
+  if (!Array.isArray(options) || options.length < 2 || options.length > 4) return 'invalid';
+  const texts: { text: string }[] = [];
+  for (const option of options) {
+    const text = typeof option === 'string' ? option.trim() : '';
+    if (size(text) < 1 || size(text) > 30) return 'invalid';
+    texts.push({ text });
+  }
+  const minutes = durationMinutes === undefined || durationMinutes === null ? 10_080 : durationMinutes;
+  const duration = typeof minutes === 'number' && Object.hasOwn(POLL_DURATIONS, minutes) ? POLL_DURATIONS[minutes] : undefined;
+  if (!duration) return 'invalid';
+  if ((multiple !== undefined && multiple !== null && multiple !== false) || (hideTotals !== undefined && hideTotals !== null && hideTotals !== false)) return 'invalid';
+  return { question: asked, options: texts, settings: { duration } };
+}
+
+// A document's title (#1119), in `settings.linkedin.documentTitle`: 1 to LINKEDIN_DOCUMENT_TITLE_MAX characters once
+// trimmed. null when unsaid (the post then takes its title or the file's name), 'invalid' for any other shape.
+export function linkedinDocumentTitleOf(settings: Readonly<Record<string, unknown>> | undefined): string | null | 'invalid' {
+  const linkedin = settings?.linkedin;
+  if (linkedin === undefined || linkedin === null) return null;
+  if (typeof linkedin !== 'object' || Array.isArray(linkedin)) return 'invalid';
+  const title = (linkedin as { documentTitle?: unknown }).documentTitle;
+  if (title === undefined || title === null) return null;
+  if (typeof title !== 'string') return 'invalid';
+  const trimmed = title.trim();
+  const size = trimmed.normalize('NFC').length;
+  return size < 1 || size > LINKEDIN_DOCUMENT_TITLE_MAX ? 'invalid' : trimmed;
+}
+
+// The title a document goes out with when the variant names none: the post's title, else the file's name, cut to the
+// limit on a character boundary; 'Document' when neither is known.
+export function linkedinDocumentTitle(title: string | null, filename: string | null): string {
+  const chosen = title?.trim() || filename?.trim() || 'Document';
+  let out = '';
+  for (const c of chosen.normalize('NFC')) {
+    if (out.length + c.length > LINKEDIN_DOCUMENT_TITLE_MAX) break;
+    out += c;
+  }
+  return out;
+}
+
 const VIDEO_URN = /^urn:li:video:[A-Za-z0-9_-]{1,64}$/;
+const DOCUMENT_URN = /^urn:li:document:[A-Za-z0-9_-]{1,64}$/;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 // How long a publish waits for LinkedIn to process a video; with the upload it stays inside callTimeoutMs.
 const PROCESSING_WAIT_MS = 300_000;
@@ -387,6 +459,17 @@ class LinkedInPosting {
     const visibility = linkedinVisibilityOf(input.settings);
     if (visibility === 'invalid' || (this.author === 'organization' && visibility === 'CONNECTIONS')) return { kind: 'rejected', error: 'bad_request', code: 'VISIBILITY_INVALID' };
     const author = kind.urn(input.externalAccountId);
+    // A poll (#1118) is the post's whole content: checked before any call, then posted with the commentary.
+    const poll = linkedinPollOf(input.settings);
+    if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
+    if (poll && input.content.media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
+    if (poll) {
+      const text = textOf(input.content);
+      if (!text) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+      return this.post(token, author, text, { poll }, visibility);
+    }
+    // A document (#1119) is the post's whole content, like a video.
+    if (input.content.media.some((m) => LINKEDIN_DOCUMENT_TYPES.includes(m.mime))) return this.publishDocument(input, token, author, visibility);
     if (input.content.media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token, author, visibility);
     if (input.content.media.length > MAX_IMAGES) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_IMAGES' };
     const images: { id: string; altText?: string }[] = [];
@@ -483,6 +566,53 @@ class LinkedInPosting {
     }
     if (Date.now() >= budgetEnd) return late();
     return this.post(token, author, textOf(input.content), { media: { id: urn } }, visibility);
+  }
+
+  // One PDF as a document (#1119): the Documents API's upload (initialize with the author as owner, then a PUT of the
+  // bytes), a wait until LinkedIn has processed it, then the post with the document and its title. As with a video,
+  // nothing is visible before the post, so every failure before it posted nothing.
+  private async publishDocument(input: PublishInput, token: string, author: string, visibility: Visibility): Promise<PublishResult> {
+    const { media } = input.content;
+    const document = media[0];
+    if (!document || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_DOCUMENT_ONLY' };
+    if (!LINKEDIN_DOCUMENT_TYPES.includes(document.mime)) return { kind: 'rejected', error: 'bad_request', code: 'DOCUMENT_TYPE' };
+    if (document.sizeBytes > LINKEDIN_DOCUMENT_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'DOCUMENT_TOO_LARGE' };
+    const asked = linkedinDocumentTitleOf(input.settings);
+    if (asked === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'DOCUMENT_TITLE_INVALID' };
+    let bytes: Uint8Array;
+    try {
+      bytes = await input.readMedia(document.fileId);
+    } catch {
+      return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+    }
+    if (bytes.byteLength > LINKEDIN_DOCUMENT_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'DOCUMENT_TOO_LARGE' };
+    // The file's name only when the post has no title to give (a name that cannot be read leaves 'Document').
+    const filename = asked !== null || input.content.title?.trim() ? null : await (input.mediaName?.(document.fileId) ?? Promise.resolve(null)).catch(() => null);
+    const title = asked ?? linkedinDocumentTitle(input.content.title, filename);
+    // One budget for the upload and the wait, as for a video.
+    const budgetEnd = Date.now() + this.budgetMs;
+    let urn: string;
+    try {
+      const init = await this.client.call<{ value?: { uploadUrl?: unknown; document?: unknown } }>('POST', '/rest/documents?action=initializeUpload', token, { initializeUploadRequest: { owner: author } });
+      const uploadUrl = init.body?.value?.uploadUrl;
+      const value = init.body?.value?.document;
+      if (typeof uploadUrl !== 'string' || typeof value !== 'string' || !DOCUMENT_URN.test(value)) return { kind: 'rejected', error: 'transient', code: 'NO_UPLOAD_URL' };
+      urn = value;
+      await this.client.upload(uploadUrl, token, bytes, document.mime);
+      const deadline = Math.min(Date.now() + this.processingWaitMs, budgetEnd);
+      for (;;) {
+        const got = await this.client.call<{ status?: unknown }>('GET', `/rest/documents/${encodeURIComponent(urn)}`, token);
+        const status = got.body?.status;
+        if (status === 'AVAILABLE') break;
+        if (status === 'PROCESSING_FAILED') return { kind: 'rejected', error: 'bad_request', code: 'DOCUMENT_PROCESSING_FAILED' };
+        if (Date.now() >= deadline) return { kind: 'rejected', error: 'transient', code: 'DOCUMENT_STILL_PROCESSING' };
+        await sleep(Math.min(this.pollMs, Math.max(0, deadline - Date.now())));
+      }
+    } catch (error) {
+      return beforePost(publishResult(error));
+    }
+    if (Date.now() >= budgetEnd) return { kind: 'rejected', error: 'transient', code: 'DOCUMENT_TOO_SLOW' };
+    return this.post(token, author, textOf(input.content), { media: { id: urn, title } }, visibility);
   }
 
   // A comment under the member's post (#587), through the Social Actions API with the same w_member_social grant; a

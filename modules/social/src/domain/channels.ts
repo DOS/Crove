@@ -29,7 +29,11 @@ export function isProvider(value: string): value is Provider {
   return (PROVIDERS as readonly string[]).includes(value);
 }
 
-export type MediaKind = 'image' | 'video';
+// A document (#1119) is a PDF a channel shows as a document of pages (a LinkedIn carousel); only LinkedIn posts one.
+export type MediaKind = 'image' | 'video' | 'document';
+export const DOCUMENT_TYPES: readonly string[] = ['application/pdf'];
+// A post file is a video, a document or an image, by its type (the server read it from the bytes).
+export const mediaKindOf = (mime: string): MediaKind => (mime.startsWith('video/') ? 'video' : DOCUMENT_TYPES.includes(mime.toLowerCase()) ? 'document' : 'image');
 
 // How a platform counts text against its limit. Text is NFC-normalized first, so Vietnamese typed with combining
 // marks (NFD) counts the same as precomposed text.
@@ -65,6 +69,8 @@ export interface MediaRule {
   maxImageBytes: number | null;
   maxVideoBytes: number | null;
   maxVideoSeconds: number | null;
+  // A document's size cap, where kinds takes documents (#1119). A document is always the post's only file.
+  maxDocumentBytes?: number;
 }
 
 export interface ChannelCapabilities {
@@ -94,6 +100,28 @@ export const PHOTO_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { tik
 // A shorter text where a channel's posts with media take one (#747): a Telegram caption is 1,024 characters, where a
 // message's text is 4,096.
 export const MEDIA_BODY_MAX: Readonly<Partial<Record<Provider, number>>> = { telegram: 1024 };
+// How much alt text each channel's Crove adapter sends (#790, #801), in characters, the smallest over its media kinds
+// (Bluesky cuts a video's at 1000): the adapters cut a longer one. A channel missing here sends no alt text, or none
+// Crove cuts. An AI suggestion (#1121) keeps within the smallest of the chosen channels.
+export const ALT_TEXT_LIMITS: Readonly<Partial<Record<Provider, number>>> = {
+  x: 1000,
+  facebook_page: 1000,
+  instagram: 1000,
+  threads: 1000,
+  bluesky: 1000,
+  mastodon: 1500,
+  linkedin: 4086,
+  linkedin_page: 4086,
+  pinterest: 500,
+  discord: 1024,
+  wordpress: 1000,
+};
+
+// The smallest alt-text limit of these channels; null when none of them has one.
+export function strictestAltTextLimit(providers: readonly string[]): number | null {
+  const limits = providers.flatMap((p) => (isProvider(p) && ALT_TEXT_LIMITS[p] !== undefined ? [ALT_TEXT_LIMITS[p] as number] : []));
+  return limits.length === 0 ? null : Math.min(...limits);
+}
 
 // Where each adapter puts the post's link, so the checks count the text the platform receives:
 // - text: after a blank line at the end of the text, unless the text already holds it;
@@ -246,17 +274,76 @@ export function autoReplyOf(settings: Readonly<Record<string, unknown>> | undefi
 // Threads poll always runs a day. `settings.topicTag` is one tag of 1 to 50 characters with no period or ampersand (a
 // leading # is dropped). The Threads and X adapters read the same shapes. Options count in code points (X's schema
 // maxLength, Threads' text count).
+//
+// Mastodon, Telegram and LinkedIn (#1118) read the same `settings.poll`, with what each platform adds:
+// - Mastodon (POST /api/v1/statuses poll[options][], poll[expires_in], poll[multiple], poll[hide_totals]): the status
+//   text is the question; 2 to 4 options of up to 50 characters and 5 minutes to about a month (mastodon.social's
+//   GET /api/v2/instance configuration.polls, which the adapter reads again from the account's own instance before it
+//   posts); `multiple` lets a voter pick several, `hideTotals` hides the counts until the poll ends; a day when unsaid.
+// - Telegram (sendPoll): the post's text, link included, is the question (1 to 300 characters), so the poll is the post,
+//   one message, with its buttons, silence and pin as any post; 2 to 12 options of up to 100 characters (Telegram also
+//   takes one, Crove asks for two like every channel); `durationMinutes` up to 43,800 (open_period, 5 to 2,628,000
+//   seconds), open until stopped in Telegram when unsaid; `multiple` (allows_multiple_answers) and `hideTotals`
+//   (hide_results_until_closes). Always anonymous, Telegram's default: the docs do not say a channel takes a public
+//   poll, so Crove offers none.
+// - LinkedIn, member and Company Page (Posts API content.poll): a question of its own (`question`, 1 to 140
+//   characters), the post's text staying its commentary; 2 to 4 options of up to 30 characters; 1, 3, 7 or 14 days
+//   (settings.duration ONE_DAY, THREE_DAYS, SEVEN_DAYS, FOURTEEN_DAYS), a week when unsaid; one answer per voter.
+// Every poll goes on a post without images or video: Mastodon and LinkedIn refuse both together, and Crove sends a
+// Telegram poll without media.
 export interface PollRule {
   minOptions: number;
   maxOptions: number;
   maxChars: number;
-  // The poll's length in whole minutes, on channels that take one; absent where the platform sets it.
-  duration?: { min: number; max: number; default: number };
+  // How an option is counted; code points when unsaid.
+  count?: CountMode;
+  // The poll's length in whole minutes, on channels that take one; absent where the platform sets it. default null: an
+  // unsaid length leaves the poll open until it is stopped (Telegram). choices: the only lengths the platform takes.
+  duration?: { min: number; max: number; default: number | null; choices?: readonly number[] };
+  // Voters may pick several options (`settings.poll.multiple`), and the counts may stay hidden until the poll ends
+  // (`settings.poll.hideTotals`).
+  multiple?: boolean;
+  hideTotals?: boolean;
+  // A question of its own (`settings.poll.question`, required); without it the post's text is the question.
+  question?: { maxChars: number; count: CountMode };
+  // The post's text as the question has its own limit (Telegram): 1 to maxChars, counted as the channel's text.
+  textAsQuestion?: { maxChars: number };
 }
+// The member's and the page's polls go through the same Posts API.
+const LINKEDIN_POLL: PollRule = {
+  minOptions: 2,
+  maxOptions: 4,
+  maxChars: 30,
+  count: 'utf16',
+  duration: { min: 1440, max: 20_160, default: 10_080, choices: [1440, 4320, 10_080, 20_160] },
+  question: { maxChars: 140, count: 'utf16' },
+};
 export const POLL_RULES: Readonly<Partial<Record<Provider, PollRule>>> = {
   threads: { minOptions: 2, maxOptions: 4, maxChars: 25 },
   x: { minOptions: 2, maxOptions: 4, maxChars: 25, duration: { min: 5, max: 10_080, default: 1440 } },
+  mastodon: { minOptions: 2, maxOptions: 4, maxChars: 50, duration: { min: 5, max: 43_829, default: 1440 }, multiple: true, hideTotals: true },
+  telegram: { minOptions: 2, maxOptions: 12, maxChars: 100, count: 'utf16', duration: { min: 1, max: 43_800, default: null }, multiple: true, hideTotals: true, textAsQuestion: { maxChars: 300 } },
+  linkedin: LINKEDIN_POLL,
+  linkedin_page: LINKEDIN_POLL,
 };
+
+// A choice of a variant's poll (`multiple`, `hideTotals`): false when unsaid, 'invalid' when it is not true or false.
+export function pollFlagOf(settings: Readonly<Record<string, unknown>> | undefined, key: 'multiple' | 'hideTotals'): boolean | 'invalid' {
+  const poll = settings?.poll;
+  if (!poll || typeof poll !== 'object') return false;
+  const value = (poll as Record<string, unknown>)[key];
+  if (value === undefined || value === null) return false;
+  return typeof value === 'boolean' ? value : 'invalid';
+}
+
+// The poll's own question, trimmed: null when unsaid, 'invalid' when it is not text.
+export function pollQuestionOf(settings: Readonly<Record<string, unknown>> | undefined): string | null | 'invalid' {
+  const poll = settings?.poll;
+  if (!poll || typeof poll !== 'object') return null;
+  const value = (poll as { question?: unknown }).question;
+  if (value === undefined || value === null) return null;
+  return typeof value === 'string' ? value.trim() : 'invalid';
+}
 
 // The poll's length in a variant's settings: null when unsaid, 'invalid' when it is not a whole number of minutes.
 export function pollDurationOf(settings: Readonly<Record<string, unknown>> | undefined): number | null | 'invalid' {
@@ -282,6 +369,33 @@ export function replySettingOf(provider: string, settings: Readonly<Record<strin
   const allowed = isProvider(provider) ? REPLY_SETTINGS[provider] : undefined;
   const value = settings?.replySettings;
   return allowed && value !== 'everyone' && (allowed as readonly unknown[]).includes(value) ? (value as Exclude<ReplySetting, 'everyone'>) : null;
+}
+// Bluesky (#1102) reads the same field with the same names, plus nobody, and several of mentionedUsers, following and
+// followers may combine as a list (Bluesky's threadgate allows any of its rules together). `settings.quotes: false`
+// turns quote posts off (a postgate); on is the default and is not stored. Both are written after the post, by the
+// gate step, on the thread's first post: its threadgate covers every reply of the thread, its postgate that post.
+export const BLUESKY_REPLY_RULES = ['mentionedUsers', 'following', 'followers'] as const;
+export type BlueskyReplyRule = (typeof BLUESKY_REPLY_RULES)[number];
+// The choices the composer offers, everyone first (the default); the rules may also be picked together.
+export const BLUESKY_REPLY_SETTINGS = ['everyone', 'nobody', ...BLUESKY_REPLY_RULES] as const;
+const isBlueskyRule = (v: unknown): v is BlueskyReplyRule => typeof v === 'string' && (BLUESKY_REPLY_RULES as readonly string[]).includes(v);
+// Who may reply to a Bluesky post: null for everyone (unsaid or 'everyone'), 'nobody', the rules (in
+// BLUESKY_REPLY_RULES order) from one name or a list of distinct names, 'invalid' for anything else.
+export function blueskyRepliesOf(settings: Readonly<Record<string, unknown>> | undefined): BlueskyReplyRule[] | 'nobody' | null | 'invalid' {
+  const value = settings?.replySettings;
+  if (value === undefined || value === 'everyone') return null;
+  if (value === 'nobody') return 'nobody';
+  if (isBlueskyRule(value)) return [value];
+  if (Array.isArray(value) && value.length > 0 && value.every(isBlueskyRule) && new Set(value).size === value.length) return BLUESKY_REPLY_RULES.filter((r) => value.includes(r));
+  return 'invalid';
+}
+// Whether a variant turns quote posts off; anything but false leaves them on (validation refuses a non-boolean).
+export const blueskyQuotesOff = (settings: Readonly<Record<string, unknown>> | undefined): boolean => settings?.quotes === false;
+// Whether a Bluesky variant asks for a gate the gate step writes after the post: replies limited or quotes off.
+export function wantsBlueskyGate(provider: string, settings: Readonly<Record<string, unknown>> | undefined): boolean {
+  if (provider !== 'bluesky' || (settings?.quotes !== undefined && typeof settings.quotes !== 'boolean')) return false;
+  const replies = blueskyRepliesOf(settings);
+  return replies !== 'invalid' && (replies !== null || blueskyQuotesOff(settings));
 }
 export const TOPIC_TAG_RULES: Readonly<Partial<Record<Provider, { maxChars: number }>>> = { threads: { maxChars: 50 } };
 
@@ -538,6 +652,55 @@ export function mapTelegramButtonUrls(settings: Record<string, unknown>, map: (u
 // read at connect): the editor greys the pin out without it.
 export const TELEGRAM_PIN_SCOPE = 'can_pin_messages';
 
+// Discord forum posts and threads (#1103), in `settings.discord`: { forum?: true, threadName?, tags?, threadId? }. A
+// webhook's channel type cannot be read with the webhook alone, so the person posting marks a forum (or media)
+// channel's webhook: forum posts the variant as a new forum post named threadName, else the post's title, else the
+// text's first line (cut to DISCORD_THREAD_NAME_MAX), with the forum's tag ids; threadId posts into an existing thread
+// instead. Absent is a message in the webhook's channel, as before. The adapter's discordOptionsOf in @crove/channel
+// reads the same shape and names the same limits.
+export const DISCORD_THREAD_NAME_MAX = 100;
+export const DISCORD_TAGS_MAX = 5;
+const DISCORD_ID = /^\d{17,20}$/;
+export const isDiscordId = (id: string): boolean => DISCORD_ID.test(id);
+export interface DiscordOptions {
+  forum: boolean;
+  // As typed; validateVariant checks each value.
+  threadName: string | null;
+  tags: string[];
+  threadId: string | null;
+}
+// The options in a variant's settings: null when there are none, 'invalid' when they are not an object of those keys
+// with a true-or-false forum, a text name and thread id, and a list of texts as tags.
+export function discordOptionsOf(settings: Readonly<Record<string, unknown>> | undefined): DiscordOptions | 'invalid' | null {
+  const raw = settings?.discord;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== 'forum' && k !== 'threadName' && k !== 'tags' && k !== 'threadId')) return 'invalid';
+  if ((r.forum !== undefined && typeof r.forum !== 'boolean') || (r.threadName !== undefined && typeof r.threadName !== 'string') || (r.threadId !== undefined && typeof r.threadId !== 'string')) return 'invalid';
+  if (r.tags !== undefined && (!Array.isArray(r.tags) || r.tags.some((t) => typeof t !== 'string'))) return 'invalid';
+  return { forum: r.forum === true, threadName: (r.threadName as string | undefined) ?? null, tags: (r.tags as string[] | undefined) ?? [], threadId: (r.threadId as string | undefined) ?? null };
+}
+// Whether a Discord variant goes out as a new forum post, which takes the post's title as its name.
+export const isDiscordForum = (provider: string, settings: Readonly<Record<string, unknown>> | undefined): boolean => {
+  if (provider !== 'discord') return false;
+  const options = discordOptionsOf(settings);
+  return options !== null && options !== 'invalid' && options.forum;
+};
+// At most `max` UTF-16 code units, never ending on half of a surrogate pair.
+function cutUtf16(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const last = cut.charCodeAt(cut.length - 1);
+  return (last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut).trimEnd();
+}
+// A forum post's name as the adapter sends it: the one given, else the post's title, else the first line of its text,
+// cut to Discord's limit; '' when there is none (files alone, with no title).
+export function discordThreadName(own: string | null, title: string | null, text: string): string {
+  const name = own?.trim() || title?.trim() || (text.split('\n').find((line) => line.trim() !== '') ?? '').trim();
+  return cutUtf16(name.replace(/\s+/g, ' '), DISCORD_THREAD_NAME_MAX);
+}
+
 // What social.publish.record stores as a published variant's note (error_code, with no error kind) when the platform
 // took the post as a draft in its own app (#903): not public yet and with no post id, so it is never read as out.
 export const SENT_TO_APP = 'SENT_TO_APP';
@@ -560,6 +723,24 @@ export const WORDPRESS_TERM_MAX = 200;
 
 // YouTube refuses a thumbnail over 2 MB (thumbnails.set).
 export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024 };
+
+// A LinkedIn document's title (#1119), `settings.linkedin.documentTitle`: 1 to DOCUMENT_TITLE_MAX characters once
+// trimmed, counted as LinkedIn counts its text. Unsaid, the adapter sends the post's title or the file's name. The
+// adapter's linkedinDocumentTitleOf in @crove/channel reads the same shape and limit (LinkedIn's docs give none; 58 is
+// the one schedulers that post documents hold to).
+export const DOCUMENT_TITLE_MAX = 58;
+export const DOCUMENT_PROVIDERS: ReadonlySet<Provider> = new Set<Provider>(['linkedin', 'linkedin_page']);
+export function documentTitleOf(settings: Readonly<Record<string, unknown>> | undefined): string | null | 'invalid' {
+  const linkedin = settings?.linkedin;
+  if (linkedin === undefined || linkedin === null) return null;
+  if (typeof linkedin !== 'object' || Array.isArray(linkedin)) return 'invalid';
+  const title = (linkedin as { documentTitle?: unknown }).documentTitle;
+  if (title === undefined || title === null) return null;
+  if (typeof title !== 'string') return 'invalid';
+  const trimmed = title.trim();
+  const size = trimmed.normalize('NFC').length;
+  return size < 1 || size > DOCUMENT_TITLE_MAX ? 'invalid' : trimmed;
+}
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
@@ -690,17 +871,18 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'linkedin',
     body: { max: 3000, count: 'utf16', required: false },
     title: null,
-    media: { min: 0, max: 20, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800 },
+    media: { min: 0, max: 20, kinds: ['image', 'video', 'document'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800, maxDocumentBytes: 100 * MB },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['body.max', 'media.max'],
   },
-  // A Company Page posts through the same Posts, Images and Videos APIs as the member (#1077), so the same limits.
+  // A Company Page posts through the same Posts, Images, Videos and Documents APIs as the member (#1077), so the same
+  // limits. A document (#1119) is one PDF of at most 100 MB (LinkedIn's limit; the library holds at most 25 MB).
   linkedin_page: {
     provider: 'linkedin_page',
     body: { max: 3000, count: 'utf16', required: false },
     title: null,
-    media: { min: 0, max: 20, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800 },
+    media: { min: 0, max: 20, kinds: ['image', 'video', 'document'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800, maxDocumentBytes: 100 * MB },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['body.max', 'media.max'],
@@ -957,6 +1139,26 @@ export function youtubePlaylistIdFrom(text: string): string | null {
   return list && YOUTUBE_PLAYLIST_ID.test(list) ? list : null;
 }
 
+// The Pinterest board section a pin goes into (#1120): settings.pinterest.sectionId, one of the board's sections as the
+// composer listed them (PINTEREST_SECTION_ID in @crove/channel, which sends it and checks it against the board again).
+// Not stored without one, so a variant saved before keeps its content hash.
+export const PINTEREST_SECTION_ID = /^\d{1,32}$/;
+
+// The section id in a variant's settings: null when there is none, 'invalid' when settings.pinterest is not an object
+// holding only a section id.
+export function pinterestSectionOf(settings: Readonly<Record<string, unknown>> | undefined): string | 'invalid' | null {
+  const raw = settings?.pinterest;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== 'sectionId')) return 'invalid';
+  if (r.sectionId === undefined) return null;
+  return typeof r.sectionId === 'string' && PINTEREST_SECTION_ID.test(r.sectionId) ? r.sectionId : 'invalid';
+}
+
+// The channels whose composer lists options to pick from (#1120), and what each lists.
+export const CHANNEL_OPTION_KIND_OF: Readonly<Partial<Record<Provider, 'pinterest_section'>>> = { pinterest: 'pinterest_section' };
+
 // Instagram people (#796): up to 3 collaborators (`settings.collaborators`, on feed posts and Reels; each must accept
 // the invitation in Instagram) and up to 20 people tagged on the first image (`settings.userTags`, image posts only).
 // Usernames as Instagram writes them, without the @. The adapter reads the same shapes.
@@ -1005,7 +1207,7 @@ export function instagramReelOf(settings: Readonly<Record<string, unknown>> | un
 }
 
 // Whether a variant's post is an Instagram Reel: one video, not a Story (a feed post of one video goes out as a Reel).
-export function isInstagramReel(media: readonly { kind: 'image' | 'video' }[], settings: Readonly<Record<string, unknown>> | undefined): boolean {
+export function isInstagramReel(media: readonly { kind: MediaKind }[], settings: Readonly<Record<string, unknown>> | undefined): boolean {
   return media.length === 1 && media[0]?.kind === 'video' && postTypeOf(settings) !== 'story';
 }
 
@@ -1047,7 +1249,7 @@ export function limitWait(starts: readonly Date[], limit: PublishLimit, now: Dat
 // cannot go out, so the composer says so before the post is submitted. Instagram takes a Reel or a video Story without
 // one (Crove uploads the bytes), but not images, carousels or a cover image; Threads, Google Business, Zalo OA (its
 // images) and TikTok photos are fetched by URL always.
-export function needsPublicUrls(provider: Provider, media: readonly { kind: 'image' | 'video' }[], settings?: Readonly<Record<string, unknown>>): boolean {
+export function needsPublicUrls(provider: Provider, media: readonly { kind: MediaKind }[], settings?: Readonly<Record<string, unknown>>): boolean {
   if (media.length === 0) return false;
   switch (provider) {
     case 'instagram': {

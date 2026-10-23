@@ -1,6 +1,7 @@
-// LinkedIn against recorded answers (shapes from LinkedIn's Share on LinkedIn, Posts and Images API docs); no live call.
+// LinkedIn against recorded answers (shapes from LinkedIn's Share on LinkedIn, Posts, Images, Videos and Documents API
+// docs); no live call.
 import { describe, expect, it } from 'vitest';
-import { LINKEDIN_VERSION, LinkedInConnector, LinkedInPageConnector, LinkedInPagePublisher, LinkedInPublisher, littleText, type Fetch, type PublishInput } from '../src/index.ts';
+import { LINKEDIN_DOCUMENT_MAX_BYTES, LINKEDIN_DOCUMENT_TITLE_MAX, LINKEDIN_VERSION, LinkedInConnector, LinkedInPageConnector, LinkedInPagePublisher, LinkedInPublisher, linkedinDocumentTitle, linkedinDocumentTitleOf, littleText, type Fetch, type PublishInput } from '../src/index.ts';
 
 const APP = { clientId: '86abcdefgh1234', clientSecret: 'test-linkedin-secret-not-real' };
 const MEMBER = 'yrZCpj2Z12';
@@ -116,6 +117,51 @@ describe('LinkedInPublisher', () => {
       expect(await publisher.publish(input({ settings: { visibility } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'VISIBILITY_INVALID' });
     }
     expect(await publisher.publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [image('f-9')] }, settings: { visibility: 'friends' } }))).toMatchObject({ code: 'VISIBILITY_INVALID' });
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('posts a poll as the content, with its own question and LinkedIn duration, a week when unsaid (#1118)', async () => {
+    const created = (n: number) => ({ status: 201, headers: { 'x-restli-id': `urn:li:ugcPost:690000000000000000${n}` } });
+    const { fetchImpl, calls } = linkedin({ 'POST api.linkedin.com/rest/posts': [created(1), created(2), created(3), created(4)] });
+    const publisher = new LinkedInPublisher({}, fetchImpl);
+    const asked = (poll: Record<string, unknown>) => input({ settings: { poll } });
+    expect(await publisher.publish(asked({ question: ' Món nào ngon nhất? ', options: [' Phở ', 'Bún chả'] }))).toEqual({
+      kind: 'accepted',
+      externalId: 'urn:li:ugcPost:6900000000000000001',
+      url: 'https://www.linkedin.com/feed/update/urn:li:ugcPost:6900000000000000001/',
+    });
+    for (const minutes of [1440, 4320, 20_160]) await publisher.publish(asked({ question: 'Q', options: ['a', 'b', 'c', 'd'], durationMinutes: minutes }));
+    expect(calls[0]?.body).toEqual({
+      author: `urn:li:person:${MEMBER}`,
+      commentary: 'Khai trương chi nhánh mới \\(Q1\\)',
+      visibility: 'PUBLIC',
+      distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+      content: { poll: { question: 'Món nào ngon nhất?', options: [{ text: 'Phở' }, { text: 'Bún chả' }], settings: { duration: 'SEVEN_DAYS' } } },
+    });
+    expect(calls.slice(1).map((c) => (c.body as { content: { poll: { settings: unknown } } }).content.poll.settings)).toEqual([{ duration: 'ONE_DAY' }, { duration: 'THREE_DAYS' }, { duration: 'FOURTEEN_DAYS' }]);
+  });
+
+  it('refuses a poll with media, without a question, or LinkedIn would refuse, before any call (#1118)', async () => {
+    const none = linkedin({});
+    const publisher = new LinkedInPublisher({}, none.fetchImpl);
+    const poll = { question: 'Món nào?', options: ['Phở', 'Bún chả'] };
+    expect(await publisher.publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [image('f-9')] }, settings: { poll } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' });
+    expect(await publisher.publish(input({ content: { body: 'Clip', title: null, linkUrl: null, media: [{ fileId: 'v', mime: 'video/mp4', sizeBytes: 10, altText: null }] }, settings: { poll } }))).toMatchObject({ code: 'POLL_WITH_MEDIA' });
+    for (const bad of [
+      { options: poll.options },
+      { ...poll, question: 'x'.repeat(141) },
+      { ...poll, options: ['Phở'] },
+      { ...poll, options: ['a', 'b', 'c', 'd', 'e'] },
+      { ...poll, options: ['Phở', 'x'.repeat(31)] },
+      { ...poll, durationMinutes: 2880 },
+      { ...poll, multiple: true },
+      { ...poll, hideTotals: true },
+      'có',
+    ]) {
+      expect(await publisher.publish(input({ settings: { poll: bad } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' });
+    }
     expect(none.calls).toHaveLength(0);
   });
 
@@ -428,6 +474,21 @@ describe('LinkedIn Company Pages (#1077)', () => {
     });
   });
 
+  it('posts a poll as the page (#1118)', async () => {
+    const { fetchImpl, calls } = pages({ 'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:ugcPost:7400000000000000009' } }] });
+    const result = await new LinkedInPagePublisher({}, fetchImpl).publish(pageInput({ settings: { visibility: 'loggedIn', poll: { question: 'Chi nhánh tiếp theo ở đâu?', options: ['Quận 1', 'Thủ Đức', 'Bình Thạnh'], durationMinutes: 4320 } } }));
+    expect(result).toMatchObject({ kind: 'accepted', externalId: 'urn:li:ugcPost:7400000000000000009' });
+    expect(calls[0]?.body).toEqual({
+      author: `urn:li:organization:${ORG_A}`,
+      commentary: 'Khai trương chi nhánh mới \\(Q1\\)',
+      visibility: 'LOGGED_IN',
+      distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+      content: { poll: { question: 'Chi nhánh tiếp theo ở đâu?', options: [{ text: 'Quận 1' }, { text: 'Thủ Đức' }, { text: 'Bình Thạnh' }], settings: { duration: 'THREE_DAYS' } } },
+    });
+  });
+
   it('sends signed-in members only when chosen, and refuses connections and a member id before any call', async () => {
     const shown = pages({ 'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7400000000000000002' } }] });
     expect((await new LinkedInPagePublisher({}, shown.fetchImpl).publish(pageInput({ settings: { visibility: 'loggedIn' } }))).kind).toBe('accepted');
@@ -488,5 +549,153 @@ describe('LinkedIn Company Pages (#1077)', () => {
     const result = await new LinkedInPagePublisher({}, fetchImpl).comment({ externalAccountId: ORG_A, secret: SECRET, externalId: urn, text: 'Đặt bánh tại tiembanhb.vn', callKey: 'k' });
     expect(result).toEqual({ kind: 'accepted', externalId: '6643206422739898368' });
     expect(calls[0]?.body).toEqual({ actor: `urn:li:organization:${ORG_A}`, object: urn, message: { text: 'Đặt bánh tại tiembanhb.vn' } });
+  });
+});
+describe('LinkedIn documents (#1119)', () => {
+  const DOC = 'urn:li:document:D5510AQHXjcP8QBYD9A';
+  const DOC_PUT = 'PUT www.linkedin.com/dms-uploads/D5510AQHXjcP8QBYD9A/ads-uploadedDocument/0';
+  const DOC_UPLOAD = 'https://www.linkedin.com/dms-uploads/D5510AQHXjcP8QBYD9A/ads-uploadedDocument/0?ca=vector_ads&cn=uploads&sync=0&v=beta&ut=36ezHi';
+  const PDF = new TextEncoder().encode('%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n');
+  const pdf = { fileId: 'd-1', mime: 'application/pdf', sizeBytes: PDF.byteLength, altText: null };
+  const quick = { processingWaitMs: 1000, pollMs: 0 };
+  const status = `GET api.linkedin.com/rest/documents/${encodeURIComponent(DOC)}`;
+  const withPdf = (over: Partial<PublishInput> = {}) =>
+    input({ content: { body: 'Báo giá quý 4', title: null, linkUrl: null, media: [pdf] }, readMedia: async () => PDF, mediaName: async () => 'bao-gia-q4.pdf', ...over });
+  // The Documents API's recorded answers: initializeUpload, the PUT, the status, then the post.
+  const answers = (post = 'urn:li:share:7500000000000000001'): Record<string, Answer[]> => ({
+    'POST api.linkedin.com/rest/documents?action=initializeUpload': [{ body: { value: { uploadUrlExpiresAt: 1650567510704, uploadUrl: DOC_UPLOAD, document: DOC } } }],
+    [DOC_PUT]: [{ status: 201 }],
+    [status]: [{ body: { id: DOC, owner: `urn:li:person:${MEMBER}`, status: 'PROCESSING' } }, { body: { id: DOC, owner: `urn:li:person:${MEMBER}`, status: 'AVAILABLE' } }],
+    'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': post } }],
+  });
+
+  it('uploads the PDF owned by the member, waits until it is available, then posts it with its title', async () => {
+    const { fetchImpl, calls } = linkedin(answers());
+    const result = await new LinkedInPublisher({}, fetchImpl, quick).publish(withPdf({ settings: { linkedin: { documentTitle: '  Báo giá dịch vụ quý 4  ' } } }));
+    expect(result).toEqual({ kind: 'accepted', externalId: 'urn:li:share:7500000000000000001', url: 'https://www.linkedin.com/feed/update/urn:li:share:7500000000000000001/' });
+    expect(calls.map((c) => c.route)).toEqual(['POST api.linkedin.com/rest/documents?action=initializeUpload', DOC_PUT, status, status, 'POST api.linkedin.com/rest/posts']);
+    expect(calls[0]?.body).toEqual({ initializeUploadRequest: { owner: `urn:li:person:${MEMBER}` } });
+    expect(calls[0]?.headers.get('linkedin-version')).toBe(LINKEDIN_VERSION);
+    expect(calls[0]?.headers.get('x-restli-protocol-version')).toBe('2.0.0');
+    // The exact bytes, with the member's token, to the URL LinkedIn handed out.
+    expect(calls[1]?.headers.get('authorization')).toBe('Bearer li-token-1');
+    const sent = calls[1]?.body;
+    expect(sent).toBeInstanceOf(Blob);
+    expect(new Uint8Array(await (sent as Blob).arrayBuffer())).toEqual(PDF);
+    expect(calls[2]?.headers.get('linkedin-version')).toBe(LINKEDIN_VERSION);
+    expect(calls.at(-1)?.body).toEqual({
+      author: `urn:li:person:${MEMBER}`,
+      commentary: 'Báo giá quý 4',
+      visibility: 'PUBLIC',
+      distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+      content: { media: { id: DOC, title: 'Báo giá dịch vụ quý 4' } },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+    });
+  });
+
+  it('titles the document with the post title, else the file name, cut to the limit, else Document', async () => {
+    const titled = async (over: Partial<PublishInput>) => {
+      const { fetchImpl, calls } = linkedin(answers());
+      expect((await new LinkedInPublisher({}, fetchImpl, quick).publish(withPdf(over))).kind).toBe('accepted');
+      return (calls.at(-1)?.body as { content: { media: { title: string } } } | undefined)?.content.media.title ?? '';
+    };
+    expect(await titled({})).toBe('bao-gia-q4.pdf');
+    expect(await titled({ content: { body: 'x', title: 'Hồ sơ năng lực', linkUrl: null, media: [pdf] } })).toBe('Hồ sơ năng lực');
+    expect(await titled({ mediaName: async () => null })).toBe('Document');
+    expect(
+      await titled({
+        mediaName: async () => {
+          throw new Error('gone');
+        },
+      }),
+    ).toBe('Document');
+    const long = `${'Tài liệu giới thiệu '.repeat(5)}.pdf`;
+    const cut = await titled({ mediaName: async () => long });
+    expect(cut.length).toBe(LINKEDIN_DOCUMENT_TITLE_MAX);
+    expect(long.startsWith(cut)).toBe(true);
+    // An emoji is never split in half.
+    expect(linkedinDocumentTitle(`${'a'.repeat(57)}😀`, null)).toBe('a'.repeat(57));
+  });
+
+  it('uploads the PDF owned by the page and posts it as the page', async () => {
+    const ORG = '2414183';
+    const { fetchImpl, calls } = linkedin(answers('urn:li:share:7500000000000000002'));
+    const result = await new LinkedInPagePublisher({}, fetchImpl, quick).publish(withPdf({ externalAccountId: ORG, settings: { linkedin: { documentTitle: 'Catalogue 2026' }, visibility: 'loggedIn' } }));
+    expect(result).toMatchObject({ kind: 'accepted', externalId: 'urn:li:share:7500000000000000002' });
+    expect(calls[0]?.body).toEqual({ initializeUploadRequest: { owner: `urn:li:organization:${ORG}` } });
+    expect(calls.at(-1)?.body).toMatchObject({ author: `urn:li:organization:${ORG}`, visibility: 'LOGGED_IN', content: { media: { id: DOC, title: 'Catalogue 2026' } } });
+  });
+
+  it('refuses a document beside other files, too large, or with a title LinkedIn would refuse, before any call', async () => {
+    const none = linkedin({});
+    const publisher = new LinkedInPublisher({}, none.fetchImpl, quick);
+    const media = (list: PublishInput['content']['media']) => withPdf({ content: { body: 'x', title: null, linkUrl: null, media: list } });
+    expect(await publisher.publish(media([pdf, image('f-1')]))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'ONE_DOCUMENT_ONLY' });
+    expect(await publisher.publish(media([image('f-1'), pdf]))).toMatchObject({ code: 'ONE_DOCUMENT_ONLY' });
+    expect(await publisher.publish(media([pdf, { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 10, altText: null }]))).toMatchObject({ code: 'ONE_DOCUMENT_ONLY' });
+    expect(await publisher.publish(media([pdf, { ...pdf, fileId: 'd-2' }]))).toMatchObject({ code: 'ONE_DOCUMENT_ONLY' });
+    expect(await publisher.publish(media([{ ...pdf, sizeBytes: LINKEDIN_DOCUMENT_MAX_BYTES + 1 }]))).toMatchObject({ code: 'DOCUMENT_TOO_LARGE' });
+    const refused = { kind: 'rejected', error: 'bad_request', code: 'DOCUMENT_TITLE_INVALID' };
+    for (const shape of [{ documentTitle: '' }, { documentTitle: '   ' }, { documentTitle: 'a'.repeat(LINKEDIN_DOCUMENT_TITLE_MAX + 1) }, { documentTitle: 7 }, 'title', ['x']]) {
+      const settings = { linkedin: shape };
+      expect(await publisher.publish(withPdf({ settings }))).toEqual(refused);
+    }
+    expect(await publisher.publish(withPdf({ settings: { poll: { question: 'Chọn gói nào?', options: ['A', 'B'] } } }))).toMatchObject({ code: 'POLL_WITH_MEDIA' });
+    expect(
+      await publisher.publish(
+        withPdf({
+          readMedia: async () => {
+            throw new Error('missing');
+          },
+        }),
+      ),
+    ).toMatchObject({ code: 'MEDIA_UNREADABLE' });
+    expect(none.calls).toHaveLength(0);
+    expect(linkedinDocumentTitleOf({ linkedin: { documentTitle: 'a'.repeat(LINKEDIN_DOCUMENT_TITLE_MAX) } })).toBe('a'.repeat(LINKEDIN_DOCUMENT_TITLE_MAX));
+    expect(linkedinDocumentTitleOf({})).toBeNull();
+    expect(linkedinDocumentTitleOf({ linkedin: {} })).toBeNull();
+  });
+
+  it('posts nothing when processing fails, the upload fails, the answer names no document, or it is still processing', async () => {
+    const run = async (routes: Record<string, Answer[]>, timing = quick) => {
+      const recorded = linkedin(routes);
+      const result = await new LinkedInPublisher({}, recorded.fetchImpl, timing).publish(withPdf());
+      expect(recorded.calls.some((c) => c.route === 'POST api.linkedin.com/rest/posts')).toBe(false);
+      return { result, calls: recorded.calls };
+    };
+    expect((await run({ ...answers(), [status]: [{ body: { id: DOC, status: 'PROCESSING_FAILED' } }] })).result).toEqual({ kind: 'rejected', error: 'bad_request', code: 'DOCUMENT_PROCESSING_FAILED' });
+    expect((await run({ ...answers(), [DOC_PUT]: [{ status: 503 }] })).result).toMatchObject({ kind: 'rejected', error: 'transient' });
+    expect((await run({ 'POST api.linkedin.com/rest/documents?action=initializeUpload': [{ body: { value: { uploadUrl: DOC_UPLOAD, document: 'urn:li:image:C4E10AQ1' } } }] })).result).toEqual({
+      kind: 'rejected',
+      error: 'transient',
+      code: 'NO_UPLOAD_URL',
+    });
+    const forbidden = { status: 403, body: { status: 403, code: 'DOCUMENT_FORBIDDEN', message: 'Accessing this document resource is forbidden' } };
+    expect((await run({ 'POST api.linkedin.com/rest/documents?action=initializeUpload': [forbidden] })).result).toMatchObject({ kind: 'rejected', error: 'permission', code: 'DOCUMENT_FORBIDDEN' });
+    const elsewhere = await run({ 'POST api.linkedin.com/rest/documents?action=initializeUpload': [{ body: { value: { uploadUrl: 'https://evil.example/upload', document: DOC } } }] });
+    expect(elsewhere.result.kind).toBe('rejected');
+    expect(elsewhere.calls.some((c) => c.route.includes('evil.example'))).toBe(false);
+    const waiting = { ...answers(), [status]: Array.from({ length: 5 }, () => ({ body: { id: DOC, status: 'WAITING_UPLOAD' } })) };
+    expect((await run(waiting, { processingWaitMs: 0, pollMs: 0 })).result).toEqual({ kind: 'rejected', error: 'transient', code: 'DOCUMENT_STILL_PROCESSING' });
+  });
+
+  it('leaves image posts as they were: only a PDF goes to the Documents API', async () => {
+    const { fetchImpl, calls } = linkedin({
+      'POST api.linkedin.com/rest/images?action=initializeUpload': [{ body: { value: { uploadUrl: UPLOAD, image: 'urn:li:image:C4E10AQ7' } } }],
+      'PUT www.linkedin.com/dms-uploads/sp/v2/D4D10AQ/upload': [{ status: 201 }],
+      'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7500000000000000003' } }],
+    });
+    await new LinkedInPublisher({}, fetchImpl).publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [image('f-7', 'Mặt tiền')] }, mediaName: async () => 'anh.jpg' }));
+    expect(calls.some((c) => c.route.includes('/rest/documents'))).toBe(false);
+    expect(calls.at(-1)?.body).toEqual({
+      author: `urn:li:person:${MEMBER}`,
+      commentary: 'Ảnh',
+      visibility: 'PUBLIC',
+      distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+      content: { media: { id: 'urn:li:image:C4E10AQ7', altText: 'Mặt tiền' } },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+    });
   });
 });

@@ -3,6 +3,7 @@
 // Each capability is its own small interface, added by the step that first needs it.
 import { randomBytes } from 'node:crypto';
 import type { PostType } from './post-type.ts';
+import type { ChannelOptionsInput, ChannelOptionsResult } from './options.ts';
 
 export * from './oauth.ts';
 export * from './text.ts';
@@ -25,6 +26,7 @@ export * from './comment.ts';
 export * from './cover.ts';
 export * from './post-type.ts';
 export * from './recent.ts';
+export * from './options.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -123,6 +125,9 @@ export interface PublishInput {
   // A short-lived public URL for one of content.media, for platforms that fetch images themselves (Instagram); null
   // when the deployment's storage cannot hand one out (local disk).
   mediaUrl(fileId: string): Promise<string | null>;
+  // The name one of content.media was uploaded under, for a platform that shows it (a LinkedIn document's title when
+  // the post gives none, #1119); null when unknown. Absent in callers that have no names.
+  mediaName?(fileId: string): Promise<string | null>;
   // The variant's provider settings; a video's cover (#642) is `settings.cover`, read with videoCoverOf. readMedia and
   // mediaUrl also serve a cover image's file.
   settings: Record<string, unknown>;
@@ -274,6 +279,18 @@ export interface PlaylistInput {
   callKey: string;
 }
 
+// Who may reply to and quote the account's own published post (#1102, Bluesky's threadgate and postgate records). It
+// answers like a comment: the id of a gate record when accepted. settings: the variant's, which name the gates.
+export interface GateInput {
+  externalAccountId: string;
+  secret: string;
+  // The published post's id, as publish returned it (a thread's first post).
+  externalId: string;
+  settings: Readonly<Record<string, unknown>>;
+  // The external_call key of this step.
+  callKey: string;
+}
+
 export type CommentResult =
   | { kind: 'accepted'; externalId: string }
   | { kind: 'rejected'; error: Exclude<PublishErrorKind, 'unknown'>; code?: string; message?: string }
@@ -323,10 +340,15 @@ export interface Publisher {
   repost?(input: RepostInput): Promise<CommentResult>;
   // Providers that pin a published post (#982). Never retried by itself, like a comment.
   pin?(input: PinInput): Promise<CommentResult>;
+  // Providers that limit who may reply to or quote a published post with records of their own (#1102, Bluesky). Never
+  // retried by itself, like a comment.
+  gate?(input: GateInput): Promise<CommentResult>;
   // Providers that add a published video to playlists (#1018), one call a playlist. Never retried by itself, like a comment.
   playlist?(input: PlaylistInput): Promise<CommentResult>;
   // Providers that take a published post down (#860), when a person asks.
   remove?(input: RemoveInput): Promise<RemoveResult>;
+  // Providers whose channel offers options to pick from in the composer (#1120), read by the worker only.
+  options?(input: ChannelOptionsInput): Promise<ChannelOptionsResult>;
 }
 
 interface SandboxPost {

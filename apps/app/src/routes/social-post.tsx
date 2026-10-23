@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -24,6 +24,8 @@ import { PostActivity } from '../components/social-activity.tsx';
 import { ReviewChanges } from '../components/social-review-diff.tsx';
 import { PostVersions } from '../components/social-post-versions.tsx';
 import { BannedWordHints, BannedWordReview, useBannedWords } from '../components/social-banned-words.tsx';
+import { ReviewChecklistTicks } from '../components/social-review-checklist.tsx';
+import { checksFor, fullyTicked } from '../lib/social-review-checklist.ts';
 import { LabelPicker } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
 import { BestTimeButton } from '../components/social-best-time.tsx';
@@ -41,7 +43,7 @@ import {
   EDITABLE,
   draftIssues,
   fromLocalInput,
-  hasTitle,
+  takesTitle,
   providerName,
   SUBMITTABLE,
   setFlash,
@@ -287,6 +289,87 @@ function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<st
   );
 }
 
+// A pin's board section on Pinterest (#1120): one of the board's sections as the worker listed them with the board's
+// token, kept as settings.pinterest.sectionId; none is the board itself, as before, and is not stored. The names are
+// Pinterest's text, shown as text only. Publishing checks the section against the board again.
+function PinterestSettings({ connectionId, settings, onChange, disabled }: { connectionId: string | null; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const chosen = pinterestSectionOf(settings);
+  const sectionId = chosen !== null && chosen !== 'invalid' ? chosen : null;
+  const { pinterest: _section, ...others } = settings;
+  const on = connectionId !== null;
+  const asked = useQuery({
+    queryKey: ['social-channel-options', 'request', connectionId],
+    queryFn: () => client.social.channelOptions.request({ connectionId: connectionId as string }),
+    enabled: on,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
+  const waiting = asked.data?.status === 'pending';
+  const read = useQuery({
+    queryKey: ['social-channel-options', 'get', connectionId],
+    queryFn: () => client.social.channelOptions.get({ connectionId: connectionId as string }),
+    enabled: on && waiting,
+    retry: false,
+    // About a minute, then the picker says Pinterest did not answer.
+    refetchInterval: (q) => (q.state.data && q.state.data.status !== 'pending') || q.state.dataUpdateCount >= 40 ? false : 1500,
+  });
+  const latest = read.data ?? asked.data ?? null;
+  const ready = latest?.status === 'ready';
+  const options = ready ? latest.options : [];
+  const known = sectionId === null || options.some((o) => o.id === sectionId);
+  // Still pending when the polling above stops.
+  const stalled = latest?.status === 'pending' && read.data?.status === 'pending' && read.dataUpdatedAt - asked.dataUpdatedAt > 55_000;
+  const reload = () => {
+    void queryClient.resetQueries({ queryKey: ['social-channel-options', 'get', connectionId] });
+    void asked.refetch();
+  };
+  const reloadButton = (
+    <Button variant="ghost" size="sm" disabled={asked.isFetching} onClick={reload}>
+      {t('pinSectionReload')}
+    </Button>
+  );
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={`${id}-section`} className="text-xs">
+        {t('pinSection')}
+      </Label>
+      <NativeSelect
+        id={`${id}-section`}
+        size="sm"
+        className="w-full max-w-xs"
+        value={sectionId ?? ''}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value ? { ...others, pinterest: { sectionId: e.target.value } } : others)}
+      >
+        <NativeSelectOption value="">{t('pinSectionNone')}</NativeSelectOption>
+        {sectionId !== null && !known && <NativeSelectOption value={sectionId}>{ready ? t('pinSectionGone') : sectionId}</NativeSelectOption>}
+        {options.map((o) => (
+          <NativeSelectOption key={o.id} value={o.id}>
+            {o.name}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      {on && (asked.isLoading || (latest?.status === 'pending' && !stalled)) && <p className="text-xs text-subtle-foreground">{t('pinSectionLoading')}</p>}
+      {(asked.isError || stalled || latest?.status === 'failed') && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-warning">{latest?.status === 'failed' && latest.error ? t(`pinSectionFailed.${latest.error}`) : stalled ? t('pinSectionFailed.no_answer') : errorMessage(asked.error)}</p>
+          {/* A failed read stays the answer for a few minutes (#1120); asking again before then changes nothing. */}
+          {latest?.status === 'failed' && (latest.retryAfterSeconds ?? 0) > 0 ? (
+            <p className="text-xs text-subtle-foreground">{t('pinSectionRetryLater', { minutes: Math.ceil((latest.retryAfterSeconds ?? 0) / 60) })}</p>
+          ) : (
+            !disabled && reloadButton
+          )}
+        </div>
+      )}
+      {ready && options.length === 0 && <p className="text-xs text-subtle-foreground">{t('pinSectionEmpty')}</p>}
+      {ready && !known && <p className="text-xs text-warning">{t('pinSectionGone')}</p>}
+      <p className="text-xs text-subtle-foreground">{t('pinSectionHint')}</p>
+    </div>
+  );
+}
+
 // WordPress category or tag names typed as text (#981), separated by commas; a name may hold spaces. The text is kept
 // as typed while the field has focus, so a comma can be typed.
 function NamesField({ label, hint, names, max, onChange, disabled }: { label: string; hint: string; names: readonly string[]; max: number; onChange: (names: string[]) => void; disabled: boolean }) {
@@ -371,6 +454,109 @@ function WordPressSettings({ settings, onChange, disabled }: { settings: Record<
         <Textarea id={`${id}-excerpt`} rows={3} value={excerpt} disabled={disabled} onChange={(e) => set('excerpt', e.target.value === '' ? null : e.target.value)} />
         <p className="text-xs text-subtle-foreground">{t('wpExcerptHint')}</p>
       </div>
+    </div>
+  );
+}
+
+// A Discord thread id, or the thread's link as Discord copies it (https://discord.com/channels/<server>/<thread>, or a
+// message's link inside it, .../<thread>/<message>), as its id; anything else as typed, for the check to name.
+const discordThreadIdFrom = (text: string): string => {
+  const trimmed = text.trim();
+  const link = /^https:\/\/(?:(?:canary|ptb)\.)?discord(?:app)?\.com\/channels\/\d{17,20}\/(\d{17,20})(?:\/\d{17,20})?\/?$/.exec(trimmed);
+  return link ? (link[1] as string) : trimmed;
+};
+
+// Discord (#1103): Crove cannot read a webhook's channel type, so the person posting marks a forum (or media) channel's
+// webhook. A forum post takes a name (the post's title or the text's first line unless given) and up to 5 of the
+// forum's tags, by id; otherwise the post can go into an existing thread. Only what is set is stored, so a variant left
+// as it was keeps its content hash and posts as before.
+function DiscordSettings({ settings, onChange, disabled, threadNameDefault }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean; threadNameDefault: string }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const [tagsText, setTagsText] = useState<string | null>(null);
+  const read = discordOptionsOf(settings);
+  const current = read && read !== 'invalid' ? read : { forum: false, threadName: null, tags: [], threadId: null };
+  const save = (next: { forum: boolean; threadName: string | null; tags: string[]; threadId: string | null }) => {
+    const { discord: _old, ...rest } = settings;
+    const kept = next.forum
+      ? { forum: true, ...(next.threadName ? { threadName: next.threadName } : {}), ...(next.tags.length > 0 ? { tags: next.tags } : {}) }
+      : next.threadId
+        ? { threadId: next.threadId }
+        : {};
+    onChange(Object.keys(kept).length > 0 ? { ...rest, discord: kept } : rest);
+  };
+  const nameUsed = (current.threadName ?? '').trim().length;
+  return (
+    <div className="space-y-2">
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox checked={current.forum} disabled={disabled} onCheckedChange={(on) => save({ forum: on === true, threadName: null, tags: [], threadId: null })} />
+          {t('discordForum')}
+        </label>
+        <p className="text-xs text-subtle-foreground">{t('discordForumHint')}</p>
+      </div>
+      {current.forum ? (
+        <>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={`${id}-name`} className="text-xs">
+                {t('discordThreadName')}
+              </Label>
+              <span className={cn('font-mono text-xs tabular-nums', nameUsed > DISCORD_THREAD_NAME_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+                {nameUsed || threadNameDefault.length}/{DISCORD_THREAD_NAME_MAX}
+              </span>
+            </div>
+            <Input
+              id={`${id}-name`}
+              value={current.threadName ?? ''}
+              disabled={disabled}
+              placeholder={threadNameDefault || t('discordThreadNamePlaceholder')}
+              aria-invalid={nameUsed > DISCORD_THREAD_NAME_MAX}
+              onChange={(e) => save({ ...current, threadName: e.target.value === '' ? null : e.target.value })}
+            />
+            <p className="text-xs text-subtle-foreground">{t('discordThreadNameHint')}</p>
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={`${id}-tags`} className="text-xs">
+                {t('discordTags')}
+              </Label>
+              <span className={cn('font-mono text-xs tabular-nums', current.tags.length > DISCORD_TAGS_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+                {current.tags.length}/{DISCORD_TAGS_MAX}
+              </span>
+            </div>
+            <Input
+              id={`${id}-tags`}
+              inputMode="numeric"
+              value={tagsText ?? current.tags.join(', ')}
+              disabled={disabled}
+              aria-invalid={current.tags.some((tag) => !isDiscordId(tag))}
+              onFocus={() => setTagsText(current.tags.join(', '))}
+              onBlur={() => setTagsText(null)}
+              onChange={(e) => {
+                setTagsText(e.target.value);
+                save({ ...current, tags: [...new Set(e.target.value.split(/[\s,]+/).filter(Boolean))] });
+              }}
+            />
+            <p className="text-xs text-subtle-foreground">{t('discordTagsHint', { max: DISCORD_TAGS_MAX })}</p>
+          </div>
+        </>
+      ) : (
+        <div className="space-y-1">
+          <Label htmlFor={`${id}-thread`} className="text-xs">
+            {t('discordThreadId')}
+          </Label>
+          <Input
+            id={`${id}-thread`}
+            value={current.threadId ?? ''}
+            disabled={disabled}
+            aria-invalid={current.threadId !== null && !isDiscordId(current.threadId)}
+            placeholder={t('discordThreadIdPlaceholder')}
+            onChange={(e) => save({ ...current, threadId: e.target.value.trim() === '' ? null : discordThreadIdFrom(e.target.value) })}
+          />
+          <p className="text-xs text-subtle-foreground">{t('discordThreadIdHint')}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -485,7 +671,8 @@ function TikTokDisclosureField({ settings, photo, disabled, onChange }: { settin
 // inboxOffered: the channel's connection was granted video.upload, which Crove asks for only where the deployment turns
 // TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903). pinAllowed: the Telegram bot may pin in the channel, as read at
 // connect (#982). reel: the post goes out as an Instagram Reel (#1019). photo: the post is photos only (TikTok's
-// disclosure label names a photo or a video, #1078).
+// disclosure label names a photo or a video, #1078). threadNameDefault: a Discord forum post's name when none is given
+// (#1103), from the post's title or its text's first line.
 function ProviderSettings({
   provider,
   settings,
@@ -495,6 +682,8 @@ function ProviderSettings({
   pinAllowed = false,
   reel = false,
   photo = false,
+  threadNameDefault = '',
+  connectionId = null,
 }: {
   provider: string;
   settings: Record<string, unknown>;
@@ -504,8 +693,12 @@ function ProviderSettings({
   pinAllowed?: boolean;
   reel?: boolean;
   photo?: boolean;
+  threadNameDefault?: string;
+  connectionId?: string | null;
 }) {
   const t = useTranslations('social');
+  if (provider === 'pinterest') return <PinterestSettings connectionId={connectionId} settings={settings} onChange={onChange} disabled={disabled} />;
+  if (provider === 'discord') return <DiscordSettings settings={settings} onChange={onChange} disabled={disabled} threadNameDefault={threadNameDefault} />;
   // Telegram (#982): a silent post, and a pin to the top of the channel once it is out; link buttons under it (#1017).
   // Only what is on is stored, so a variant left as it was keeps its content hash.
   if (provider === 'telegram') {
@@ -532,6 +725,61 @@ function ProviderSettings({
         </label>
         {!pinAllowed && <p className="text-xs text-subtle-foreground">{t('telegramPinHint')}</p>}
         <TelegramButtonsField rows={rows} disabled={disabled} onChange={(next) => save({ ...current, rows: next })} />
+      </div>
+    );
+  }
+  // Bluesky (#1102): who may reply (everyone, nobody, or one or several groups together, as Bluesky allows) and whether
+  // others may quote the post. Everyone and quotes on are the defaults and are not stored, so a variant left as it was
+  // keeps its content hash.
+  if (provider === 'bluesky') {
+    const replies = blueskyRepliesOf(settings);
+    const mode = replies === null ? 'everyone' : replies === 'nobody' ? 'nobody' : replies === 'invalid' ? 'invalid' : 'some';
+    const rules = Array.isArray(replies) ? replies : [];
+    const { replySettings: _replies, quotes: _quotes, ...rest } = settings;
+    // replies: what replySettings holds, undefined for everyone (a value it cannot read is kept as it is).
+    const save = (next: { replies: unknown; quotes: boolean }) => onChange({ ...rest, ...(next.replies === undefined ? {} : { replySettings: next.replies }), ...(next.quotes ? {} : { quotes: false }) });
+    const quotes = !blueskyQuotesOff(settings);
+    const setRule = (rule: BlueskyReplyRule, on: boolean) => {
+      const chosen = BLUESKY_REPLY_RULES.filter((r) => (r === rule ? on : rules.includes(r)));
+      // The last group cannot be cleared: no group at all is "Nobody", a choice of its own.
+      if (chosen.length > 0) save({ replies: chosen, quotes });
+    };
+    return (
+      <div className="space-y-1.5">
+        <Label htmlFor="bluesky-replies" className="text-xs">
+          {t('replySettings')}
+        </Label>
+        <NativeSelect
+          id="bluesky-replies"
+          size="sm"
+          className="w-full max-w-xs"
+          value={mode}
+          disabled={disabled}
+          onChange={(e) => save({ replies: e.target.value === 'nobody' ? 'nobody' : e.target.value === 'some' ? (rules.length > 0 ? rules : ['following']) : undefined, quotes })}
+        >
+          {mode === 'invalid' && <NativeSelectOption value="invalid">{String(settings.replySettings)}</NativeSelectOption>}
+          {(['everyone', 'nobody', 'some'] as const).map((v) => (
+            <NativeSelectOption key={v} value={v}>
+              {t(`blueskyReplies.${v}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        {mode === 'some' && (
+          <div className="space-y-1.5 ps-1" role="group" aria-label={t('blueskyReplies.some')}>
+            {BLUESKY_REPLY_RULES.map((r) => (
+              <label key={r} className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Checkbox checked={rules.includes(r)} disabled={disabled || (rules.length === 1 && rules.includes(r))} onCheckedChange={(on) => setRule(r, on === true)} />
+                {t(`blueskyReplyRule.${r}`)}
+              </label>
+            ))}
+            <p className="text-xs text-subtle-foreground">{t('blueskyReplyRulesHint')}</p>
+          </div>
+        )}
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox checked={quotes} disabled={disabled} onCheckedChange={(on) => save({ replies: settings.replySettings, quotes: on === true })} />
+          {t('blueskyQuotes')}
+        </label>
+        {!quotes && threadPartsOf(settings) && <p className="text-xs text-subtle-foreground">{t('blueskyQuotesHint')}</p>}
       </div>
     );
   }
@@ -1071,6 +1319,11 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('POLL_OPTIONS', { limit });
       case 'POLL_OPTION_LENGTH':
         return t('POLL_OPTION_LENGTH', { limit });
+      // A LinkedIn poll's own question, and a Telegram poll's question, the post's text (#1118).
+      case 'POLL_QUESTION_LENGTH':
+        return t('POLL_QUESTION_LENGTH', { limit });
+      case 'POLL_TEXT_LENGTH':
+        return t('POLL_TEXT_LENGTH', { limit, actual });
       case 'GBP_INVALID':
         return t('GBP_INVALID', { limit: limit || 58 });
       case 'TOPIC_TAG_INVALID':
@@ -1090,6 +1343,13 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('TELEGRAM_BUTTONS_ON_ALBUM', { actual });
       case 'TELEGRAM_BUTTON_TEXT_LENGTH':
         return t('TELEGRAM_BUTTON_TEXT_LENGTH', { limit });
+      // Discord forum posts (#1103); which tag: tags.<index> on the issue, counted from 1 for the person.
+      case 'DISCORD_THREAD_NAME_TOO_LONG':
+        return t('DISCORD_THREAD_NAME_TOO_LONG', { limit, actual });
+      case 'DISCORD_TOO_MANY_TAGS':
+        return t('DISCORD_TOO_MANY_TAGS', { limit, actual });
+      case 'DISCORD_TAG_INVALID':
+        return t('DISCORD_TAG_INVALID', { n: Number(issue.field.split('.')[3] ?? 0) + 1 });
       // Which image: media.<index> on the issue, counted from 1 for the person.
       case 'IMAGE_RATIO_NOT_ALLOWED':
         return t('IMAGE_RATIO_NOT_ALLOWED', { n: Number(issue.field.split('.')[1] ?? 0) + 1 });
@@ -1098,6 +1358,8 @@ function IssueList({ issues }: { issues: Issue[] }) {
       // In milliseconds on the issue, in seconds for the person.
       case 'COVER_OUT_OF_RANGE':
         return t('COVER_OUT_OF_RANGE', { limit: limit / 1000, actual: actual / 1000 });
+      case 'DOCUMENT_TITLE_INVALID':
+        return t('DOCUMENT_TITLE_INVALID', { limit });
       default:
         return t(issue.code);
     }
@@ -1255,11 +1517,13 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
   );
 }
 
-// The lengths offered for a poll that takes one (X, #948), in minutes: from 5 minutes to 7 days.
-const POLL_LENGTHS: readonly number[] = [5, 15, 30, 60, 360, 720, 1440, 2880, 4320, 10_080];
+// The lengths offered for a poll that takes one (X, #948; Mastodon and Telegram, #1118), in minutes: from 5 minutes to
+// 30 days, each channel keeping those within its own range. LinkedIn offers its own few (choices).
+const POLL_LENGTHS: readonly number[] = [5, 15, 30, 60, 360, 720, 1440, 2880, 4320, 10_080, 20_160, 43_200];
 
-// Threads and X polls and Threads topic tags (#711, #948): a poll of 2 to 4 short options on a post without media (with
-// its length on X), and one topic tag. The options are kept as typed; the server trims them.
+// Polls (Threads and X, #711, #948; Mastodon, Telegram and LinkedIn, #1118) and Threads topic tags: a poll of a few
+// short options on a post without media, with what the channel adds (its length, several answers, counts hidden until
+// the end, a question of its own on LinkedIn), and one topic tag. The texts are kept as typed; the server trims them.
 function PollAndTagField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social.threadsExtras');
   if (!isProvider(provider)) return null;
@@ -1273,15 +1537,21 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
     const { [key]: _gone, ...rest } = settings;
     return rest;
   };
-  // The poll's length stays when its options change (X, #948).
+  // The poll's length and choices stay when its options change (X, #948).
   const setOptions = (next: string[] | null) => onChange(next ? { ...settings, poll: { ...rawPoll, options: next } } : without('poll'));
-  const duration = pollRule?.duration;
-  const minutes = duration ? (pollDurationOf(settings) ?? duration.default) : null;
-  const setMinutes = (value: number) => {
-    const { durationMinutes: _gone, ...rest } = rawPoll ?? {};
-    onChange({ ...settings, poll: duration && value === duration.default ? rest : { ...rest, durationMinutes: value } });
+  // One field of the poll, dropped when it goes back to its default (unsaid), so a poll as usual stores nothing more.
+  const setPoll = (key: string, value: unknown) => {
+    const { [key]: _gone, ...rest } = rawPoll ?? {};
+    onChange({ ...settings, poll: value === undefined ? rest : { ...rest, [key]: value } });
   };
-  const lengths = duration ? POLL_LENGTHS.filter((m) => m >= duration.min && m <= duration.max) : [];
+  const duration = pollRule?.duration;
+  // null: open until stopped (Telegram's default); a number of minutes otherwise.
+  const said = pollDurationOf(settings);
+  const minutes = duration ? (said ?? duration.default) : null;
+  const setMinutes = (value: number | null) => setPoll('durationMinutes', duration && value === duration.default ? undefined : value);
+  const lengths = duration ? (duration.choices ?? POLL_LENGTHS.filter((m) => m >= duration.min && m <= duration.max)) : [];
+  const question = typeof rawPoll?.question === 'string' ? rawPoll.question : '';
+  const flag = (key: 'multiple' | 'hideTotals') => pollFlagOf(settings, key) === true;
   const lengthLabel = (m: number) => (m % 1440 === 0 ? t('pollLengthDays', { n: m / 1440 }) : m % 60 === 0 ? t('pollLengthHours', { n: m / 60 }) : t('pollLengthMinutes', { n: m }));
   const tag = typeof settings.topicTag === 'string' ? settings.topicTag : '';
   return (
@@ -1294,6 +1564,17 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
           </label>
           {options && (
             <div className="space-y-1.5 pl-6">
+              {pollRule.question && (
+                <Input
+                  value={question}
+                  disabled={disabled}
+                  maxLength={pollRule.question.maxChars + 10}
+                  aria-label={t('pollQuestion')}
+                  placeholder={t('pollQuestionPlaceholder')}
+                  className="h-8 max-w-md"
+                  onChange={(e) => setPoll('question', e.target.value)}
+                />
+              )}
               {options.map((option, i) => (
                 <div key={i} className="flex items-center gap-1.5">
                   <Input
@@ -1317,13 +1598,21 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
                   {t('addOption')}
                 </Button>
               )}
-              {duration && minutes !== null && (
+              {duration && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Label htmlFor={`poll-length-${provider}`} className="text-xs">
                     {t('pollLength')}
                   </Label>
-                  <NativeSelect id={`poll-length-${provider}`} size="sm" className="w-40" value={String(minutes)} disabled={disabled} onChange={(e) => setMinutes(Number(e.target.value))}>
-                    {minutes === 'invalid' || !lengths.includes(minutes) ? <NativeSelectOption value={String(minutes)}>{minutes === 'invalid' ? '?' : lengthLabel(minutes)}</NativeSelectOption> : null}
+                  <NativeSelect
+                    id={`poll-length-${provider}`}
+                    size="sm"
+                    className="w-48"
+                    value={minutes === null ? '' : String(minutes)}
+                    disabled={disabled}
+                    onChange={(e) => setMinutes(e.target.value === '' ? null : Number(e.target.value))}
+                  >
+                    {duration.default === null && <NativeSelectOption value="">{t('pollNoEnd')}</NativeSelectOption>}
+                    {minutes !== null && (minutes === 'invalid' || !lengths.includes(minutes)) ? <NativeSelectOption value={String(minutes)}>{minutes === 'invalid' ? '?' : lengthLabel(minutes)}</NativeSelectOption> : null}
                     {lengths.map((m) => (
                       <NativeSelectOption key={m} value={String(m)}>
                         {lengthLabel(m)}
@@ -1332,7 +1621,21 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
                   </NativeSelect>
                 </div>
               )}
-              <p className="text-xs text-subtle-foreground">{t('pollHint', { max: String(pollRule.maxChars) })}</p>
+              {pollRule.multiple && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox checked={flag('multiple')} disabled={disabled} onCheckedChange={(checked) => setPoll('multiple', checked === true ? true : undefined)} />
+                  {t('pollMultiple')}
+                </label>
+              )}
+              {pollRule.hideTotals && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox checked={flag('hideTotals')} disabled={disabled} onCheckedChange={(checked) => setPoll('hideTotals', checked === true ? true : undefined)} />
+                  {t('pollHideTotals')}
+                </label>
+              )}
+              <p className="text-xs text-subtle-foreground">{t('pollHint', { options: String(pollRule.maxOptions), max: String(pollRule.maxChars) })}</p>
+              {pollRule.textAsQuestion && <p className="text-xs text-subtle-foreground">{t('pollTextQuestion', { max: String(pollRule.textAsQuestion.maxChars) })}</p>}
+              {provider === 'mastodon' && <p className="text-xs text-subtle-foreground">{t('pollInstance')}</p>}
             </div>
           )}
         </div>
@@ -1461,6 +1764,43 @@ function GbpField({ provider, settings, onChange, disabled }: { provider: string
   );
 }
 
+// A LinkedIn document's title (#1119), on a channel whose post holds a PDF (or still has a title set, so it can be
+// cleared). Empty, nothing is stored and the adapter sends the file's name (the placeholder).
+function DocumentTitleField({ id, settings, placeholder, disabled, onChange }: { id: string; settings: Record<string, unknown>; placeholder: string; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const own = settings.linkedin !== null && typeof settings.linkedin === 'object' && !Array.isArray(settings.linkedin) ? (settings.linkedin as Record<string, unknown>) : {};
+  const value = typeof own.documentTitle === 'string' ? own.documentTitle : '';
+  // A title typed but blank once trimmed, or over the limit, is refused; the error sits under the field.
+  const size = value.trim().normalize('NFC').length;
+  const invalid = value !== '' && (size === 0 || size > DOCUMENT_TITLE_MAX);
+  const errorId = `${id}-error`;
+  const save = (text: string) => {
+    const { linkedin: _old, ...rest } = settings;
+    const { documentTitle: _title, ...others } = own;
+    const next = text === '' ? others : { ...others, documentTitle: text };
+    onChange(Object.keys(next).length > 0 ? { ...rest, linkedin: next } : rest);
+  };
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <Label htmlFor={id} className="text-xs">
+          {t('documentTitle')}
+        </Label>
+        <span className="text-xs text-subtle-foreground tabular-nums">
+          {size}/{DOCUMENT_TITLE_MAX}
+        </span>
+      </div>
+      <Input id={id} value={value} disabled={disabled} placeholder={placeholder} aria-invalid={invalid || undefined} aria-describedby={invalid ? errorId : undefined} onChange={(e) => save(e.target.value)} />
+      {invalid && (
+        <p id={errorId} className="text-xs text-destructive">
+          {t('issues.DOCUMENT_TITLE_INVALID', { limit: DOCUMENT_TITLE_MAX })}
+        </p>
+      )}
+      <p className="text-xs text-subtle-foreground">{t('documentTitleHint')}</p>
+    </div>
+  );
+}
+
 function ChannelEditor({
   provider,
   channel,
@@ -1502,7 +1842,11 @@ function ChannelEditor({
   const poll = pollOptionsOf(own.settings);
   const pollRule = isProvider(provider) ? POLL_RULES[provider] : undefined;
   const pollMinutes = pollDurationOf(own.settings);
+  const pollQuestion = pollQuestionOf(own.settings);
   const replySettings = replySettingOf(provider, own.settings);
+  // Who may reply to and quote a Bluesky post (#1102).
+  const blueskyReplies = provider === 'bluesky' ? blueskyRepliesOf(own.settings) : null;
+  const quotesOff = provider === 'bluesky' && blueskyQuotesOff(own.settings);
   const linkedinVisibility =
     (own.settings.visibility === 'connections' || own.settings.visibility === 'loggedIn') && (linkedinVisibilities(provider) as readonly string[] | null)?.includes(own.settings.visibility) ? (own.settings.visibility as 'connections' | 'loggedIn') : null;
   const tag = topicTagOf(own.settings);
@@ -1515,17 +1859,33 @@ function ChannelEditor({
     cover: coverOf(own.settings),
     postType,
     ...(Array.isArray(poll) ? { poll } : {}),
-    ...(Array.isArray(poll) && pollRule?.duration ? { pollMinutes: typeof pollMinutes === 'number' ? pollMinutes : pollRule.duration.default } : {}),
+    ...(Array.isArray(poll) && pollRule?.duration && (typeof pollMinutes === 'number' || pollRule.duration.default !== null)
+      ? { pollMinutes: typeof pollMinutes === 'number' ? pollMinutes : (pollRule.duration.default as number) }
+      : {}),
+    // What a Mastodon, Telegram or LinkedIn poll adds (#1118): LinkedIn's own question, several answers, hidden counts.
+    ...(Array.isArray(poll) && pollRule?.question && typeof pollQuestion === 'string' ? { pollQuestion } : {}),
+    ...(Array.isArray(poll) && pollRule?.multiple && pollFlagOf(own.settings, 'multiple') === true ? { pollMultiple: true } : {}),
+    ...(Array.isArray(poll) && pollRule?.hideTotals && pollFlagOf(own.settings, 'hideTotals') === true ? { pollHideTotals: true } : {}),
     ...(typeof tag === 'string' && tag ? { topicTag: tag } : {}),
     ...(replySettings ? { replySettings } : {}),
+    ...(blueskyReplies !== null && blueskyReplies !== 'invalid' ? { replyRules: blueskyReplies } : {}),
+    ...(quotesOff ? { quotesOff } : {}),
     ...(linkedinVisibility ? { visibility: linkedinVisibility } : {}),
     ...(Array.isArray(telegramButtons) ? { buttons: telegramButtons } : {}),
   };
-  const issues = draftIssues(provider, { body: content.body, title: hasTitle(provider) ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
+  // The PDF the channel posts as a LinkedIn document (#1119), if any, and the title it goes out with: the one set, else
+  // the post's title, else the file's name. The preview's card shows that title.
+  const pdf = content.media.find((m) => mediaKindOf(m.mime) === 'document');
+  const setTitle = documentTitleOf(own.settings);
+  const documentTitle = pdf && isProvider(provider) && DOCUMENT_PROVIDERS.has(provider) ? (typeof setTitle === 'string' && setTitle !== 'invalid' ? setTitle : content.title?.trim() || pdf.filename || null) : null;
+  const previewContent = documentTitle ? { ...content, media: content.media.map((m) => (m === pdf ? { ...m, filename: documentTitle } : m)) } : content;
+  // A Discord forum post (#1103) takes the post's title as its name.
+  const titled = takesTitle(provider, own.settings);
+  const issues = draftIssues(provider, { body: content.body, title: titled ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings: own.settings });
   // The channel's own texts against its banned words (#1055); the shared text is marked under the shared fields.
   const allWords = useBannedWords();
   const banned = connectionId ? wordsForChannel(allWords, connectionId) : allWords;
-  const ownTexts = variantTexts({ body: own.custom ? content.body : '', title: own.custom && hasTitle(provider) ? content.title || null : null }, own.settings).filter((x) => x.text !== '');
+  const ownTexts = variantTexts({ body: own.custom ? content.body : '', title: own.custom && titled ? content.title || null : null }, own.settings).filter((x) => x.text !== '');
   return (
     <Card className="block space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1545,7 +1905,7 @@ function ChannelEditor({
       </label>
       {own.custom && (
         <div className="space-y-2">
-          {hasTitle(provider) && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
+          {titled && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
           <Textarea id={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
           <div className="flex flex-wrap items-center gap-2">
             <EmojiPicker targetId={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />
@@ -1554,7 +1914,7 @@ function ChannelEditor({
           {!disabled && onAiUsed && (
             <AiRewrite
               text={own.body}
-              title={hasTitle(provider) ? own.title || null : null}
+              title={titled ? own.title || null : null}
               {...(connectionId ? { connectionId } : {})}
               onAccept={(next) => {
                 onChange({ ...own, body: next.text, title: next.title ?? own.title });
@@ -1568,8 +1928,17 @@ function ChannelEditor({
         <Checkbox checked={own.customMedia} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, customMedia: checked === true, media: own.media.length > 0 ? own.media : base.media })} />
         {t('ownMedia')}
       </label>
-      {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
+      {own.customMedia && <MediaField media={own.media} disabled={disabled} onAiUsed={onAiUsed} connectionIds={connectionId ? [connectionId] : undefined} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
+      {isProvider(provider) && DOCUMENT_PROVIDERS.has(provider) && (pdf || own.settings.linkedin !== undefined) && (
+        <DocumentTitleField
+          id={`social-document-title-${connectionId ?? provider}`}
+          settings={own.settings}
+          placeholder={content.title?.trim() || pdf?.filename || t('documentTitleFallback')}
+          disabled={disabled}
+          onChange={(settings) => onChange({ ...own, settings })}
+        />
+      )}
       {isProvider(provider) && REPOST_PROVIDERS.has(provider) && postType !== 'story' && <RepostField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {/* A channel Crove cannot take a post down from shows the field only to clear a time set elsewhere (its issue says why). */}
       {((isProvider(provider) && REMOVE_READY.has(provider) && postType !== 'story') || own.settings.removeAt !== undefined) && (
@@ -1598,14 +1967,16 @@ function ChannelEditor({
         disabled={disabled}
         inboxOffered={scopes?.includes('video.upload') ?? false}
         pinAllowed={scopes?.includes(TELEGRAM_PIN_SCOPE) ?? false}
-        reel={provider === 'instagram' && isInstagramReel(content.media.map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const) })), own.settings)}
+        reel={provider === 'instagram' && isInstagramReel(content.media.map((m) => ({ kind: mediaKindOf(m.mime) })), own.settings)}
         photo={content.media.length > 0 && content.media.every((m) => m.mime.startsWith('image/'))}
+        threadNameDefault={provider === 'discord' ? discordThreadName(null, content.title || null, content.body) : ''}
+        connectionId={connectionId ?? null}
         onChange={(settings) => onChange({ ...own, settings })}
       />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <IssueList issues={issues} />
       {!disabled && <BannedWordHints texts={ownTexts} words={banned} />}
-      <PlatformPreview channel={channel} provider={provider} content={content} readLink />
+      <PlatformPreview channel={channel} provider={provider} content={previewContent} readLink />
       {footer}
     </Card>
   );
@@ -1727,15 +2098,15 @@ function SharedFields({
         <Label htmlFor="social-link">{t('link')}</Label>
         <Input id="social-link" type="url" inputMode="url" value={base.linkUrl} disabled={disabled} placeholder="https://" onChange={(e) => onChange({ ...base, linkUrl: e.target.value })} />
       </div>
-      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} onChange={(media) => onChange({ ...base, media })} />
+      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} connectionIds={connectionIds} onChange={(media) => onChange({ ...base, media })} />
     </Card>
   );
 }
 
 const orNull = (value: string) => (value.trim() === '' ? null : value);
 const mediaInput = (media: readonly MediaItem[]) => media.map((m) => ({ fileId: m.fileId, altText: orNull(m.altText) }));
-const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number; durationMs: number | null; width: number | null; height: number | null }[]): MediaItem[] =>
-  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs, width: m.width, height: m.height }));
+const mediaItems = (media: readonly { fileId: string; altText: string | null; mime: string; sizeBytes: number; durationMs: number | null; width: number | null; height: number | null; filename?: string | null | undefined }[]): MediaItem[] =>
+  media.map((m) => ({ fileId: m.fileId, altText: m.altText ?? '', mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs, width: m.width, height: m.height, filename: m.filename ?? null }));
 
 // ---------------------------------------------------------------------------------------------------------------------
 // New post
@@ -1890,7 +2261,7 @@ export function SocialComposePage() {
   const blocking = selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
-    return draftIssues(c.provider, { body: content.body, title: hasTitle(c.provider) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withUtm(mine, utm).settings }).length > 0;
+    return draftIssues(c.provider, { body: content.body, title: takesTitle(c.provider, mine.settings) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withUtm(mine, utm).settings }).length > 0;
   });
   // Owners and admins may approve their own post: for one written by a person (no AI text), one action approves it and
   // schedules it (#638). A channel whose policy needs another reviewer still waits for them.
@@ -1898,7 +2269,10 @@ export function SocialComposePage() {
   // Not where four-eyes (#740) asks for another reviewer: the author's approval would be refused.
   const policies = useQuery({ ...orpc.social.policies.list.queryOptions({ input: {} }), enabled: canDecide });
   const fourEyes = new Set((policies.data ?? []).filter((p) => p.fourEyes).map((p) => p.connectionId));
-  const oneStep = canDecide && !aiUsed && policies.isSuccess && !selected.some((c) => fourEyes.has(c.id));
+  // Nor where the review checklist (#1105) has items to tick: those are ticked in the review panel.
+  const checklist = useQuery({ ...orpc.social.reviewChecklist.list.queryOptions({ input: {} }), enabled: canDecide });
+  const toTick = (id: string) => (checklist.data?.items ?? []).some((c) => c.connectionId === null || c.connectionId === id);
+  const oneStep = canDecide && !aiUsed && policies.isSuccess && checklist.isSuccess && !selected.some((c) => fourEyes.has(c.id) || toTick(c.id));
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && chosen.length > 0 && !blocking && !create.isPending) {
       e.preventDefault();
@@ -1980,7 +2354,7 @@ export function SocialComposePage() {
             onChange={setBase}
             disabled={create.isPending}
             autoFocus
-            needsTitle={selected.some((c) => hasTitle(c.provider))}
+            needsTitle={selected.some((c) => takesTitle(c.provider, own[c.id]?.settings))}
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={selected.map((c) => c.id)}
@@ -2140,6 +2514,8 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
   const [unticked, setUnticked] = useState<string[]>([]);
   const picked = waiting.map((v) => v.id).filter((id) => !unticked.includes(id));
   const [comment, setComment] = useState('');
+  // The review checklist items this reviewer ticked (#1105); an approval sends each channel the ticks of its own list.
+  const [checked, setChecked] = useState<Set<string>>(() => new Set());
   const decide = useMutation({
     mutationFn: (decision: 'approved' | 'changes_requested' | 'rejected') =>
       client.social.variants.decide({
@@ -2147,18 +2523,27 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
         decision,
         ...(comment.trim() ? { comment: comment.trim() } : {}),
         // What this reviewer sees: a newer revision is refused, never approved by mistake.
-        variants: waiting.filter((v) => picked.includes(v.id) && (decision !== 'approved' || (!mine(v) && !barred(v)))).map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })),
+        variants: waiting
+          .filter((v) => picked.includes(v.id) && (decision !== 'approved' || (!mine(v) && !barred(v))))
+          .map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash, ...(decision === 'approved' && v.checklist.length > 0 ? { checks: checksFor(v, checked) } : {}) })),
       }),
     onSuccess: () => {
       setComment('');
       setUnticked([]);
+      setChecked(new Set());
       onDone();
+    },
+    // A checklist changed since the page loaded: show the list as it is now.
+    onError: (error) => {
+      const code = (error as { code?: unknown }).code;
+      if (code === 'CHECKLIST_CHANGED' || code === 'CHECKLIST_INCOMPLETE') onDone();
     },
   });
   if (inReview.length === 0) return null;
   const done = inReview.filter(mine);
   const approvable = waiting.filter((v) => picked.includes(v.id) && !mine(v) && !barred(v));
   const others = inReview.filter(barred);
+  const ticksMissing = !fullyTicked(approvable, checked);
 
   return (
     <Card className="block space-y-3 border-warning/40 p-4">
@@ -2184,12 +2569,14 @@ function ReviewPanel({ post, names, onDone }: { post: Post; names: Map<string, s
       {waiting.map((v) => (
         <BannedWordReview key={`banned-${v.id}`} channel={names.get(v.connectionId) ?? providerName(v.provider)} matches={v.bannedWords} status={v.bannedWordsStatus} content={v.effective} settings={v.settings} />
       ))}
+      {/* The review checklist (#1105): every item of the channels being approved, which the Approve button needs. */}
+      <ReviewChecklistTicks variants={approvable} names={names} ticked={checked} onChange={setChecked} />
       {/* What changed since each channel's last decision (#944); nothing on a first review. */}
       <ReviewChanges postId={post.id} variants={waiting.map((v) => ({ id: v.id, name: names.get(v.connectionId) ?? providerName(v.provider), revision: v.revision, contentHash: v.contentHash }))} />
       <Textarea value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
       {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
       <div className="flex flex-wrap gap-2">
-        <Button size="lg" disabled={self === undefined || approvable.length === 0 || decide.isPending} onClick={() => decide.mutate('approved')}>
+        <Button size="lg" disabled={self === undefined || approvable.length === 0 || ticksMissing || decide.isPending} onClick={() => decide.mutate('approved')}>
           {t('approve')}
         </Button>
         <Button variant="outline" size="lg" disabled={picked.length === 0 || decide.isPending || !comment.trim()} onClick={() => decide.mutate('changes_requested')}>
@@ -2437,6 +2824,16 @@ function RecurrencePanel({ post, published, onDone }: { post: Post; published: b
 // When a published variant that is not public yet went to its platform, in words.
 const NOT_PUBLIC_AT: Readonly<Record<string, 'sentToAppAt' | 'wordpressDraftAt' | 'wordpressPendingAt'>> = { sent_to_app: 'sentToAppAt', wordpress_draft: 'wordpressDraftAt', wordpress_pending: 'wordpressPendingAt' };
 
+// The Discord adapter's refusals of a forum post or a thread (#1103), by the outcome text that says what to change.
+type DiscordOutcome = 'discordThreadNameRequired' | 'discordNotForum' | 'discordTagRequired' | 'discordTagUnknown' | 'discordThreadUnknown';
+const DISCORD_OUTCOMES: Readonly<Record<string, DiscordOutcome>> = {
+  DISCORD_THREAD_NAME_REQUIRED: 'discordThreadNameRequired',
+  DISCORD_NOT_FORUM: 'discordNotForum',
+  DISCORD_TAG_REQUIRED: 'discordTagRequired',
+  DISCORD_TAG_UNKNOWN: 'discordTagUnknown',
+  DISCORD_THREAD_UNKNOWN: 'discordThreadUnknown',
+};
+
 // The WordPress adapter's refusals of a category or tag (#981), by the outcome text that names it.
 type WordPressTermOutcome = 'wordpressCategoryNotFound' | 'wordpressCategoryAmbiguous' | 'wordpressTagNotAllowed';
 const WORDPRESS_TERM_OUTCOMES: Readonly<Record<string, WordPressTermOutcome>> = {
@@ -2491,10 +2888,14 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
     case 'failed':
       // A draft for the TikTok app on a deployment that has not turned inbox mode on (#903).
       if (v.error?.code === 'TIKTOK_INBOX_NOT_ENABLED') return <p className="text-destructive">{t('outcome.inboxNotEnabled')}</p>;
+      // A board section Pinterest no longer has (#1120): nothing was pinned.
+      if (v.error?.code === 'PINTEREST_SECTION_NOT_FOUND') return <p className="text-destructive">{t('outcome.pinterestSectionNotFound')}</p>;
       // A category or tag the WordPress site refused before anything was posted (#981); the message is its name.
       if (v.error?.code && v.error.code in WORDPRESS_TERM_OUTCOMES) {
         return <p className="text-destructive [overflow-wrap:anywhere]">{t(`outcome.${WORDPRESS_TERM_OUTCOMES[v.error.code] as WordPressTermOutcome}`, { name: v.error.message ?? '' })}</p>;
       }
+      // Discord refused a forum post or a thread before posting it (#1103): what to change.
+      if (v.error?.code && v.error.code in DISCORD_OUTCOMES) return <p className="text-destructive">{t(`outcome.${DISCORD_OUTCOMES[v.error.code] as DiscordOutcome}`)}</p>;
       // Kept by the org's publishing hold until more than an hour past its time (#946): nothing was sent.
       if (v.error?.code === 'HELD_TOO_LONG') return <p className="text-warning">{t('outcome.heldTooLong')}</p>;
       // TikTok refused an inbox upload for the missing video.upload grant (#903): a reconnect fixes it.
@@ -2982,7 +3383,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             base={base}
             onChange={setBase}
             disabled={!editable || save.isPending}
-            needsTitle={p.variants.some((v) => hasTitle(v.provider))}
+            needsTitle={p.variants.some((v) => takesTitle(v.provider, own[v.id]?.settings ?? v.settings))}
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={p.variants.map((v) => v.connectionId)}
@@ -3066,6 +3467,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                       </div>
                     )}
                     {v.pinStatus && <p className={v.pinStatus === 'failed' || v.pinStatus === 'not_allowed' || v.pinStatus === 'unknown' ? 'text-warning' : ''}>{t(`pinStatus.${v.pinStatus}`)}</p>}
+                    {v.gateStatus && <p className={v.gateStatus === 'failed' || v.gateStatus === 'unknown' ? 'text-warning' : ''}>{t(`gateStatus.${v.gateStatus}`)}</p>}
                     {v.playlistStatus && (
                       <p className={v.playlistStatus.state === 'pending' || v.playlistStatus.state === 'added' ? '' : 'text-warning'}>
                         {t(`playlistStatus.${v.playlistStatus.state}`, { added: v.playlistStatus.added, total: v.playlistStatus.total })}

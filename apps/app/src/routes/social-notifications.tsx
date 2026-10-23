@@ -12,7 +12,7 @@ import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName } from '../lib/social.ts';
-import { NOTIFICATION_KINDS, notificationTarget, type NotificationKind } from '../lib/social-notifications.ts';
+import { DIGEST_KIND, NOTIFICATION_KINDS, notificationTarget, type NotificationKind } from '../lib/social-notifications.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 export type NotificationItem = Awaited<ReturnType<typeof client.social.notifications.list>>['items'][number];
@@ -59,6 +59,9 @@ function useLine() {
         const count = Number(n.detail.heldTooLong ?? 0);
         return count > 0 ? t('text.publishing_released_stale', { actor, count }) : t('text.publishing_released', { actor });
       }
+      // A mail only (#1104); never an item of the list.
+      case 'weekly_digest':
+        return t('digest');
       default:
         return t(`text.${n.kind}`, { actor });
     }
@@ -73,6 +76,7 @@ function Settings({ muted, mailOff }: { muted: readonly NotificationKind[]; mail
   });
   const mail = useMutation({ mutationFn: (enabled: boolean) => client.social.notifications.mail({ enabled }), onSettled: refresh });
   const mailOn = mail.isPending && mail.variables !== undefined ? mail.variables : !mailOff;
+  const digestOn = mute.isPending && mute.variables?.kind === DIGEST_KIND ? !mute.variables.muted : !muted.includes(DIGEST_KIND);
   return (
     <Card className="block space-y-3 p-4">
       <div>
@@ -95,6 +99,14 @@ function Settings({ muted, mailOff }: { muted: readonly NotificationKind[]; mail
         <span>
           <span className="block text-foreground">{t('mail')}</span>
           <span className="block text-xs text-subtle-foreground">{t('mailHint')}</span>
+        </span>
+      </label>
+      {/* The weekly digest (#1104): a mail, so it needs the mail switch on too. */}
+      <label className="flex items-start gap-2 text-sm text-muted-foreground">
+        <Checkbox checked={mailOn && digestOn} disabled={mute.isPending || !mailOn} onCheckedChange={(checked) => mute.mutate({ kind: DIGEST_KIND, muted: checked !== true })} />
+        <span>
+          <span className="block text-foreground">{t('digest')}</span>
+          <span className="block text-xs text-subtle-foreground">{mailOn ? t('digestHint') : t('digestMailOff')}</span>
         </span>
       </label>
       {(mute.error ?? mail.error) && <ErrorText>{errorMessage(mute.error ?? mail.error)}</ErrorText>}

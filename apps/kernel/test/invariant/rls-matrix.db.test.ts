@@ -174,6 +174,8 @@ const socialShortLinkRows = (o: { id: string; owner: string }) => {
 let portalListYear = 2000;
 // A tax obligation is marked done once per period (#921): each row its own year.
 let taxObligationYear = 2000;
+// An org's weekly digest is marked sent once per ISO week (#1104): each row its own year.
+let digestWeekYear = 2000;
 const portalListRow = (o: { id: string; file: string }) => ({
   org_id: o.id,
   id: randomUUID(),
@@ -654,6 +656,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // A channel's options for the composer (#1120, a Pinterest board's sections), cached per connection and kind: asked
+  // for by a member, filled in by the worker. One row per connection and kind, so each row gets its own fresh
+  // connection however many rows an org gets.
+  'crove_social.channel_option': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, kind: 'pinterest_section', status: 'pending', requested_at: new Date().toISOString() },
+      };
+    },
+  },
   // The review policy of a channel (S9, issue #394): how many people approve a variant, and whether its reviewers
   // are reminded (#703), one row per connection.
   'crove_social.channel_policy': {
@@ -680,6 +694,9 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // The weekly digest's sent marker (#1104): the worker's sweep writes one row per org and ISO week, so each row gets
+  // its own week however many rows an org gets.
+  'crove_social.digest_week': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), iso_week: `${digestWeekYear++}-W01` } }) },
   // The worker's last bring-in of a channel's posts published outside Crove (#1054): one row per connection, so each
   // row gets its own fresh connection.
   'crove_social.external_import': {
@@ -905,6 +922,18 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       return {
         setup: [{ table: 'crove_social.report_schedule', values: schedule }],
         row: { org_id: o.id, id: randomUUID(), schedule_id: schedule.id, kind: 'scheduled', period_start: '2026-10-12T00:00:00Z', period_end: '2026-10-19T00:00:00Z' },
+      };
+    },
+  },
+  // An item of the org's review checklist (#1105), ticked by a reviewer before approving: for every channel (no
+  // connection) or one channel, at a position. The table has no unique index (the commands keep at most 10 items per
+  // org under an advisory lock), so the rows of an org may share a position; each row gets its own fresh connection.
+  'crove_social.review_check': {
+    make: (o) => {
+      const connection = channelConnectionRow(o);
+      return {
+        setup: [{ table: 'crove_kernel.channel_connection', values: connection }],
+        row: { org_id: o.id, id: randomUUID(), channel_connection_id: connection.id, position: 0, label: `RLS matrix check ${tag()}`, created_by: o.owner },
       };
     },
   },

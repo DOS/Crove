@@ -1,6 +1,6 @@
 // Shared pieces of the Social screens: status tones, provider names, the effective text of a variant as the composer
 // shows it, and grouping by day for the agenda.
-import { CAPABILITIES, SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, countText, isProvider, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { CAPABILITIES, SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, countText, isDiscordForum, isProvider, mediaKindOf, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
 import { getConfig } from './auth.ts';
 
 export type VariantStatus =
@@ -106,6 +106,11 @@ export function hasTitle(provider: string): boolean {
   return isProvider(provider) && CAPABILITIES[provider].title !== null;
 }
 
+// Whether a channel's variant sends a title: its channel has one, or it is a Discord forum post (#1103), named by it.
+export function takesTitle(provider: string, settings: Readonly<Record<string, unknown>> | undefined): boolean {
+  return hasTitle(provider) || isDiscordForum(provider, settings);
+}
+
 // The issues a draft would have at submit, checked as it is typed (the server checks again).
 // Whether this deployment keeps files where no public link reaches them (local disk); unknown before the config loads.
 function uploadsDirect(): boolean {
@@ -118,7 +123,7 @@ function uploadsDirect(): boolean {
 
 export function draftIssues(provider: string, content: { body: string; title: string | null; linkUrl?: string | null; media?: readonly { mime: string; sizeBytes: number; durationMs?: number | null | undefined; width?: number | null | undefined; height?: number | null | undefined }[]; settings?: Record<string, unknown> }): Issue[] {
   if (!isProvider(provider)) return [];
-  const media = (content.media ?? []).map((m) => ({ kind: m.mime.startsWith('video/') ? ('video' as const) : ('image' as const), mime: m.mime, sizeBytes: m.sizeBytes, // Absent: an upload the server has not read yet (the post is not saved); it reads and checks the length on save.
+  const media = (content.media ?? []).map((m) => ({ kind: mediaKindOf(m.mime), mime: m.mime, sizeBytes: m.sizeBytes, // Absent: an upload the server has not read yet (the post is not saved); it reads and checks the length on save.
     durationSeconds: m.durationMs === undefined ? 0 : m.durationMs === null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null }));
   const issues = validateVariant({ provider, body: content.body, title: content.title, linkUrl: content.linkUrl ?? null, media, ...(content.settings ? { settings: content.settings } : {}) });
   // Files that channel fetches by URL, on a deployment that hands out none (#772): said before the post is submitted.

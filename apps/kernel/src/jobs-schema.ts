@@ -29,6 +29,8 @@ export const QUEUES = {
   mailEvent: 'kernel-mail-event',
   // Created by the Social link preview migration (20261021150000).
   socialLinkPreview: 'social-link-preview',
+  // Created by the Social channel option migration (20261029060000).
+  socialChannelOption: 'social-channel-option',
   // Created by the Social notifications migration (20261021140000).
   socialNotify: 'social-notify',
   // Created by the Social remove migration (20261023141000).
