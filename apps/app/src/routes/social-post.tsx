@@ -3519,6 +3519,12 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           </div>
         </Notice>
       )}
+      {/* Open internal comments (#1168) warn before a review, and never block it. */}
+      {canWrite && submittable.length > 0 && p.openComments > 0 && (
+        <div className="mb-4 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-foreground" role="status" data-testid="submit-open-comments">
+          {t('submitOpenComments', { count: p.openComments })}
+        </div>
+      )}
       {(error || flash) && (
         <div className="mb-4">
           <ErrorText>{error ? errorMessage(error) : flash}</ErrorText>

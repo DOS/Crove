@@ -1300,6 +1300,8 @@ export interface SocialPostCommentTable {
   body: string;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   edited_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  resolved_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  resolved_by: string | null;
 }
 
 /** crove_social.post_label */
