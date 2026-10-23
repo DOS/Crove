@@ -56,6 +56,8 @@ function SuggestPanel({ labels, onClose }: { labels: readonly SocialLabel[]; onC
   const [count, setCount] = useState<number>(SUGGEST_DEFAULT_COUNT);
   const [connectionId, setConnectionId] = useState('');
   const [kept, setKept] = useState<number[]>([]);
+  // The suggestions already on the board: kept once, never offered again (a retry after a failure saves only the rest).
+  const [saved, setSaved] = useState<number[]>([]);
   const label = labels.find((l) => l.id === labelId) ?? null;
   const ask = useMutation({
     mutationFn: () => {
@@ -68,14 +70,21 @@ function SuggestPanel({ labels, onClose }: { labels: readonly SocialLabel[]; onC
         ...(connectionId ? { connectionId } : {}),
       });
     },
-    onSuccess: () => setKept([]),
+    onSuccess: () => {
+      setKept([]);
+      setSaved([]);
+    },
   });
   const ideas: Suggestion[] = ask.data?.ideas ?? [];
   const keep = useMutation({
-    mutationFn: async (picked: Suggestion[]) => {
-      // One at a time, in the order shown; an idea kept before a failure stays on the board.
-      for (const idea of picked) {
+    mutationFn: async (picked: number[]) => {
+      // One at a time, in the order shown; an idea kept before a failure stays on the board and leaves the picks.
+      for (const i of [...picked].sort((a, b) => a - b)) {
+        const idea = ideas[i];
+        if (!idea) continue;
         await client.social.ideas.create({ title: idea.title, note: idea.note, origin: 'ai', ...(label ? { labelIds: [label.id] } : {}) });
+        setSaved((s) => [...s, i]);
+        setKept((k) => k.filter((x) => x !== i));
       }
     },
     onSettled: refresh,
@@ -160,7 +169,7 @@ function SuggestPanel({ labels, onClose }: { labels: readonly SocialLabel[]; onC
             {ideas.map((idea, i) => (
               <li key={`${i}-${idea.title}`}>
                 <label className="flex items-start gap-2 rounded-lg border border-dashed p-2 text-sm">
-                  <Checkbox className="mt-0.5" checked={kept.includes(i)} disabled={keep.isPending} onCheckedChange={() => setKept(kept.includes(i) ? kept.filter((x) => x !== i) : [...kept, i])} />
+                  <Checkbox className="mt-0.5" checked={kept.includes(i) || saved.includes(i)} disabled={keep.isPending || saved.includes(i)} onCheckedChange={() => setKept(kept.includes(i) ? kept.filter((x) => x !== i) : [...kept, i])} />
                   <span className="min-w-0 space-y-0.5">
                     <span className="block font-medium break-words text-foreground">{idea.title}</span>
                     {idea.note && <span className="block text-xs break-words whitespace-pre-line text-muted-foreground">{idea.note}</span>}
@@ -170,7 +179,7 @@ function SuggestPanel({ labels, onClose }: { labels: readonly SocialLabel[]; onC
             ))}
           </ul>
           {keep.error ? <ErrorText>{errorMessage(keep.error)}</ErrorText> : null}
-          <Button type="button" disabled={kept.length === 0 || busy} onClick={() => keep.mutate(ideas.filter((_, i) => kept.includes(i)))}>
+          <Button type="button" disabled={kept.length === 0 || busy} onClick={() => keep.mutate(kept)}>
             {keep.isPending ? <Spinner className="text-current" /> : null}
             {t('keep', { count: kept.length })}
           </Button>
