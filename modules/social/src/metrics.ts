@@ -61,6 +61,22 @@ export const metricsRecord = defineCommand({
   },
 });
 
+// Whether a variant goes out with one video: its own media when it has them, else the post's (as What works reads them).
+async function singleVideo(trx: Trx, orgId: string, variantId: string): Promise<boolean> {
+  const { rows } = await sql<{ types: string[] | null }>`
+    SELECT CASE WHEN jsonb_typeof(v.media) = 'array' THEN (
+             SELECT array_agg(f.content_type) FROM jsonb_array_elements(v.media) x(e)
+             JOIN crove_kernel.file f ON f.org_id = v.org_id AND f.id::text = x.e->>'fileId'
+           ) ELSE (
+             SELECT array_agg(f.content_type) FROM crove_social.post_media m
+             JOIN crove_kernel.file f ON f.org_id = m.org_id AND f.id = m.file_id
+             WHERE m.org_id = v.org_id AND m.post_id = v.post_id
+           ) END AS types
+    FROM crove_social.post_variant v WHERE v.org_id = ${orgId} AND v.id = ${variantId}`.execute(trx);
+  const types = rows[0]?.types ?? [];
+  return types.length === 1 && (types[0] ?? '').startsWith('video/');
+}
+
 // What the sweep needs to ask a platform about a variant: its connection and the platform's id of the post.
 export const metricsTarget = defineQuery({
   name: 'social.metrics.target',
@@ -74,7 +90,10 @@ export const metricsTarget = defineQuery({
       .where('id', '=', input.variantId)
       .executeTakeFirst();
     if (!row || row.status !== 'published' || !row.external_post_id) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy bài đã đăng này');
-    const postType = postTypeOf((row.settings ?? {}) as Record<string, unknown>);
+    const settingsPostType = postTypeOf((row.settings ?? {}) as Record<string, unknown>);
+    // Instagram publishes a feed post of one video as a Reel (isInstagramReel), so it is asked for the Reels watch time
+    // (#1147) like one marked as a Reel.
+    const postType: PostType | null = row.provider === 'instagram' && settingsPostType === 'feed' && (await singleVideo(ctx.trx, ctx.orgId, row.id)) ? 'reel' : settingsPostType;
     // Whether the variant still waits to be weighed (#1132): the sweep runs the check only then, so a post is weighed
     // (and audited) once, not after every later capture; the check keeps its own guards.
     const outperformCheck = await pendingWeigh(ctx.trx, ctx.orgId, row);

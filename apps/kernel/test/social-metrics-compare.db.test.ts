@@ -30,6 +30,8 @@ suite('social metrics against the window before (#947)', () => {
   let pool: pg.Pool;
   let db: Db;
   let rt: Runtime;
+  let workerPool: pg.Pool;
+  let worker: Runtime;
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
 
   async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
@@ -99,10 +101,17 @@ suite('social metrics against the window before (#947)', () => {
     pool = createPool({ connectionString: app.toString(), max: 4 });
     db = createDb(pool);
     rt = new Runtime(db).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
+    // The metrics sweep's own queries run as the worker.
+    const asWorker = new URL(adminUrl);
+    asWorker.username = 'crove_worker';
+    asWorker.password = 'test-worker-pw';
+    workerPool = createPool({ connectionString: asWorker.toString(), max: 2 });
+    worker = new Runtime(createDb(workerPool)).register({ commands: [...kernelCommands, ...socialCommands], queries: [...kernelQueries({ inboundDomain: null }), ...socialQueries] });
   });
 
   afterAll(async () => {
     await pool?.end();
+    await workerPool?.end();
     if (!ADMIN) return;
     const root = new pg.Client({ connectionString: ADMIN });
     await root.connect();
@@ -190,5 +199,32 @@ suite('social metrics against the window before (#947)', () => {
     const t = await totals(o, { days: 7 });
     expect(t.metrics).toEqual({ views: 150, totalWatchTimeMs: 1_630_000 });
     expect(t.channels[0]?.metrics).toEqual({ views: 150, totalWatchTimeMs: 1_630_000 });
+  });
+
+  // #1147: Instagram publishes a feed post of one video as a Reel, so the sweep asks it for the watch time too.
+  it('asks an Instagram feed post of one video for the Reels watch time, and not one of a photo', async () => {
+    const o = await org();
+    const ig = await connection(o.orgId, o.owner, 'Instagram');
+    const system = { type: 'system' as const, component: 'social-metrics-compare-test' };
+    const withMedia = async (contentType: string, settings: Record<string, unknown>) => {
+      const postId = await published(o, ig, 1, { views: 1 });
+      return admin(async (c) => {
+        const fileId = randomUUID();
+        const sha = randomUUID().replace(/-/g, '').padEnd(64, '0');
+        await c.query(
+          "INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, filename, content_type, size_bytes, source) VALUES ($1, $2, $3, $4, 'tep', $5, 10, 'upload')",
+          [o.orgId, fileId, sha, `org/${o.orgId}/${sha}`, contentType],
+        );
+        const { rows } = await c.query<{ id: string }>(
+          "UPDATE crove_social.post_variant SET provider = 'instagram', external_post_id = '17900000000000001', media = $2, settings = $3 WHERE post_id = $1 RETURNING id",
+          [postId, JSON.stringify([{ fileId }]), JSON.stringify(settings)],
+        );
+        return rows[0]?.id as string;
+      });
+    };
+    const postTypeOfTarget = async (variantId: string) => (await worker.query<{ postType: string | null }>('social.metrics.target', { variantId }, { actor: system, orgId: o.orgId })).postType;
+    expect(await postTypeOfTarget(await withMedia('video/mp4', {}))).toBe('reel');
+    expect(await postTypeOfTarget(await withMedia('video/mp4', { postType: 'story' }))).toBe('story');
+    expect(await postTypeOfTarget(await withMedia('image/jpeg', {}))).toBe('feed');
   });
 });
