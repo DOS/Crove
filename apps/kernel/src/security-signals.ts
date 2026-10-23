@@ -4,7 +4,8 @@
 //   actor_many_orgs   one user acting in more orgs than SECURITY_ALERT_ORG_THRESHOLD within the window;
 //   refusal_spike     more refusals across the deployment than SECURITY_ALERT_REFUSAL_THRESHOLD within the window;
 //   privileged_grant  an owner or admin role given in an org;
-//   out_of_pipeline_ddl  schema changes made outside the migration pipeline (#1202), one alert per database session.
+//   out_of_pipeline_ddl  schema changes made outside the migration pipeline (#1202), one alert per database session,
+//                        and out_of_pipeline_ddl_more for the sessions past the first 10 of a pass.
 // The database remembers what was alerted, so several workers alert once and a lasting signal repeats only after the
 // repeat interval. Messages hold ids and counts only: no email, name or token.
 import { sql } from 'kysely';
@@ -23,7 +24,7 @@ export interface SecurityThresholds {
 export const DEFAULT_SECURITY_THRESHOLDS: SecurityThresholds = { windowSeconds: 300, orgThreshold: 20, refusalThreshold: 500, repeatSeconds: 3600 };
 
 export interface SecuritySignal {
-  signal: 'actor_many_orgs' | 'refusal_spike' | 'privileged_grant' | 'out_of_pipeline_ddl';
+  signal: 'actor_many_orgs' | 'refusal_spike' | 'privileged_grant' | 'out_of_pipeline_ddl' | 'out_of_pipeline_ddl_more';
   subject: string;
   value: number;
   orgId: string | null;
@@ -53,6 +54,8 @@ export function securityAlertText(signal: SecuritySignal, thresholds: SecurityTh
       return `${signal.detail === 'owner' ? 'owner' : 'admin'} role given in org ${signal.orgId ?? 'unknown'} (audit row ${signal.subject}): confirm it was intended`;
     case 'out_of_pipeline_ddl':
       return `${signal.value} schema change(s) outside the migration pipeline, first by ${signal.detail ?? 'unknown'} (ddl_event ${signal.subject}): find who made them and why (docs/runbooks/alerts.md)`;
+    case 'out_of_pipeline_ddl_more':
+      return `${signal.value} more database session(s) made ${signal.detail ?? 'schema changes'} outside the migration pipeline (from ddl_event ${signal.subject}): find who made them and why (docs/runbooks/alerts.md)`;
   }
 }
 

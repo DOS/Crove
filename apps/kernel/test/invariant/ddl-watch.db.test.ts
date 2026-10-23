@@ -72,7 +72,7 @@ suite('DDL outside the migration pipeline on PostgreSQL (#1202)', () => {
       fetch,
       log: (line) => lines.push(line),
     });
-    return { found, lines, posted: posted.filter((p) => p.crove.signal === 'out_of_pipeline_ddl') };
+    return { found, lines, posted: posted.filter((p) => String(p.crove.signal).startsWith('out_of_pipeline_ddl')) };
   }
 
   beforeAll(async () => {
@@ -213,6 +213,70 @@ suite('DDL outside the migration pipeline on PostgreSQL (#1202)', () => {
     // One database session (the grant before the switch included): one alert.
     const { posted } = await sweep();
     expect(posted.map((p) => p.crove.value)).toEqual([6]);
+  });
+
+  it("spares Supabase Auth's role only for its objects in the auth schema, and records the rest of its DDL", async () => {
+    const before = (await records()).length;
+    await withClient(adminUrl, async (c) => {
+      // As the bootstrap sets it up (a cluster where the role already existed skipped that in this database).
+      await c.query('CREATE SCHEMA IF NOT EXISTS auth AUTHORIZATION supabase_auth_admin');
+      await c.query(`GRANT CREATE ON DATABASE ${dbName} TO supabase_auth_admin`);
+    });
+    const setup = (await records()).length;
+    await withClient(adminUrl, async (c) => {
+      await c.query('SET SESSION AUTHORIZATION supabase_auth_admin');
+      // Its own migrations: not recorded.
+      await c.query('CREATE TABLE auth.ddl_probe_auth (id integer)');
+      await c.query('ALTER TABLE auth.ddl_probe_auth ADD COLUMN note text');
+      await c.query('DROP TABLE auth.ddl_probe_auth');
+      // Anything else: recorded.
+      await c.query('CREATE SCHEMA ddl_shadow');
+      await c.query('CREATE TABLE ddl_shadow.copy (id integer)');
+      await c.query('ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO PUBLIC');
+      await c.query('GRANT USAGE ON SCHEMA auth TO PUBLIC');
+      await c.query('DROP TABLE ddl_shadow.copy');
+    });
+    const all = await records();
+    expect(all.slice(before, setup).map((r) => r.session_role)).toEqual(all.slice(before, setup).map(() => adminRole));
+    expect(all.slice(setup).map((r) => [r.session_role, r.command_tag, r.object_identity])).toEqual([
+      ['supabase_auth_admin', 'CREATE SCHEMA', 'ddl_shadow'],
+      ['supabase_auth_admin', 'CREATE TABLE', 'ddl_shadow.copy'],
+      ['supabase_auth_admin', 'ALTER DEFAULT PRIVILEGES', null],
+      ['supabase_auth_admin', 'GRANT', null],
+      ['supabase_auth_admin', 'DROP TABLE', 'ddl_shadow.copy'],
+    ]);
+    await sweep();
+  });
+
+  it('alerts at most 10 sessions one by one per pass, and folds the rest into one message', async () => {
+    for (let i = 0; i < 13; i++) {
+      await withClient(adminUrl, (c) => c.query(`CREATE TABLE public.ddl_probe_session_${i} (id integer)`));
+    }
+    await withClient(adminUrl, (c) => c.query('DROP TABLE public.ddl_probe_session_12'));
+    const { posted, lines } = await sweep();
+    expect(posted.map((p) => [p.crove.signal, p.crove.value])).toEqual([
+      ...Array.from({ length: 10 }, () => ['out_of_pipeline_ddl', 1]),
+      ['out_of_pipeline_ddl_more', 4],
+    ]);
+    expect(posted[10]?.text).toMatch(/: 4 more database session\(s\) made 4 schema change\(s\) outside the migration pipeline \(from ddl_event \d+\)/);
+    expect(lines.filter((l) => l.startsWith('[security] ALERT out_of_pipeline_ddl'))).toHaveLength(11);
+    expect((await sweep()).posted).toEqual([]);
+  });
+
+  it('refuses to attach the event triggers to a function owned by a role that is neither a superuser nor the installer', async () => {
+    await withClient(adminUrl, async (c) => {
+      // With the watch on, the change of owner itself would fail: the function would run as the new owner.
+      await c.query('SET event_triggers = off');
+      await c.query(`ALTER FUNCTION crove_kernel.ddl_watch() OWNER TO ${probeRole}`);
+    });
+    await expect(installDdlWatch({ adminUrl })).rejects.toThrow(
+      new RegExp(`crove_kernel\\.ddl_watch\\(\\) is owned by ${probeRole}, neither a superuser nor the installing role`),
+    );
+    await withClient(adminUrl, async (c) => {
+      await c.query('SET event_triggers = off');
+      await c.query(`ALTER FUNCTION crove_kernel.ddl_watch() OWNER TO ${adminRole}`);
+    });
+    expect(await installDdlWatch({ adminUrl })).toBe('installed');
   });
 
   it('keeps the records and the mark out of every login role, behind a pinned definer no role may execute', async () => {

@@ -14,19 +14,25 @@
 --                                 hosted Supabase, so `migrate` creates it after the files (installDdlWatch in
 --                                 packages/db/src/migrate.ts), never a migration, which runs as a non-superuser (T17).
 -- crove_kernel.security_signals   gains the signal out_of_pipeline_ddl: the records not alerted yet, one alert per
---                                 session, marked alerted by the worker pass that reports them.
+--                                 session for the first 10 sessions of a pass and one out_of_pipeline_ddl_more for the
+--                                 rest, marked alerted by the worker pass that reports them.
 --
 -- Not recorded:
 --   - the pipeline's own sessions: the migration runner and auth-grants insert their backend (pid and start time) into
 --     crove_meta.pipeline_session, which only the runner's role (the owner of crove_meta) and superusers may write, and
 --     remove it when done. A login role cannot add its session there, and a crashed run's row matches no later
 --     session, whose start time differs even when its pid is reused.
---   - Supabase Auth's own migrations: DDL by the role that owns the `auth` schema (supabase_auth_admin) when it is not a
---     superuser and has not switched role. That role owns no Crove object and may create in no crove_* schema, so its
---     DDL changes only its own objects, whose data it can write anyway.
+--   - Supabase Auth's own migrations, and only their objects in the `auth` schema: rows of DDL by the role that owns
+--     that schema (supabase_auth_admin), when it is not a superuser and has not switched role, whose object is in
+--     `auth`. That role owns the auth tables and may write their rows directly, so DDL there gives it nothing more. Its
+--     DDL anywhere else (a new schema, a table outside `auth`, default privileges, a GRANT, which names no schema) is
+--     recorded: the role holds CREATE on the database and its password sits in the internet-facing Supabase Auth
+--     container.
 --   - what PostgreSQL itself does not pass to event triggers: shared objects (roles, databases, tablespaces) and event
---     triggers. A superuser can also turn event triggers off (event_triggers = off, dropping the trigger); this is a
---     detective control against mistakes and stolen non-superuser credentials, not against a hostile superuser.
+--     triggers. A superuser can also turn event triggers off (event_triggers = off, dropping the trigger), and so can
+--     the migration role, which owns crove_meta and these objects: it can mark its own session, empty ddl_event or
+--     replace ddl_watch(). This is a detective control against mistakes and stolen credentials of the other roles, not
+--     against a hostile superuser or migration role.
 SET LOCAL lock_timeout = '2s';
 
 CREATE TABLE IF NOT EXISTS crove_kernel.ddl_event (
@@ -57,6 +63,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_start timestamptz;
   v_role text := NULLIF(pg_catalog.current_setting('role'), 'none');
+  v_auth_admin boolean;
 BEGIN
   SELECT a.backend_start INTO v_start FROM pg_catalog.pg_stat_activity a WHERE a.pid = pg_catalog.pg_backend_pid();
   IF EXISTS (
@@ -65,12 +72,11 @@ BEGIN
   ) THEN
     RETURN;
   END IF;
-  IF v_role IS NULL AND EXISTS (
+  -- Supabase Auth's role: its objects in `auth` only (see the header).
+  v_auth_admin := v_role IS NULL AND EXISTS (
     SELECT 1 FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_roles r ON r.oid = n.nspowner
     WHERE n.nspname = 'auth' AND r.rolname = SESSION_USER AND NOT r.rolsuper
-  ) THEN
-    RETURN;
-  END IF;
+  );
 
   IF TG_EVENT = 'sql_drop' THEN
     INSERT INTO crove_kernel.ddl_event (session_role, set_role, command_tag, object_type, schema_name, object_identity,
@@ -78,14 +84,15 @@ BEGIN
     SELECT SESSION_USER, v_role, TG_TAG, d.object_type, d.schema_name, pg_catalog.left(d.object_identity, 500),
            pg_catalog.pg_backend_pid(), v_start, pg_catalog.inet_client_addr()
     FROM pg_catalog.pg_event_trigger_dropped_objects() d
-    WHERE d.original AND NOT d.is_temporary;
+    WHERE d.original AND NOT d.is_temporary AND NOT (v_auth_admin AND d.schema_name IS NOT DISTINCT FROM 'auth');
   ELSE
     INSERT INTO crove_kernel.ddl_event (session_role, set_role, command_tag, object_type, schema_name, object_identity,
                                         backend_pid, backend_start, client_addr)
     SELECT SESSION_USER, v_role, c.command_tag, c.object_type, c.schema_name, pg_catalog.left(c.object_identity, 500),
            pg_catalog.pg_backend_pid(), v_start, pg_catalog.inet_client_addr()
     FROM pg_catalog.pg_event_trigger_ddl_commands() c
-    WHERE c.schema_name IS DISTINCT FROM 'pg_temp' AND NOT c.in_extension;
+    WHERE c.schema_name IS DISTINCT FROM 'pg_temp' AND NOT c.in_extension
+      AND NOT (v_auth_admin AND c.schema_name IS NOT DISTINCT FROM 'auth');
   END IF;
 END $$;
 -- An event trigger function cannot be called directly; no role needs EXECUTE to have it fire.
@@ -102,6 +109,7 @@ DECLARE
   v_orgs int := LEAST(GREATEST(COALESCE(p_org_threshold, 20), 1), 1000000);
   v_refusals int := LEAST(GREATEST(COALESCE(p_refusal_threshold, 500), 1), 1000000);
   v_row record;
+  c_ddl_sessions constant int := 10;
 BEGIN
   IF NOT pg_catalog.pg_has_role(SESSION_USER, 'crove_worker', 'MEMBER') THEN
     RAISE EXCEPTION 'SECURITY_SIGNALS_WORKER_ONLY' USING ERRCODE = '42501';
@@ -148,7 +156,10 @@ BEGIN
 
   -- DDL outside the pipeline: every record not alerted yet, whatever its age, one alert per session. The UPDATE claims
   -- the rows, so with several workers each record is reported once. subject is the session's first new record,
-  -- value how many there are; detail names the role and the first statement's tag and object.
+  -- value how many there are; detail names the role and the first statement's tag and object. At most
+  -- c_ddl_sessions sessions alert one by one per pass; the rest fold into one out_of_pipeline_ddl_more row (subject
+  -- the first record of the first folded session, value the number of folded sessions, detail their record count),
+  -- so a script that opens a session per statement posts a bounded number of messages.
   RETURN QUERY
   WITH claimed AS (
     UPDATE crove_kernel.ddl_event d SET alerted_at = pg_catalog.now()
@@ -156,14 +167,24 @@ BEGIN
     RETURNING d.id, d.session_role, d.set_role, d.command_tag, d.object_identity, d.backend_pid, d.backend_start
   ),
   sessions AS (
-    SELECT c.backend_pid, c.backend_start, pg_catalog.min(c.id) AS first_id, pg_catalog.count(*) AS n
+    SELECT c.backend_pid, c.backend_start, pg_catalog.min(c.id) AS first_id, pg_catalog.count(*) AS n,
+           pg_catalog.row_number() OVER (ORDER BY pg_catalog.min(c.id)) AS rank
     FROM claimed c GROUP BY c.backend_pid, c.backend_start
   )
-  SELECT 'out_of_pipeline_ddl'::text, s.first_id::text, s.n, NULL::uuid,
-         pg_catalog.left(pg_catalog.format('%s%s: %s %s', f.session_role, COALESCE(' as ' || f.set_role, ''), f.command_tag,
-                                           COALESCE(f.object_identity, '')), 300)
-  FROM sessions s JOIN claimed f ON f.id = s.first_id
-  ORDER BY s.first_id;
+  SELECT x.sig, x.subj, x.val, NULL::uuid, x.what FROM (
+    SELECT 'out_of_pipeline_ddl'::text AS sig, s.first_id AS ord, s.first_id::text AS subj, s.n AS val,
+           pg_catalog.left(pg_catalog.format('%s%s: %s %s', f.session_role, COALESCE(' as ' || f.set_role, ''), f.command_tag,
+                                             COALESCE(f.object_identity, '')), 300) AS what
+    FROM sessions s JOIN claimed f ON f.id = s.first_id
+    WHERE s.rank <= c_ddl_sessions
+    UNION ALL
+    SELECT 'out_of_pipeline_ddl_more', pg_catalog.min(s.first_id), pg_catalog.min(s.first_id)::text, pg_catalog.count(*),
+           pg_catalog.format('%s schema change(s)', pg_catalog.sum(s.n))
+    FROM sessions s
+    WHERE s.rank > c_ddl_sessions
+    HAVING pg_catalog.count(*) > 0
+  ) x
+  ORDER BY x.ord;
 END $$;
 
 -- EXECUTE matrix: only the worker login role (unchanged).

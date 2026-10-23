@@ -164,13 +164,28 @@ export interface DdlWatchOptions {
  * supautils privileged role `postgres`), which the migration runner is not required to be (T17), so `migrate` runs this
  * step after the files with the same admin URL. Idempotent: it drops and recreates both triggers in one transaction,
  * which also repairs a trigger that was disabled or pointed elsewhere. Resolves to 'installed', or to 'skipped' when the
- * role may not create event triggers (42501): the step logs why and the deployment runs without the watch.
+ * role may not create event triggers (42501): the step logs why and the deployment runs without the watch. Refuses when
+ * the function is owned by a role that is neither a superuser nor the installing role, which could change the body
+ * that every session's DDL then runs.
  */
 export async function installDdlWatch(options: DdlWatchOptions): Promise<'installed' | 'skipped'> {
   const log = options.log ?? (() => {});
   const client = new pg.Client({ connectionString: options.adminUrl, application_name: 'crove-migrate' });
   await client.connect();
   try {
+    // A superuser attaches event triggers to this function, which then runs for every session, so its owner must not be
+    // a role with less than the installer has: only a superuser or the installing role itself.
+    const { rows: owner } = await client.query<{ owner: string; ok: boolean }>(
+      `SELECT r.rolname AS owner, r.rolsuper OR r.rolname = current_user AS ok
+       FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_roles r ON r.oid = p.proowner
+       WHERE p.oid = 'crove_kernel.ddl_watch()'::pg_catalog.regprocedure`,
+    );
+    if (!owner[0]?.ok) {
+      throw new Error(
+        `crove_kernel.ddl_watch() is owned by ${owner[0]?.owner ?? 'nobody'}, neither a superuser nor the installing role; ` +
+          'refusing to attach the DDL watch to it (run migrate with the role that applied the migrations)',
+      );
+    }
     await client.query('BEGIN');
     try {
       await client.query(`
