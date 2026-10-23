@@ -1923,6 +1923,7 @@ export const en = {
         client_changes_requested: 'Client {name} wants changes',
         client_comment: 'Client {name} left a note',
         assigned: '{actor} assigned you a post',
+        assigned_many: '{actor} assigned you {count, plural, one {# post} other {# posts}}',
         feed_paused: 'The feed {feed} could not be read 5 times in a row and is paused',
         reminder_waiting: 'A post has waited more than 24 hours for your review',
         reminder_due: 'A post goes out within 24 hours and is not approved yet',
@@ -2846,7 +2847,7 @@ export const en = {
       selectAll: 'Select every post shown',
       selected: '{count, plural, one {# post selected} other {# posts selected}}',
       clear: 'Clear',
-      action: { approve: 'Approve', queue: 'Put in the queue', cancel: 'Cancel posts', move: 'Reschedule', labels: 'Set labels', assign: 'Assign', replace: 'Find and replace' },
+      action: { approve: 'Approve', submit: 'Submit for review', queue: 'Put in the queue', cancel: 'Cancel posts', move: 'Reschedule', labels: 'Set labels', assign: 'Assign', replace: 'Find and replace', addChannel: 'Add a channel' },
       confirmCancel: 'Cancel {count, plural, one {# post} other {# posts}} on every channel that has not gone out?',
       result: '{action}: {done, number} done, {skipped, number} with nothing to do, {refused, number} refused.',
       move: {
@@ -2886,7 +2887,22 @@ export const en = {
         dueClear: 'Clear it',
         dueAt: 'New due date',
         apply: 'Assign posts',
-        hint: 'Owners and admins assign any post; members only the posts they wrote. Published posts stay as they are. The person assigned is told of each post.',
+        hint: 'Owners and admins assign any post; members only the posts they wrote. Published posts stay as they are. The person assigned gets one notification for the whole assignment.',
+      },
+      addChannel: {
+        channel: 'Channel to add',
+        pick: 'Pick a channel',
+        apply: 'Add to the posts',
+        hint: "The channel is added as a draft with each post's shared content and planned time, and goes to review like any draft. Posts that are published, going out, already on this channel or at 20 channels stay as they are.",
+        result:
+          'Added {channel}: {done, number} posts got the channel ({fits, number} already fit its rules, {needsEdits, number} need edits), {skipped, number} left as they were, {refused, number} refused.',
+        needsEdits: 'needs edits before review: {issues}',
+      },
+      submit: {
+        result:
+          'Submit for review: {done, number} sent, {skipped, number} had nothing to send, {invalid, number} have a channel that does not fit its rules yet, {blocked, number} hold a banned word, {refused, number} refused.',
+        invalid: "a channel does not meet its platform's rules yet",
+        blocked: 'holds banned words: {words}',
       },
       replace: {
         find: 'Find',
@@ -2919,6 +2935,8 @@ export const en = {
           over_limit: 'the result would go over a limit',
           invalid_link: 'the link would no longer be valid',
           banned_words: 'the result would hold a banned word',
+          already_on: 'it is already on this channel',
+          too_many_channels: 'it already has 20 channels',
         },
       },
     },

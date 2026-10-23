@@ -12,6 +12,9 @@ import { validateVariant, type Issue } from './domain/validate.ts';
 
 export type Trx = Transaction<Database>;
 
+// The most channels one post has, cancelled ones included (social.post.add_channels, social.post.bulk_add_channel).
+export const MAX_CHANNELS_PER_POST = 20;
+
 export interface PostRow {
   id: string;
   body: string;

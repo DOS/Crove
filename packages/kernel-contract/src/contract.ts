@@ -22,6 +22,8 @@ import {
   zChannelConnection,
   zOAuthProvider,
   zOAuthState,
+  zSocialBulkAddChannel,
+  zSocialBulkAddChannelResult,
   zSocialBulkAssign,
   zSocialBulkLabels,
   zSocialBulkReplace,
@@ -410,6 +412,9 @@ export const contract = {
       // left out; the replace changes each post through its single edits and answers as the bulk edits do.
       bulkReplacePreview: oc.input(zSocialBulkReplace).output(zSocialBulkReplacePreview),
       bulkReplace: oc.input(zSocialBulkReplace).output(zSocialBulkResult),
+      // One channel added to up to 100 posts (#1178), each through the single add; the answer names each post left out
+      // and why, and what each added channel still lacks for its rules.
+      bulkAddChannel: oc.input(zSocialBulkAddChannel).output(zSocialBulkAddChannelResult),
       // One draft per library file (#1080), all or none: every file is checked against every channel first, and a file
       // that does not fit one is reported with nothing saved. A retry with the same idempotencyKey returns the first answer.
       createFromMedia: oc.input(zSocialDraftsFromMediaFields.extend({ idempotencyKey: zId }).refine(channelsOrSet, 'channels or a channel set')).output(zSocialDraftsFromMediaResult),

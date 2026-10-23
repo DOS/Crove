@@ -613,18 +613,21 @@ export function SocialPage() {
   useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.mine]);
   const canDecide = role === 'owner' || role === 'admin';
   // Moving by days or hours (#945) is for owners and admins, like a single reschedule; the agenda offers only that.
+  // Members and above send drafts to review in bulk on the Drafts and Attention lists (#1178).
   const bulkActions: readonly BulkAction[] = !canWrite
     ? []
     : listTab === 'review'
       ? canDecide ? ['approve', 'move', 'cancel'] : ['cancel']
       : listTab === 'drafts'
-        ? canDecide ? ['queue', 'move', 'cancel'] : ['cancel']
+        ? canDecide ? ['submit', 'queue', 'move', 'cancel'] : ['submit', 'cancel']
         : listTab === 'attention'
-          ? canDecide ? ['move', 'cancel'] : ['cancel']
+          ? canDecide ? ['submit', 'move', 'cancel'] : ['submit', 'cancel']
           : [];
-  // Labels and the assignee on many posts at once (#1057), and find and replace (#1144), for members and above, in the
-  // lists, the board and the calendar.
-  const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign', 'replace'] : [];
+  // Labels and the assignee on many posts at once (#1057), find and replace (#1144) and a channel added (#1178), for
+  // members and above, in the lists, the board and the calendar.
+  const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign', 'replace', 'addChannel'] : [];
+  // The channels a member may add to posts: live, and theirs (#1081).
+  const channelOptions = (channels.data ?? []).filter((c) => c.status !== 'revoked' && scope.allows(c.id)).map((c) => ({ id: c.id, name: `${c.displayName} · ${providerName(c.provider)}` }));
   const listActions = bulkActions.length > 0 ? [...bulkActions, ...editActions] : [];
   const agendaActions: readonly BulkAction[] = [...(canDecide ? (['move'] as const) : []), ...editActions];
   const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: canWrite });
@@ -766,6 +769,7 @@ export function SocialPage() {
                 channelName={channelName}
                 labelOptions={labelList}
                 members={members}
+                channelOptions={channelOptions}
                 findHint={search.q}
                 onClear={() => setPicked(new Set())}
               />
@@ -799,6 +803,7 @@ export function SocialPage() {
                           channelName={channelName}
                           labelOptions={labelList}
                           members={members}
+                          channelOptions={channelOptions}
                           findHint={search.q}
                           onClear={clear}
                         />
@@ -831,6 +836,7 @@ export function SocialPage() {
                         channelName={channelName}
                         labelOptions={labelList}
                         members={members}
+                        channelOptions={channelOptions}
                         findHint={search.q}
                         onClear={() => setPicked(new Set())}
                       />
@@ -882,6 +888,7 @@ export function SocialPage() {
                       channelName={channelName}
                       labelOptions={labelList}
                       members={members}
+                      channelOptions={channelOptions}
                       findHint={search.q}
                       onClear={() => setPicked(new Set())}
                     />

@@ -65,6 +65,9 @@ function useLine() {
         const count = Number(n.detail.heldTooLong ?? 0);
         return count > 0 ? t('text.publishing_released_stale', { actor, count }) : t('text.publishing_released', { actor });
       }
+      // A bulk assignment (#1062): one item for all its posts.
+      case 'assigned':
+        return n.detail.count ? t('text.assigned_many', { actor, count: Number(n.detail.count) }) : t('text.assigned', { actor });
       // A mail only (#1104); never an item of the list.
       case 'weekly_digest':
         return t('digest');
@@ -138,6 +141,7 @@ export function SocialNotificationsPage() {
     else if (target?.to === 'channels') void navigate({ to: '/o/$slug/social/channels', params: { slug } });
     else if (target?.to === 'feeds') void navigate({ to: '/o/$slug/social/feeds', params: { slug } });
     else if (target?.to === 'compose') void navigate({ to: '/o/$slug/social/new', params: { slug }, search: { channel: target.channelId } });
+    else if (target?.to === 'mine') void navigate({ to: '/o/$slug/social', params: { slug }, search: { mine: true } });
   };
   const items = list.data?.items ?? [];
   return (

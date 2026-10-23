@@ -158,6 +158,27 @@ export async function usersInScope(trx: Trx, orgId: string, userIds: readonly st
   });
 }
 
+// The posts among these a person may see, in their order, as usersInScope decides for one post: every post for owners,
+// admins and members who are not limited; for a limited one, those with a variant on one of their channels. Nobody
+// who is not a member sees any. For a notification about many posts at once (a bulk assignment, #1062).
+export async function postsVisibleTo(trx: Trx, orgId: string, userId: string, postIds: readonly string[]): Promise<string[]> {
+  if (postIds.length === 0) return [];
+  const member = await trx.selectFrom('crove_kernel.tenant_member').select('role').where('org_id', '=', orgId).where('user_id', '=', userId).executeTakeFirst();
+  if (!member) return [];
+  const list = member.role === 'owner' || member.role === 'admin' ? [] : await listOf(trx, orgId, userId);
+  if (list.length === 0) return [...postIds];
+  const rows = await trx
+    .selectFrom('crove_social.post_variant')
+    .select('post_id')
+    .distinct()
+    .where('org_id', '=', orgId)
+    .where('post_id', 'in', [...new Set(postIds)])
+    .where('channel_connection_id', 'in', list)
+    .execute();
+  const seen = new Set(rows.map((r) => r.post_id));
+  return postIds.filter((id) => seen.has(id));
+}
+
 export interface ChannelAccessEntry {
   userId: string;
   // The channels of the member's list; an owner's or admin's list does not apply while they hold that role.

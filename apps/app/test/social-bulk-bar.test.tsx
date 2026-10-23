@@ -1,7 +1,9 @@
 // The bulk bar over the Social lists (#635, #945) as each role sees it: owners and admins get the move by days or hours,
 // members do not (social.variant.reschedule is theirs alone, and the server refuses anyone else anyway). Labels and the
 // assignee (#1057) are offered to members too; labels only once the org has one. Find and replace (#1144) is offered to
-// members, and its preview shows each match with what replaces it and why a post is left out. Rendered on the server.
+// members, and its preview shows each match with what replaces it and why a post is left out. Sending drafts to review
+// and adding a channel (#1178) are offered to members, the latter once there is a channel they may add. Rendered on the
+// server.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
@@ -27,11 +29,23 @@ const posts: BulkPost[] = [
 
 const spring = { id: '00000000-0000-4000-8000-000000000003', name: 'Mùa xuân', color: 'green' as const };
 
-function bar(canDecide: boolean, actions: readonly BulkAction[], labelOptions: readonly (typeof spring)[] = []): string {
+const threads = { id: '00000000-0000-4000-8000-000000000004', name: 'Threads của tiệm' };
+
+function bar(canDecide: boolean, actions: readonly BulkAction[], labelOptions: readonly (typeof spring)[] = [], channelOptions: readonly (typeof threads)[] = []): string {
   return renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient()}>
       <IntlProvider locale="vi" messages={catalog('vi')} timeZone="Asia/Ho_Chi_Minh">
-        <BulkBar posts={posts} actions={actions} canDecide={canDecide} excerptOf={() => 'Khai trương'} channelName={() => 'Fanpage'} labelOptions={labelOptions} members={[]} onClear={() => undefined} />
+        <BulkBar
+          posts={posts}
+          actions={actions}
+          canDecide={canDecide}
+          excerptOf={() => 'Khai trương'}
+          channelName={() => 'Fanpage'}
+          labelOptions={labelOptions}
+          members={[]}
+          channelOptions={channelOptions}
+          onClear={() => undefined}
+        />
       </IntlProvider>
     </QueryClientProvider>,
   );
@@ -66,6 +80,17 @@ describe('BulkBar', () => {
   it('offers members find and replace', () => {
     const html = bar(false, ['labels', 'assign', 'replace']);
     expect(html).toContain(t.action.replace);
+  });
+
+  it('offers members sending drafts to review, and adding a channel once there is one they may add', () => {
+    const html = bar(false, ['submit', 'cancel', 'labels', 'assign', 'replace', 'addChannel'], [], [threads]);
+    expect(html).toContain(t.action.submit);
+    expect(html).toContain(t.action.addChannel);
+    // The channel form opens on a click; its button says whether it is open.
+    expect(html).toMatch(new RegExp('aria-expanded="false"[^>]*>' + t.action.addChannel));
+    const none = bar(false, ['submit', 'addChannel']);
+    expect(none).toContain(t.action.submit);
+    expect(none).not.toContain(t.action.addChannel);
   });
 
   it('previews each match with what replaces it, and says why a post is left out', () => {

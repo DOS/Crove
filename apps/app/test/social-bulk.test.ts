@@ -3,6 +3,7 @@ import { localTime } from '@crove/mod-social/contract';
 import {
   BULK_EDIT_MAX,
   BULK_REPLACE_MAX,
+  addedSummary,
   assignInput,
   bulkRequest,
   editBatches,
@@ -10,11 +11,13 @@ import {
   previewSummary,
   replaceKey,
   planMove,
+  runAddChannel,
   runBulk,
   runEdit,
   runMove,
   runReplacePreview,
   shiftTime,
+  submitResult,
   toggleEditLabel,
   validLabelEdit,
   validMove,
@@ -285,5 +288,72 @@ describe('find and replace across posts (#1144)', () => {
     expect(replaceKey({ ...edit, replace: 'x' }, ['a', 'b'])).not.toBe(key);
     expect(replaceKey({ ...edit, wholeWord: true }, ['a', 'b'])).not.toBe(key);
     expect(replaceKey(edit, ['a'])).not.toBe(key);
+  });
+});
+
+describe('drafts sent to review and a channel added in bulk (#1178)', () => {
+  it('sends a post with a draft or a channel sent back, and skips one with nothing to send', async () => {
+    expect(bulkRequest(post('p', v('a', 'draft'), v('b', 'scheduled')), 'submit', false)).toEqual({ action: 'submit', postId: 'p' });
+    expect(bulkRequest(post('p', v('a', 'changes_requested')), 'submit', false)).toEqual({ action: 'submit', postId: 'p' });
+    expect(bulkRequest(post('p', v('a', 'rejected')), 'submit', true)).toEqual({ action: 'submit', postId: 'p' });
+    expect(bulkRequest(post('p', v('a', 'in_review'), v('b', 'published')), 'submit', true)).toBeNull();
+    const sent: string[] = [];
+    const result = await runBulk([post('p1', v('a', 'draft')), post('p2', v('b', 'approved'))], 'submit', false, async (r) => void sent.push(r.postId));
+    expect(sent).toEqual(['p1']);
+    expect(result).toEqual({ done: ['p1'], skipped: ['p2'], refused: [] });
+  });
+
+  it('tells apart nothing to send, channels that do not fit and a blocked word from other refusals', () => {
+    const refusal = (code: string, data?: unknown) => Object.assign(new Error(code), { code, data });
+    const result = submitResult({
+      done: ['ok'],
+      skipped: ['none'],
+      refused: [
+        { postId: 'gone', error: refusal('NOTHING_TO_SUBMIT') },
+        { postId: 'bad', error: refusal('VARIANT_INVALID', { variants: [{ variantId: 'v1', issues: [{ code: 'MEDIA_REQUIRED', field: 'media', limit: null, actual: null }] }] }) },
+        {
+          postId: 'word',
+          error: refusal('BANNED_WORDS', {
+            variants: [
+              {
+                variantId: 'v2',
+                words: [
+                  { wordId: 'w', phrase: 'cấm', field: 'body', reason: null },
+                  { wordId: 'w', phrase: 'cấm', field: 'title', reason: null },
+                ],
+              },
+            ],
+          }),
+        },
+        { postId: 'other', error: refusal('CHANNEL_NOT_ALLOWED') },
+      ],
+    });
+    expect(result.done).toEqual(['ok']);
+    expect(result.skipped).toEqual(['none', 'gone']);
+    expect(result.invalid).toEqual([{ postId: 'bad', variants: [{ variantId: 'v1', issues: [{ code: 'MEDIA_REQUIRED', field: 'media', limit: null, actual: null }] }] }]);
+    expect(result.blocked).toEqual([{ postId: 'word', phrases: ['cấm'] }]);
+    expect(result.refused.map((r) => r.postId)).toEqual(['other']);
+  });
+
+  it('adds the channel batch by batch, keeping what each added channel still lacks', async () => {
+    const ids = Array.from({ length: BULK_EDIT_MAX + 1 }, (_, i) => 'p' + i);
+    const batches: string[][] = [];
+    const result = await runAddChannel(ids, async (batch) => {
+      batches.push(batch);
+      if (batches.length === 2) throw new Error('refused');
+      return {
+        done: batch.slice(0, 2),
+        skipped: [{ postId: batch[2] as string, reason: 'already_on' as const }],
+        added: [
+          { postId: batch[0] as string, variantId: 'v0', issues: [] },
+          { postId: batch[1] as string, variantId: 'v1', issues: [{ code: 'MEDIA_REQUIRED', field: 'media', limit: null, actual: null }] },
+        ],
+      };
+    });
+    expect(batches.map((b) => b.length)).toEqual([BULK_EDIT_MAX, 1]);
+    expect(result.done).toEqual(['p0', 'p1']);
+    expect(result.skipped).toEqual([{ postId: 'p2', reason: 'already_on' }]);
+    expect(result.refused.map((r) => r.postId)).toEqual(['p' + BULK_EDIT_MAX]);
+    expect(addedSummary(result.added)).toEqual({ fits: 1, needsEdits: 1 });
   });
 });

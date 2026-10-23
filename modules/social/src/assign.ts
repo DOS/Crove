@@ -11,7 +11,14 @@ const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 
 export const postAssign = defineCommand({
   name: 'social.post.assign',
-  input: z.strictObject({ postId: zId, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable() }),
+  input: z.strictObject({
+    postId: zId,
+    assigneeUserId: zId.nullable(),
+    dueAt: z.iso.datetime({ offset: true }).nullable(),
+    // Set by social.post.bulk_assign only, which tells the assignee once of all its posts (#1062); the app's assign
+    // never sends it (the RPC contract's input has no such field).
+    bulk: z.literal(true).optional(),
+  }),
   risk: 'R1',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
@@ -44,7 +51,8 @@ export const postAssign = defineCommand({
       .where('id', '=', post.id)
       .execute();
     if (input.assigneeUserId && input.assigneeUserId !== post.assignee_user_id) {
-      await ctx.emit('social.post.assigned', { post_id: post.id, assignee_user_id: input.assigneeUserId, by: userId });
+      // In a bulk assignment the event says so, and the notification comes once from the bulk command's own event.
+      await ctx.emit('social.post.assigned', { post_id: post.id, assignee_user_id: input.assigneeUserId, by: userId, ...(input.bulk ? { bulk: true } : {}) });
     }
     return { postId: post.id, assigneeUserId: input.assigneeUserId, dueAt: input.dueAt };
   },

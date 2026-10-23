@@ -6,10 +6,13 @@
 // told of each post as for a single assignment. A post the caller may not change is left out with the reason, and
 // the others go on; the answer names every post left out and why.
 //
-// Left out without trying: a post that is not there (or is another org's), one already published (every live channel
-// out), and one the change would not change. A label edit that would put more than ten labels on a post leaves that
-// post out too. A label to add that the org does not have, or an assignee who is not a member, refuses the whole
-// command: nothing would be done the way the person asked.
+// Left out without trying: a post that is not there (or is another org's), one on none of the caller's channels
+// (not_allowed, #1081, said before anything else of it so a limited member learns nothing of a post they cannot see,
+// #1099), one already published (every live channel out), and one the change would not change. A label edit that
+// would put more than ten labels on a post leaves that post out too. A label to add that the org does not have refuses
+// the whole command, and so does an assignee who is not a member when some post would get them as a new assignee
+// (keeping one who has since left, to set due dates, is allowed as for a single assignment, #1062): nothing would be
+// done the way the person asked. A bulk assignment tells the assignee once, of all the posts it gave them (#1062).
 //
 // Find and replace (#1144), as Publer and Hootsuite edit a month of scheduled posts when a link, a price or a promo
 // code changes: social.post.bulk_replace_preview lists, per post, where the text matches (the base text, title and
@@ -30,19 +33,30 @@
 // - banned_words: a channel the change would give a 'block' word it did not have (#1055).
 // A refusal of a post's first nested command leaves only that post out; one of a later nested command of the same post
 // fails the whole command, so a post is never left half replaced (the checks above make it rare).
+//
+// One channel on many posts (#1178), as Publer and Sprout add a newly connected account to a month of planned posts:
+// social.post.bulk_add_channel takes one channel the caller may use and up to 100 posts, locks the posts in id order
+// (each with its variants), and adds the channel to each through social.post.add_channels as a nested command, with its
+// checks, its audit row and its post version. The new channel is a draft with the post's base content and planned time.
+// Left out, with the reason: not_found; not_allowed for a post on none of the caller's channels (#1081, before anything
+// else of it); published: no channel open any more; already_on: the post has the channel; too_many_channels: it has
+// as many as a post may; in_flight: a channel of it is going out. The answer names, per channel added, what its rules
+// still miss (Instagram without an image, YouTube without a video), so the person knows which drafts need edits before
+// review. A channel the caller may not use, or not a live channel of the org, refuses the whole command.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zSocialBulkAssign, zSocialBulkLabels, zSocialBulkReplace, type SocialBulkSkipReason, type SocialReplaceField } from '@crove/kernel-contract';
+import { zSocialBulkAddChannel, zSocialBulkAssign, zSocialBulkLabels, zSocialBulkReplace, type SocialBulkSkipReason, type SocialReplaceField } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { BannedWordsTooComplex } from './domain/banned-words.ts';
 import { replaceLiteral, type ReplaceExcerpt, type ReplaceOptions } from './domain/replace.ts';
 import { FROZEN, IN_FLIGHT } from './domain/state.ts';
 import { bannedChecker, bannedCommandBudget, bannedTooComplex, bannedWordsOf, type BannedCheck } from './banned-words.ts';
-import { channelScope, mayUse, type ChannelScope } from './channel-access.ts';
+import { channelScope, mayUse, postsInScope, refuseOutside, type ChannelScope } from './channel-access.ts';
+import type { Issue } from './domain/validate.ts';
 import { MAX_LABELS_PER_POST } from './labels.ts';
 import { coverProblem } from './cover-check.ts';
-import { POST_COLUMNS, VARIANT_COLUMNS, base, hashOf, issuesOf, loadPostMedia, lockVariants, settingsOf, type PostRow, type Trx, type VariantRow } from './variants.ts';
+import { MAX_CHANNELS_PER_POST, POST_COLUMNS, VARIANT_COLUMNS, base, hashOf, issuesOf, loadPostMedia, lockVariants, providerOf, settingsOf, type PostRow, type Trx, type VariantRow } from './variants.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 
@@ -76,6 +90,12 @@ async function lockPosts(ctx: CommandContext, postIds: readonly string[]): Promi
   return new Map(rows.map((r) => [r.id, r]));
 }
 
+// The posts among these the caller may see (#1081); the others are left out as not_allowed before anything else is
+// said of them (#1099).
+async function visiblePosts(ctx: CommandContext, postIds: readonly string[]): Promise<Set<string>> {
+  return new Set(await postsInScope(ctx, await channelScope(ctx), postIds));
+}
+
 // The posts in the order they were locked (by id), so the nested commands run in that order too.
 const byId = (postIds: readonly string[]) => [...postIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
@@ -107,6 +127,7 @@ export const postBulkLabels = defineCommand({
       if (found.length !== input.add.length) throw new DomainError('LABEL_NOT_FOUND', 404, 'Có nhãn không tồn tại hoặc đã bị xóa');
     }
     const ids = [...posts.keys()];
+    const visible = await visiblePosts(ctx, ids);
     const current = ids.length === 0 ? [] : await ctx.trx.selectFrom('crove_social.post_label').select(['post_id', 'label_id']).where('org_id', '=', ctx.orgId).where('post_id', 'in', ids).orderBy('created_at').orderBy('label_id').execute();
     const labelsOf = new Map<string, string[]>();
     for (const r of current) labelsOf.set(r.post_id, [...(labelsOf.get(r.post_id) ?? []), r.label_id]);
@@ -116,6 +137,10 @@ export const postBulkLabels = defineCommand({
       const post = posts.get(postId);
       if (!post) {
         result.skipped.push({ postId, reason: 'not_found' });
+        continue;
+      }
+      if (!visible.has(postId)) {
+        result.skipped.push({ postId, reason: 'not_allowed' });
         continue;
       }
       if (post.status === 'published') {
@@ -148,20 +173,21 @@ export const postBulkAssign = defineCommand({
   risk: 'R1',
   access: MEMBERS,
   handler: async (ctx, input): Promise<BulkEditResult> => {
-    requireUser(ctx);
+    const userId = requireUser(ctx);
     const posts = await lockPosts(ctx, input.postIds);
-    // Checked once for all the posts: a person who is not a member is never assigned anything (crove_kernel.member_profiles
-    // answers for members of the org only).
-    if (input.assigneeUserId) {
-      const { rows } = await sql<{ user_id: string }>`SELECT user_id FROM crove_kernel.member_profiles(${[input.assigneeUserId]}::uuid[])`.execute(ctx.trx);
-      if (rows.length === 0) throw new DomainError('ASSIGNEE_NOT_MEMBER', 422, 'Người được giao không phải thành viên của tổ chức');
-    }
+    const visible = await visiblePosts(ctx, [...posts.keys()]);
     const dueMs = input.dueAt ? Date.parse(input.dueAt) : null;
     const result: BulkEditResult = { done: [], skipped: [] };
+    // The posts to assign, with the due date each gets and whether it gets a new assignee.
+    const planned: Array<{ postId: string; dueAt: string | null; newAssignee: boolean }> = [];
     for (const postId of byId(input.postIds)) {
       const post = posts.get(postId);
       if (!post) {
         result.skipped.push({ postId, reason: 'not_found' });
+        continue;
+      }
+      if (!visible.has(postId)) {
+        result.skipped.push({ postId, reason: 'not_allowed' });
         continue;
       }
       if (post.status === 'published') {
@@ -175,10 +201,25 @@ export const postBulkAssign = defineCommand({
         result.skipped.push({ postId, reason: 'unchanged' });
         continue;
       }
-      const attempt = await ctx.tryRun('social.post.assign', { postId, assigneeUserId: input.assigneeUserId, dueAt: due }, { recover: notAllowed });
-      if (attempt.status === 'ok') result.done.push(postId);
-      else result.skipped.push({ postId, reason: 'not_allowed' });
+      planned.push({ postId, dueAt: due, newAssignee: post.assignee_user_id !== input.assigneeUserId });
     }
+    // Checked once for all the posts, and only when some post gets them as a new assignee (#1062): a person who is not a
+    // member is never assigned anything (crove_kernel.member_profiles answers for members of the org only), while
+    // keeping one who has since left, to change only the due dates, is allowed as for a single assignment.
+    if (input.assigneeUserId && planned.some((p) => p.newAssignee)) {
+      const { rows } = await sql<{ user_id: string }>`SELECT user_id FROM crove_kernel.member_profiles(${[input.assigneeUserId]}::uuid[])`.execute(ctx.trx);
+      if (rows.length === 0) throw new DomainError('ASSIGNEE_NOT_MEMBER', 422, 'Người được giao không phải thành viên của tổ chức');
+    }
+    const given: string[] = [];
+    for (const p of planned) {
+      const attempt = await ctx.tryRun('social.post.assign', { postId: p.postId, assigneeUserId: input.assigneeUserId, dueAt: p.dueAt, bulk: true }, { recover: notAllowed });
+      if (attempt.status === 'ok') {
+        result.done.push(p.postId);
+        if (p.newAssignee) given.push(p.postId);
+      } else result.skipped.push({ postId: p.postId, reason: 'not_allowed' });
+    }
+    // One notification for the assignee, of every post this gave them (#1062).
+    if (input.assigneeUserId && given.length > 0) await ctx.emit('social.post.bulk_assigned', { post_ids: given, assignee_user_id: input.assigneeUserId, by: userId });
     audit(ctx, result, { assignee_user_id: input.assigneeUserId, due_at: input.dueAt === undefined ? 'kept' : input.dueAt });
     return result;
   },
@@ -409,5 +450,80 @@ export const postBulkReplace = defineCommand({
   },
 });
 
-export const bulkEditCommands = [postBulkLabels, postBulkAssign, postBulkReplace];
+export interface BulkAddChannelResult extends BulkEditResult {
+  // Per channel added, in the order of the posts: what its rules still miss (none: it already fits them).
+  added: Array<{ postId: string; variantId: string; issues: Issue[] }>;
+}
+
+// The refusals of social.post.add_channels that leave only that post out; the checks before it make them rare.
+const ADD_LEFT_OUT: Readonly<Partial<Record<string, SocialBulkSkipReason>>> = {
+  FORBIDDEN: 'not_allowed',
+  CHANNEL_NOT_ALLOWED: 'not_allowed',
+  POST_NOT_FOUND: 'not_found',
+  CHANNEL_ALREADY_IN_POST: 'already_on',
+  TOO_MANY_CHANNELS: 'too_many_channels',
+};
+
+// Why a post would be left out, or null when the channel can be added to it.
+function addSkip(loaded: LoadedPost | undefined, scope: ChannelScope, connectionId: string): SocialBulkSkipReason | null {
+  if (!loaded) return 'not_found';
+  const { variants } = loaded;
+  if (scope !== null && !variants.some((v) => scope.has(v.channel_connection_id))) return 'not_allowed';
+  if (variants.every((v) => FROZEN.has(v.status))) return 'published';
+  // One live variant per channel (a cancelled one is history: the channel can be added again).
+  if (variants.some((v) => v.channel_connection_id === connectionId && v.status !== 'cancelled')) return 'already_on';
+  if (variants.length + 1 > MAX_CHANNELS_PER_POST) return 'too_many_channels';
+  if (variants.some((v) => IN_FLIGHT.has(v.status))) return 'in_flight';
+  return null;
+}
+
+export const postBulkAddChannel = defineCommand({
+  name: 'social.post.bulk_add_channel',
+  input: zSocialBulkAddChannel,
+  risk: 'R1',
+  access: MEMBERS,
+  handler: async (ctx, input): Promise<BulkAddChannelResult> => {
+    requireUser(ctx);
+    // The channel, once for all the posts: one the caller may not use (#1081), or not a live channel of the org, refuses
+    // the whole command before any post is read.
+    const scope = await channelScope(ctx);
+    refuseOutside(scope, [input.connectionId]);
+    const connection = await ctx.trx
+      .selectFrom('crove_kernel.channel_connection')
+      .select(['id', 'provider'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.connectionId)
+      .where('status', '<>', 'revoked')
+      .executeTakeFirst();
+    if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
+    providerOf(connection);
+    const loaded = await loadPosts(ctx.trx, ctx.orgId, input.postIds, true);
+    const result: BulkAddChannelResult = { done: [], skipped: [], added: [] };
+    for (const postId of byId(input.postIds)) {
+      const skip = addSkip(loaded.get(postId), scope, input.connectionId);
+      if (skip) {
+        result.skipped.push({ postId, reason: skip });
+        continue;
+      }
+      const attempt = await ctx.tryRun<{ variants: Array<{ variantId: string }> }>(
+        'social.post.add_channels',
+        { postId, channels: [{ connectionId: input.connectionId }] },
+        { recover: (refusal) => ADD_LEFT_OUT[refusal.code] !== undefined },
+      );
+      if (attempt.status !== 'ok') {
+        result.skipped.push({ postId, reason: ADD_LEFT_OUT[attempt.refusal.code] ?? 'not_allowed' });
+        continue;
+      }
+      const [created] = attempt.value.variants;
+      if (!created) throw new Error('social.post.add_channels added no channel');
+      const variant = await ctx.trx.selectFrom('crove_social.post_variant').select(VARIANT_COLUMNS).where('org_id', '=', ctx.orgId).where('id', '=', created.variantId).executeTakeFirstOrThrow();
+      result.done.push(postId);
+      result.added.push({ postId, variantId: created.variantId, issues: issuesOf(base((loaded.get(postId) as LoadedPost).post), variant) });
+    }
+    audit(ctx, result, { connection_id: input.connectionId, needs_edits: result.added.filter((a) => a.issues.length > 0).length });
+    return result;
+  },
+});
+
+export const bulkEditCommands = [postBulkLabels, postBulkAssign, postBulkReplace, postBulkAddChannel];
 export const bulkEditQueries = [postBulkReplacePreview];

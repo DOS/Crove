@@ -1,6 +1,7 @@
 // Labels and the assignee on many Social posts at once on PostgreSQL 17 (#1057): one transaction per command, the
-// posts locked in id order, viewers refused, the assignee a member, each post left out with its reason, the assignee
-// told of each post, and an entry on each post's timeline. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes
+// posts locked in id order, viewers refused, the assignee a member when some post gets them anew (#1062), each post
+// left out with its reason (a post outside a limited member's channels as not_allowed, #1099), the assignee told once
+// per bulk assignment (#1062), and an entry on each post's timeline. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes
 // its own database. The worker's dispatch is run here by hand for each new outbox event.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -62,6 +63,14 @@ suite('social bulk labels and assignment on PostgreSQL (#1057)', () => {
   }
 
   const exec = <O>(o: Org, user: string, name: string, input: unknown) => rt.execute<O>(name, input, { actor: asUser(user), orgId: o.orgId });
+  // Another channel of the org.
+  async function channel(o: Org, name: string) {
+    const id = randomUUID();
+    await admin((c) =>
+      c.query('INSERT INTO crove_kernel.channel_connection (org_id, id, provider, external_account_id, display_name, connected_by) VALUES ($1, $2, $3, $4, $5, $6)', [o.orgId, id, 'sandbox', `acct-${id.slice(0, 8)}`, name, o.owner]),
+    );
+    return id;
+  }
   const get = (o: Org, user: string, postId: string) => rt.query<PostView>('social.post.get', { postId }, { actor: asUser(user), orgId: o.orgId });
   const post = async (o: Org, user: string, body: string) => (await exec<{ postId: string }>(o, user, 'social.post.create', { body, channels: [{ connectionId: o.conn }] })).postId;
   const label = async (o: Org, name: string) => (await exec<{ labelId: string }>(o, o.member, 'social.label.create', { name })).labelId;
@@ -230,15 +239,23 @@ suite('social bulk labels and assignment on PostgreSQL (#1057)', () => {
     expect(Date.parse((await get(o, o.owner, mine)).dueAt ?? '')).toBe(Date.parse(due));
     expect(await get(o, o.owner, ownerPost)).toMatchObject({ assigneeUserId: o.other, dueAt: null });
 
-    // The assignee hears of each post, as for a single assignment; never the person who acted.
+    // The assignee hears once per bulk assignment (#1062): each of these gave them one post, which reads as a single
+    // assignment; never the person who acted.
     await deliver(o);
     const told = (await notifications(o, o.other)).items.filter((i) => i.kind === 'assigned');
     expect(told.map((i) => i.postId).sort()).toEqual(sorted([mine, ownerPost]));
+    expect(told.every((i) => i.detail.count === undefined)).toBe(true);
     expect((await notifications(o, o.member)).items.filter((i) => i.kind === 'assigned')).toEqual([]);
-    const events = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.post.assigned' ORDER BY created_at, id", [o.orgId])).rows);
-    expect(events.map((e) => e.payload)).toEqual([
-      { post_id: mine, assignee_user_id: o.other, by: o.member },
-      { post_id: ownerPost, assignee_user_id: o.other, by: o.owner },
+    // Each post's own event says it was part of a bulk assignment; the bulk command's event names the posts.
+    const events = (type: string) =>
+      admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>('SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = $2 ORDER BY created_at, id', [o.orgId, type])).rows.map((e) => e.payload));
+    expect(await events('social.post.assigned')).toEqual([
+      { post_id: mine, assignee_user_id: o.other, by: o.member, bulk: true },
+      { post_id: ownerPost, assignee_user_id: o.other, by: o.owner, bulk: true },
+    ]);
+    expect(await events('social.post.bulk_assigned')).toEqual([
+      { post_ids: [mine], assignee_user_id: o.other, by: o.member },
+      { post_ids: [ownerPost], assignee_user_id: o.other, by: o.owner },
     ]);
 
     // Each post's timeline shows who assigned it.
@@ -266,6 +283,72 @@ suite('social bulk labels and assignment on PostgreSQL (#1057)', () => {
     await expect(exec(o, o.owner, 'social.post.bulk_assign', { postIds: [a], assigneeUserId: o.other })).rejects.toMatchObject({ code: 'ASSIGNEE_NOT_MEMBER' });
     expect(await get(o, o.owner, a)).toMatchObject({ assigneeUserId: null });
     expect(await audits(o, 'social.post.assign')).toEqual([]);
+  });
+
+  it('tells the assignee once of a bulk assignment, of the posts they may see (#1062, #1081)', async () => {
+    const o = await org();
+    const ids = sorted([await post(o, o.owner, 'Một'), await post(o, o.owner, 'Hai'), await post(o, o.owner, 'Ba')]);
+    await exec(o, o.owner, 'social.post.bulk_assign', { postIds: ids, assigneeUserId: o.other });
+    await deliver(o);
+    const told = (await notifications(o, o.other)).items.filter((i) => i.kind === 'assigned');
+    expect(told).toHaveLength(1);
+    expect(told[0]).toMatchObject({ postId: null, detail: { count: '3' } });
+
+    // A member limited to one channel hears only of the posts on it, as for a single assignment.
+    const other = await channel(o, 'Kênh khác');
+    await exec(o, o.owner, 'social.channel_access.set', { userId: o.member, channelConnectionIds: [o.conn] });
+    const seen = await post(o, o.owner, 'Trên kênh của thành viên');
+    const unseen = (await exec<{ postId: string }>(o, o.owner, 'social.post.create', { body: 'Chỉ trên kênh khác', channels: [{ connectionId: other }] })).postId;
+    const seen2 = await post(o, o.owner, 'Cũng trên kênh của thành viên');
+    await exec(o, o.owner, 'social.post.bulk_assign', { postIds: [seen, unseen, seen2], assigneeUserId: o.member });
+    await deliver(o);
+    const theirs = (await notifications(o, o.member)).items.filter((i) => i.kind === 'assigned');
+    expect(theirs).toHaveLength(1);
+    expect(theirs[0]).toMatchObject({ postId: null, detail: { count: '2' } });
+    // Only the hidden one: no notification at all.
+    const lone = (await exec<{ postId: string }>(o, o.owner, 'social.post.create', { body: 'Một mình trên kênh khác', channels: [{ connectionId: other }] })).postId;
+    await exec(o, o.owner, 'social.post.bulk_assign', { postIds: [lone], assigneeUserId: o.member });
+    await deliver(o);
+    expect((await notifications(o, o.member)).items.filter((i) => i.kind === 'assigned')).toHaveLength(1);
+  });
+
+  it('sets due dates in bulk on posts of an assignee who has left, checking membership only for a new assignee (#1062)', async () => {
+    const o = await org();
+    const a = await post(o, o.owner, 'Bài A');
+    const b = await post(o, o.owner, 'Bài B');
+    await exec(o, o.owner, 'social.post.bulk_assign', { postIds: [a, b], assigneeUserId: o.other });
+    await admin((c) => c.query('DELETE FROM crove_kernel.tenant_member WHERE org_id = $1 AND user_id = $2', [o.orgId, o.other]));
+    const due = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    const kept = await exec<BulkEditResult>(o, o.owner, 'social.post.bulk_assign', { postIds: [a, b], assigneeUserId: o.other, dueAt: due });
+    expect(sorted(kept.done)).toEqual(sorted([a, b]));
+    expect(Date.parse((await get(o, o.owner, a)).dueAt ?? '')).toBe(Date.parse(due));
+    expect(await get(o, o.owner, b)).toMatchObject({ assigneeUserId: o.other });
+    // A post that would get them anew refuses the whole command, changing nothing.
+    const c = await post(o, o.owner, 'Bài C');
+    const later = new Date(Date.now() + 4 * 86_400_000).toISOString();
+    await expect(exec(o, o.owner, 'social.post.bulk_assign', { postIds: [a, c], assigneeUserId: o.other, dueAt: later })).rejects.toMatchObject({ code: 'ASSIGNEE_NOT_MEMBER' });
+    expect(Date.parse((await get(o, o.owner, a)).dueAt ?? '')).toBe(Date.parse(due));
+    expect(await get(o, o.owner, c)).toMatchObject({ assigneeUserId: null });
+  });
+
+  it('reports a post outside a limited member\'s channels as not_allowed, whatever its state (#1099)', async () => {
+    const o = await org();
+    const spring = await label(o, 'Mùa xuân');
+    const other = await channel(o, 'Kênh khác');
+    await exec(o, o.owner, 'social.channel_access.set', { userId: o.member, channelConnectionIds: [o.conn] });
+    const mine = await post(o, o.member, 'Bài của thành viên');
+    const hidden = (await exec<{ postId: string }>(o, o.owner, 'social.post.create', { body: 'Chỉ trên kênh khác', channels: [{ connectionId: other }] })).postId;
+    const hiddenPublished = (await exec<{ postId: string }>(o, o.owner, 'social.post.create', { body: 'Đã đăng trên kênh khác', channels: [{ connectionId: other }] })).postId;
+    await publish(o, hiddenPublished);
+    await exec(o, o.owner, 'social.post.set_labels', { postId: hidden, labelIds: [spring] });
+
+    const labels = await exec<BulkEditResult>(o, o.member, 'social.post.bulk_labels', { postIds: [mine, hidden, hiddenPublished], add: [spring], remove: [] });
+    expect(labels.done).toEqual([mine]);
+    // Neither 'unchanged' nor 'published': the member learns nothing of them.
+    expect(labels.skipped).toEqual(expect.arrayContaining([{ postId: hidden, reason: 'not_allowed' }, { postId: hiddenPublished, reason: 'not_allowed' }]));
+    expect(labels.skipped).toHaveLength(2);
+    const assigned = await exec<BulkEditResult>(o, o.member, 'social.post.bulk_assign', { postIds: [mine, hiddenPublished], assigneeUserId: o.member });
+    expect(assigned).toEqual({ done: [mine], skipped: [{ postId: hiddenPublished, reason: 'not_allowed' }] });
   });
 
   it('locks every post it names in id order before changing any, in one transaction', async () => {
