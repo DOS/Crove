@@ -1,6 +1,7 @@
 // A post's internal comments and timeline (#582): members write a comment on the post or on one channel, the author
 // may fix it for 15 minutes, and everyone sees what happened to the post, newest first. Comments are never published.
 // A comment dealt with is marked resolved (#1168) and shows greyed, with who resolved it and when; it can be reopened.
+// A comment can be pinned (#1180) to a spot on one of the post's images or a moment in one of its videos.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -11,6 +12,8 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, mentionsForEditing, mentionsForStoring } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { CommentBody, MentionBox, useMemberNames, type Picked } from './social-mentions.tsx';
+import { PinBoard, boardPins, clockOf, commentAnchor, revealMarker, useMediaLabels, type DraftPin, type PinMedia } from './social-comment-pins.tsx';
+import { Thumb } from './social-media.tsx';
 import { TickedChecks } from './social-review-checklist.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -19,7 +22,32 @@ import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 type Item = Awaited<ReturnType<typeof client.social.posts.activity>>['items'][number];
 const MAX = 4000;
 
-function Entry({ item, channel, canWrite }: { item: Item; channel: string | null; canWrite: boolean }) {
+// Where a comment is pinned (#1180): its number on the board, which brings its marker into view; on a resolved
+// comment, whose marker is hidden, only where; on a file the post no longer uses, that file's thumbnail.
+function PinNote({ item, n, onBoard }: { item: Item & { pin: NonNullable<Item['pin']> }; n: number | null; onBoard: boolean }) {
+  const t = useTranslations('social.activity');
+  const { pin } = item;
+  const time = pin.atSeconds !== null ? clockOf(pin.atSeconds) : null;
+  if (!pin.current || !onBoard) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="pin-old">
+        <Thumb fileId={pin.fileId} alt={pin.filename} name={pin.filename} mime={pin.mime} className="size-12 shrink-0" />
+        <span>
+          {t(pin.mime.startsWith('video/') ? 'oldVideo' : 'oldImage')}
+          {time ? ` · ${time}` : ''}
+        </span>
+      </div>
+    );
+  }
+  if (n === null) return <p className="text-xs text-muted-foreground">{time ? t('pinnedAtHidden', { time }) : t('pinnedHidden')}</p>;
+  return (
+    <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => revealMarker(item.id)}>
+      {time ? t('pinnedAt', { n: String(n), time }) : t('pinned', { n: String(n) })}
+    </Button>
+  );
+}
+
+function Entry({ item, channel, canWrite, pinNumber, onBoard }: { item: Item; channel: string | null; canWrite: boolean; pinNumber: number | null; onBoard: boolean }) {
   const t = useTranslations('social.activity');
   const f = useFormat();
   const [editing, setEditing] = useState<string | null>(null);
@@ -58,7 +86,12 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
               ? t(`queueMoved.${item.code}`)
               : t(`kind.${item.kind}`);
   return (
-    <li className={cn('space-y-1 border-l-2 py-1 pl-3 text-sm', item.kind === 'comment' && !resolved ? 'border-primary' : 'border-border', resolved && 'opacity-60')} data-resolved={resolved || undefined}>
+    <li
+      id={item.kind === 'comment' ? commentAnchor(item.id) : undefined}
+      tabIndex={item.kind === 'comment' ? -1 : undefined}
+      className={cn('space-y-1 border-l-2 py-1 pl-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none', item.kind === 'comment' && !resolved ? 'border-primary' : 'border-border', resolved && 'opacity-60')}
+      data-resolved={resolved || undefined}
+    >
       <p className="text-xs text-muted-foreground">
         <span className="font-medium text-foreground">{item.kind === 'published' || item.kind === 'failed' || item.kind === 'cancelled' || item.kind === 'auto_replied' || item.kind === 'auto_reply_failed' || item.kind === 'reposted' || item.kind === 'repost_failed' ? (channel ?? t('channel')) : who}</span>{' '}
         {what}
@@ -90,6 +123,7 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
       ) : (
         item.body && (item.kind === 'comment' ? <CommentBody body={item.body} /> : <p className="whitespace-pre-wrap break-words text-foreground">{item.body}</p>)
       )}
+      {item.kind === 'comment' && item.pin && <PinNote item={{ ...item, pin: item.pin }} n={pinNumber} onBoard={onBoard} />}
       {resolved && item.resolvedAt && (
         <p className="text-xs text-muted-foreground">{t('resolvedBy', { name: item.resolvedByName ?? t('formerMember'), when: f.dateTime(item.resolvedAt) })}</p>
       )}
@@ -117,21 +151,41 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
   );
 }
 
-export function PostActivity({ postId, channels, canWrite, className }: { postId: string; channels: { variantId: string; name: string }[]; canWrite: boolean; className?: string }) {
+// media: the post's images and videos, and each channel's own, that comments can be pinned to (#1180).
+export function PostActivity({ postId, channels, canWrite, className, media = [] }: { postId: string; channels: { variantId: string; name: string }[]; canWrite: boolean; className?: string; media?: readonly PinMedia[] }) {
   const t = useTranslations('social.activity');
   const activity = useQuery(orpc.social.posts.activity.queryOptions({ input: { postId } }));
   const [body, setBody] = useState('');
   const [variantId, setVariantId] = useState('');
   const [picked, setPicked] = useState<Picked>([]);
+  const [draft, setDraft] = useState<DraftPin | null>(null);
   const add = useMutation({
-    mutationFn: () => client.social.posts.comment({ postId, body: mentionsForStoring(body.trim(), picked), ...(variantId ? { variantId } : {}) }),
+    mutationFn: () =>
+      client.social.posts.comment({
+        postId,
+        body: mentionsForStoring(body.trim(), picked),
+        ...(variantId ? { variantId } : {}),
+        ...(draft ? { pin: 'atSeconds' in draft ? { fileId: draft.fileId, atSeconds: draft.atSeconds } : { fileId: draft.fileId, x: draft.x, y: draft.y } } : {}),
+      }),
     onSuccess: () => {
       setBody('');
       setPicked([]);
+      setDraft(null);
       void queryClient.invalidateQueries({ queryKey: orpc.social.posts.activity.key() });
     },
   });
   const nameOf = new Map(channels.map((c) => [c.variantId, c.name]));
+  const items = activity.data?.items ?? [];
+  const onBoard = new Set(media.map((m) => m.fileId));
+  const pins = boardPins(items, onBoard);
+  const pinNumber = new Map(pins.map((p) => [p.commentId, p.n]));
+  // A pin on a channel's own file makes the comment that channel's; choosing another target drops such a pin.
+  const pickPin = (pin: DraftPin) => {
+    setDraft(pin);
+    if (pin.variantId) setVariantId(pin.variantId);
+  };
+  const labels = useMediaLabels(media);
+  const draftName = draft ? (labels.get(`${draft.variantId ?? 'post'}:${draft.fileId}`) ?? '') : '';
   // Each mention is stored as its member's token, longer than the @name shown, so the limit counts what is stored.
   const tooLong = mentionsForStoring(body.trim(), picked).length > MAX;
   return (
@@ -140,6 +194,7 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
         <h3 className="text-sm font-medium text-foreground">{t('title')}</h3>
         <p className="text-xs text-subtle-foreground">{t('hint')}</p>
       </div>
+      <PinBoard media={media} pins={pins} draft={draft} onDraft={pickPin} canPin={canWrite} />
       {canWrite && (
         <form
           className="space-y-2"
@@ -149,9 +204,25 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
           }}
         >
           <MentionBox value={body} onChange={setBody} picked={picked} onPicked={setPicked} maxLength={MAX} rows={3} placeholder={t('placeholder')} label={t('placeholder')} />
+          {draft && (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-foreground" role="status" data-testid="pin-draft-note">
+              <span>{'atSeconds' in draft ? t('draftVideo', { media: draftName, time: clockOf(draft.atSeconds) }) : t('draftImage', { media: draftName })}</span>
+              <Button type="button" size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => setDraft(null)}>
+                {t('unpin')}
+              </Button>
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             {channels.length > 1 && (
-              <NativeSelect value={variantId} onChange={(e) => setVariantId(e.target.value)} aria-label={t('about')} className="w-auto">
+              <NativeSelect
+                value={variantId}
+                onChange={(e) => {
+                  setVariantId(e.target.value);
+                  if (draft?.variantId && draft.variantId !== e.target.value) setDraft(null);
+                }}
+                aria-label={t('about')}
+                className="w-auto"
+              >
                 <NativeSelectOption value="">{t('wholePost')}</NativeSelectOption>
                 {channels.map((c) => (
                   <NativeSelectOption key={c.variantId} value={c.variantId}>
@@ -176,8 +247,15 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
       ) : (
         <>
           <ol className="space-y-2">
-            {(activity.data?.items ?? []).map((item) => (
-              <Entry key={item.id} item={item} channel={item.variantId ? (nameOf.get(item.variantId) ?? null) : null} canWrite={canWrite} />
+            {items.map((item) => (
+              <Entry
+                key={item.id}
+                item={item}
+                channel={item.variantId ? (nameOf.get(item.variantId) ?? null) : null}
+                canWrite={canWrite}
+                pinNumber={pinNumber.get(item.id) ?? null}
+                onBoard={item.pin ? onBoard.has(item.pin.fileId) : false}
+              />
             ))}
           </ol>
           {activity.data?.more && <p className="text-xs text-subtle-foreground">{t('more')}</p>}

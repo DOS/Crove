@@ -21,6 +21,7 @@ import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
 import { PostActivity } from '../components/social-activity.tsx';
+import { boardMedia } from '../components/social-comment-pins.tsx';
 import { ReviewChanges } from '../components/social-review-diff.tsx';
 import { PostVersions } from '../components/social-post-versions.tsx';
 import { BannedWordHints, BannedWordReview, useBannedWords } from '../components/social-banned-words.tsx';
@@ -3784,7 +3785,14 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             );
           })}
         </div>
-        <PostActivity postId={p.id} channels={p.variants.map((v) => ({ variantId: v.id, name: names.get(v.connectionId) ?? providerName(v.provider) }))} canWrite={canWrite} className="lg:col-span-2" />
+        <PostActivity
+          postId={p.id}
+          channels={p.variants.map((v) => ({ variantId: v.id, name: names.get(v.connectionId) ?? providerName(v.provider) }))}
+          canWrite={canWrite}
+          className="lg:col-span-2"
+          // The images and videos comments can be pinned to (#1180): the post's as saved, then each channel's own.
+          media={boardMedia(p.media, p.variants.map((v) => ({ variantId: v.id, channel: names.get(v.connectionId) ?? providerName(v.provider), ownMedia: v.ownMedia, media: v.media })))}
+        />
       </div>
     </div>
   );

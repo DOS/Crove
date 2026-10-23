@@ -1306,6 +1306,10 @@ export interface SocialPostCommentTable {
   edited_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   resolved_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   resolved_by: string | null;
+  file_id: ColumnType<string | null, string | null, NotGranted>;
+  pin_x: ColumnType<number | null, number | null, NotGranted>;
+  pin_y: ColumnType<number | null, number | null, NotGranted>;
+  pin_seconds: ColumnType<number | null, number | null, NotGranted>;
 }
 
 /** crove_social.post_label */
