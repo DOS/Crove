@@ -3,11 +3,12 @@
 // minutes. The timeline puts the comments next to what happened to the post: created, edited, submitted, each review
 // decision with its comment, scheduled, published or failed per channel. It reads the audit rows of the post's
 // commands, the decisions and the channels' own state; nothing is written for it. A comment may be pinned (#1180) to a
-// spot on one of the post's images or a moment in one of its videos.
+// spot on one of the post's images or a moment in one of its videos, or suggest an edit of the text (#1236,
+// suggestions.ts).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId, zSocialCommentPin } from '@crove/kernel-contract';
-import type { MemberRole } from '@crove/db';
+import type { MemberRole, SocialSuggestField, SocialSuggestState } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
 import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
@@ -18,6 +19,7 @@ import { QUEUE_ORDER_COMMANDS, reorderCode } from './queue-order.ts';
 import { channelScope, connectionInScope, postsInScope, refuseChannels, refusePostOutside, type ChannelScope } from './channel-access.ts';
 import { mediaOf, type Trx } from './variants.ts';
 import { tickedOf, type TickedCheck } from './review-checklist.ts';
+import { channelFrozen, contextOf, locateSuggestion, postFrozen } from './domain/suggestion.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -31,7 +33,7 @@ const zBody = z.string().trim().min(1).max(4000);
 type PinInput = z.infer<typeof zSocialCommentPin>;
 
 // The members of the org among the ones a comment mentions (#793), other than its author; anyone else is text.
-async function mentionedMembers(ctx: CommandContext, body: string, author: string): Promise<string[]> {
+export async function mentionedMembers(ctx: CommandContext, body: string, author: string): Promise<string[]> {
   const ids = mentionsOf(body).filter((id) => id !== author);
   if (ids.length === 0) return [];
   const rows = await ctx.trx.selectFrom('crove_kernel.tenant_member').select('user_id').where('org_id', '=', ctx.orgId).where('user_id', 'in', ids).execute();
@@ -155,7 +157,7 @@ async function setResolved(ctx: CommandContext, commentId: string, resolved: boo
   const userId = requireUser(ctx);
   const c = await ctx.trx
     .selectFrom('crove_social.post_comment')
-    .select(['id', 'post_id', 'variant_id', 'author_user_id', 'resolved_at', 'resolved_by'])
+    .select(['id', 'post_id', 'variant_id', 'author_user_id', 'resolved_at', 'resolved_by', 'suggest_state'])
     .where('org_id', '=', ctx.orgId)
     .where('id', '=', commentId)
     .forUpdate()
@@ -167,6 +169,8 @@ async function setResolved(ctx: CommandContext, commentId: string, resolved: boo
     const v = await ctx.trx.selectFrom('crove_social.post_variant').select('channel_connection_id').where('org_id', '=', ctx.orgId).where('id', '=', c.variant_id).executeTakeFirst();
     if (v) await refuseChannels(ctx, [v.channel_connection_id]);
   }
+  // A suggested edit (#1236) is closed by accepting or skipping it, never resolved or reopened by hand.
+  if (c.suggest_state !== null) throw new DomainError('SUGGESTION_NOT_RESOLVABLE', 409, 'Đề xuất sửa được đóng bằng Nhận hoặc Bỏ qua');
   const may = ctx.role === 'owner' || ctx.role === 'admin' || [c.author_user_id, post.author_user_id, post.assignee_user_id].includes(userId);
   if (!may) throw new DomainError('FORBIDDEN', 403, 'Chỉ người viết bình luận, người viết hoặc người phụ trách bài, chủ sở hữu hoặc quản trị viên mới đánh dấu được bình luận này');
   let at = c.resolved_at;
@@ -295,6 +299,24 @@ export interface ActivityItem {
   resolvable: boolean;
   // On a pinned comment (#1180): where; null otherwise.
   pin: CommentPin | null;
+  // On a suggested edit (#1236): what it changes and where it stands; null otherwise.
+  suggestion: CommentSuggestion | null;
+}
+
+// A suggested edit (#1236) as the timeline shows it. On an open one: outdated, its words are no longer in the text (it
+// cannot be accepted); frozen, the text went out; before and after, the words around it in the text now; revision, the
+// text's revision an accept names (null when the text is gone). decidable: the viewer may accept or skip it.
+export interface CommentSuggestion {
+  field: SocialSuggestField;
+  quote: string;
+  text: string;
+  state: SocialSuggestState;
+  outdated: boolean;
+  frozen: boolean;
+  before: string;
+  after: string;
+  revision: number | null;
+  decidable: boolean;
 }
 
 // A comment's pin (#1180): the file by id, as the post's media are given (its bytes through GET /api/files/:id), its
@@ -336,7 +358,7 @@ export const postActivity = defineQuery({
   handler: async (ctx, input): Promise<{ items: ActivityItem[]; more: boolean }> => {
     const post = await ctx.trx
       .selectFrom('crove_social.post')
-      .select(['id', 'author_user_id', 'assignee_user_id', 'origin', 'created_at'])
+      .select(['id', 'author_user_id', 'assignee_user_id', 'origin', 'created_at', 'body', 'revision'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.postId)
       .executeTakeFirst();
@@ -346,7 +368,7 @@ export const postActivity = defineQuery({
     if ((await postsInScope(ctx, scope, [post.id])).length === 0) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
     const variants = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at', 'removed_at', 'removed_by', 'remove_reason', 'media'])
+      .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at', 'removed_at', 'removed_by', 'remove_reason', 'media', 'body', 'revision', 'content_frozen'])
       .where('org_id', '=', ctx.orgId)
       .where('post_id', '=', post.id)
       .where(connectionInScope(scope, 'channel_connection_id'))
@@ -355,7 +377,7 @@ export const postActivity = defineQuery({
     const [comments, decisions, audited, reorders] = await Promise.all([
       ctx.trx
         .selectFrom('crove_social.post_comment')
-        .select(['id', 'variant_id', 'author_user_id', 'body', 'created_at', 'edited_at', 'resolved_at', 'resolved_by', 'file_id', 'pin_x', 'pin_y', 'pin_seconds'])
+        .select(['id', 'variant_id', 'author_user_id', 'body', 'created_at', 'edited_at', 'resolved_at', 'resolved_by', 'file_id', 'pin_x', 'pin_y', 'pin_seconds', 'suggest_field', 'suggest_start', 'suggest_end', 'suggest_quote', 'suggest_text', 'suggest_state'])
         .where('org_id', '=', ctx.orgId)
         .where('post_id', '=', post.id)
         .orderBy('created_at', 'desc')
@@ -401,13 +423,35 @@ export const postActivity = defineQuery({
       const f = pinFiles.get(c.file_id);
       return { fileId: c.file_id, mime: f?.mime ?? '', filename: f?.filename ?? '', x: c.pin_x, y: c.pin_y, atSeconds: c.pin_seconds, current: current.has(c.file_id) };
     };
+    // A suggested edit (#1236), against the text it changes as it is now: the post's own, or its channel's own (a
+    // channel the caller may not use is left out below with its comments).
+    const suggestionOf = (c: (typeof comments)[number]): CommentSuggestion | null => {
+      if (c.suggest_field === null || c.suggest_state === null || c.suggest_quote === null || c.suggest_text === null || c.suggest_start === null || c.suggest_end === null) return null;
+      const v = c.suggest_field === 'channel' ? variants.find((x) => x.id === c.variant_id) : undefined;
+      const current = c.suggest_field === 'post' ? { text: post.body, revision: post.revision } : v && v.body !== null ? { text: v.body, revision: v.revision } : null;
+      const open = c.suggest_state === 'open';
+      const at = open && current ? locateSuggestion(current.text, { start: c.suggest_start, end: c.suggest_end, quote: c.suggest_quote }) : null;
+      const around = at && current ? contextOf(current.text, at) : { before: '', after: '' };
+      const frozen = c.suggest_field === 'post' ? postFrozen(variants) : v ? channelFrozen(v) : false;
+      return {
+        field: c.suggest_field,
+        quote: c.suggest_quote,
+        text: c.suggest_text,
+        state: c.suggest_state,
+        outdated: open && at === null,
+        frozen: open && frozen,
+        ...around,
+        revision: open ? (current?.revision ?? null) : null,
+        decidable: open && writer,
+      };
+    };
     const keyed = await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'revision', 'published_revision', 'attempt']).where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).where(connectionInScope(scope, 'channel_connection_id')).execute();
     const replies = await autoReplyCallsOf(ctx.trx, ctx.orgId, keyed);
     const reposts = await repostCallsOf(ctx.trx, ctx.orgId, keyed);
     const edits = await editCallsOf(ctx.trx, ctx.orgId, keyed);
     const viewer = ctx.actor.type === 'user' ? ctx.actor.userId : null;
     const now = Date.now();
-    const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null, checklist: null, resolvedAt: null, resolvedBy: null, resolvedByName: null, resolvable: false, pin: null };
+    const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null, checklist: null, resolvedAt: null, resolvedBy: null, resolvedByName: null, resolvable: false, pin: null, suggestion: null };
     // As social.post_comment.resolve decides it; a viewer never writes.
     const writer = viewer !== null && ctx.role !== null && MEMBERS.includes(ctx.role);
     const resolver = writer && (ctx.role === 'owner' || ctx.role === 'admin' || viewer === post.author_user_id || viewer === post.assignee_user_id);
@@ -425,8 +469,9 @@ export const postActivity = defineQuery({
         editable: c.author_user_id === viewer && now - c.created_at.getTime() <= COMMENT_EDIT_MS,
         resolvedAt: c.resolved_at?.toISOString() ?? null,
         resolvedBy: c.resolved_by,
-        resolvable: resolver || (writer && c.author_user_id === viewer),
+        resolvable: c.suggest_state === null && (resolver || (writer && c.author_user_id === viewer)),
         pin: pinOf(c),
+        suggestion: suggestionOf(c),
       })),
       ...decisions.map((d) => ({ ...none, id: d.id, kind: 'decision' as const, at: d.created_at.toISOString(), userId: d.decided_by, variantId: d.variant_id, body: d.comment, decision: d.decision, checklist: tickedOf(d.checklist) })),
       ...audited.rows.map((a) => ({

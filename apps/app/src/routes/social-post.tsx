@@ -30,7 +30,8 @@ import { BannedWordHints, BannedWordReview, useBannedWords } from '../components
 import { ReviewChecklistTicks } from '../components/social-review-checklist.tsx';
 import { checksFor, fullyTicked } from '../lib/social-review-checklist.ts';
 import { NoneLeftToReview, ReviewKeysHint, useReviewShortcuts } from '../components/social-review-keys.tsx';
-import { awaitsApprovalBy, firstUnticked } from '../lib/social-review-keys.ts';
+import { awaitsApprovalBy, firstUnticked, markReviewMove, takeReviewMove } from '../lib/social-review-keys.ts';
+import { SuggestEdit } from '../components/social-suggest.tsx';
 import { nextAfterDecision, nextPendingId, previousPendingId } from '../lib/review.ts';
 import { CampaignFindings, LabelPicker, useLabels } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
@@ -1996,6 +1997,7 @@ function ChannelEditor({
   channelSignature,
   adding = false,
   signaturesLoading = false,
+  suggest = null,
 }: {
   provider: string;
   channel: string;
@@ -2022,6 +2024,8 @@ function ChannelEditor({
   adding?: boolean;
   // The channels' signatures are still being read (#1190): the toggle waits for them.
   signaturesLoading?: boolean;
+  // Suggesting an edit of the words selected in the channel's own text (#1236), right under it.
+  suggest?: ReactNode;
 }) {
   const t = useTranslations('social');
   const settings = adding ? withChannelSignature(own.settings, channelSignature) : own.settings;
@@ -2105,6 +2109,7 @@ function ChannelEditor({
         <div className="space-y-2">
           {titled && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
           <Textarea id={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} rows={5} aria-label={t('ownTextPlaceholder')} placeholder={t('ownTextPlaceholder')} onChange={(e) => onChange({ ...own, body: e.target.value })} />
+          {suggest}
           <div className="flex flex-wrap items-center gap-2">
             <EmojiPicker targetId={`social-own-${connectionId ?? provider}`} value={own.body} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />
             {slug && <SnippetPicker slug={slug} targetId={`social-own-${connectionId ?? provider}`} value={own.body} provider={provider} disabled={disabled} onChange={(body) => onChange({ ...own, body })} />}
@@ -2277,6 +2282,7 @@ function SharedFields({
   slug,
   connectionIds = [],
   providers = [],
+  suggest = null,
 }: {
   base: Base;
   onChange: (base: Base) => void;
@@ -2289,6 +2295,8 @@ function SharedFields({
   connectionIds?: readonly string[];
   // Their platforms, for the hints on styled letters (#1179).
   providers?: readonly string[];
+  // Suggesting an edit of the words selected in the text (#1236), right under it.
+  suggest?: ReactNode;
 }) {
   const t = useTranslations('social');
   const banned = wordsForChannels(useBannedWords(), connectionIds);
@@ -2297,6 +2305,7 @@ function SharedFields({
       <div className="space-y-1.5">
         <Label htmlFor="social-body">{t('sharedText')}</Label>
         <Textarea id="social-body" autoFocus={autoFocus} value={base.body} disabled={disabled} rows={7} placeholder={t('sharedTextPlaceholder')} onChange={(e) => onChange({ ...base, body: e.target.value })} />
+        {suggest}
         <div className="flex flex-wrap items-center gap-2">
           <EmojiPicker targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />
           {slug && <SnippetPicker slug={slug} targetId="social-body" value={base.body} disabled={disabled} onChange={(body) => onChange({ ...base, body })} />}
@@ -2429,7 +2438,21 @@ export function SocialComposePage() {
   const attempt = useRef<{ key: string; payload: string } | null>(null);
   const create = useMutation({
     // draft: saved only; submit: sent to review; publish: also approved by this owner or admin and scheduled (#638).
-    mutationFn: async (mode: 'draft' | 'submit' | 'publish') => {
+    mutationFn: async (asked: 'draft' | 'submit' | 'publish') => {
+      let mode = asked;
+      // The one-step publish rests on the checklist and four-eyes as this page read them: read again first, so a list
+      // saved meanwhile sends the post to review instead of leaving it there after a refused approval (#1113).
+      if (mode === 'publish') {
+        const [checks, rules] = await Promise.all([
+          queryClient.fetchQuery({ ...orpc.social.reviewChecklist.list.queryOptions({ input: {} }), staleTime: 0 }),
+          queryClient.fetchQuery({ ...orpc.social.policies.list.queryOptions({ input: {} }), staleTime: 0 }),
+        ]);
+        const four = new Set(rules.filter((r) => r.fourEyes).map((r) => r.connectionId));
+        if (chosen.some((id) => four.has(id) || checks.items.some((c) => c.connectionId === null || c.connectionId === id))) {
+          mode = 'submit';
+          setFlash(t('publishNowChanged'));
+        }
+      }
       const request = {
         body: base.body,
         title: orNull(base.title),
@@ -2884,7 +2907,7 @@ function ReviewPanel({
       </div>
       {/* What changed since each channel's last decision (#944); nothing on a first review. */}
       <ReviewChanges postId={post.id} variants={waiting.map((v) => ({ id: v.id, name: names.get(v.connectionId) ?? providerName(v.provider), revision: v.revision, contentHash: v.contentHash }))} />
-      <Textarea ref={reason} value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
+      <Textarea ref={reason} value={comment} rows={2} aria-label={t('commentPlaceholder')} aria-keyshortcuts="R" placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
       {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
       <div className="flex flex-wrap gap-2">
         <Button size="lg" disabled={!canApprove} onClick={() => decide.mutate('approved')}>
@@ -2892,7 +2915,7 @@ function ReviewPanel({
         </Button>
         {/* The same approval, then the next post waiting for this reviewer, or the end of the list (#1221). */}
         {onApproved && (
-          <Button variant="outline" size="lg" disabled={!canApprove} onClick={approveAndNext}>
+          <Button variant="outline" size="lg" disabled={!canApprove} aria-keyshortcuts="A" onClick={approveAndNext}>
             {t('reviewKeys.approveNext')}
           </Button>
         )}
@@ -2904,6 +2927,8 @@ function ReviewPanel({
         </Button>
       </div>
       {!comment.trim() && waiting.length > 0 && <p className="text-xs text-subtle-foreground">{t('changesNeedComment')}</p>}
+      {/* Suggested edits (#1236): the words to change are chosen in the text itself. */}
+      <p className="text-xs text-subtle-foreground">{t('suggest.reviewHint')}</p>
       <ReviewKeysHint />
     </Card>
   );
@@ -3669,11 +3694,11 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   // for this reviewer opens, or the end of the list shows.
   const reviewInput = { stage: 'review' as const, limit: 200 };
   const [reviewing, setReviewing] = useState(false);
-  const reviewList = useQuery({ ...orpc.social.posts.list.queryOptions({ input: reviewInput }), enabled: canDecide && reviewing });
+  const [noneLeft, setNoneLeft] = useState(false);
+  const reviewList = useQuery({ ...orpc.social.posts.list.queryOptions({ input: reviewInput }), enabled: canDecide && reviewing, refetchInterval: noneLeft ? 30_000 : false });
   useEffect(() => {
     if (post.data?.variants.some((v) => v.status === 'in_review')) setReviewing(true);
   }, [post.data]);
-  const [noneLeft, setNoneLeft] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   // A reply that comes back after the reviewer has moved on (J or K meanwhile) opens nothing.
   const live = useRef(true);
@@ -3683,7 +3708,11 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
       live.current = false;
     };
   }, []);
-  const openPost = (id: string) => void navigate({ to: '/o/$slug/social/$id', params: { slug, id } });
+  // The page it opens takes the focus to its title and says which post it is (#1230).
+  const openPost = (id: string) => {
+    markReviewMove(id);
+    void navigate({ to: '/o/$slug/social/$id', params: { slug, id } });
+  };
   const reviewRows = reviewList.data ?? [];
   const nextId = canDecide && reviewing ? nextPendingId(reviewRows, postId) : null;
   const previousId = canDecide && reviewing ? previousPendingId(reviewRows, postId) : null;
@@ -3704,6 +3733,21 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
     if (target) openPost(target);
     else setNoneLeft(true);
   };
+  // A post sent for review while the end of the list shows (the list is read again every half minute meanwhile) takes
+  // the end away, so J opens it (#1230).
+  useEffect(() => {
+    if (noneLeft && reviewRows.some((r) => r.id !== postId && awaitsApprovalBy(r, userId))) setNoneLeft(false);
+  }, [noneLeft, reviewRows, postId, userId]);
+  // Opened by moving on through the review list: the focus goes to the title, and the post's first words are read out.
+  const [arrival, setArrival] = useState('');
+  const arrived = useRef(false);
+  useEffect(() => {
+    if (!post.data || !origin || arrived.current) return;
+    arrived.current = true;
+    if (!takeReviewMove(postId)) return;
+    document.getElementById('social-post-title')?.focus();
+    setArrival(t('reviewKeys.opened', { text: [...post.data.body.trim()].slice(0, 80).join('') || t('reviewKeys.untitled') }));
+  }, [post.data, origin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (post.isLoading || !base || !origin) return post.error ? <ErrorText>{errorMessage(post.error)}</ErrorText> : <Spinner />;
   if (!post.data) return null;
@@ -3745,8 +3789,12 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
 
   return (
     <div onKeyDown={onKey}>
+      <p role="status" className="sr-only" data-testid="review-arrival">
+        {arrival}
+      </p>
       <PageHeader
         title={t('postTitle')}
+        titleId="social-post-title"
         subtitle={t('postSubtitle', { updated: f.dateTime(p.updatedAt) })}
         actions={
           <>
@@ -3867,6 +3915,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             slug={slug}
             connectionIds={p.variants.map((v) => v.connectionId)}
             providers={p.variants.map((v) => v.provider)}
+            // A member who may comment suggests an edit of words of the saved text (#1236), while a channel can still change.
+            suggest={editable ? <SuggestEdit postId={p.id} targetId="social-body" field="post" saved={origin.body} current={base.body} /> : null}
           />
           {base.linkUrl.trim() && editable && (
             <Card className="block p-4">
@@ -3968,6 +4018,19 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 duplicate={v.duplicateOf ? { of: v.duplicateOf, checked: v.effective.body } : null}
                 channelSignature={signatures.get(v.connectionId) ?? null}
                 signaturesLoading={signatureRows.isPending}
+                // On the channel's own saved text (#1236), while the channel can still change.
+                suggest={
+                  !frozen && canWrite && v.overrides.body !== null && (own[v.id] ?? ownOf(v)).custom ? (
+                    <SuggestEdit
+                      postId={p.id}
+                      targetId={`social-own-${v.connectionId}`}
+                      field="channel"
+                      variantId={v.id}
+                      saved={origin.variants.find((o) => o.id === v.id)?.overrides.body ?? v.overrides.body}
+                      current={(own[v.id] ?? ownOf(v)).body}
+                    />
+                  ) : null
+                }
                 footer={
                   <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
                     {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (
@@ -4057,6 +4120,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           postId={p.id}
           channels={p.variants.map((v) => ({ variantId: v.id, name: names.get(v.connectionId) ?? providerName(v.provider) }))}
           canWrite={canWrite}
+          // An accepted suggestion (#1236) waits for the edits on this page to be saved or dropped.
+          suggestionsLocked={dirty || stale}
           className="lg:col-span-2"
           // The images and videos comments can be pinned to (#1180): the post's as saved, then each channel's own.
           media={boardMedia(p.media, p.variants.map((v) => ({ variantId: v.id, channel: names.get(v.connectionId) ?? providerName(v.provider), ownMedia: v.ownMedia, media: v.media })))}

@@ -6,10 +6,10 @@
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
-import { approvalsInRound } from './domain/approval.ts';
 import { approvalsRequired, clientApprovalOn, clientVerdict, decisionsOf } from './policy.ts';
 import { CLEAR_ERROR, POLICY_RAISED, approvedValues, base, lockPost, lockVariants, refreshPostStatus, setVariant, step } from './variants.ts';
 import { bannedCheckerOf, isBlocked } from './banned-words.ts';
+import { checkedApprovers, checklistFor, checklistForApproval } from './review-checklist.ts';
 
 export const clientSettle = defineCommand({
   name: 'social.review.client_settle',
@@ -36,6 +36,8 @@ export const clientSettle = defineCommand({
     // The client's yes approves nothing that holds a blocked word (#1055), added since the team approved: it stays in
     // review, where the team sees the word.
     const banned = verdict === 'approved' ? await bannedCheckerOf(ctx.trx, ctx.orgId) : null;
+    // Nor one whose team approvals did not tick the channel's review checklist as it is now (#1113).
+    const checks = verdict === 'approved' ? await checklistForApproval(ctx) : [];
     for (const v of waiting) {
       if (verdict === 'changes_requested') {
         // As a reviewer's request for changes does: it also ends a raised policy's hold on the variant.
@@ -43,8 +45,9 @@ export const clientSettle = defineCommand({
         settled.push(v.id);
         continue;
       }
-      // The client's yes completes a variant only once the team's approvals of this content are all in.
-      const given = approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash });
+      // The client's yes completes a variant only once the team's approvals of this content are all in, each with the
+      // channel's checklist ticked.
+      const given = checkedApprovers(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }, checklistFor(checks, v.channel_connection_id));
       if (given.length < (required.get(v.channel_connection_id) ?? 1)) continue;
       if (banned && isBlocked(banned, base(post), v)) continue;
       const values = approvedValues(v, ctx.now);

@@ -10,11 +10,14 @@ import { useTranslations } from 'use-intl';
 import { brandName } from '../i18n/brand.ts';
 import { takeOrgLeftNotice } from '../lib/api.ts';
 
-export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string | undefined; actions?: ReactNode }) {
+// titleId: the title can take the focus by this id (a page that moves the focus there when it opens, #1230).
+export function PageHeader({ title, subtitle, actions, titleId }: { title: string; subtitle?: string | undefined; actions?: ReactNode; titleId?: string }) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">{title}</h1>
+        <h1 id={titleId} tabIndex={titleId ? -1 : undefined} className="text-xl font-semibold tracking-tight text-foreground outline-none">
+          {title}
+        </h1>
         {subtitle && <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>}
       </div>
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}

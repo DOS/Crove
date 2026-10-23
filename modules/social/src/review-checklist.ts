@@ -13,17 +13,20 @@
 //   (409 CHECKLIST_CHANGED) and an approval without every item ticked (422 CHECKLIST_INCOMPLETE), and stores the items
 //   as [{ id, label }] copied from the database, never a label from the client. A request for changes or a rejection
 //   needs no ticks and stores NULL; so does an approval on a channel without a checklist, as before #1105.
-// - Approvals that complete on their own (a lowered approval count, the client's answer on a review link) add no
-//   decision row and ask nothing: they complete on approvals already given, which ticked the list as it was then (or
-//   none, when they came before it), as posts already approved stay approved. Client review links are not asked.
+// - Approvals that complete on their own (a lowered approval count, client approval turned off, the client's answer on
+//   a review link) add no decision row and ask nothing: they complete on approvals already given, counting only those
+//   that ticked every item of the channel's list as it is now (#1113); a variant short of them stays in review, as
+//   one holding a blocked word does. Posts already approved stay approved. Client review links are not asked.
+// - The list is read whole or not at all: more than SOCIAL_REVIEW_CHECKS_MAX rows is refused (#1113).
 // - Every member reads the list (social.review_check.list); a member limited to some channels (#1081) sees the
 //   org-wide items and those channels' items only.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_REVIEW_CHECK_LABEL_MAX, zId } from '@crove/kernel-contract';
+import { SOCIAL_REVIEW_CHECKS_MAX, zId, zSocialReviewCheckLabel } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { channelScope } from './channel-access.ts';
+import { approvalsInRound } from './domain/approval.ts';
 import type { Trx } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -43,17 +46,11 @@ export interface TickedCheck {
   label: string;
 }
 
-// The label as the person typed it, in NFC with its white space collapsed; at most SOCIAL_REVIEW_CHECK_LABEL_MAX
-// characters (code points, as the database counts them).
-const zLabel = z
-  .string()
-  .transform((s) => s.normalize('NFC').replace(/\s+/gu, ' ').trim())
-  .pipe(z.string().min(1))
-  .refine((s) => [...s].length <= SOCIAL_REVIEW_CHECK_LABEL_MAX, `at most ${SOCIAL_REVIEW_CHECK_LABEL_MAX} characters`);
-
+// The label as the contract takes it (#1113): in NFC with its white space collapsed, at most
+// SOCIAL_REVIEW_CHECK_LABEL_MAX code points.
 export const zReviewChecklistSet = z.strictObject({
   items: z
-    .array(z.strictObject({ connectionId: zId.nullable(), label: zLabel }))
+    .array(z.strictObject({ connectionId: zId.nullable(), label: zSocialReviewCheckLabel }))
     .max(SOCIAL_REVIEW_CHECKS_MAX)
     .refine((items) => new Set(items.map((i) => `${i.connectionId?.toLowerCase() ?? ''}\u0000${i.label}`)).size === items.length, 'each item once per channel'),
 });
@@ -64,7 +61,11 @@ const lockKey = (orgId: string) => `crove_social.review_check:${orgId}`;
 const lockList = (ctx: Pick<CommandContext, 'trx' | 'orgId'>) => sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${lockKey(ctx.orgId)}, 0))`.execute(ctx.trx);
 const lockListShared = (ctx: Pick<CommandContext, 'trx' | 'orgId'>) => sql`SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtextextended(${lockKey(ctx.orgId)}, 0))`.execute(ctx.trx);
 
-/** The org's items, in (position, id) order. */
+/**
+ * The org's items, in (position, id) order. Only social.review_check.set writes them, at most SOCIAL_REVIEW_CHECKS_MAX;
+ * a list longer than that (written some other way) is refused rather than read shorter (#1113), so an approval never
+ * passes over an item nobody saw.
+ */
 export async function reviewChecksOf(trx: Trx, orgId: string): Promise<ReviewCheck[]> {
   const rows = await trx
     .selectFrom('crove_social.review_check')
@@ -72,8 +73,9 @@ export async function reviewChecksOf(trx: Trx, orgId: string): Promise<ReviewChe
     .where('org_id', '=', orgId)
     .orderBy('position')
     .orderBy('id')
-    .limit(SOCIAL_REVIEW_CHECKS_MAX)
+    .limit(SOCIAL_REVIEW_CHECKS_MAX + 1)
     .execute();
+  if (rows.length > SOCIAL_REVIEW_CHECKS_MAX) throw new DomainError('CHECKLIST_INVALID', 500, 'Danh sách kiểm tra có quá nhiều mục, cần kiểm tra dữ liệu');
   return rows.map((r) => ({ id: r.id, connectionId: r.channel_connection_id, position: r.position, label: r.label }));
 }
 
@@ -104,6 +106,30 @@ export function tickedChecklist(checks: readonly ReviewCheck[], variant: { id: s
 export async function checklistForApproval(ctx: Pick<CommandContext, 'trx' | 'orgId'>): Promise<ReviewCheck[]> {
   await lockListShared(ctx);
   return reviewChecksOf(ctx.trx, ctx.orgId);
+}
+
+/** Whether an approval's ticked items (as the row keeps them) hold every item of a channel's checklist as it is now. */
+export function coversChecklist(list: readonly ReviewCheck[], ticked: unknown): boolean {
+  if (list.length === 0) return true;
+  const ids = new Set((tickedOf(ticked) ?? []).map((c) => c.id));
+  return list.every((c) => ids.has(c.id));
+}
+
+/**
+ * The people whose approval of a variant's current content counts towards an approval that completes on its own (a
+ * lowered approval count, client approval turned off, the client's yes; #1113): those whose approval ticked every
+ * item of the channel's checklist as it is now. An approval given before the list, or before one of its items, does
+ * not complete the variant, which stays in review until a reviewer ticks the list, as banned words keep it there.
+ */
+export function checkedApprovers(
+  decisions: readonly { decision: string; decidedBy: string; revision: number; contentHash: string; checklist: unknown }[],
+  current: { revision: number; contentHash: string },
+  list: readonly ReviewCheck[],
+): string[] {
+  return approvalsInRound(
+    decisions.filter((d) => d.decision !== 'approved' || coversChecklist(list, d.checklist)),
+    current,
+  );
 }
 
 /** An approval's ticked items as the row keeps them. Read defensively: an entry without an id and a label is dropped. */

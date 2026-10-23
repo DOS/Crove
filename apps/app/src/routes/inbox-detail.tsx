@@ -24,7 +24,8 @@ import { reversalErrorMessage } from '../lib/reversal.ts';
 import { journalVoucherProblem } from '../lib/journal-voucher.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
 import { partySearch } from '../lib/parties.ts';
-import { nextPendingId, previousPendingId, reviewShortcut, type ReviewAction } from '../lib/review.ts';
+import { nextPendingId, previousPendingId } from '../lib/review.ts';
+import { useReviewShortcuts, type ReviewHandlers } from '../lib/review-shortcuts.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 const CHECK_TONE = { pass: 'success', warn: 'warning', fail: 'destructive' } as const;
@@ -282,8 +283,6 @@ export function InboxDetailPage() {
   return <InboxDetail key={id} slug={slug} id={id} />;
 }
 
-type ShortcutHandlers = Partial<Record<ReviewAction, () => void>>;
-
 function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const locale = useLocale();
   const navigate = useNavigate();
@@ -421,13 +420,12 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
 
   // Review shortcuts (issue #315): J or N the next pending proposal, A approve, E the first account to edit. Each one
   // does only what its button would do now (A never while the step-up prompt waits for a code). The handlers are
-  // computed on each render and handed to the key listener after it commits, through the ref.
+  // computed on each render and handed to the key listener Social posts share (#1230).
   const pendingList = useQuery(orpc.inbox.list.queryOptions({ input: { status: 'pending' } }));
   const linesRef = useRef<HTMLDivElement>(null);
-  const shortcuts = useRef<ShortcutHandlers>({});
   const nextId = pendingList.data ? nextPendingId(pendingList.data, id) : null;
   const previousId = pendingList.data ? previousPendingId(pendingList.data, id) : null;
-  const handlers: ShortcutHandlers = {
+  const handlers: ReviewHandlers = {
     ...(nextId && nextId !== id ? { next: () => void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: nextId } }) } : {}),
     ...(previousId ? { previous: () => void navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: previousId } }) } : {}),
     ...(approveReady && !stepUp ? { approve: submitApproval } : {}),
@@ -435,20 +433,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
       ? { edit: () => linesRef.current?.querySelector<HTMLSelectElement>('select:not(:disabled)')?.focus() }
       : {}),
   };
-  useEffect(() => {
-    shortcuts.current = handlers;
-  });
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const action = reviewShortcut(event);
-      const handler = action ? shortcuts.current[action] : undefined;
-      if (!handler) return;
-      event.preventDefault();
-      handler();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  useReviewShortcuts(handlers);
 
   if (detail.isLoading) return <Spinner />;
   if (detail.error) return <ErrorText>{errorMessage(detail.error)}</ErrorText>;
