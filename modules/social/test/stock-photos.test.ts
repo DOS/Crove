@@ -23,6 +23,10 @@ describe('stock photo hosts and text (#1106)', () => {
     expect(stockText('   ', 100)).toBeNull();
     expect(stockText(undefined, 100)).toBeNull();
     expect([...(stockText('ả'.repeat(STOCK_ALT_MAX + 50), STOCK_ALT_MAX) ?? '')]).toHaveLength(STOCK_ALT_MAX);
+    // Emoji take two UTF-16 units: the cut fits the input schema's count and never splits one.
+    const emoji = stockText('📷'.repeat(STOCK_ALT_MAX), STOCK_ALT_MAX) ?? '';
+    expect(emoji).toBe('📷'.repeat(Math.floor(STOCK_ALT_MAX / 2)));
+    expect(zStockCredit.shape.altText.safeParse(emoji).success).toBe(true);
   });
 
   it('takes a credit only with Pexels links and a Pexels id', () => {

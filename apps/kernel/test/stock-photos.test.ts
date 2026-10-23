@@ -270,4 +270,20 @@ describe('Pexels stock photos with recorded answers (#1106)', () => {
     now += 60_000;
     expect(budget.take('org', 'c').allowed).toBe(true);
   });
+
+  it('keeps one org to its share of the hour and the deployment under the shared key', () => {
+    let now = 0;
+    const budget = new StockPhotoBudget({ perUserPerMinute: 100, perOrgPerMinute: 100, perOrgPerHour: 2, perDeploymentPerHour: 3, now: () => now });
+    expect(budget.take('busy', 'a').allowed).toBe(true);
+    expect(budget.take('busy', 'b').allowed).toBe(true);
+    // The org's hour is spent; it waits about half an hour for one more, and the others still get theirs.
+    const refused = budget.take('busy', 'c');
+    expect(refused).toMatchObject({ allowed: false });
+    expect(refused.allowed ? 0 : refused.retryAfterSeconds).toBe(30 * 60);
+    expect(budget.take('quiet', 'd').allowed).toBe(true);
+    // The deployment's hour is spent for every org.
+    expect(budget.take('third', 'e')).toMatchObject({ allowed: false });
+    now += 60 * 60_000;
+    expect(budget.take('third', 'e').allowed).toBe(true);
+  });
 });

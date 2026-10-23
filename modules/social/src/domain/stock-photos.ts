@@ -35,7 +35,8 @@ export function pexelsImageUrl(raw: unknown): string | null {
 }
 
 // Text from Pexels as one line of plain text: control and format characters dropped, white space collapsed, cut to
-// max characters; null when nothing is left.
+// max UTF-16 units (what the command's input schema counts; never more characters than the table allows), never
+// inside a character; null when nothing is left.
 export function stockText(raw: unknown, max: number): string | null {
   if (typeof raw !== 'string') return null;
   const text = raw
@@ -44,6 +45,11 @@ export function stockText(raw: unknown, max: number): string | null {
     .replace(/\s+/g, ' ')
     .trim();
   if (text === '') return null;
-  const chars = [...text];
-  return chars.length > max ? chars.slice(0, max).join('').trimEnd() : text;
+  if (text.length <= max) return text;
+  let cut = '';
+  for (const char of text) {
+    if (cut.length + char.length > max) break;
+    cut += char;
+  }
+  return cut.trimEnd() || null;
 }

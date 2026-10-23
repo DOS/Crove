@@ -11,9 +11,11 @@
 // stored and recorded like an uploaded image (social.media.save_stock: kernel.file.ingest with source 'social', and
 // the credit in crove_social.media_attribution).
 //
-// Pexels allows 200 requests an hour per key (https://www.pexels.com/api/documentation/), so a member gets a few
-// searches and saves a minute and an org a few more, in this process's memory like the AI drafting budget
-// (ai-draft-limit.ts). Pexels' own refusal (429) is passed on as "busy", never worked around.
+// Pexels allows 200 requests an hour per key (https://www.pexels.com/api/documentation/), and every org of the
+// deployment shares the key. So a member gets a few searches and saves a minute, an org at most a third of the
+// deployment's hour, and the deployment stays under Pexels' hour, in this process's memory like the AI drafting
+// budget (ai-draft-limit.ts): one busy org never leaves the others without stock photos. Pexels' own refusal (429)
+// is passed on as "busy", never worked around.
 import { MAX_UPLOAD_BYTES, SOCIAL_PHOTO_TYPES, STOCK_PHOTO_SIZES } from '@crove/kernel-contract';
 import { DomainError, EgressError, fileKey, guardedFetch, guardedRequest, putFile, sha256Hex, type BlobStore, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { PEXELS_IMAGE_HOST, STOCK_ALT_MAX, STOCK_NAME_MAX, pexelsImageUrl, pexelsPageUrl, stockText, type StockCredit } from '@crove/mod-social';
@@ -27,8 +29,11 @@ const API_TIMEOUT_MS = 8000;
 const API_MAX_BYTES = 2 * 1024 * 1024;
 const IMAGE_TIMEOUT_MS = 30_000;
 const THUMB_TIMEOUT_MS = 5000;
-const THUMB_MAX_BYTES = 256 * 1024;
+// Pexels' tiny copies are 10 to 20 KB, so 40 of them stay a small answer.
+const THUMB_MAX_BYTES = 64 * 1024;
 const THUMBS_AT_ONCE = 6;
+// No thumbnail is started after this; the rest show the photo's colour.
+const THUMBS_DEADLINE_MS = 10_000;
 const IMAGE_ACCEPT = 'image/jpeg,image/png,image/webp;q=0.9';
 export const STOCK_PER_PAGE = 24;
 
@@ -77,15 +82,41 @@ export interface StockSaved {
 
 export type StockTicket = { allowed: true } | { allowed: false; retryAfterSeconds: number };
 
-// Searches and saves of a member (per org) and of an org, a minute.
+// A RateLimiter over an hour: its minute is an hour of real time, so its wait is 60 times longer.
+class HourLimiter {
+  private readonly limiter: RateLimiter;
+
+  constructor(perHour: number, now: () => number) {
+    this.limiter = new RateLimiter({ perMinute: perHour, now: () => now() / 60 });
+  }
+
+  peek(key: string): StockTicket {
+    return this.ticket(this.limiter.peek(key));
+  }
+
+  take(key: string): StockTicket {
+    return this.ticket(this.limiter.take(key));
+  }
+
+  private ticket(decision: { allowed: boolean; retryAfterSeconds: number }): StockTicket {
+    return decision.allowed ? { allowed: true } : { allowed: false, retryAfterSeconds: decision.retryAfterSeconds * 60 };
+  }
+}
+
+// Searches and saves of a member (per org) and of an org a minute, of an org an hour, and of the whole deployment an
+// hour (under Pexels' 200 for the shared key).
 export class StockPhotoBudget {
   private readonly users: RateLimiter;
   private readonly orgs: RateLimiter;
+  private readonly orgHours: HourLimiter;
+  private readonly deployment: HourLimiter;
 
-  constructor(options: { perUserPerMinute?: number; perOrgPerMinute?: number; now?: () => number } = {}) {
+  constructor(options: { perUserPerMinute?: number; perOrgPerMinute?: number; perOrgPerHour?: number; perDeploymentPerHour?: number; now?: () => number } = {}) {
     const now = options.now ?? Date.now;
     this.users = new RateLimiter({ perMinute: options.perUserPerMinute ?? 20, now });
     this.orgs = new RateLimiter({ perMinute: options.perOrgPerMinute ?? 60, now });
+    this.orgHours = new HourLimiter(options.perOrgPerHour ?? 60, now);
+    this.deployment = new HourLimiter(options.perDeploymentPerHour ?? 180, now);
   }
 
   take(orgId: string, userId: string): StockTicket {
@@ -95,11 +126,17 @@ export class StockPhotoBudget {
     if (!user.allowed) return { allowed: false, retryAfterSeconds: user.retryAfterSeconds };
     const org = this.orgs.peek(orgId);
     if (!org.allowed) return { allowed: false, retryAfterSeconds: org.retryAfterSeconds };
+    const orgHour = this.orgHours.peek(orgId);
+    if (!orgHour.allowed) return orgHour;
+    const deployment = this.deployment.peek('');
+    if (!deployment.allowed) return deployment;
     const takenUser = this.users.take(key);
     if (!takenUser.allowed) return { allowed: false, retryAfterSeconds: takenUser.retryAfterSeconds };
     const takenOrg = this.orgs.take(orgId);
     if (!takenOrg.allowed) return { allowed: false, retryAfterSeconds: takenOrg.retryAfterSeconds };
-    return { allowed: true };
+    const takenHour = this.orgHours.take(orgId);
+    if (!takenHour.allowed) return takenHour;
+    return this.deployment.take('');
   }
 }
 
@@ -206,7 +243,7 @@ export function createPexels(options: StockPhotosOptions): StockPhotos {
     }
     const declared = mimeOf(answer.contentType);
     const type = sniffType(answer.body);
-    if (!type || !SOCIAL_PHOTO_TYPES.includes(type) || (declared !== '' && !SOCIAL_PHOTO_TYPES.includes(declared))) {
+    if (!type || !SOCIAL_PHOTO_TYPES.includes(type) || (declared !== '' && declared !== type)) {
       throw new DomainError('UNSUPPORTED_TYPE', 415, 'Pexels không trả về ảnh JPG, PNG hoặc WEBP cho ảnh này');
     }
     return { bytes: answer.body, type };
@@ -216,8 +253,9 @@ export function createPexels(options: StockPhotosOptions): StockPhotos {
   async function thumbs(photos: PexelsPhoto[]): Promise<(string | null)[]> {
     const out: (string | null)[] = photos.map(() => null);
     let next = 0;
+    const until = Date.now() + THUMBS_DEADLINE_MS;
     const worker = async () => {
-      while (next < photos.length) {
+      while (next < photos.length && Date.now() < until) {
         const i = next++;
         const src = photos[i]?.src.tiny;
         if (!src) continue;
