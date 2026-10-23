@@ -448,7 +448,7 @@ export class WordPressPublisher implements Publisher {
       return answer.status === 'trash' ? { kind: 'removed' } : { kind: 'unknown', code: 'NOT_TRASHED' };
     } catch (error) {
       if (error instanceof WordPressError) {
-        if (error.status === 410 || (error.status === 404 && error.code === 'rest_post_invalid_id')) return { kind: 'removed' };
+        if ((error.status === 410 && error.code === 'rest_already_trashed') || (error.status === 404 && error.code === 'rest_post_invalid_id')) return { kind: 'removed' };
         if (error.code === 'rest_trash_not_supported') return { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_TRASH_DISABLED' };
         if ((error.status === 401 || error.status === 403) && (error.code === 'rest_cannot_delete' || error.code === 'rest_user_cannot_delete_post')) return { kind: 'rejected', error: 'permission', code: 'WORDPRESS_CANNOT_DELETE' };
       }

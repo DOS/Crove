@@ -3252,6 +3252,8 @@ export const vi = {
       code: {
         TELEGRAM_CANNOT_DELETE: 'Telegram chỉ cho gỡ bài trong 48 giờ sau khi đăng; hãy gỡ trực tiếp trên Telegram',
         REMOVE_NOT_RUN: 'Yêu cầu gỡ chưa được xử lý; hãy thử lại',
+        WORDPRESS_TRASH_DISABLED: 'Trang WordPress này đã tắt thùng rác nên không gỡ tạm được; hãy xóa bài trực tiếp trên trang',
+        WORDPRESS_CANNOT_DELETE: 'Tài khoản WordPress đã kết nối không có quyền xóa bài này; hãy nhờ quản trị viên trang gỡ',
       },
     },
     threadParts: 'Đăng thành chuỗi (không bắt buộc)',

@@ -501,6 +501,9 @@ describe('WordPress remove (#1138)', () => {
     // A 404 that is not WordPress saying the post is gone (no REST route at this address) deleted nothing.
     const noRoute = site({ [DELETE]: [{ status: 404, body: { code: 'rest_no_route', message: 'No route was found matching the URL and request method.', data: { status: 404 } } }] });
     expect(await remove(noRoute.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_404' });
+    // A 410 from the host rather than WordPress (a site taken down) says nothing about the post.
+    const hostGone = site({ [DELETE]: [{ status: 410, body: '<html>Gone</html>' }] });
+    expect(await remove(hostGone.fetchImpl)).not.toEqual({ kind: 'removed' });
   });
 
   it('leaves an answer that did not trash the post unclear', async () => {

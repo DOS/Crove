@@ -3253,6 +3253,8 @@ export const en = {
       code: {
         TELEGRAM_CANNOT_DELETE: 'Telegram lets a bot remove a post only within 48 hours of it; remove it in Telegram itself',
         REMOVE_NOT_RUN: 'The removal was not handled; try again',
+        WORDPRESS_TRASH_DISABLED: 'This WordPress site has its trash turned off, so the post cannot be moved there; delete it on the site',
+        WORDPRESS_CANNOT_DELETE: 'The connected WordPress user may not delete this post; ask a site administrator to remove it',
       },
     },
     threadParts: 'Post as a thread (optional)',

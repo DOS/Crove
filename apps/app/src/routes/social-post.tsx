@@ -3133,7 +3133,7 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
     if (planned === null || planned === 'invalid' || !v.publishedAt || removeAtFit(v.provider, v.settings, new Date(v.publishedAt)) !== null) return null;
     return <p>{t('remove.planned', { when: f.dateTime(planned) })}</p>;
   }
-  const known = v.removal.code === 'TELEGRAM_CANNOT_DELETE' || v.removal.code === 'REMOVE_NOT_RUN' ? v.removal.code : null;
+  const known = REMOVE_CODES.find((c) => c === v.removal?.code) ?? null;
   return (
     <div className="space-y-1">
       <p className={v.removal.state === 'pending' ? '' : 'text-warning'}>{t(`remove.${v.removal.state}`)}</p>
@@ -3141,6 +3141,9 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
     </div>
   );
 }
+
+// The removal codes the post page explains in words; any other failure shows its code.
+const REMOVE_CODES = ['TELEGRAM_CANNOT_DELETE', 'REMOVE_NOT_RUN', 'WORDPRESS_TRASH_DISABLED', 'WORDPRESS_CANNOT_DELETE'] as const;
 
 // Another time for a scheduled channel, its approvals kept (#580): the calendar's drag, from the keyboard.
 function MoveTime({ variantId, connectionId, timeZone, at, onDone }: { variantId: string; connectionId: string; timeZone: string; at: string | null; onDone: () => void }) {
