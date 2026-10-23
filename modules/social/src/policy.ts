@@ -13,6 +13,7 @@ import { agentTaskOf } from './agent.ts';
 import { channelScope, connectionInScope, mayUse } from './channel-access.ts';
 import { plainNote } from './report-links.ts';
 import { SIGNATURE_MAX } from './domain/signature.ts';
+import { checkedApprovers, checklistFor, checklistForApproval } from './review-checklist.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
@@ -100,16 +101,16 @@ export async function fourEyesOn(trx: Trx, orgId: string, connectionIds: readonl
 }
 
 export async function decisionsOf(trx: Trx, orgId: string, variantIds: readonly string[]) {
-  const out = new Map<string, { decision: string; decidedBy: string; revision: number; contentHash: string }[]>();
+  const out = new Map<string, { decision: string; decidedBy: string; revision: number; contentHash: string; checklist: unknown }[]>();
   if (variantIds.length === 0) return out;
   const rows = await trx
     .selectFrom('crove_social.post_approval')
-    .select(['variant_id', 'decision', 'decided_by', 'revision', 'content_hash'])
+    .select(['variant_id', 'decision', 'decided_by', 'revision', 'content_hash', 'checklist'])
     .where('org_id', '=', orgId)
     .where('variant_id', 'in', [...variantIds])
     .orderBy('id', 'desc')
     .execute();
-  for (const r of rows) out.set(r.variant_id, [...(out.get(r.variant_id) ?? []), { decision: r.decision, decidedBy: r.decided_by, revision: r.revision, contentHash: r.content_hash }]);
+  for (const r of rows) out.set(r.variant_id, [...(out.get(r.variant_id) ?? []), { decision: r.decision, decidedBy: r.decided_by, revision: r.revision, contentHash: r.content_hash, checklist: r.checklist }]);
   return out;
 }
 
@@ -163,6 +164,8 @@ export const policySet = defineCommand({
     // A lowered count approves nothing that holds a blocked word (#1055): it stays in review.
     // One checker and one budget for the whole command, shared by every post; past it the rest stay in review.
     const banned = bannedChecker(touched.length > 0 ? await bannedWordsOf(ctx.trx, ctx.orgId) : [], bannedCommandBudget());
+    // Nor one whose approvals did not tick the channel's review checklist as it is now (#1113).
+    const checklist = touched.length > 0 ? checklistFor(await checklistForApproval(ctx), input.connectionId) : [];
     for (const { post_id } of touched) {
       const post = await lockPost(ctx.trx, ctx.orgId, post_id);
       const variants = (await lockVariants(ctx.trx, ctx.orgId, post_id)).filter((v) => v.channel_connection_id === input.connectionId && GATED.includes(v.status));
@@ -178,6 +181,7 @@ export const policySet = defineCommand({
         const given = approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash });
         if (v.status === 'in_review' && given.length >= input.approvalsRequired) {
           if (isBlocked(banned, base(post), v)) continue;
+          if (checkedApprovers(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }, checklist).length < input.approvalsRequired) continue;
           const values = approvedValues(v, ctx.now);
           await setVariant(ctx, v.id, values);
           up.push(v.id);
@@ -403,6 +407,8 @@ export const clientApprovalSet = defineCommand({
       // Nothing that holds a blocked word (#1055) is approved this way: it stays in review.
       // One checker and one budget for the whole command, shared by every post; past it the rest stay in review.
       const banned = bannedChecker(touched.length > 0 ? await bannedWordsOf(ctx.trx, ctx.orgId) : [], bannedCommandBudget());
+      // Counting only approvals that ticked the channel's review checklist as it is now (#1113).
+      const checklist = touched.length > 0 ? checklistFor(await checklistForApproval(ctx), input.connectionId) : [];
       for (const { post_id } of touched) {
         const post = await lockPost(ctx.trx, ctx.orgId, post_id);
         const variants = (await lockVariants(ctx.trx, ctx.orgId, post_id)).filter((v) => v.channel_connection_id === input.connectionId && v.status === 'in_review');
@@ -410,7 +416,7 @@ export const clientApprovalSet = defineCommand({
         const up: string[] = [];
         const scheduled: string[] = [];
         for (const v of variants) {
-          if (approvalsInRound(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }).length < required) continue;
+          if (checkedApprovers(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }, checklist).length < required) continue;
           if (isBlocked(banned, base(post), v)) continue;
           const values = approvedValues(v, ctx.now);
           await setVariant(ctx, v.id, values);

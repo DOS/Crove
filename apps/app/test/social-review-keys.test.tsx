@@ -25,19 +25,22 @@ const render = (node: React.ReactNode, locale: 'vi' | 'en' = 'vi') => {
 const text = (html: string) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
 const ME = 'u-me';
-const variant = (status: string, approvedBy: string[] = [], fourEyes = false) => ({ status, review: { approvedBy, fourEyes } });
+const variant = (status: string, approvedBy: string[] = [], fourEyes = false, required = 1) => ({ status, review: { approvedBy, fourEyes, required } });
 
 describe('reviewing Social posts by keyboard (#1221)', () => {
   it('moves on only to posts with a channel in review this reviewer may still approve', () => {
     const post = (authorUserId: string | null, ...variants: ReturnType<typeof variant>[]) => ({ authorUserId, variants });
     expect(awaitsApprovalBy(post('u-writer', variant('in_review')), ME)).toBe(true);
     // Approved by this reviewer already, waiting for a second person.
-    expect(awaitsApprovalBy(post('u-writer', variant('in_review', [ME])), ME)).toBe(false);
+    expect(awaitsApprovalBy(post('u-writer', variant('in_review', [ME], false, 2)), ME)).toBe(false);
+    expect(awaitsApprovalBy(post('u-writer', variant('in_review', ['u-other'], false, 2)), ME)).toBe(true);
+    // Every team approval in, waiting only for the client's (#770, #1230): nothing left for this reviewer.
+    expect(awaitsApprovalBy(post('u-writer', variant('in_review', ['u-other'])), ME)).toBe(false);
     // Their own post on a four-eyes channel (#740); without four-eyes they may approve it.
     expect(awaitsApprovalBy(post(ME, variant('in_review', [], true)), ME)).toBe(false);
     expect(awaitsApprovalBy(post(ME, variant('in_review')), ME)).toBe(true);
     // One channel left to approve is enough; channels not in review do not count.
-    expect(awaitsApprovalBy(post('u-writer', variant('in_review', [ME]), variant('in_review', ['u-other'])), ME)).toBe(true);
+    expect(awaitsApprovalBy(post('u-writer', variant('in_review', [ME], false, 2), variant('in_review', ['u-other'], false, 2)), ME)).toBe(true);
     expect(awaitsApprovalBy(post('u-writer', variant('approved'), variant('changes_requested')), ME)).toBe(false);
     // Before the session is known, none.
     expect(awaitsApprovalBy(post('u-writer', variant('in_review')), undefined)).toBe(false);
@@ -65,11 +68,24 @@ describe('reviewing Social posts by keyboard (#1221)', () => {
   it('says when no post is left to review, with the way back to the list', () => {
     const vi = render(<NoneLeftToReview slug="tiem-banh" />);
     expect(text(vi)).toBe('Hết bài chờ duyệt Không còn bài nào chờ bạn duyệt. Bài mới gửi duyệt sẽ hiện trong mục Cần duyệt. Về mục Cần duyệt');
-    expect(vi).toContain('role="status"');
+    // Named once by its focus, not read again as a live status (#1230).
+    expect(vi).toContain('role="region"');
+    expect(vi).not.toContain('role="status"');
+    expect(vi).toMatch(/aria-labelledby="([^"]+)".*id="\1"/);
     expect(vi).toContain('tabindex="-1"');
     expect(vi).toContain('href="/o/tiem-banh/social?tab=review"');
     expect(text(render(<NoneLeftToReview slug="tiem-banh" />, 'en'))).toBe(
       'No posts left to review No post is waiting for your approval. New posts sent for review show in the To review tab. Back to the review list',
     );
+  });
+});
+
+describe('moving on through the review list (#1230)', () => {
+  it('tells the page it opens once, and no other page', async () => {
+    const { markReviewMove, takeReviewMove } = await import('../src/lib/social-review-keys.ts');
+    markReviewMove('post-2');
+    expect(takeReviewMove('post-3')).toBe(false);
+    expect(takeReviewMove('post-2')).toBe(true);
+    expect(takeReviewMove('post-2')).toBe(false);
   });
 });
