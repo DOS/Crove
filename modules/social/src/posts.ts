@@ -16,7 +16,7 @@ import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db'
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
 import { firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
-import { isValidTimeZone, nextFreeSlot, placeQueued, retime, type QueueSpec } from './domain/queue.ts';
+import { isValidTimeZone, nextFreeSlot, openSlots, placeQueued, retime, slotRefusal, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { activityCommands, activityQueries } from './activity.ts';
@@ -772,7 +772,11 @@ export const variantDecide = defineCommand({
 });
 
 // Schedules approved variants: at a time (`at`, else the post's default time), or in the next free slot of each
-// connection's queue (`queue: true`).
+// connection's queue (`queue: true`). With `slotAt` (#1158, a drop on the calendar's open slot), one variant, approved or
+// already scheduled, takes exactly that slot of its queue: an instant of the queue within the year ahead
+// (SLOT_NOT_IN_QUEUE) and after now (SCHEDULE_IN_PAST), held by no other post (SLOT_TAKEN), open or kept for one of the
+// post's labels (SLOT_KEPT_FOR_LABEL), and one its planned takedown fits, all decided under the queue row's lock as for
+// the next free slot.
 export const variantSchedule = defineCommand({
   name: 'social.variant.schedule',
   input: z
@@ -781,6 +785,8 @@ export const variantSchedule = defineCommand({
       variantIds: zVariantIds.optional(),
       at: z.iso.datetime({ offset: true }).optional(),
       queue: z.literal(true).optional(),
+      // Exactly this slot of the queue (#1158), for one variant.
+      slotAt: z.iso.datetime({ offset: true }).optional(),
       // A time per channel (#576): these variants, each at its own time.
       times: z
         .array(z.strictObject({ variantId: zId, at: z.iso.datetime({ offset: true }) }))
@@ -789,7 +795,8 @@ export const variantSchedule = defineCommand({
         .optional(),
     })
     .refine((x) => !(x.at && x.queue), 'choose a time or the queue, not both')
-    .refine((x) => !x.times || (!x.at && !x.queue && !x.variantIds), 'times names the variants and their times on its own'),
+    .refine((x) => !x.times || (!x.at && !x.queue && !x.variantIds), 'times names the variants and their times on its own')
+    .refine((x) => !x.slotAt || (x.queue && x.variantIds?.length === 1), 'slotAt takes the queue and one variant'),
   risk: 'R2',
   access: ADMINS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
@@ -849,15 +856,20 @@ export const variantSchedule = defineCommand({
       }
       // Approved under a bar its channel has raised since (#408).
       if (await shortOfPolicy(ctx.trx, ctx.orgId, v)) throw new DomainError('APPROVALS_MISSING', 409, 'Kênh này cần thêm người duyệt trước khi lên lịch', { variantId: v.id });
-      const status = step(v, { type: 'schedule' });
+      // A variant already scheduled moves into the slot it is dropped on (#1158) and stays scheduled.
+      const moving = input.slotAt !== undefined && v.status === 'scheduled';
+      const status = moving ? v.status : step(v, { type: 'schedule' });
       if (input.queue) {
         const queue = queues.get(v.channel_connection_id) ?? null;
         if (!queue || queue.spec.slots.length === 0) throw new DomainError('QUEUE_EMPTY', 409, 'Kênh này chưa có khung giờ đăng trong hàng đợi', { variantId: v.id });
+        const taken = await takenSlots(ctx.trx, ctx.orgId, v.channel_connection_id, v.id);
         // A post's labels pick the slots of their content categories first (#745).
-        const slot = nextFreeSlot(queue.spec, ctx.now.getTime(), await takenSlots(ctx.trx, ctx.orgId, v.channel_connection_id, v.id), 366, await postLabels());
+        const slot =
+          input.slotAt !== undefined ? await exactSlot(ctx, queue, v.id, Date.parse(input.slotAt), taken, await postLabels()) : nextFreeSlot(queue.spec, ctx.now.getTime(), taken, 366, await postLabels());
         if (slot === null) throw new DomainError('QUEUE_FULL', 409, 'Hàng đợi của kênh này đã kín trong năm tới', { variantId: v.id });
         refuseRemoveAtMisfit(v, new Date(slot));
-        await setVariant(ctx, v.id, { status, queue_slot_at: new Date(slot), scheduled_at: null, error_retry_at: null });
+        // A move leaves the variant's own time and an earlier refusal with its retry time, which belong to the old time.
+        await setVariant(ctx, v.id, { ...(moving ? CLEAR_ERROR : {}), status, queue_slot_at: new Date(slot), scheduled_at: null, error_retry_at: null });
         scheduled.push({ variantId: v.id, at: new Date(slot).toISOString() });
       } else {
         // The time is stored on the variant, so a later change of the post's planned time does not move it.
@@ -871,6 +883,26 @@ export const variantSchedule = defineCommand({
     return { postId: post.id, scheduled };
   },
 });
+
+// The slot a drop names (#1158), checked against the queue the caller locked and the clock: the later of the
+// transaction's and the command's, so a slot either has passed is never taken.
+async function exactSlot(ctx: CommandContext, queue: QueueState, variantId: string, atMs: number, taken: ReadonlySet<number>, labels: ReadonlySet<string>): Promise<number> {
+  const clock = await sql<{ now: Date }>`SELECT pg_catalog.now() AS now`.execute(ctx.trx);
+  const now = Math.max(ctx.now.getTime(), clock.rows[0]?.now.getTime() ?? 0);
+  const at = new Date(atMs).toISOString();
+  switch (slotRefusal(queue.spec, atMs, now, taken, labels)) {
+    case 'not_in_queue':
+      throw new DomainError('SLOT_NOT_IN_QUEUE', 422, 'Giờ này không phải một khung giờ đăng trong hàng đợi của kênh', { variantId, at });
+    case 'past':
+      throw new DomainError('SCHEDULE_IN_PAST', 422, 'Khung giờ này đã qua', { variantId, at });
+    case 'taken':
+      throw new DomainError('SLOT_TAKEN', 409, 'Khung giờ này của kênh đã có bài khác', { variantId, at });
+    case 'label':
+      throw new DomainError('SLOT_KEPT_FOR_LABEL', 409, 'Khung giờ này dành cho bài có nhãn khác', { variantId, at });
+    case null:
+      return atMs;
+  }
+}
 
 export const variantUnschedule = defineCommand({
   name: 'social.variant.unschedule',
@@ -1710,6 +1742,53 @@ export const queueGet = defineQuery({
   },
 });
 
+// The most days and slots one open-slots answer covers (#1158): a month view's month.
+export const OPEN_SLOT_DAYS = 31;
+export const OPEN_SLOT_LIMIT = 500;
+
+// The open slots of a channel's queue in a range (#1158), for the calendar's gaps: its active slots after now (the
+// transaction's clock, the instant the slots taken are read at) that no post holds, each with the label it is kept for
+// (#745). At most 31 days and 500 slots (capped: more were left out). Only a channel the caller may use (#1081).
+export const queueOpenSlots = defineQuery({
+  name: 'social.queue.open_slots',
+  input: z
+    .strictObject({ connectionId: zId, from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }) })
+    .refine((x) => Date.parse(x.from) < Date.parse(x.to), 'the range ends after it starts')
+    .refine((x) => Date.parse(x.to) - Date.parse(x.from) <= OPEN_SLOT_DAYS * 86_400_000, `at most ${OPEN_SLOT_DAYS} days`),
+  access: ALL,
+  handler: async (ctx, input) => {
+    if (!mayUse(await channelScope(ctx), input.connectionId)) throw channelNotAllowed([input.connectionId]);
+    const queue = await ctx.trx
+      .selectFrom('crove_social.queue')
+      .select(['id', 'time_zone', 'paused'])
+      .where('org_id', '=', ctx.orgId)
+      .where('channel_connection_id', '=', input.connectionId)
+      .executeTakeFirst();
+    if (!queue) return { connectionId: input.connectionId, timeZone: null, paused: false, slots: [], capped: false };
+    const rows = await ctx.trx
+      .selectFrom('crove_social.queue_slot as s')
+      .leftJoin('crove_social.label as l', (j) => j.onRef('l.org_id', '=', 's.org_id').onRef('l.id', '=', 's.label_id'))
+      .select(['s.weekday', 's.minute', 's.label_id', 'l.name as label_name'])
+      .where('s.org_id', '=', ctx.orgId)
+      .where('s.queue_id', '=', queue.id)
+      .where('s.active', '=', true)
+      .execute();
+    const spec: QueueSpec = { timeZone: queue.time_zone, slots: rows.map((s) => ({ weekday: s.weekday, minute: s.minute, labelId: s.label_id })) };
+    const names = new Map(rows.filter((r) => r.label_id !== null).map((r) => [r.label_id as string, r.label_name]));
+    const taken = await takenSlots(ctx.trx, ctx.orgId, input.connectionId);
+    const clock = await sql<{ now: Date }>`SELECT pg_catalog.now() AS now`.execute(ctx.trx);
+    const from = Math.max(Date.parse(input.from), (clock.rows[0]?.now ?? new Date()).getTime());
+    const open = openSlots(spec, from, Date.parse(input.to), taken, OPEN_SLOT_LIMIT + 1);
+    return {
+      connectionId: input.connectionId,
+      timeZone: queue.time_zone,
+      paused: queue.paused,
+      slots: open.slice(0, OPEN_SLOT_LIMIT).map((e) => ({ at: new Date(e.at).toISOString(), labelId: e.labelId, label: e.labelId === null ? null : (names.get(e.labelId) ?? null) })),
+      capped: open.length > OPEN_SLOT_LIMIT,
+    };
+  },
+});
+
 export const socialCommands = [
   postCreate,
   postImport,
@@ -1817,4 +1896,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, queueOpenSlots, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];

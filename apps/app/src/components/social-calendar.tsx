@@ -8,6 +8,10 @@
 // week view the hours of each day are drop targets while something is dragged. Without dragging, the list's "Đặt ngày"
 // and the chip's menu set a date and time by keyboard; at phone width, where chips are too narrow for a menu, the list
 // is a plain list with its "Đặt ngày".
+// Under a channel filter only that channel's chips show (#1044), and the gaps of its queue (#1158): its open slots, as
+// dashed "Trống" chips (greyed while the queue is paused). An owner or admin drops an approved or scheduled channel on
+// one to put it in exactly that slot (social.variant.schedule with slotAt); a draft dropped there, by a member too, gets
+// the slot's time as its planned time. The chip's menu and the list's "Đặt ngày" offer the same slots by keyboard.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useMemo, useState, type DragEvent, type ReactNode } from 'react';
@@ -18,6 +22,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
+import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { RepeatIcon } from '@crove/ui/components/repeat-icon';
 import { cn } from '@crove/ui/lib/utils';
 import { ErrorText, Spinner } from './ui.tsx';
@@ -36,11 +41,17 @@ import {
   onDay,
   planDrop,
   plannedAt,
+  slotDrop,
+  slotRange,
+  slotsByDay,
+  slotVariant,
   startOfDay,
   viewDays,
   type CalendarItem,
+  type OpenSlot,
   type PlanRequest,
   type PlanTarget,
+  type SlotRequest,
   type View,
 } from '../lib/social-calendar.ts';
 import { NoteChip, NoteEditor, type NoteDraft } from './social-calendar-notes.tsx';
@@ -52,8 +63,10 @@ const excerpt = (text: string) => text.replace(/\s+/g, ' ').trim();
 type Post = CalendarItem['post'];
 // What is being dragged: a channel on the calendar, or an undated draft from the list (#1145).
 type Dragged = { kind: 'variant'; id: string } | { kind: 'post'; id: string };
-// A draft opened in the date editor, with the text it is named by.
-type Planning = PlanTarget & { text: string };
+// A draft or channel opened in the date editor, with the text it is named by: item is the chip it was opened from (null:
+// the undated list), and dates whether it may be given any date and time (a planned draft) or only an open slot (#1158).
+type Planning = Omit<PlanTarget, 'post'> & { post: Post; text: string; item: CalendarItem | null; dates: boolean };
+type Scheduling = Extract<SlotRequest, { kind: 'schedule' }>;
 
 // The undated drafts the list shows, the post list's default page.
 const UNDATED_LIMIT = 50;
@@ -73,6 +86,7 @@ function Chip({
   onDragStart,
   onDragEnd,
   onPlan,
+  menu,
 }: {
   item: CalendarItem;
   slug: string;
@@ -83,6 +97,8 @@ function Chip({
   onDragStart: () => void;
   onDragEnd: () => void;
   onPlan: (() => void) | null;
+  // What the menu does: change a draft's planned date, or put the channel in an open slot (#1158).
+  menu: 'changeDate' | 'toSlot';
 }) {
   const t = useTranslations('social');
   const f = useFormat();
@@ -147,8 +163,8 @@ function Chip({
       <button
         type="button"
         onClick={onPlan}
-        aria-label={t('calendar.changeDateOf', { text })}
-        title={t('calendar.changeDate')}
+        aria-label={t(`calendar.${menu}Of`, { text })}
+        title={t(`calendar.${menu}`)}
         className="inline-flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded px-1 text-xs text-subtle-foreground opacity-0 group-hover/chip:opacity-100 hover:text-foreground focus-visible:opacity-100 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none max-sm:hidden"
       >
         ⋯
@@ -176,6 +192,33 @@ function OccasionChip({ occasion, onStart }: { occasion: Occasion; onStart: (o: 
     >
       {name}
     </button>
+  );
+}
+
+// An open slot of the filtered channel's queue (#1158): a drop target for those who may plan or schedule, greyed while
+// the queue is paused (a post put there waits until it runs again).
+function SlotChip({ slot, paused, over, onDragOver, onDragLeave, onDrop }: { slot: OpenSlot; paused: boolean; over: boolean; onDragOver: ((e: DragEvent) => void) | undefined; onDragLeave: () => void; onDrop: ((e: DragEvent) => void) | undefined }) {
+  const t = useTranslations('social.calendar');
+  const f = useFormat();
+  const title = [`${f.time(slot.at)} · ${t('slotOpen')}`, slot.label ? t('slotKept', { label: slot.label }) : null, paused ? t('slotPaused') : null].filter(Boolean).join(' · ');
+  return (
+    <div
+      data-testid="open-slot"
+      data-slot={slot.at}
+      title={title}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={cn(
+        'block truncate rounded-md border border-dashed bg-muted/40 px-1.5 py-0.5 text-xs text-subtle-foreground',
+        paused && 'opacity-50',
+        over && 'border-primary bg-primary/10 text-foreground',
+      )}
+    >
+      <span className="font-mono tabular-nums">{f.time(slot.at)}</span> {t('slotOpen')}
+      {slot.label && <span> · {slot.label}</span>}
+      {paused && <span className="sr-only"> · {t('slotPaused')}</span>}
+    </div>
   );
 }
 
@@ -242,9 +285,30 @@ function UndatedList({
 }
 
 // A date and time for a draft, without dragging (#1145): its planned time to start with, or the first free 09:00 (the
-// next full hour today) for an undated one.
-function PlanEditor({ target, busy, onSave, onClose }: { target: Planning; busy: boolean; onSave: (request: PlanRequest) => void; onClose: () => void }) {
+// next full hour today) for an undated one. Under a channel filter, the open slots of its queue too (#1158): picking one
+// does what a drop on it does (schedules: an owner or admin puts the channel in it; else the draft is planned then).
+function PlanEditor({
+  target,
+  busy,
+  slots,
+  schedules,
+  onSave,
+  onSlot,
+  onClose,
+}: {
+  target: Planning;
+  busy: boolean;
+  slots: readonly OpenSlot[];
+  schedules: boolean;
+  onSave: (request: PlanRequest) => void;
+  onSlot: (slot: OpenSlot) => void;
+  onClose: () => void;
+}) {
   const t = useTranslations('social.calendar');
+  const f = useFormat();
+  const [picked, setSlotAt] = useState(slots[0]?.at ?? '');
+  // The slots may load or change after the editor opens: the first one until another is picked.
+  const slotAt = slots.some((s) => s.at === picked) ? picked : (slots[0]?.at ?? '');
   const [initial] = useState(() => {
     const now = new Date();
     return target.at ?? plannedAt(now, now) ?? plannedAt(addDays(startOfDay(now), 1), now) ?? now;
@@ -255,47 +319,84 @@ function PlanEditor({ target, busy, onSave, onClose }: { target: Planning; busy:
   return (
     <Card className="block space-y-3 p-4">
       <div>
-        <h3 className="text-sm font-medium text-foreground">{t('planTitle')}</h3>
+        <h3 className="text-sm font-medium text-foreground">{t(target.dates ? 'planTitle' : 'slotTitle')}</h3>
         <p className="truncate text-xs text-subtle-foreground">{target.text}</p>
       </div>
-      <form
-        className="flex flex-wrap items-end gap-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const at = localMoment(date, time);
-          if (!at || at.getTime() <= Date.now()) {
-            setPast(true);
-            return;
-          }
-          setPast(false);
-          if (target.at && at.getTime() === target.at.getTime()) {
-            onClose();
-            return;
-          }
-          if (!busy) onSave({ postId: target.post.id, revision: target.post.revision, scheduledAt: at.toISOString() });
-        }}
-      >
-        <div className="space-y-1">
-          <Label htmlFor="plan-date" className="text-xs">
-            {t('planDate')}
-          </Label>
-          <Input id="plan-date" type="date" autoFocus required value={date} min={dayId(new Date())} onChange={(e) => setDate(e.target.value)} className="w-40" />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="plan-time" className="text-xs">
-            {t('planTime')}
-          </Label>
-          <Input id="plan-time" type="time" required value={time} onChange={(e) => setTime(e.target.value)} className="w-32" />
-        </div>
-        <div className="flex gap-2">
-          <Button type="submit" size="sm" disabled={busy}>
-            {t('setDate')}
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={onClose}>
-            {t('planCancel')}
-          </Button>
-        </div>
-      </form>
+      {slots.length > 0 && (
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const slot = slots.find((s) => s.at === slotAt);
+            if (slot && !busy) onSlot(slot);
+          }}
+        >
+          <div className="space-y-1">
+            <Label htmlFor="plan-slot" className="text-xs">
+              {t('slotPick')}
+            </Label>
+            <NativeSelect id="plan-slot" autoFocus={!target.dates} value={slotAt} onChange={(e) => setSlotAt(e.target.value)} className="w-64">
+              {slots.map((s) => (
+                <NativeSelectOption key={s.at} value={s.at}>
+                  {f.dateTime(s.at)}
+                  {s.label ? ` · ${s.label}` : ''}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" disabled={busy}>
+              {t(schedules ? 'slotSchedule' : 'slotPlan')}
+            </Button>
+            {!target.dates && (
+              <Button type="button" size="sm" variant="ghost" onClick={onClose}>
+                {t('planCancel')}
+              </Button>
+            )}
+          </div>
+        </form>
+      )}
+      {!target.dates && slots.length === 0 && <p className="text-xs text-subtle-foreground">{t('slotNone')}</p>}
+      {target.dates && (
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const at = localMoment(date, time);
+            if (!at || at.getTime() <= Date.now()) {
+              setPast(true);
+              return;
+            }
+            setPast(false);
+            if (target.at && at.getTime() === target.at.getTime()) {
+              onClose();
+              return;
+            }
+            if (!busy) onSave({ postId: target.post.id, revision: target.post.revision, scheduledAt: at.toISOString() });
+          }}
+        >
+          <div className="space-y-1">
+            <Label htmlFor="plan-date" className="text-xs">
+              {t('planDate')}
+            </Label>
+            <Input id="plan-date" type="date" autoFocus required value={date} min={dayId(new Date())} onChange={(e) => setDate(e.target.value)} className="w-40" />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="plan-time" className="text-xs">
+              {t('planTime')}
+            </Label>
+            <Input id="plan-time" type="time" required value={time} onChange={(e) => setTime(e.target.value)} className="w-32" />
+          </div>
+          <div className="flex gap-2">
+            <Button type="submit" size="sm" disabled={busy}>
+              {t('setDate')}
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={onClose}>
+              {t('planCancel')}
+            </Button>
+          </div>
+        </form>
+      )}
       {past && <ErrorText>{t('planPast')}</ErrorText>}
     </Card>
   );
@@ -328,7 +429,19 @@ export function SocialCalendar({
   const days = useMemo(() => viewDays(view, anchor), [view, anchor]);
   const range = useMemo(() => ({ from: (days[0] as Date).toISOString(), to: addDays(days.at(-1) as Date, 1).toISOString() }), [days]);
   const posts = useQuery(orpc.social.posts.list.queryOptions({ input: { ...range, ...filters, limit: 200 } }));
-  const items = useMemo(() => calendarItems(posts.data ?? []), [posts.data]);
+  const connectionId = filters.connectionId;
+  // Under a channel filter, only that channel's chips (#1044).
+  const items = useMemo(() => calendarItems(posts.data ?? [], connectionId), [posts.data, connectionId]);
+  // And the open slots of its queue that the view shows from now on (#1158); the range is read once per view, so the
+  // query keeps its key while the view stays.
+  const slotWindow = useMemo(() => (connectionId ? slotRange(view, days, anchor, new Date()) : null), [connectionId, view, days, anchor]);
+  const slots = useQuery({
+    ...orpc.social.queues.openSlots.queryOptions({ input: { connectionId: connectionId ?? '', from: slotWindow?.from ?? '', to: slotWindow?.to ?? '' } }),
+    enabled: connectionId !== undefined && slotWindow !== null,
+  });
+  const openSlots = useMemo(() => (connectionId && slotWindow ? (slots.data?.slots ?? []) : []), [connectionId, slotWindow, slots.data]);
+  const slotsOn = useMemo(() => slotsByDay(openSlots), [openSlots]);
+  const queuePaused = slots.data?.paused ?? false;
   // The drafts with no time yet, under the same filters (#1145), for those who may plan them.
   const undated = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { undated: true, ...filters, limit: UNDATED_LIMIT } }), enabled: canWrite });
   const notes = useQuery(orpc.social.calendarNotes.list.queryOptions({ input: { from: dayId(days[0] as Date), to: dayId(days.at(-1) as Date) } }));
@@ -345,7 +458,7 @@ export function SocialCalendar({
   const [dragged, setDragged] = useState<Dragged | null>(null);
   // Set after the drag has started: changing the page in dragstart itself ends some browsers' drag at once.
   const beginDrag = (what: Dragged) => void setTimeout(() => setDragged(what), 0);
-  const [refusal, setRefusal] = useState<'dropPast' | 'planPast' | null>(null);
+  const [refusal, setRefusal] = useState<'dropPast' | 'planPast' | 'slotLabel' | null>(null);
   const [planning, setPlanning] = useState<Planning | null>(null);
   const [done, setDone] = useState<string | null>(null);
   // Picking posts for the bulk bar (#1057): a post leaves the selection when it leaves the month or week shown.
@@ -377,9 +490,19 @@ export function SocialCalendar({
     },
     onSettled: () => void queryClient.invalidateQueries(),
   });
+  // A channel put in exactly an open slot (#1158); the server checks the slot again under the queue's lock.
+  const slotting = useMutation({
+    mutationFn: (r: Scheduling) => client.social.variants.schedule({ postId: r.postId, variantIds: [r.variantId], queue: true, slotAt: r.slotAt }),
+    onSuccess: (_, r) => {
+      setPlanning((open) => (open && open.post.id !== r.postId ? open : null));
+      setDone(t('calendar.slotDone', { when: f.dateTime(r.slotAt) }));
+    },
+    onSettled: () => void queryClient.invalidateQueries(),
+  });
   const clearNotices = () => {
     move.reset();
     plan.reset();
+    slotting.reset();
     setRefusal(null);
     setDone(null);
   };
@@ -391,15 +514,49 @@ export function SocialCalendar({
     }
     plan.mutate(request);
   };
+  const sendSlot = (request: SlotRequest | 'past' | 'label' | null) => {
+    if (request === null || slotting.isPending) return;
+    if (request === 'past' || request === 'label') {
+      setRefusal(request === 'past' ? 'planPast' : 'slotLabel');
+      return;
+    }
+    if (request.kind === 'plan') sendPlan(request.request);
+    else slotting.mutate(request);
+  };
+  // What a slot drop or pick acts on: an undated draft of the list, or a chip.
+  const slotTargetOf = (what: Dragged) => {
+    if (what.kind === 'post') {
+      const post = (undated.data ?? []).find((p) => p.id === what.id);
+      return post ? { post, item: null } : null;
+    }
+    const item = items.find((i) => i.v.id === what.id);
+    return item ? { post: item.post, item } : null;
+  };
+  const may = { canDecide, canWrite };
   const today = dayId(new Date());
   const shift = (n: number) => setAnchor((a) => (view === 'month' ? new Date(a.getFullYear(), a.getMonth() + n, 1) : addDays(a, 7 * n)));
+  const draggedOf = (e: DragEvent): Dragged | null => {
+    const data = e.dataTransfer.getData('text/plain');
+    return dragged ?? (data.startsWith('post:') ? { kind: 'post', id: data.slice(5) } : data ? { kind: 'variant', id: data } : null);
+  };
+  // A drop on an open slot of the filtered channel's queue (#1158).
+  const dropOnSlot = (slot: OpenSlot) => (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setOver(null);
+    const what = draggedOf(e);
+    setDragged(null);
+    const target = what ? slotTargetOf(what) : null;
+    if (!target || !connectionId) return;
+    clearNotices();
+    sendSlot(slotDrop(target, slot, connectionId, may, new Date()));
+  };
   // A drop on a day, or on one of its hours in week view.
   const drop = (day: Date, hour?: number) => (e: DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setOver(null);
-    const data = e.dataTransfer.getData('text/plain');
-    const what: Dragged | null = dragged ?? (data.startsWith('post:') ? { kind: 'post', id: data.slice(5) } : data ? { kind: 'variant', id: data } : null);
+    const what = draggedOf(e);
     setDragged(null);
     if (!what) return;
     clearNotices();
@@ -516,12 +673,26 @@ export function SocialCalendar({
       ) : (
         canWrite && <p className="text-xs text-subtle-foreground">{t(canDecide ? 'calendar.dragHint' : 'calendar.dragHintMember')}</p>
       )}
+      {!picking && canWrite && openSlots.length > 0 && <p className="text-xs text-subtle-foreground">{t(canDecide ? 'calendar.slotHint' : 'calendar.slotHintMember')}</p>}
       {noteDraft && <NoteEditor key={'note' in noteDraft ? noteDraft.note.id : noteDraft.day} draft={noteDraft} onClose={() => setNoteDraft(null)} />}
       {exporting && canWrite && <PlanExportPanel slug={slug} month={anchor} onClose={() => setExporting(false)} />}
-      {planning && <PlanEditor key={planning.post.id} target={planning} busy={plan.isPending} onSave={sendPlan} onClose={() => setPlanning(null)} />}
+      {planning && (
+        <PlanEditor
+          key={`${planning.post.id}:${planning.item?.v.id ?? ''}`}
+          target={planning}
+          busy={plan.isPending || slotting.isPending}
+          slots={openSlots}
+          schedules={canDecide && connectionId !== undefined && slotVariant(planning, connectionId) !== null}
+          onSave={sendPlan}
+          onSlot={(slot) => connectionId && sendSlot(slotDrop(planning, slot, connectionId, may, new Date()))}
+          onClose={() => setPlanning(null)}
+        />
+      )}
       {notes.error && <ErrorText>{errorMessage(notes.error)}</ErrorText>}
       {move.error && <ErrorText>{errorMessage(move.error)}</ErrorText>}
       {plan.error && <ErrorText>{errorMessage(plan.error)}</ErrorText>}
+      {slotting.error && <ErrorText>{errorMessage(slotting.error)}</ErrorText>}
+      {slots.error && <ErrorText>{errorMessage(slots.error)}</ErrorText>}
       {refusal && <ErrorText>{t(`calendar.${refusal}`)}</ErrorText>}
       <p role="status" className={cn('text-xs text-muted-foreground', !done && 'sr-only')}>
         {done}
@@ -537,7 +708,7 @@ export function SocialCalendar({
               capped={undatedPosts.length >= UNDATED_LIMIT}
               onDragStart={(id) => beginDrag({ kind: 'post', id })}
               onDragEnd={() => setDragged(null)}
-              onPlan={(post, text) => openPlan({ post, at: null, text })}
+              onPlan={(post, text) => openPlan({ post, at: null, text, item: null, dates: true })}
             />
           </div>
         )}
@@ -598,6 +769,9 @@ export function SocialCalendar({
                       {list.slice(0, shown).map((item) => {
                         const plannable = canWrite && followsPlan(item);
                         const movable = canDecide && !item.planned && item.v.status === 'scheduled' && !item.v.queuePaused;
+                        // Under a channel filter with open slots, an owner or admin puts the channel in one from the menu.
+                        const slottable = canDecide && connectionId !== undefined && openSlots.length > 0 && slotVariant({ post: item.post, item }, connectionId) !== null;
+                        const text = excerpt(item.v.effective.body) || t('emptyText');
                         return (
                           <Chip
                             key={item.v.id}
@@ -609,11 +783,37 @@ export function SocialCalendar({
                             onToggle={() => togglePick(item.post.id)}
                             onDragStart={() => beginDrag({ kind: 'variant', id: item.v.id })}
                             onDragEnd={() => setDragged(null)}
-                            onPlan={plannable ? () => openPlan({ post: item.post, at: item.at, text: excerpt(item.v.effective.body) || t('emptyText') }) : null}
+                            onPlan={plannable || slottable ? () => openPlan({ post: item.post, at: item.at, text, item, dates: plannable }) : null}
+                            menu={plannable ? 'changeDate' : 'toSlot'}
                           />
                         );
                       })}
                       {list.length > shown && <span className="text-xs text-subtle-foreground">{t('calendar.more', { count: list.length - shown })}</span>}
+                      {(slotsOn.get(id) ?? []).slice(0, shown).map((slot) => {
+                        const key = `slot:${slot.at}`;
+                        return (
+                          <SlotChip
+                            key={slot.at}
+                            slot={slot}
+                            paused={queuePaused}
+                            over={over === key}
+                            onDragOver={
+                              target
+                                ? (e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setOver(key);
+                                  }
+                                : undefined
+                            }
+                            onDragLeave={() => setOver((o) => (o === key ? null : o))}
+                            onDrop={target ? dropOnSlot(slot) : undefined}
+                          />
+                        );
+                      })}
+                      {(slotsOn.get(id)?.length ?? 0) > shown && (
+                        <span className="text-xs text-subtle-foreground">{t('calendar.moreSlots', { count: (slotsOn.get(id)?.length ?? 0) - shown })}</span>
+                      )}
                       {hours.length > 0 && (
                         <div className="mt-1 hidden flex-col gap-px sm:flex" aria-hidden="true">
                           {hours.map((h) => {
@@ -644,7 +844,9 @@ export function SocialCalendar({
                 <Badge variant={VARIANT_TONE.scheduled}>{t('status.scheduled')}</Badge>
                 <Badge variant={VARIANT_TONE.published}>{t('status.published')}</Badge>
                 <span className="rounded-md border border-dashed px-1.5">{t('calendar.planned')}</span>
+                {openSlots.length > 0 && <span className={cn('rounded-md border border-dashed bg-muted/40 px-1.5', queuePaused && 'opacity-50')}>{t(queuePaused ? 'calendar.slotLegendPaused' : 'calendar.slotLegend')}</span>}
               </div>
+              {slots.data?.capped && <p className="text-xs text-subtle-foreground">{t('calendar.slotsCapped')}</p>}
               {upcoming.length > 0 && (
                 <section aria-label={t('occasions.upcoming')} className="space-y-2 rounded-xl border p-3">
                   <p className="text-sm font-medium text-foreground">{t('occasions.upcoming')}</p>

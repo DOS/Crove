@@ -109,11 +109,13 @@ export function notesByDay<N extends { startsOn: string; endsOn: string }>(notes
   return map;
 }
 
-export function calendarItems(posts: readonly Post[]): CalendarItem[] {
+// connectionId: the channel filter (#1044), under which only that channel's chips are drawn, not every channel of a
+// post that matches.
+export function calendarItems(posts: readonly Post[], connectionId?: string): CalendarItem[] {
   return posts
     .flatMap((post) =>
       post.variants
-        .filter((v) => SHOWN.includes(v.status))
+        .filter((v) => SHOWN.includes(v.status) && (connectionId === undefined || v.connectionId === connectionId))
         .flatMap((v) => {
           // effectiveAt falls back to the post's planned time for a channel with none of its own (a draft); a channel
           // sent back to review keeps its own time.
@@ -125,3 +127,69 @@ export function calendarItems(posts: readonly Post[]): CalendarItem[] {
     .sort((a, b) => a.at.getTime() - b.at.getTime());
 }
 
+// An open slot of the filtered channel's queue (#1158), from social.queue.open_slots.
+export interface OpenSlot {
+  at: string;
+  labelId: string | null;
+  label: string | null;
+}
+
+// The server answers at most this many days of open slots at once.
+export const SLOT_RANGE_DAYS = 31;
+
+// The range of open slots a view asks for (#1158): what it shows from now on, at most 31 days. A month view of a later
+// month starts at its 1st, so the month's own days fit; the few days of the weeks around it may show none. null when
+// the view is over.
+export function slotRange(view: View, days: readonly Date[], anchor: Date, now: Date): { from: string; to: string } | null {
+  const first = days[0] as Date;
+  const end = addDays(days.at(-1) as Date, 1);
+  const month = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  const start = view === 'month' && month.getTime() > now.getTime() ? month : first;
+  const from = Math.max(start.getTime(), now.getTime());
+  const to = Math.min(end.getTime(), from + SLOT_RANGE_DAYS * DAY_MS);
+  return to > from ? { from: new Date(from).toISOString(), to: new Date(to).toISOString() } : null;
+}
+
+export function slotsByDay<S extends { at: string }>(slots: readonly S[]): Map<string, S[]> {
+  const map = new Map<string, S[]>();
+  for (const s of slots) {
+    const id = dayId(new Date(s.at));
+    map.set(id, [...(map.get(id) ?? []), s]);
+  }
+  return map;
+}
+
+// What a drop on an open slot asks (#1158): an owner or admin puts the channel of that queue, approved or scheduled, into
+// exactly that slot (social.variant.schedule with slotAt); otherwise a draft that may be planned gets the slot's time as
+// its planned time, as a drop on a day does (#1145).
+export type SlotRequest = { kind: 'schedule'; postId: string; variantId: string; slotAt: string } | { kind: 'plan'; request: PlanRequest };
+export interface SlotTarget {
+  post: Pick<Post, 'id' | 'revision' | 'variants' | 'labelIds'>;
+  // The chip dragged, or null for an undated draft from the list.
+  item: CalendarItem | null;
+}
+
+// The channel of the slot's queue that a drop would schedule, for an owner or admin: the chip's own when it is on that
+// channel, approved or scheduled (not held by a paused queue it waits in), else for an undated draft its approved
+// channel there.
+export function slotVariant(target: SlotTarget, connectionId: string): Variant | null {
+  const may = (v: Variant) => v.connectionId === connectionId && (v.status === 'approved' || (v.status === 'scheduled' && !v.queuePaused));
+  if (target.item) return may(target.item.v) ? target.item.v : null;
+  return target.post.variants.find((v) => v.connectionId === connectionId && v.status === 'approved') ?? null;
+}
+
+// 'past' when the slot's time is gone and 'label' when it is kept for a label (#745) the post lacks, refused here with
+// nothing sent; null when nothing changes or nothing may.
+export function slotDrop(target: SlotTarget, slot: OpenSlot, connectionId: string, may: { canDecide: boolean; canWrite: boolean }, now: Date): SlotRequest | 'past' | 'label' | null {
+  const at = Date.parse(slot.at);
+  if (at <= now.getTime()) return 'past';
+  const v = may.canDecide ? slotVariant(target, connectionId) : null;
+  if (v) {
+    if (v.queueSlotAt !== null && Date.parse(v.queueSlotAt) === at) return null;
+    if (slot.labelId !== null && !target.post.labelIds.includes(slot.labelId)) return 'label';
+    return { kind: 'schedule', postId: target.post.id, variantId: v.id, slotAt: slot.at };
+  }
+  if (!may.canWrite || (target.item && !followsPlan(target.item))) return null;
+  if (target.item && target.item.at.getTime() === at) return null;
+  return { kind: 'plan', request: { postId: target.post.id, revision: target.post.revision, scheduledAt: slot.at } };
+}

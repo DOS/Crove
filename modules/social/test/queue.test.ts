@@ -1,7 +1,7 @@
 // Posting queue slot math (issue #231): IANA zones, DST, and the keep-your-slot placement rules.
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { isSlot, isValidTimeZone, localTime, moveToFront, nextFreeSlot, placeQueued, queueRunway, retime, shuffleTimes, slotsBetween, zonedToEpoch, type Holder, type QueueSpec } from '../src/index.ts';
+import { isSlot, isValidTimeZone, localTime, moveToFront, nextFreeSlot, openSlots, placeQueued, queueRunway, retime, shuffleTimes, slotRefusal, slotsBetween, zonedToEpoch, type Holder, type QueueSpec } from '../src/index.ts';
 
 const HCM = 'Asia/Ho_Chi_Minh';
 const NY = 'America/New_York';
@@ -379,5 +379,52 @@ describe('queueRunway: how far ahead a queue is filled (#1079)', () => {
     // A post after the window, or before now, fills nothing.
     expect(queueRunway(daily, [at(2, 9), at(9, 9)], now, 1)).toEqual({ postingDays: 1, filledDays: 1, low: false });
     expect(queueRunway(daily, [at(1, 9)], now, 1)).toEqual({ postingDays: 1, filledDays: 0, low: true });
+  });
+});
+
+describe('open slots on the calendar (#1158)', () => {
+  // Every day at 02:30 and 09:00, New York time, around the 2026-03-08 forward change (02:00 EST to 03:00 EDT); Monday's
+  // 09:00 is kept for promotions.
+  const ny: QueueSpec = { timeZone: NY, slots: [1, 2, 3, 4, 5, 6, 7].flatMap((weekday) => [{ weekday, minute: 150 }, { weekday, minute: 540, labelId: weekday === 1 ? 'promo' : null }]) };
+  const from = Date.UTC(2026, 2, 7, 0, 0);
+  const to = Date.UTC(2026, 2, 10, 0, 0);
+  const sunday9 = Date.UTC(2026, 2, 8, 13, 0); // 09:00 EDT
+
+  it('lists the slots no post holds across a DST change, each at its local clock time', () => {
+    const open = openSlots(ny, from, to, new Set([sunday9]), 500);
+    expect(open.map((s) => s.at)).toEqual([
+      Date.UTC(2026, 2, 7, 7, 30), // Saturday 02:30 EST
+      Date.UTC(2026, 2, 7, 14, 0), // Saturday 09:00 EST
+      Date.UTC(2026, 2, 8, 7, 30), // Sunday 02:30 does not exist: 03:30 EDT, just after the change
+      Date.UTC(2026, 2, 9, 6, 30), // Monday 02:30 EDT
+      Date.UTC(2026, 2, 9, 13, 0), // Monday 09:00 EDT, kept for promotions
+    ]);
+    expect(open.filter((s) => localTime(s.at, NY).hour === 9).map((s) => localTime(s.at, NY).minute)).toEqual([0, 0]);
+    expect(open.map((s) => s.labelId)).toEqual([null, null, null, null, 'promo']);
+    // At most `limit`, the first ones; an empty queue or range has none.
+    expect(openSlots(ny, from, to, new Set(), 2).map((s) => s.at)).toEqual([Date.UTC(2026, 2, 7, 7, 30), Date.UTC(2026, 2, 7, 14, 0)]);
+    expect(openSlots({ timeZone: NY, slots: [] }, from, to, new Set(), 500)).toEqual([]);
+    expect(openSlots(ny, to, from, new Set(), 500)).toEqual([]);
+  });
+
+  it('lists a repeated time of a backward change once, at its first occurrence', () => {
+    // 2026-11-01 01:30 happens twice in New York; the slot is the first one (EDT, UTC-4).
+    const night: QueueSpec = { timeZone: NY, slots: [{ weekday: 7, minute: 90 }] };
+    expect(openSlots(night, Date.UTC(2026, 10, 1, 0, 0), Date.UTC(2026, 10, 2, 0, 0), new Set(), 500).map((s) => s.at)).toEqual([Date.UTC(2026, 10, 1, 5, 30)]);
+  });
+
+  it('takes exactly an open slot of the queue, after now, that the post may use', () => {
+    const none = new Set<string>();
+    expect(slotRefusal(ny, Date.UTC(2026, 2, 8, 7, 30), from, new Set(), none)).toBeNull();
+    // 01:30 EST on the day of the change is no slot, nor is a time off the minute or past the horizon.
+    expect(slotRefusal(ny, Date.UTC(2026, 2, 8, 6, 30), from, new Set(), none)).toBe('not_in_queue');
+    expect(slotRefusal(ny, Date.UTC(2026, 2, 8, 7, 30) + 1000, from, new Set(), none)).toBe('not_in_queue');
+    expect(slotRefusal(ny, Date.UTC(2026, 2, 7, 14, 0) + 400 * DAY, from, new Set(), none)).toBe('not_in_queue');
+    expect(slotRefusal(ny, Date.UTC(2026, 2, 7, 14, 0), Date.UTC(2026, 2, 7, 14, 0), new Set(), none)).toBe('past');
+    expect(slotRefusal(ny, sunday9, from, new Set([sunday9]), none)).toBe('taken');
+    // A slot kept for a label goes only to a post with it.
+    const monday9 = Date.UTC(2026, 2, 9, 13, 0);
+    expect(slotRefusal(ny, monday9, from, new Set(), none)).toBe('label');
+    expect(slotRefusal(ny, monday9, from, new Set(), new Set(['promo']))).toBeNull();
   });
 });

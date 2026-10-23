@@ -639,3 +639,50 @@ test('plans an undated draft by dropping it on a day, then moves its time from t
   expect(planned()).toBe(`${day} 15:30`);
   expect(updates).toHaveLength(2);
 });
+
+test('puts an approved post in an open queue slot by dropping it there, then moves it from the chip menu (#1158)', async ({ page }) => {
+  await signInNewUser(page, newEmail('social-slots'));
+  const slug = await createOrg(page, 'Công ty Khung Giờ');
+  await connectSandbox(page, 'Trang Khung Giờ');
+  // A queue posting every day at 19:00, set on the channels screen.
+  await page.getByRole('textbox', { name: 'Giờ' }).fill('19:00');
+  await page.getByRole('button', { name: 'Thêm cho mọi ngày' }).click();
+  await page.getByRole('button', { name: 'Lưu hàng đợi' }).click();
+  await expect(page.getByText(/Khung giờ trống kế tiếp:/)).toBeVisible();
+  await compose(page, 'Bài vào khung giờ');
+  await page.getByRole('button', { name: 'Lưu và gửi duyệt' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  await page.getByRole('button', { name: 'Duyệt', exact: true }).click();
+  await expect(page.getByText('Lên lịch 1 kênh đã duyệt')).toBeVisible();
+  const postId = postIdOf(page);
+  const [channel] = sql<{ id: string }>(`SELECT channel_connection_id AS id FROM crove_social.post_variant WHERE post_id = :'post'`, { post: postId });
+  const slotOf = () =>
+    sql<{ status: string; at: string | null }>(
+      `SELECT status, to_char(queue_slot_at AT TIME ZONE :'zone', 'YYYY-MM-DD HH24:MI') AS at FROM crove_social.post_variant WHERE post_id = :'post'`,
+      { post: postId, zone: TIME_ZONE },
+    )[0];
+
+  // Under the channel filter the calendar draws the queue's open slots; two days ahead is always in the month view.
+  await page.goto(`/o/${slug}/social?tab=calendar&channel=${channel?.id ?? ''}`);
+  const dayOf = (n: number) => new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date(Date.now() + n * 86_400_000));
+  const slotAt = (day: string) => new Date(`${day}T19:00:00+07:00`).toISOString();
+  const [day, next] = [dayOf(2), dayOf(3)];
+  const slot = page.locator(`[data-slot="${slotAt(day)}"]`);
+  await expect(slot).toContainText('19:00 Trống');
+  const draft = page.getByTestId('undated-draft').filter({ hasText: 'Bài vào khung giờ' });
+  await slot.scrollIntoViewIfNeeded();
+  await draft.dragTo(slot);
+  await expect(page.getByText('Đã xếp bài vào khung giờ')).toBeVisible();
+  expect(slotOf()).toEqual({ status: 'scheduled', at: `${day} 19:00` });
+  await expect(slot).toHaveCount(0);
+  await expect(draft).toHaveCount(0);
+
+  // Without dragging: the chip's menu offers the open slots, by keyboard, and moves the post to the next day's.
+  await page.getByRole('button', { name: 'Xếp vào khung giờ trống: Bài vào khung giờ' }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByLabel('Khung giờ trống của hàng đợi').selectOption(slotAt(next));
+  await page.getByRole('button', { name: 'Lên lịch vào giờ này' }).click();
+  await expect(page.getByText('Đã xếp bài vào khung giờ')).toBeVisible();
+  expect(slotOf()).toEqual({ status: 'scheduled', at: `${next} 19:00` });
+  await expect(page.locator(`[data-slot="${slotAt(day)}"]`)).toContainText('Trống');
+});
