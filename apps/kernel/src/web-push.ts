@@ -52,11 +52,12 @@ export function loadVapidKeys(env: { VAPID_PUBLIC_KEY?: string | undefined; VAPI
   return { publicKey: pub.toString('base64url'), subject, privateKey };
 }
 
-// A fresh key pair, for an operator setting up push (`worker vapid-keys`).
+// A fresh key pair, for an operator setting up push (the vapid-keys role of main.ts).
 export function generateVapidKeys(): { publicKey: string; privateKey: string } {
   const ecdh = createECDH('prime256v1');
   ecdh.generateKeys();
-  return { publicKey: ecdh.getPublicKey().toString('base64url'), privateKey: ecdh.getPrivateKey().toString('base64url') };
+  const priv = ecdh.getPrivateKey();
+  return { publicKey: ecdh.getPublicKey().toString('base64url'), privateKey: Buffer.concat([Buffer.alloc(32 - priv.length), priv]).toString('base64url') };
 }
 
 // The VAPID token for a push service's origin (RFC 8292 section 2): ES256 over the header and claims, the signature

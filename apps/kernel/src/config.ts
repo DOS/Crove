@@ -383,11 +383,11 @@ const schema = z.object({
   // searches and image downloads go through the API, so browsers never reach Pexels.
   MEDIA_PEXELS_API_KEY: optional.pipe(z.string().regex(/^[A-Za-z0-9]{20,100}$/, 'MEDIA_PEXELS_API_KEY is the key Pexels shows under Your API key: letters and digits').optional()),
   // Browser push for the Social notifications someone must act on (#1238): the deployment's VAPID key pair (RFC 8292),
-  // base64url (`worker vapid-keys` prints a new pair), and the contact push services may write to about it (a mailto:
+  // base64url (the `vapid-keys` role prints a new pair), and the contact push services may write to about it (a mailto:
   // address or an https: URL). All three or none: unset, the app offers no push and nothing is sent. Changing the pair
   // ends every subscription; members turn push on again.
-  VAPID_PUBLIC_KEY: optional.pipe(z.string().regex(/^[A-Za-z0-9_-]{87}$/, 'VAPID_PUBLIC_KEY is the base64url public key `worker vapid-keys` prints').optional()),
-  VAPID_PRIVATE_KEY: optional.pipe(z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'VAPID_PRIVATE_KEY is the base64url private key `worker vapid-keys` prints').optional()),
+  VAPID_PUBLIC_KEY: optional.pipe(z.string().regex(/^[A-Za-z0-9_-]{87}$/, 'VAPID_PUBLIC_KEY is the base64url public key the vapid-keys role prints').optional()),
+  VAPID_PRIVATE_KEY: optional.pipe(z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'VAPID_PRIVATE_KEY is the base64url private key the vapid-keys role prints').optional()),
   VAPID_SUBJECT: optional.pipe(z.string().max(200).optional()),
   // The public tax registry lookup that prefills a new org from its tax code (issue #324): an https URL template with
   // {taxCode}, answering in the VietQR business shape (https://api.vietqr.io/v2/business/{taxCode}). Unset turns the

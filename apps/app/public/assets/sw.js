@@ -6,7 +6,7 @@
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const PATH = new RegExp(`^/o/[a-z0-9][a-z0-9-]{0,62}/social/(channels|${UUID}|new\\?channel=${UUID})$`);
-const text = (value, max) => (typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max) : '');
+const text = (value, max) => (typeof value === 'string' ? value.replace(/\p{Cc}+/gu, ' ').trim().slice(0, max) : '');
 const safePath = (value) => (typeof value === 'string' && PATH.test(value) ? value : null);
 
 self.addEventListener('install', () => self.skipWaiting());
