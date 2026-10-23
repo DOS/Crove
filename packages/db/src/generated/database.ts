@@ -1049,6 +1049,7 @@ export interface SocialChannelPolicyTable {
   short_links: Generated<boolean>;
   four_eyes: Generated<boolean>;
   client_approval: Generated<boolean>;
+  signature: string | null;
 }
 
 /** crove_social.channel_set */

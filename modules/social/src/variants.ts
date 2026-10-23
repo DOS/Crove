@@ -4,7 +4,7 @@
 import type { Transaction } from 'kysely';
 import type { Database, SocialVariantStatus } from '@crove/db';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
-import { contentHash, effectiveContent, effectiveMedia, type BaseContent, type PostMedia } from './domain/approval.ts';
+import { contentHash, effectiveContent, effectiveMedia, inheritedContent, type BaseContent, type PostMedia } from './domain/approval.ts';
 import { REMOVE_AT_MIN_GAP_MS, isProvider, mediaKindOf, removeAtFit, type MediaKind } from './domain/channels.ts';
 import type { QueueSpec } from './domain/queue.ts';
 import { postStatus, transitionVariant, type VariantEvent } from './domain/state.ts';
@@ -142,7 +142,7 @@ export function hashOf(
   post: PostContent,
   v: Pick<VariantRow, 'channel_connection_id' | 'provider' | 'body' | 'title' | 'link_url' | 'settings'> & { media?: unknown; content_frozen?: boolean },
 ): string {
-  const content = effectiveContent(post, overrides(v), v.content_frozen ?? false);
+  const content = effectiveContent(post, overrides(v), v.content_frozen ?? false, settingsOf(v));
   const media = mediaFor(post, v).map((m) => ({ fileId: m.fileId, generation: m.generation, altText: m.altText }));
   return contentHash([
     { channelConnectionId: v.channel_connection_id, provider: providerOf(v), body: content.body, title: content.title, linkUrl: content.linkUrl, media, settings: settingsOf(v) },
@@ -150,7 +150,7 @@ export function hashOf(
 }
 
 export function issuesOf(post: PostContent, v: VariantRow): Issue[] {
-  const content = effectiveContent(post, overrides(v), v.content_frozen);
+  const content = effectiveContent(post, overrides(v), v.content_frozen, settingsOf(v));
   const media = mediaFor(post, v).map((m) => ({ kind: mediaKind(m.mime), mime: m.mime, sizeBytes: m.sizeBytes, durationSeconds: m.durationMs == null ? null : m.durationMs / 1000, width: m.width ?? null, height: m.height ?? null }));
   return validateVariant({ provider: providerOf(v), body: content.body, title: content.title, linkUrl: content.linkUrl, media, settings: settingsOf(v) });
 }
@@ -321,8 +321,9 @@ export function approvedValues(v: VariantRow, now: Date): Record<string, unknown
 }
 
 // A variant becoming history keeps the content it had: copied into its own columns, which base edits no longer reach.
+// Its own text, without the signature: its settings keep that, and effectiveContent appends it as before.
 export function freezeValues(post: PostRow, v: VariantRow): Record<string, unknown> {
-  const kept = effectiveContent(base(post), overrides(v), v.content_frozen);
+  const kept = inheritedContent(base(post), overrides(v), v.content_frozen);
   return { body: kept.body, title: kept.title, link_url: kept.linkUrl, media: JSON.stringify(mediaFor(base(post), v)), content_frozen: true };
 }
 

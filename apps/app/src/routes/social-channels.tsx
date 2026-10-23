@@ -21,6 +21,7 @@ import { BannedWordsCard } from '../components/social-banned-words.tsx';
 import { ReviewChecklistCard } from '../components/social-review-checklist.tsx';
 import { ChannelAccessCard, useChannelScope } from '../components/social-channel-access.tsx';
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
+import { SignatureEditor } from '../components/social-signature.tsx';
 import { QueueCopy, QueueSuggestButton } from '../components/social-queue-tools.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -393,6 +394,7 @@ export function SocialChannelsPage() {
   const shortLinks = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.shortLinks]));
   const fourEyes = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.fourEyes]));
   const clientApproval = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.clientApproval]));
+  const signatures = new Map((policyRows.data ?? []).map((p) => [p.connectionId, p.signature]));
   const [name, setName] = useState('');
   const [confirming, setConfirming] = useState<string | null>(null);
   const sandbox = getConfig().channels?.sandbox ?? false;
@@ -613,6 +615,9 @@ export function SocialChannelsPage() {
                 {confirming === c.id && <p className="text-xs text-muted-foreground">{t('disconnectHint')}</p>}
                 <div className="border-t pt-3">
                   <ReviewPolicy channel={c} required={policies.get(c.id) ?? 1} reminders={reminders.get(c.id) ?? true} shortLinks={shortLinks.get(c.id) ?? false} fourEyes={fourEyes.get(c.id) ?? false} clientApproval={clientApproval.get(c.id) ?? false} canEdit={isAdmin} canOwn={role === 'owner'} loading={policyRows.isLoading} />
+                </div>
+                <div className="border-t pt-3">
+                  {!policyRows.isLoading && <SignatureEditor key={signatures.get(c.id) ?? 'none'} connectionId={c.id} revoked={c.status === 'revoked'} signature={signatures.get(c.id) ?? null} canEdit={isAdmin} />}
                 </div>
                 <div className="border-t pt-3">
                   <p className="mb-2 text-sm font-medium text-muted-foreground">{t('voice.channelTitle')}</p>

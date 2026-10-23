@@ -1051,13 +1051,13 @@ describe('postStatus', () => {
 describe('effectiveContent', () => {
   it('inherits the base where the variant has no override, and keeps an empty override', () => {
     const base = { body: 'Gốc', title: 'Tiêu đề', linkUrl: 'https://a.vn' };
-    expect(effectiveContent(base, { body: null, title: null, linkUrl: null })).toEqual(base);
-    expect(effectiveContent(base, { body: 'Riêng', title: '', linkUrl: null })).toEqual({ body: 'Riêng', title: '', linkUrl: 'https://a.vn' });
+    expect(effectiveContent(base, { body: null, title: null, linkUrl: null }, false, {})).toEqual(base);
+    expect(effectiveContent(base, { body: 'Riêng', title: '', linkUrl: null }, false, {})).toEqual({ body: 'Riêng', title: '', linkUrl: 'https://a.vn' });
   });
 
   it('keeps a frozen variant’s own content, where null means none', () => {
     const base = { body: 'Gốc', title: 'Tiêu đề', linkUrl: 'https://a.vn' };
-    expect(effectiveContent(base, { body: 'Đã đăng', title: null, linkUrl: null }, true)).toEqual({ body: 'Đã đăng', title: null, linkUrl: null });
+    expect(effectiveContent(base, { body: 'Đã đăng', title: null, linkUrl: null }, true, {})).toEqual({ body: 'Đã đăng', title: null, linkUrl: null });
   });
 });
 

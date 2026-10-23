@@ -1173,6 +1173,18 @@ export const IG_COLLABORATORS_MAX = 3;
 export const IG_USER_TAGS_MAX = 20;
 export const IG_USERNAME = /^[a-z0-9._]{1,30}$/;
 
+// An Instagram caption's caps besides its 2,200 characters (#1190; Meta's IG User Media reference: "Maximum 2200
+// characters, 30 hashtags, and 20 @ tags"), counted in the caption as it is sent (with the signature). Each place
+// counts: a tag written twice is two.
+export const IG_HASHTAGS_MAX = 30;
+export const IG_MENTIONS_MAX = 20;
+// A hashtag: # and a word, not inside a word or an HTML entity; an @ tag: @ and an Instagram username, not inside a
+// word or an email address.
+const CAPTION_HASHTAG = /(?<![\p{L}\p{N}_&#])#[\p{L}\p{M}\p{N}_]+/gu;
+const CAPTION_MENTION = /(?<![\p{L}\p{N}_.@])@[A-Za-z0-9._]{1,30}/gu;
+export const captionHashtags = (text: string): number => [...text.normalize('NFC').matchAll(CAPTION_HASHTAG)].length;
+export const captionMentions = (text: string): number => [...text.normalize('NFC').matchAll(CAPTION_MENTION)].length;
+
 // The usernames in settings[key]: null when there are none, 'invalid' when the value is not a list of usernames.
 export function instagramPeopleOf(settings: Readonly<Record<string, unknown>> | undefined, key: 'collaborators' | 'userTags'): string[] | 'invalid' | null {
   const value = settings?.[key];
