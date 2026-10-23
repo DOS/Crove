@@ -292,11 +292,13 @@ suite('social report links on PostgreSQL (#643)', () => {
     const previous = readFileSync(join(MIGRATIONS, '20261028200000_crove_social_report_external.sql'), 'utf8');
     const [now, before] = await admin(async (c) => {
       const read = async () => (await c.query<{ page: string }>('SELECT crove_social.report_link_view($1)::text AS page', [token])).rows[0]?.page;
-      const current = await read();
+      // The audience list (#1146) came after: left out of today's answer, which has it empty here.
+      const current = (await c.query<{ page: string; audience: string }>("SELECT (crove_social.report_link_view($1) - 'audience')::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience", [token])).rows[0];
+      expect(current?.audience).toEqual([]);
       await c.query('BEGIN');
       try {
         await c.query(previous);
-        return [current, await read()];
+        return [current?.page, await read()];
       } finally {
         await c.query('ROLLBACK');
       }
@@ -304,6 +306,76 @@ suite('social report links on PostgreSQL (#643)', () => {
     expect(now).toBeTruthy();
     expect(now).toBe(before);
     expect(JSON.parse(now as string)).toMatchObject({ posts: 3, totals: { reach: 810, linkClicks: 5 } });
+  });
+
+  // Who follows each channel (#1146): the latest audience of the link's channels taken on a UTC day whose midday is in
+  // the period; an ask that got nothing, a day outside the period and a channel the link does not name are left out.
+  const AUDIENCE = {
+    age: [{ key: '18-24', count: 410 }, { key: '25-34', count: 620 }],
+    gender: [{ key: 'F', count: 780 }, { key: 'M', count: 400 }],
+    cities: [{ key: 'Hanoi, Hanoi', count: 300 }],
+    countries: [{ key: 'VN', count: 1100 }],
+  };
+  async function snapshot(orgId: string, conn: string, on: string, audience: unknown) {
+    await admin((c) => c.query('INSERT INTO crove_social.account_snapshot (org_id, channel_connection_id, captured_on, followers, audience) VALUES ($1, $2, $3, 1000, $4::jsonb)', [orgId, conn, on, audience === null ? null : JSON.stringify(audience)]));
+  }
+
+  it('shows the latest audience in the period of each of the link\'s channels (#1146)', async () => {
+    const o = await org();
+    const stranger = await org();
+    const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
+    const zalo = await connection(o.orgId, o.owner, 'Zalo OA');
+    const ig = await connection(o.orgId, o.owner, 'Instagram Hoa Mai');
+    const other = await connection(o.orgId, o.owner, 'Kênh khác');
+    const earlier = { ...AUDIENCE, countries: [{ key: 'US', count: 5 }] };
+    const later = { ...AUDIENCE, countries: [{ key: 'JP', count: 9 }] };
+    // The period is 2026-09-30T17:00Z to 2026-10-31T17:00Z: 30 September's midday is before it, 31 October's in it.
+    await snapshot(o.orgId, fb, '2026-09-30', later);
+    await snapshot(o.orgId, fb, '2026-10-08', earlier);
+    await snapshot(o.orgId, fb, '2026-10-22', AUDIENCE);
+    await snapshot(o.orgId, fb, '2026-10-29', null);
+    await snapshot(o.orgId, fb, '2026-11-01', later);
+    await snapshot(o.orgId, zalo, '2026-10-15', {});
+    await snapshot(o.orgId, ig, '2026-10-31', later);
+    await snapshot(o.orgId, other, '2026-10-10', AUDIENCE);
+    const theirs = await connection(stranger.orgId, stranger.owner, 'Của họ');
+    await snapshot(stranger.orgId, theirs, '2026-10-10', AUDIENCE);
+    const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { periodStart: '2026-10-01T00:00:00+07:00', periodEnd: '2026-11-01T00:00:00+07:00', connectionIds: [fb, zalo, ig] });
+    const page = (await view(token)) as ReportPage;
+    expect(page.posts).toBe(0);
+    expect(page.audience).toEqual([
+      { channel: 'Instagram Hoa Mai', provider: 'sandbox', day: '2026-10-31', audience: later },
+      { channel: 'Trang Facebook', provider: 'sandbox', day: '2026-10-22', audience: AUDIENCE },
+    ]);
+    expect(JSON.stringify(page)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+    // A link on every channel shows each one that has an audience.
+    const all = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { periodStart: '2026-10-01T00:00:00+07:00', periodEnd: '2026-11-01T00:00:00+07:00' });
+    expect(((await view(all.token)) as ReportPage).audience.map((a) => a.channel)).toEqual(['Instagram Hoa Mai', 'Kênh khác', 'Trang Facebook']);
+  });
+
+  it('gives exactly the previous output, with an empty audience, for a report without one (#1146)', async () => {
+    const o = await org();
+    const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
+    const first = await published(o, fb, 'Khai trương', '2026-10-05T03:00:00Z', { reach: 700, reactions: 40, replies: 3 });
+    await published(o, fb, 'Tháng trước', '2026-09-20T03:00:00Z', { reach: 30, reactions: 2 });
+    await shortLink(o, first, 1, { '2026-10-08': 5 });
+    await snapshot(o.orgId, fb, '2026-10-10', {});
+    await snapshot(o.orgId, fb, '2026-10-11', null);
+    const { token } = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { periodStart: '2026-10-01T00:00:00+07:00', periodEnd: '2026-11-01T00:00:00+07:00' });
+    const previous = readFileSync(join(MIGRATIONS, '20261028240000_crove_social_story_report.sql'), 'utf8');
+    const [now, audience, before] = await admin(async (c) => {
+      const current = (await c.query<{ page: string; audience: unknown }>("SELECT (crove_social.report_link_view($1) - 'audience')::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience", [token])).rows[0];
+      await c.query('BEGIN');
+      try {
+        await c.query(previous);
+        return [current?.page, current?.audience, (await c.query<{ page: string }>('SELECT crove_social.report_link_view($1)::text AS page', [token])).rows[0]?.page];
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    expect(audience).toEqual([]);
+    expect(now).toBeTruthy();
+    expect(now).toBe(before);
   });
 
   it('lets only owners and admins make and revoke links, within the limits, and lists them without tokens', async () => {

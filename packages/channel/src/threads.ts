@@ -13,6 +13,7 @@
 // threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
 import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import { AUDIENCE_BREAKDOWNS, AUDIENCE_MIN_FOLLOWERS, audienceOf, audienceSlices, type Audience, type AudienceBreakdown, type AudienceSlice } from './audience.ts';
 import { commentResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -273,21 +274,44 @@ export class ThreadsPublisher implements Publisher {
 
   // A post's counts (plan §3.6, #744): views, likes, replies, and reposts, quotes and shares together, from the media
   // insights endpoint (threads_manage_insights). A post that is gone, or insights not granted, give no counts.
-  // The account's followers (#819), from threads_insights (followers_count is a total, not a daily series).
+  // The account's followers (#819), from threads_insights (followers_count is a total, not a daily series), and who
+  // follows it when asked (#1146).
   async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
     const token = tokenIn(input.secret);
     if (!token) return { refused: 'token_expired' };
     if (!NUMERIC_ID.test(input.externalAccountId)) return null;
+    let followers: number | null;
     try {
       const answer = await this.client.call<{ data?: { name?: unknown; total_value?: { value?: unknown } }[] }>('GET', `${VERSION}/${input.externalAccountId}/threads_insights`, { token, params: { metric: 'followers_count' } });
       const value = (answer.data ?? []).find((r) => r.name === 'followers_count')?.total_value?.value;
-      return { followers: typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null };
+      followers = typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null;
     } catch (error) {
       const result = threadsResult(error);
       if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
       if (result.kind === 'rejected' && result.error === 'permission') return { refused: 'permission' };
       return null;
     }
+    if (!input.audience) return { followers };
+    const audience = followers !== null && followers >= AUDIENCE_MIN_FOLLOWERS ? await this.audience(input.externalAccountId, token) : null;
+    if (audience === 'token_expired') return { refused: 'token_expired' };
+    return { followers, audience };
+  }
+
+  // Who follows the account (#1146): follower_demographics on threads_insights, which takes one breakdown per call
+  // and no since or until, under threads_manage_insights. A breakdown that fails or comes back empty is left out.
+  private async audience(user: string, token: string): Promise<Audience | null | 'token_expired'> {
+    const parts: Partial<Record<AudienceBreakdown, AudienceSlice[]>> = {};
+    for (const breakdown of AUDIENCE_BREAKDOWNS) {
+      try {
+        const answer = await this.client.call<unknown>('GET', `${VERSION}/${user}/threads_insights`, { token, params: { metric: 'follower_demographics', breakdown } });
+        parts[breakdown] = audienceSlices(answer, breakdown);
+      } catch (error) {
+        const result = threadsResult(error);
+        if (result.kind === 'rejected' && result.error === 'token_expired') return 'token_expired';
+        if (result.kind === 'rejected' && result.error === 'permission') return null;
+      }
+    }
+    return audienceOf(parts);
   }
 
   async metrics(input: MetricsInput): Promise<MetricsResult> {

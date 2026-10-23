@@ -4,6 +4,7 @@
 import { randomBytes } from 'node:crypto';
 import type { PostType } from './post-type.ts';
 import type { ChannelOptionsInput, ChannelOptionsResult } from './options.ts';
+import type { Audience } from './audience.ts';
 
 export * from './oauth.ts';
 export * from './text.ts';
@@ -26,6 +27,7 @@ export * from './comment.ts';
 export * from './cover.ts';
 export * from './post-type.ts';
 export * from './recent.ts';
+export * from './audience.ts';
 export * from './options.ts';
 
 export const CHANNEL_PROVIDERS = [
@@ -209,11 +211,15 @@ export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extr
 // What a platform says about a connected account itself (#645): its followers (subscribers on YouTube), and the people
 // it reached over the last day where the platform gives that. null: no answer worth keeping (a network failure, a
 // malformed answer); refused: the token or the permission was refused.
+// audience (#1146): asked for only when the input says so (the sweep does once a week). Instagram and Threads answer
+// with who follows the account, or null when they give nothing (under 100 followers, no insights permission on an
+// older connection); the followers are reported all the same. Absent: not asked, or the platform has no such thing.
 export interface AccountMetricsInput {
   externalAccountId: string;
   secret: string;
+  audience?: boolean;
 }
-export type AccountMetricsResult = { followers: number | null; reach?: number | null } | { refused: 'token_expired' | 'permission' } | null;
+export type AccountMetricsResult = { followers: number | null; reach?: number | null; audience?: Audience | null } | { refused: 'token_expired' | 'permission' } | null;
 
 // The posts an account published itself, outside Crove (#1054), so the Metrics tab and the client report can count
 // every post of the account when asked. since: how far back, clamped to RECENT_POSTS_MAX_DAYS before now. null: no
