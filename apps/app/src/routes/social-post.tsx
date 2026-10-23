@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollOptionsOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, pinterestSectionOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, pinterestSectionOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -1314,6 +1314,11 @@ function IssueList({ issues }: { issues: Issue[] }) {
         return t('POLL_OPTIONS', { limit });
       case 'POLL_OPTION_LENGTH':
         return t('POLL_OPTION_LENGTH', { limit });
+      // A LinkedIn poll's own question, and a Telegram poll's question, the post's text (#1118).
+      case 'POLL_QUESTION_LENGTH':
+        return t('POLL_QUESTION_LENGTH', { limit });
+      case 'POLL_TEXT_LENGTH':
+        return t('POLL_TEXT_LENGTH', { limit, actual });
       case 'GBP_INVALID':
         return t('GBP_INVALID', { limit: limit || 58 });
       case 'TOPIC_TAG_INVALID':
@@ -1505,11 +1510,13 @@ function PostTypeField({ provider, settings, onChange, disabled }: { provider: s
   );
 }
 
-// The lengths offered for a poll that takes one (X, #948), in minutes: from 5 minutes to 7 days.
-const POLL_LENGTHS: readonly number[] = [5, 15, 30, 60, 360, 720, 1440, 2880, 4320, 10_080];
+// The lengths offered for a poll that takes one (X, #948; Mastodon and Telegram, #1118), in minutes: from 5 minutes to
+// 30 days, each channel keeping those within its own range. LinkedIn offers its own few (choices).
+const POLL_LENGTHS: readonly number[] = [5, 15, 30, 60, 360, 720, 1440, 2880, 4320, 10_080, 20_160, 43_200];
 
-// Threads and X polls and Threads topic tags (#711, #948): a poll of 2 to 4 short options on a post without media (with
-// its length on X), and one topic tag. The options are kept as typed; the server trims them.
+// Polls (Threads and X, #711, #948; Mastodon, Telegram and LinkedIn, #1118) and Threads topic tags: a poll of a few
+// short options on a post without media, with what the channel adds (its length, several answers, counts hidden until
+// the end, a question of its own on LinkedIn), and one topic tag. The texts are kept as typed; the server trims them.
 function PollAndTagField({ provider, settings, onChange, disabled }: { provider: string; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social.threadsExtras');
   if (!isProvider(provider)) return null;
@@ -1523,15 +1530,21 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
     const { [key]: _gone, ...rest } = settings;
     return rest;
   };
-  // The poll's length stays when its options change (X, #948).
+  // The poll's length and choices stay when its options change (X, #948).
   const setOptions = (next: string[] | null) => onChange(next ? { ...settings, poll: { ...rawPoll, options: next } } : without('poll'));
-  const duration = pollRule?.duration;
-  const minutes = duration ? (pollDurationOf(settings) ?? duration.default) : null;
-  const setMinutes = (value: number) => {
-    const { durationMinutes: _gone, ...rest } = rawPoll ?? {};
-    onChange({ ...settings, poll: duration && value === duration.default ? rest : { ...rest, durationMinutes: value } });
+  // One field of the poll, dropped when it goes back to its default (unsaid), so a poll as usual stores nothing more.
+  const setPoll = (key: string, value: unknown) => {
+    const { [key]: _gone, ...rest } = rawPoll ?? {};
+    onChange({ ...settings, poll: value === undefined ? rest : { ...rest, [key]: value } });
   };
-  const lengths = duration ? POLL_LENGTHS.filter((m) => m >= duration.min && m <= duration.max) : [];
+  const duration = pollRule?.duration;
+  // null: open until stopped (Telegram's default); a number of minutes otherwise.
+  const said = pollDurationOf(settings);
+  const minutes = duration ? (said ?? duration.default) : null;
+  const setMinutes = (value: number | null) => setPoll('durationMinutes', duration && value === duration.default ? undefined : value);
+  const lengths = duration ? (duration.choices ?? POLL_LENGTHS.filter((m) => m >= duration.min && m <= duration.max)) : [];
+  const question = typeof rawPoll?.question === 'string' ? rawPoll.question : '';
+  const flag = (key: 'multiple' | 'hideTotals') => pollFlagOf(settings, key) === true;
   const lengthLabel = (m: number) => (m % 1440 === 0 ? t('pollLengthDays', { n: m / 1440 }) : m % 60 === 0 ? t('pollLengthHours', { n: m / 60 }) : t('pollLengthMinutes', { n: m }));
   const tag = typeof settings.topicTag === 'string' ? settings.topicTag : '';
   return (
@@ -1544,6 +1557,17 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
           </label>
           {options && (
             <div className="space-y-1.5 pl-6">
+              {pollRule.question && (
+                <Input
+                  value={question}
+                  disabled={disabled}
+                  maxLength={pollRule.question.maxChars + 10}
+                  aria-label={t('pollQuestion')}
+                  placeholder={t('pollQuestionPlaceholder')}
+                  className="h-8 max-w-md"
+                  onChange={(e) => setPoll('question', e.target.value)}
+                />
+              )}
               {options.map((option, i) => (
                 <div key={i} className="flex items-center gap-1.5">
                   <Input
@@ -1567,13 +1591,21 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
                   {t('addOption')}
                 </Button>
               )}
-              {duration && minutes !== null && (
+              {duration && (
                 <div className="flex flex-wrap items-center gap-2">
                   <Label htmlFor={`poll-length-${provider}`} className="text-xs">
                     {t('pollLength')}
                   </Label>
-                  <NativeSelect id={`poll-length-${provider}`} size="sm" className="w-40" value={String(minutes)} disabled={disabled} onChange={(e) => setMinutes(Number(e.target.value))}>
-                    {minutes === 'invalid' || !lengths.includes(minutes) ? <NativeSelectOption value={String(minutes)}>{minutes === 'invalid' ? '?' : lengthLabel(minutes)}</NativeSelectOption> : null}
+                  <NativeSelect
+                    id={`poll-length-${provider}`}
+                    size="sm"
+                    className="w-48"
+                    value={minutes === null ? '' : String(minutes)}
+                    disabled={disabled}
+                    onChange={(e) => setMinutes(e.target.value === '' ? null : Number(e.target.value))}
+                  >
+                    {duration.default === null && <NativeSelectOption value="">{t('pollNoEnd')}</NativeSelectOption>}
+                    {minutes !== null && (minutes === 'invalid' || !lengths.includes(minutes)) ? <NativeSelectOption value={String(minutes)}>{minutes === 'invalid' ? '?' : lengthLabel(minutes)}</NativeSelectOption> : null}
                     {lengths.map((m) => (
                       <NativeSelectOption key={m} value={String(m)}>
                         {lengthLabel(m)}
@@ -1582,7 +1614,21 @@ function PollAndTagField({ provider, settings, onChange, disabled }: { provider:
                   </NativeSelect>
                 </div>
               )}
-              <p className="text-xs text-subtle-foreground">{t('pollHint', { max: String(pollRule.maxChars) })}</p>
+              {pollRule.multiple && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox checked={flag('multiple')} disabled={disabled} onCheckedChange={(checked) => setPoll('multiple', checked === true ? true : undefined)} />
+                  {t('pollMultiple')}
+                </label>
+              )}
+              {pollRule.hideTotals && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox checked={flag('hideTotals')} disabled={disabled} onCheckedChange={(checked) => setPoll('hideTotals', checked === true ? true : undefined)} />
+                  {t('pollHideTotals')}
+                </label>
+              )}
+              <p className="text-xs text-subtle-foreground">{t('pollHint', { options: String(pollRule.maxOptions), max: String(pollRule.maxChars) })}</p>
+              {pollRule.textAsQuestion && <p className="text-xs text-subtle-foreground">{t('pollTextQuestion', { max: String(pollRule.textAsQuestion.maxChars) })}</p>}
+              {provider === 'mastodon' && <p className="text-xs text-subtle-foreground">{t('pollInstance')}</p>}
             </div>
           )}
         </div>
@@ -1752,6 +1798,7 @@ function ChannelEditor({
   const poll = pollOptionsOf(own.settings);
   const pollRule = isProvider(provider) ? POLL_RULES[provider] : undefined;
   const pollMinutes = pollDurationOf(own.settings);
+  const pollQuestion = pollQuestionOf(own.settings);
   const replySettings = replySettingOf(provider, own.settings);
   // Who may reply to and quote a Bluesky post (#1102).
   const blueskyReplies = provider === 'bluesky' ? blueskyRepliesOf(own.settings) : null;
@@ -1768,7 +1815,13 @@ function ChannelEditor({
     cover: coverOf(own.settings),
     postType,
     ...(Array.isArray(poll) ? { poll } : {}),
-    ...(Array.isArray(poll) && pollRule?.duration ? { pollMinutes: typeof pollMinutes === 'number' ? pollMinutes : pollRule.duration.default } : {}),
+    ...(Array.isArray(poll) && pollRule?.duration && (typeof pollMinutes === 'number' || pollRule.duration.default !== null)
+      ? { pollMinutes: typeof pollMinutes === 'number' ? pollMinutes : (pollRule.duration.default as number) }
+      : {}),
+    // What a Mastodon, Telegram or LinkedIn poll adds (#1118): LinkedIn's own question, several answers, hidden counts.
+    ...(Array.isArray(poll) && pollRule?.question && typeof pollQuestion === 'string' ? { pollQuestion } : {}),
+    ...(Array.isArray(poll) && pollRule?.multiple && pollFlagOf(own.settings, 'multiple') === true ? { pollMultiple: true } : {}),
+    ...(Array.isArray(poll) && pollRule?.hideTotals && pollFlagOf(own.settings, 'hideTotals') === true ? { pollHideTotals: true } : {}),
     ...(typeof tag === 'string' && tag ? { topicTag: tag } : {}),
     ...(replySettings ? { replySettings } : {}),
     ...(blueskyReplies !== null && blueskyReplies !== 'invalid' ? { replyRules: blueskyReplies } : {}),
@@ -1825,7 +1878,7 @@ function ChannelEditor({
         <Checkbox checked={own.customMedia} disabled={disabled} onCheckedChange={(checked) => onChange({ ...own, customMedia: checked === true, media: own.media.length > 0 ? own.media : base.media })} />
         {t('ownMedia')}
       </label>
-      {own.customMedia && <MediaField media={own.media} disabled={disabled} onChange={(media) => onChange({ ...own, media })} />}
+      {own.customMedia && <MediaField media={own.media} disabled={disabled} onAiUsed={onAiUsed} connectionIds={connectionId ? [connectionId] : undefined} onChange={(media) => onChange({ ...own, media })} />}
       {own.customMedia && own.media.length === 0 && <p className="text-xs text-subtle-foreground">{t('ownMediaEmpty')}</p>}
       {isProvider(provider) && REPOST_PROVIDERS.has(provider) && postType !== 'story' && <RepostField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {/* A channel Crove cannot take a post down from shows the field only to clear a time set elsewhere (its issue says why). */}
@@ -1986,7 +2039,7 @@ function SharedFields({
         <Label htmlFor="social-link">{t('link')}</Label>
         <Input id="social-link" type="url" inputMode="url" value={base.linkUrl} disabled={disabled} placeholder="https://" onChange={(e) => onChange({ ...base, linkUrl: e.target.value })} />
       </div>
-      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} onChange={(media) => onChange({ ...base, media })} />
+      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} connectionIds={connectionIds} onChange={(media) => onChange({ ...base, media })} />
     </Card>
   );
 }

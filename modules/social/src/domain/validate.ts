@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollOptionsOf, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, pinterestSectionOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, pinterestSectionOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -123,8 +123,17 @@ export type IssueCode =
   | 'POLL_OPTIONS'
   | 'POLL_OPTION_LENGTH'
   | 'POLL_WITH_MEDIA'
-  // A poll's length (#948, X): not whole minutes from the channel's least to its most (limit: the most, actual: minutes).
+  // A poll's length (#948, X): not whole minutes from the channel's least to its most, or not one of the lengths it
+  // takes (LinkedIn, #1118) (limit: the most, actual: minutes).
   | 'POLL_DURATION'
+  // Polls on Mastodon, Telegram and LinkedIn (#1118): a choice the channel's polls do not take (several answers, counts
+  // hidden until the end, a question of its own; field settings.poll.<name>), or one that is not true or false (or text,
+  // for the question); LinkedIn's question missing or too long (field settings.poll.question); Telegram's question, the
+  // post's text with its link, empty or too long (field body).
+  | 'POLL_SETTING_NOT_SUPPORTED'
+  | 'POLL_SETTING_INVALID'
+  | 'POLL_QUESTION_LENGTH'
+  | 'POLL_TEXT_LENGTH'
   // Who may reply (#948 X, #983 Threads, #1102 Bluesky): a value the channel does not take (everyone, following or
   // mentionedUsers; Threads also followers; Bluesky also nobody, or a list of distinct mentionedUsers, following and
   // followers).
@@ -443,7 +452,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
   checkDiscord(issues, variant, sent);
-  checkPollAndTag(issues, variant, caps);
+  checkPollAndTag(issues, variant, caps, sent);
   checkGbp(issues, variant);
   checkWordPress(issues, variant);
   if (variant.provider === 'tiktok') {
@@ -500,24 +509,48 @@ function checkTikTokDisclosure(issues: Issue[], variant: VariantDraft): void {
   }
 }
 
-function checkPollAndTag(issues: Issue[], variant: VariantDraft, caps: ChannelCapabilities): void {
+// A poll's choices and question (#1118): several answers and hidden counts only where the channel's polls take them
+// (false, the default, is fine anywhere); LinkedIn's own question, required; Telegram's question, the text as sent.
+function checkPollChoices(issues: Issue[], variant: VariantDraft, rule: PollRule, sent: string): void {
+  for (const key of ['multiple', 'hideTotals'] as const) {
+    const value = pollFlagOf(variant.settings, key);
+    const field = `settings.poll.${key}`;
+    if (value === 'invalid') issues.push({ code: 'POLL_SETTING_INVALID', field, limit: null, actual: null });
+    else if (value && !rule[key]) issues.push({ code: 'POLL_SETTING_NOT_SUPPORTED', field, limit: null, actual: null });
+  }
+  const question = pollQuestionOf(variant.settings);
+  const field = 'settings.poll.question';
+  if (question === 'invalid') issues.push({ code: 'POLL_SETTING_INVALID', field, limit: null, actual: null });
+  else if (rule.question) {
+    const n = question === null ? 0 : countText(question, rule.question.count);
+    if (n < 1 || n > rule.question.maxChars) issues.push({ code: 'POLL_QUESTION_LENGTH', field, limit: rule.question.maxChars, actual: n });
+  } else if (question) issues.push({ code: 'POLL_SETTING_NOT_SUPPORTED', field, limit: null, actual: null });
+  if (rule.textAsQuestion) {
+    const n = countText(sent.trim(), CAPABILITIES[variant.provider].body.count);
+    if (n < 1 || n > rule.textAsQuestion.maxChars) issues.push({ code: 'POLL_TEXT_LENGTH', field: 'body', limit: rule.textAsQuestion.maxChars, actual: n });
+  }
+}
+
+function checkPollAndTag(issues: Issue[], variant: VariantDraft, caps: ChannelCapabilities, sent: string): void {
   const options = pollOptionsOf(variant.settings);
-  if (options !== null) {
-    const rule = POLL_RULES[variant.provider];
-    if (!rule) issues.push({ code: 'POLL_NOT_SUPPORTED', field: 'settings.poll', limit: null, actual: null });
-    else if (options === 'invalid' || options.length < rule.minOptions || options.length > rule.maxOptions) {
+  const rule = options !== null ? POLL_RULES[variant.provider] : undefined;
+  if (options !== null && !rule) issues.push({ code: 'POLL_NOT_SUPPORTED', field: 'settings.poll', limit: null, actual: null });
+  if (options !== null && rule) {
+    if (options === 'invalid' || options.length < rule.minOptions || options.length > rule.maxOptions) {
       issues.push({ code: 'POLL_OPTIONS', field: 'settings.poll', limit: rule.maxOptions, actual: options === 'invalid' ? null : options.length });
     } else {
       options.forEach((option, i) => {
-        const n = countText(option, 'codepoints');
+        const n = countText(option, rule.count ?? 'codepoints');
         if (n < 1 || n > rule.maxChars) issues.push({ code: 'POLL_OPTION_LENGTH', field: `settings.poll.${i}`, limit: rule.maxChars, actual: n });
       });
     }
-    const minutes = rule?.duration ? pollDurationOf(variant.settings) : null;
-    if (rule?.duration && minutes !== null && (minutes === 'invalid' || minutes < rule.duration.min || minutes > rule.duration.max)) {
-      issues.push({ code: 'POLL_DURATION', field: 'settings.poll.durationMinutes', limit: rule.duration.max, actual: minutes === 'invalid' ? null : minutes });
+    const minutes = rule.duration ? pollDurationOf(variant.settings) : null;
+    const length = rule.duration;
+    if (length && minutes !== null && (minutes === 'invalid' || minutes < length.min || minutes > length.max || (length.choices !== undefined && !length.choices.includes(minutes)))) {
+      issues.push({ code: 'POLL_DURATION', field: 'settings.poll.durationMinutes', limit: length.max, actual: minutes === 'invalid' ? null : minutes });
     }
-    if (rule && variant.media.length > 0) issues.push({ code: 'POLL_WITH_MEDIA', field: 'settings.poll', limit: null, actual: null });
+    checkPollChoices(issues, variant, rule, sent);
+    if (variant.media.length > 0) issues.push({ code: 'POLL_WITH_MEDIA', field: 'settings.poll', limit: null, actual: null });
   }
   const replyAllowed = REPLY_SETTINGS[variant.provider];
   if (replyAllowed && variant.settings?.replySettings !== undefined && !(replyAllowed as readonly unknown[]).includes(variant.settings.replySettings)) {

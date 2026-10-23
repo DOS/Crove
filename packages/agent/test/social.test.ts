@@ -1,6 +1,6 @@
 // SocialWriter with a stand-in for the model: what it is told, and what it keeps of the answer.
 import { describe, expect, it } from 'vitest';
-import { SocialWriter, cleanHashtag, type DescribeGenerator, type DraftGenerator, type HashtagGenerator, type RewriteGenerator, type WriterChannel } from '../src/index.ts';
+import { ALT_TEXT_IMAGE_MAX_BYTES, SocialWriter, altTextLimit, cleanHashtag, type DescribeGenerator, type DraftGenerator, type HashtagGenerator, type RewriteGenerator, type WriterChannel } from '../src/index.ts';
 
 const CONFIG = { baseURL: 'http://localhost:1/v1', apiKey: null, model: 'test' };
 const channels: WriterChannel[] = [
@@ -154,5 +154,43 @@ describe('SocialWriter alt text (#817)', () => {
     expect(asked[0]).toMatchObject({ mime: 'image/jpeg', image });
     expect(asked[0]?.system).toContain('Vietnamese');
     expect(await writer.describeImage({ image: new Uint8Array(), mime: 'image/jpeg', language: 'vi' })).toBeNull();
+  });
+
+  it("keeps within the strictest chosen channel's limit when it is below 250 characters (#1121)", async () => {
+    const asked: { system: string }[] = [];
+    const generate: DescribeGenerator = async (args) => {
+      asked.push(args);
+      return { altText: 'Ly cà phê sữa đá trên bàn gỗ, bên cạnh ổ bánh mì nóng giòn.' };
+    };
+    const writer = new SocialWriter(CONFIG, undefined, undefined, undefined, generate);
+    const alt = await writer.describeImage({ image: new Uint8Array([1, 2, 3]), mime: 'image/png', language: 'en', maxChars: 20 });
+    expect(Array.from(alt ?? '')).toHaveLength(20);
+    expect(asked[0]?.system).toContain('At most 20 characters');
+    expect(asked[0]?.system).toContain('Describe in English');
+    expect(altTextLimit(undefined)).toBe(250);
+    expect(altTextLimit(null)).toBe(250);
+    expect(altTextLimit(500)).toBe(250);
+    expect(altTextLimit(120.7)).toBe(120);
+    expect(altTextLimit(0)).toBe(1);
+  });
+
+  it('never sends the model a file that is not a JPG, PNG or WEBP image of at most 10 MB (#1121)', async () => {
+    let calls = 0;
+    const generate: DescribeGenerator = async () => {
+      calls++;
+      return { altText: 'x' };
+    };
+    const writer = new SocialWriter(CONFIG, undefined, undefined, undefined, generate);
+    expect(await writer.describeImage({ image: new Uint8Array([1]), mime: 'video/mp4', language: 'vi' })).toBeNull();
+    expect(await writer.describeImage({ image: new Uint8Array([1]), mime: 'image/svg+xml', language: 'vi' })).toBeNull();
+    expect(await writer.describeImage({ image: new Uint8Array(ALT_TEXT_IMAGE_MAX_BYTES + 1), mime: 'image/jpeg', language: 'vi' })).toBeNull();
+    expect(calls).toBe(0);
+    expect(await writer.describeImage({ image: new Uint8Array([1]), mime: 'image/webp', language: 'vi' })).toBe('x');
+    expect(calls).toBe(1);
+  });
+
+  it('gives nothing when the model answers only blanks', async () => {
+    const writer = new SocialWriter(CONFIG, undefined, undefined, undefined, async () => ({ altText: '   ' }));
+    expect(await writer.describeImage({ image: new Uint8Array([1]), mime: 'image/jpeg', language: 'vi' })).toBeNull();
   });
 });

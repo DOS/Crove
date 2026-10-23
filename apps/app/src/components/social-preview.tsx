@@ -19,9 +19,13 @@ export interface PreviewContent {
   cover?: Cover | null;
   // The channel's post type (#644): a Story shows only its image or video, in a phone frame.
   postType?: string;
-  // A Threads or X poll's options and a Threads topic tag (#711, #948); an X poll's length in minutes.
+  // A poll's options and a Threads topic tag (#711, #948, #1118); the poll's length in minutes where it has one.
   poll?: readonly string[];
   pollMinutes?: number;
+  // A LinkedIn poll's own question; voters may pick several options; counts hidden until the end (#1118).
+  pollQuestion?: string;
+  pollMultiple?: boolean;
+  pollHideTotals?: boolean;
   topicTag?: string;
   // Who may reply to an X or Threads post, when not everyone (#948, #983).
   replySettings?: 'following' | 'mentionedUsers' | 'followers';
@@ -248,6 +252,7 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
       {title && <p className="mt-3 text-sm font-semibold text-foreground">{title}</p>}
       {content.topicTag && <p className="mt-2 text-xs font-medium text-link">{content.topicTag}</p>}
       <div className="mt-2">{body}</div>
+      {content.poll && content.poll.length > 0 && typeof content.pollQuestion === 'string' && <p className="mt-2 text-sm font-semibold text-foreground">{content.pollQuestion.trim() || ' '}</p>}
       {content.poll && content.poll.length > 0 && (
         <ul className="mt-2 space-y-1" aria-label={t('previewPoll')}>
           {content.poll.map((option, i) => (
@@ -260,6 +265,8 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
       {content.poll && content.poll.length > 0 && content.pollMinutes !== undefined && (
         <p className="mt-1 text-xs text-subtle-foreground">{t(`previewPollLength.${pollLength(content.pollMinutes).unit}`, { n: pollLength(content.pollMinutes).n })}</p>
       )}
+      {content.poll && content.poll.length > 0 && content.pollMultiple && <p className="mt-1 text-xs text-subtle-foreground">{t('previewPollMultiple')}</p>}
+      {content.poll && content.poll.length > 0 && content.pollHideTotals && <p className="mt-1 text-xs text-subtle-foreground">{t('previewPollHideTotals')}</p>}
       <Media media={content.media} layout="feed" max={rule.gridMax} />
       {content.replySettings && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewReplySettings.${content.replySettings}`)}</p>}
       {content.visibility && <p className="mt-2 text-xs text-subtle-foreground">{t(`previewVisibility.${content.visibility}`)}</p>}

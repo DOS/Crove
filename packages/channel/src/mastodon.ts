@@ -11,6 +11,7 @@
 // is posted (POST /api/v1/statuses) with the call's key as its Idempotency-Key, so a repeat of the same call within the
 // instance's window posts nothing new. A content warning (spoiler text) and the visibility (public or unlisted) come
 // from the variant's settings. The limits are the instance's own (GET /api/v2/instance), read before the post.
+// A status may carry a poll instead of media (#1118, `settings.poll`), its text being the question.
 import type { CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
@@ -128,6 +129,44 @@ interface InstanceLimits {
   maxMedia: number;
   imageBytes: number | null;
   videoBytes: number | null;
+  // configuration.polls: options, characters an option, and the shortest and longest poll in seconds.
+  pollOptions: number;
+  pollOptionChars: number;
+  pollMinSeconds: number;
+  pollMaxSeconds: number;
+}
+
+// A poll (#1118), as the variant's settings carry it (`settings.poll`: { options, durationMinutes?, multiple?,
+// hideTotals? }, the shape X and Threads read): POST /api/v1/statuses takes poll { options, expires_in (seconds),
+// multiple, hide_totals }, and a status carries media or a poll, never both. Without a length the poll runs a day.
+// multiple and hide_totals go only when true, so a poll as usual sends what Mastodon defaults to. null for none,
+// 'invalid' for any other shape. The instance's own limits are checked by publish.
+export const MASTODON_POLL_DEFAULT_MINUTES = 1440;
+export interface MastodonPoll {
+  options: string[];
+  expires_in: number;
+  multiple?: true;
+  hide_totals?: true;
+}
+export function mastodonPollOf(settings: Readonly<Record<string, unknown>> | undefined): MastodonPoll | null | 'invalid' {
+  const poll = settings?.poll;
+  if (poll === undefined || poll === null) return null;
+  if (typeof poll !== 'object' || Array.isArray(poll)) return 'invalid';
+  const { options, durationMinutes, multiple, hideTotals } = poll as { options?: unknown; durationMinutes?: unknown; multiple?: unknown; hideTotals?: unknown };
+  if (!Array.isArray(options) || options.length < 2) return 'invalid';
+  const texts: string[] = [];
+  for (const option of options) {
+    const text = typeof option === 'string' ? option.trim() : '';
+    if (!text) return 'invalid';
+    texts.push(text);
+  }
+  const minutes = durationMinutes === undefined || durationMinutes === null ? MASTODON_POLL_DEFAULT_MINUTES : durationMinutes;
+  if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1) return 'invalid';
+  const flag = (v: unknown) => (v === undefined || v === null ? false : typeof v === 'boolean' ? v : 'invalid');
+  const many = flag(multiple);
+  const hidden = flag(hideTotals);
+  if (many === 'invalid' || hidden === 'invalid') return 'invalid';
+  return { options: texts, expires_in: minutes * 60, ...(many ? { multiple: true as const } : {}), ...(hidden ? { hide_totals: true as const } : {}) };
 }
 
 function mastodonResult(error: unknown): PublishResult {
@@ -164,12 +203,30 @@ export class MastodonPublisher implements Publisher {
   }
 
   private async limits(s: MastodonSecret): Promise<InstanceLimits> {
-    const fallback: InstanceLimits = { maxCharacters: 500, maxMedia: 4, imageBytes: null, videoBytes: null };
+    // Mainline Mastodon's poll limits (mastodon.social, configuration.polls) where an instance names none.
+    const polls = { pollOptions: 4, pollOptionChars: 50, pollMinSeconds: 300, pollMaxSeconds: 2_629_746 };
+    const fallback: InstanceLimits = { maxCharacters: 500, maxMedia: 4, imageBytes: null, videoBytes: null, ...polls };
     try {
-      const { data } = await this.client.call<{ configuration?: { statuses?: { max_characters?: unknown; max_media_attachments?: unknown }; media_attachments?: { image_size_limit?: unknown; video_size_limit?: unknown } } }>(s, 'GET', '/api/v2/instance');
+      const { data } = await this.client.call<{
+        configuration?: {
+          statuses?: { max_characters?: unknown; max_media_attachments?: unknown };
+          media_attachments?: { image_size_limit?: unknown; video_size_limit?: unknown };
+          polls?: { max_options?: unknown; max_characters_per_option?: unknown; min_expiration?: unknown; max_expiration?: unknown };
+        };
+      }>(s, 'GET', '/api/v2/instance');
       const c = data.configuration;
       const n = (v: unknown, d: number | null) => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : d);
-      return { maxCharacters: n(c?.statuses?.max_characters, 500) as number, maxMedia: n(c?.statuses?.max_media_attachments, 4) as number, imageBytes: n(c?.media_attachments?.image_size_limit, null), videoBytes: n(c?.media_attachments?.video_size_limit, null) };
+      const p = c?.polls;
+      return {
+        maxCharacters: n(c?.statuses?.max_characters, 500) as number,
+        maxMedia: n(c?.statuses?.max_media_attachments, 4) as number,
+        imageBytes: n(c?.media_attachments?.image_size_limit, null),
+        videoBytes: n(c?.media_attachments?.video_size_limit, null),
+        pollOptions: n(p?.max_options, polls.pollOptions) as number,
+        pollOptionChars: n(p?.max_characters_per_option, polls.pollOptionChars) as number,
+        pollMinSeconds: n(p?.min_expiration, polls.pollMinSeconds) as number,
+        pollMaxSeconds: n(p?.max_expiration, polls.pollMaxSeconds) as number,
+      };
     } catch {
       return fallback;
     }
@@ -183,8 +240,19 @@ export class MastodonPublisher implements Publisher {
     const media = input.content.media;
     const { spoilerText, visibility } = mastodonSettingsOf(input.settings);
     if (!text && media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    // The poll (#1118) is checked before any call, and against the instance's own limits before anything is uploaded.
+    const poll = mastodonPollOf(input.settings);
+    if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
+    if (poll && media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
     const limits = await this.limits(s);
     if (codepoints(text) + (spoilerText ? codepoints(spoilerText) : 0) > limits.maxCharacters) return { kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG', message: `this instance takes ${limits.maxCharacters} characters` };
+    if (poll) {
+      if (poll.options.length > limits.pollOptions) return { kind: 'rejected', error: 'bad_request', code: 'POLL_TOO_MANY_OPTIONS', message: `this instance takes ${limits.pollOptions} options` };
+      if (poll.options.some((o) => codepoints(o) > limits.pollOptionChars)) return { kind: 'rejected', error: 'bad_request', code: 'POLL_OPTION_TOO_LONG', message: `this instance takes ${limits.pollOptionChars} characters an option` };
+      if (poll.expires_in < limits.pollMinSeconds || poll.expires_in > limits.pollMaxSeconds) {
+        return { kind: 'rejected', error: 'bad_request', code: 'POLL_DURATION', message: `this instance takes polls of ${limits.pollMinSeconds} to ${limits.pollMaxSeconds} seconds` };
+      }
+    }
     if (media.length > limits.maxMedia) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_MEDIA' };
     for (const m of media) {
       const cap = m.mime.startsWith('video/') ? limits.videoBytes : limits.imageBytes;
@@ -217,7 +285,8 @@ export class MastodonPublisher implements Publisher {
         s,
         'POST',
         '/api/v1/statuses',
-        { json: { status: text, media_ids: mediaIds, visibility, ...(spoilerText ? { spoiler_text: spoilerText } : {}) } },
+        // A poll goes instead of media_ids, which Mastodon refuses with it; a status without one is sent as before.
+        { json: { status: text, ...(poll ? {} : { media_ids: mediaIds }), visibility, ...(spoilerText ? { spoiler_text: spoilerText } : {}), ...(poll ? { poll } : {}) } },
         { 'idempotency-key': input.callKey },
       );
       if (typeof data.id !== 'string' || !STATUS_ID.test(data.id)) return { kind: 'unknown', code: 'NO_STATUS_ID' };

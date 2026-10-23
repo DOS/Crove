@@ -178,10 +178,10 @@ describe('channel scope', () => {
 });
 
 describe('variantTexts', () => {
-  it('checks the text, title, first comment, thread parts, auto-reply and poll options', () => {
+  it('checks the text, title, first comment, thread parts, auto-reply, poll options and a LinkedIn poll question', () => {
     const texts = variantTexts(
       { body: 'thân', title: 'tiêu đề' },
-      { firstComment: 'bình luận', threadParts: ['phần 2', 3], autoReply: { text: 'cảm ơn', likes: 5 }, poll: { options: ['có', 'không'] }, privacy: 'PUBLIC' },
+      { firstComment: 'bình luận', threadParts: ['phần 2', 3], autoReply: { text: 'cảm ơn', likes: 5 }, poll: { options: ['có', 'không'], question: 'Món nào?' }, privacy: 'PUBLIC' },
     );
     expect(texts).toEqual([
       { field: 'body', text: 'thân' },
@@ -191,6 +191,7 @@ describe('variantTexts', () => {
       { field: 'settings.autoReply.text', text: 'cảm ơn' },
       { field: 'settings.poll.0', text: 'có' },
       { field: 'settings.poll.1', text: 'không' },
+      { field: 'settings.poll.question', text: 'Món nào?' },
     ]);
     expect(variantTexts({ body: '', title: null }, undefined)).toEqual([{ field: 'body', text: '' }]);
   });
