@@ -121,6 +121,8 @@ interface ChannelOptionJob {
   optionId: string;
 }
 const CHANNEL_OPTION_RETRY_LIMIT = 2;
+// Lists one worker process reads at once (#1131); each holds at most one database connection at a time.
+const CHANNEL_OPTION_WORKERS = 4;
 
 interface ExtractJob {
   orgId: string;
@@ -712,8 +714,10 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       const done = await runRemoveJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, after);
       console.log(`[social-remove] ${provider.slice(0, 32)} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
     });
-    // A channel's options for the composer (#1120): the token is opened here and goes to the adapter only.
-    await boss.work<ChannelOptionJob>(QUEUES.socialChannelOption, { batchSize: 1 }, async ([job]) => {
+    // A channel's options for the composer (#1120): the token is opened here and goes to the adapter only. A few lists
+    // are read at once (#1131), so one slow platform or site, within the list's deadline, does not hold every other
+    // org's pickers behind it.
+    await boss.work<ChannelOptionJob>(QUEUES.socialChannelOption, { batchSize: 1, localConcurrency: CHANNEL_OPTION_WORKERS }, async ([job]) => {
       if (!job || !channels) return;
       const done = await runChannelOptionJob({ runtime: deps.runtime, broker: channels.broker, publishers }, job.data.orgId, job.data.optionId);
       if (done !== 'none') console.log(`[social-channel-option] ${job.data.optionId.slice(0, 8)}: ${done}`);

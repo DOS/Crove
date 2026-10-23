@@ -347,17 +347,101 @@ describe('YouTubePublisher playlists (#1018)', () => {
     expect(none.calls).toEqual([]);
   });
 
-  it("lists the channel's own playlists for the composer, one page, and tells a dead token from an outage", async () => {
+  it("lists the channel's own playlists for the composer, page by page, and tells a dead token from an outage", async () => {
     const { fetchImpl, calls } = google({
       'GET www.googleapis.com/youtube/v3/playlists': [
         { body: { items: [{ id: SALE, snippet: { title: ' Khuyến mãi tháng 10 ' } }, { id: GONE, snippet: {} }, { id: 'not a playlist', snippet: { title: 'x' } }], nextPageToken: 'CDIQAA' } },
+        { body: { items: [{ id: SALE, snippet: { title: 'again' } }] } },
       ],
     });
     expect(await new YouTubePublisher(APP, fetchImpl).playlists({ secret: SECRET })).toEqual({ playlists: [{ id: SALE, title: 'Khuyến mãi tháng 10' }, { id: GONE, title: GONE }] });
     expect(Object.fromEntries(calls[0]?.url.searchParams ?? [])).toEqual({ part: 'snippet', mine: 'true', maxResults: '50' });
+    expect(Object.fromEntries(calls[1]?.url.searchParams ?? [])).toEqual({ part: 'snippet', mine: 'true', maxResults: '50', pageToken: 'CDIQAA' });
+    expect(calls).toHaveLength(2);
     const dead = google({ 'GET www.googleapis.com/youtube/v3/playlists': [{ status: 401, body: { error: { message: 'Invalid Credentials', errors: [{ reason: 'authError' }] } } }] });
     expect(await new YouTubePublisher(APP, dead.fetchImpl).playlists({ secret: SECRET })).toEqual({ refused: 'token_expired' });
     const down = google({ 'GET www.googleapis.com/youtube/v3/playlists': [{ status: 503, body: {} }] });
     expect(await new YouTubePublisher(APP, down.fetchImpl).playlists({ secret: SECRET })).toBeNull();
+  });
+});
+
+describe('YouTubePublisher options for the composer (#1030, #1131)', () => {
+  const PLAYLISTS = 'GET www.googleapis.com/youtube/v3/playlists';
+  const list = (fetchImpl: Fetch, over: { externalAccountId?: string; kind?: 'youtube_playlist' | 'pinterest_section'; secret?: string } = {}) =>
+    new YouTubePublisher(APP, fetchImpl).options({ externalAccountId: over.externalAccountId ?? CHANNEL, secret: over.secret ?? SECRET, kind: over.kind ?? 'youtube_playlist' });
+  // The nth playlist of the channel, as YouTube writes its id.
+  const playlist = (n: number) => `PL${String(n).padStart(16, '0')}`;
+
+  it("lists the channel's playlists by name, following the page token, with names cleaned", async () => {
+    const { fetchImpl, calls } = google({
+      [PLAYLISTS]: [
+        { body: { kind: 'youtube#playlistListResponse', items: [{ id: playlist(1), snippet: { title: 'Khuyến\u200b mãi\ntháng 10' } }, { id: playlist(2), snippet: { title: '   ' } }], nextPageToken: 'CAIQAA' } },
+        { body: { kind: 'youtube#playlistListResponse', items: [{ id: playlist(3), snippet: { title: 'Thực đơn <mới>' } }] } },
+      ],
+    });
+    expect(await list(fetchImpl)).toEqual({
+      options: [
+        { id: playlist(1), name: 'Khuyến mãi tháng 10' },
+        { id: playlist(2), name: playlist(2) },
+        // YouTube's text, kept as text; the composer shows it as text.
+        { id: playlist(3), name: 'Thực đơn <mới>' },
+      ],
+    });
+    expect(calls.map((c) => c.headers.get('authorization'))).toEqual(['Bearer ya29.token-1', 'Bearer ya29.token-1']);
+    expect(calls[1]?.url.searchParams.get('pageToken')).toBe('CAIQAA');
+  });
+
+  it('stops at 500 playlists, ten pages of 50', async () => {
+    const pages = Array.from({ length: 11 }, (_, p) => ({ body: { items: Array.from({ length: 50 }, (_, i) => ({ id: playlist(p * 50 + i), snippet: { title: `List ${p * 50 + i}` } })), nextPageToken: `page-${p + 1}` } }));
+    const { fetchImpl, calls } = google({ [PLAYLISTS]: pages });
+    const answer = await list(fetchImpl);
+    expect(answer && 'options' in answer ? answer.options.length : 0).toBe(500);
+    expect(calls).toHaveLength(10);
+  });
+
+  it('tells a dead token, a refusal, a gone channel, a spent quota and an outage apart', async () => {
+    const error = (status: number, reason: string) => ({ status, body: { error: { code: status, message: reason, errors: [{ reason }] } } });
+    const cases: [Answer, unknown][] = [
+      [error(401, 'authError'), { refused: 'token_expired' }],
+      [error(403, 'insufficientPermissions'), { refused: 'permission' }],
+      [error(404, 'channelNotFound'), { refused: 'not_found' }],
+      [error(403, 'quotaExceeded'), null],
+      [error(429, 'rateLimitExceeded'), null],
+      [{ status: 503, body: {} }, null],
+      [{ body: { items: 'not a list' } }, null],
+    ];
+    for (const [answer, expected] of cases) expect(await list(google({ [PLAYLISTS]: [answer] }).fetchImpl)).toEqual(expected);
+    // A failure on a later page keeps none of the earlier ones.
+    const later = google({ [PLAYLISTS]: [{ body: { items: [{ id: playlist(1), snippet: { title: 'A' } }], nextPageToken: 'next' } }, { status: 503, body: {} }] });
+    expect(await list(later.fetchImpl)).toBeNull();
+  });
+
+  it('asks nothing for a secret it cannot read, another kind of list or a malformed channel id', async () => {
+    const { fetchImpl, calls } = google({});
+    expect(await list(fetchImpl, { secret: '{}' })).toEqual({ refused: 'token_expired' });
+    expect(await list(fetchImpl, { kind: 'pinterest_section' })).toEqual({ refused: 'not_found' });
+    expect(await list(fetchImpl, { externalAccountId: 'not a channel' })).toEqual({ refused: 'not_found' });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('YouTube playlists picked from the list go in as pasted ones (#1131)', () => {
+  it('puts the video into a listed playlist with the insert as before, and still refuses one deleted since', async () => {
+    const SALE = 'PLabcdefghijklmnopqrstuvwxyz012345';
+    const { fetchImpl, calls } = google({
+      'GET www.googleapis.com/youtube/v3/playlists': [{ body: { items: [{ id: SALE, snippet: { title: 'Khuyến mãi' } }] } }],
+      'POST www.googleapis.com/youtube/v3/playlistItems': [
+        { body: { kind: 'youtube#playlistItem', id: 'UExpdGVtMQ' } },
+        { status: 404, body: { error: { code: 404, message: 'Playlist not found.', errors: [{ reason: 'playlistNotFound' }] } } },
+      ],
+    });
+    const publisher = new YouTubePublisher(APP, fetchImpl);
+    const listed = await publisher.options({ externalAccountId: CHANNEL, secret: SECRET, kind: 'youtube_playlist' });
+    const picked = listed && 'options' in listed ? (listed.options[0]?.id as string) : '';
+    expect(picked).toBe(SALE);
+    const item = { externalAccountId: CHANNEL, secret: SECRET, externalId: 'dQw4w9WgXcQ', playlistId: picked, callKey: 'call-1' };
+    expect(await publisher.playlist(item)).toEqual({ kind: 'accepted', externalId: 'UExpdGVtMQ' });
+    expect(calls[1]?.body).toEqual({ snippet: { playlistId: SALE, resourceId: { kind: 'youtube#video', videoId: 'dQw4w9WgXcQ' } } });
+    expect(await publisher.playlist(item)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'PLAYLIST_NOT_FOUND' });
   });
 });

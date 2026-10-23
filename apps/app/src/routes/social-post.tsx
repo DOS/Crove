@@ -146,15 +146,22 @@ function TagsField({ tags, onChange, disabled }: { tags: readonly string[]; onCh
   );
 }
 
-// The playlists a YouTube video goes into once it is out (#1018): the channel's own, pasted as a playlist link or id
-// and kept as ids in settings.youtube.playlistIds, at most YOUTUBE_PLAYLISTS_MAX. A playlist that is gone by then
-// leaves the video published, with a warning on the post.
-function PlaylistsField({ ids, onChange, disabled }: { ids: readonly string[]; onChange: (ids: string[]) => void; disabled: boolean }) {
+// The playlists a YouTube video goes into once it is out (#1018): the channel's own, chosen by name from the list the
+// worker read with the channel's token (#1030, #1131) or pasted as a playlist link or id, and kept as ids in
+// settings.youtube.playlistIds, at most YOUTUBE_PLAYLISTS_MAX. A playlist that is gone by then leaves the video
+// published, with a warning on the post. The names are YouTube's text, shown as text only.
+function PlaylistsField({ ids, onChange, disabled, connectionId }: { ids: readonly string[]; onChange: (ids: string[]) => void; disabled: boolean; connectionId: string | null }) {
   const t = useTranslations('social');
   const id = useId();
   const [text, setText] = useState('');
   const [wrong, setWrong] = useState(false);
   const full = ids.length >= YOUTUBE_PLAYLISTS_MAX;
+  const list = useChannelOptions(connectionId);
+  const { ready, options } = list;
+  const nameOf = (playlist: string) => options.find((o) => o.id === playlist)?.name ?? null;
+  // Only a list that holds every playlist can tell one is gone.
+  const gone = ready && listedAll(options) ? ids.filter((playlist) => nameOf(playlist) === null) : [];
+  const left = options.filter((o) => !ids.includes(o.id));
   const add = () => {
     const playlist = youtubePlaylistIdFrom(text);
     if (!playlist) {
@@ -177,18 +184,52 @@ function PlaylistsField({ ids, onChange, disabled }: { ids: readonly string[]; o
       </div>
       {ids.length > 0 && (
         <ul className="space-y-1">
-          {ids.map((playlist) => (
-            <li key={playlist} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1">
-              <a href={`https://www.youtube.com/playlist?list=${playlist}`} target="_blank" rel="noopener noreferrer" className="truncate font-mono text-xs text-link hover:underline">
-                {playlist}
-              </a>
-              <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onChange(ids.filter((x) => x !== playlist))}>
-                {t('ytPlaylistRemove')}
-              </Button>
-            </li>
-          ))}
+          {ids.map((playlist) => {
+            const name = nameOf(playlist);
+            return (
+              <li key={playlist} className="flex items-center justify-between gap-2 rounded-md border px-2 py-1">
+                <a href={`https://www.youtube.com/playlist?list=${playlist}`} target="_blank" rel="noopener noreferrer" className={cn('truncate text-xs text-link hover:underline', name === null && 'font-mono')}>
+                  {name ?? playlist}
+                </a>
+                <Button variant="ghost" size="sm" disabled={disabled} onClick={() => onChange(ids.filter((x) => x !== playlist))}>
+                  {t('ytPlaylistRemove')}
+                </Button>
+              </li>
+            );
+          })}
         </ul>
       )}
+      {gone.length > 0 && <p className="text-xs text-warning">{t('ytPlaylistGone', { count: gone.length })}</p>}
+      {list.on && (
+        <NativeSelect
+          aria-label={t('ytPlaylistPick')}
+          size="sm"
+          className="w-full max-w-xs"
+          value=""
+          disabled={disabled || full || left.length === 0}
+          onChange={(e) => {
+            if (e.target.value && !ids.includes(e.target.value)) onChange([...ids, e.target.value]);
+          }}
+        >
+          <NativeSelectOption value="">{t('ytPlaylistPick')}</NativeSelectOption>
+          {left.map((o) => (
+            <NativeSelectOption key={o.id} value={o.id}>
+              {o.name}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      )}
+      <ChannelOptionsState
+        list={list}
+        disabled={disabled}
+        words={{
+          loading: t('ytPlaylistListLoading'),
+          empty: t('ytPlaylistListEmpty'),
+          failed: (error) => t(`ytPlaylistListFailed.${error}`),
+          reload: t('channelOptionsReload'),
+          retryLater: (minutes) => t('channelOptionsRetryLater', { minutes }),
+        }}
+      />
       <div className="flex gap-2">
         <Input
           id={id}
@@ -219,7 +260,7 @@ function PlaylistsField({ ids, onChange, disabled }: { ids: readonly string[]; o
 
 // YouTube (#905): who can watch, whether the video is made for kids (YouTube requires the answer; absent is no, as for
 // every video Crove posted before), its category from YouTube's fixed list, and its tags.
-function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+function YouTubeSettings({ connectionId, settings, onChange, disabled }: { connectionId: string | null; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social');
   const locale = useLocale();
   const id = useId();
@@ -284,20 +325,17 @@ function YouTubeSettings({ settings, onChange, disabled }: { settings: Record<st
         </NativeSelect>
       </div>
       <TagsField tags={tags} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, tags: next } : without('tags'))} />
-      <PlaylistsField ids={playlists} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, youtube: { playlistIds: next } } : without('youtube'))} />
+      <PlaylistsField ids={playlists} connectionId={connectionId} disabled={disabled} onChange={(next) => onChange(next.length > 0 ? { ...settings, youtube: { playlistIds: next } } : without('youtube'))} />
     </div>
   );
 }
 
-// A pin's board section on Pinterest (#1120): one of the board's sections as the worker listed them with the board's
-// token, kept as settings.pinterest.sectionId; none is the board itself, as before, and is not stored. The names are
-// Pinterest's text, shown as text only. Publishing checks the section against the board again.
-function PinterestSettings({ connectionId, settings, onChange, disabled }: { connectionId: string | null; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
-  const t = useTranslations('social');
-  const id = useId();
-  const chosen = pinterestSectionOf(settings);
-  const sectionId = chosen !== null && chosen !== 'invalid' ? chosen : null;
-  const { pinterest: _section, ...others } = settings;
+type ChannelOptionList = NonNullable<Awaited<ReturnType<typeof client.social.channelOptions.get>>>;
+type ChannelOptionError = NonNullable<ChannelOptionList['error']>;
+
+// A channel's list to pick from (#1120, #1131): asked for once the channel is known, then read while the worker is on
+// it, for about a minute. Only the worker opens the channel's token; the composer reads what it recorded.
+function useChannelOptions(connectionId: string | null) {
   const on = connectionId !== null;
   const asked = useQuery({
     queryKey: ['social-channel-options', 'request', connectionId],
@@ -312,24 +350,69 @@ function PinterestSettings({ connectionId, settings, onChange, disabled }: { con
     queryFn: () => client.social.channelOptions.get({ connectionId: connectionId as string }),
     enabled: on && waiting,
     retry: false,
-    // About a minute, then the picker says Pinterest did not answer.
+    // About a minute, then the picker says the platform did not answer.
     refetchInterval: (q) => (q.state.data && q.state.data.status !== 'pending') || q.state.dataUpdateCount >= 40 ? false : 1500,
   });
-  const latest = read.data ?? asked.data ?? null;
+  const latest: ChannelOptionList | null = read.data ?? asked.data ?? null;
   const ready = latest?.status === 'ready';
   const options = ready ? latest.options : [];
-  const known = sectionId === null || options.some((o) => o.id === sectionId);
   // Still pending when the polling above stops.
   const stalled = latest?.status === 'pending' && read.data?.status === 'pending' && read.dataUpdatedAt - asked.dataUpdatedAt > 55_000;
   const reload = () => {
     void queryClient.resetQueries({ queryKey: ['social-channel-options', 'get', connectionId] });
     void asked.refetch();
   };
-  const reloadButton = (
-    <Button variant="ghost" size="sm" disabled={asked.isFetching} onClick={reload}>
-      {t('pinSectionReload')}
-    </Button>
+  return { on, asked, latest, ready, options, stalled, reload };
+}
+type ChannelOptions = ReturnType<typeof useChannelOptions>;
+
+// Where a channel's list stands, under its picker: loading, why it failed (with a reload, or how long until one), or
+// that it is empty. The words are the channel's own.
+function ChannelOptionsState({
+  list,
+  disabled,
+  words,
+}: {
+  list: ChannelOptions;
+  disabled: boolean;
+  words: { loading: string; empty: string; failed: (error: ChannelOptionError) => string; reload: string; retryLater: (minutes: number) => string };
+}) {
+  const { on, asked, latest, ready, options, stalled, reload } = list;
+  return (
+    <>
+      {on && (asked.isLoading || (latest?.status === 'pending' && !stalled)) && <p className="text-xs text-subtle-foreground">{words.loading}</p>}
+      {(asked.isError || stalled || latest?.status === 'failed') && (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-warning">{latest?.status === 'failed' && latest.error ? words.failed(latest.error) : stalled ? words.failed('no_answer') : errorMessage(asked.error)}</p>
+          {/* A failed read stays the answer for a few minutes (#1120); asking again before then changes nothing. */}
+          {latest?.status === 'failed' && (latest.retryAfterSeconds ?? 0) > 0 ? (
+            <p className="text-xs text-subtle-foreground">{words.retryLater(Math.ceil((latest.retryAfterSeconds ?? 0) / 60))}</p>
+          ) : (
+            !disabled && (
+              <Button variant="ghost" size="sm" disabled={asked.isFetching} onClick={reload}>
+                {words.reload}
+              </Button>
+            )
+          )}
+        </div>
+      )}
+      {ready && options.length === 0 && <p className="text-xs text-subtle-foreground">{words.empty}</p>}
+    </>
   );
+}
+
+// A pin's board section on Pinterest (#1120): one of the board's sections as the worker listed them with the board's
+// token, kept as settings.pinterest.sectionId; none is the board itself, as before, and is not stored. The names are
+// Pinterest's text, shown as text only. Publishing checks the section against the board again.
+function PinterestSettings({ connectionId, settings, onChange, disabled }: { connectionId: string | null; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+  const t = useTranslations('social');
+  const id = useId();
+  const chosen = pinterestSectionOf(settings);
+  const sectionId = chosen !== null && chosen !== 'invalid' ? chosen : null;
+  const { pinterest: _section, ...others } = settings;
+  const list = useChannelOptions(connectionId);
+  const { ready, options } = list;
+  const known = sectionId === null || options.some((o) => o.id === sectionId);
   return (
     <div className="space-y-1.5">
       <Label htmlFor={`${id}-section`} className="text-xs">
@@ -351,19 +434,17 @@ function PinterestSettings({ connectionId, settings, onChange, disabled }: { con
           </NativeSelectOption>
         ))}
       </NativeSelect>
-      {on && (asked.isLoading || (latest?.status === 'pending' && !stalled)) && <p className="text-xs text-subtle-foreground">{t('pinSectionLoading')}</p>}
-      {(asked.isError || stalled || latest?.status === 'failed') && (
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="text-xs text-warning">{latest?.status === 'failed' && latest.error ? t(`pinSectionFailed.${latest.error}`) : stalled ? t('pinSectionFailed.no_answer') : errorMessage(asked.error)}</p>
-          {/* A failed read stays the answer for a few minutes (#1120); asking again before then changes nothing. */}
-          {latest?.status === 'failed' && (latest.retryAfterSeconds ?? 0) > 0 ? (
-            <p className="text-xs text-subtle-foreground">{t('pinSectionRetryLater', { minutes: Math.ceil((latest.retryAfterSeconds ?? 0) / 60) })}</p>
-          ) : (
-            !disabled && reloadButton
-          )}
-        </div>
-      )}
-      {ready && options.length === 0 && <p className="text-xs text-subtle-foreground">{t('pinSectionEmpty')}</p>}
+      <ChannelOptionsState
+        list={list}
+        disabled={disabled}
+        words={{
+          loading: t('pinSectionLoading'),
+          empty: t('pinSectionEmpty'),
+          failed: (error) => t(`pinSectionFailed.${error}`),
+          reload: t('channelOptionsReload'),
+          retryLater: (minutes) => t('channelOptionsRetryLater', { minutes }),
+        }}
+      />
       {ready && !known && <p className="text-xs text-warning">{t('pinSectionGone')}</p>}
       <p className="text-xs text-subtle-foreground">{t('pinSectionHint')}</p>
     </div>
@@ -407,9 +488,52 @@ function NamesField({ label, hint, names, max, onChange, disabled }: { label: st
   );
 }
 
+// A WordPress name as the site compares it (#981): spaces collapsed, case ignored.
+const termKeyOf = (name: string) => name.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+// The most options a list keeps and the bytes they may take (CHANNEL_OPTIONS_MAX and CHANNEL_OPTIONS_BYTES_MAX in
+// @crove/channel, which the browser does not import).
+const CHANNEL_OPTIONS_LISTED_MAX = 500;
+const CHANNEL_OPTIONS_LISTED_BYTES = 131_072;
+// Room for one more option of the longest kind (a 200-character name of 4-byte characters, its id and taxonomy).
+const OPTION_BYTES_ROOM = 1_024;
+// Whether a read list holds everything the platform has: not when it stopped at 500 items or near the byte cap, where
+// what is missing may simply not have fitted.
+function listedAll(options: readonly { id: string; name: string }[]): boolean {
+  const bytes = new TextEncoder().encode(JSON.stringify(options)).length + 8 * options.length;
+  return options.length < CHANNEL_OPTIONS_LISTED_MAX && bytes + OPTION_BYTES_ROOM <= CHANNEL_OPTIONS_LISTED_BYTES;
+}
+
+// A WordPress category or tag chosen by name from the site's list (#1131), added to the names typed above it, as a
+// typed name would be. The names are the site's text, shown as text only; one entry per name.
+function TermPick({ label, terms, names, max, onChange, disabled }: { label: string; terms: readonly { id: string; name: string }[]; names: readonly string[]; max: number; onChange: (names: string[]) => void; disabled: boolean }) {
+  const left = [...new Map(terms.filter((o) => !names.some((n) => termKeyOf(n) === termKeyOf(o.name))).map((o) => [termKeyOf(o.name), o] as const)).values()];
+  return (
+    <NativeSelect
+      aria-label={label}
+      size="sm"
+      className="w-full max-w-xs"
+      value=""
+      disabled={disabled || names.length >= max || left.length === 0}
+      onChange={(e) => {
+        const term = left.find((o) => o.id === e.target.value);
+        if (term) onChange([...names, term.name]);
+      }}
+    >
+      <NativeSelectOption value="">{label}</NativeSelectOption>
+      {left.map((o) => (
+        <NativeSelectOption key={o.id} value={o.id}>
+          {o.name}
+        </NativeSelectOption>
+      ))}
+    </NativeSelect>
+  );
+}
+
 // WordPress (#981): published at once, saved as a draft or sent for review; its categories (names the site has), tags
-// and excerpt. Each is optional and is stored only when set, so a variant saved before keeps its content hash.
-function WordPressSettings({ settings, onChange, disabled }: { settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
+// and excerpt. Each is optional and is stored only when set, so a variant saved before keeps its content hash. The
+// categories and tags are picked by name from the site's list the worker read with its login (#1131), or typed; they
+// are stored as names either way, and publishing matches them on the site as before.
+function WordPressSettings({ connectionId, settings, onChange, disabled }: { connectionId: string | null; settings: Record<string, unknown>; onChange: (settings: Record<string, unknown>) => void; disabled: boolean }) {
   const t = useTranslations('social');
   const id = useId();
   const { wordpress: raw, ...others } = settings;
@@ -424,6 +548,12 @@ function WordPressSettings({ settings, onChange, disabled }: { settings: Record<
   const known = (WORDPRESS_STATUSES as readonly string[]).includes(status);
   const excerpt = typeof w.excerpt === 'string' ? w.excerpt : '';
   const excerptUsed = [...excerpt.trim()].length;
+  const list = useChannelOptions(connectionId);
+  const listedCategories = list.options.filter((o) => o.taxonomy === 'category');
+  const listedTags = list.options.filter((o) => o.taxonomy === 'tag');
+  // Categories come first in the list, so it holds every one of them unless they alone filled it.
+  const everyCategory = list.ready && (listedTags.length > 0 || listedAll(list.options));
+  const missingCategories = everyCategory ? names('categories').filter((n) => !listedCategories.some((c) => termKeyOf(c.name) === termKeyOf(n))) : [];
   return (
     <div className="space-y-2">
       <div className="space-y-1.5">
@@ -441,7 +571,21 @@ function WordPressSettings({ settings, onChange, disabled }: { settings: Record<
         {status !== 'publish' && <p className="text-xs text-subtle-foreground">{t('wpStatusHint')}</p>}
       </div>
       <NamesField label={t('wpCategories')} hint={t('wpCategoriesHint')} names={names('categories')} max={WORDPRESS_CATEGORIES_MAX} disabled={disabled} onChange={(v) => set('categories', v)} />
+      {list.on && <TermPick label={t('wpCategoryPick')} terms={listedCategories} names={names('categories')} max={WORDPRESS_CATEGORIES_MAX} disabled={disabled} onChange={(v) => set('categories', v)} />}
+      {missingCategories.length > 0 && <p className="text-xs text-warning">{t('wpCategoryGone', { names: missingCategories.join(', ') })}</p>}
       <NamesField label={t('wpTags')} hint={t('wpTagsHint')} names={names('tags')} max={WORDPRESS_TAGS_MAX} disabled={disabled} onChange={(v) => set('tags', v)} />
+      {list.on && <TermPick label={t('wpTagPick')} terms={listedTags} names={names('tags')} max={WORDPRESS_TAGS_MAX} disabled={disabled} onChange={(v) => set('tags', v)} />}
+      <ChannelOptionsState
+        list={list}
+        disabled={disabled}
+        words={{
+          loading: t('wpTermListLoading'),
+          empty: t('wpTermListEmpty'),
+          failed: (error) => t(`wpTermListFailed.${error}`),
+          reload: t('channelOptionsReload'),
+          retryLater: (minutes) => t('channelOptionsRetryLater', { minutes }),
+        }}
+      />
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-2">
           <Label htmlFor={`${id}-excerpt`} className="text-xs">
@@ -886,8 +1030,8 @@ function ProviderSettings({
       </div>
     );
   }
-  if (provider === 'youtube') return <YouTubeSettings settings={settings} onChange={onChange} disabled={disabled} />;
-  if (provider === 'wordpress') return <WordPressSettings settings={settings} onChange={onChange} disabled={disabled} />;
+  if (provider === 'youtube') return <YouTubeSettings connectionId={connectionId} settings={settings} onChange={onChange} disabled={disabled} />;
+  if (provider === 'wordpress') return <WordPressSettings connectionId={connectionId} settings={settings} onChange={onChange} disabled={disabled} />;
   // Zalo OA (#943): whether the article takes comments. On is the default and is not stored, so a variant saved before
   // keeps its content hash.
   if (provider === 'zalo_oa') {

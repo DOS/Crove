@@ -19,7 +19,7 @@
 import type { ConnectedAccount, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
 import { videoCoverOf } from './cover.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
-import { CHANNEL_OPTIONS_MAX, optionName, type ChannelOption, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
+import { CHANNEL_OPTIONS_MAX, OptionList, optionCallSignal, optionName, type ChannelOption, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
 
 export const PINTEREST_HOSTS = ['api.pinterest.com'] as const;
 // Where Pinterest takes a video's bytes (the upload_url of POST /v5/media).
@@ -141,10 +141,11 @@ class PinterestClient {
     if (!response.ok) throw new PinterestError(response.status, null);
   }
 
-  async call<T>(method: 'GET' | 'POST', path: string, token: string, json?: unknown): Promise<T | null> {
+  async call<T>(method: 'GET' | 'POST', path: string, token: string, json?: unknown, signal?: AbortSignal): Promise<T | null> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     if (json !== undefined) headers['content-type'] = 'application/json';
-    const response = await this.fetch(`${API}${path}`, { method, headers, ...(json === undefined ? {} : { body: JSON.stringify(json) }) });
+    // A page of the composer's list passes its own signal (#1131); otherwise the fetch's own timeout.
+    const response = await this.fetch(`${API}${path}`, { method, headers, ...(json === undefined ? {} : { body: JSON.stringify(json) }), ...(signal ? { signal } : {}) });
     const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!response.ok) throw new PinterestError(response.status, body);
     return body as T | null;
@@ -332,25 +333,34 @@ export class PinterestPublisher implements Publisher {
   }
 
   // The board's sections, at most CHANNEL_OPTIONS_MAX, following Pinterest's bookmark from page to page. It only reads.
-  private async listSections(boardId: string, token: string): Promise<ChannelOptionsResult> {
+  // For the composer's list (forList), also within the list's byte cap and the worker's deadline, each page with its
+  // own shorter timeout (#1131); publishing reads them as before.
+  private async listSections(boardId: string, token: string, forList?: { signal: AbortSignal | undefined }): Promise<ChannelOptionsResult> {
     const options: ChannelOption[] = [];
+    const list = new OptionList();
     const seen = new Set<string>();
     let bookmark: string | null = null;
     try {
       for (let page = 0; page < Math.ceil(CHANNEL_OPTIONS_MAX / SECTIONS_PAGE); page += 1) {
         const query: string = `page_size=${SECTIONS_PAGE}${bookmark ? `&bookmark=${encodeURIComponent(bookmark)}` : ''}`;
-        const answer = await this.client.call<{ items?: unknown; bookmark?: unknown }>('GET', `/boards/${boardId}/sections?${query}`, token);
+        forList?.signal?.throwIfAborted();
+        const answer = await this.client.call<{ items?: unknown; bookmark?: unknown }>('GET', `/boards/${boardId}/sections?${query}`, token, undefined, forList ? optionCallSignal(forList.signal) : undefined);
         if (!answer || !Array.isArray(answer.items)) return null;
         for (const item of answer.items as ({ id?: unknown; name?: unknown } | null)[]) {
           if (!item || typeof item.id !== 'string' || !PINTEREST_SECTION_ID.test(item.id) || seen.has(item.id)) continue;
           seen.add(item.id);
-          options.push({ id: item.id, name: (typeof item.name === 'string' ? optionName(item.name) : '') || item.id });
+          const option = { id: item.id, name: (typeof item.name === 'string' ? optionName(item.name) : '') || item.id };
+          if (forList) {
+            if (!list.add(option)) return { options: list.options };
+            continue;
+          }
+          options.push(option);
           if (options.length >= CHANNEL_OPTIONS_MAX) return { options };
         }
         bookmark = typeof answer.bookmark === 'string' && answer.bookmark && answer.bookmark.length <= BOOKMARK_MAX ? answer.bookmark : null;
         if (!bookmark) break;
       }
-      return { options };
+      return { options: forList ? list.options : options };
     } catch (error) {
       if (error instanceof PinterestError && error.status === 401) return { refused: 'token_expired' };
       if (error instanceof PinterestError && error.status === 403) return { refused: 'permission' };
@@ -364,7 +374,7 @@ export class PinterestPublisher implements Publisher {
     const s = pinterestSecretOf(input.secret);
     if (!s) return { refused: 'token_expired' };
     if (input.kind !== 'pinterest_section' || !ID.test(input.externalAccountId)) return { refused: 'not_found' };
-    return this.listSections(input.externalAccountId, s.accessToken);
+    return this.listSections(input.externalAccountId, s.accessToken, { signal: input.signal });
   }
 
   // The section a pin goes into, checked against the board's sections as they are now; nothing is posted before.

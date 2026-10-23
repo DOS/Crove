@@ -14,8 +14,9 @@
 // figures after it, the first one as the featured image, the terms, the excerpt and the status (published, a draft or
 // pending review). Every character of the text is escaped. Nothing before the post call is visible on the site. The post
 // call takes no idempotency key, so an unclear answer is checked by listing the user's latest posts, drafts included,
-// matched by title and time.
+// matched by title and time. The composer's picker lists the site's categories and tags (options(), #1131).
 import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+import { CHANNEL_OPTIONS_MAX, OptionList, optionCallSignal, optionName, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
 import { holdsLink } from './text.ts';
 import { ConnectorError, type Fetch } from './oauth.ts';
 
@@ -159,7 +160,7 @@ class WordPressClient {
   }
 
   // A call to the site's REST API (path after /wp-json). The password goes in Basic auth and nowhere else.
-  async call<T>(s: WordPressSecret, method: 'GET' | 'POST', path: string, body?: Body, auth = true): Promise<T> {
+  async call<T>(s: WordPressSecret, method: 'GET' | 'POST', path: string, body?: Body, auth = true, signal?: AbortSignal): Promise<T> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (auth) headers.authorization = `Basic ${Buffer.from(`${s.username}:${s.appPassword}`, 'utf8').toString('base64')}`;
     let payload: string | Uint8Array<ArrayBuffer> | undefined;
@@ -171,7 +172,7 @@ class WordPressClient {
       headers['content-disposition'] = `attachment; filename="${body.filename}"`;
       payload = body.bytes as Uint8Array<ArrayBuffer>;
     }
-    const response = await this.fetch(`${s.site}/wp-json${path}`, { method, headers, redirect: 'manual', ...(payload !== undefined ? { body: payload } : {}) });
+    const response = await this.fetch(`${s.site}/wp-json${path}`, { method, headers, redirect: 'manual', ...(payload !== undefined ? { body: payload } : {}), ...(signal ? { signal } : {}) });
     if (response.status >= 300 && response.status < 400) throw new WordPressError(response.status, 'the site redirects; use its final https address');
     const json = (await response.json().catch(() => null)) as (T & { code?: unknown; message?: unknown; data?: { term_id?: unknown } }) | null;
     if (response.status >= 400) {
@@ -344,10 +345,14 @@ export class WordPressPublisher implements Publisher {
   // Up to 10 images of 10 MB go up one by one, to hosts that may be slow; within the job's stale limit (600 s).
   readonly callTimeoutMs = 420_000;
   private readonly client: WordPressClient;
+  // The composer's lists (#1131) go through their own guarded fetch, with a shorter timeout for each page; without
+  // one, the publishing fetch.
+  private readonly listClient: WordPressClient;
 
   // The fetch is the kernel's egress guard; there is no default, so this adapter never calls a site unguarded.
-  constructor(fetchImpl: Fetch) {
+  constructor(fetchImpl: Fetch, listFetch?: Fetch) {
     this.client = new WordPressClient(fetchImpl);
+    this.listClient = new WordPressClient(listFetch ?? fetchImpl);
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -485,6 +490,54 @@ export class WordPressPublisher implements Publisher {
     const key = termKey(name);
     const ids = rows.filter((r) => typeof r.name === 'string' && termKey(r.name) === key).map((r) => postId(r.id));
     return [...new Set(ids.filter((id): id is number => id !== null))];
+  }
+
+  // The composer's list of the site's categories, then its tags (#1131), read by the worker with the site's login: each
+  // taxonomy page by page (100 a page, by name), at most CHANNEL_OPTIONS_MAX terms and the list's byte cap in all, so a
+  // site with many tags still lists every category first. Each page has its own shorter timeout (the list fetch), and
+  // none is asked once the worker's deadline (signal) has passed. Names are read back from WordPress's entities and kept only when they are clean
+  // option names the post's settings can carry, so a picked name matches the site's term when publishing. It only
+  // reads, and publishing still matches the chosen names as before (an unknown category posts nothing).
+  async options(input: ChannelOptionsInput): Promise<ChannelOptionsResult> {
+    const s = wordpressSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (input.kind !== 'wordpress_term' || input.externalAccountId !== siteId(s.site)) return { refused: 'not_found' };
+    const list = new OptionList();
+    const seen = new Set<string>();
+    try {
+      for (const [taxonomy, path] of [['category', 'categories'], ['tag', 'tags']] as const) {
+        for (let page = 1; page <= Math.ceil(CHANNEL_OPTIONS_MAX / TERM_PAGE); page += 1) {
+          let rows: unknown;
+          try {
+            input.signal?.throwIfAborted();
+            rows = await this.listClient.call<unknown>(s, 'GET', `/wp/v2/${path}?per_page=${TERM_PAGE}&page=${page}&orderby=name&order=asc&_fields=id,name`, undefined, true, optionCallSignal(input.signal));
+          } catch (error) {
+            // Past the last page: WordPress refuses the page number rather than answering an empty list.
+            if (page > 1 && error instanceof WordPressError && error.status === 400 && error.code === 'rest_post_invalid_page_number') break;
+            throw error;
+          }
+          if (!Array.isArray(rows)) return null;
+          for (const row of rows as ({ id?: unknown; name?: unknown } | null)[]) {
+            const id = postId(row?.id);
+            if (id === null || seen.has(`${taxonomy}:${id}`)) continue;
+            const raw = typeof row?.name === 'string' ? decodeEntities(row.name) : '';
+            const name = optionName(raw);
+            // Left out: a name cleaning had to change (an invisible mark, past 200 characters), which publishing could
+            // not match on the site, and one the post's settings could not carry.
+            if (!name || termKey(name) !== termKey(raw) || /[<>]/.test(name)) continue;
+            seen.add(`${taxonomy}:${id}`);
+            if (!list.add({ id: String(id), name, taxonomy })) return { options: list.options };
+          }
+          if (rows.length < TERM_PAGE) break;
+        }
+      }
+      return { options: list.options };
+    } catch (error) {
+      if (error instanceof WordPressError && error.status === 401) return { refused: 'token_expired' };
+      if (error instanceof WordPressError && error.status === 403) return { refused: 'permission' };
+      if (error instanceof WordPressError && error.status === 404) return { refused: 'not_found' };
+      return null;
+    }
   }
 
   // The user's latest posts since a day before the window (WordPress compares `after` with the site's local time),
