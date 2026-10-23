@@ -1887,7 +1887,7 @@ export const vi = {
       settings: 'Nhận thông báo về',
       settingsHint: 'Bỏ chọn những loại bạn không muốn nhận. Chỉ áp dụng cho tài khoản của bạn.',
       mail: 'Gửi cả email cho tôi',
-      mailHint: 'Khi có bài chờ duyệt, bài đã được duyệt, bài đăng lỗi, kênh cần kết nối lại, hàng đợi sắp hết bài hoặc có người nhắc tên bạn, {brand} gửi thêm một email tới địa chỉ của bạn.',
+      mailHint: 'Khi có bài chờ duyệt, bài đã được duyệt, bài đăng lỗi, kênh cần kết nối lại, hàng đợi sắp hết bài, có người nhắc tên bạn hoặc bài của bạn đang tốt hơn hẳn thường lệ, {brand} gửi thêm một email tới địa chỉ của bạn.',
       digest: 'Bản tin hằng tuần',
       digestHint: 'Mỗi sáng thứ Hai, {brand} gửi bạn một email tóm tắt: tuần trước đã đăng gì, bài nào được tương tác nhiều nhất, bài nào lỗi, và lịch đăng của tuần này.',
       digestMailOff: 'Bật "Gửi cả email cho tôi" để nhận bản tin hằng tuần.',
@@ -1905,6 +1905,7 @@ export const vi = {
         review_reminder: 'Nhắc bài đang chờ duyệt',
         publishing_hold: 'Khi tổ chức tạm dừng hoặc tiếp tục đăng bài',
         queue_low: 'Hàng đợi của kênh sắp hết bài',
+        post_outperforming: 'Bài của bạn đang tốt hơn hẳn thường lệ',
       },
       text: {
         review_requested: '{actor} gửi một bài cần duyệt',
@@ -1928,6 +1929,8 @@ export const vi = {
         publishing_released: '{actor} đã cho đăng bài trở lại',
         publishing_released_stale: '{actor} đã cho đăng bài trở lại; {count, plural, other {# bài}} đã quá giờ hẹn hơn một giờ nên chờ bạn xem lại',
         queue_low: 'Hàng đợi của {channel} sắp hết bài: trong {days, plural, other {# ngày}} tới mới có {filled}/{posting} ngày đăng có bài. Viết thêm bài để lấp chỗ trống.',
+        post_outperforming: 'Bài trên {channel} đang tốt gấp {ratio, number} lần thường lệ',
+        post_outperforming_reach: 'Bài trên {channel} đang tốt gấp {ratio, number} lần thường lệ, lượt tiếp cận gấp {reach, number} lần',
       },
     },
     threadsExtras: {

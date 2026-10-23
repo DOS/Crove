@@ -19,6 +19,7 @@ import { autoReplyOf, repostRuleOf } from './domain/channels.ts';
 import { csvCell } from './domain/csv.ts';
 import { STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture } from './domain/story-metrics.ts';
 import { channelScope, connectionInScope, type ChannelScope } from './channel-access.ts';
+import { OUTPERFORM_AFTER_HOURS } from './domain/outperform.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -498,6 +499,13 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
       if (!result || 'refused' in result) out.skipped += 1;
       const done = await deps.runtime.execute<{ recorded: boolean }>('social.metrics.record', { variantId: row.variant_id, captureKey: captureKeyOf, ...input }, options);
       if (done.recorded && result && !('refused' in result)) out.recorded += 1;
+      // A capture with counts a day or more after the post went out may be its 24-hour capture: the check tells the
+      // author when it does much better than usual (#1132). Its failure never touches the metrics.
+      if (done.recorded && result && !('refused' in result) && story === null && target.publishedAt && now.getTime() - Date.parse(target.publishedAt) >= OUTPERFORM_AFTER_HOURS * 3_600_000) {
+        await deps.runtime
+          .execute('social.metrics.check_outperforming', { variantId: row.variant_id }, options)
+          .catch((error: unknown) => console.warn(`[social-outperforming] variant ${row.variant_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error'));
+      }
       // The count may set off the variant's auto-reply (#746); its failure never touches the metrics.
       const likes = result && !('refused' in result) ? result.metrics.reactions : undefined;
       // And its repost rule (#773): a like count or a delay, checked by the command against the post's time.

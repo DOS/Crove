@@ -5,12 +5,14 @@
 // owners and admins; an internal comment or a client's answer tells the author and the people who commented before;
 // an assignment tells the assignee; a reminder of a post still waiting for review (#703) tells the owners and admins who
 // have not approved its current content yet; a publishing hold put on or taken off (#946) tells the whole team; a
-// channel's queue running low (#1079) tells the owners, admins and members, who can fill it. Never the person who
-// acted, never a kind the person turned off, and only people who are members when it is written. Each member reads
-// and marks only their own (a restrictive policy).
+// channel's queue running low (#1079) tells the owners, admins and members, who can fill it; a post doing much better
+// than usual (#1132) tells its author and its assignee, who can boost or reuse it. Never the person who acted, never a
+// kind the person turned off, and only people who are members when it is written. Each member reads and marks only
+// their own (a restrictive policy).
 //
 // Email (#579): the kinds someone must act on (a post to review, a decision, a failed or stuck post, an expired channel,
-// a queue running low) also go out by email, one per notification, through the kernel's queued mail (the suppression
+// a queue running low, a post doing much better than usual) also go out by email, one per notification, through the
+// kernel's queued mail (the suppression
 // list, the mail log), unless the member turned Social emails off. The mail names the post and links to it; nothing
 // secret is in it. A deployment without mail records the mail as not sent and nothing fails.
 import { sql } from 'kysely';
@@ -22,6 +24,7 @@ import { DomainError, defineCommand, defineQuery, type CommandContext } from '@c
 import { approvalsInRound } from './domain/approval.ts';
 import { decisionsOf } from './policy.ts';
 import { channelScope, connectionInScope, postInScope, usersInScope } from './channel-access.ts';
+import { RATIO_LABEL } from './domain/outperform.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The newest notifications a read returns, and the unread count it reports at most.
@@ -51,6 +54,8 @@ export const NOTIFYING_EVENTS = [
   'social.publishing.released',
   // A channel's queue ran low (#1079).
   'social.queue.low',
+  // A post doing much better than usual (#1132).
+  'social.variant.outperforming',
   // Not a notice: a member's links stop working when they lose the right to make them (#625).
   'kernel.member.removed',
   'kernel.member.role_changed',
@@ -230,6 +235,31 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
         detail: { days: String(e.data.low_days), posting: String(e.data.posting_days), filled: String(e.data.filled_days) },
       };
     }
+    // A post doing much better than usual (#1132): its author and assignee, while it is still out.
+    case 'social.variant.outperforming': {
+      const e = z
+        .object({ post_id: zId, variant_id: zId, ratio: z.string().regex(RATIO_LABEL), reach_ratio: z.string().regex(RATIO_LABEL).nullable().optional() })
+        .safeParse(payload);
+      if (!e.success) return null;
+      const v = await ctx.trx
+        .selectFrom('crove_social.post_variant')
+        .select(['provider', 'channel_connection_id', 'status'])
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', e.data.variant_id)
+        .where('post_id', '=', e.data.post_id)
+        .executeTakeFirst();
+      // Removed since: nothing left to boost.
+      if (!v || v.status !== 'published') return null;
+      const p = await ctx.trx.selectFrom('crove_social.post').select(['author_user_id', 'assignee_user_id']).where('org_id', '=', ctx.orgId).where('id', '=', e.data.post_id).executeTakeFirst();
+      if (!p) return null;
+      return {
+        kind: 'post_outperforming',
+        users: [p.author_user_id, p.assignee_user_id].filter((u): u is string => u !== null),
+        postId: e.data.post_id,
+        connectionId: v.channel_connection_id,
+        detail: { provider: v.provider, ratio: e.data.ratio, ...(e.data.reach_ratio ? { reach: e.data.reach_ratio } : {}) },
+      };
+    }
     case 'social.review.reminder': {
       const e = z.object({ post_id: zId, stage: z.enum(['waiting', 'due']), variant_ids: z.array(zId).min(1).max(100) }).safeParse(payload);
       if (!e.success) return null;
@@ -259,7 +289,7 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
 }
 
 // The kinds that also go out by email, and the template they use.
-export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'mention', 'queue_low']);
+export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'mention', 'queue_low', 'post_outperforming']);
 export const NOTIFICATION_MAIL_TEMPLATE = 'social.notification';
 
 const oneLine = (text: string, max: number) => {
@@ -283,6 +313,8 @@ function subjectOf(kind: SocialNotificationKind, detail: Record<string, string>,
       return `Bạn được nhắc đến trong một bình luận${about}`;
     case 'queue_low':
       return `Hàng đợi của kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} sắp hết bài`;
+    case 'post_outperforming':
+      return `Bài trên ${channel ? oneLine(channel, 60) : 'mạng xã hội'} đang tốt gấp ${(detail.ratio ?? '2').replace('.', ',')} lần thường lệ${about}`;
     default:
       return `Kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} cần kết nối lại`;
   }
@@ -342,6 +374,7 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
         decision: plan.detail.decision ?? null,
         ...(plan.detail.removal ? { removal: plan.detail.removal } : {}),
         ...(plan.kind === 'queue_low' ? { days: plan.detail.days ?? null } : {}),
+        ...(plan.kind === 'post_outperforming' ? { ratio: plan.detail.ratio ?? null, reach: plan.detail.reach ?? null } : {}),
         path,
       },
       status: 'queued',

@@ -1888,7 +1888,7 @@ export const en = {
       settings: 'Notify me about',
       settingsHint: 'Untick what you do not want. This applies to your account only.',
       mail: 'Email me too',
-      mailHint: 'When a post waits for review, gets a decision, fails, a channel needs reconnecting, a queue runs low, or someone mentions you, {brand} also sends an email to your address.',
+      mailHint: 'When a post waits for review, gets a decision, fails, a channel needs reconnecting, a queue runs low, someone mentions you, or your post does much better than usual, {brand} also sends an email to your address.',
       digest: 'Weekly digest',
       digestHint: 'Every Monday morning, {brand} emails you a summary: what went out last week, the posts with the most engagement, the ones that failed, and the schedule for this week.',
       digestMailOff: 'Turn on "Email me too" to get the weekly digest.',
@@ -1906,6 +1906,7 @@ export const en = {
         review_reminder: 'Reminders of posts waiting for review',
         publishing_hold: 'Publishing paused or resumed for the organization',
         queue_low: 'A channel queue running low',
+        post_outperforming: 'Your post doing much better than usual',
       },
       text: {
         review_requested: '{actor} sent a post for review',
@@ -1929,6 +1930,8 @@ export const en = {
         publishing_released: '{actor} resumed publishing',
         publishing_released_stale: '{actor} resumed publishing; {count, plural, one {# post} other {# posts}} more than an hour past their time wait for you to look again',
         queue_low: 'The queue of {channel} is running low: only {filled} of {posting} posting days in {days, plural, one {the next day} other {the next # days}} have a post. Write more to fill the gaps.',
+        post_outperforming: 'Your post on {channel} is doing {ratio, number}× better than usual',
+        post_outperforming_reach: 'Your post on {channel} is doing {ratio, number}× better than usual, with {reach, number}× the usual reach',
       },
     },
     threadsExtras: {

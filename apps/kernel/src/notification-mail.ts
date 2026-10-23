@@ -21,10 +21,14 @@ const LEAD: Record<string, string> = {
   channel_expired: 'Một kênh đã hết hạn kết nối; bài lên lịch trên kênh này sẽ chờ đến khi bạn kết nối lại.',
   mention: 'Một thành viên đã nhắc đến bạn trong bình luận nội bộ của một bài.',
   queue_low: 'Hàng đợi đăng bài của một kênh sắp hết bài: có ngày đăng sắp tới chưa có bài nào. Hãy viết thêm bài và xếp vào hàng đợi để kênh không bị bỏ trống.',
+  post_outperforming: 'Một bài của bạn đang được tương tác nhiều hơn hẳn thường lệ. Đây là lúc nên đẩy thêm cho bài, trả lời bình luận hoặc dùng lại nội dung này cho bài sau.',
 };
+// A ratio as the notification wrote it (#1132), shown the Vietnamese way (2,5).
+const RATIO = /^\d{1,4}(\.\d)?$/;
+const ratioVi = (value: unknown): string | null => (typeof value === 'string' && RATIO.test(value) ? value.replace('.', ',') : null);
 
 export async function renderNotificationMail(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string } | null> {
-  const { kind, org, post, channel, decision, removal, days, path } = input.payload;
+  const { kind, org, post, channel, decision, removal, days, ratio, reach, path } = input.payload;
   if (typeof kind !== 'string' || typeof org !== 'string' || typeof path !== 'string' || !PATH.test(path)) return null;
   const lead = LEAD[kind === 'decided' ? `decided_${typeof decision === 'string' ? decision : ''}` : kind === 'failed' && removal === 'scheduled' ? 'failed_removal' : kind];
   if (!lead) return null;
@@ -33,9 +37,17 @@ export async function renderNotificationMail(input: MailTemplateInput): Promise<
   const open = path.endsWith('/channels') ? 'Mở trang kênh' : path.includes('/social/new?') ? 'Viết bài cho kênh này' : 'Mở bài viết';
   // The window the warning looks at (#1079).
   const ahead = kind === 'queue_low' && typeof days === 'string' && /^\d{1,2}$/.test(days) ? `${input.brand} kiểm tra các ngày đăng trong ${days} ngày tới.` : null;
+  // How much better than usual (#1132): against the channel's recent posts (up to 30), a day after it went out.
+  const times = kind === 'post_outperforming' ? ratioVi(ratio) : null;
+  const reachTimes = kind === 'post_outperforming' ? ratioVi(reach) : null;
+  if (kind === 'post_outperforming' && !times) return null;
+  const better = times
+    ? `Một ngày sau khi đăng, lượt tương tác của bài đã gấp ${times} lần mức thường thấy của các bài gần đây trên kênh${reachTimes ? `; lượt tiếp cận gấp ${reachTimes} lần` : ''}.`
+    : null;
   const lines = [
     leadText,
     ahead,
+    better,
     typeof post === 'string' && post ? `Bài: ${oneLine(post)}` : null,
     typeof channel === 'string' && channel ? `Kênh: ${oneLine(channel)}` : null,
     `${open}: ${url}`,
@@ -47,6 +59,7 @@ export async function renderNotificationMail(input: MailTemplateInput): Promise<
 ${typeof post === 'string' && post ? `<p style="margin:0 0 4px"><strong>Bài:</strong> ${escapeHtml(oneLine(post))}</p>` : ''}
 ${typeof channel === 'string' && channel ? `<p style="margin:0 0 4px"><strong>Kênh:</strong> ${escapeHtml(oneLine(channel))}</p>` : ''}
 ${ahead ? `<p style="margin:0 0 4px">${escapeHtml(ahead)}</p>` : ''}
+${better ? `<p style="margin:0 0 4px">${escapeHtml(better)}</p>` : ''}
 <p style="margin:16px 0"><a href="${escapeHtml(url)}" style="color:#b91c1c">${escapeHtml(open)}</a></p>
 <p style="font-size:12px;color:#71717a">Thư này được gửi từ ${escapeHtml(input.brand)} cho ${escapeHtml(oneLine(org))}. Bạn có thể tắt email trong mục Thông báo của Social.</p>
 </body></html>`;
