@@ -627,11 +627,12 @@ export function SocialPage() {
           ? canDecide ? ['submit', 'move', 'cancel'] : ['submit', 'cancel']
           : [];
   // Labels and the assignee on many posts at once (#1057), find and replace (#1144) and a channel added (#1178), for
-  // members and above, in the lists, the board and the calendar.
-  const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign', 'replace', 'addChannel'] : [];
+  // members and above, in the lists, the board and the calendar. So are copies moved by days or weeks (#1192), which the
+  // Done list offers too: last week's published set is what gets copied.
+  const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign', 'replace', 'addChannel', 'duplicate'] : [];
   // The channels a member may add to posts: live, and theirs (#1081).
   const channelOptions = (channels.data ?? []).filter((c) => c.status !== 'revoked' && scope.allows(c.id)).map((c) => ({ id: c.id, name: `${c.displayName} · ${providerName(c.provider)}` }));
-  const listActions = bulkActions.length > 0 ? [...bulkActions, ...editActions] : [];
+  const listActions: readonly BulkAction[] = bulkActions.length > 0 ? [...bulkActions, ...editActions] : listTab === 'done' && canWrite ? ['duplicate'] : [];
   const agendaActions: readonly BulkAction[] = [...(canDecide ? (['move'] as const) : []), ...editActions];
   const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: canWrite });
   const members = (org.data?.members ?? []).map((m) => ({ userId: m.userId, name: m.displayName ?? m.email }));

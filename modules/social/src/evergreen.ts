@@ -4,16 +4,18 @@
 // to review at once: a person approves it before it goes out again.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zId } from '@crove/kernel-contract';
+import { zId, zSocialPostDuplicate, type zSocialPostDuplicateResult } from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { inheritedContent } from './domain/approval.ts';
+import { effectiveContent, inheritedContent } from './domain/approval.ts';
+import { refusesDuplicates } from './domain/duplicate.ts';
+import { duplicatesOf } from './duplicates.ts';
 import { insertVariants, writePostMedia } from './posts.ts';
 import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
 import { publishingHeld } from './publish-hold.ts';
 import { bannedCheckerOf, isBlocked } from './banned-words.ts';
-import { refusePostWholly } from './channel-access.ts';
+import { inScope, refusePostOutside, refusePostWholly } from './channel-access.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const EVERGREEN_SWEEP_MS = 60 * 60_000;
@@ -247,18 +249,24 @@ export const postSetEvergreen = defineCommand({
   },
 });
 
-// A copy of any post as a new draft (#575): its text, title, link and images, and each channel still connected with
-// its own content and settings; never its schedule, approvals or history. As tainted as its source.
+// A copy of any post as a new draft (#575): its text, title, link and images, its labels, and each channel still
+// connected with its own content and settings (its signature, #1190, among them); never its schedule, approvals or
+// history. As tainted as its source. A member limited to some channels (#1081) copies those only, and a post with none
+// of theirs is not theirs to copy. The copy is planned for scheduledAt when given, which must be ahead (the bulk bar's
+// copies moved by days or weeks, #1192), else undated; either way it is a draft that goes through review again.
 export const postDuplicate = defineCommand({
   name: 'social.post.duplicate',
-  input: z.strictObject({ postId: zId }),
+  input: zSocialPostDuplicate,
   risk: 'R1',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
-  handler: async (ctx, input) => {
+  handler: async (ctx, input): Promise<DuplicateResult> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const at = input.scheduledAt ? new Date(input.scheduledAt) : null;
+    if (at && at.getTime() <= ctx.now.getTime()) throw new DomainError('DUPLICATE_IN_PAST', 422, 'Giờ dự kiến của bản sao đã qua; hãy chọn một giờ ở tương lai', { scheduledAt: input.scheduledAt });
     const source = await lockPost(ctx.trx, ctx.orgId, input.postId);
-    const variants = (await lockVariants(ctx.trx, ctx.orgId, source.id)).filter((v) => v.status !== 'cancelled');
+    const scope = await refusePostOutside(ctx, source.id);
+    const variants = inScope(scope, await lockVariants(ctx.trx, ctx.orgId, source.id)).filter((v) => v.status !== 'cancelled');
     const connected =
       variants.length === 0
         ? new Set<string>()
@@ -278,10 +286,54 @@ export const postDuplicate = defineCommand({
             ).map((c) => c.id),
           );
     const targets = variants.filter((v) => connected.has(v.channel_connection_id));
-    if (targets.length === 0) throw new DomainError('NOTHING_TO_DUPLICATE', 409, 'Các kênh của bài này không còn kết nối');
-    return { postId: (await copyPost(ctx, source, targets, { repostOf: null, submit: false })).postId };
+    if (targets.length === 0) throw new DomainError('NOTHING_TO_DUPLICATE', 409, 'Các kênh bạn dùng được của bài này không còn kết nối nên chưa nhân bản được');
+    const { postId } = await copyPost(ctx, source, targets, { repostOf: null, submit: false, ...(at ? { scheduledAt: at } : {}) });
+    const labels = await copyLabels(ctx, source.id, postId);
+    ctx.audit({ scheduled_at: at ? at.toISOString() : null, labels });
+    return { postId, repeats: await repeatsOf(ctx, postId) };
   },
 });
+
+export type DuplicateResult = z.infer<typeof zSocialPostDuplicateResult>;
+
+// The source's labels on the copy. Held until the commit, so a label deleted meanwhile waits rather than failing the
+// insert; one deleted before is simply not there.
+async function copyLabels(ctx: CommandContext, fromId: string, toId: string): Promise<number> {
+  const ids = (await ctx.trx.selectFrom('crove_social.post_label').select('label_id').where('org_id', '=', ctx.orgId).where('post_id', '=', fromId).execute()).map((r) => r.label_id);
+  if (ids.length === 0) return 0;
+  const found = await ctx.trx.selectFrom('crove_social.label').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', ids).forKeyShare().execute();
+  if (found.length === 0) return 0;
+  await ctx.trx
+    .insertInto('crove_social.post_label')
+    .values(found.map((l) => ({ org_id: ctx.orgId, post_id: toId, label_id: l.id, created_at: ctx.now })))
+    .execute();
+  return found.length;
+}
+
+// The copy's channels on X and LinkedIn whose text, signature included, matches another post there (#1156): those
+// platforms refuse it, so the person copying hears of it before a reviewer does. Elsewhere the same text is only
+// advice, which the post page gives.
+async function repeatsOf(ctx: CommandContext, postId: string): Promise<DuplicateResult['repeats']> {
+  const post = await lockPost(ctx.trx, ctx.orgId, postId);
+  const variants = (await lockVariants(ctx.trx, ctx.orgId, postId)).filter((v) => refusesDuplicates(v.provider));
+  if (variants.length === 0) return [];
+  const found = await duplicatesOf(
+    ctx.trx,
+    ctx.orgId,
+    variants.map((v) => ({
+      id: v.id,
+      postId,
+      connectionId: v.channel_connection_id,
+      status: v.status,
+      body: effectiveContent({ body: post.body, title: null, linkUrl: null }, overrides(v), v.content_frozen, settingsOf(v)).body,
+    })),
+    ctx.now,
+  );
+  return variants.flatMap((v) => {
+    const match = found.get(v.id);
+    return match ? [{ variantId: v.id, connectionId: v.channel_connection_id, provider: v.provider, at: match.at, status: match.status }] : [];
+  });
+}
 
 export const evergreenCommands = [postRepost, postRepostEvergreen, postSetEvergreen, postDuplicate];
 

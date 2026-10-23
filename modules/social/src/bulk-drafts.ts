@@ -15,7 +15,7 @@ import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-r
 import { captionFromFilename, fileIssues } from './domain/bulk-drafts.ts';
 import { nextFreeSlot } from './domain/queue.ts';
 import { validateVariant, type MediaItem } from './domain/validate.ts';
-import { lockQueue, mediaKind, providerOf, setVariant, takenSlots, type QueueState } from './variants.ts';
+import { MAX_CHANNELS_PER_POST, lockQueue, mediaKind, providerOf, setVariant, takenSlots, type QueueState } from './variants.ts';
 import { refuseChannels } from './channel-access.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -89,6 +89,14 @@ export const postCreateFromMedia = defineCommand({
   handler: async (ctx, input): Promise<DraftsFromMediaResult> => {
     requireUser(ctx);
     const channels = await liveChannels(ctx, input.channelSetId ? await setChannels(ctx, input.channelSetId) : (input.connectionIds ?? []), input.channelSetId !== undefined);
+    // A saved set may hold more live channels than one post takes (#1088): refused here, with the counts, rather than by
+    // the first nested create's generic validation error.
+    if (channels.length > MAX_CHANNELS_PER_POST) {
+      throw new DomainError('CHANNEL_SET_TOO_LARGE', 422, `Bộ kênh này có ${channels.length} kênh đang kết nối, mà mỗi bài chỉ đăng được tối đa ${MAX_CHANNELS_PER_POST} kênh; hãy bỏ bớt kênh khỏi bộ hoặc chọn từng kênh`, {
+        limit: MAX_CHANNELS_PER_POST,
+        actual: channels.length,
+      });
+    }
     // A member limited to some channels (#1081) makes drafts for those only, a channel set's included; refused before
     // any queue is locked or post made.
     await refuseChannels(

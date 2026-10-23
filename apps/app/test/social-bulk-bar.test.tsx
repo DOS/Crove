@@ -3,7 +3,8 @@
 // assignee (#1057) are offered to members too; labels only once the org has one. Find and replace (#1144) is offered to
 // members, and its preview shows each match with what replaces it and why a post is left out. Sending drafts to review
 // and adding a channel (#1178) are offered to members, the latter once there is a channel they may add. Rendered on the
-// server.
+// server. Copies moved by days or weeks (#1192) are offered to members, and the result names each copy, each post left
+// out and why, and each copy whose text X or LinkedIn would refuse.
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
@@ -11,12 +12,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { SOCIAL_BULK_SKIP_REASONS, SOCIAL_REPLACE_FIELDS } from '@crove/kernel-contract';
 import { en as enMessages } from '../src/i18n/messages/en.ts';
 import { vi as viMessages } from '../src/i18n/messages/vi.ts';
-import type { BulkAction, BulkPost, ReplacePreviewPost } from '../src/lib/social-bulk.ts';
+import type { BulkAction, BulkPost, DuplicatePostResult, ReplacePreviewPost } from '../src/lib/social-bulk.ts';
 import { catalog } from '../src/i18n/runtime.ts';
 
 vi.mock('../src/lib/api.ts', () => ({ client: {}, queryClient: { invalidateQueries: () => undefined }, errorMessage: (e: unknown) => String(e) }));
 
-const { BulkBar, ReplacePreview } = await import('../src/components/social-bulk.tsx');
+const { BulkBar, DuplicateOutcome, ReplacePreview } = await import('../src/components/social-bulk.tsx');
 const t = viMessages.social.bulk;
 
 const posts: BulkPost[] = [
@@ -126,6 +127,46 @@ describe('BulkBar', () => {
     for (const field of SOCIAL_REPLACE_FIELDS) {
       expect(t.replace.field[field]).toBeTruthy();
       expect(enMessages.social.bulk.replace.field[field]).toBeTruthy();
+    }
+  });
+
+  it('offers members the copies moved by days or weeks, as a form opened on a click', () => {
+    const html = bar(false, ['labels', 'assign', 'replace', 'duplicate']);
+    expect(html).toContain(t.action.duplicate);
+    expect(html).toMatch(new RegExp('aria-expanded="false"[^>]*>' + t.action.duplicate));
+    // A viewer's lists pass no action, so no bar button.
+    expect(bar(false, [])).not.toContain(t.action.duplicate);
+  });
+
+  it('names each copy and its time, each post left out and why, and each copy X or LinkedIn would refuse', () => {
+    const results: DuplicatePostResult[] = [
+      { postId: 'p1', outcome: 'done', copyId: 'c1', at: '2026-11-09T02:00:00.000Z', repeats: [] },
+      { postId: 'p2', outcome: 'done', copyId: 'c2', at: '2026-11-10T02:00:00.000Z', repeats: [{ variantId: 'v2', connectionId: 'x', provider: 'x', at: '2026-11-03T02:00:00.000Z', status: 'published' }] },
+      { postId: 'p3', outcome: 'skipped', reason: 'past' },
+      { postId: 'p4', outcome: 'skipped', reason: 'noChannel' },
+      { postId: 'p5', outcome: 'refused', error: 'Lỗi máy chủ' },
+    ];
+    const html = renderToStaticMarkup(
+      <IntlProvider locale="vi" messages={catalog('vi')} timeZone="Asia/Ho_Chi_Minh">
+        <DuplicateOutcome duplicate={{ amount: 1, unit: 'weeks' }} results={results} postName={(id) => 'Bài ' + id} channelName={(id) => (id === 'x' ? 'X của tiệm' : 'Fanpage')} />
+      </IntlProvider>,
+    );
+    expect(html).toContain('Nhân bản (sau 1 tuần): 2 bài đã có bản sao, 2 bài bỏ qua, 1 bài bị từ chối; 1 bản sao trùng nội dung trên X hoặc LinkedIn.');
+    expect(html).toContain('bản nháp mới, dự kiến đăng');
+    expect(html).toContain('X của tiệm: nội dung giống hệt một bài đã đăng trên kênh này');
+    expect(html).toContain('bỏ qua vì ' + t.duplicate.skip.past);
+    expect(html).toContain('bỏ qua vì ' + t.duplicate.skip.noChannel);
+    expect(html).toContain('Lỗi máy chủ');
+    const undated = renderToStaticMarkup(
+      <IntlProvider locale="vi" messages={catalog('vi')} timeZone="Asia/Ho_Chi_Minh">
+        <DuplicateOutcome duplicate={{ amount: 0, unit: 'days' }} results={[{ postId: 'p1', outcome: 'done', copyId: 'c1', at: null, repeats: [] }]} postName={() => 'Bài'} channelName={() => 'Fanpage'} />
+      </IntlProvider>,
+    );
+    expect(undated).toContain('Nhân bản (chưa có ngày): 1 bài đã có bản sao, 0 bài bỏ qua, 0 bài bị từ chối.');
+    expect(undated).toContain(t.duplicate.undated);
+    for (const reason of ['undated', 'past', 'noChannel', 'notAllowed'] as const) {
+      expect(t.duplicate.skip[reason]).toBeTruthy();
+      expect(enMessages.social.bulk.duplicate.skip[reason]).toBeTruthy();
     }
   });
 
