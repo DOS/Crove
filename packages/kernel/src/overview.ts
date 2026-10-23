@@ -9,6 +9,12 @@
 //
 // The org's VAT filing period (monthly or quarterly) is set by owners and admins (kernel.org.set_vat_filing_period,
 // tax-code.ts); the rest of its tax calendar (#921) by kernel.tax_profile.save (tax-calendar.ts).
+//
+// Modules add their own figures (#1261) through an overview contribution: a query the module registers, named to the
+// kernel by the composition root for the modules CROVE_MODULES enables, so the kernel never imports a module. Each runs
+// with ctx.query in the org's own transaction, as the member (their role, and whatever the module's own rules hide
+// from them), so its figures are the ones the member would see on that org's screens. An org whose figures cannot be
+// read (an error, the statement timeout) is one error row, not a failed screen (#495).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { nextVatDeadline, vietnamToday, type TaxDueView, type VatDeadline, type VatFilingPeriod } from '@crove/kernel-contract';
@@ -38,11 +44,21 @@ export interface OrgOverview {
   vatDeadline: VatDeadline | null;
   // The tax calendar (#921): what is due in the next 30 days or overdue and not marked done, by due date.
   taxDues: TaxDueView[];
+  // Each contributing module's figures by its module id (#1261); a module this deployment leaves out has no key.
+  modules: Record<string, unknown>;
 }
 
-export interface ClientOverview extends OrgSummary {
-  overview: OrgOverview;
+// A module's figures on the home screen (#1261): `query` is one of the module's registered queries, taking {}, whose
+// answer is kept under `module` in OrgOverview.modules. The composition root passes the contributions of the enabled
+// modules to kernelQueries; a contribution whose module the runtime does not register adds nothing.
+export interface OverviewContribution {
+  readonly module: string;
+  readonly query: string;
 }
+
+// One org on the home screen: its figures, or, when they could not be read, null and the error's code (#495), so the
+// other orgs still show.
+export type ClientOverview = OrgSummary & ({ overview: OrgOverview; error: null } | { overview: null; error: string });
 
 // total: the orgs the user has, of which the first MAX_CLIENT_ORGS are read (#495).
 export interface ClientOverviews {
@@ -50,8 +66,9 @@ export interface ClientOverviews {
   total: number;
 }
 
-export function orgOverviewQuery(options: { now?: () => Date } = {}) {
+export function orgOverviewQuery(options: { now?: () => Date; contributions?: readonly OverviewContribution[] } = {}) {
   const now = options.now ?? (() => new Date());
+  const contributions = options.contributions ?? [];
   return defineQuery({
     name: 'kernel.org.overview',
     input: z.object({}),
@@ -71,6 +88,11 @@ export function orgOverviewQuery(options: { now?: () => Date } = {}) {
         .where('org_id', '=', ctx.orgId)
         .executeTakeFirstOrThrow();
       const period = tenant.vat_filing_period;
+      const modules: Record<string, unknown> = {};
+      for (const c of contributions) {
+        const answer = await ctx.query<unknown>(c.query, {});
+        if (answer.status === 'ok') modules[c.module] = answer.value;
+      }
       return {
         pendingProposals: Number(pending.n),
         failedFiles: files.filter((f) => f.status.status === 'failed').length,
@@ -78,12 +100,11 @@ export function orgOverviewQuery(options: { now?: () => Date } = {}) {
         vatFilingPeriod: period,
         vatDeadline: period ? nextVatDeadline(period, vietnamToday(now())) : null,
         taxDues: await taxDuesOf(ctx, period, vietnamToday(now())),
+        modules,
       };
     },
   });
 }
-
-export const orgOverview = orgOverviewQuery();
 
 // Runs fn over items with at most `limit` calls in flight, keeping the order of items. Once a call fails, or `signal`
 // aborts (the client went away), no worker starts another item (#495): the answer is lost anyway, and each item is a
@@ -113,8 +134,9 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) 
 const GONE = new Set(['NOT_A_MEMBER', 'SESSION_REVOKED_IN_ORG']);
 
 // The home screen: the user's orgs (the same list as me.get), each with its figures read in its own context, and how
-// many orgs the user has, so a list cut at MAX_CLIENT_ORGS says so. Any other failure of one org fails the whole
-// answer, so the screen never shows a partial list as if it were complete.
+// many orgs the user has, so a list cut at MAX_CLIENT_ORGS says so. An org whose figures fail is an error row with the
+// error's code (#495), so one slow or broken org no longer fails the screen; a refusal of the user themselves (no
+// session or a revoked one, 401) still fails the answer, since every other org would refuse them too.
 export async function clientOverviews(runtime: Runtime, actor: UserActor, options: { signal?: AbortSignal } = {}): Promise<ClientOverviews> {
   const all = await runtime.forUser(actor, (db) => sessionOrgs(db, actor.userId, actor.sessionId ?? null));
   const orgs = all.slice(0, MAX_CLIENT_ORGS);
@@ -124,10 +146,14 @@ export async function clientOverviews(runtime: Runtime, actor: UserActor, option
     async (org): Promise<ClientOverview | null> => {
       try {
         const overview = await runtime.query<OrgOverview>('kernel.org.overview', {}, { actor, orgId: org.orgId });
-        return { ...org, overview };
+        return { ...org, overview, error: null };
       } catch (error) {
         if (error instanceof DomainError && GONE.has(error.code)) return null;
-        throw error;
+        if (error instanceof DomainError && error.status === 401) throw error;
+        // The client went away: the answer fails once the orgs already running finish.
+        if (options.signal?.aborted) throw error;
+        if (!(error instanceof DomainError) || error.status >= 500) console.error('[clients] org overview failed', org.orgId, error);
+        return { ...org, overview: null, error: error instanceof DomainError ? error.code : 'INTERNAL' };
       }
     },
     options.signal,

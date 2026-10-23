@@ -190,6 +190,7 @@ export const en = {
     subtitle: 'What is waiting and when the next VAT return is due, for every company you work on. Click a name to open it.',
     columns: {
       company: 'Company',
+      social: 'Social',
       pending: 'Awaiting approval',
       failed: 'Failed files',
       lastActivity: 'Last activity',
@@ -207,6 +208,17 @@ export const en = {
     empty: 'You are not part of any company yet',
     emptyHint: 'Create your first company or accept an invite from a client to get started.',
     create: 'Create a company',
+    loadError: "This company's figures could not be loaded.",
+    retry: 'Load again',
+    social: {
+      attention: '{count, plural, one {# post needs attention} other {# posts need attention}}',
+      reconnect: '{count, plural, one {# channel to reconnect} other {# channels to reconnect}}',
+      review: '{count, plural, one {# post in review} other {# posts in review}}',
+      waitingClient: '{count, plural, other {of which # waiting for the client}}',
+      upcoming: '{count, plural, =0 {Nothing in the next 7 days} one {# post in the next 7 days} other {# posts in the next 7 days}}',
+      lastPost: '{days, plural, =0 {Last post today} =1 {Last post yesterday} other {Last post # days ago}}',
+      neverPosted: 'No post yet',
+    },
   },
   taxCalendar: {
     title: 'Tax calendar, next 30 days',

@@ -46,7 +46,7 @@ import {
 } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
-import { buildKernelCommands, kernelQueries, setMessageIdDomain } from '@crove/kernel';
+import { buildKernelCommands, kernelQueries, setMessageIdDomain, type OverviewContribution } from '@crove/kernel';
 import {
   LocalDiskStore,
   egressFetch,
@@ -59,7 +59,7 @@ import {
   type SessionStatusSource,
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
-import { socialAgentPrograms, socialCommands, socialQueries } from '@crove/mod-social';
+import { socialAgentPrograms, socialCommands, socialOverviewContributions, socialQueries } from '@crove/mod-social';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
@@ -155,6 +155,14 @@ export interface ModuleDefinitions {
   queries: QueryDef<any, any>[];
 }
 
+// The figures each module adds to the multi-client home (#1261); a module without any is left out.
+const OVERVIEW_CONTRIBUTIONS: Partial<Record<ModuleId, readonly OverviewContribution[]>> = { social: socialOverviewContributions };
+
+// The overview contributions of the modules CROVE_MODULES enables, which kernel.org.overview runs in each org.
+export function overviewContributions(config: Pick<Config, 'CROVE_MODULES'>): OverviewContribution[] {
+  return config.CROVE_MODULES.flatMap((module) => OVERVIEW_CONTRIBUTIONS[module] ?? []);
+}
+
 // The commands and queries of the modules CROVE_MODULES enables (plan Decision 12, ADR-0031). A module left out has
 // none registered, so its commands answer COMMAND_NOT_FOUND, a ctx.query into it answers not_installed (with the
 // absentModules buildRuntime passes), and the
@@ -171,7 +179,7 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
         inviteLimits: { perRecipientPerDay: config.INVITE_LIMIT_PER_RECIPIENT_PER_DAY },
         messageIdDomain: messageIdDomain(config),
       }),
-      queries: kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }),
+      queries: kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null, overview: overviewContributions(config) }),
     }),
     finance: () => ({ commands: financeCommands, queries: financeQueries }),
     social: () => ({ commands: socialCommands, queries: socialQueries }),

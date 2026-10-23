@@ -232,27 +232,42 @@ export const zOrgDetail = z.object({
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
-// One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures read in its own
-// context. pendingProposals: proposals waiting in the Inbox. failedFiles: files that could not be read among the ones
-// the Inbox lists. lastActivityAt: the newest entry of the org's activity feed. vatDeadline: the next VAT return due,
-// from the org's filing period (null while none is chosen).
-export const zClientOverview = zOrgSummary.extend({
-  overview: z.object({
-    pendingProposals: z.number().int().nonnegative(),
-    failedFiles: z.number().int().nonnegative(),
-    lastActivityAt: z.string().nullable(),
-    vatFilingPeriod: zVatFilingPeriod.nullable(),
-    vatDeadline: z
-      .object({
-        period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/),
-        dueDate: zLocalDate,
-        daysLeft: z.number().int().nonnegative(),
-      })
-      .nullable(),
-    // The tax calendar (#921): what is due in the next 30 days, or overdue and not marked done, by due date.
-    taxDues: z.array(zTaxDueView),
-  }),
+// An org's Social figures on the multi-client home (#1261), read as the member in that org, each as the Social screen it
+// links to counts it (at most 200 for the post lists): posts in review (the Review tab), of those the ones waiting only
+// for the client's approval, posts needing attention (the Attention tab), channels to reconnect (expired or broken),
+// posts going out in the next 7 days, and when a post last went out.
+export const zSocialClientFigures = z.object({
+  review: z.number().int().nonnegative(),
+  waitingClient: z.number().int().nonnegative(),
+  attention: z.number().int().nonnegative(),
+  reconnect: z.number().int().nonnegative(),
+  upcoming: z.number().int().nonnegative(),
+  lastPostAt: z.string().nullable(),
 });
+
+// An org's figures (issue #318), read in its own context. pendingProposals: proposals waiting in the Inbox. failedFiles:
+// files that could not be read among the ones the Inbox lists. lastActivityAt: the newest entry of the org's activity
+// feed. vatDeadline: the next VAT return due, from the org's filing period (null while none is chosen). modules: the
+// figures of the modules this deployment enables (#1261), with no key for a module it leaves out.
+export const zOrgOverview = z.object({
+  pendingProposals: z.number().int().nonnegative(),
+  failedFiles: z.number().int().nonnegative(),
+  lastActivityAt: z.string().nullable(),
+  vatFilingPeriod: zVatFilingPeriod.nullable(),
+  vatDeadline: z
+    .object({
+      period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/),
+      dueDate: zLocalDate,
+      daysLeft: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  // The tax calendar (#921): what is due in the next 30 days, or overdue and not marked done, by due date.
+  taxDues: z.array(zTaxDueView),
+  modules: z.object({ social: zSocialClientFigures.optional() }),
+});
+// One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures; or, for an org
+// whose figures could not be read, overview null and the error's code (#495), so the other orgs still show.
+export const zClientOverview = zOrgSummary.extend({ overview: zOrgOverview.nullable(), error: z.string().nullable() });
 // The home screen's answer (#495): at most 200 orgs, and how many the user has, so a cut list says so.
 export const zClientOverviews = z.object({ clients: z.array(zClientOverview), total: z.number().int().nonnegative() });
 // What the public tax registry says about a tax code (issue #324), to prefill a new org: the normalized tax code, the

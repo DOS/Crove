@@ -62,6 +62,8 @@ export * from './client-review.ts';
 export * from './thread.ts';
 export * from './review-inbox.ts';
 export * from './attention-inbox.ts';
+export * from './client-overview.ts';
+export * from './post-filter.ts';
 export * from './auto-reply.ts';
 export * from './repost.ts';
 export * from './pin.ts';

@@ -188,6 +188,7 @@ export const vi = {
     subtitle: 'Việc đang chờ và hạn nộp tờ khai GTGT của từng doanh nghiệp bạn phụ trách. Bấm vào tên để mở.',
     columns: {
       company: 'Doanh nghiệp',
+      social: 'Mạng xã hội',
       pending: 'Chờ duyệt',
       failed: 'Tệp lỗi',
       lastActivity: 'Hoạt động gần nhất',
@@ -205,6 +206,17 @@ export const vi = {
     empty: 'Bạn chưa thuộc doanh nghiệp nào',
     emptyHint: 'Tạo doanh nghiệp đầu tiên hoặc nhận lời mời từ khách hàng để bắt đầu.',
     create: 'Tạo doanh nghiệp',
+    loadError: 'Chưa tải được số liệu của doanh nghiệp này.',
+    retry: 'Tải lại',
+    social: {
+      attention: '{count, plural, other {# bài cần xử lý}}',
+      reconnect: '{count, plural, other {# kênh cần kết nối lại}}',
+      review: '{count, plural, other {# bài chờ duyệt}}',
+      waitingClient: '{count, plural, other {trong đó # bài chờ khách duyệt}}',
+      upcoming: '{count, plural, =0 {Chưa có bài nào trong 7 ngày tới} other {# bài trong 7 ngày tới}}',
+      lastPost: '{days, plural, =0 {Bài gần nhất đăng hôm nay} =1 {Bài gần nhất đăng hôm qua} other {Bài gần nhất đăng # ngày trước}}',
+      neverPosted: 'Chưa đăng bài nào',
+    },
   },
   taxCalendar: {
     title: 'Việc thuế trong 30 ngày tới',
