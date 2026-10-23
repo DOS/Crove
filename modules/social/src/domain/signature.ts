@@ -32,7 +32,8 @@ export function signatureText(settings: Readonly<Record<string, unknown>> | null
 export function withSignature(body: string, settings: Readonly<Record<string, unknown>> | null | undefined): string {
   const signature = signatureText(settings);
   if (signature === null) return body;
-  const text = body.replace(/\s+$/u, '');
+  // trimEnd, not a /\s+$/ regex: linear on a long run of white space inside the text.
+  const text = body.trimEnd();
   if (text.normalize('NFC').endsWith(signature.normalize('NFC'))) return body;
   return text === '' ? signature : `${text}\n\n${signature}`;
 }
