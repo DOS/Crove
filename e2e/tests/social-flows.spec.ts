@@ -594,3 +594,48 @@ test('moves a draft to review on the board and approves it with four-eyes; an il
   expect(decided).toEqual([{ email: reviewer.toLowerCase(), decision: 'approved' }]);
   await reviewerContext.close();
 });
+
+test('plans an undated draft by dropping it on a day, then moves its time from the chip menu (#1145)', async ({ page }) => {
+  await signInNewUser(page, newEmail('social-undated'));
+  const slug = await createOrg(page, 'Công ty Lịch Nháp');
+  await connectSandbox(page, 'Trang Lịch Nháp');
+  await compose(page, 'Bài chưa có ngày');
+  await page.getByRole('button', { name: 'Lưu nháp' }).click();
+  await expect(page).toHaveURL(/\/social\/[0-9a-f-]{36}$/);
+  const postId = postIdOf(page);
+  const planned = () =>
+    sql<{ at: string | null }>(`SELECT to_char(scheduled_at AT TIME ZONE :'zone', 'YYYY-MM-DD HH24:MI') AS at FROM crove_social.post WHERE id = :'post'`, { post: postId, zone: TIME_ZONE })[0]?.at;
+  expect(planned()).toBeNull();
+  const updates: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/api/rpc/social/posts/update')) updates.push(r.url());
+  });
+
+  await page.goto(`/o/${slug}/social?tab=calendar`);
+  const draft = page.getByTestId('undated-draft').filter({ hasText: 'Bài chưa có ngày' });
+  await expect(page.getByRole('heading', { name: /Chưa có ngày/ })).toBeVisible();
+  await expect(draft).toHaveCount(1);
+  // Two days ahead is always in the month view (it runs at least four days into the next month): 09:00 that day.
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date(Date.now() + 2 * 86_400_000));
+  // The list stays beside the calendar, so neither has to scroll while dragging.
+  const cell = page.locator(`[data-day="${day}"]`);
+  await cell.scrollIntoViewIfNeeded();
+  await expect(draft).toBeInViewport();
+  await draft.dragTo(cell);
+  await expect(page.getByText('Đã đặt ngày dự kiến:')).toBeVisible();
+  await expect(draft).toHaveCount(0);
+  expect(planned()).toBe(`${day} 09:00`);
+  expect(updates).toHaveLength(1);
+  const chip = cell.getByTestId('calendar-chip').filter({ hasText: 'Bài chưa có ngày' });
+  await expect(chip).toContainText('09:00');
+
+  // Without dragging: the chip's menu, by keyboard, to 15:30 the same day.
+  await page.getByRole('button', { name: 'Đổi ngày dự kiến của bài: Bài chưa có ngày' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Ngày', { exact: true })).toBeFocused();
+  await page.getByLabel('Giờ', { exact: true }).fill('15:30');
+  await page.keyboard.press('Enter');
+  await expect(chip).toContainText('15:30');
+  expect(planned()).toBe(`${day} 15:30`);
+  expect(updates).toHaveLength(2);
+});
