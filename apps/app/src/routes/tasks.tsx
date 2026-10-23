@@ -115,7 +115,7 @@ export function TasksPage() {
       ) : tasks.error ? (
         <ErrorText>{errorMessage(tasks.error)}</ErrorText>
       ) : tasks.data.length === 0 ? (
-        <Empty title={t('empty')} />
+        <Empty title={t('empty')} hint={t(filter === 'mine' ? 'emptyMineHint' : 'emptyHint')} />
       ) : (
         <>
           {tasks.data.length >= TASK_LIST_LIMIT && <p className="mb-2 text-xs text-muted-foreground">{t('truncated', { count: String(TASK_LIST_LIMIT) })}</p>}
