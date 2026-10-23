@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_social.push_subscription',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -880,6 +881,22 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // A hold on all of an org's publishing (#946), by an owner or admin with a reason. The commands keep one live hold per
   // org under an advisory lock; the table has no unique index, so an org's rows may all be live.
   'crove_social.publish_hold': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), reason: `RLS matrix hold ${tag()}`, held_by: o.owner } }) },
+  // A member's browser push subscription on one device (#1238), under a restrictive policy like the mutes: each member
+  // sees and changes only their own. One endpoint per member, so every row gets its own; the keys are a P-256 point and
+  // a 16-byte secret, base64url.
+  'crove_social.push_subscription': {
+    make: (o) => ({
+      row: {
+        org_id: o.id,
+        id: randomUUID(),
+        user_id: o.owner,
+        endpoint: `https://push.example.com/rls-${tag()}`,
+        p256dh: Buffer.concat([Buffer.from([4]), randomBytes(64)]).toString('base64url'),
+        auth: randomBytes(16).toString('base64url'),
+        user_agent: 'RLS matrix',
+      },
+    }),
+  },
   // One queue per connection, so every queue row gets its own connection.
   'crove_social.queue': {
     make: (o) => {

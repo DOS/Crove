@@ -81,3 +81,5 @@ export * from './digest.ts';
 export * from './domain/outperform.ts';
 export * from './outperforming.ts';
 export * from './domain/duplicate.ts';
+export * from './suggestions.ts';
+export * from './domain/suggestion.ts';

@@ -262,7 +262,8 @@ suite('pinned internal comments on PostgreSQL (#1180)', () => {
       expect.objectContaining({ code: '23503', constraint: 'post_comment_file_fk' }),
     );
 
-    // crove_tenant inserts a pin but never changes one; its text and resolve grants stay.
+    // crove_tenant inserts a pin but never changes one; its text and resolve grants stay, and a suggestion's state
+    // (#1236).
     for (const column of ['file_id', 'pin_x', 'pin_y', 'pin_seconds']) {
       await expect(
         admin(async (c) => {
@@ -281,6 +282,6 @@ suite('pinned internal comments on PostgreSQL (#1180)', () => {
         "SELECT column_name FROM information_schema.column_privileges WHERE table_schema = 'crove_social' AND table_name = 'post_comment' AND grantee = 'crove_tenant' AND privilege_type = 'UPDATE' ORDER BY column_name",
       ),
     );
-    expect(grants.rows.map((r) => r.column_name)).toEqual(['body', 'edited_at', 'resolved_at', 'resolved_by']);
+    expect(grants.rows.map((r) => r.column_name)).toEqual(['body', 'edited_at', 'resolved_at', 'resolved_by', 'suggest_state']);
   });
 });

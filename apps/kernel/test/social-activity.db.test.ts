@@ -166,8 +166,8 @@ suite('social post comments and activity on PostgreSQL (#582)', () => {
         )
       ).rows.map((r) => r.column_name),
     );
-    // The edit command's text columns, and the resolve command's two (#1168); nothing else.
-    expect(columns).toEqual(['body', 'edited_at', 'resolved_at', 'resolved_by']);
+    // The edit command's text columns, the resolve command's two (#1168) and a suggestion's state (#1236); nothing else.
+    expect(columns).toEqual(['body', 'edited_at', 'resolved_at', 'resolved_by', 'suggest_state']);
     const asTenant = (statement: string, params: unknown[]) =>
       admin(async (c) => {
         await c.query('BEGIN');

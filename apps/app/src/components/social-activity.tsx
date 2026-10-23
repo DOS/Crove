@@ -1,7 +1,8 @@
 // A post's internal comments and timeline (#582): members write a comment on the post or on one channel, the author
 // may fix it for 15 minutes, and everyone sees what happened to the post, newest first. Comments are never published.
 // A comment dealt with is marked resolved (#1168) and shows greyed, with who resolved it and when; it can be reopened.
-// A comment can be pinned (#1180) to a spot on one of the post's images or a moment in one of its videos.
+// A comment can be pinned (#1180) to a spot on one of the post's images or a moment in one of its videos, or suggest
+// an edit of the text (#1236), which a member who may edit the post accepts or skips.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -15,6 +16,7 @@ import { CommentBody, MentionBox, useMemberNames, type Picked } from './social-m
 import { PinBoard, boardPins, clockOf, commentAnchor, revealMarker, useMediaLabels, type DraftPin, type PinMedia } from './social-comment-pins.tsx';
 import { Thumb } from './social-media.tsx';
 import { TickedChecks } from './social-review-checklist.tsx';
+import { SuggestionView } from './social-suggest.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -47,7 +49,7 @@ function PinNote({ item, n, onBoard }: { item: Item & { pin: NonNullable<Item['p
   );
 }
 
-function Entry({ item, channel, canWrite, pinNumber, onBoard }: { item: Item; channel: string | null; canWrite: boolean; pinNumber: number | null; onBoard: boolean }) {
+function Entry({ item, channel, canWrite, pinNumber, onBoard, locked }: { item: Item; channel: string | null; canWrite: boolean; pinNumber: number | null; onBoard: boolean; locked: boolean }) {
   const t = useTranslations('social.activity');
   const f = useFormat();
   const [editing, setEditing] = useState<string | null>(null);
@@ -71,7 +73,7 @@ function Entry({ item, channel, canWrite, pinNumber, onBoard }: { item: Item; ch
   });
   const resolved = item.kind === 'comment' && item.resolvedAt !== null;
   const who = item.name ?? t(item.userId ? 'formerMember' : 'system');
-  const what =
+  const happened =
     item.kind === 'decision'
       ? t(`decision.${item.decision === 'approved' ? 'approved' : item.decision === 'rejected' ? 'rejected' : 'changes_requested'}`)
       : item.kind === 'created' && item.code === 'ai'
@@ -85,6 +87,8 @@ function Entry({ item, channel, canWrite, pinNumber, onBoard }: { item: Item; ch
               item.kind === 'queue_moved' && (item.code === 'shuffle' || item.code === 'front' || item.code === 'shifted')
               ? t(`queueMoved.${item.code}`)
               : t(`kind.${item.kind}`);
+  // A suggested edit (#1236) is a comment that says what to change.
+  const what = item.kind === 'comment' && item.suggestion ? t('suggested') : happened;
   return (
     <li
       id={item.kind === 'comment' ? commentAnchor(item.id) : undefined}
@@ -124,6 +128,7 @@ function Entry({ item, channel, canWrite, pinNumber, onBoard }: { item: Item; ch
         item.body && (item.kind === 'comment' ? <CommentBody body={item.body} /> : <p className="whitespace-pre-wrap break-words text-foreground">{item.body}</p>)
       )}
       {item.kind === 'comment' && item.pin && <PinNote item={{ ...item, pin: item.pin }} n={pinNumber} onBoard={onBoard} />}
+      {item.kind === 'comment' && item.suggestion && <SuggestionView commentId={item.id} suggestion={item.suggestion} channel={channel} locked={locked} />}
       {resolved && item.resolvedAt && (
         <p className="text-xs text-muted-foreground">{t('resolvedBy', { name: item.resolvedByName ?? t('formerMember'), when: f.dateTime(item.resolvedAt) })}</p>
       )}
@@ -151,8 +156,23 @@ function Entry({ item, channel, canWrite, pinNumber, onBoard }: { item: Item; ch
   );
 }
 
-// media: the post's images and videos, and each channel's own, that comments can be pinned to (#1180).
-export function PostActivity({ postId, channels, canWrite, className, media = [] }: { postId: string; channels: { variantId: string; name: string }[]; canWrite: boolean; className?: string; media?: readonly PinMedia[] }) {
+// media: the post's images and videos, and each channel's own, that comments can be pinned to (#1180). suggestionsLocked:
+// the page has unsaved edits, so no suggested edit is accepted until they are saved or dropped (#1236).
+export function PostActivity({
+  postId,
+  channels,
+  canWrite,
+  className,
+  media = [],
+  suggestionsLocked = false,
+}: {
+  postId: string;
+  channels: { variantId: string; name: string }[];
+  canWrite: boolean;
+  className?: string;
+  media?: readonly PinMedia[];
+  suggestionsLocked?: boolean;
+}) {
   const t = useTranslations('social.activity');
   const activity = useQuery(orpc.social.posts.activity.queryOptions({ input: { postId } }));
   const [body, setBody] = useState('');
@@ -255,6 +275,7 @@ export function PostActivity({ postId, channels, canWrite, className, media = []
                 canWrite={canWrite}
                 pinNumber={pinNumber.get(item.id) ?? null}
                 onBoard={item.pin ? onBoard.has(item.pin.fileId) : false}
+                locked={suggestionsLocked}
               />
             ))}
           </ol>
