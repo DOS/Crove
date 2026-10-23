@@ -216,6 +216,9 @@ describe('LinkedInPublisher', () => {
     // Any other 422 keeps its plain refusal.
     const invalid = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 422, body: { status: 422, code: 'UNPROCESSABLE_ENTITY', message: '/author does not match the member or organization URN pattern' } }] });
     expect(await new LinkedInPublisher({}, invalid.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'UNPROCESSABLE_ENTITY', httpStatus: 422 });
+    // A 422 about a duplicate of something else (a mention, a media asset) is not a duplicate post.
+    const mention = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 422, body: { status: 422, message: 'Duplicate mention entities are not allowed' } }] });
+    expect(await new LinkedInPublisher({}, mention.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'HTTP_422' });
     // A 403 that mentions a duplicate is still a permission refusal: only the 422 names the duplicate.
     const denied = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 403, body: { status: 403, message: 'Not enough permissions to create a duplicate share' } }] });
     expect(await new LinkedInPublisher({}, denied.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'permission', code: 'HTTP_403' });

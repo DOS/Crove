@@ -306,7 +306,7 @@ function publishResult(error: unknown): PublishResult {
   if (error.status === 429) return { kind: 'rejected', error: 'rate_limited', code, message: error.message, httpStatus: error.status };
   // The same text as a recent post of the member or page (#1156): LinkedIn answers 422 "Content is a duplicate of
   // urn:li:share:..." (public reports; confirm on a live account, #591). Nothing was posted; the text must change.
-  if (error.status === 422 && /\bduplicate\b/i.test(error.message)) return { kind: 'rejected', error: 'bad_request', code: DUPLICATE_CONTENT, message: error.message, httpStatus: error.status };
+  if (error.status === 422 && /\bis a duplicate of\b/i.test(error.message)) return { kind: 'rejected', error: 'bad_request', code: DUPLICATE_CONTENT, message: error.message, httpStatus: error.status };
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
 }
 
