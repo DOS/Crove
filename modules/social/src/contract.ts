@@ -9,6 +9,9 @@ export * from './domain/mentions.ts';
 export * from './domain/media-tags.ts';
 // Local clock times in an IANA zone, for moving posts by days in the app (#945) as the queues retime them.
 export { localTime, zonedToEpoch, type LocalTime } from './domain/queue.ts';
+// The placement `social.queue.set` runs, so a copy of a queue to other channels (#1166) says beforehand how many queued
+// posts each one places again.
+export { placeQueued, retime, type QueuedPost, type QueueSpec } from './domain/queue.ts';
 // Recurring posts (#979): the rule's next occurrence, for the post page's preview.
 export * from './domain/recurrence.ts';
 // Banned and sensitive words (#1055): the composer marks matches with the rules the commands apply.

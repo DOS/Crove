@@ -21,6 +21,7 @@ import { BannedWordsCard } from '../components/social-banned-words.tsx';
 import { ReviewChecklistCard } from '../components/social-review-checklist.tsx';
 import { ChannelAccessCard, useChannelScope } from '../components/social-channel-access.tsx';
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
+import { QueueCopy, QueueSuggestButton } from '../components/social-queue-tools.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -28,6 +29,8 @@ import { getConfig } from '../lib/auth.ts';
 import { rememberOAuthAttempt } from '../lib/oauth.ts';
 import { connectPlatforms, minuteLabel, parseMinute, providerName } from '../lib/social.ts';
 import { shuffleRange } from '../lib/social-queue-order.ts';
+import type { QueueSuggestion } from '../lib/social-best-time.ts';
+import { copySlots } from '../lib/social-queue-copy.ts';
 
 type Channel = Awaited<ReturnType<typeof orpc.channels.list.call>>[number];
 type OAuthProvider = (typeof OAUTH_CHANNEL_PROVIDERS)[number];
@@ -140,7 +143,7 @@ function ReviewPolicy({ channel, required, reminders, shortLinks, fourEyes, clie
   );
 }
 
-function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean }) {
+function QueueEditor({ channel, canEdit, copyTargets }: { channel: Channel; canEdit: boolean; copyTargets: readonly Channel[] }) {
   const t = useTranslations('social');
   const f = useFormat();
   const { slug } = useParams({ strict: false }) as { slug: string };
@@ -150,6 +153,8 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
   const [time, setTime] = useState('09:00');
   // A content category (#745): the label a new slot is kept for; '' is an open slot.
   const [category, setCategory] = useState('');
+  // Slots the draft took from the best times (#1166), by weekday:minute, until it is saved.
+  const [suggested, setSuggested] = useState<Map<string, QueueSuggestion>>(new Map());
   const labels = useQuery(orpc.social.labels.list.queryOptions({ input: {} }));
   const labelName = new Map((labels.data ?? []).map((l) => [l.id, l.name]));
   const current = draft ?? (queue.data ? { timeZone: queue.data.timeZone ?? 'Asia/Ho_Chi_Minh', slots: queue.data.slots.map((s) => ({ weekday: s.weekday, minute: s.minute, ...(s.label ? { label: s.label } : {}), ...(s.labelId ? { labelId: s.labelId } : {}) })) } : null);
@@ -157,6 +162,7 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
     mutationFn: (next: { timeZone: string; slots: Slot[]; paused?: boolean; lowDays?: number | null }) => client.social.queues.set({ connectionId: channel.id, ...next }),
     onSuccess: () => {
       setDraft(null);
+      setSuggested(new Map());
       void queryClient.invalidateQueries();
     },
   });
@@ -173,6 +179,14 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
     const missing = WEEKDAYS.filter((d) => !current.slots.some((s) => s.weekday === d && s.minute === minute)).map((d) => ({ weekday: d, minute, ...(category ? { labelId: category } : {}) }));
     setDraft({ ...current, slots: [...current.slots, ...missing] });
   };
+  // The suggestions join the draft as open slots, or kept for the category picked, like a slot added by hand.
+  const suggest = (list: QueueSuggestion[]) => {
+    const fresh = list.filter((x) => !current.slots.some((s) => s.weekday === x.weekday && s.minute === x.minute));
+    setDraft({ ...current, slots: [...current.slots, ...fresh.map((x) => ({ weekday: x.weekday, minute: x.minute, ...(category ? { labelId: category } : {}) }))] });
+    setSuggested(new Map([...(draft ? suggested : []), ...fresh.map((x) => [`${x.weekday}:${x.minute}`, x] as const)]));
+  };
+  const keyOf = (s: { weekday: number; minute: number }) => `${s.weekday}:${s.minute}`;
+  const suggestedNow = draft ? current.slots.filter((s) => suggested.has(keyOf(s))).length : 0;
   const paused = queue.data?.paused ?? false;
   const lowDays = queue.data?.lowDays ?? null;
   return (
@@ -239,23 +253,36 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
         <p className="text-xs text-subtle-foreground">{t('noSlots')}</p>
       ) : (
         <div className="flex flex-wrap gap-1.5">
-          {sorted.map((s) => (
-            <span key={`${s.weekday}:${s.minute}`} className="inline-flex items-center gap-1.5 rounded-lg border bg-background px-2 py-1 text-xs text-foreground">
-              {t(`weekday.${dayKeyOf(s.weekday)}`)} <span className="font-mono tabular-nums">{minuteLabel(s.minute)}</span>
-              {s.labelId && <span className="text-subtle-foreground">· {labelName.get(s.labelId) ?? t('queueCategoryGone')}</span>}
-              {canEdit && (
-                <button
-                  type="button"
-                  aria-label={t('removeSlot')}
-                  className="rounded text-subtle-foreground hover:text-destructive focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                  onClick={() => setDraft({ ...current, slots: current.slots.filter((x) => !(x.weekday === s.weekday && x.minute === s.minute)) })}
-                >
-                  ×
-                </button>
-              )}
-            </span>
-          ))}
+          {sorted.map((s) => {
+            // A slot from the suggestions, until the draft is saved: dashed, with why it was suggested.
+            const hint = draft ? suggested.get(keyOf(s)) : undefined;
+            return (
+              <span
+                key={keyOf(s)}
+                className={`inline-flex items-center gap-1.5 rounded-lg border bg-background px-2 py-1 text-xs text-foreground${hint ? ' border-dashed border-primary' : ''}`}
+                title={hint ? t('queueTools.suggestedSlot', { engagement: f.number(Math.round(hint.engagement)), posts: String(hint.posts) }) : undefined}
+              >
+                {t(`weekday.${dayKeyOf(s.weekday)}`)} <span className="font-mono tabular-nums">{minuteLabel(s.minute)}</span>
+                {s.labelId && <span className="text-subtle-foreground">· {labelName.get(s.labelId) ?? t('queueCategoryGone')}</span>}
+                {canEdit && (
+                  <button
+                    type="button"
+                    aria-label={t('removeSlot')}
+                    className="rounded text-subtle-foreground hover:text-destructive focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                    onClick={() => setDraft({ ...current, slots: current.slots.filter((x) => !(x.weekday === s.weekday && x.minute === s.minute)) })}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            );
+          })}
         </div>
+      )}
+      {suggestedNow > 0 && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t('queueTools.suggested', { count: suggestedNow, zone: current.timeZone })}
+        </p>
       )}
       {canEdit && (
         <div className="flex flex-wrap items-center gap-2">
@@ -283,6 +310,7 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
           <Button variant="ghost" size="sm" onClick={everyDay}>
             {t('addEveryDay')}
           </Button>
+          <QueueSuggestButton connectionId={channel.id} timeZone={current.timeZone} slots={current.slots} onSuggest={suggest} />
           <Button size="sm" disabled={!draft || save.isPending} onClick={() => draft && save.mutate(draft)}>
             {t('saveQueue')}
           </Button>
@@ -293,6 +321,13 @@ function QueueEditor({ channel, canEdit }: { channel: Channel; canEdit: boolean 
         <p className="text-xs text-subtle-foreground">{t('nextFree', { list: (queue.data?.nextFree ?? []).map((s) => f.dateTime(s)).join(', ') })}</p>
       )}
       {canEdit && queue.data?.queueId && <QueueShuffle connectionId={channel.id} timeZone={queue.data.timeZone ?? current.timeZone} unsaved={Boolean(draft)} />}
+      <QueueCopy
+        source={channel}
+        saved={queue.data?.queueId && queue.data.timeZone ? { timeZone: queue.data.timeZone, slots: copySlots(queue.data.slots) } : null}
+        targets={copyTargets}
+        unsaved={Boolean(draft)}
+        canEdit={canEdit}
+      />
     </div>
   );
 }
@@ -585,7 +620,7 @@ export function SocialChannelsPage() {
                 </div>
                 <div className="border-t pt-3">
                   <p className="mb-2 text-sm font-medium text-muted-foreground">{t('queueTitle')}</p>
-                  <QueueEditor channel={c} canEdit={isAdmin} />
+                  <QueueEditor channel={c} canEdit={isAdmin} copyTargets={(channels.data ?? []).filter((x) => x.id !== c.id && x.status !== 'revoked')} />
                 </div>
               </Card>
             ))

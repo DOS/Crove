@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PublishedSample } from '@crove/mod-social/contract';
-import { BEST_TIME_MIN_POSTS, channelBestTimes, knownZone, listedPosts, nextOccurrence, suggestBestTimes, takenTimes } from '../src/lib/social-best-time.ts';
+import { BEST_TIME_MIN_POSTS, QUEUE_SUGGEST_MAX, channelBestTimes, knownZone, listedPosts, nextOccurrence, queueSuggestions, suggestBestTimes, takenTimes } from '../src/lib/social-best-time.ts';
 
 const HCM = 'Asia/Ho_Chi_Minh';
 const NY = 'America/New_York';
@@ -128,5 +128,67 @@ describe('the zone the suggestions use', () => {
     expect(knownZone(HCM)).toBe(HCM);
     expect(knownZone('Mars/Olympus', HCM)).toBe(HCM);
     expect(knownZone(null)).toBe('UTC');
+  });
+});
+
+describe('queue slots suggested from the best times (#1166)', () => {
+  const sample = (publishedAt: string, reactions: number, connectionId = 'a'): PublishedSample => ({ connectionId, publishedAt, metrics: { reactions } });
+  // Two posts each at Tuesday 20:00, Thursday 12:00 and Saturday 09:00 in Ho Chi Minh City (UTC+7), October 2026.
+  const rows = [
+    sample('2026-10-06T13:00:00Z', 30),
+    sample('2026-10-13T13:00:00Z', 30),
+    sample('2026-10-08T05:00:00Z', 20),
+    sample('2026-10-15T05:00:00Z', 20),
+    sample('2026-10-10T02:00:00Z', 10),
+    sample('2026-10-17T02:00:00Z', 10),
+    sample('2026-10-06T13:00:00Z', 900, 'b'),
+  ];
+
+  it('gives the best weekday-hour slots as queue slots on the hour, best first', () => {
+    expect(queueSuggestions(rows, 'a', HCM, [])).toEqual({
+      state: 'ready',
+      slots: [
+        { weekday: 2, minute: 1200, posts: 2, engagement: 30 },
+        { weekday: 4, minute: 720, posts: 2, engagement: 20 },
+        { weekday: 6, minute: 540, posts: 2, engagement: 10 },
+      ],
+    });
+  });
+
+  it('never suggests a slot the queue has, and lets the next best fill in', () => {
+    const got = queueSuggestions(rows, 'a', HCM, [{ weekday: 2, minute: 1200 }, { weekday: 4, minute: 735 }], 2);
+    expect(got).toEqual({ state: 'ready', slots: [{ weekday: 4, minute: 720, posts: 2, engagement: 20 }, { weekday: 6, minute: 540, posts: 2, engagement: 10 }] });
+    expect(queueSuggestions(rows, 'a', HCM, [{ weekday: 2, minute: 1200 }, { weekday: 4, minute: 720 }, { weekday: 6, minute: 540 }])).toEqual({ state: 'had' });
+    expect(QUEUE_SUGGEST_MAX).toBe(5);
+  });
+
+  it('is disabled under five posts with metrics, as the "Giờ đẹp" button', () => {
+    expect(queueSuggestions(rows.slice(0, 4), 'a', HCM, [])).toEqual({ state: 'few', posts: 4 });
+    expect(queueSuggestions(rows, 'z', HCM, [])).toEqual({ state: 'few', posts: 0 });
+  });
+
+  it('reads the hours in the queue\'s time zone', () => {
+    expect(queueSuggestions(rows, 'a', 'UTC', [])).toMatchObject({ state: 'ready', slots: [{ weekday: 2, minute: 780 }, { weekday: 4, minute: 300 }, { weekday: 6, minute: 120 }] });
+  });
+
+  it('keeps a local hour across a DST change', () => {
+    // Monday 09:00 in New York before the change on 2026-11-01 (EDT, 13:00 UTC) and after it (EST, 14:00 UTC).
+    const monday = ['2026-10-19T13:00:00Z', '2026-10-26T13:00:00Z', '2026-11-02T14:00:00Z', '2026-11-09T14:00:00Z', '2026-11-16T14:00:00Z'].map((at) => sample(at, 8));
+    expect(queueSuggestions(monday, 'a', NY, [])).toEqual({ state: 'ready', slots: [{ weekday: 1, minute: 540, posts: 5, engagement: 8 }] });
+    // In UTC the same posts split over two hours.
+    expect(queueSuggestions(monday, 'a', 'UTC', [])).toEqual({
+      state: 'ready',
+      slots: [
+        { weekday: 1, minute: 840, posts: 3, engagement: 8 },
+        { weekday: 1, minute: 780, posts: 2, engagement: 8 },
+      ],
+    });
+    // The queue's 09:00 Monday is the slot the suggestion would make, so none is left.
+    expect(queueSuggestions(monday, 'a', NY, [{ weekday: 1, minute: 540 }])).toEqual({ state: 'had' });
+  });
+
+  it('says when enough posts show no slot that stands out', () => {
+    const scattered = [6, 7, 8, 9, 10].map((d) => sample(`2026-10-${String(d).padStart(2, '0')}T0${d - 5}:00:00Z`, 4));
+    expect(queueSuggestions(scattered, 'a', HCM, [])).toEqual({ state: 'none' });
   });
 });
