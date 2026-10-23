@@ -438,13 +438,15 @@ export const contract = {
         )
         .output(z.object({ postId: zId })),
       // A rewrite of one text, as a proposal the member accepts or discards (#583); nothing is saved. With a channel,
-      // the rewrite is told its limits.
+      // the rewrite is told its limits. proofread (#1167): spelling, diacritics, spacing and punctuation only; the
+      // text comes back unchanged when there is nothing to fix, and an answer that changed a link, hashtag, mention,
+      // number or price, or emoji is refused with AI_PROOFREAD_CHANGED.
       rewriteWithAi: oc
         .input(
           z.strictObject({
             text: z.string().trim().min(1).max(20_000),
             title: z.string().trim().max(500).nullable().optional(),
-            action: z.enum(['shorten', 'formal', 'casual', 'translate_en', 'translate_vi']),
+            action: z.enum(['shorten', 'formal', 'casual', 'translate_en', 'translate_vi', 'proofread']),
             connectionId: zId.optional(),
           }),
         )

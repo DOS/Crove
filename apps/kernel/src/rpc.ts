@@ -3,9 +3,9 @@ import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
-import { ALT_TEXT_IMAGE_MAX_BYTES, ALT_TEXT_IMAGE_TYPES, type SocialWriter, type WriterChannel } from '@crove/agent';
+import { ALT_TEXT_IMAGE_MAX_BYTES, ALT_TEXT_IMAGE_TYPES, ProofreadChangedError, type SocialWriter, type WriterChannel } from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider, strictestAltTextLimit } from '@crove/mod-social/contract';
-import { voiceNotes, type BrandVoice } from '@crove/mod-social';
+import { channelNotAllowed, voiceNotes, type BrandVoice } from '@crove/mod-social';
 import {
   clientOverviews,
   createOrg,
@@ -77,6 +77,17 @@ export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> &
     // maxChars when the chosen channels take less than the writer's own limit (#1121).
     describeStored?: (file: { key: string; generation: string | null; sha256: string }, mime: string, language: 'vi' | 'en', maxChars?: number | null) => Promise<string | null>;
   };
+
+// A member limited to some channels (#1081) may not have AI write for another one (#1099): refused before the paid model
+// call and before that channel's brand voice is read, as social.post.create would refuse the channel afterwards.
+async function refuseChannelsOutside(runtime: Runtime, actor: UserActor, orgId: string, connectionIds: readonly string[]): Promise<void> {
+  if (connectionIds.length === 0) return;
+  const mine = await runtime.query<{ limited: boolean; connectionIds: string[] }>('social.channel_access.mine', {}, { actor, orgId });
+  if (!mine.limited) return;
+  const allowed = new Set(mine.connectionIds);
+  const outside = [...new Set(connectionIds)].filter((id) => !allowed.has(id)).sort();
+  if (outside.length > 0) throw channelNotAllowed(outside);
+}
 
 // The org's saved brand voices (#741) as notes for the writer: the org's, and each channel's by connection.
 async function savedVoices(runtime: Runtime, actor: UserActor, orgId: string): Promise<{ org: string | null; byChannel: Map<string, string> }> {
@@ -481,6 +492,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             if (role !== 'owner' && role !== 'admin' && role !== 'member') throw new DomainError('FORBIDDEN', 403, 'Vai trò chỉ xem không soạn được bài');
             if (!socialWriter) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
             if (new Set(input.connectionIds).size !== input.connectionIds.length) throw new DomainError('CHANNEL_ALREADY_IN_POST', 409, 'Mỗi kênh chỉ có một bản trong bài đăng');
+            await refuseChannelsOutside(runtime, actor, orgId, input.connectionIds);
             const connections = await runtime.query<{ id: string; provider: string; displayName: string; status: string }[]>('kernel.channel.list', {}, { actor, orgId });
             const chosen = input.connectionIds.map((id) => connections.find((c) => c.id === id && c.status === 'active'));
             if (chosen.some((c) => !c)) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
@@ -540,11 +552,13 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             if (!socialWriter) throw new DomainError('AI_NOT_CONFIGURED', 503, 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL)');
             let channel: WriterChannel | undefined;
             if (input.connectionId) {
+              await refuseChannelsOutside(runtime, actor, orgId, [input.connectionId]);
               const connections = await runtime.query<{ id: string; provider: string; displayName: string; status: string }[]>('kernel.channel.list', {}, { actor, orgId });
               const found = connections.find((c) => c.id === input.connectionId && c.status !== 'revoked');
               if (!found) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Có kênh không tồn tại hoặc đã ngắt kết nối');
               channel = writerChannel(found);
             }
+            const proofread = input.action === 'proofread';
             // The same budget as drafts: each rewrite is a paid model call (#386).
             const ticket = drafts.take(orgId, actor.userId);
             if (!ticket.allowed) {
@@ -554,15 +568,22 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
             }
             let result: Awaited<ReturnType<SocialDrafter['rewrite']>>;
             try {
-              const voices = await savedVoices(runtime, actor, orgId);
-              const voice = (input.connectionId ? voices.byChannel.get(input.connectionId) : undefined) ?? voices.org;
+              // A proofread keeps the member's style: no brand voice is read for it.
+              const voices = proofread ? null : await savedVoices(runtime, actor, orgId);
+              const voice = voices ? ((input.connectionId ? voices.byChannel.get(input.connectionId) : undefined) ?? voices.org) : null;
               result = await socialWriter.rewrite({ text: input.text, title: input.title ?? null, action: input.action, ...(channel ? { channel } : {}), ...(voice ? { voice } : {}) });
             } catch (error: unknown) {
+              // The check after a proofread (#1167) found a changed link, hashtag, mention, number or price, or emoji.
+              if (error instanceof ProofreadChangedError) {
+                throw new DomainError('AI_PROOFREAD_CHANGED', 422, 'AI đã sửa cả liên kết, hashtag, tài khoản được nhắc (@), con số, giá hoặc emoji nên bản sửa bị bỏ; nội dung của bạn vẫn giữ nguyên', { changed: [...error.kinds] });
+              }
               console.error('[social-ai] rewrite failed', error instanceof Error ? error.name : typeof error);
+              if (proofread) throw new DomainError('AI_PROOFREAD_FAILED', 503, 'AI chưa soát được chính tả lúc này, hãy thử lại sau');
               throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
             } finally {
               ticket.release();
             }
+            if (!result && proofread) throw new DomainError('AI_PROOFREAD_FAILED', 503, 'AI chưa soát được chính tả lúc này, hãy thử lại sau');
             if (!result) throw new DomainError('AI_REWRITE_EMPTY', 422, 'AI không viết lại được đoạn này, hãy thử cách khác');
             return result;
           }),
@@ -605,7 +626,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               altText = await socialWriter.describeStored({ key: file.storageKey, generation: file.generation, sha256: file.sha256 }, file.contentType, input.language, maxChars);
             } catch (error: unknown) {
               console.error('[social-ai] describe failed', error instanceof Error ? error.name : typeof error);
-              throw new DomainError('AI_DRAFT_FAILED', 503, 'AI không soạn được bài lúc này, hãy thử lại sau');
+              throw new DomainError('AI_ALT_TEXT_FAILED', 503, 'AI chưa gợi ý được mô tả ảnh lúc này, hãy thử lại sau');
             } finally {
               ticket.release();
             }

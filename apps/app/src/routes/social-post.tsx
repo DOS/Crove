@@ -31,6 +31,7 @@ import { AssignCard } from '../components/social-assign.tsx';
 import { BestTimeButton } from '../components/social-best-time.tsx';
 import { EmojiPicker } from '../components/social-emoji.tsx';
 import { DuplicateNote, ownRewriteId, SHARED_REWRITE_ID } from '../components/social-duplicate.tsx';
+import { ProofreadProposal } from '../components/social-proofread.tsx';
 import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -1559,7 +1560,7 @@ function UtmFields({ utm, onChange, disabled }: { utm: UtmTags | null; onChange:
   );
 }
 
-const REWRITES = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi'] as const;
+const REWRITES = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi', 'proofread'] as const;
 
 // An AI rewrite of a text (#583): a proposal shown next to the text, which the member takes or leaves. Taking it marks
 // the post as AI-assisted.
@@ -1567,15 +1568,15 @@ const REWRITES = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi']
 function AiRewrite({ id, text, title, connectionId, onAccept }: { id?: string; text: string; title: string | null; connectionId?: string; onAccept: (next: { text: string; title: string | null }) => void }) {
   const t = useTranslations('social');
   const [action, setAction] = useState<(typeof REWRITES)[number]>('shorten');
-  // The text the proposal was made from: typed on since, it no longer fits and is not offered.
-  const [asked, setAsked] = useState<string | null>(null);
+  // The text the proposal was made from, and how: typed on since, it no longer fits and is not offered.
+  const [asked, setAsked] = useState<{ text: string; title: string | null; action: (typeof REWRITES)[number] } | null>(null);
   const rewrite = useMutation({
     mutationFn: () => {
-      setAsked(text);
+      setAsked({ text, title, action });
       return client.social.posts.rewriteWithAi({ text, title, action, ...(connectionId ? { connectionId } : {}) });
     },
   });
-  const outdated = rewrite.data !== undefined && asked !== text;
+  const outdated = rewrite.data !== undefined && asked?.text !== text;
   if (getConfig().aiEnabled !== true || !text.trim()) return null;
   return (
     <div id={id} className="space-y-2 rounded-lg border border-dashed p-2">
@@ -1593,7 +1594,19 @@ function AiRewrite({ id, text, title, connectionId, onAccept }: { id?: string; t
         </Button>
       </div>
       {rewrite.error && <ErrorText>{errorMessage(rewrite.error)}</ErrorText>}
-      {rewrite.data && (
+      {rewrite.data && asked?.action === 'proofread' && (
+        <ProofreadProposal
+          before={{ text: asked.text, title: asked.title }}
+          after={rewrite.data}
+          outdated={outdated}
+          onApply={() => {
+            onAccept(rewrite.data);
+            rewrite.reset();
+          }}
+          onDiscard={() => rewrite.reset()}
+        />
+      )}
+      {rewrite.data && asked?.action !== 'proofread' && (
         <div className="space-y-2">
           {rewrite.data.title && <p className="text-sm font-medium text-foreground">{rewrite.data.title}</p>}
           <p className="text-sm whitespace-pre-wrap [overflow-wrap:anywhere] text-foreground">{rewrite.data.text}</p>
