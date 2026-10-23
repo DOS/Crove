@@ -1888,6 +1888,9 @@ export const vi = {
       settingsHint: 'Bỏ chọn những loại bạn không muốn nhận. Chỉ áp dụng cho tài khoản của bạn.',
       mail: 'Gửi cả email cho tôi',
       mailHint: 'Khi có bài chờ duyệt, bài đã được duyệt, bài đăng lỗi, kênh cần kết nối lại, hàng đợi sắp hết bài hoặc có người nhắc tên bạn, {brand} gửi thêm một email tới địa chỉ của bạn.',
+      digest: 'Bản tin hằng tuần',
+      digestHint: 'Mỗi sáng thứ Hai, {brand} gửi bạn một email tóm tắt: tuần trước đã đăng gì, bài nào được tương tác nhiều nhất, bài nào lỗi, và lịch đăng của tuần này.',
+      digestMailOff: 'Bật "Gửi cả email cho tôi" để nhận bản tin hằng tuần.',
       kinds: {
         review_requested: 'Bài cần duyệt',
         decided: 'Kết quả duyệt bài của bạn',

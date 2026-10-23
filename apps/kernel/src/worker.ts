@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runCommentJob, runPublishJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
@@ -810,6 +810,24 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const queueLowTimer = deps.runtime.installed('social') ? setInterval(() => void queueLowSweep(), QUEUE_LOW_SWEEP_MS) : null;
   if (queueLowTimer) void queueLowSweep();
 
+  // The weekly digest (#1104): every hour, the orgs past Monday 08:00 in their zone that have not had this week's;
+  // each is claimed once per ISO week in its own transaction. The log names counts only.
+  let digesting = false;
+  const digestSweep = async () => {
+    if (digesting) return;
+    digesting = true;
+    try {
+      const sent = await sweepDigests({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (sent > 0) console.log(`[social-digest] sent the weekly digest of ${sent} org(s)`);
+    } catch (error) {
+      console.error('[social-digest] sweep', error instanceof Error ? error.name : 'error');
+    } finally {
+      digesting = false;
+    }
+  };
+  const digestTimer = deps.runtime.installed('social') ? setInterval(() => void digestSweep(), DIGEST_SWEEP_MS) : null;
+  if (digestTimer) void digestSweep();
+
   // Proposal reminders and escalation (#676): every half hour, the pending proposals past the days their org set.
   let nudging = false;
   const proposalNudgeSweep = async () => {
@@ -1325,6 +1343,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (recurringTimer) clearInterval(recurringTimer);
     if (reminderTimer) clearInterval(reminderTimer);
     if (queueLowTimer) clearInterval(queueLowTimer);
+    if (digestTimer) clearInterval(digestTimer);
     if (missingInvoiceTimer) clearInterval(missingInvoiceTimer);
     clearInterval(proposalNudgeTimer);
     clearInterval(securityTimer);

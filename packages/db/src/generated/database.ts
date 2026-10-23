@@ -82,6 +82,7 @@ export interface CroveSocialSchema {
   'crove_social.channel_policy': SocialChannelPolicyTable;
   'crove_social.channel_set': SocialChannelSetTable;
   'crove_social.chat_alert': SocialChatAlertTable;
+  'crove_social.digest_week': SocialDigestWeekTable;
   'crove_social.external_import': SocialExternalImportTable;
   'crove_social.external_post': SocialExternalPostTable;
   'crove_social.feed': SocialFeedTable;
@@ -1056,6 +1057,14 @@ export interface SocialChatAlertTable {
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
   last_test_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   last_test_code: string | null;
+}
+
+/** crove_social.digest_week */
+export interface SocialDigestWeekTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  iso_week: ColumnType<string, string, NotGranted>;
+  sent_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_social.external_import */
