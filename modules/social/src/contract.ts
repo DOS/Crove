@@ -29,3 +29,5 @@ export { csvCell } from './domain/csv.ts';
 export * from './domain/bulk-drafts.ts';
 // The same text again on a channel (#1156): the composer compares as the member types, as social.post.get does.
 export * from './domain/duplicate.ts';
+// Bold and italic text (#1179): the composer styles a selection with the letters the matchers fold back.
+export * from './domain/text-styles.ts';

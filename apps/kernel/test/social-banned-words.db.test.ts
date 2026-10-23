@@ -12,6 +12,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { socialCommands, socialQueries, type BannedWordView, type PostView } from '@crove/mod-social';
+import { styleSelection, styleText } from '@crove/mod-social/contract';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -162,6 +163,25 @@ suite('social banned words on PostgreSQL (#1055)', () => {
     await exec(o, o.member, 'social.post.update', { postId, revision: (await get(o, postId)).revision, body: 'Trà thảo mộc giúp ngủ ngon, bệnh chưa khỏi thì hỏi bác sĩ' });
     await submit(o, postId);
     expect(await statuses(o, postId)).toEqual(['in_review']);
+  });
+
+  it('a blocked word typed in bold or italic (#1179) refuses submit and approval, wherever the styling came from', async () => {
+    const o = await org();
+    const conn = await connection(o);
+    await add(o, 'chữa khỏi', 'block');
+    // Styled with the composer's helper, half the phrase in bold.
+    const styled = styleSelection('Trà thảo mộc chữa khỏi mất ngủ #thaomoc', 13, 17, 'bold').text;
+    const postId = await post(o, styled, [conn]);
+    expect((await get(o, postId)).variants[0]?.bannedWords).toMatchObject([{ phrase: 'chữa khỏi', level: 'block', field: 'body', start: 13, end: 13 + styleText('chữa', 'bold').length + ' khỏi'.length }]);
+    await expect(submit(o, postId)).rejects.toMatchObject({ code: 'BANNED_WORDS', status: 422 });
+    expect(await statuses(o, postId)).toEqual(['draft']);
+
+    // A word blocked after submit refuses the approval of a post written in italic, without diacritics.
+    const other = await post(o, `Cam kết ${styleText('hoan tien', 'italic')} 100%`, [conn]);
+    await submit(o, other);
+    await add(o, 'hoàn tiền', 'block');
+    await expect(approve(o, other)).rejects.toMatchObject({ code: 'BANNED_WORDS', status: 422 });
+    expect(await statuses(o, other)).toEqual(['in_review']);
   });
 
   it('a blocked word in the first comment or a channel override counts too', async () => {

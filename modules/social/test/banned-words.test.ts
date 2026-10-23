@@ -4,6 +4,7 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import { BANNED_COMMAND_OPS_MAX, BANNED_COMMAND_PREPARE_MAX, BANNED_OPS_MAX, BANNED_PREPARE_MAX, BannedWordsTooComplex, MATCH_STEPS, bannedBudget, compileBannedWords, findBannedInTexts, findBannedWords, normalizePhrase, prepareBannedText, variantTexts, wordsForChannel, wordsForChannels, type BannedBudget, type BannedWord } from '../src/domain/banned-words.ts';
 import { bannedChecker, bannedCommandBudget, isBlocked } from '../src/banned-words.ts';
+import { styleSelection, styleText } from '../src/domain/text-styles.ts';
 
 let n = 0;
 const word = (phrase: string, over: Partial<BannedWord> = {}): BannedWord => ({ id: `w${(n += 1)}`, phrase, level: 'block', reason: null, connectionIds: [], ...over });
@@ -112,6 +113,52 @@ describe('findBannedWords: emoji', () => {
     const text = '👨‍👩‍👧 mua ngay, 🇻🇳 GIẢM GIÁ';
     const ranges = findBannedWords(text, [word('mua ngay'), word('giảm giá')]).map((m) => [m.start, m.end]);
     expect(ranges.map(([s, e]) => text.slice(s, e))).toEqual(['mua ngay', 'GIẢM GIÁ']);
+  });
+});
+
+describe('findBannedWords: styled letters (#1179)', () => {
+  it('matches a word typed in bold, italic or bold italic, with or without its diacritics', () => {
+    for (const style of ['bold', 'italic', 'boldItalic'] as const) {
+      const text = `Trà thảo mộc ${styleText('Chữa Khỏi', style)} mất ngủ`;
+      expect(found(text, 'chữa khỏi')).toEqual([styleText('Chữa Khỏi', style)]);
+      expect(found(styleText('chua khoi', style), 'chữa khỏi')).toHaveLength(1);
+      // The marks still count: a styled "chưa" is not "chữa".
+      expect(found(styleText('chưa khỏi', style), 'chữa khỏi')).toEqual([]);
+    }
+    expect(found(`Hàng ${styleText('số 1', 'bold')} Việt Nam`, 'số 1')).toEqual([styleText('số 1', 'bold')]);
+    // Styled through the composer, the selection half styled.
+    const half = styleSelection('Mua ngay hôm nay', 4, 8, 'bold').text;
+    expect(found(half, 'mua ngay')).toEqual([`Mua ${styleText('ngay', 'bold')}`]);
+  });
+
+  it('reports UTF-16 ranges in the text as given, over the styled letters and their marks', () => {
+    const text = `😀 ${styleText('tốt nhất', 'italic')}!`;
+    const [m] = findBannedWords(text, [word('tốt nhất')]);
+    expect(m?.start).toBe(3);
+    expect(text.slice(m?.start, m?.end)).toBe(styleText('tốt nhất', 'italic'));
+    expect(m?.end).toBe(text.length - 1);
+  });
+
+  it('matches plain text against a phrase listed in bold, and keeps one entry for both', () => {
+    expect(found('Tốt nhất', styleText('tốt nhất', 'bold'))).toEqual(['Tốt nhất']);
+    expect(normalizePhrase(styleText('Tốt  Nhất', 'bold'))).toBe('tốt nhất');
+  });
+
+  it('keeps word boundaries: a styled letter is a letter', () => {
+    expect(found(styleText('sales', 'bold'), 'sale')).toEqual([]);
+    expect(found(`${styleText('x', 'bold')}sale`, 'sale')).toEqual([]);
+    expect(found(`sale${styleText('s', 'italic')}`, 'sale')).toEqual([]);
+    expect(found(`${styleText('sale', 'bold')}, ok`, 'sale')).toEqual([styleText('sale', 'bold')]);
+  });
+
+  it('folds the block only: no Latin match from styled Greek, other compatibility letters or a reserved code point', () => {
+    // Bold Greek capital alpha, rho and omicron fold to Greek, not to Latin A, P, O.
+    expect(found('\u{1D6A8}\u{1D6B8}\u{1D6B6}', 'apo')).toEqual([]);
+    // Full-width and circled letters are not folded (not NFKC).
+    expect(found('ｓａｌｅ ⓢⓐⓛⓔ', 'sale')).toEqual([]);
+    // U+1D455, where italic h would be, is reserved and stays itself; italic h is U+210E.
+    expect(found('\u{1D455}ot', 'hot')).toEqual([]);
+    expect(found(styleText('hot', 'italic'), 'hot')).toEqual([styleText('hot', 'italic')]);
   });
 });
 

@@ -5,6 +5,8 @@
 // goes out and followers see it twice: the warning is advice there. Pure and isomorphic: the app compares as the
 // member types with the same rules the server applies.
 
+import { foldMathAlphanumerics } from './text-styles.ts';
+
 // What social.publish.record keeps as the error code when X or LinkedIn refused a text identical to a recent post: the
 // adapters' DUPLICATE_CONTENT in @crove/channel, which the browser cannot import.
 export const DUPLICATE_CONTENT = 'DUPLICATE_CONTENT';
@@ -32,9 +34,11 @@ const ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', amp: '&' 
 
 // A text as the duplicate check compares it, the way X's adapter compares a post with what it sent (comparableText):
 // links dropped (X rewrites them to t.co links), the three entities X writes decoded in one pass, NFC, white space
-// collapsed. Case and punctuation count, so changing one word clears the match. Only compared, never shown.
+// collapsed. Case and punctuation count, so changing one word clears the match. Styled letters (#1179) are compared as
+// their plain ones, first, so the same words in bold, italic or plain are the same text, and a styled link is dropped
+// like a plain one. Only compared, never shown.
 export function duplicateText(text: string): string {
-  return text
+  return foldMathAlphanumerics(text)
     .replace(/&(lt|gt|amp);/g, (_, name: string) => ENTITIES[name] ?? '')
     .replace(/\bhttps?:\/\/\S+/g, ' ')
     .replace(BARE_LINK, ' ')

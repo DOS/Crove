@@ -12,6 +12,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { socialCommands, socialQueries, type PostView, type PreReview } from '@crove/mod-social';
+import { styleSelection, styleText } from '@crove/mod-social/contract';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -141,6 +142,23 @@ suite('social duplicate text on PostgreSQL (#1156)', () => {
     const changed = await get(o, copy);
     expect(changed.variants.map((v) => v.duplicateOf)).toEqual([null, null]);
     expect((await query<PreReview>(o, o.owner, 'social.post.pre_review', { postId: copy })).findings.some((f) => f.includes('trùng'))).toBe(false);
+  });
+
+  it('catches last week\'s text sent again in bold (#1179), on X', async () => {
+    const o = await org();
+    const text = 'Ưu đãi cuối tuần: giảm 20% mọi món #uudai';
+    const last = await post(o, [o.x], text);
+    await published(o, last, o.x, 7);
+    // The composer's bold over the whole text keeps the hashtag; the words are the same.
+    const bold = styleSelection(text, 0, text.length, 'bold').text;
+    expect(bold).not.toBe(text);
+    const copy = await post(o, [o.x], bold);
+    expect(on(await get(o, copy), o.x)?.duplicateOf?.status).toBe('published');
+    // The other way round: a post that went out in italic, and the same words in plain text.
+    const italic = await post(o, [o.x], styleText('Mua 1 tặng 1 hôm nay', 'italic'));
+    await published(o, italic, o.x, 3);
+    const plain = await post(o, [o.x], 'Mua 1 tặng 1 hôm nay');
+    expect(on(await get(o, plain), o.x)?.duplicateOf?.status).toBe('published');
   });
 
   it('counts posts published in the last 30 days, scheduled or queued, the newest first; not older ones', async () => {
