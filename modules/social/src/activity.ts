@@ -2,10 +2,11 @@
 // a comment is never published and never part of what a reviewer approves. Its author may fix the text for a few
 // minutes. The timeline puts the comments next to what happened to the post: created, edited, submitted, each review
 // decision with its comment, scheduled, published or failed per channel. It reads the audit rows of the post's
-// commands, the decisions and the channels' own state; nothing is written for it.
+// commands, the decisions and the channels' own state; nothing is written for it. A comment may be pinned (#1180) to a
+// spot on one of the post's images or a moment in one of its videos.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zId } from '@crove/kernel-contract';
+import { zId, zSocialCommentPin } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
@@ -14,7 +15,7 @@ import { mentionsOf } from './domain/mentions.ts';
 import { NOT_PUBLIC_NOTES } from './domain/channels.ts';
 import { QUEUE_ORDER_COMMANDS, reorderCode } from './queue-order.ts';
 import { channelScope, connectionInScope, postsInScope, refuseChannels, refusePostOutside, type ChannelScope } from './channel-access.ts';
-import type { Trx } from './variants.ts';
+import { mediaOf, type Trx } from './variants.ts';
 import { tickedOf, type TickedCheck } from './review-checklist.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -24,6 +25,9 @@ export const COMMENT_EDIT_MS = 15 * 60_000;
 export const ACTIVITY_LIMIT = 500;
 
 const zBody = z.string().trim().min(1).max(4000);
+// A pin (#1180): a spot on an image, x and y in 0..1 of its width and height from the top left, or a moment in a video
+// (at most a day in, as the table's CHECK).
+type PinInput = z.infer<typeof zSocialCommentPin>;
 
 // The members of the org among the ones a comment mentions (#793), other than its author; anyone else is text.
 async function mentionedMembers(ctx: CommandContext, body: string, author: string): Promise<string[]> {
@@ -34,6 +38,19 @@ async function mentionedMembers(ctx: CommandContext, body: string, author: strin
   return ids.filter((id) => members.has(id));
 }
 
+// A pin names a file among the post's media, or the comment's channel's own media, as they are now; an image for a
+// spot and a video for a moment. Anything else, another org's file included, is the same refusal.
+async function checkPin(ctx: CommandContext, postId: string, channelMedia: unknown, pin: PinInput): Promise<void> {
+  const notInPost = () => new DomainError('PIN_FILE_NOT_IN_POST', 422, 'Ảnh hoặc video được ghim không thuộc bài đăng hay kênh này');
+  const inPost = await ctx.trx.selectFrom('crove_social.post_media').select('file_id').where('org_id', '=', ctx.orgId).where('post_id', '=', postId).where('file_id', '=', pin.fileId).executeTakeFirst();
+  if (!inPost && !(mediaOf(channelMedia) ?? []).some((m) => m.fileId === pin.fileId)) throw notInPost();
+  const file = await ctx.trx.selectFrom('crove_kernel.file').select('content_type').where('org_id', '=', ctx.orgId).where('id', '=', pin.fileId).executeTakeFirst();
+  if (!file) throw notInPost();
+  if ('atSeconds' in pin ? !file.content_type.startsWith('video/') : !file.content_type.startsWith('image/')) {
+    throw new DomainError('PIN_KIND_MISMATCH', 422, 'Ghim một vị trí trên ảnh, hoặc một thời điểm trên video');
+  }
+}
+
 function requireUser(ctx: CommandContext): string {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
   return ctx.actor.userId;
@@ -41,7 +58,7 @@ function requireUser(ctx: CommandContext): string {
 
 export const commentAdd = defineCommand({
   name: 'social.post_comment.add',
-  input: z.strictObject({ postId: zId, variantId: zId.optional(), body: zBody }),
+  input: z.strictObject({ postId: zId, variantId: zId.optional(), body: zBody, pin: zSocialCommentPin.optional() }),
   risk: 'R1',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
@@ -51,20 +68,35 @@ export const commentAdd = defineCommand({
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
     // A member limited to some channels (#1081) comments on the posts and the channels they may use.
     await refusePostOutside(ctx, post.id);
+    let channelMedia: unknown = null;
     if (input.variantId) {
       const v = await ctx.trx
         .selectFrom('crove_social.post_variant')
-        .select(['id', 'channel_connection_id'])
+        .select(['id', 'channel_connection_id', 'media'])
         .where('org_id', '=', ctx.orgId)
         .where('id', '=', input.variantId)
         .where('post_id', '=', input.postId)
         .executeTakeFirst();
       if (!v) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
       await refuseChannels(ctx, [v.channel_connection_id]);
+      channelMedia = v.media;
     }
+    const pin = input.pin ?? null;
+    if (pin) await checkPin(ctx, post.id, channelMedia, pin);
     const row = await ctx.trx
       .insertInto('crove_social.post_comment')
-      .values({ org_id: ctx.orgId, post_id: input.postId, variant_id: input.variantId ?? null, author_user_id: userId, body: input.body, created_at: ctx.now })
+      .values({
+        org_id: ctx.orgId,
+        post_id: input.postId,
+        variant_id: input.variantId ?? null,
+        author_user_id: userId,
+        body: input.body,
+        created_at: ctx.now,
+        file_id: pin?.fileId ?? null,
+        pin_x: pin && 'x' in pin ? pin.x : null,
+        pin_y: pin && 'y' in pin ? pin.y : null,
+        pin_seconds: pin && 'atSeconds' in pin ? pin.atSeconds : null,
+      })
       .returning('id')
       .executeTakeFirstOrThrow();
     const mentioned = await mentionedMembers(ctx, input.body, userId);
@@ -255,6 +287,21 @@ export interface ActivityItem {
   resolvedByName: string | null;
   // The viewer may resolve or reopen this comment.
   resolvable: boolean;
+  // On a pinned comment (#1180): where; null otherwise.
+  pin: CommentPin | null;
+}
+
+// A comment's pin (#1180): the file by id, as the post's media are given (its bytes through GET /api/files/:id), its
+// type and name, the spot (x, y) on an image or the moment (atSeconds) in a video, and whether the file is still among
+// the post's or its channels' media (current false: the pin is on an earlier image).
+export interface CommentPin {
+  fileId: string;
+  mime: string;
+  filename: string;
+  x: number | null;
+  y: number | null;
+  atSeconds: number | null;
+  current: boolean;
 }
 
 // The audited commands the timeline shows, by what they did. Decisions come from the decision rows, which carry the
@@ -292,7 +339,7 @@ export const postActivity = defineQuery({
     if ((await postsInScope(ctx, scope, [post.id])).length === 0) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
     const variants = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at', 'removed_at', 'removed_by', 'remove_reason'])
+      .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at', 'removed_at', 'removed_by', 'remove_reason', 'media'])
       .where('org_id', '=', ctx.orgId)
       .where('post_id', '=', post.id)
       .where(connectionInScope(scope, 'channel_connection_id'))
@@ -301,7 +348,7 @@ export const postActivity = defineQuery({
     const [comments, decisions, audited, reorders] = await Promise.all([
       ctx.trx
         .selectFrom('crove_social.post_comment')
-        .select(['id', 'variant_id', 'author_user_id', 'body', 'created_at', 'edited_at', 'resolved_at', 'resolved_by'])
+        .select(['id', 'variant_id', 'author_user_id', 'body', 'created_at', 'edited_at', 'resolved_at', 'resolved_by', 'file_id', 'pin_x', 'pin_y', 'pin_seconds'])
         .where('org_id', '=', ctx.orgId)
         .where('post_id', '=', post.id)
         .orderBy('created_at', 'desc')
@@ -331,12 +378,28 @@ export const postActivity = defineQuery({
           AND detail -> 'post_ids' @> pg_catalog.jsonb_build_array(${post.id}::text)
         ORDER BY occurred_at DESC LIMIT ${ACTIVITY_LIMIT}`.execute(ctx.trx),
     ]);
+    // The files the comments are pinned to (#1180), and those the post and the channels the caller may see use now.
+    const pinned = [...new Set(comments.flatMap((c) => (c.file_id ? [c.file_id] : [])))];
+    const pinFiles = new Map<string, { mime: string; filename: string }>();
+    const current = new Set<string>();
+    if (pinned.length > 0) {
+      const files = await ctx.trx.selectFrom('crove_kernel.file').select(['id', 'content_type', 'filename']).where('org_id', '=', ctx.orgId).where('id', 'in', pinned).execute();
+      for (const f of files) pinFiles.set(f.id, { mime: f.content_type, filename: f.filename });
+      const used = await ctx.trx.selectFrom('crove_social.post_media').select('file_id').where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).execute();
+      for (const m of used) current.add(m.file_id);
+      for (const v of variants) for (const m of mediaOf(v.media) ?? []) current.add(m.fileId);
+    }
+    const pinOf = (c: { file_id: string | null; pin_x: number | null; pin_y: number | null; pin_seconds: number | null }): CommentPin | null => {
+      if (!c.file_id) return null;
+      const f = pinFiles.get(c.file_id);
+      return { fileId: c.file_id, mime: f?.mime ?? '', filename: f?.filename ?? '', x: c.pin_x, y: c.pin_y, atSeconds: c.pin_seconds, current: current.has(c.file_id) };
+    };
     const keyed = await ctx.trx.selectFrom('crove_social.post_variant').select(['id', 'revision', 'attempt']).where('org_id', '=', ctx.orgId).where('post_id', '=', post.id).where(connectionInScope(scope, 'channel_connection_id')).execute();
     const replies = await autoReplyCallsOf(ctx.trx, ctx.orgId, keyed);
     const reposts = await repostCallsOf(ctx.trx, ctx.orgId, keyed);
     const viewer = ctx.actor.type === 'user' ? ctx.actor.userId : null;
     const now = Date.now();
-    const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null, checklist: null, resolvedAt: null, resolvedBy: null, resolvedByName: null, resolvable: false };
+    const none = { userId: null, name: null, variantId: null, body: null, decision: null, editedAt: null, editable: false, url: null, code: null, checklist: null, resolvedAt: null, resolvedBy: null, resolvedByName: null, resolvable: false, pin: null };
     // As social.post_comment.resolve decides it; a viewer never writes.
     const writer = viewer !== null && ctx.role !== null && MEMBERS.includes(ctx.role);
     const resolver = writer && (ctx.role === 'owner' || ctx.role === 'admin' || viewer === post.author_user_id || viewer === post.assignee_user_id);
@@ -355,6 +418,7 @@ export const postActivity = defineQuery({
         resolvedAt: c.resolved_at?.toISOString() ?? null,
         resolvedBy: c.resolved_by,
         resolvable: resolver || (writer && c.author_user_id === viewer),
+        pin: pinOf(c),
       })),
       ...decisions.map((d) => ({ ...none, id: d.id, kind: 'decision' as const, at: d.created_at.toISOString(), userId: d.decided_by, variantId: d.variant_id, body: d.comment, decision: d.decision, checklist: tickedOf(d.checklist) })),
       ...audited.rows.map((a) => ({

@@ -61,6 +61,8 @@ const TYPE_MAP = {
   'pg_catalog.bool': 'boolean',
   'pg_catalog.bytea': 'Buffer',
   'pg_catalog.date': 'string',
+  // real (#1180): pg parses float4 to a JavaScript number.
+  'pg_catalog.float4': 'number',
   'pg_catalog.int2': 'number',
   'pg_catalog.int4': 'number',
   'pg_catalog.int8': 'string',

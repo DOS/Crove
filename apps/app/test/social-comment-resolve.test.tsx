@@ -15,6 +15,8 @@ vi.mock('../src/lib/api.ts', () => ({
   orpc: { org: { get: off('org') }, social: { posts: { activity: off('activity'), get: off('post'), list: off('list') } } },
   queryClient: null,
   errorMessage: (e: unknown) => String(e),
+  fetchFile: () => Promise.reject(new Error('not fetched')),
+  uploadFiles: () => Promise.reject(new Error('not uploaded')),
 }));
 
 const { OpenComments, PostActivity } = await import('../src/components/social-activity.tsx');
