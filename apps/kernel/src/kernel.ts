@@ -490,13 +490,13 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
 
 // The Social writer as the API uses it: drafts, rewrites and hashtags as they are, and with an image-capable model
 // (AI_VISION) an image's alt text from its stored bytes, read and checked like a download (#817).
-function socialDrafter(writer: NonNullable<KernelAdapters['writer']>, store: BlobStore | null): SocialDrafter {
+export function socialDrafter(writer: NonNullable<KernelAdapters['writer']>, store: BlobStore | null): SocialDrafter {
   const describe = writer.describeImage?.bind(writer);
   return {
     draft: (request) => writer.draft(request),
     rewrite: (request) => writer.rewrite(request),
     ...(writer.hashtags ? { hashtags: writer.hashtags.bind(writer) } : {}),
-    ...(store && describe ? { describeStored: async (file, mime, language) => describe({ image: await readVerified(store, file), mime, language }) } : {}),
+    ...(store && describe ? { describeStored: async (file, mime, language, maxChars) => describe({ image: await readVerified(store, file), mime, language, maxChars: maxChars ?? null }) } : {}),
   };
 }
 

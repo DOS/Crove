@@ -292,15 +292,38 @@ async function measure(file: File): Promise<{ width: number; height: number } | 
   }
 }
 
-// onAiUsed: when given (a post's media), an image's alt text may be suggested by AI (#817); keeping one marks the post
-// AI-assisted.
-export function MediaField({ media, onChange, disabled, onAiUsed }: { media: MediaItem[]; onChange: (media: MediaItem[]) => void; disabled: boolean; onAiUsed?: (() => void) | undefined }) {
+// An AI suggestion for one image's alt text (#1121), in the language of the page, within the limits of the channels
+// the image goes to. Nothing is saved: the caller puts it in the field for the member to edit.
+export async function askAltText(fileId: string, locale: string, connectionIds?: readonly string[]): Promise<string> {
+  const { altText } = await client.social.posts.describeImage({ fileId, language: locale === 'en' ? 'en' : 'vi', ...(connectionIds && connectionIds.length > 0 ? { connectionIds: connectionIds.slice(0, 20) } : {}) });
+  return altText;
+}
+
+// The media with a suggestion in one image's alt text field; the other images as they are, and nothing if it is gone.
+export const withSuggestedAlt = (media: MediaItem[], fileId: string, altText: string): MediaItem[] => media.map((x) => (x.fileId === fileId ? { ...x, altText } : x));
+
+// onAiUsed: when given (a post's media), an image's alt text may be suggested by AI (#817, #1121): the suggestion fills
+// the field for the member to edit, nothing is saved until the post is, and the post is then AI-assisted (tainted).
+// connectionIds: the channels the images go to, whose strictest alt-text limit the suggestion keeps within.
+export function MediaField({
+  media,
+  onChange,
+  disabled,
+  onAiUsed,
+  connectionIds,
+}: {
+  media: MediaItem[];
+  onChange: (media: MediaItem[]) => void;
+  disabled: boolean;
+  onAiUsed?: (() => void) | undefined;
+  connectionIds?: readonly string[] | undefined;
+}) {
   const t = useTranslations('social');
   const locale = useLocale();
   const describe = useMutation({
-    mutationFn: (fileId: string) => client.social.posts.describeImage({ fileId, language: locale === 'en' ? 'en' : 'vi' }),
-    onSuccess: (r, fileId) => {
-      onChange(media.map((x) => (x.fileId === fileId ? { ...x, altText: r.altText } : x)));
+    mutationFn: (fileId: string) => askAltText(fileId, locale, connectionIds),
+    onSuccess: (altText, fileId) => {
+      onChange(withSuggestedAlt(media, fileId, altText));
       onAiUsed?.();
     },
   });
@@ -370,7 +393,7 @@ export function MediaField({ media, onChange, disabled, onAiUsed }: { media: Med
                 onChange={(e) => onChange(media.map((x, j) => (j === i ? { ...x, altText: e.target.value } : x)))}
               />
               {canDescribe && m.mime.startsWith('image/') && !disabled && (
-                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" disabled={describe.isPending} onClick={() => describe.mutate(m.fileId)}>
+                <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" title={t('altTextAiHint')} disabled={describe.isPending} onClick={() => describe.mutate(m.fileId)}>
                   {describe.isPending && describe.variables === m.fileId ? <Spinner className="text-current" /> : null}
                   {t('altTextAi')}
                 </Button>
