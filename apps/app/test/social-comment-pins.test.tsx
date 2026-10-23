@@ -20,7 +20,7 @@ vi.mock('../src/lib/api.ts', () => ({
 }));
 
 const { PostActivity } = await import('../src/components/social-activity.tsx');
-const { boardMedia, boardPins, clockOf } = await import('../src/components/social-comment-pins.tsx');
+const { PinBoard, PIN_STEP, PIN_STEP_LARGE, boardMedia, boardPins, clockOf, nudgePin } = await import('../src/components/social-comment-pins.tsx');
 
 const U1 = '11111111-1111-4111-8111-111111111111';
 const PHOTO = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -115,6 +115,48 @@ describe('pinned comments (#1180)', () => {
     expect(markers(english).map((m) => attr(m, 'aria-label'))).toEqual(['Pin 1: Logo nhỏ quá', 'Pin 2 at 0:12: Chữ ở giây 12 bị che']);
     expect(text(english)).toContain('Pin at 0:00');
     expect(text(english)).toContain('Video 1 · Facebook only');
+  });
+
+  it('moves a pin not saved yet with the arrow keys, 1% or 10% with Shift, and keeps it on the image (#1186)', () => {
+    const k = (key: string, extra: Partial<{ shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean }> = {}) => ({ key, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, ...extra });
+    const mid = { x: 0.5, y: 0.5 };
+    expect([PIN_STEP, PIN_STEP_LARGE]).toEqual([0.01, 0.1]);
+    expect(nudgePin(mid, k('ArrowRight'))).toEqual({ x: 0.51, y: 0.5 });
+    expect(nudgePin(mid, k('ArrowLeft'))).toEqual({ x: 0.49, y: 0.5 });
+    expect(nudgePin(mid, k('ArrowUp'))).toEqual({ x: 0.5, y: 0.49 });
+    expect(nudgePin(mid, k('ArrowDown', { shiftKey: true }))).toEqual({ x: 0.5, y: 0.6 });
+    // Never off the image, and to the precision the server keeps.
+    expect(nudgePin({ x: 0.995, y: 0.04 }, k('ArrowRight', { shiftKey: true }))).toEqual({ x: 1, y: 0.04 });
+    expect(nudgePin({ x: 0, y: 0.04 }, k('ArrowUp', { shiftKey: true }))).toEqual({ x: 0, y: 0 });
+    let at = { x: 0.1, y: 0.1 };
+    for (let i = 0; i < 3; i++) at = nudgePin(at, k('ArrowRight')) ?? at;
+    expect(at).toEqual({ x: 0.13, y: 0.1 });
+    // Other keys, and the browser's and system's shortcuts, are left alone.
+    expect(nudgePin(mid, k('Enter'))).toBeNull();
+    expect(nudgePin(mid, k('j'))).toBeNull();
+    for (const mod of ['ctrlKey', 'altKey', 'metaKey'] as const) expect(nudgePin(mid, k('ArrowLeft', { [mod]: true }))).toBeNull();
+  });
+
+  it('says where the pin not saved yet is, and how to move it from the keyboard, in Vietnamese and in English', () => {
+    const board = (locale: 'vi' | 'en', draft: { x: number; y: number } | null) =>
+      renderToStaticMarkup(
+        <QueryClientProvider client={new QueryClient()}>
+          <IntlProvider locale={locale} messages={catalog(locale)} timeZone="Asia/Ho_Chi_Minh">
+            <PinBoard media={media} pins={[]} draft={draft ? { fileId: PHOTO, variantId: null, ...draft } : null} onDraft={() => undefined} canPin />
+          </IntlProvider>
+        </QueryClientProvider>,
+      );
+    const live = (html: string) => /<span[^>]*data-testid="pin-draft-at"[^>]*>([^<]*)<\/span>/.exec(html);
+    const vi = board('vi', { x: 0.52, y: 0.4801 });
+    expect(live(vi)?.[0]).toContain('aria-live="polite"');
+    expect(live(vi)?.[1]).toBe('Chỗ sẽ ghim: 52% từ trái sang, 48% từ trên xuống');
+    expect(text(vi)).toContain('nhấn Enter trên ảnh để ghim vào giữa, rồi dùng các phím mũi tên để dịch chỗ ghim');
+    expect(attr([...vi.matchAll(/<button[^>]*data-testid="pin-draft"[^>]*>/g)][0]?.[0] ?? '', 'style')).toContain('left:52%');
+    // Empty but there before a pin is placed, so the first move is read out.
+    expect(live(board('vi', null))?.[1]).toBe('');
+    const en = board('en', { x: 0.1, y: 0.9 });
+    expect(live(en)?.[1]).toBe('The pin is 10% from the left and 90% from the top');
+    expect(text(en)).toContain('move the pin with the arrow keys');
   });
 
   it('builds the board from the post’s files and each channel’s own, once each, and numbers its pins', () => {

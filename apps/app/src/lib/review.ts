@@ -93,9 +93,10 @@ export async function sendBatches(
   return { results, next: batches.length, error: null };
 }
 
-export type ReviewAction = 'next' | 'previous' | 'approve' | 'edit';
+// reject: R, which on a Social post opens the request for changes with its reason (#1221).
+export type ReviewAction = 'next' | 'previous' | 'approve' | 'edit' | 'reject';
 
-const KEYS: Readonly<Record<string, ReviewAction>> = { j: 'next', n: 'next', k: 'previous', p: 'previous', a: 'approve', e: 'edit' };
+const KEYS: Readonly<Record<string, ReviewAction>> = { j: 'next', n: 'next', k: 'previous', p: 'previous', a: 'approve', e: 'edit', r: 'reject' };
 
 interface KeyLike {
   key: string;
@@ -114,9 +115,9 @@ function editable(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true;
 }
 
-// The review action a key press asks for: J or N the next pending proposal, K or P the previous one, A approve, E edit
-// the accounts. Never
-// while typing in a field, with a modifier (browser and system shortcuts), or for a held-down key.
+// The review action a key press asks for: J or N the next pending item, K or P the previous one, A approve, E edit, R
+// reject or ask for changes. Never while typing in a field, with a modifier (browser and system shortcuts), or for a
+// held-down key. A page acts only on the actions it has a handler for.
 export function reviewShortcut(event: KeyLike): ReviewAction | null {
   if (event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.defaultPrevented) return null;
   if (editable(event.target)) return null;
@@ -129,6 +130,17 @@ export function nextPendingId(items: ReadonlyArray<{ id: string }>, current: str
   const at = items.findIndex((i) => i.id === current);
   if (at === -1) return items[0]?.id ?? null;
   return items[at + 1]?.id ?? null;
+}
+
+// The item to open after deciding `current`, from the list as the reviewer saw it (`before`) and as it is now
+// (`after`): the first one that followed `current` and still waits, else the first one still waiting (one placed above
+// it, or one that came in meanwhile); null when none is left. The list is newest change first, so a decided item that
+// still waits for someone else moves to the top: following the old order keeps the reviewer moving down the list.
+export function nextAfterDecision(before: ReadonlyArray<{ id: string }>, after: ReadonlyArray<{ id: string }>, current: string): string | null {
+  const left = new Set(after.map((i) => i.id).filter((id) => id !== current));
+  const at = before.findIndex((i) => i.id === current);
+  for (const item of before.slice(at + 1)) if (left.has(item.id)) return item.id;
+  return after.find((i) => left.has(i.id))?.id ?? null;
 }
 
 // The pending proposal before `current` in the list order; null when `current` is the first or not in the list.

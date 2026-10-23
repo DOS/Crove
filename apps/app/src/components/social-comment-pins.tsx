@@ -2,7 +2,8 @@
 // as designers and reviewers say "the logo here" or "the text at 0:12". The board shows the post's images and videos
 // (and each channel's own) whole, with a numbered marker for each open pinned comment; a marker, and the list of pins
 // under each file, scroll to its comment. A member clicks a spot on an image, or pauses a video and pins the moment,
-// before writing the comment. A resolved comment's marker goes away; a pin on a file the post no longer uses shows in
+// before writing the comment; from the keyboard, Enter on an image pins its middle and the arrow keys move the pin
+// before it is saved (#1186). A resolved comment's marker goes away; a pin on a file the post no longer uses shows in
 // its comment, on an earlier image, with that file's thumbnail.
 import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -60,6 +61,23 @@ export function boardPins(items: readonly { id: string; kind: string; at: string
     .map((i, k) => ({ commentId: i.id, n: k + 1, body: i.body ?? '', pin: i.pin }));
 }
 
+// A spot on an image, x and y in 0..1 from the top left, kept on the image and to the precision the server stores.
+const clampSpot = (v: number) => Math.min(1, Math.max(0, Math.round(v * 10000) / 10000));
+
+// How far an arrow key moves a pin not saved yet (#1186, WCAG 2.5.7): 1% of the image, 10% with Shift.
+export const PIN_STEP = 0.01;
+export const PIN_STEP_LARGE = 0.1;
+const ARROWS: Readonly<Record<string, readonly [number, number]>> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+
+// Where an arrow key moves a pin, kept on the image; null for any other key, or with Ctrl, Alt or Meta (the browser's
+// and the system's shortcuts).
+export function nudgePin(at: { x: number; y: number }, key: { key: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean }): { x: number; y: number } | null {
+  if (key.ctrlKey || key.altKey || key.metaKey || !Object.hasOwn(ARROWS, key.key)) return null;
+  const [dx, dy] = ARROWS[key.key] as readonly [number, number];
+  const step = key.shiftKey ? PIN_STEP_LARGE : PIN_STEP;
+  return { x: clampSpot(at.x + dx * step), y: clampSpot(at.y + dy * step) };
+}
+
 export const commentAnchor = (commentId: string) => `comment-${commentId}`;
 export const markerAnchor = (commentId: string) => `pin-${commentId}`;
 
@@ -88,6 +106,8 @@ function Marker({ pin, onClick, label, className, style }: { pin: BoardPin | nul
       title={label}
       onClick={onClick}
       style={style}
+      // The pin not saved yet does nothing when pressed: out of the tab order, so Tab goes on to the comment box.
+      tabIndex={pin ? undefined : -1}
       data-testid={pin ? 'pin-marker' : 'pin-draft'}
       className={cn(
         'absolute flex size-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 border-background text-xs font-semibold shadow-md ring-offset-2 ring-offset-background focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
@@ -115,16 +135,27 @@ function ImageBoard({ item, label, pins, draft, onDraft, canPin }: { item: PinMe
           disabled={!url.url}
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
-            // From the keyboard (no pointer position) the pin goes to the middle; it can be clicked again to move it.
+            // From the keyboard (no pointer position) the pin goes to the middle, and the arrow keys move it from there.
             const keyboard = e.detail === 0 || rect.width === 0 || rect.height === 0;
-            const clamp = (v: number) => Math.min(1, Math.max(0, Math.round(v * 10000) / 10000));
-            onDraft({ fileId: item.fileId, variantId: item.variantId, x: keyboard ? 0.5 : clamp((e.clientX - rect.left) / rect.width), y: keyboard ? 0.5 : clamp((e.clientY - rect.top) / rect.height) });
+            onDraft({ fileId: item.fileId, variantId: item.variantId, x: keyboard ? 0.5 : clampSpot((e.clientX - rect.left) / rect.width), y: keyboard ? 0.5 : clampSpot((e.clientY - rect.top) / rect.height) });
+          }}
+          onKeyDown={(e) => {
+            const moved = mine ? nudgePin(mine, e) : null;
+            if (!mine || !moved) return;
+            e.preventDefault();
+            onDraft({ ...mine, ...moved });
           }}
         >
           {image}
         </button>
       ) : (
         image
+      )}
+      {/* Where the pin not saved yet is, read out as the arrow keys move it. */}
+      {canPin && (
+        <span className="sr-only" aria-live="polite" data-testid="pin-draft-at">
+          {mine ? t('draftAt', { x: Math.round(mine.x * 100), y: Math.round(mine.y * 100) }) : ''}
+        </span>
       )}
       {pins.map((p) => (
         <Marker key={p.commentId} pin={p} label={t('marker', { n: String(p.n), text: excerpt(p.body) })} onClick={() => revealComment(p.commentId)} style={{ left: `${(p.pin.x ?? 0) * 100}%`, top: `${(p.pin.y ?? 0) * 100}%` }} />

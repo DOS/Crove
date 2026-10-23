@@ -29,6 +29,9 @@ import { PostVersions } from '../components/social-post-versions.tsx';
 import { BannedWordHints, BannedWordReview, useBannedWords } from '../components/social-banned-words.tsx';
 import { ReviewChecklistTicks } from '../components/social-review-checklist.tsx';
 import { checksFor, fullyTicked } from '../lib/social-review-checklist.ts';
+import { NoneLeftToReview, ReviewKeysHint, useReviewShortcuts } from '../components/social-review-keys.tsx';
+import { awaitsApprovalBy, firstUnticked } from '../lib/social-review-keys.ts';
+import { nextAfterDecision, nextPendingId, previousPendingId } from '../lib/review.ts';
 import { CampaignFindings, LabelPicker, useLabels } from '../components/social-labels.tsx';
 import { AssignCard } from '../components/social-assign.tsx';
 import { BestTimeButton } from '../components/social-best-time.tsx';
@@ -2752,7 +2755,20 @@ function plannedRemoval(v: Variant): string | null {
 }
 
 // rewriteTarget: the AI rewrite box of the text a channel sends, when the reviewer may use it (#1156).
-function ReviewPanel({ post, names, onDone, rewriteTarget }: { post: Post; names: Map<string, string>; onDone: () => void; rewriteTarget?: (v: Variant) => string | null }) {
+// onApproved: after an approval through *Duyệt và sang bài tiếp* or the A shortcut, opens the next post (#1221).
+function ReviewPanel({
+  post,
+  names,
+  onDone,
+  rewriteTarget,
+  onApproved,
+}: {
+  post: Post;
+  names: Map<string, string>;
+  onDone: () => void;
+  rewriteTarget?: (v: Variant) => string | null;
+  onApproved?: (() => void) | undefined;
+}) {
   const t = useTranslations('social');
   const f = useFormat();
   const me = useQuery(orpc.me.get.queryOptions());
@@ -2794,11 +2810,28 @@ function ReviewPanel({ post, names, onDone, rewriteTarget }: { post: Post; names
       if (code === 'CHECKLIST_CHANGED' || code === 'CHECKLIST_INCOMPLETE') onDone();
     },
   });
-  if (inReview.length === 0) return null;
   const done = inReview.filter(mine);
   const approvable = waiting.filter((v) => picked.includes(v.id) && !mine(v) && !barred(v));
   const others = inReview.filter(barred);
   const ticksMissing = !fullyTicked(approvable, checked);
+  // The Approve buttons are enabled exactly when this holds, and the A shortcut uses the same value; with an item of
+  // the checklist left, A takes the focus to it instead of approving (#1221).
+  const canApprove = self !== undefined && approvable.length > 0 && !ticksMissing && !decide.isPending;
+  const approveAndNext = () => decide.mutate('approved', { onSuccess: () => onApproved?.() });
+  const checklistBox = useRef<HTMLDivElement>(null);
+  const reason = useRef<HTMLTextAreaElement>(null);
+  const toTick = self !== undefined && approvable.length > 0 && ticksMissing && !decide.isPending;
+  useReviewShortcuts(
+    inReview.length === 0
+      ? {}
+      : {
+          ...(canApprove ? { approve: onApproved ? approveAndNext : () => decide.mutate('approved') } : {}),
+          ...(toTick ? { approve: () => firstUnticked(checklistBox.current)?.focus() } : {}),
+          // R: the request for changes, which needs its reason, so the note box takes the focus.
+          ...(picked.length > 0 && !decide.isPending ? { reject: () => reason.current?.focus() } : {}),
+        },
+  );
+  if (inReview.length === 0) return null;
 
   return (
     <Card className="block space-y-3 border-warning/40 p-4">
@@ -2831,15 +2864,23 @@ function ReviewPanel({ post, names, onDone, rewriteTarget }: { post: Post; names
       {/* The automatic checks the content agent reads (#1193): its task holds counts only. */}
       <PreReviewFindings postId={post.id} waiting={waiting} />
       {/* The review checklist (#1105): every item of the channels being approved, which the Approve button needs. */}
-      <ReviewChecklistTicks variants={approvable} names={names} ticked={checked} onChange={setChecked} />
+      <div ref={checklistBox}>
+        <ReviewChecklistTicks variants={approvable} names={names} ticked={checked} onChange={setChecked} />
+      </div>
       {/* What changed since each channel's last decision (#944); nothing on a first review. */}
       <ReviewChanges postId={post.id} variants={waiting.map((v) => ({ id: v.id, name: names.get(v.connectionId) ?? providerName(v.provider), revision: v.revision, contentHash: v.contentHash }))} />
-      <Textarea value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
+      <Textarea ref={reason} value={comment} rows={2} aria-label={t('commentPlaceholder')} placeholder={t('commentPlaceholder')} onChange={(e) => setComment(e.target.value)} />
       {decide.error && <ErrorText>{errorMessage(decide.error)}</ErrorText>}
       <div className="flex flex-wrap gap-2">
-        <Button size="lg" disabled={self === undefined || approvable.length === 0 || ticksMissing || decide.isPending} onClick={() => decide.mutate('approved')}>
+        <Button size="lg" disabled={!canApprove} onClick={() => decide.mutate('approved')}>
           {t('approve')}
         </Button>
+        {/* The same approval, then the next post waiting for this reviewer, or the end of the list (#1221). */}
+        {onApproved && (
+          <Button variant="outline" size="lg" disabled={!canApprove} onClick={approveAndNext}>
+            {t('reviewKeys.approveNext')}
+          </Button>
+        )}
         <Button variant="outline" size="lg" disabled={picked.length === 0 || decide.isPending || !comment.trim()} onClick={() => decide.mutate('changes_requested')}>
           {t('requestChanges')}
         </Button>
@@ -2848,6 +2889,7 @@ function ReviewPanel({ post, names, onDone, rewriteTarget }: { post: Post; names
         </Button>
       </div>
       {!comment.trim() && waiting.length > 0 && <p className="text-xs text-subtle-foreground">{t('changesNeedComment')}</p>}
+      <ReviewKeysHint />
     </Card>
   );
 }
@@ -3518,6 +3560,35 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
     onSuccess: refresh,
   });
 
+  // Reviewing one post after another (#1221): J or N opens the next post of the review list and K or P the previous
+  // one, in the list's order (newest change first, on the channels this member may use, as the Cần duyệt tab), once
+  // this post was in review here; after an approval through *Duyệt và sang bài tiếp* or A, the next post still waiting
+  // for this reviewer opens, or the end of the list shows.
+  const reviewInput = { stage: 'review' as const, limit: 200 };
+  const reviewList = useQuery({ ...orpc.social.posts.list.queryOptions({ input: reviewInput }), enabled: canDecide });
+  const [reviewing, setReviewing] = useState(false);
+  useEffect(() => {
+    if (post.data?.variants.some((v) => v.status === 'in_review')) setReviewing(true);
+  }, [post.data]);
+  const [noneLeft, setNoneLeft] = useState(false);
+  const openPost = (id: string) => void navigate({ to: '/o/$slug/social/$id', params: { slug, id } });
+  const reviewRows = reviewList.data ?? [];
+  const nextId = canDecide && reviewing ? nextPendingId(reviewRows, postId) : null;
+  const previousId = canDecide && reviewing ? previousPendingId(reviewRows, postId) : null;
+  useReviewShortcuts({
+    ...(nextId && nextId !== postId ? { next: () => openPost(nextId) } : {}),
+    ...(previousId ? { previous: () => openPost(previousId) } : {}),
+  });
+  const moveOn = async () => {
+    const before = reviewRows.filter((r) => awaitsApprovalBy(r, userId));
+    // The list as it is now: the post just approved has left it, or waits for another person.
+    const fresh = await queryClient.fetchQuery({ ...orpc.social.posts.list.queryOptions({ input: reviewInput }), staleTime: 0 }).catch(() => null);
+    if (!fresh) return;
+    const target = nextAfterDecision(before, fresh.filter((r) => awaitsApprovalBy(r, userId)), postId);
+    if (target) openPost(target);
+    else setNoneLeft(true);
+  };
+
   if (post.isLoading || !base || !origin) return post.error ? <ErrorText>{errorMessage(post.error)}</ErrorText> : <Spinner />;
   if (!post.data) return null;
   const p = post.data;
@@ -3686,7 +3757,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
               <UtmFields utm={shownUtm} onChange={setUtm} disabled={save.isPending} />
             </Card>
           )}
-          {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} rewriteTarget={rewriteTarget} />}
+          {noneLeft && <NoneLeftToReview slug={slug} />}
+          {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} rewriteTarget={rewriteTarget} onApproved={() => void moveOn()} />}
           {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
           <LabelPicker
             slug={slug}
