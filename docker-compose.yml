@@ -137,6 +137,8 @@ services:
       # The public status page PUBLIC_URL/status (#678): the prober's last result, on the shared `status` volume.
       STATUS_FILE: ${STATUS_FILE:-}
       TAX_CODE_LOOKUP_URL: ${TAX_CODE_LOOKUP_URL:-}
+      # Stock photos from Pexels in the Social media library (#1106); empty turns them off.
+      MEDIA_PEXELS_API_KEY: ${MEDIA_PEXELS_API_KEY:-}
       # The assisted purchase-invoice sync from the tax portal (#325); off unless true.
       TAX_PORTAL_SYNC: ${TAX_PORTAL_SYNC:-false}
       TAX_PORTAL_STEP_SECONDS: ${TAX_PORTAL_STEP_SECONDS:-90}

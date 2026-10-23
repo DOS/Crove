@@ -1419,7 +1419,47 @@ export const zSocialPostVersions = z.object({
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
 // A media library item (S9): an image of the org uploaded for posts, how many posts show it and its tags (#904).
-export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()) });
+// A stock photo's credit (#1106): the photographer and the photo's page on Pexels, and its description as alt text.
+export const zSocialMediaCredit = z.object({ provider: z.literal('pexels'), photographer: z.string(), photographerUrl: z.string(), sourceUrl: z.string(), altText: z.string().nullable() });
+export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()), credit: zSocialMediaCredit.nullable() });
+// Stock photos from Pexels (#1106): a search (a page of up to 40 photos in the language of the page), its results, and
+// the photo to save at one of Pexels' sizes (large2x by default: up to 1880 by 1300 pixels, enough for every channel).
+export const STOCK_PHOTO_SIZES = ['large2x', 'large', 'original'] as const;
+export const zSocialStockSearch = z.strictObject({
+  query: z.string().trim().min(1).max(100),
+  page: z.number().int().min(1).max(100).optional(),
+  perPage: z.number().int().min(1).max(40).optional(),
+  orientation: z.enum(['landscape', 'portrait', 'square']).optional(),
+  locale: z.enum(['vi-VN', 'en-US']).optional(),
+});
+export const zSocialStockPhoto = z.object({
+  id: z.number().int(),
+  width: z.number().int(),
+  height: z.number().int(),
+  // The photo's page on Pexels, and its photographer's.
+  pageUrl: z.string(),
+  photographer: z.string(),
+  photographerUrl: z.string(),
+  alt: z.string().nullable(),
+  avgColor: z.string().nullable(),
+  // A small copy as a data: URL, relayed by the server; null when it could not be fetched.
+  thumb: z.string().nullable(),
+});
+export const zSocialStockResults = z.object({ photos: z.array(zSocialStockPhoto), page: z.number().int(), total: z.number().int(), more: z.boolean() });
+export const zSocialStockSave = z.strictObject({ photoId: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER), size: z.enum(STOCK_PHOTO_SIZES).optional() });
+// The saved file, for the composer to add to a post with the photo's description as alt text; credited false: the
+// same bytes were in the library already with a credit of their own.
+export const zSocialStockSaved = z.object({
+  fileId: zId,
+  duplicate: z.boolean(),
+  credited: z.boolean(),
+  filename: z.string(),
+  mime: z.string(),
+  sizeBytes: z.number().int(),
+  width: z.number().int().nullable(),
+  height: z.number().int().nullable(),
+  altText: z.string().nullable(),
+});
 // A tag of the library and how many files carry it (#904).
 export const zSocialMediaTagCount = z.object({ tag: z.string(), files: z.number().int() });
 // A saved snippet (#584): hashtags, a signature, or a whole post to start from (isTemplate).
