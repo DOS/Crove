@@ -499,6 +499,7 @@ export const postBulkAddChannel = defineCommand({
     providerOf(connection);
     const loaded = await loadPosts(ctx.trx, ctx.orgId, input.postIds, true);
     const result: BulkAddChannelResult = { done: [], skipped: [], added: [] };
+    const made: Array<{ postId: string; variantId: string }> = [];
     for (const postId of byId(input.postIds)) {
       const skip = addSkip(loaded.get(postId), scope, input.connectionId);
       if (skip) {
@@ -516,9 +517,16 @@ export const postBulkAddChannel = defineCommand({
       }
       const [created] = attempt.value.variants;
       if (!created) throw new Error('social.post.add_channels added no channel');
-      const variant = await ctx.trx.selectFrom('crove_social.post_variant').select(VARIANT_COLUMNS).where('org_id', '=', ctx.orgId).where('id', '=', created.variantId).executeTakeFirstOrThrow();
       result.done.push(postId);
-      result.added.push({ postId, variantId: created.variantId, issues: issuesOf(base((loaded.get(postId) as LoadedPost).post), variant) });
+      made.push({ postId, variantId: created.variantId });
+    }
+    // The added channels read in one go, to say which still miss their channel's rules.
+    const variants = made.length === 0 ? [] : await ctx.trx.selectFrom('crove_social.post_variant').select(VARIANT_COLUMNS).where('org_id', '=', ctx.orgId).where('id', 'in', made.map((m) => m.variantId)).execute();
+    const byVariant = new Map(variants.map((v) => [v.id, v]));
+    for (const { postId, variantId } of made) {
+      const variant = byVariant.get(variantId);
+      if (!variant) throw new Error('social.post.add_channels added a channel that cannot be read');
+      result.added.push({ postId, variantId, issues: issuesOf(base((loaded.get(postId) as LoadedPost).post), variant) });
     }
     audit(ctx, result, { connection_id: input.connectionId, needs_edits: result.added.filter((a) => a.issues.length > 0).length });
     return result;

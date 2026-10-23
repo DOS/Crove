@@ -240,11 +240,14 @@ suite('social bulk add channel on PostgreSQL (#1178)', () => {
       await holder.query('BEGIN');
       await holder.query('SELECT id FROM crove_social.post WHERE org_id = $1 AND id = $2 FOR UPDATE', [o.orgId, high]);
       const running = add(o, o.member, [high, low, mid], o.b);
-      for (let waiting = 0; waiting < 1; ) {
+      // Bounded, so a run that never waits fails here rather than hanging the suite.
+      let waiting = 0;
+      for (let tries = 0; waiting < 1 && tries < 250; tries++) {
         await new Promise((resolve) => setTimeout(resolve, 20));
         const { rows } = await prober.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_catalog.pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`);
         waiting = rows[0]?.n ?? 0;
       }
+      expect(waiting).toBeGreaterThan(0);
       // While it waits, the lower posts are already its own, and none has the channel yet.
       for (const id of [low, mid]) {
         await expect(prober.query('SELECT id FROM crove_social.post WHERE org_id = $1 AND id = $2 FOR UPDATE NOWAIT', [o.orgId, id])).rejects.toMatchObject({ code: '55P03' });
