@@ -15,7 +15,9 @@
 // pending review). Every character of the text is escaped. Nothing before the post call is visible on the site. The post
 // call takes no idempotency key, so an unclear answer is checked by listing the user's latest posts, drafts included,
 // matched by title and time. The composer's picker lists the site's categories and tags (options(), #1131).
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety } from './index.ts';
+// Remove (#1138): DELETE /wp/v2/posts/:id without force moves the post to the site's trash, where its owner can restore it.
+import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { removeResult } from './comment.ts';
 import { CHANNEL_OPTIONS_MAX, OptionList, optionCallSignal, optionName, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
 import { holdsLink } from './text.ts';
 import { ConnectorError, type Fetch } from './oauth.ts';
@@ -160,7 +162,7 @@ class WordPressClient {
   }
 
   // A call to the site's REST API (path after /wp-json). The password goes in Basic auth and nowhere else.
-  async call<T>(s: WordPressSecret, method: 'GET' | 'POST', path: string, body?: Body, auth = true, signal?: AbortSignal): Promise<T> {
+  async call<T>(s: WordPressSecret, method: 'GET' | 'POST' | 'DELETE', path: string, body?: Body, auth = true, signal?: AbortSignal): Promise<T> {
     const headers: Record<string, string> = { accept: 'application/json' };
     if (auth) headers.authorization = `Basic ${Buffer.from(`${s.username}:${s.appPassword}`, 'utf8').toString('base64')}`;
     let payload: string | Uint8Array<ArrayBuffer> | undefined;
@@ -427,6 +429,30 @@ export class WordPressPublisher implements Publisher {
       return { kind: 'accepted', externalId: String(id), url: linkOn(s.site, answer.link) };
     } catch (error) {
       return wordpressResult(error);
+    }
+  }
+
+  // Moves the post to the site's trash (#1138): DELETE /wp/v2/posts/:id without force, so the site's owner can restore
+  // it; WordPress answers the post with status trash. A post already in the trash (410 rest_already_trashed) or no
+  // longer on the site (404 rest_post_invalid_id) is gone already. A site whose trash is off (501
+  // rest_trash_not_supported) would only delete it for good with force, which Crove never sends: a person deletes it on
+  // the site. A user who may not delete the post (rest_cannot_delete, rest_user_cannot_delete_post) is refused as
+  // WORDPRESS_CANNOT_DELETE; any other 401 or 403 is a login to renew, as for publishing.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = wordpressSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' };
+    if (input.externalAccountId !== siteId(s.site)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    if (!/^[1-9]\d{0,15}$/.test(input.externalId) || postId(Number(input.externalId)) === null) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.client.call<{ status?: unknown }>(s, 'DELETE', `/wp/v2/posts/${input.externalId}`);
+      return answer.status === 'trash' ? { kind: 'removed' } : { kind: 'unknown', code: 'NOT_TRASHED' };
+    } catch (error) {
+      if (error instanceof WordPressError) {
+        if ((error.status === 410 && error.code === 'rest_already_trashed') || (error.status === 404 && error.code === 'rest_post_invalid_id')) return { kind: 'removed' };
+        if (error.code === 'rest_trash_not_supported') return { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_TRASH_DISABLED' };
+        if ((error.status === 401 || error.status === 403) && (error.code === 'rest_cannot_delete' || error.code === 'rest_user_cannot_delete_post')) return { kind: 'rejected', error: 'permission', code: 'WORDPRESS_CANNOT_DELETE' };
+      }
+      return removeResult(wordpressResult(error));
     }
   }
 

@@ -480,3 +480,57 @@ describe('WordPress names picked from the list publish as typed ones (#1131)', (
     expect(calls.at(-1)?.json).toEqual({ status: 'publish', title: 'Khuyến mãi', content: '<p>Món mới</p>', categories: [9], tags: [21] });
   });
 });
+
+describe('WordPress remove (#1138)', () => {
+  const DELETE = 'DELETE tiemcuaban.vn/wp-json/wp/v2/posts/42';
+  const remove = (fetchImpl: Fetch, externalId = '42', secret = SECRET) => new WordPressPublisher(fetchImpl).remove({ externalAccountId: ACCOUNT, secret, externalId });
+
+  it('moves the post to the site trash, never past it, through the fetch it was given', async () => {
+    const { fetchImpl, calls } = site({ [DELETE]: [{ body: { id: 42, status: 'trash', link: 'https://tiemcuaban.vn/?p=42' } }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.route, c.auth, c.redirect])).toEqual([[DELETE, BASIC, 'manual']]);
+    // No force: WordPress keeps the post in its trash, where the site owner can restore it.
+    expect(new URL(calls[0]?.url ?? '').search).toBe('');
+  });
+
+  it('counts a post already in the trash or no longer on the site as removed', async () => {
+    const trashed = site({ [DELETE]: [{ status: 410, body: { code: 'rest_already_trashed', message: 'The post has already been deleted.', data: { status: 410 } } }] });
+    expect(await remove(trashed.fetchImpl)).toEqual({ kind: 'removed' });
+    const gone = site({ [DELETE]: [{ status: 404, body: { code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } } }] });
+    expect(await remove(gone.fetchImpl)).toEqual({ kind: 'removed' });
+    // A 404 that is not WordPress saying the post is gone (no REST route at this address) deleted nothing.
+    const noRoute = site({ [DELETE]: [{ status: 404, body: { code: 'rest_no_route', message: 'No route was found matching the URL and request method.', data: { status: 404 } } }] });
+    expect(await remove(noRoute.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_404' });
+    // A 410 from the host rather than WordPress (a site taken down) says nothing about the post.
+    const hostGone = site({ [DELETE]: [{ status: 410, body: '<html>Gone</html>' }] });
+    expect(await remove(hostGone.fetchImpl)).not.toEqual({ kind: 'removed' });
+  });
+
+  it('leaves an answer that did not trash the post unclear', async () => {
+    const kept = site({ [DELETE]: [{ body: { id: 42, status: 'publish' } }] });
+    expect(await remove(kept.fetchImpl)).toEqual({ kind: 'unknown', code: 'NOT_TRASHED' });
+  });
+
+  it('maps the refusals to codes, an outage to unclear, and calls nothing for a malformed id', async () => {
+    const noTrash = site({ [DELETE]: [{ status: 501, body: { code: 'rest_trash_not_supported', message: "The post does not support trashing. Set 'force=true' to delete.", data: { status: 501 } } }] });
+    expect(await remove(noTrash.fetchImpl)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_TRASH_DISABLED' });
+    const notHers = site({ [DELETE]: [{ status: 403, body: { code: 'rest_cannot_delete', message: 'Sorry, you are not allowed to delete this post.', data: { status: 403 } } }] });
+    expect(await remove(notHers.fetchImpl)).toEqual({ kind: 'rejected', error: 'permission', code: 'WORDPRESS_CANNOT_DELETE' });
+    const revoked = site({ [DELETE]: [{ status: 401, body: { code: 'incorrect_password', message: 'The provided password is an invalid application password.', data: { status: 401 } } }] });
+    const refused = await remove(revoked.fetchImpl);
+    expect(refused).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'WORDPRESS_401' });
+    expect(JSON.stringify(refused)).not.toContain(PASSWORD);
+    const limited = site({ [DELETE]: [{ status: 429, body: { code: 'too_many_requests', message: 'Too many requests' } }] });
+    expect(await remove(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const down = site({ [DELETE]: [{ status: 503, body: '<html>Service Unavailable</html>' }] });
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'WORDPRESS_503' });
+    const moved = site({ [DELETE]: [{ status: 301, body: '' }] });
+    expect(await remove(moved.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'SITE_REDIRECTS' });
+    const none = site({});
+    expect(await remove(none.fetchImpl, '42?force=true')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await remove(none.fetchImpl, '0')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await new WordPressPublisher(none.fetchImpl).remove({ externalAccountId: 'other.vn', secret: SECRET, externalId: '42' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' });
+    expect(await remove(none.fetchImpl, '42', '{}')).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' });
+    expect(none.calls).toHaveLength(0);
+  });
+});

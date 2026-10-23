@@ -3238,6 +3238,7 @@ export const en = {
     remove: {
       action: 'Remove from channel',
       confirm: 'The post will be deleted on {channel}. This cannot be undone: to post it again, make a new post.',
+      confirmTrash: 'The post will be moved to the trash on {channel}. You can still restore it from the trash in the WordPress dashboard.',
       reason: 'Reason (optional)',
       reasonHint: 'Note why it comes down, so the whole team knows',
       submit: 'Remove post',
@@ -3254,6 +3255,8 @@ export const en = {
         FACEBOOK_CANNOT_DELETE: 'Facebook would not let {brand} remove this post; remove it on the Page itself',
         RECONNECT_FOR_REMOVE: 'Connect the YouTube channel again and allow managing its videos, then try again',
         REMOVE_NOT_RUN: 'The removal was not handled; try again',
+        WORDPRESS_TRASH_DISABLED: 'This WordPress site has its trash turned off, so the post cannot be moved there; delete it on the site',
+        WORDPRESS_CANNOT_DELETE: 'The connected WordPress user may not delete this post; ask a site administrator to remove it',
       },
     },
     threadParts: 'Post as a thread (optional)',

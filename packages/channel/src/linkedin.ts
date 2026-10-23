@@ -10,8 +10,9 @@
 // Who sees the post (#983): the post's visibility, PUBLIC unless the variant's settings choose connections or signed-in
 // members. A post may be a poll instead of images or a video (#1118, content.poll), or one PDF shown as a document
 // (#1119: the Documents API, then content.media with the document and its title).
-import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RetrySafety } from './index.ts';
-import { commentResult } from './comment.ts';
+// Remove (#1138): DELETE /rest/posts/{urn}, when a person asks or at the post's planned takedown.
+import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -20,7 +21,7 @@ import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInp
 // Management API (CHANNEL_LINKEDIN_ORGANIZATIONS), since a dialog asking for a scope the app lacks fails as a whole.
 // Connect asks for w_organization_social and r_organization_admin, lists the pages the member administers
 // (organizationAcls, role ADMINISTRATOR, state APPROVED) and returns one account per page, all with the member's token.
-// Publish, upload and comment are the member code with the author urn:li:organization:{id}.
+// Publish, upload, comment and remove are the member code with the author urn:li:organization:{id}.
 
 // Upload URLs LinkedIn hands out are on www.linkedin.com (dms-uploads) or api.linkedin.com (mediaUpload).
 export const LINKEDIN_HOSTS = ['www.linkedin.com', 'api.linkedin.com'] as const;
@@ -111,9 +112,11 @@ class LinkedInClient {
   }
 
   // A JSON call to the versioned REST API (or /v2/userinfo). Returns the body and the x-restli-id header.
-  async call<T>(method: 'GET' | 'POST', path: string, token: string, json?: unknown): Promise<{ body: T | null; id: string | null; status: number }> {
+  async call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, token: string, json?: unknown): Promise<{ body: T | null; id: string | null; status: number }> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json', 'X-Restli-Protocol-Version': '2.0.0' };
     if (path.startsWith('/rest/')) headers['Linkedin-Version'] = this.version;
+    // Rest.li names a delete in a header of its own, as the Posts API's sample does.
+    if (method === 'DELETE') headers['X-RestLi-Method'] = 'DELETE';
     if (json !== undefined) headers['content-type'] = 'application/json';
     const response = await this.fetch(`${API}${path}`, { method, headers, ...(json === undefined ? {} : { body: JSON.stringify(json) }) });
     const text = await response.text().catch(() => '');
@@ -389,6 +392,8 @@ export function linkedinDocumentTitle(title: string | null, filename: string | n
   return out;
 }
 
+// The id LinkedIn names a post by (the x-restli-id of POST /rest/posts).
+const POST_URN = /^urn:li:(share|ugcPost):\d{1,32}$/;
 const VIDEO_URN = /^urn:li:video:[A-Za-z0-9_-]{1,64}$/;
 const DOCUMENT_URN = /^urn:li:document:[A-Za-z0-9_-]{1,64}$/;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -631,6 +636,24 @@ class LinkedInPosting {
       return { kind: 'accepted', externalId: id.slice(0, 500) };
     } catch (error) {
       return commentResult(publishResult(error));
+    }
+  }
+
+  // Deletes the post (#1138): DELETE /rest/posts/{encoded urn}, answered 204, with the grant that made it
+  // (w_member_social for a member, w_organization_social for a page). LinkedIn's deletes are idempotent: a post already
+  // deleted answers 204 too, and one it does not find (404) is gone as well. A write conflict (409) deleted nothing.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!AUTHORS[this.author].id.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    if (!POST_URN.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      await this.client.call('DELETE', `/rest/posts/${encodeURIComponent(input.externalId)}`, token);
+      return { kind: 'removed' };
+    } catch (error) {
+      if (error instanceof LinkedInError && (error.status === 404 || error.status === 410)) return { kind: 'removed' };
+      if (error instanceof LinkedInError && error.status === 409) return { kind: 'rejected', error: 'transient', code: error.code ?? 'HTTP_409' };
+      return removeResult(publishResult(error));
     }
   }
 

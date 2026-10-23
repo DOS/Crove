@@ -3237,6 +3237,7 @@ export const vi = {
     remove: {
       action: 'Gỡ khỏi kênh',
       confirm: 'Bài sẽ bị xóa trên {channel}. Việc này không hoàn tác được: muốn đăng lại thì phải tạo bài mới.',
+      confirmTrash: 'Bài sẽ được chuyển vào thùng rác trên {channel}. Bạn vẫn khôi phục được bài từ thùng rác trong trang quản trị WordPress.',
       reason: 'Lý do (không bắt buộc)',
       reasonHint: 'Ghi lại vì sao gỡ bài, để cả nhóm cùng biết',
       submit: 'Gỡ bài',
@@ -3253,6 +3254,8 @@ export const vi = {
         FACEBOOK_CANNOT_DELETE: 'Facebook không cho {brand} gỡ bài này; hãy gỡ trực tiếp trên Trang',
         RECONNECT_FOR_REMOVE: 'Hãy kết nối lại kênh YouTube và cho phép quản lý video, rồi thử gỡ lại',
         REMOVE_NOT_RUN: 'Yêu cầu gỡ chưa được xử lý; hãy thử lại',
+        WORDPRESS_TRASH_DISABLED: 'Trang WordPress này đã tắt thùng rác nên không gỡ tạm được; hãy xóa bài trực tiếp trên trang',
+        WORDPRESS_CANNOT_DELETE: 'Tài khoản WordPress đã kết nối không có quyền xóa bài này; hãy nhờ quản trị viên trang gỡ',
       },
     },
     threadParts: 'Đăng thành chuỗi (không bắt buộc)',
