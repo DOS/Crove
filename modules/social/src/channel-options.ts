@@ -1,4 +1,5 @@
-// A channel's options for the composer (#1120): first a Pinterest board's sections, for the pin's section picker. Only
+// A channel's options for the composer (#1120): a Pinterest board's sections, for the pin's section picker, and since
+// #1131 a YouTube channel's playlists and a WordPress site's categories and tags (each with its taxonomy). Only
 // the worker may open a channel's token (ADR-0025), so the composer cannot ask the platform itself: as for link
 // previews (#641), a member asks for the list (social.channel_option.request); a fresh answer (under a day old) or a
 // request in progress is returned as it is, else the request is queued for the worker, within a per-org budget a
@@ -7,12 +8,13 @@
 // them (social.channel_option.record). The token never reaches a command, an event, an error or an answer.
 //
 // The list is shown in Crove only, as names (third-party text, rendered as text). Publishing never trusts it: the
-// adapter lists the board's sections again before it pins, and refuses a section the board no longer has.
+// Pinterest adapter lists the board's sections again before it pins, and refuses a section the board no longer has;
+// YouTube refuses a playlist that is gone when the video is added to it, and WordPress matches the names as before.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import { SOCIAL_CHANNEL_OPTION_ERRORS, type MemberRole, type SocialChannelOptionError, type SocialChannelOptionKind, type SocialChannelOptionStatus } from '@crove/db';
-import { CHANNEL_OPTIONS_MAX, CHANNEL_OPTION_NAME_MAX, OPTION_NAME_INVISIBLE, type ChannelOption, type ChannelOptionsResult, type Publisher } from '@crove/channel';
+import { CHANNEL_OPTIONS_MAX, CHANNEL_OPTION_NAME_MAX, OPTION_NAME_INVISIBLE, WORDPRESS_TAXONOMIES, type ChannelOption, type ChannelOptionsResult, type Publisher } from '@crove/channel';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type CredentialBroker, type QueryContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { CHANNEL_OPTION_KIND_OF, isProvider } from './domain/channels.ts';
 import { refuseChannels } from './channel-access.ts';
@@ -49,11 +51,16 @@ const zOptionName = z
   .min(1)
   .max(CHANNEL_OPTION_NAME_MAX)
   .refine((v) => !OPTION_NAME_INVISIBLE.test(v) && v.trim() === v, 'one trimmed line, no control, zero-width or direction marks');
-const zOption = z.strictObject({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), name: zOptionName });
+// A WordPress term carries its taxonomy (#1131); an item of any other list has none.
+const zOption = z.strictObject({ id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/), name: zOptionName, taxonomy: z.enum(WORDPRESS_TAXONOMIES).optional() });
 const zOptions = z
   .array(zOption)
   .max(CHANNEL_OPTIONS_MAX)
-  .refine((list) => new Set(list.map((o) => o.id)).size === list.length, 'distinct ids');
+  .refine((list) => new Set(list.map((o) => `${o.taxonomy ?? ''}:${o.id}`)).size === list.length, 'distinct ids')
+  .refine((list) => list.every((o) => o.taxonomy !== undefined) || list.every((o) => o.taxonomy === undefined), 'a taxonomy on every item or on none');
+
+// Whether a list's items have the shape of its kind: a taxonomy on every WordPress term, on no other item.
+const fitsKind = (kind: SocialChannelOptionKind, options: readonly ChannelOption[]) => options.every((o) => (o.taxonomy !== undefined) === (kind === 'wordpress_term'));
 
 // How long a failed read stays the answer, from now; null for a list that did not fail.
 function retryAfter(r: Row, now: Date): number | null {
@@ -64,7 +71,7 @@ function retryAfter(r: Row, now: Date): number | null {
 // A stored list as the composer shows it: only a read list has options, and only well-formed ones.
 function view(connectionId: string, kind: SocialChannelOptionKind, r: Row, now: Date): ChannelOptionList {
   const parsed = r.status === 'ready' ? zOptions.safeParse(r.items) : null;
-  return { connectionId, kind, status: r.status, options: parsed?.success ? parsed.data : [], error: r.error, fetchedAt: r.fetched_at?.toISOString() ?? null, retryAfterSeconds: retryAfter(r, now) };
+  return { connectionId, kind, status: r.status, options: parsed?.success && fitsKind(kind, parsed.data) ? parsed.data : [], error: r.error, fetchedAt: r.fetched_at?.toISOString() ?? null, retryAfterSeconds: retryAfter(r, now) };
 }
 
 type Ctx = Pick<QueryContext, 'trx' | 'orgId' | 'actor' | 'role'>;
@@ -181,6 +188,10 @@ export const channelOptionRecord = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình nền mới thực hiện được việc này');
     const r = input.result;
+    if (r.ok) {
+      const list = await ctx.trx.selectFrom('crove_social.channel_option').select('kind').where('org_id', '=', ctx.orgId).where('id', '=', input.optionId).executeTakeFirst();
+      if (list && !fitsKind(list.kind, r.options)) throw new DomainError('VALIDATION', 422, 'Các mục không đúng dạng của danh sách này');
+    }
     const done = await ctx.trx
       .updateTable('crove_social.channel_option')
       .set(r.ok ? { status: 'ready', items: JSON.stringify(r.options), error: null, fetched_at: ctx.now } : { status: 'failed', items: '[]', error: r.error, fetched_at: ctx.now })
@@ -240,5 +251,5 @@ export async function runChannelOptionJob(deps: ChannelOptionDeps, orgId: string
   if (!result) return record({ ok: false, error: 'no_answer' });
   if ('refused' in result) return record({ ok: false, error: result.refused });
   const valid = zOptions.safeParse(result.options);
-  return valid.success ? record({ ok: true, options: valid.data }) : record({ ok: false, error: 'no_answer' });
+  return valid.success && fitsKind(target.kind, valid.data) ? record({ ok: true, options: valid.data }) : record({ ok: false, error: 'no_answer' });
 }

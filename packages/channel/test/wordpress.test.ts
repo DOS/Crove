@@ -397,3 +397,86 @@ describe('WordPress categories, tags, excerpt and status (#981)', () => {
     expect(wordpressOptionsOf({ wordpress: { categories: [' Tin   tức ', 'tin tức'], status: 'pending' } })).toEqual({ categories: ['Tin tức'], tags: [], excerpt: '', status: 'pending' });
   });
 });
+
+describe('WordPress categories and tags for the composer (#1131)', () => {
+  const CATEGORIES = 'GET tiemcuaban.vn/wp-json/wp/v2/categories';
+  const TAGS = 'GET tiemcuaban.vn/wp-json/wp/v2/tags';
+  const list = (fetchImpl: Fetch, over: { externalAccountId?: string; kind?: 'wordpress_term' | 'youtube_playlist'; secret?: string } = {}) =>
+    new WordPressPublisher(fetchImpl).options({ externalAccountId: over.externalAccountId ?? ACCOUNT, secret: over.secret ?? SECRET, kind: over.kind ?? 'wordpress_term' });
+  const terms = (from: number, n: number, prefix: string) => Array.from({ length: n }, (_, i) => ({ id: from + i, name: `${prefix} ${from + i}` }));
+
+  it('lists the categories, then the tags, by name with their taxonomy, names read back from entities and cleaned', async () => {
+    const { fetchImpl, calls } = site({
+      [CATEGORIES]: [{ body: [{ id: 1, name: 'Chưa phân loại' }, { id: 7, name: 'Tin tức &amp; Sự kiện' }, { id: 8, name: '  Giờ   mở cửa ' }, { id: 10, name: 'Ẩn\u200bdanh' }, { id: 0, name: 'bad id' }, { id: 9, name: '&lt;script&gt;' }] }],
+      [TAGS]: [{ body: [{ id: 12, name: 'bánh mì' }, { id: 12, name: 'twice' }, { id: 13, name: '' }] }],
+    });
+    expect(await list(fetchImpl)).toEqual({
+      options: [
+        { id: '1', name: 'Chưa phân loại', taxonomy: 'category' },
+        { id: '7', name: 'Tin tức & Sự kiện', taxonomy: 'category' },
+        { id: '8', name: 'Giờ mở cửa', taxonomy: 'category' },
+        { id: '12', name: 'bánh mì', taxonomy: 'tag' },
+      ],
+    });
+    expect(calls.map((c) => c.auth)).toEqual([BASIC, BASIC]);
+    expect(calls.map((c) => c.redirect)).toEqual(['manual', 'manual']);
+    expect(Object.fromEntries(new URL(calls[0]?.url as string).searchParams)).toEqual({ per_page: '100', page: '1', orderby: 'name', order: 'asc', _fields: 'id,name' });
+  });
+
+  it('follows the pages of each taxonomy, stops past the last page, and keeps at most 500 terms, the categories first', async () => {
+    const paged = site({
+      [CATEGORIES]: [{ body: terms(1, 100, 'Chuyên mục') }, { status: 400, body: { code: 'rest_post_invalid_page_number', message: 'The page number requested is larger than the number of pages available.' } }],
+      [TAGS]: [{ body: terms(1001, 100, 'Thẻ') }, { body: terms(1101, 3, 'Thẻ') }],
+    });
+    const answer = await list(paged.fetchImpl);
+    expect(answer && 'options' in answer ? answer.options.length : 0).toBe(203);
+    expect(paged.calls.map((c) => `${c.route} ${new URL(c.url).searchParams.get('page')}`)).toEqual([`${CATEGORIES} 1`, `${CATEGORIES} 2`, `${TAGS} 1`, `${TAGS} 2`]);
+    const many = site({ [CATEGORIES]: [{ body: terms(1, 100, 'C') }, { body: terms(101, 50, 'C') }], [TAGS]: Array.from({ length: 5 }, (_, p) => ({ body: terms(1000 + p * 100, 100, 'T') })) });
+    const full = await list(many.fetchImpl);
+    const options = full && 'options' in full ? full.options : [];
+    expect(options).toHaveLength(500);
+    expect(options.filter((o) => o.taxonomy === 'category')).toHaveLength(150);
+    expect(many.calls).toHaveLength(6);
+  });
+
+  it('tells a refused password, a refusal, a gone REST API and an outage apart', async () => {
+    const cases: [Answer, unknown][] = [
+      [{ status: 401, body: { code: 'incorrect_password', message: 'The provided password is an invalid application password.' } }, { refused: 'token_expired' }],
+      [{ status: 403, body: { code: 'rest_forbidden', message: 'Sorry, you are not allowed to do that.' } }, { refused: 'permission' }],
+      [{ status: 404, body: { code: 'rest_no_route', message: 'No route was found matching the URL and request method.' } }, { refused: 'not_found' }],
+      [{ status: 500, body: { code: 'internal_server_error', message: 'There has been a critical error on this website.' } }, null],
+      [{ status: 200, body: '<html>not the REST API</html>' }, null],
+      [{ status: 200, body: { not: 'a list' } }, null],
+      [{ status: 400, body: { code: 'rest_post_invalid_page_number', message: 'x' } }, null],
+    ];
+    for (const [answer, expected] of cases) expect(await list(site({ [CATEGORIES]: [answer] }).fetchImpl)).toEqual(expected);
+    // A failure on the tags keeps none of the categories.
+    expect(await list(site({ [CATEGORIES]: [{ body: terms(1, 2, 'C') }], [TAGS]: [{ status: 503, body: {} }] }).fetchImpl)).toBeNull();
+  });
+
+  it('asks nothing for a secret it cannot read, another kind of list or another site', async () => {
+    const { fetchImpl, calls } = site({});
+    expect(await list(fetchImpl, { secret: '{}' })).toEqual({ refused: 'token_expired' });
+    expect(await list(fetchImpl, { kind: 'youtube_playlist' })).toEqual({ refused: 'not_found' });
+    expect(await list(fetchImpl, { externalAccountId: 'other.example.com' })).toEqual({ refused: 'not_found' });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('WordPress names picked from the list publish as typed ones (#1131)', () => {
+  it('matches a listed category and tag by name when publishing, with the post body as before', async () => {
+    const { fetchImpl, calls } = site({
+      'GET tiemcuaban.vn/wp-json/wp/v2/categories': [{ body: [{ id: 9, name: 'Khuyến mãi &amp; Quà' }] }, { body: [{ id: 9, name: 'Khuyến mãi &amp; Quà' }] }],
+      'GET tiemcuaban.vn/wp-json/wp/v2/tags': [{ body: [{ id: 21, name: 'bánh mì' }] }, { body: [{ id: 21, name: 'bánh mì' }] }],
+      [POSTS]: [{ status: 201, body: { id: 150, link: `${SITE}/khuyen-mai/`, status: 'publish' } }],
+    });
+    const publisher = new WordPressPublisher(fetchImpl);
+    const listed = await publisher.options({ externalAccountId: ACCOUNT, secret: SECRET, kind: 'wordpress_term' });
+    const names = (taxonomy: string) => (listed && 'options' in listed ? listed.options.filter((o) => o.taxonomy === taxonomy).map((o) => o.name) : []);
+    expect([names('category'), names('tag')]).toEqual([['Khuyến mãi & Quà'], ['bánh mì']]);
+    const result = await publisher.publish(input({ content: { body: 'Món mới', title: 'Khuyến mãi', linkUrl: null, media: [] }, settings: { wordpress: { categories: names('category'), tags: names('tag') } } }));
+    expect(result).toEqual({ kind: 'accepted', externalId: '150', url: `${SITE}/khuyen-mai/` });
+    expect(new URL(calls[2]?.url as string).searchParams.get('search')).toBe('Khuyến mãi &amp; Quà');
+    expect(calls.at(-1)?.json).toEqual({ status: 'publish', title: 'Khuyến mãi', content: '<p>Món mới</p>', categories: [9], tags: [21] });
+  });
+});

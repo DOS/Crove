@@ -1156,8 +1156,13 @@ export function pinterestSectionOf(settings: Readonly<Record<string, unknown>> |
   return typeof r.sectionId === 'string' && PINTEREST_SECTION_ID.test(r.sectionId) ? r.sectionId : 'invalid';
 }
 
-// The channels whose composer lists options to pick from (#1120), and what each lists.
-export const CHANNEL_OPTION_KIND_OF: Readonly<Partial<Record<Provider, 'pinterest_section'>>> = { pinterest: 'pinterest_section' };
+// The channels whose composer lists options to pick from (#1120), and what each lists: a board's sections, a YouTube
+// channel's playlists and a WordPress site's categories and tags (#1131). One list per channel.
+export const CHANNEL_OPTION_KIND_OF: Readonly<Partial<Record<Provider, 'pinterest_section' | 'youtube_playlist' | 'wordpress_term'>>> = {
+  pinterest: 'pinterest_section',
+  youtube: 'youtube_playlist',
+  wordpress: 'wordpress_term',
+};
 
 // Instagram people (#796): up to 3 collaborators (`settings.collaborators`, on feed posts and Reels; each must accept
 // the invitation in Instagram) and up to 20 people tagged on the first image (`settings.userTags`, image posts only).
