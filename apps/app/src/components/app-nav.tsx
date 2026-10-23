@@ -145,7 +145,12 @@ export function ShellNav({ slug, groups, badges, orgs, email, onOpenPalette, pal
         {groups.map((group, index) => {
           const headingId = `${orgSelectId}-${group.id}`;
           return (
-            <section key={group.id} aria-labelledby={NO_HEADING.has(group.id) ? undefined : headingId} className={index === 0 ? '' : 'mt-3'}>
+            // A group without a visible heading still has a name for screen readers.
+            <section
+              key={group.id}
+              className={index === 0 ? '' : 'mt-3'}
+              {...(NO_HEADING.has(group.id) ? { 'aria-label': t(`groups.${group.id}`) } : { 'aria-labelledby': headingId })}
+            >
               {!NO_HEADING.has(group.id) && (
                 <h2 id={headingId} className="px-3 pb-1 text-xs font-medium text-subtle-foreground">
                   {t(`groups.${group.id}`)}
@@ -219,6 +224,13 @@ export function NavDrawer({ open, onOpenChange, children }: { open: boolean; onO
     if (open && !el.open) el.showModal();
     else if (!open && el.open) el.close();
   }, [open]);
+  // Leaving the org layout with the drawer open closes it first, so the browser ends the modal state cleanly.
+  useEffect(() => {
+    const el = dialog.current;
+    return () => {
+      if (el?.open) el.close();
+    };
+  }, []);
   return (
     <dialog
       ref={dialog}
