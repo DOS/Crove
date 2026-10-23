@@ -280,7 +280,8 @@ export function InboxPage() {
           )}
         >
           <div className="min-w-0">
-            <p className="text-sm text-foreground">{t('dropHereCompact')}</p>
+            {/* A phone has nothing to drag from: it keeps the formats and the header's upload button. */}
+            <p className="hidden text-sm text-foreground sm:block">{t('dropHereCompact')}</p>
             <p className="text-xs text-subtle-foreground">{config.aiEnabled ? t('formatsAll') : t('formatsXml')}</p>
             {!config.aiEnabled && <p className="text-xs text-warning">{t('noAi')}</p>}
           </div>
