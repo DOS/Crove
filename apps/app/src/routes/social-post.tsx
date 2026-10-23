@@ -3596,11 +3596,31 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             canWrite={canWrite}
             // A campaign label fills the empty UTM fields (#1169) as an edit like any other: nothing is saved until Save,
             // and saving changes the channels' settings, their content hash and their approval as any edit does.
+            // Each channel's own empty fields, and none while a save is on its way (it would settle over the fill).
             onPut={(label) => {
-              if (!editable || !base.linkUrl.trim()) return false;
-              const next = prefillUtm(shownUtm, label);
-              if (next) setUtm(next);
-              return next !== null;
+              if (!editable || !base.linkUrl.trim() || save.isPending) return false;
+              // Called once the label is saved: the edits made since are read from the latest state, never overwritten.
+              const fill = (from: Record<string, Own>) => {
+                const changed = { ...from };
+                let filled = false;
+                for (const v of p.variants) {
+                  if (!EDITABLE.includes(v.status)) continue;
+                  const mine = from[v.id] ?? ownOf(v);
+                  const tags = utmOf(mine.settings);
+                  const next = prefillUtm(tags ? { campaign: tags.campaign, medium: tags.medium ?? 'social' } : null, label);
+                  if (!next) continue;
+                  changed[v.id] = withUtm(mine, next);
+                  filled = true;
+                }
+                return filled ? changed : null;
+              };
+              if (!fill(own)) return false;
+              setOwn((latest) => fill(latest) ?? latest);
+              setUtmState((latest) => {
+                const shown = latest === undefined ? shownUtm : latest;
+                return prefillUtm(shown, label) ?? shown;
+              });
+              return true;
             }}
           />
           <CampaignFindings

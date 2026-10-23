@@ -160,9 +160,9 @@ export function LabelPicker({
     const next = toggleLabel(current, id);
     setFull(next === null);
     if (!next) return;
-    save.mutate(next);
     const label = all.find((l) => l.id === id);
-    if (label && next.includes(id) && onPut?.(label)) setPrefilled(label.name);
+    // A campaign label fills the post's UTM fields only once it is on the post.
+    save.mutate(next, { onSuccess: () => label && next.includes(id) && onPut?.(label) && setPrefilled(label.name) });
   };
   const mine = labelsOf(current, all);
   return (

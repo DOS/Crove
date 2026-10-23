@@ -121,7 +121,12 @@ function Row({ label, canManage }: { label: SocialLabel; canManage: boolean }) {
   const t = useTranslations('social.labels');
   const [editing, setEditing] = useState(false);
   const update = useMutation({
-    mutationFn: (d: Draft) => client.social.labels.update({ labelId: label.id, name: d.name.trim(), color: d.color, ...campaignInput(d) }),
+    // Only the campaign fields this form changed, so it never writes back what another owner set since it opened.
+    mutationFn: (d: Draft) => {
+      const before: Record<string, unknown> = campaignInput(draftOf(label));
+      const changed = Object.fromEntries(Object.entries(campaignInput(d)).filter(([k, v]) => v !== before[k]));
+      return client.social.labels.update({ labelId: label.id, name: d.name.trim(), color: d.color, ...changed });
+    },
     onSuccess: () => {
       setEditing(false);
       refreshLabels();
