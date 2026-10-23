@@ -1,6 +1,6 @@
 // Bulk approval batches and review shortcuts (issue #315).
 import { describe, expect, it } from 'vitest';
-import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, showMatched, type BulkBatch } from '../src/lib/review.ts';
+import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextAfterDecision, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, showMatched, type BulkBatch } from '../src/lib/review.ts';
 
 const REVERSAL = 'finance.reversal';
 
@@ -81,6 +81,10 @@ describe('review shortcuts', () => {
   it('maps J and N to next, K and P to previous, A to approve and E to edit, in either case', () => {
     expect([key('j'), key('n'), key('a'), key('e'), key('A'), key('E')]).toEqual(['next', 'next', 'approve', 'edit', 'approve', 'edit']);
     expect([key('k'), key('p'), key('K')]).toEqual(['previous', 'previous', 'previous']);
+    // R rejects, or on a Social post asks for changes (#1221).
+    expect([key('r'), key('R')]).toEqual(['reject', 'reject']);
+    expect(key('r', { ctrlKey: true })).toBeNull();
+    expect(key('r', { target: { tagName: 'TEXTAREA' } as unknown as EventTarget })).toBeNull();
     expect(key('x')).toBeNull();
     expect(key('Enter')).toBeNull();
   });
@@ -103,6 +107,25 @@ describe('review shortcuts', () => {
     // The current one was just decided and left the pending list.
     expect(nextPendingId(items, 'gone')).toBe('p1');
     expect(nextPendingId([], 'gone')).toBeNull();
+  });
+
+  it('opens the next item after a decision in the order the reviewer saw (#1221)', () => {
+    const before = [{ id: 'p1' }, { id: 'p2' }, { id: 'p3' }, { id: 'p4' }];
+    // p2 approved and gone: on to p3.
+    expect(nextAfterDecision(before, [{ id: 'p1' }, { id: 'p3' }, { id: 'p4' }], 'p2')).toBe('p3');
+    // p2 still waits for someone else and moved to the top (newest change first): still on to p3, not back to p1.
+    expect(nextAfterDecision(before, [{ id: 'p2' }, { id: 'p1' }, { id: 'p3' }, { id: 'p4' }], 'p2')).toBe('p3');
+    // p3 was decided elsewhere meanwhile: the one after it.
+    expect(nextAfterDecision(before, [{ id: 'p1' }, { id: 'p4' }], 'p2')).toBe('p4');
+    // Nothing left below: the first one still waiting above, or one that came in meanwhile.
+    expect(nextAfterDecision(before, [{ id: 'p1' }], 'p4')).toBe('p1');
+    expect(nextAfterDecision(before, [{ id: 'p9' }, { id: 'p4' }], 'p4')).toBe('p9');
+    // None left.
+    expect(nextAfterDecision(before, [{ id: 'p4' }], 'p4')).toBeNull();
+    expect(nextAfterDecision(before, [], 'p4')).toBeNull();
+    expect(nextAfterDecision([], [], 'p1')).toBeNull();
+    // The current one was not in the list seen: the first of that list still waiting.
+    expect(nextAfterDecision(before, [{ id: 'p3' }, { id: 'p2' }], 'gone')).toBe('p2');
   });
 
   it('finds the previous pending proposal', () => {
