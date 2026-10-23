@@ -202,4 +202,106 @@ describe('Pinterest video pins (#813)', () => {
     expect(await new PinterestPublisher(APP, late.fetchImpl, { ...fast, budgetMs: -1 }).publish(videoInput())).toMatchObject({ kind: 'rejected', error: 'transient' });
     for (const t of [elsewhere, failed, slow, late]) expect(t.calls.some((c) => c.route === 'POST /v5/pins')).toBe(false);
   });
+
+  it('checks the section before the upload and pins the video into it', async () => {
+    const SALE = '5027630990032166911';
+    const t = withUpload({
+      [`GET /v5/boards/${BOARD}/sections`]: [{ body: { items: [{ id: SALE, name: 'Khuyến mãi' }], bookmark: null } }],
+      'POST /v5/media': [{ status: 201, body: { media_id: '12345', upload_url: UPLOAD, upload_parameters: {} } }],
+      'GET /v5/media/12345': [{ body: { status: 'succeeded' } }],
+      'POST /v5/pins': [{ status: 201, body: { id: '813744226420795999' } }],
+    });
+    expect(await new PinterestPublisher(APP, t.fetchImpl, fast).publish(videoInput({ pinterest: { sectionId: SALE } }))).toMatchObject({ kind: 'accepted' });
+    expect(t.calls[0]?.route).toBe(`GET /v5/boards/${BOARD}/sections`);
+    expect(t.calls.at(-1)?.body).toMatchObject({ board_id: BOARD, board_section_id: SALE });
+    const gone = withUpload({ [`GET /v5/boards/${BOARD}/sections`]: [{ body: { items: [] } }] });
+    expect(await new PinterestPublisher(APP, gone.fetchImpl, fast).publish(videoInput({ pinterest: { sectionId: SALE } }))).toMatchObject({ kind: 'rejected', code: 'PINTEREST_SECTION_NOT_FOUND' });
+    expect([gone.uploads.length, gone.calls.map((c) => c.route)]).toEqual([0, [`GET /v5/boards/${BOARD}/sections`]]);
+  });
+});
+
+describe('Pinterest board sections (#1120)', () => {
+  const SALE = '5027630990032166911';
+  const MENU = '5027630990032166912';
+  const ROUTE = `GET /v5/boards/${BOARD}/sections`;
+  const sections = (items: unknown[], bookmark: string | null = null): Answer => ({ body: { items, bookmark } });
+  const inSection = (sectionId: unknown) => input({ settings: { pinterest: { sectionId } } });
+  const list = (fetchImpl: Fetch) => new PinterestPublisher(APP, fetchImpl).options({ externalAccountId: BOARD, secret: SECRET, kind: 'pinterest_section' });
+
+  it('lists the board sections page by page, following the bookmark, with clean names', async () => {
+    const { fetchImpl, calls } = pinterest({
+      [ROUTE]: [sections([{ id: SALE, name: '  Khuyến mãi‮ tháng 10 ' }, { id: 'not-an-id', name: 'x' }], 'bm-2'), sections([{ id: MENU, name: '' }, { id: SALE, name: 'again' }])],
+    });
+    expect(await list(fetchImpl)).toEqual({
+      options: [
+        { id: SALE, name: 'Khuyến mãi tháng 10' },
+        { id: MENU, name: MENU },
+      ],
+    });
+    expect(calls.map((c) => [c.url.searchParams.get('page_size'), c.url.searchParams.get('bookmark')])).toEqual([
+      ['250', null],
+      ['250', 'bm-2'],
+    ]);
+    expect(calls[0]?.headers.get('authorization')).toBe('Bearer pina_access-1');
+  });
+
+  it('stops at 500 sections and tells a dead token, a refusal, a gone board and an outage apart', async () => {
+    const many = (from: number) => Array.from({ length: 250 }, (_, i) => ({ id: String(1_000_000 + from + i), name: `S${from + i}` }));
+    const full = pinterest({ [ROUTE]: [sections(many(0), 'b1'), sections(many(250), 'b2'), sections(many(500))] });
+    const listed = await list(full.fetchImpl);
+    expect(listed && 'options' in listed ? listed.options.length : 0).toBe(500);
+    expect(full.calls).toHaveLength(2);
+    const ask = (status: number) => list(pinterest({ [ROUTE]: [{ status, body: { code: 1, message: 'x' } }] }).fetchImpl);
+    expect(await ask(401)).toEqual({ refused: 'token_expired' });
+    expect(await ask(403)).toEqual({ refused: 'permission' });
+    expect(await ask(404)).toEqual({ refused: 'not_found' });
+    expect(await ask(500)).toBeNull();
+    expect(await ask(429)).toBeNull();
+    expect(await list(pinterest({ [ROUTE]: [{ body: { items: 'no' } }] }).fetchImpl)).toBeNull();
+  });
+
+  it('lists the sections again and pins into the chosen one with board_section_id', async () => {
+    const { fetchImpl, calls } = pinterest({
+      [ROUTE]: [sections([{ id: MENU, name: 'Thực đơn' }, { id: SALE, name: 'Khuyến mãi' }])],
+      'POST /v5/pins': [{ status: 201, body: { id: '813744226420795884' } }],
+    });
+    expect(await new PinterestPublisher(APP, fetchImpl).publish(inSection(SALE))).toMatchObject({ kind: 'accepted', externalId: '813744226420795884' });
+    expect(calls.map((c) => c.route)).toEqual([ROUTE, 'POST /v5/pins']);
+    expect(calls[1]?.body).toEqual({
+      board_id: BOARD,
+      board_section_id: SALE,
+      title: 'Thực đơn mùa xuân',
+      description: 'Bánh mì mới ra lò mỗi sáng',
+      link: 'https://shop.example/menu',
+      alt_text: 'Ổ bánh mì giòn',
+      media_source: { source_type: 'image_base64', content_type: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0xff]).toString('base64') },
+    });
+  });
+
+  it('pins nothing into a section the board no longer has, with settings it cannot read, or when the list does not come', async () => {
+    const gone = pinterest({ [ROUTE]: [sections([{ id: MENU, name: 'Thực đơn' }])] });
+    expect(await new PinterestPublisher(APP, gone.fetchImpl).publish(inSection(SALE))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'PINTEREST_SECTION_NOT_FOUND', message: SALE });
+    const bad = pinterest({});
+    for (const settings of [{ pinterest: { sectionId: 'abc' } }, { pinterest: { sectionId: SALE, extra: 1 } }, { pinterest: [SALE] }]) {
+      expect(await new PinterestPublisher(APP, bad.fetchImpl).publish(input({ settings }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'PINTEREST_SECTION_INVALID' });
+    }
+    expect(bad.calls).toEqual([]);
+    const down = pinterest({ [ROUTE]: [{ status: 503, body: { code: 1, message: 'down' } }] });
+    expect(await new PinterestPublisher(APP, down.fetchImpl).publish(inSection(SALE))).toEqual({ kind: 'rejected', error: 'transient', code: 'PINTEREST_SECTIONS_UNREADABLE' });
+    const dead = pinterest({ [ROUTE]: [{ status: 401, body: { code: 2, message: 'Authentication failed.' } }] });
+    expect(await new PinterestPublisher(APP, dead.fetchImpl).publish(inSection(SALE))).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    const board = pinterest({ [ROUTE]: [{ status: 404, body: { code: 40, message: 'Board not found.' } }] });
+    expect(await new PinterestPublisher(APP, board.fetchImpl).publish(inSection(SALE))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'BOARD_NOT_FOUND' });
+    for (const t of [gone, down, dead, board]) expect(t.calls.some((c) => c.route === 'POST /v5/pins')).toBe(false);
+    // Deleted between the check and the pin: Pinterest's 404 "Board or section not found".
+    const raced = pinterest({ [ROUTE]: [sections([{ id: SALE, name: 'Khuyến mãi' }])], 'POST /v5/pins': [{ status: 404, body: { code: 40, message: 'Board or section not found.' } }] });
+    expect(await new PinterestPublisher(APP, raced.fetchImpl).publish(inSection(SALE))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'PINTEREST_SECTION_NOT_FOUND', httpStatus: 404 });
+  });
+
+  it('sends a pin without a section exactly as before, with no sections call', async () => {
+    const { fetchImpl, calls } = pinterest({ 'POST /v5/pins': [{ status: 201, body: { id: '813744226420795884' } }] });
+    await new PinterestPublisher(APP, fetchImpl).publish(input({ settings: { pinterest: {} } }));
+    expect(calls.map((c) => c.route)).toEqual(['POST /v5/pins']);
+    expect(Object.keys(calls[0]?.body as object)).not.toContain('board_section_id');
+  });
 });

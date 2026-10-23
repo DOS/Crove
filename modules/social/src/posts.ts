@@ -24,6 +24,7 @@ import { accountCommands, accountQueries } from './accounts.ts';
 import { reportLinkCommands, reportLinkQueries } from './report-links.ts';
 import { goalCommands, goalQueries } from './goals.ts';
 import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
+import { channelOptionCommands, channelOptionQueries } from './channel-options.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
 import { reminderCommands } from './reminders.ts';
 import { QUEUE_LOW_DAYS_MAX, QUEUE_LOW_DAYS_MIN, queueLowCommands } from './queue-low.ts';
@@ -1745,6 +1746,7 @@ export const socialCommands = [
   ...reportLinkCommands,
   ...goalCommands,
   ...linkPreviewCommands,
+  ...channelOptionCommands,
   ...notificationCommands,
   ...reminderCommands,
   ...channelAccessCommands,
@@ -1793,4 +1795,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries];

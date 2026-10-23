@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, pinterestSectionOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf } from './channels.ts';
 import { sentLink } from './utm.ts';
 
 // TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
@@ -162,6 +162,9 @@ export type IssueCode =
   | 'YOUTUBE_NOT_SUPPORTED'
   | 'YT_PLAYLISTS_INVALID'
   | 'YT_PLAYLISTS_TOO_MANY'
+  // Pinterest board sections (#1120): settings.pinterest on another channel; not { sectionId } with a section's id.
+  | 'PINTEREST_NOT_SUPPORTED'
+  | 'PINTEREST_SECTION_INVALID'
   // Zalo OA (#943): settings.comments is set and is not true or false.
   | 'ZALO_COMMENTS_INVALID'
   // Telegram (#982): settings.telegram on another channel; or not { silent?, pin? } with true or false values.
@@ -428,6 +431,13 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     if (variant.provider !== 'youtube') issues.push({ code: 'YOUTUBE_NOT_SUPPORTED', field: 'settings.youtube', limit: null, actual: null });
     else if (playlists === 'invalid') issues.push({ code: 'YT_PLAYLISTS_INVALID', field: 'settings.youtube.playlistIds', limit: null, actual: null });
     else if (playlists.length > YOUTUBE_PLAYLISTS_MAX) issues.push({ code: 'YT_PLAYLISTS_TOO_MANY', field: 'settings.youtube.playlistIds', limit: YOUTUBE_PLAYLISTS_MAX, actual: playlists.length });
+  }
+  // Pinterest board sections (#1120), none when absent. Whether the board still has the section is checked when
+  // publishing, against the board as it is then.
+  const section = pinterestSectionOf(variant.settings);
+  if (section !== null) {
+    if (variant.provider !== 'pinterest') issues.push({ code: 'PINTEREST_NOT_SUPPORTED', field: 'settings.pinterest', limit: null, actual: null });
+    else if (section === 'invalid') issues.push({ code: 'PINTEREST_SECTION_INVALID', field: 'settings.pinterest.sectionId', limit: null, actual: null });
   }
   // Zalo OA (#943): comments on the article, on when absent.
   if (variant.provider === 'zalo_oa' && variant.settings?.comments !== undefined && typeof variant.settings.comments !== 'boolean') {

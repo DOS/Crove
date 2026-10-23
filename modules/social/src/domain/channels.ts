@@ -1114,6 +1114,26 @@ export function youtubePlaylistIdFrom(text: string): string | null {
   return list && YOUTUBE_PLAYLIST_ID.test(list) ? list : null;
 }
 
+// The Pinterest board section a pin goes into (#1120): settings.pinterest.sectionId, one of the board's sections as the
+// composer listed them (PINTEREST_SECTION_ID in @crove/channel, which sends it and checks it against the board again).
+// Not stored without one, so a variant saved before keeps its content hash.
+export const PINTEREST_SECTION_ID = /^\d{1,32}$/;
+
+// The section id in a variant's settings: null when there is none, 'invalid' when settings.pinterest is not an object
+// holding only a section id.
+export function pinterestSectionOf(settings: Readonly<Record<string, unknown>> | undefined): string | 'invalid' | null {
+  const raw = settings?.pinterest;
+  if (raw === undefined) return null;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== 'sectionId')) return 'invalid';
+  if (r.sectionId === undefined) return null;
+  return typeof r.sectionId === 'string' && PINTEREST_SECTION_ID.test(r.sectionId) ? r.sectionId : 'invalid';
+}
+
+// The channels whose composer lists options to pick from (#1120), and what each lists.
+export const CHANNEL_OPTION_KIND_OF: Readonly<Partial<Record<Provider, 'pinterest_section'>>> = { pinterest: 'pinterest_section' };
+
 // Instagram people (#796): up to 3 collaborators (`settings.collaborators`, on feed posts and Reels; each must accept
 // the invitation in Instagram) and up to 20 people tagged on the first image (`settings.userTags`, image posts only).
 // Usernames as Instagram writes them, without the @. The adapter reads the same shapes.

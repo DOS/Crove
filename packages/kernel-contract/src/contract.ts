@@ -58,6 +58,7 @@ import {
   zSocialGoals,
   zSocialGoalSet,
   zSocialLinkPreview,
+  zSocialChannelOptions,
   zSocialNotificationKind,
   zSocialNotifications,
   zSocialAccountTrend,
@@ -660,6 +661,12 @@ export const contract = {
     linkPreviews: {
       request: oc.input(z.strictObject({ url: z.string().min(1).max(2048) })).output(zSocialLinkPreview),
       get: oc.input(z.object({ url: z.string().min(1).max(2048) })).output(zSocialLinkPreview.nullable()),
+    },
+    // A channel's options for the composer (#1120): a Pinterest board's sections, read by the worker with the
+    // channel's token; shown in Crove only.
+    channelOptions: {
+      request: oc.input(z.strictObject({ connectionId: zId })).output(zSocialChannelOptions),
+      get: oc.input(z.strictObject({ connectionId: zId })).output(zSocialChannelOptions.nullable()),
     },
     // In-app notifications (#637): each member reads, marks and turns off only their own.
     notifications: {
