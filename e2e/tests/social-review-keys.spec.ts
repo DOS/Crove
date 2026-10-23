@@ -65,7 +65,7 @@ test('approves three posts with a checklist in a row from the keyboard and lands
   await page.getByRole('link', { name: /Bài phím ba/ }).first().click();
   await expect(page).toHaveURL(new RegExp(`/social/${order[0]}$`));
   const panel = page.locator('[data-slot="card"]').filter({ hasText: 'Duyệt bài' }).filter({ hasText: 'Danh sách kiểm tra' });
-  await expect(panel.getByTestId('review-shortcuts')).toContainText('J hoặc N sang bài sau');
+  await expect(panel.getByTestId('review-shortcuts')).toContainText('J hoặc N sang bài tiếp');
   await expect(panel.getByRole('button', { name: 'Duyệt và sang bài tiếp' })).toBeDisabled();
 
   // J and K move along the list, in its order, and back.
