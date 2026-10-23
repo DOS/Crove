@@ -1989,6 +1989,7 @@ function ChannelEditor({
   duplicate,
   channelSignature,
   adding = false,
+  signaturesLoading = false,
 }: {
   provider: string;
   channel: string;
@@ -2013,6 +2014,8 @@ function ChannelEditor({
   // takes it unless the person leaves it off, as social.post.create copies it. A variant already saved keeps its own.
   channelSignature?: string | null;
   adding?: boolean;
+  // The channels' signatures are still being read (#1190): the toggle waits for them.
+  signaturesLoading?: boolean;
 }) {
   const t = useTranslations('social');
   const settings = adding ? withChannelSignature(own.settings, channelSignature) : own.settings;
@@ -2091,7 +2094,7 @@ function ChannelEditor({
         {t('ownText')}
       </label>
       {/* Leaving the signature out of this post (#1190), or putting it back: the channel's as it is now. */}
-      <SignatureToggle settings={settings} disabled={disabled} onChange={(off) => onChange({ ...own, settings: signatureSettings(own.settings, off, channelSignature) })} />
+      <SignatureToggle settings={settings} disabled={disabled} loading={signaturesLoading} onChange={(off) => onChange({ ...own, settings: signatureSettings(own.settings, off, channelSignature) })} />
       {own.custom && (
         <div className="space-y-2">
           {titled && <Input value={own.title} disabled={disabled} aria-label={t('titleField')} placeholder={base.title || t('titlePlaceholder')} onChange={(e) => onChange({ ...own, title: e.target.value })} />}
@@ -2469,7 +2472,8 @@ export function SocialComposePage() {
   // Each channel's signature (#1190), which the new post's channels take unless left off.
   const signatureRows = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
   const signatures = new Map((signatureRows.data ?? []).map((p) => [p.connectionId, p.signature]));
-  const blocking = selected.some((c) => {
+  // Until they are read, the channels' checks would leave them out: the post is not ready to send.
+  const blocking = signatureRows.isPending || selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
     return draftIssues(c.provider, { body: content.body, title: takesTitle(c.provider, mine.settings) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withChannelSignature(withUtm(mine, utm).settings, signatures.get(c.id)) }).length > 0;
@@ -2491,7 +2495,7 @@ export function SocialComposePage() {
     }
   };
 
-  if (channels.isLoading) return <Spinner />;
+  if (channels.isLoading || signatureRows.isPending) return <Spinner />;
   return (
     <div onKeyDown={onKey}>
       <PageHeader
@@ -2650,6 +2654,7 @@ export function SocialComposePage() {
                 base={base}
                 own={withUtm(own[c.id] ?? EMPTY_OWN, utm)}
                 channelSignature={signatures.get(c.id) ?? null}
+                signaturesLoading={signatureRows.isPending}
                 adding
                 disabled={create.isPending}
                 onChange={(next) => setOwn({ ...own, [c.id]: next })}
@@ -3736,6 +3741,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 onRemoveAtAll={!frozen && p.variants.filter((x) => EDITABLE.includes(x.status)).length > 1 ? setRemoveAtAll : undefined}
                 duplicate={v.duplicateOf ? { of: v.duplicateOf, checked: v.effective.body } : null}
                 channelSignature={signatures.get(v.connectionId) ?? null}
+                signaturesLoading={signatureRows.isPending}
                 footer={
                   <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
                     {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (

@@ -72,6 +72,12 @@ describe('"Bỏ chữ ký" in the composer', () => {
     expect(wrap(<SignatureToggle settings={{ signature: 4 }} disabled={false} onChange={() => undefined} />)).toBe('');
   });
 
+  it('waits while the channels\' signatures are still being read', () => {
+    const html = wrap(<SignatureToggle settings={{ signature: false }} disabled={false} loading onChange={() => undefined} />);
+    expect(html).toContain('aria-disabled="true"');
+    expect(wrap(<SignatureToggle settings={{ signature: false }} disabled={false} onChange={() => undefined} />)).not.toContain('aria-disabled="true"');
+  });
+
   it('says when this post goes out without it, in both languages', () => {
     expect(text(wrap(<SignatureToggle settings={{ signature: false }} disabled={false} onChange={() => undefined} />))).toContain('Bài này không thêm chữ ký của kênh ở cuối.');
     const en = text(wrap(<SignatureToggle settings={{ signature: false }} disabled={false} onChange={() => undefined} />, 'en'));

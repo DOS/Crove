@@ -20,7 +20,8 @@ export function signatureSettings(settings: Record<string, unknown>, off: boolea
 
 // The toggle under a channel in the composer, shown when the channel adds a signature or this post left it off.
 // settings: the variant's settings as it goes out (a channel being added holds its channel's signature already).
-export function SignatureToggle({ settings, disabled, onChange }: { settings: Record<string, unknown>; disabled: boolean; onChange: (off: boolean) => void }) {
+// loading: the channels' signatures are still being read, so putting one back would not know it yet: the toggle waits.
+export function SignatureToggle({ settings, disabled, loading = false, onChange }: { settings: Record<string, unknown>; disabled: boolean; loading?: boolean; onChange: (off: boolean) => void }) {
   const t = useTranslations('social');
   const text = signatureText(settings);
   const off = signatureOf(settings) === 'off';
@@ -28,7 +29,7 @@ export function SignatureToggle({ settings, disabled, onChange }: { settings: Re
   return (
     <div className="space-y-1">
       <label className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Checkbox checked={off} disabled={disabled} onCheckedChange={(checked) => onChange(checked === true)} />
+        <Checkbox checked={off} disabled={disabled || loading} onCheckedChange={(checked) => onChange(checked === true)} />
         {t('signatureOff')}
       </label>
       {off ? (

@@ -22,18 +22,20 @@ export function SocialImportPage() {
   const f = useFormat();
   const navigate = useNavigate();
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
+  // Each channel's signature (#1190), which the import adds to every draft on it: the checks count it, so the rows
+  // wait for it as they wait for the channels.
+  const policies = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
+  const signatures = new Map((policies.data ?? []).map((p) => [p.connectionId, p.signature]));
   // The sheet as read; its rows are worked out against the channels, again whenever those load or change.
   const [sheet, setSheet] = useState<SheetRows | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
-  const rows = useMemo<ImportRow[] | null>(() => (sheet && channels.data ? importRows(sheet, channels.data) : null), [sheet, channels.data]);
+  const loading = channels.isLoading || policies.isPending;
+  const rows = useMemo<ImportRow[] | null>(() => (sheet && channels.data && !loading ? importRows(sheet, channels.data) : null), [sheet, channels.data, loading]);
   const tooMany = rows !== null && rows.length > MAX_IMPORT_ROWS;
-  const headerMissing = sheet !== null && channels.data !== undefined && rows === null;
+  const headerMissing = sheet !== null && channels.data !== undefined && !loading && rows === null;
   // One key per set of rows sent: a retry after a lost answer returns the first import.
   const attempt = useRef<{ key: string; payload: string } | null>(null);
   const byId = new Map((channels.data ?? []).map((c) => [c.id, c]));
-  // Each channel's signature (#1190), which the import adds to every draft on it: the checks count it.
-  const policies = useQuery(orpc.social.policies.list.queryOptions({ input: {} }));
-  const signatures = new Map((policies.data ?? []).map((p) => [p.connectionId, p.signature]));
   // A row is ready when the sheet gave it no problem and every channel takes it as it is.
   const issuesOf = (r: ImportRow) =>
     r.connectionIds.flatMap((id) => {
@@ -108,7 +110,7 @@ export function SocialImportPage() {
         {fileError && <ErrorText>{fileError}</ErrorText>}
         {headerMissing && <ErrorText>{t('import.noHeader')}</ErrorText>}
         {tooMany && <ErrorText>{t('import.tooMany', { max: MAX_IMPORT_ROWS })}</ErrorText>}
-        {sheet && channels.isLoading && <Spinner />}
+        {sheet && loading && <Spinner />}
       </Card>
       {rows && !tooMany && (
         <div className="space-y-3">
