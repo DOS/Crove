@@ -299,6 +299,50 @@ suite('social posts on PostgreSQL (S3)', () => {
     expect(await list(new Date(), new Date(Date.now() + 24 * HOUR))).toEqual([soon.id]);
     expect((await list(new Date(), new Date(Date.now() + 72 * HOUR))).sort()).toEqual([soon.id, later.id].sort());
   });
+  it('lists the drafts with no time for the calendar, and plans one once on the revision shown (#1145)', async () => {
+    const o = await org();
+    const [a, b] = [await connection(o.orgId, o.owner), await connection(o.orgId, o.owner)];
+    const create = (body: string, connections = [a]) => exec<{ postId: string }>(o, o.member, 'social.post.create', { body, channels: connections.map((connectionId) => ({ connectionId })) }).then((r) => r.postId);
+    const undated = (input: Record<string, unknown> = {}) => rt.query<PostView[]>('social.post.list', { undated: true, ...input }, { actor: asUser(o.viewer), orgId: o.orgId }).then((ps) => ps.map((p) => p.id).sort());
+    const draft = await create('Chưa có ngày');
+    const inReview = await create('Chờ duyệt, chưa có ngày');
+    await exec(o, o.member, 'social.post.submit', { postId: inReview });
+    const ready = (await approved(o, [a], 'Đã duyệt, chưa có ngày')).id;
+    await exec(o, o.member, 'social.post.create', { body: 'Có giờ dự kiến', scheduledAt: new Date(Date.now() + 30 * HOUR).toISOString(), channels: [{ connectionId: a }] });
+    const scheduled = await approved(o, [a], 'Đã lên lịch');
+    await exec(o, o.owner, 'social.variant.schedule', { postId: scheduled.id, at: new Date(Date.now() + 2 * HOUR).toISOString() });
+    // A cancelled channel does not count; a post whose every channel is cancelled is not a draft to plan.
+    const half = await create('Một kênh đã hủy', [a, b]);
+    const gone = await create('Mọi kênh đã hủy');
+    const cancel = async (postId: string, which: (v: PostView['variants'][number]) => boolean) =>
+      exec(o, o.member, 'social.variant.cancel', { variantIds: (await get(o, o.owner, postId)).variants.filter(which).map((v) => v.id) });
+    await cancel(half, (v) => v.connectionId === b);
+    await cancel(gone, () => true);
+    expect(await undated()).toEqual([draft, inReview, ready, half].sort());
+    // The other filters and the page size apply as for any list.
+    expect(await undated({ connectionId: b })).toEqual([]);
+    expect(await undated({ search: 'Chờ duyệt' })).toEqual([inReview]);
+    expect(await undated({ limit: 2 })).toHaveLength(2);
+
+    // A drop plans it once: a second drop on the revision seen before is refused as stale and changes nothing.
+    const seenDraft = await get(o, o.owner, draft);
+    const at = new Date(Date.now() + 26 * HOUR);
+    at.setMinutes(0, 0, 0);
+    await expect(exec(o, o.viewer, 'social.post.update', { postId: draft, revision: seenDraft.revision, scheduledAt: at.toISOString() })).rejects.toMatchObject({ status: 403 });
+    await exec(o, o.member, 'social.post.update', { postId: draft, revision: seenDraft.revision, scheduledAt: at.toISOString() });
+    await expect(exec(o, o.member, 'social.post.update', { postId: draft, revision: seenDraft.revision, scheduledAt: new Date(at.getTime() + HOUR).toISOString() })).rejects.toMatchObject({
+      code: 'STALE_REVISION',
+      status: 409,
+    });
+    const after = await get(o, o.owner, draft);
+    expect(after).toMatchObject({ scheduledAt: at.toISOString(), revision: seenDraft.revision + 1 });
+    // Its channel stays a draft with its content: only the planned time moved, and the calendar now has it.
+    expect(after.variants.map((v) => [v.status, v.revision, v.contentHash, v.effectiveAt])).toEqual(seenDraft.variants.map((v) => [v.status, v.revision, v.contentHash, at.toISOString()]));
+    expect(await undated()).toEqual([inReview, ready, half].sort());
+    const range = { from: new Date(at.getTime() - HOUR).toISOString(), to: new Date(at.getTime() + HOUR).toISOString() };
+    expect((await rt.query<PostView[]>('social.post.list', range, { actor: asUser(o.viewer), orgId: o.orgId })).map((p) => p.id)).toEqual([draft]);
+  });
+
   it('moves a scheduled channel to another time and keeps its approval (#580)', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);

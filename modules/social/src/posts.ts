@@ -1587,6 +1587,8 @@ export const postList = defineQuery({
     labelId: zId.optional(),
     // Posts assigned to the viewer (#640).
     assignee: z.literal('me').optional(),
+    // Drafts with no planned time and no channel time (#1145), the calendar's side list.
+    undated: z.literal(true).optional(),
     // In the post's or a channel's own text or title; wildcards are matched as themselves.
     search: z.string().trim().min(1).max(200).optional(),
     // The last post of the previous page, newest change first.
@@ -1615,6 +1617,16 @@ export const postList = defineQuery({
       q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status IN ('failed', 'needs_attention', 'paused'))`);
     }
     if (input.connectionId) q = q.where(variantWhere(null));
+    // Every channel the member may use is cancelled, rejected or a draft with no time of its own, at least one is a
+    // draft, and the post has no planned time: what the calendar cannot place yet.
+    if (input.undated) {
+      q = q
+        .where('p.scheduled_at', 'is', null)
+        .where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status IN ('draft', 'in_review', 'changes_requested', 'approved'))`)
+        .where(
+          sql<boolean>`NOT EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status NOT IN ('cancelled', 'rejected') AND (v.status NOT IN ('draft', 'in_review', 'changes_requested', 'approved') OR v.scheduled_at IS NOT NULL OR v.queue_slot_at IS NOT NULL))`,
+        );
+    }
     if (input.labelId) q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = p.org_id AND pl.post_id = p.id AND pl.label_id = ${input.labelId}::uuid)`);
     if (input.search) {
       const term = likeTerm(input.search);

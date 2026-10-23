@@ -43,10 +43,60 @@ export function viewDays(view: View, anchor: Date): Date[] {
 
 export const dayId = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
-// The same time of day on another day, for a drop.
-export function onDay(at: Date, day: Date): Date {
-  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), at.getHours(), at.getMinutes());
+// The same time of day on another day, for a drop; with an hour (a drop on the week view's hours), at that hour and
+// the same minutes.
+export function onDay(at: Date, day: Date, hour?: number): Date {
+  return new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour ?? at.getHours(), at.getMinutes());
 }
+
+// When a post with no time yet is planned on a day (a new post from the day's +, an undated draft dropped there,
+// #1145): at the hour given, else 09:00, and today after 09:00 at the next full hour. null when that time is gone: a
+// past day, an hour already gone, or today after 23:00.
+export function plannedAt(day: Date, now: Date, hour?: number): Date | null {
+  const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour ?? 9, 0);
+  if (at.getTime() > now.getTime()) return at;
+  if (hour !== undefined) return null;
+  const next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours() + 1, 0);
+  return dayId(next) === dayId(day) ? next : null;
+}
+
+// The hours the week view offers as drop targets while something is dragged (#1145); other hours are set from the
+// chip's menu.
+export const DROP_HOURS: readonly number[] = Array.from({ length: 18 }, (_, i) => i + 6);
+
+// Whether a draft sits on the calendar at its post's planned time, so moving it moves that time (social.post.update,
+// #1145). A channel sent back to review with a time of its own keeps that time and does not move this way.
+// A draft being planned (#1145): its post, with the revision the viewer saw, and its planned time (null: undated).
+export interface PlanTarget {
+  post: { id: string; revision: number };
+  at: Date | null;
+}
+export interface PlanRequest {
+  postId: string;
+  revision: number;
+  scheduledAt: string;
+}
+
+// What dropping a draft on a day asks of social.post.update: an undated draft at plannedAt, a planned one at the same
+// time of day (or the hour dropped on). 'past' when that time is gone, refused here with nothing sent; null when the
+// time would not change.
+export function planDrop(target: PlanTarget, day: Date, now: Date, hour?: number): PlanRequest | 'past' | null {
+  const at = target.at ? onDay(target.at, day, hour) : plannedAt(day, now, hour);
+  if (at === null || at.getTime() <= now.getTime()) return 'past';
+  if (target.at && at.getTime() === target.at.getTime()) return null;
+  return { postId: target.post.id, revision: target.post.revision, scheduledAt: at.toISOString() };
+}
+
+// A local date (YYYY-MM-DD) and time (HH:mm) from the date and time inputs, as a moment; null when either is missing.
+export function localMoment(date: string, time: string): Date | null {
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  const t = /^(\d{2}):(\d{2})$/.exec(time);
+  if (!d || !t) return null;
+  return new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]), Number(t[1]), Number(t[2]));
+}
+
+export const followsPlan = (item: CalendarItem): boolean =>
+  item.planned && item.post.scheduledAt !== null && item.v.effectiveAt !== null && Date.parse(item.v.effectiveAt) === Date.parse(item.post.scheduledAt);
 
 // The notes (#794) on each day a view shows: a note covers every day from its start to its end, both included.
 export function notesByDay<N extends { startsOn: string; endsOn: string }>(notes: readonly N[], days: readonly Date[]): Map<string, N[]> {

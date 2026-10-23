@@ -266,6 +266,26 @@ suite('social channels per member on PostgreSQL (#1081)', () => {
     await expect(plan(o.member, { connectionIds: [o.b] })).rejects.toMatchObject(notAllowed);
   });
 
+  it('the calendar’s undated drafts leave other channels out, and a member plans only their own (#1145)', async () => {
+    const o = await org();
+    await limit(o, o.member, [o.a]);
+    const onA = await post(o, o.owner, [o.a], 'Nháp kênh A');
+    const onB = await post(o, o.owner, [o.b], 'Nháp kênh B');
+    const both = await post(o, o.owner, [o.a, o.b], 'Nháp hai kênh');
+    const undated = (user: string) => list(o, user, { undated: true }).then((views) => views.map((v) => v.id).sort());
+    expect(await undated(o.owner)).toEqual([onA, onB, both].sort());
+    expect(await undated(o.member)).toEqual([onA, both].sort());
+    // Planning the shared draft would move channel B's planned time too.
+    const at = new Date(Date.now() + 26 * HOUR).toISOString();
+    const shared = await get(o, o.member, both);
+    await expect(exec(o, o.member, 'social.post.update', { postId: both, revision: shared.revision, scheduledAt: at })).rejects.toMatchObject(notAllowed);
+    const other = await get(o, o.owner, onB);
+    await expect(exec(o, o.member, 'social.post.update', { postId: onB, revision: other.revision, scheduledAt: at })).rejects.toMatchObject(notAllowed);
+    const own = await get(o, o.member, onA);
+    await exec(o, o.member, 'social.post.update', { postId: onA, revision: own.revision, scheduledAt: at });
+    expect(await undated(o.member)).toEqual([both]);
+  });
+
   it('a limited member sees their channels’ goals only, and cannot retime or stop the repeats of a post on other channels', async () => {
     const o = await org();
     await limit(o, o.member, [o.a]);

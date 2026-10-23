@@ -316,6 +316,8 @@ export const contract = {
             labelId: zId.optional(),
             // Posts assigned to the viewer (#640).
             assignee: z.literal('me').optional(),
+            // Drafts with no planned time and no channel time (#1145), for the calendar's side list.
+            undated: z.literal(true).optional(),
             search: z.string().trim().min(1).max(200).optional(),
             // The last post of the previous page (newest change first).
             before: z.strictObject({ updatedAt: z.iso.datetime({ offset: true }), postId: zId }).optional(),
