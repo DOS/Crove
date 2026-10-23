@@ -37,7 +37,7 @@ For each worker that ended a turn:
   1. Check that the merge commit is on `main` and the issue is closed.
   2. Check that the PR's checks were green on the head that was merged.
   3. Post one or two lines to the owner: what merged, and what comes next. Keep the words opened, merged and deployed distinct, and say what was verified and what was not (`AGENTS.md`, "Writing to the owner").
-  4. Offer to archive the worker session only if the owner asks.
+  4. Once the worker's issue is closed and its last PR merged, archive the worker session (`archive_session`). The owner asked for this on 2026-10-24: finished sessions must not pile up in the sidebar. Archiving also removes a clean worktree. If the worktree is still listed afterwards and `git status` is clean, run `git worktree remove` on it and delete its local branch. A worker with a second PR still to open (a two-step change) stays until that PR merges too.
 - **Blocked:**
   - If the block is technical, decide it yourself and message the worker. Write the decision and its reason in the PR or the issue.
   - If it is a person's step (accounts, money, legal, real samples, irreversible steps), comment it on the issue with the `owner-action` label, release the claim, and collect it for the owner report.
