@@ -5,11 +5,11 @@
 //   fk-shape      a foreign key between tenant tables leads with org_id on both sides and is composite (only the
 //                 org itself, crove_kernel.tenant, is referenced by org_id alone), so a row cannot point into
 //                 another org;
-//   fk-index      such a foreign key has a supporting index: a valid index whose leading key columns are exactly the
-//                 key's columns, either total or partial on "<key column> IS NOT NULL" only (a NULL key is never
-//                 checked), so deleting a parent (an org purge) never scans the child;
+//   fk-index      such a foreign key has a supporting index: a valid btree index whose leading key columns are
+//                 exactly the key's distinct columns, either total or partial on "<key column> IS NOT NULL" only (a
+//                 NULL key is never checked), so deleting a parent (an org purge) never scans the child;
 //   timestamp     no column in a crove_* schema is timestamp without time zone (directly, as an array, or through
-//                 a domain);
+//                 a domain); partitions are skipped, since their columns are their parent's;
 //   money         a money column (named by MONEY_NAME, or listed in MONEY_COLUMNS) is numeric, directly or through a
 //                 domain such as crove_finance.amount, and no column has the locale-bound money type;
 //   cross-module  a foreign key from a crove_* table stays in its own schema or points to crove_kernel: modules
@@ -34,16 +34,13 @@ const MIGRATIONS = fileURLToPath(new URL('../../../../supabase/migrations', impo
 
 // The org itself: the only table a tenant foreign key may reference by org_id alone.
 const ORG_TABLE = 'crove_kernel.tenant';
-// pg-boss's own schema (`pnpm db:vendor:pgboss`): its DDL is pg-boss's, so the column rules skip it. It has no tenant
-// table; a table with org_id there would still meet every tenant rule.
-const VENDORED_SCHEMAS = new Set(['crove_jobs']);
 // Column names that hold an amount of money.
 const MONEY_NAME = /(^|_)(amount|cost|price|subtotal|total|debit|credit|balance|fee)$/;
 // Money columns the naming rule does not catch.
 const MONEY_COLUMNS = new Set(['crove_kernel.budget_policy.monthly_limit']);
 
 // Tenant tables whose primary key is not (org_id, id), with the key they have. Every one still leads with org_id
-// except outbox_pending, whose rows belong to no org until the worker moves them.
+// except outbox_pending, which is keyed by its global sequence.
 const PK_EXCEPTIONS: Record<string, { pk: string; reason: string }> = {
   'crove_finance.journal_line': { pk: 'org_id,entry_id,line_no', reason: 'A line of an append-only journal entry, keyed by its entry and line number.' },
   'crove_finance.portal_invoice_row': { pk: 'org_id,list_id,row_no', reason: 'A row of an imported tax-portal invoice list, keyed by its list and row number.' },
@@ -77,6 +74,12 @@ const FK_INDEX_EXCEPTIONS: Record<string, { cols: string; reason: string }> = {
   'crove_social.post_variant.post_variant_post_fk': { cols: 'org_id,post_id', reason: 'Index missing, tracked in #1212: only a partial unique index on live variants.' },
   'crove_social.watermark.watermark_file_fk': { cols: 'org_id,file_id', reason: 'Index missing, tracked in #1212.' },
 };
+// Columns of the vendored pg-boss schema (`pnpm db:vendor:pgboss`) that break a column rule, with their type. Its
+// DDL is pg-boss's; its runtime partitions (job_common, queue_stats_<day>) are skipped with every partition.
+const COLUMN_EXCEPTIONS: Record<string, { rule: 'timestamp' | 'money'; type: string; reason: string }> = {
+  'crove_jobs.instance.pool_total': { rule: 'money', type: 'integer', reason: 'pg-boss: the size of a worker connection pool, a count and not money.' },
+  'crove_jobs.job.singleton_on': { rule: 'timestamp', type: 'timestamp without time zone', reason: 'pg-boss: the singleton time slot, set and compared by pg-boss itself.' },
+};
 // Exceptions whose object an open PR adds or fixes. CI runs main's copy of this file on that PR, so the entry has to
 // be on main first; while it is listed here, an exception that matches nothing is not stale. Remove the key once the
 // PR is merged. One key per line, sorted, with a trailing comma.
@@ -109,7 +112,6 @@ function onlyKeyNotNull(predicate: string, keyColumns: string[]): boolean {
 // Every deviation from the conventions in the database, exceptions included.
 async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
   const out: Violation[] = [];
-  const vendored = [...VENDORED_SCHEMAS];
 
   const tenants = await client.query<{ name: string; pk: string | null }>(
     `SELECT pg_catalog.format('%I.%I', n.nspname, c.relname) AS name,
@@ -153,9 +155,14 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
             COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
                         'keys', (i.indkey::int2[])[0:i.indnkeyatts - 1],
                         'pred', pg_catalog.pg_get_expr(i.indpred, i.indrelid)))
-                      FROM pg_catalog.pg_index i WHERE i.indrelid = co.conrelid AND i.indisvalid), '[]') AS indexes
+                      FROM pg_catalog.pg_index i
+                      JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
+                      JOIN pg_catalog.pg_am am ON am.oid = ic.relam
+                      WHERE i.indrelid = co.conrelid AND i.indisvalid AND am.amname = 'btree'), '[]') AS indexes
      FROM pg_catalog.pg_constraint co
-     WHERE co.contype = 'f' AND co.conrelid IN (SELECT oid FROM tenant) AND co.confrelid IN (SELECT oid FROM tenant)
+     -- conparentid: a partition's copy of its parent's key is checked once, on the parent.
+     WHERE co.contype = 'f' AND co.conparentid = 0
+       AND co.conrelid IN (SELECT oid FROM tenant) AND co.confrelid IN (SELECT oid FROM tenant)
      ORDER BY 1`,
   );
   for (const fk of fks.rows) {
@@ -168,6 +175,7 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
       const lead = index.keys.slice(0, wanted.size);
       return (
         lead.length === wanted.size &&
+        new Set(lead).size === wanted.size &&
         lead.every((attnum) => wanted.has(attnum)) &&
         (index.pred === null || onlyKeyNotNull(index.pred, fk.cols))
       );
@@ -183,7 +191,7 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
        FROM pg_catalog.pg_attribute a
        JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-       WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND starts_with(n.nspname, 'crove_') AND n.nspname <> ALL ($1::text[])
+       WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition AND starts_with(n.nspname, 'crove_')
          AND a.attnum > 0 AND NOT a.attisdropped),
      chain(start, oid) AS (
        SELECT DISTINCT start, start FROM col
@@ -193,7 +201,6 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
        WHERE t.typtype = 'd' OR (t.typcategory = 'A' AND t.typelem <> 0))
      SELECT col.key, col.type, ARRAY(SELECT chain.oid::regtype::text FROM chain WHERE chain.start = col.start) AS chain
      FROM col ORDER BY 1`,
-    [vendored],
   );
   for (const { key, type, chain } of columns.rows) {
     if (chain.includes('timestamp without time zone')) out.push({ rule: 'timestamp', key, detail: type });
@@ -208,7 +215,7 @@ async function findViolations(client: pg.ClientBase): Promise<Violation[]> {
      FROM pg_catalog.pg_constraint co
      JOIN pg_catalog.pg_class c ON c.oid = co.conrelid
      JOIN pg_catalog.pg_class r ON r.oid = co.confrelid
-     WHERE co.contype = 'f' AND starts_with(c.relnamespace::regnamespace::text, 'crove_')
+     WHERE co.contype = 'f' AND co.conparentid = 0 AND starts_with(c.relnamespace::regnamespace::text, 'crove_')
        AND r.relnamespace <> c.relnamespace AND r.relnamespace <> 'crove_kernel'::regnamespace
      ORDER BY 1`,
   );
@@ -233,6 +240,7 @@ function compare(violations: Violation[]) {
   const recorded = new Map<string, string>();
   for (const [table, { pk }] of Object.entries(PK_EXCEPTIONS)) recorded.set(`pk ${table}`, pk);
   for (const [key, { cols }] of Object.entries(FK_INDEX_EXCEPTIONS)) recorded.set(`fk-index ${key}`, cols);
+  for (const [key, { rule, type }] of Object.entries(COLUMN_EXCEPTIONS)) recorded.set(`${rule} ${key}`, type);
   const matched = new Set<string>();
   const unexpected: string[] = [];
   for (const v of violations) {
@@ -284,10 +292,10 @@ suite('tenant schema conformance (G3)', () => {
   });
 
   it('keeps the exception lists sorted and reasoned', () => {
-    for (const keys of [Object.keys(PK_EXCEPTIONS), Object.keys(FK_INDEX_EXCEPTIONS), [...PENDING_EXCEPTIONS]]) {
+    for (const keys of [Object.keys(PK_EXCEPTIONS), Object.keys(FK_INDEX_EXCEPTIONS), Object.keys(COLUMN_EXCEPTIONS), [...PENDING_EXCEPTIONS]]) {
       expect(keys).toEqual([...keys].sort());
     }
-    for (const reason of [...Object.values(PK_EXCEPTIONS).map((e) => e.reason), ...Object.values(FK_INDEX_EXCEPTIONS).map((e) => e.reason)]) {
+    for (const reason of [...Object.values(PK_EXCEPTIONS).map((e) => e.reason), ...Object.values(FK_INDEX_EXCEPTIONS).map((e) => e.reason), ...Object.values(COLUMN_EXCEPTIONS).map((e) => e.reason)]) {
       expect(reason.trim().length).toBeGreaterThan(10);
     }
   });
@@ -340,17 +348,32 @@ suite('tenant schema conformance (G3)', () => {
   it('fails a tenant foreign key without a supporting index', async () => {
     const found = await withFixture(`${parent}
       CREATE TABLE ${FIXTURE}.child (org_id uuid NOT NULL, id uuid NOT NULL, a uuid, b uuid, c uuid, d uuid, e uuid,
-        status text, PRIMARY KEY (org_id, id),
+        f uuid, g uuid, status text, PRIMARY KEY (org_id, id),
         CONSTRAINT bare FOREIGN KEY (org_id, a) REFERENCES ${FIXTURE}.parent (org_id, id),
         CONSTRAINT other_partial FOREIGN KEY (org_id, b) REFERENCES ${FIXTURE}.parent (org_id, id),
         CONSTRAINT wrong_lead FOREIGN KEY (org_id, c) REFERENCES ${FIXTURE}.parent (org_id, id),
         CONSTRAINT not_null_partial FOREIGN KEY (org_id, d) REFERENCES ${FIXTURE}.parent (org_id, id),
-        CONSTRAINT reordered FOREIGN KEY (org_id, e) REFERENCES ${FIXTURE}.parent (org_id, id));
+        CONSTRAINT reordered FOREIGN KEY (org_id, e) REFERENCES ${FIXTURE}.parent (org_id, id),
+        CONSTRAINT repeated FOREIGN KEY (org_id, f) REFERENCES ${FIXTURE}.parent (org_id, id),
+        CONSTRAINT brin_only FOREIGN KEY (org_id, g) REFERENCES ${FIXTURE}.parent (org_id, id));
       CREATE INDEX ON ${FIXTURE}.child (org_id, b) WHERE status = 'open';
       CREATE INDEX ON ${FIXTURE}.child (org_id, id, c);
       CREATE INDEX ON ${FIXTURE}.child (org_id, d, status) WHERE d IS NOT NULL;
-      CREATE INDEX ON ${FIXTURE}.child (e, org_id);`);
-    expect(named(found, 'fk-index')).toEqual([`${FIXTURE}.child.bare: org_id,a`, `${FIXTURE}.child.other_partial: org_id,b`, `${FIXTURE}.child.wrong_lead: org_id,c`]);
+      CREATE INDEX ON ${FIXTURE}.child (e, org_id);
+      CREATE INDEX ON ${FIXTURE}.child (org_id, org_id, f);
+      CREATE INDEX ON ${FIXTURE}.child USING brin (org_id, g);
+      CREATE TABLE ${FIXTURE}.split (org_id uuid NOT NULL, id uuid NOT NULL, a uuid, PRIMARY KEY (org_id, id),
+        CONSTRAINT split_bare FOREIGN KEY (org_id, a) REFERENCES ${FIXTURE}.parent (org_id, id)) PARTITION BY LIST (org_id);
+      CREATE TABLE ${FIXTURE}.split_rest PARTITION OF ${FIXTURE}.split DEFAULT;`);
+    expect(named(found, 'fk-index')).toEqual([
+      `${FIXTURE}.child.bare: org_id,a`,
+      `${FIXTURE}.child.brin_only: org_id,g`,
+      `${FIXTURE}.child.other_partial: org_id,b`,
+      `${FIXTURE}.child.repeated: org_id,f`,
+      `${FIXTURE}.child.wrong_lead: org_id,c`,
+      // Once, on the partitioned table: the partition's inherited copy is not counted again.
+      `${FIXTURE}.split.split_bare: org_id,a`,
+    ]);
   });
 
   it('fails a timestamp without time zone column', async () => {
@@ -358,12 +381,20 @@ suite('tenant schema conformance (G3)', () => {
       CREATE DOMAIN ${FIXTURE}.local_time AS timestamp;
       CREATE TABLE ${FIXTURE}.times (org_id uuid NOT NULL, id uuid NOT NULL, PRIMARY KEY (org_id, id),
         plain timestamp, several timestamp[], via_domain ${FIXTURE}.local_time, fine timestamptz);
-      CREATE VIEW ${FIXTURE}.times_view AS SELECT now()::timestamp AS seen;`);
+      CREATE VIEW ${FIXTURE}.times_view AS SELECT now()::timestamp AS seen;
+      CREATE TABLE ${FIXTURE}.times_split (org_id uuid NOT NULL, id uuid NOT NULL, at timestamp, PRIMARY KEY (org_id, id))
+        PARTITION BY LIST (org_id);
+      CREATE TABLE ${FIXTURE}.times_split_rest PARTITION OF ${FIXTURE}.times_split DEFAULT;
+      ALTER TABLE crove_jobs.queue ADD COLUMN g3_fixture_at timestamp;`);
     expect(named(found, 'timestamp')).toEqual([
       `${FIXTURE}.times.plain: timestamp without time zone`,
       `${FIXTURE}.times.several: timestamp without time zone[]`,
       `${FIXTURE}.times.via_domain: ${FIXTURE}.local_time`,
+      // Once, on the partitioned table.
+      `${FIXTURE}.times_split.at: timestamp without time zone`,
       `${FIXTURE}.times_view.seen: timestamp without time zone`,
+      // The vendored pg-boss schema has exceptions for its own columns only.
+      'crove_jobs.queue.g3_fixture_at: timestamp without time zone',
     ]);
   });
 
@@ -371,12 +402,14 @@ suite('tenant schema conformance (G3)', () => {
     const found = await withFixture(`${parent}
       CREATE TABLE ${FIXTURE}.prices (org_id uuid NOT NULL, id uuid NOT NULL, PRIMARY KEY (org_id, id),
         amount bigint, unit_price double precision, vat_amount text, fee money, subtotal crove_finance.amount,
-        total numeric(20,4), quantity real);`);
+        total numeric(20,4), quantity real);
+      ALTER TABLE crove_jobs.queue ADD COLUMN g3_fixture_fee integer;`);
     expect(named(found, 'money')).toEqual([
       `${FIXTURE}.prices.amount: bigint`,
       `${FIXTURE}.prices.fee: money`,
       `${FIXTURE}.prices.unit_price: double precision`,
       `${FIXTURE}.prices.vat_amount: text`,
+      'crove_jobs.queue.g3_fixture_fee: integer',
     ]);
   });
 
