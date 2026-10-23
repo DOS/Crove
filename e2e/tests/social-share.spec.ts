@@ -35,7 +35,7 @@ test('a page shared to the installed app lands in a new draft, and the shared va
   await expect(page).toHaveURL(new RegExp(`/o/${slug}/social/new$`));
   await expect(page.getByLabel('Nội dung chung')).toHaveValue(`${TITLE}\n\n${TEXT}`);
   await expect(page.getByLabel('Liên kết', { exact: true })).toHaveValue(URL_SHARED);
-  await expect(page.getByText('Đã điền sẵn đường link và nội dung bạn chia sẻ.')).toBeVisible();
+  await expect(page.getByText('Đã điền sẵn liên kết và nội dung bạn chia sẻ.')).toBeVisible();
   // The fragment is cleared, and the share target's query is in no history entry.
   expect(await page.evaluate(() => ({ search: location.search, hash: location.hash }))).toEqual({ search: '', hash: '' });
 
