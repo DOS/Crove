@@ -41,7 +41,7 @@ suite('AI alt text suggestions through the API (#1121)', () => {
   let pool: pg.Pool;
   let db: Db;
   let dir = '';
-  let apps: Record<'on' | 'noVision' | 'noAi', ReturnType<typeof createHttpApp>>;
+  let apps: Record<'on' | 'noVision' | 'noAi' | 'failing', ReturnType<typeof createHttpApp>>;
   // The model's answer, recorded: what it was sent, and the description it gave.
   const asked: { system: string; prompt: string; image: Uint8Array; mime: string }[] = [];
   const RECORDED = { altText: 'Ổ bánh mì thịt nướng giòn trên khay gỗ, bên cạnh ly cà phê sữa đá. Dòng chữ "Khai trương" ở góc trên.' };
@@ -173,7 +173,14 @@ suite('AI alt text suggestions through the API (#1121)', () => {
     const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
     const make = (socialWriter?: ReturnType<typeof socialDrafter>) =>
       createHttpApp({ config, runtime, store, authenticate: createAuthenticator(config, db), pool, aiEnabled: true, channels: { broker: vault, sandbox: true }, ...(socialWriter ? { socialWriter } : {}) });
-    apps = { on: make(socialDrafter(writer, store)), noVision: make(socialDrafter(writer, null)), noAi: make() };
+    // failing: a model that does not answer, on an app of its own so it spends none of the budget the last test counts.
+    const failing = {
+      ...socialDrafter(writer, store),
+      describeStored: async () => {
+        throw new Error('the model did not answer');
+      },
+    };
+    apps = { on: make(socialDrafter(writer, store)), noVision: make(socialDrafter(writer, null)), noAi: make(), failing: make(failing) };
 
     for (const who of [owner, viewer, other]) {
       const me = await rpc('me/get', await tokenFor(who), undefined, { slug: null });
@@ -232,6 +239,10 @@ suite('AI alt text suggestions through the API (#1121)', () => {
     expect(await rpc('social/posts/describeImage', await tokenFor(owner), { fileId: files.photo, language: 'vi' }, { app: 'noAi' })).toMatchObject({ status: 503, body: { code: 'AI_NOT_CONFIGURED' } });
     expect(await rpc('social/posts/describeImage', await tokenFor(owner), { fileId: files.photo, language: 'vi' }, { app: 'noVision' })).toMatchObject({ status: 422, body: { code: 'AI_VISION_OFF' } });
     expect(asked).toHaveLength(count);
+  });
+
+  it('words a failed model call as an alt text failure, not a draft failure (#1126)', async () => {
+    expect(await rpc('social/posts/describeImage', await tokenFor(owner), { fileId: files.photo, language: 'vi' }, { app: 'failing' })).toMatchObject({ status: 503, body: { code: 'AI_ALT_TEXT_FAILED' } });
   });
 
   it("refuses a video, an image too large, an accounting document, another org's file and another org's channel", async () => {
