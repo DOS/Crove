@@ -1313,6 +1313,13 @@ export interface SocialPostCommentTable {
   pin_x: ColumnType<number | null, number | null, NotGranted>;
   pin_y: ColumnType<number | null, number | null, NotGranted>;
   pin_seconds: ColumnType<number | null, number | null, NotGranted>;
+  suggest_field: ColumnType<string | null, string | null, NotGranted>;
+  suggest_start: ColumnType<number | null, number | null, NotGranted>;
+  suggest_end: ColumnType<number | null, number | null, NotGranted>;
+  suggest_quote: ColumnType<string | null, string | null, NotGranted>;
+  suggest_text: ColumnType<string | null, string | null, NotGranted>;
+  suggest_hash: ColumnType<string | null, string | null, NotGranted>;
+  suggest_state: string | null;
 }
 
 /** crove_social.post_label */

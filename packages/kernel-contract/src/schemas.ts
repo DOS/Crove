@@ -1168,11 +1168,17 @@ export const zSocialVariantUpdate = z.strictObject({
 export const SOCIAL_REVIEW_CHECKS_MAX = 10;
 export const SOCIAL_REVIEW_CHECK_LABEL_MAX = 120;
 export const zSocialReviewCheck = z.object({ id: zId, connectionId: zId.nullable(), position: z.number().int(), label: z.string() });
+// An item's label as the person typed it, in NFC with its white space collapsed; at most SOCIAL_REVIEW_CHECK_LABEL_MAX
+// characters, counted in code points as the database counts them (#1113), so the contract and the module take the same
+// labels.
+export const zSocialReviewCheckLabel = z
+  .string()
+  .transform((s) => s.normalize('NFC').replace(/\s+/gu, ' ').trim())
+  .pipe(z.string().min(1))
+  .refine((s) => [...s].length <= SOCIAL_REVIEW_CHECK_LABEL_MAX, `at most ${SOCIAL_REVIEW_CHECK_LABEL_MAX} characters`);
 // Replaces the whole list; the items' order is the order reviewers see them in. An empty list removes the checklist.
 export const zSocialReviewChecklistSet = z.strictObject({
-  items: z
-    .array(z.strictObject({ connectionId: zId.nullable(), label: z.string().trim().min(1).max(SOCIAL_REVIEW_CHECK_LABEL_MAX) }))
-    .max(SOCIAL_REVIEW_CHECKS_MAX),
+  items: z.array(z.strictObject({ connectionId: zId.nullable(), label: zSocialReviewCheckLabel })).max(SOCIAL_REVIEW_CHECKS_MAX),
 });
 // An item an approval was given with, as the database copied it then.
 export const zSocialTickedCheck = z.object({ id: zId, label: z.string() });
@@ -1750,6 +1756,46 @@ export const zSocialReviewPlanLink = z.object({
   gone: z.number().int().min(0),
 });
 
+// A suggested edit (#1236): the words [start, end) of the post's own text ('post') or of the comment's channel's own
+// text ('channel'), as the member selected them (offsets in UTF-16 code units, as the browser counts them), and the
+// words suggested instead (empty: delete them).
+export const SOCIAL_SUGGESTION_MAX = 4000;
+export const zSocialSuggestion = z
+  .strictObject({
+    field: z.enum(['post', 'channel']),
+    start: z.number().int().min(0).max(100_000),
+    end: z.number().int().min(1).max(100_000),
+    quote: z.string().min(1).max(SOCIAL_SUGGESTION_MAX),
+    text: z.string().max(SOCIAL_SUGGESTION_MAX),
+  })
+  .refine((s) => s.end > s.start && s.end - s.start === s.quote.length, 'the range must hold the quote')
+  .refine((s) => s.quote !== s.text, 'the suggestion changes nothing');
+// A suggestion as the timeline shows it: where it stands; on an open one, whether it still applies (outdated: its words
+// are no longer in the text), the words around it in the text now, whether the text can still be edited (frozen: the
+// channel or every channel went out), and the revision of the text an accept names; decidable: the viewer may accept or
+// skip it.
+export const zSocialCommentSuggestion = z.object({
+  field: z.enum(['post', 'channel']),
+  quote: z.string(),
+  text: z.string(),
+  state: z.enum(['open', 'accepted', 'skipped', 'outdated']),
+  outdated: z.boolean(),
+  frozen: z.boolean(),
+  before: z.string(),
+  after: z.string(),
+  revision: z.number().int().nullable(),
+  decidable: z.boolean(),
+});
+// A suggestion after social.post_comment.accept or .skip. On an accept: the channels the edit changed and those of them
+// sent back to review because they were in review or approved before it.
+export const zSocialSuggestionDecided = z.object({
+  commentId: zId,
+  postId: zId,
+  state: z.enum(['accepted', 'skipped', 'outdated']),
+  changedVariants: z.array(zId),
+  resubmitted: z.array(zId),
+});
+
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
@@ -1778,6 +1824,8 @@ export const zSocialActivityItem = z.object({
   pin: z
     .object({ fileId: zId, mime: z.string(), filename: z.string(), x: z.number().nullable(), y: z.number().nullable(), atSeconds: z.number().nullable(), current: z.boolean() })
     .nullable(),
+  // On a suggested edit (#1236): the words, the suggestion and where it stands; null on any other entry.
+  suggestion: zSocialCommentSuggestion.nullable(),
 });
 
 // Where a new internal comment is pinned (#1180): a spot on an image of the post or its channel (x and y in 0..1 from

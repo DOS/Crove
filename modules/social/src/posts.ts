@@ -20,6 +20,7 @@ import { isValidTimeZone, nextFreeSlot, openSlots, placeQueued, retime, slotRefu
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
 import { activityCommands, activityQueries } from './activity.ts';
+import { suggestionCommands } from './suggestions.ts';
 import { accountCommands, accountQueries } from './accounts.ts';
 import { reportLinkCommands, reportLinkQueries } from './report-links.ts';
 import { goalCommands, goalQueries } from './goals.ts';
@@ -1942,6 +1943,7 @@ export const socialCommands = [
   ...calendarFeedCommands,
   ...reviewLinkCommands,
   ...activityCommands,
+  ...suggestionCommands,
   ...accountCommands,
   ...reportLinkCommands,
   ...goalCommands,

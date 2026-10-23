@@ -301,6 +301,53 @@ suite('social review checklist on PostgreSQL (#1105)', () => {
     expect((await stored(postId)).map((r) => (r.checklist as unknown[]).length)).toEqual([1, 1]);
   });
 
+  it('completes an approval on its own only with approvals that ticked the list as it is now (#1113)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    await exec(o, o.owner, 'social.channel.set_policy', { connectionId: conn, approvalsRequired: 2 });
+    // One approval each, given before the checklist existed.
+    const early = await inReview(o, [conn], 'Bài duyệt trước danh sách');
+    await exec(o, o.admin, 'social.variant.decide', { postId: early, decision: 'approved', variants: seen(await get(o, early)) });
+    await setList(o, o.owner, [{ connectionId: null, label: 'Đã soát chính tả' }]);
+    // And one approval with the list ticked.
+    const ticked = await inReview(o, [conn], 'Bài duyệt có đánh dấu');
+    await exec(o, o.admin, 'social.variant.decide', { postId: ticked, decision: 'approved', variants: seen(await get(o, ticked), all) });
+
+    // A lowered approval count approves the post whose approval ticked the list, and leaves the other in review.
+    const lowered = await exec<{ approved: string[] }>(o, o.owner, 'social.channel.set_policy', { connectionId: conn, approvalsRequired: 1 });
+    expect((await get(o, ticked)).variants[0]?.status).toBe('approved');
+    expect((await get(o, early)).variants[0]?.status).toBe('in_review');
+    expect(lowered.approved).toEqual([(await get(o, ticked)).variants[0]?.id]);
+    // A reviewer who ticks the list approves it as always.
+    await exec(o, o.owner, 'social.variant.decide', { postId: early, decision: 'approved', variants: seen(await get(o, early), all) });
+    expect((await get(o, early)).variants[0]?.status).toBe('approved');
+  });
+
+  it('keeps a post in review when client approval is turned off and its approval came before the list (#1113)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    await exec(o, o.owner, 'social.channel.set_client_approval', { connectionId: conn, clientApproval: true });
+    const postId = await inReview(o, [conn]);
+    await exec(o, o.admin, 'social.variant.decide', { postId, decision: 'approved', variants: seen(await get(o, postId)) });
+    // Waiting for the client only.
+    expect((await get(o, postId)).variants[0]?.status).toBe('in_review');
+    await setList(o, o.owner, [{ connectionId: conn, label: 'Liên kết mở được' }]);
+    const off = await exec<{ approved: string[] }>(o, o.owner, 'social.channel.set_client_approval', { connectionId: conn, clientApproval: false });
+    expect(off.approved).toEqual([]);
+    expect((await get(o, postId)).variants[0]?.status).toBe('in_review');
+  });
+
+  it('refuses to read a list longer than the cap rather than reading it shorter (#1113)', async () => {
+    const o = await org();
+    const conn = await connection(o.orgId, o.owner);
+    await setList(o, o.owner, Array.from({ length: 10 }, (_, i) => ({ connectionId: null, label: `Mục ${i + 1}` })));
+    // An 11th item written outside the command.
+    await admin((c) => c.query("INSERT INTO crove_social.review_check (org_id, channel_connection_id, position, label, created_by) VALUES ($1, NULL, 9, 'Mục lạ', $2)", [o.orgId, o.owner]));
+    expect(await refusal(list(o, o.owner))).toBe('CHECKLIST_INVALID');
+    const postId = await inReview(o, [conn]);
+    expect(await refusal(get(o, postId))).toBe('CHECKLIST_INVALID');
+  });
+
   it('keeps the column to approvals and to its shape', async () => {
     const o = await org();
     const conn = await connection(o.orgId, o.owner);
