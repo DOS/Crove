@@ -195,7 +195,7 @@ suite('social posts published outside Crove (#1054)', () => {
     // With it on, the outside posts count, once each, and a viewer reads the same.
     const on = await totals(o, { days: 30, includeExternal: true }, o.viewer);
     expect(on).toMatchObject({ posts: 3, metrics: { reach: 150, reactions: 15 }, clicks: null });
-    expect(on.channels).toEqual([{ connectionId: conn, provider: 'sandbox', posts: 3, metrics: { reach: 150, reactions: 15 }, clicks: null }]);
+    expect(on.channels).toEqual([{ connectionId: conn, provider: 'sandbox', posts: 3, metrics: { reach: 150, reactions: 15 }, clicks: null, rateBases: { reach: { engagement: 15, denominator: 150 } } }]);
     // A label filter leaves them out: they carry no label.
     const { labelId } = await api.execute<{ labelId: string }>('social.label.create', { name: 'Khuyến mãi', color: 'red' }, { actor: asUser(o.owner), orgId: o.orgId });
     expect(await totals(o, { days: 30, labelId, includeExternal: true })).toEqual(await totals(o, { days: 30, labelId }));

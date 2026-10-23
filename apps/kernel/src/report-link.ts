@@ -27,9 +27,12 @@ export interface ReportPage {
   expiresAt: string;
   posts: number;
   totals: Record<string, number>;
+  // What the engagement rate is made of (#1164): per basis, the engagement and the denominator of the posts that
+  // report it; also per period and channel.
+  rateBases: RateBases;
   // The period of the same length just before (#947), on the same channels; in each channel, its counts then.
-  previous: { periodStart: string; periodEnd: string; posts: number; totals: Record<string, number> };
-  channels: { channel: string; provider: string; posts: number; totals: Record<string, number>; previous: { posts: number; totals: Record<string, number> } }[];
+  previous: { periodStart: string; periodEnd: string; posts: number; totals: Record<string, number>; rateBases: RateBases };
+  channels: { channel: string; provider: string; posts: number; totals: Record<string, number>; rateBases: RateBases; previous: { posts: number; totals: Record<string, number>; rateBases: RateBases } }[];
   // external (#1054): the post went out outside Crove; includesExternal: the link counts such posts.
   top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Record<string, number>; external?: boolean }[];
   includesExternal?: boolean;
@@ -47,6 +50,8 @@ export interface ReportPage {
   // The period's Reels (#1151) and the median of their average watch time in milliseconds (null when none reports one).
   reels: { posts: number; medianAvgWatchTimeMs: number | null };
 }
+
+type RateBases = { [B in 'reach' | 'impressions']?: { engagement: number; denominator: number } };
 
 interface AudienceSlice {
   key: string;

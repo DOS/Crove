@@ -5,6 +5,7 @@ import { generateText, Output } from 'ai';
 import { z } from 'zod';
 import { chatModel, type AiConfig } from './index.ts';
 import { ProofreadChangedError, proofreadChanges } from './proofread.ts';
+import { SUMMARY_MAX, SummaryFigureError, summaryAsk, summaryNumbersOutside, type SummaryRequest } from './summary.ts';
 
 // What the writer is told about a channel: its name and the limits the domain checks afterwards.
 export interface WriterChannel {
@@ -145,6 +146,7 @@ export class SocialWriter {
   private readonly generateHashtags: HashtagGenerator;
   private readonly generateDescription: DescribeGenerator;
   private readonly generateIdeas: IdeasGenerator;
+  private readonly generateSummary: SummaryGenerator;
   private readonly timeoutMs: number;
 
   // generate, generateRewrite: the model calls, replaceable in tests; by default the deployment's OpenAI-compatible
@@ -156,8 +158,21 @@ export class SocialWriter {
     generateHashtags?: HashtagGenerator,
     generateDescription?: DescribeGenerator,
     generateIdeas?: IdeasGenerator,
+    generateSummary?: SummaryGenerator,
   ) {
     this.timeoutMs = config.timeoutMs ?? 60_000;
+    this.generateSummary =
+      generateSummary ??
+      (async ({ system, prompt }) => {
+        const { output } = await generateText({
+          model: chatModel(config),
+          output: Output.object({ schema: zSummary }),
+          system,
+          prompt,
+          abortSignal: AbortSignal.timeout(this.timeoutMs),
+        });
+        return output ?? null;
+      });
     this.generateIdeas =
       generateIdeas ??
       (async ({ system, prompt }) => {
@@ -341,6 +356,20 @@ export class SocialWriter {
     return out;
   }
 
+  // A summary of a period's figures for a client report's note (#1237): plain text of at most SUMMARY_MAX characters,
+  // null when there are no figures or the model gave nothing. It throws SummaryFigureError when the text writes a
+  // number that is not among the figures, the period's dates or the channel names (summaryNumbersOutside): the check
+  // runs on the text as it is returned, after any cut. Tainted: the member reads and edits it before it is saved.
+  async summary(request: SummaryRequest): Promise<string | null> {
+    if (request.figures.length === 0) return null;
+    const output = await this.generateSummary(summaryAsk(request));
+    const text = clipUnits((output?.summary ?? '').normalize('NFC').replace(/\r\n?/g, '\n'), SUMMARY_MAX);
+    if (!text) return null;
+    const outside = summaryNumbersOutside(text, request);
+    if (outside.length > 0) throw new SummaryFigureError(outside.slice(0, 10));
+    return text;
+  }
+
   // A rewrite of one text (#583); null when the model gave nothing usable or nothing new.
   // A proofread (#1167) answers the text unchanged when there is nothing to fix, and throws ProofreadChangedError when
   // the model changed a link, hashtag, mention, number or price, or emoji of the text or the title.
@@ -465,6 +494,10 @@ const zIdeas = z.object({
     .describe('Distinct post ideas, the most fitting first'),
 });
 export type IdeasGenerator = (args: { system: string; prompt: string }) => Promise<z.infer<typeof zIdeas> | null>;
+
+// A period's summary (#1237): one plain text, checked against its figures afterwards (summary.ts).
+const zSummary = z.object({ summary: z.string().describe('The summary of the period, plain text, citing only the figures given, written exactly as given') });
+export type SummaryGenerator = (args: { system: string; prompt: string }) => Promise<z.infer<typeof zSummary> | null>;
 
 // The longest start of the text that takes at most max UTF-16 code units (what the idea commands' length checks
 // count) without splitting a character, trimmed.

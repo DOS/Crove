@@ -24,6 +24,7 @@ import { suggestionCommands } from './suggestions.ts';
 import { accountCommands, accountQueries } from './accounts.ts';
 import { reportLinkCommands, reportLinkQueries } from './report-links.ts';
 import { goalCommands, goalQueries } from './goals.ts';
+import { periodSummaryQueries } from './period-summary.ts';
 import { linkPreviewCommands, linkPreviewQueries } from './link-preview.ts';
 import { channelOptionCommands, channelOptionQueries } from './channel-options.ts';
 import { notificationCommands, notificationQueries } from './notifications.ts';
@@ -1996,4 +1997,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, queueOpenSlots, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, queueOpenSlots, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...periodSummaryQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];

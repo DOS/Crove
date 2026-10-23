@@ -14,7 +14,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { ReportAudiences } from '../components/social-audience.tsx';
 import { GoalList } from '../components/social-goals.tsx';
-import { engagementRate, engagementRateOf } from '@crove/mod-social/contract';
+import { engagementRate, engagementRateOfBases, rateBasesOf, type RateBases } from '@crove/mod-social/contract';
 import { ChangeChip, EngagementRateCard, EngagementRateCell } from '../components/social-growth.tsx';
 import { useRatePhrase } from '../components/social-engagement-rate.tsx';
 import { OutsideChip } from '../components/social-external-posts.tsx';
@@ -43,7 +43,9 @@ interface ReportPage {
   totals: Counts;
   // The period of the same length just before (#947), on the same channels; absent from a server without it.
   previous?: { periodStart: string; periodEnd: string; posts: number; totals: Counts };
-  channels: { channel: string; provider: string; posts: number; totals: Counts; previous?: { posts: number; totals: Counts } }[];
+  // rateBases (#1164): what each channel's engagement rate is made of, in each period; absent from a server without it,
+  // which leaves the rate to the plain sums as before.
+  channels: { channel: string; provider: string; posts: number; totals: Counts; rateBases?: RateBases; previous?: { posts: number; totals: Counts; rateBases?: RateBases } }[];
   // external (#1054): the post went out outside Crove; includesExternal: the report counts such posts. Both absent from
   // a server without them.
   top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Counts; external?: boolean }[];
@@ -59,6 +61,9 @@ interface ReportPage {
   // Read again by ReportReels.
   reels?: unknown;
 }
+
+// A channel's rate sums; from its plain sums on a server without them.
+const basesOf = (c: { totals: Counts; rateBases?: RateBases }): RateBases => c.rateBases ?? rateBasesOf([c.totals]);
 
 const tokenOf = () => {
   const t = window.location.hash.replace(/^#/, '');
@@ -148,10 +153,10 @@ export function SocialReportPage() {
   const page = useQuery({ queryKey: ['client-report', token], queryFn: () => load(token as string), enabled: token !== null, retry: false });
   const data = page.data;
   const metrics = data ? shown(data.totals) : [];
-  // The engagement rate (#1157) from the channels' totals the page already has: the sum over the channels that report
-  // reach (else impressions), for this period and the one before.
-  const rate = data ? engagementRateOf(data.channels.map((c) => c.totals)) : null;
-  const rateBefore = data ? engagementRateOf(data.channels.map((c) => c.previous?.totals ?? {})) : null;
+  // The engagement rate (#1157) from the channels' rate sums (#1164): engagement over the reach of the posts that report
+  // it (else impressions), for this period and the one before.
+  const rate = data ? engagementRateOfBases(data.channels.map(basesOf)) : null;
+  const rateBefore = data ? engagementRateOfBases(data.channels.map((c) => (c.previous ? basesOf(c.previous) : {}))) : null;
   const rateLine = useRatePhrase('line');
   const against = t('against');
   const brand = data ? pageBrand(data.brand) : null;
@@ -249,7 +254,7 @@ export function SocialReportPage() {
                                 <ChangeChip current={c.totals[m]} previous={c.previous?.totals[m]} against={against} />
                               </td>
                             ))}
-                            <EngagementRateCell current={c.totals} previous={c.previous?.totals} against={against} />
+                            <EngagementRateCell current={basesOf(c)} previous={c.previous ? basesOf(c.previous) : undefined} against={against} />
                           </tr>
                         ))}
                       </tbody>

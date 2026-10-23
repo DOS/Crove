@@ -10,7 +10,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
-import { bestTimes, engagementRateOf, type PublishedSample } from '@crove/mod-social/contract';
+import { bestTimes, engagementRateOfBases, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { PEXELS_URL, StockCredit, StockPhotoSearch, pexelsHref, useStockPhotosEnabled } from '../components/social-stock-photos.tsx';
@@ -28,6 +28,7 @@ import { DraftFromPhotoLink } from '../components/social-ai-photos.tsx';
 import { DRAFTS_FROM_MEDIA_MAX, togglePick } from '../lib/social-bulk-drafts.ts';
 import { PlanFromPosts, PlanReviewCard } from '../components/social-plan-review.tsx';
 import { ReportLinks } from '../components/social-report-links.tsx';
+import { MetricsSummary, useCanSummarize, useMetricsSummary } from '../components/social-summary.tsx';
 import { GoalsCard } from '../components/social-goals.tsx';
 import { TeamReport } from '../components/social-team-report.tsx';
 import { ReportSchedules } from '../components/social-report-schedules.tsx';
@@ -118,6 +119,9 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
   // The totals over every published channel of the window, summed by the server (#397); the list below stops at 500.
   const totals = useQuery(orpc.social.metrics.totals.queryOptions({ input: { days, ...label, ...(counting ? { includeExternal: true } : {}) } }));
   const outsideRows = useQuery({ ...orpc.social.metrics.external.queryOptions({ input: { days } }), enabled: counting });
+  // An AI summary of the window shown (#1237), for members and above on a server with AI; never saved.
+  const canSummarize = useCanSummarize();
+  const summary = useMetricsSummary();
   // The window as a CSV file, built and audited by the server, saved by the browser.
   const exportCsv = useMutation({
     mutationFn: () => client.social.metrics.export({ days, ...label }),
@@ -150,12 +154,18 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
             {t('metricsDays', { days: String(d) })}
           </Button>
         ))}
+        {(data.length > 0 || extra.length > 0) && canSummarize && (
+          <Button variant="outline" size="sm" className="ml-auto" disabled={summary.write.isPending} onClick={() => summary.start({ days, labelId, includeExternal: counting })}>
+            {t('summary.open')}
+          </Button>
+        )}
         {data.length > 0 && (
-          <Button variant="outline" size="sm" className="ml-auto" disabled={exportCsv.isPending} onClick={() => exportCsv.mutate()}>
+          <Button variant="outline" size="sm" className={canSummarize ? undefined : 'ml-auto'} disabled={exportCsv.isPending} onClick={() => exportCsv.mutate()}>
             {t('metricsExport')}
           </Button>
         )}
       </div>
+      <MetricsSummary summary={summary} />
       <OutsideSwitch checked={outside} onChange={setOutside} disabled={Boolean(labelId)} />
       {exportCsv.error && <ErrorText>{errorMessage(exportCsv.error)}</ErrorText>}
       {/* Without the server's totals the cards sum the listed rows only. */}
@@ -183,8 +193,8 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
                 {previous && <ChangeChip current={total(m)} previous={previous.metrics[m]} against={against} withPrevious className="mt-1" />}
               </Card>
             ))}
-            {/* The engagement rate over the channels that report reach (else impressions), never a mean of rates (#1157). */}
-            {totals.data && <EngagementRateCard current={engagementRateOf(totals.data.channels.map((c) => c.metrics))} previous={previous ? engagementRateOf(previous.channels.map((c) => c.metrics)) : null} against={against} />}
+            {/* The engagement rate over the posts that report reach (else impressions, #1164), never a mean of rates (#1157). */}
+            {totals.data && <EngagementRateCard current={engagementRateOfBases([totals.data.rateBases])} previous={previous ? engagementRateOfBases([previous.rateBases]) : null} against={against} />}
             {hasClicks && (
               <Card className="block p-4">
                 <p className="text-xs text-subtle-foreground">{t('metricsClicks')}</p>
