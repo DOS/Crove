@@ -47,6 +47,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { clearDraft, loadDraft, saveDraft, type StoredDraft } from '../lib/social-draft.ts';
+import { readShareFragment } from '../lib/social-share.ts';
 import { canMoveToFront } from '../lib/social-queue-order.ts';
 import { reelCounts, STORY_METRICS } from '../lib/social-insights.ts';
 import { WatchTimeItems } from '../components/social-reel-metrics.tsx';
@@ -2372,7 +2373,16 @@ export function SocialComposePage() {
   const f = useFormat();
   const navigate = useNavigate();
   const channels = useQuery(orpc.channels.list.queryOptions({ input: {} }));
-  const [base, setBase] = useState<Base>({ body: '', title: '', linkUrl: '', media: [] });
+  // A page shared into a draft (#1235): its link and text come in the fragment (#link=&text=), read once; the
+  // fragment then leaves the address bar. Through history.replaceState, keeping the router's history state, rather
+  // than navigate({ hash: '' }): a navigation would ask the leave question of the draft just filled (useBlocker) and
+  // run the route's loaders again. The router does not bring it back: a navigation takes a hash only when told to
+  // (e2e social-share.spec.ts leaves and comes back).
+  const [shared] = useState(() => readShareFragment(window.location.hash));
+  useEffect(() => {
+    if (window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search);
+  }, []);
+  const [base, setBase] = useState<Base>(() => ({ body: shared?.text ?? '', title: '', linkUrl: shared?.link ?? '', media: [] }));
   const [chosen, setChosen] = useState<string[]>([]);
   const [own, setOwn] = useState<Record<string, Own>>({});
   // UTM tags for the post's link, put on every channel's settings when it is created (#585).
@@ -2507,7 +2517,8 @@ export function SocialComposePage() {
   const [photos, setPhotos] = useState<string[]>(() => (search.photo ? [search.photo] : []));
   const sentPhotos = fromPhotos ? photos : [];
   const aiDraft = useMutation({
-    mutationFn: () => client.social.posts.draftWithAi(aiDraftInput({ brief, connectionIds: chosen, locale, source, photos: sentPhotos })),
+    // from: the shared page's link, for *Viết bằng AI từ liên kết này* (#1235), which drafts before the field updates.
+    mutationFn: (from?: string) => client.social.posts.draftWithAi(aiDraftInput({ brief, connectionIds: chosen, locale, source: from ?? source, photos: from ? [] : sentPhotos })),
     onSuccess: ({ postId }) => {
       leaving.current = true;
       void queryClient.invalidateQueries();
@@ -2594,6 +2605,33 @@ export function SocialComposePage() {
       {idea.data && (
         <Notice>
           <span>{t(ideaId ? 'ideas.fromIdea' : 'ideas.fromIdeaTaken', { title: idea.data.title })}</span>
+        </Notice>
+      )}
+      {shared && (
+        <Notice>
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span>{t(shared.link ? 'share.fromLink' : 'share.fromText')}</span>
+              {shared.link && aiEnabled && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={chosen.length === 0 || aiDraft.isPending}
+                  onClick={() => {
+                    const link = shared.link as string;
+                    setSourceUrl(link);
+                    setFromPhotos(false);
+                    aiDraft.mutate(link);
+                  }}
+                >
+                  {aiDraft.isPending && aiDraft.variables === shared.link ? <Spinner className="text-current" /> : null}
+                  {t('share.aiFromLink')}
+                </Button>
+              )}
+            </div>
+            {shared.link && aiEnabled && chosen.length === 0 && <p className="text-xs text-subtle-foreground">{t('share.pickChannelFirst')}</p>}
+            {shared.link && aiDraft.error && aiDraft.variables === shared.link && <ErrorText>{errorMessage(aiDraft.error)}</ErrorText>}
+          </div>
         </Notice>
       )}
       {create.error && (
@@ -2704,7 +2742,7 @@ export function SocialComposePage() {
                   variant="outline"
                   size="sm"
                   disabled={(!brief.trim() && !source && sentPhotos.length === 0) || (sourceUrl.trim() !== '' && !source) || (fromPhotos && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
-                  onClick={() => aiDraft.mutate()}
+                  onClick={() => aiDraft.mutate(undefined)}
                 >
                   {aiDraft.isPending ? <Spinner className="text-current" /> : null}
                   {t(fromPhotos ? 'aiPhotos.draft' : 'aiDraft')}

@@ -1,3 +1,4 @@
+import './share-boot.ts';
 import './zod-jitless.ts';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider } from '@tanstack/react-router';
@@ -9,6 +10,7 @@ import { I18nProvider } from './i18n/provider.tsx';
 import { startLocaleSync } from './i18n/runtime.ts';
 import { startThemeSync } from './lib/theme-runtime.ts';
 import { queryClient } from './lib/api.ts';
+import { forgetShare } from './lib/social-share.ts';
 import { auth, loadConfig, settleCallback } from './lib/auth.ts';
 import './styles.css';
 
@@ -38,6 +40,8 @@ async function start() {
   const { router } = await import('./router.tsx');
   auth().onAuthStateChange((event: string) => {
     if (event === 'SIGNED_OUT') {
+      // Signed out here, in another tab or by expiry: a share waiting in this tab is not the next person's.
+      forgetShare();
       queryClient.clear();
       void router.navigate({ to: '/login' });
     }

@@ -1,8 +1,8 @@
 // What a web page says about itself, for a link preview (#641): the title, description and site name from its head,
 // Open Graph first, then Twitter cards, then <title> and <meta name="description">; and its main text (#779), from the
-// <article>, else the <main>, else the body, without menus, headers, footers, forms or embeds. Plain scanning: no
-// DOM, no scripts, no styles, no external resources. The text is decoded from the page's charset, entities are
-// resolved, whitespace collapsed and every field capped.
+// <article> with the most text, else the <main> with the most, else the body, without menus, headers, footers, forms or
+// embeds. Plain scanning: no DOM, no scripts, no styles, no external resources. The text is decoded from the page's
+// charset, entities are resolved, whitespace collapsed and every field capped.
 import { EXTRACT_LIMITS, type ExtractedPage } from '@crove/extract-contract';
 
 export class HtmlMetaError extends Error {}
@@ -159,26 +159,51 @@ function plainText(html: string): string {
   return out.replaceAll('>', ' ');
 }
 
-// The part of html inside the first <name ...> ... </name>; undefined when there is none.
-function inside(html: string, name: string): string | undefined {
-  const open = new RegExp(`<${name}\\b[^<>]*>`, 'i').exec(html);
-  if (!open) return undefined;
-  const start = open.index + open[0].length;
-  const close = new RegExp(`</${name}\\s*>`, 'gi');
-  close.lastIndex = start;
-  const end = close.exec(html);
-  return end ? html.slice(start, end.index) : html.slice(start);
+// The parts of html inside each outermost <name ...> ... </name>, in order, at most MAX_SCOPES: an element nested in
+// another stays part of it, and one that never closes runs to the end. The parts never overlap, so reading all of them
+// reads the page once.
+const MAX_SCOPES = 50;
+function outermost(html: string, name: string): string[] {
+  const tag = new RegExp(`<(/?)${name}\\b[^<>]*>`, 'gi');
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let m = tag.exec(html); m !== null && parts.length < MAX_SCOPES; m = tag.exec(html)) {
+    if (m[1] === '') {
+      if (depth++ === 0) start = m.index + m[0].length;
+    } else if (depth > 0 && --depth === 0) parts.push(html.slice(start, m.index));
+  }
+  if (depth > 0 && parts.length < MAX_SCOPES) parts.push(html.slice(start));
+  return parts;
 }
 
-// The page's main text: lines of plain text, at most maxPageTextChars; null when there is none.
-function mainText(html: string): string | null {
-  const bodyAt = html.search(/<body\b/i);
-  const body = bodyAt >= 0 ? html.slice(bodyAt) : html;
-  const scope = inside(body, 'article') ?? inside(body, 'main') ?? body;
-  const lines = plainText(stripHidden(scope, FURNITURE))
+// The lines of plain text of one part of the page, without its furniture.
+function linesOf(scope: string): string[] {
+  return plainText(stripHidden(scope, FURNITURE))
     .split('\n')
     .map((line) => clean(line, EXTRACT_LIMITS.maxPageTextChars))
     .filter((line): line is string => line !== null);
+}
+
+// The page's main text: lines of plain text, at most maxPageTextChars; null when there is none. It comes from the
+// <article> with the most text (a page often has teaser cards of other articles before or after its own, #1235),
+// else the <main> with the most, else the body. html comes without its comments, scripts, styles, noscript and
+// templates (readHtmlMeta strips them first), so a tag inside one of them never moves the article and main matching.
+function mainText(html: string): string | null {
+  const bodyAt = html.search(/<body\b/i);
+  const body = bodyAt >= 0 ? html.slice(bodyAt) : html;
+  const articles = outermost(body, 'article');
+  const scopes = articles.length > 0 ? articles : outermost(body, 'main');
+  let lines: string[] = [];
+  let size = -1;
+  for (const scope of scopes.length > 0 ? scopes : [body]) {
+    const found = linesOf(scope);
+    const length = found.reduce((n, line) => n + line.length, 0);
+    if (length > size) {
+      lines = found;
+      size = length;
+    }
+  }
   if (lines.length === 0) return null;
   return cut(lines.join('\n'), EXTRACT_LIMITS.maxPageTextChars).trim() || null;
 }
