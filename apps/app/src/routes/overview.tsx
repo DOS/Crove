@@ -16,7 +16,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { OPEN_TASK_STATUSES } from '../lib/agents.ts';
 import { getConfig } from '../lib/auth.ts';
-import { deadlineTone, periodParts } from '../lib/clients.ts';
+import { deadlineTone } from '../lib/clients.ts';
 import { allCounted, waitingItems, type WaitingKey } from '../lib/overview.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 import { canMarkTaxDone } from '../lib/tax-calendar.ts';
@@ -68,6 +68,7 @@ export function OverviewPage() {
   const tt = useTranslations('taxCalendar');
   const tcl = useTranslations('clients');
   const f = useFormat();
+  const periodLabel = usePeriodLabel();
   const { slug } = useParams({ strict: false }) as { slug: string };
   const modules = getConfig().modules;
   const financeOn = modules.includes('finance');
@@ -99,7 +100,6 @@ export function OverviewPage() {
   const dues = overview.data?.taxDues ?? [];
   // The VAT return in the tax calendar already says when it is due; otherwise the next one is named on its own.
   const vatListed = vat !== null && dues.some((d) => d.obligation === 'vat_return' && d.period === vat.period);
-  const vatParts = vat ? periodParts(vat.period) : null;
   const canChooseVat = role === 'owner' || role === 'admin';
   const uploadAction = (
     <Link to="/o/$slug/inbox" params={{ slug }} className={buttonVariants()}>
@@ -166,13 +166,7 @@ export function OverviewPage() {
         <p className="mt-1 mb-3 text-xs text-subtle-foreground">{t('taxSubtitle')}</p>
         {vat && !vatListed && (
           <p className="mb-3 text-sm">
-            {t('vatNext', {
-              period: vatParts
-                ? vatParts.kind === 'month'
-                  ? tcl('periodMonth', { month: String(vatParts.index), year: String(vatParts.year) })
-                  : tcl('periodQuarter', { quarter: String(vatParts.index), year: String(vatParts.year) })
-                : vat.period,
-            })}{' '}
+            {t('vatNext', { period: periodLabel(vat.period) })}{' '}
             <span className={cn('font-medium tabular-nums', TONE_CLASS[deadlineTone(vat.daysLeft)])}>{f.date(vat.dueDate)}</span>{' '}
             <span className="text-subtle-foreground">({tt('daysLeft', { days: vat.daysLeft })})</span>
           </p>
