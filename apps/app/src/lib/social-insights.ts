@@ -18,6 +18,15 @@ export function reelCounts(metrics: Readonly<Record<string, number>>): { name: R
   return REEL_METRICS.filter((m) => typeof metrics[m] === 'number' && Number.isFinite(metrics[m]) && (metrics[m] as number) >= 0).map((m) => ({ name: m, ms: metrics[m] as number }));
 }
 
+// The client report's Reels (#1151), read again: how many went out in the period and the median of their average watch
+// time in milliseconds (null when none reports one); null when there is no Reel or the answer is not that shape.
+export function reportReels(value: unknown): { posts: number; medianAvgWatchTimeMs: number | null } | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { posts, medianAvgWatchTimeMs: median } = value as { posts?: unknown; medianAvgWatchTimeMs?: unknown };
+  if (typeof posts !== 'number' || !Number.isInteger(posts) || posts <= 0) return null;
+  return { posts, medianAvgWatchTimeMs: typeof median === 'number' && Number.isFinite(median) && median >= 0 ? median : null };
+}
+
 // Milliseconds as seconds with one decimal (12345 is 12.3).
 export function watchSeconds(ms: number): number {
   return Math.round(ms / 100) / 10;

@@ -1,5 +1,7 @@
 // Client report links on the Metrics tab (#643): owners and admins make a link to a report of a period, on every
-// channel or the ones they pick, shown once to copy and send; the list says which are live, and revokes them.
+// channel or the ones they pick, shown once to copy and send; the list says which are live, and revokes them. A link
+// may count only one label's posts (#1159, a campaign report; the client never sees the label's name) and may leave out
+// who follows the channels (#1155).
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -13,6 +15,7 @@ import { Label } from '@crove/ui/components/label';
 import { Textarea } from '@crove/ui/components/textarea';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { ErrorText } from './ui.tsx';
+import { useLabels } from './social-labels.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { lastMonth, reportPeriod, reportUrl } from '../lib/social-report.ts';
@@ -34,6 +37,9 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
   const [days, setDays] = useState<number>(30);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [outside, setOutside] = useState(false);
+  const [labelId, setLabelId] = useState('');
+  const [audience, setAudience] = useState(true);
+  const labels = useLabels();
   const [made, setMade] = useState<{ url: string; expiresAt: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.social.reportLinks.list.key() });
@@ -47,7 +53,9 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
         ...(picked.size > 0 ? { connectionIds: [...picked] } : {}),
         ...(title.trim() ? { title: title.trim() } : {}),
         ...(note.trim() ? { note } : {}),
-        ...(outside ? { includeExternal: true } : {}),
+        // A label report counts only Crove's posts.
+        ...(labelId ? { labelId } : outside ? { includeExternal: true } : {}),
+        ...(audience ? {} : { includeAudience: false }),
       });
     },
     onSuccess: (r) => {
@@ -70,6 +78,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
   const now = Date.now();
   const links = list.data ?? [];
   const names = new Map(channels.map((c) => [c.id, c.displayName]));
+  const labelNames = new Map((labels.data ?? []).map((l) => [l.id, l.name]));
   const toggle = (id: string) => {
     const next = new Set(picked);
     if (next.has(id)) next.delete(id);
@@ -125,12 +134,33 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
           </div>
         </fieldset>
       )}
+      {(labels.data ?? []).length > 0 && (
+        <div className="space-y-1.5">
+          <Label htmlFor="report-label">{t('label')}</Label>
+          <NativeSelect id="report-label" value={labelId} onChange={(e) => setLabelId(e.target.value)}>
+            <NativeSelectOption value="">{t('labelAll')}</NativeSelectOption>
+            {(labels.data ?? []).map((l) => (
+              <NativeSelectOption key={l.id} value={l.id}>
+                {l.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <p className="text-xs text-subtle-foreground">{t('labelHint')}</p>
+        </div>
+      )}
       <div className="space-y-0.5">
         <label className="flex items-center gap-2 text-sm text-foreground">
-          <Checkbox checked={outside} onCheckedChange={(v) => setOutside(v === true)} />
+          <Checkbox checked={outside && !labelId} disabled={labelId !== ''} onCheckedChange={(v) => setOutside(v === true)} />
           {t('includeExternal')}
         </label>
         <p className="text-xs text-subtle-foreground">{t('includeExternalHint')}</p>
+      </div>
+      <div className="space-y-0.5">
+        <label className="flex items-center gap-2 text-sm text-foreground">
+          <Checkbox checked={audience} onCheckedChange={(v) => setAudience(v === true)} />
+          {t('includeAudience')}
+        </label>
+        <p className="text-xs text-subtle-foreground">{t('includeAudienceHint')}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" disabled={!range || create.isPending} onClick={() => create.mutate()}>
@@ -164,6 +194,8 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
                     {t('period', { from: f.date(l.periodStart), to: f.date(last) })} ·{' '}
                     {l.connectionIds.length === 0 ? t('allChannels') : l.connectionIds.map((id) => names.get(id) ?? t('goneChannel')).join(', ')}
                     {l.includeExternal ? ` · ${t('withExternal')}` : ''}
+                    {l.labelId && labelNames.has(l.labelId) ? ` · ${t('withLabel', { name: labelNames.get(l.labelId) ?? '' })}` : ''}
+                    {l.includeAudience ? '' : ` · ${t('withoutAudience')}`}
                   </span>
                   {l.note && <span className="block truncate text-xs text-subtle-foreground">{l.note}</span>}
                 </span>

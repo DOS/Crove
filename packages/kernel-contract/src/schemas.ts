@@ -1818,6 +1818,10 @@ export const zSocialReportLink = z.object({
   revokedAt: z.string().nullable(),
   // Whether the report counts the posts published outside Crove (#1054).
   includeExternal: z.boolean(),
+  // The label whose posts alone the report counts (#1159), or null for every post; whether it shows who follows the
+  // channels (#1155).
+  labelId: zId.nullable(),
+  includeAudience: z.boolean(),
 });
 export const zSocialReportLinkCreate = z.strictObject({
   periodStart: z.iso.datetime({ offset: true }),
@@ -1828,6 +1832,9 @@ export const zSocialReportLinkCreate = z.strictObject({
   includeExternal: z.boolean().optional(),
   // The agency's note on the report (#1056), plain text.
   note: z.string().max(2000).optional(),
+  // Only the posts with this label (#1159), without outside posts; the audience shown unless false (#1155).
+  labelId: zId.optional(),
+  includeAudience: z.boolean().optional(),
 });
 
 // Monthly goals (#1056): a scope's targets (the org's when connectionId is null), and how the month stands.

@@ -90,7 +90,8 @@ export const labelUpdate = defineCommand({
   },
 });
 
-// Takes the label off every post too (the foreign key cascades).
+// Takes the label off every post too, and deletes the client report links of the label (#1159): both foreign keys
+// cascade, so a campaign report never widens to every post.
 export const labelDelete = defineCommand({
   name: 'social.label.delete',
   input: z.strictObject({ labelId: zId }),

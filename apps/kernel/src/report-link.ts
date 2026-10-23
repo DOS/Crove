@@ -41,8 +41,11 @@ export interface ReportPage {
     timeZone: string;
     groups: { channel: string | null; provider: string | null; items: { metric: string; target: number; actual: number | null }[] }[];
   } | null;
-  // Who follows each channel (#1146): the latest audience taken in the period, per channel that has one.
+  // Who follows each channel (#1146): the latest audience taken in the period, per channel that has one; empty when
+  // the link leaves it out (#1155).
   audience: { channel: string; provider: string; day: string; audience: { age: AudienceSlice[]; gender: AudienceSlice[]; cities: AudienceSlice[]; countries: AudienceSlice[] } }[];
+  // The period's Reels (#1151) and the median of their average watch time in milliseconds (null when none reports one).
+  reels: { posts: number; medianAvgWatchTimeMs: number | null };
 }
 
 interface AudienceSlice {
