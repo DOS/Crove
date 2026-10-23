@@ -32,12 +32,12 @@ For each worker that ended a turn:
 - **Merged:**
   1. Check that the merge commit is on `main` and the issue is closed.
   2. Check that the PR's checks were green on the head that was merged.
-  3. Post one or two lines to the owner: what merged, and what comes next.
+  3. Post one or two lines to the owner: what merged, and what comes next. Keep the words opened, merged and deployed distinct, and say what was verified and what was not (`AGENTS.md`, "Writing to the owner").
   4. Offer to archive the worker session only if the owner asks.
 - **Blocked:**
   - If the block is technical, decide it yourself and message the worker. Write the decision and its reason in the PR or the issue.
   - If it is a person's step (accounts, money, legal, real samples, irreversible steps), comment it on the issue with the `owner-action` label, release the claim, and collect it for the owner report.
-- **Silent for 4 hours or more with no push or comment:** message the worker once. If it is gone, release its claim (`Taking over the stale claim of <session>`) and treat the issue as free.
+- **Silent for 4 hours or more with no push or comment:** message the worker once. If its session is stopped or gone (check `list_sessions`), release its claim (`Taking over the stale claim of <session>`) and treat the issue as free. This shorter check applies only to worker sessions this coordinator started, whose state it can see; a claim by any other agent stays live for the 48 hours `AGENTS.md` sets.
 
 ## 3. Keep the workers busy
 
