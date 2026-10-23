@@ -14,7 +14,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { OPEN_TASK_STATUSES, TASK_LIST_LIMIT, TASK_STATUSES, agentPermissions, type TaskStatus } from '../lib/agents.ts';
+import { OPEN_TASK_STATUSES, TASK_LIST_LIMIT, TASK_STATUSES, agentPermissions, socialPostOf, type TaskStatus } from '../lib/agents.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 
 type Filter = 'all' | 'mine' | 'open';
@@ -175,6 +175,7 @@ export function TaskDetailPage() {
     );
   }
   const { task, comments, proposal } = detail.data;
+  const postId = socialPostOf(task.sourceRef);
   const members = org.data?.members ?? [];
   const authorName = (c: (typeof comments)[number]) =>
     c.authorType === 'agent'
@@ -204,6 +205,15 @@ export function TaskDetailPage() {
             {t('proposal', { title: proposal.title })}{' '}
             <Link to="/o/$slug/inbox/$id" params={{ slug, id: proposal.id }} className="text-link underline">
               {t('openProposal')}
+            </Link>
+          </p>
+        )}
+        {/* A Social post's task (#1193) says only counts: the post page has the rest, and answers 404 to a member who
+            may not see the post. */}
+        {postId && (
+          <p className="text-sm">
+            <Link to="/o/$slug/social/$id" params={{ slug, id: postId }} className="text-link underline">
+              {t('openPost')}
             </Link>
           </p>
         )}

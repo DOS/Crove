@@ -1863,6 +1863,7 @@ export const en = {
     },
     setStatus: 'Status',
     proposal: 'Related proposal: {title}',
+    openPost: 'Open post',
     openProposal: 'Open proposal',
     checkedOut: 'An AI agent is working on this task',
     truncated: 'Showing only the {count} newest tasks.',
@@ -2448,7 +2449,7 @@ export const en = {
     },
     channelAccess: {
       title: 'Channels per member',
-      hint: 'Give a member or a viewer some channels only, such as a freelancer or the client’s editor. They see, write and submit posts on those channels only, and metrics and exports hold those channels only. Owners and admins always use every channel.',
+      hint: 'Give a member or a viewer some channels only, such as a freelancer or the client’s editor. They see, write and submit posts on those channels only, and metrics and exports hold those channels only. Channel names, settings (such as brand voices, channel sets and feeds), the library, ideas, label counts and report link details stay visible to the whole organization. Someone removed and invited again comes back with every channel until they are limited again. Owners and admins always use every channel.',
       modeLabel: 'Channels {name} may use',
       allChannels: 'Every channel',
       someChannels: 'Only the chosen channels',
@@ -2865,6 +2866,10 @@ export const en = {
         shifted: 'put another post ahead of it in the queue',
       },
       decision: { approved: 'approved', changes_requested: 'asked for changes', rejected: 'rejected' },
+    },
+    preReview: {
+      title: 'Automatic checks',
+      none: 'Nothing to look at on the channels waiting for review.',
     },
     reviewDiff: {
       title: 'Changed since the last review',

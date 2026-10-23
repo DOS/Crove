@@ -1,6 +1,6 @@
 // What the AI agents screens decide on their own (ADR-0029, issue #258).
 import { describe, expect, it } from 'vitest';
-import { agentPermissions, budgetUsage, chartTree, holderCandidates, isBudgetAmount } from '../src/lib/agents.ts';
+import { agentPermissions, budgetUsage, chartTree, holderCandidates, isBudgetAmount, socialPostOf } from '../src/lib/agents.ts';
 
 const titles = (nodes: ReturnType<typeof chartTree<{ id: string; reportsTo: string | null }>>): unknown =>
   nodes.map((n) => (n.children.length ? { [n.position.id]: titles(n.children) } : n.position.id));
@@ -86,5 +86,16 @@ describe('holderCandidates', () => {
   it('offers none of another role, or any before the templates are known', () => {
     expect(ids(holderCandidates({ id: 'p2', roleKey: 'auditor' }, agents, positions, templateRoles))).toEqual([]);
     expect(ids(holderCandidates({ id: 'p2', roleKey: 'accountant' }, agents, positions, new Map()))).toEqual([]);
+  });
+});
+
+describe('socialPostOf', () => {
+  it("names the Social post a content agent's task is about (#1193), and nothing else", () => {
+    const id = '0b5c6f7e-1d2a-4c3b-9e8f-7a6b5c4d3e2f';
+    expect(socialPostOf({ type: 'social.post', id })).toBe(id);
+    expect(socialPostOf({ type: 'kernel.proposal', id })).toBeNull();
+    expect(socialPostOf({ type: 'social.post', id: 'not-a-uuid' })).toBeNull();
+    expect(socialPostOf(null)).toBeNull();
+    expect(socialPostOf('social.post')).toBeNull();
   });
 });

@@ -1862,6 +1862,7 @@ export const vi = {
     },
     setStatus: 'Trạng thái',
     proposal: 'Đề xuất liên quan: {title}',
+    openPost: 'Mở bài đăng',
     openProposal: 'Mở đề xuất',
     checkedOut: 'Tác tử AI đang xử lý việc này',
     truncated: 'Chỉ hiển thị {count} việc mới nhất.',
@@ -2447,7 +2448,7 @@ export const vi = {
     },
     channelAccess: {
       title: 'Kênh của từng thành viên',
-      hint: 'Giao cho thành viên hoặc người xem chỉ một số kênh, chẳng hạn cộng tác viên hay người phụ trách bên khách hàng. Họ chỉ thấy, soạn và gửi duyệt bài trên các kênh đó; số liệu và file xuất cũng chỉ có các kênh đó. Chủ sở hữu và quản trị viên luôn dùng được mọi kênh.',
+      hint: 'Giao cho thành viên hoặc người xem chỉ một số kênh, chẳng hạn cộng tác viên hay người phụ trách bên khách hàng. Họ chỉ thấy, soạn và gửi duyệt bài trên các kênh đó; số liệu và file xuất cũng chỉ có các kênh đó. Tên kênh, các phần cài đặt (như giọng thương hiệu, nhóm kênh, nguồn tin), thư viện, ý tưởng, số bài của từng nhãn và thông tin các liên kết báo cáo thì cả tổ chức vẫn thấy. Người bị xóa khỏi tổ chức rồi được mời lại sẽ dùng được mọi kênh cho đến khi được giao kênh lần nữa. Chủ sở hữu và quản trị viên luôn dùng được mọi kênh.',
       modeLabel: 'Kênh {name} được dùng',
       allChannels: 'Tất cả các kênh',
       someChannels: 'Chỉ các kênh được chọn',
@@ -2864,6 +2865,10 @@ export const vi = {
         shifted: 'đã xếp một bài khác lên trước bài này',
       },
       decision: { approved: 'đã duyệt', changes_requested: 'đã yêu cầu sửa', rejected: 'đã từ chối' },
+    },
+    preReview: {
+      title: 'Kiểm tra tự động',
+      none: 'Không thấy điểm nào cần xem trên các kênh đang chờ duyệt.',
     },
     reviewDiff: {
       title: 'Đã sửa từ lần duyệt trước',

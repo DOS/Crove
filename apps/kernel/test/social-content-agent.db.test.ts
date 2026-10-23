@@ -1,6 +1,8 @@
 // The social.content_manager agent (#799) on PostgreSQL 17: a post sent for review gives the agent a task, its run
-// comments the pre-review and hands the decision to a human, and it never approves. Set CROVE_TEST_ADMIN_URL to a
-// superuser URL; the run creates and drops its own database.
+// comments the pre-review and hands the decision to a human, and it never approves. The task, its comment and the
+// escalation say counts only, so a member limited to some channels (#1081) reads nothing of a post outside them in
+// kernel.task.list or kernel.task.get (#1193); the post page's pre-review keeps the findings for those who may see the
+// post. Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -92,7 +94,7 @@ suite('the social.content_manager agent on PostgreSQL (#799)', () => {
     // A redelivered event adds nothing.
     for (const eventId of [submitted, submitted]) await worker.execute('kernel.agent.dispatch_event', { eventId }, { actor: SYSTEM, orgId });
     const tasks = await admin(async (c) => (await c.query(`SELECT title, kind, source, source_ref, tainted FROM crove_kernel.task WHERE org_id = $1`, [orgId])).rows);
-    expect(tasks).toEqual([{ title: 'Rà soát bài: Bánh mì rẻ nhất phố', kind: 'general', source: 'event', source_ref: { type: 'social.post', id: postId }, tainted: false }]);
+    expect(tasks).toEqual([{ title: 'Rà soát bài gửi duyệt: 1 kênh', kind: 'general', source: 'event', source_ref: { type: 'social.post', id: postId }, tainted: false }]);
 
     const review = await app.query<PreReview>('social.post.pre_review', { postId }, { actor: asUser(owner), orgId });
     expect(review).toMatchObject({ postId, waiting: 1 });
@@ -107,10 +109,67 @@ suite('the social.content_manager agent on PostgreSQL (#799)', () => {
     }));
     expect(after.comment).toHaveLength(1);
     expect(after.comment[0]).toMatchObject({ author_type: 'agent' });
-    expect(after.comment[0]?.body).toContain('từ nên tránh theo giọng thương hiệu (rẻ nhất)');
-    expect(after.escalations).toEqual([{ title: 'Duyệt bài: Bánh mì rẻ nhất phố', created_by_type: 'agent' }]);
+    // Counts only (#1193): the findings stay on the post page.
+    const points = review.findings.length;
+    expect(after.comment[0]?.body).toBe(
+      `Rà soát trước: 1 kênh đang chờ duyệt.\nCác kiểm tra tự động thấy ${points} điểm cần xem; chi tiết ở mục Kiểm tra tự động, phần Duyệt bài của trang bài đăng. Người duyệt nên xem các điểm đó trước khi quyết định.`,
+    );
+    expect(after.comment[0]?.body).not.toMatch(/rẻ nhất|Bánh mì|Kênh thử/);
+    expect(after.escalations).toEqual([{ title: `Duyệt bài: 1 kênh chờ duyệt, ${points} điểm cần xem`, created_by_type: 'agent' }]);
     // The agent decided nothing: the channel still waits for a person.
     expect(after.variants).toEqual([{ status: 'in_review' }]);
+  });
+
+  it("keeps the text and channel names of posts outside a limited member's channels out of the tasks they read (#1193)", async () => {
+    const owner = await upsertIdentity(db, { issuer: 'agents', subject: randomUUID(), email: `owner-${randomUUID().slice(0, 6)}@agents.test`, name: null });
+    const member = await upsertIdentity(db, { issuer: 'agents', subject: randomUUID(), email: `member-${randomUUID().slice(0, 6)}@agents.test`, name: null });
+    const { orgId } = await createOrg(app, asUser(owner), 'Agency');
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [orgId, member]));
+    const { agentId } = await app.execute<{ agentId: string }>('kernel.agent.template.install', { templateKey: 'social.content_manager' }, { actor: asMfa(owner), orgId });
+    const channel = async (name: string) => {
+      const id = randomUUID();
+      await admin((c) =>
+        c.query('INSERT INTO crove_kernel.channel_connection (org_id, id, provider, external_account_id, display_name, connected_by) VALUES ($1, $2, $3, $4, $5, $6)', [orgId, id, 'sandbox', `acct-${id.slice(0, 8)}`, name, owner]),
+      );
+      return id;
+    };
+    const mine = await channel('Trang khách Lan');
+    const theirs = await channel('Trang khách Hùng');
+    await app.execute('social.channel_access.set', { userId: member, channelConnectionIds: [mine] }, { actor: asUser(owner), orgId });
+    await app.execute('social.brand_voice.save', { connectionId: null, description: 'Thân thiện', useWords: [], avoidWords: ['giá sốc'], emoji: true }, { actor: asUser(owner), orgId });
+    // A post on the other client's channel, sent by the owner, and one on the member's own channel, sent by the member.
+    const hidden = (
+      await app.execute<{ postId: string }>('social.post.create', { body: 'Ra mắt nệm Hùng Phát, giá sốc cuối tuần', channels: [{ connectionId: theirs }] }, { actor: asUser(owner), orgId })
+    ).postId;
+    await app.execute('social.post.submit', { postId: hidden }, { actor: asUser(owner), orgId });
+    const own = (await app.execute<{ postId: string }>('social.post.create', { body: 'Bánh Lan giá sốc hôm nay', channels: [{ connectionId: mine }] }, { actor: asUser(member), orgId })).postId;
+    await app.execute('social.post.submit', { postId: own }, { actor: asUser(member), orgId });
+    const events = await admin(async (c) => (await c.query<{ id: string }>(`SELECT id FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.post.submitted' ORDER BY id`, [orgId])).rows);
+    expect(events).toHaveLength(2);
+    for (const e of events) await worker.execute('kernel.agent.dispatch_event', { eventId: e.id }, { actor: SYSTEM, orgId });
+    expect(await runAgentWake({ runtime: worker, programs: socialAgentPrograms }, orgId, agentId)).toMatchObject({ outcome: 'succeeded' });
+
+    // What the member reads of every task: the agent's two and the two escalations, with their comments.
+    const asMember = { actor: asUser(member), orgId };
+    const { tasks } = await app.query<{ tasks: { id: string; title: string; kind: string; sourceRef: unknown }[] }>('kernel.task.list', {}, asMember);
+    expect(tasks.map((t) => `${t.kind}: ${t.title}`).sort()).toEqual([
+      'escalation: Duyệt bài: 1 kênh chờ duyệt, 1 điểm cần xem',
+      'escalation: Duyệt bài: 1 kênh chờ duyệt, 1 điểm cần xem',
+      'general: Rà soát bài gửi duyệt: 1 kênh',
+      'general: Rà soát bài gửi duyệt: 1 kênh',
+    ]);
+    const read = JSON.stringify([tasks, ...(await Promise.all(tasks.map((t) => app.query('kernel.task.get', { id: t.id }, asMember))))]);
+    for (const secret of ['Hùng', 'Ra mắt', 'nệm', 'giá sốc', 'Lan', 'Bánh']) expect(read).not.toContain(secret);
+    expect(read).toContain('1 điểm cần xem');
+    // Each task points at its post, whose page answers 404 to the member when it is outside their channels.
+    expect(new Set(tasks.map((t) => (t.sourceRef as { id: string }).id))).toEqual(new Set([hidden, own]));
+    await expect(app.query('social.post.pre_review', { postId: hidden }, asMember)).rejects.toMatchObject({ code: 'POST_NOT_FOUND', status: 404 });
+    await expect(app.query('social.post.get', { postId: hidden }, asMember)).rejects.toMatchObject({ code: 'POST_NOT_FOUND', status: 404 });
+    // The post page keeps the detail for those who may see the post.
+    expect((await app.query<PreReview>('social.post.pre_review', { postId: own }, asMember)).findings).toEqual(['Trang khách Lan: có từ nên tránh theo giọng thương hiệu (giá sốc).']);
+    expect((await app.query<PreReview>('social.post.pre_review', { postId: hidden }, { actor: asUser(owner), orgId })).findings).toEqual([
+      'Trang khách Hùng: có từ nên tránh theo giọng thương hiệu (giá sốc).',
+    ]);
   });
 
   it('makes no task from an event without an agent task, nor for a template of another module', async () => {
