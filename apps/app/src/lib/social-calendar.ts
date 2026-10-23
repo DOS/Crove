@@ -191,5 +191,5 @@ export function slotDrop(target: SlotTarget, slot: OpenSlot, connectionId: strin
   }
   if (!may.canWrite || (target.item && !followsPlan(target.item))) return null;
   if (target.item && target.item.at.getTime() === at) return null;
-  return { kind: 'plan', request: { postId: target.post.id, revision: target.post.revision, scheduledAt: new Date(at).toISOString() } };
+  return { kind: 'plan', request: { postId: target.post.id, revision: target.post.revision, scheduledAt: slot.at } };
 }
