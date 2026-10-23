@@ -74,7 +74,7 @@ export interface BannedMatch {
 }
 
 // A match in one of a variant's texts: 'body', 'title', 'settings.firstComment', 'settings.threadParts.<index>',
-// 'settings.autoReply.text' or 'settings.poll.<index>'.
+// 'settings.autoReply.text', 'settings.poll.<index>' or 'settings.poll.question'.
 export interface BannedFieldMatch extends BannedMatch {
   field: string;
 }
@@ -335,6 +335,9 @@ export function variantTexts(content: { body: string; title: string | null }, se
   const poll = s.poll;
   const options = poll !== null && typeof poll === 'object' ? (poll as { options?: unknown }).options : undefined;
   if (Array.isArray(options)) options.forEach((o, i) => typeof o === 'string' && out.push({ field: `settings.poll.${i}`, text: o }));
+  // A LinkedIn poll's own question (#1118), published with it.
+  const question = poll !== null && typeof poll === 'object' ? (poll as { question?: unknown }).question : undefined;
+  if (typeof question === 'string') out.push({ field: 'settings.poll.question', text: question });
   // YouTube tags (#905), WordPress excerpt, tags and categories (#981) and Telegram button labels (#1017): published too.
   if (Array.isArray(s.tags)) s.tags.forEach((tag, i) => typeof tag === 'string' && out.push({ field: `settings.tags.${i}`, text: tag }));
   const wp = s.wordpress;

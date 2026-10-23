@@ -119,6 +119,51 @@ describe('LinkedInPublisher', () => {
     expect(none.calls).toHaveLength(0);
   });
 
+  it('posts a poll as the content, with its own question and LinkedIn duration, a week when unsaid (#1118)', async () => {
+    const created = (n: number) => ({ status: 201, headers: { 'x-restli-id': `urn:li:ugcPost:690000000000000000${n}` } });
+    const { fetchImpl, calls } = linkedin({ 'POST api.linkedin.com/rest/posts': [created(1), created(2), created(3), created(4)] });
+    const publisher = new LinkedInPublisher({}, fetchImpl);
+    const asked = (poll: Record<string, unknown>) => input({ settings: { poll } });
+    expect(await publisher.publish(asked({ question: ' Món nào ngon nhất? ', options: [' Phở ', 'Bún chả'] }))).toEqual({
+      kind: 'accepted',
+      externalId: 'urn:li:ugcPost:6900000000000000001',
+      url: 'https://www.linkedin.com/feed/update/urn:li:ugcPost:6900000000000000001/',
+    });
+    for (const minutes of [1440, 4320, 20_160]) await publisher.publish(asked({ question: 'Q', options: ['a', 'b', 'c', 'd'], durationMinutes: minutes }));
+    expect(calls[0]?.body).toEqual({
+      author: `urn:li:person:${MEMBER}`,
+      commentary: 'Khai trương chi nhánh mới \\(Q1\\)',
+      visibility: 'PUBLIC',
+      distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+      content: { poll: { question: 'Món nào ngon nhất?', options: [{ text: 'Phở' }, { text: 'Bún chả' }], settings: { duration: 'SEVEN_DAYS' } } },
+    });
+    expect(calls.slice(1).map((c) => (c.body as { content: { poll: { settings: unknown } } }).content.poll.settings)).toEqual([{ duration: 'ONE_DAY' }, { duration: 'THREE_DAYS' }, { duration: 'FOURTEEN_DAYS' }]);
+  });
+
+  it('refuses a poll with media, without a question, or LinkedIn would refuse, before any call (#1118)', async () => {
+    const none = linkedin({});
+    const publisher = new LinkedInPublisher({}, none.fetchImpl);
+    const poll = { question: 'Món nào?', options: ['Phở', 'Bún chả'] };
+    expect(await publisher.publish(input({ content: { body: 'Ảnh', title: null, linkUrl: null, media: [image('f-9')] }, settings: { poll } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' });
+    expect(await publisher.publish(input({ content: { body: 'Clip', title: null, linkUrl: null, media: [{ fileId: 'v', mime: 'video/mp4', sizeBytes: 10, altText: null }] }, settings: { poll } }))).toMatchObject({ code: 'POLL_WITH_MEDIA' });
+    for (const bad of [
+      { options: poll.options },
+      { ...poll, question: 'x'.repeat(141) },
+      { ...poll, options: ['Phở'] },
+      { ...poll, options: ['a', 'b', 'c', 'd', 'e'] },
+      { ...poll, options: ['Phở', 'x'.repeat(31)] },
+      { ...poll, durationMinutes: 2880 },
+      { ...poll, multiple: true },
+      { ...poll, hideTotals: true },
+      'có',
+    ]) {
+      expect(await publisher.publish(input({ settings: { poll: bad } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' });
+    }
+    expect(none.calls).toHaveLength(0);
+  });
+
   it('uploads images first, then one post with them', async () => {
     const { fetchImpl, calls } = linkedin({
       'POST api.linkedin.com/rest/images?action=initializeUpload': [
@@ -425,6 +470,21 @@ describe('LinkedIn Company Pages (#1077)', () => {
       distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
       lifecycleState: 'PUBLISHED',
       isReshareDisabledByAuthor: false,
+    });
+  });
+
+  it('posts a poll as the page (#1118)', async () => {
+    const { fetchImpl, calls } = pages({ 'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:ugcPost:7400000000000000009' } }] });
+    const result = await new LinkedInPagePublisher({}, fetchImpl).publish(pageInput({ settings: { visibility: 'loggedIn', poll: { question: 'Chi nhánh tiếp theo ở đâu?', options: ['Quận 1', 'Thủ Đức', 'Bình Thạnh'], durationMinutes: 4320 } } }));
+    expect(result).toMatchObject({ kind: 'accepted', externalId: 'urn:li:ugcPost:7400000000000000009' });
+    expect(calls[0]?.body).toEqual({
+      author: `urn:li:organization:${ORG_A}`,
+      commentary: 'Khai trương chi nhánh mới \\(Q1\\)',
+      visibility: 'LOGGED_IN',
+      distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
+      lifecycleState: 'PUBLISHED',
+      isReshareDisabledByAuthor: false,
+      content: { poll: { question: 'Chi nhánh tiếp theo ở đâu?', options: [{ text: 'Quận 1' }, { text: 'Thủ Đức' }, { text: 'Bình Thạnh' }], settings: { duration: 'THREE_DAYS' } } },
     });
   });
 

@@ -224,6 +224,66 @@ describe('Telegram publish', () => {
     });
   });
 
+  describe('polls (#1118)', () => {
+    const asked = (settings: Record<string, unknown>, body = 'Bạn thích món nào?', linkUrl: string | null = null) => input({ content: { body, title: null, linkUrl, media: [] }, settings });
+
+    it('sends the post as one anonymous sendPoll, the text and its link as the question', async () => {
+      const { fetchImpl, calls } = bot({ sendPoll: [ok({ message_id: 21, poll: { id: '5' } })] });
+      const result = await new TelegramPublisher(fetchImpl).publish(asked({ poll: { options: [' Phở ', 'Bún chả'] } }, 'Bạn thích món nào?', 'https://example.com/menu'));
+      expect(result).toEqual({ kind: 'accepted', externalId: `${CHAT}:21`, url: 'https://t.me/quanpho/21' });
+      // Open until stopped when no length is set.
+      expect(calls).toEqual([{ method: 'sendPoll', token: TOKEN, form: null, json: { chat_id: CHAT, question: 'Bạn thích món nào?\n\nhttps://example.com/menu', options: [{ text: 'Phở' }, { text: 'Bún chả' }], is_anonymous: true } }]);
+    });
+
+    it('sends its length in seconds, several answers and hidden results only when on, and the silence and buttons of any post', async () => {
+      const { fetchImpl, calls } = bot({ sendPoll: [ok({ message_id: 22 }), ok({ message_id: 23 })] });
+      const publisher = new TelegramPublisher(fetchImpl);
+      const buttons = [[{ text: 'Thực đơn', url: 'https://example.com/menu' }]];
+      const options = Array.from({ length: 12 }, (_, i) => `Món ${i + 1}`);
+      await publisher.publish(asked({ poll: { options, durationMinutes: 43_800, multiple: true, hideTotals: true }, telegram: { silent: true, buttons } }));
+      await publisher.publish(asked({ poll: { options: ['Có', 'Không'], durationMinutes: 1, multiple: false, hideTotals: false } }));
+      expect(calls[0]?.json).toEqual({
+        chat_id: CHAT,
+        question: 'Bạn thích món nào?',
+        options: options.map((text) => ({ text })),
+        open_period: 2_628_000,
+        allows_multiple_answers: true,
+        hide_results_until_closes: true,
+        is_anonymous: true,
+        disable_notification: true,
+        reply_markup: { inline_keyboard: buttons },
+      });
+      expect(calls[1]?.json).toEqual({ chat_id: CHAT, question: 'Bạn thích món nào?', options: [{ text: 'Có' }, { text: 'Không' }], open_period: 60, is_anonymous: true });
+    });
+
+    it('pins and deletes a poll as any post, by its message', async () => {
+      const { fetchImpl, calls } = bot({ pinChatMessage: [ok(true)], deleteMessage: [ok(true)] });
+      const publisher = new TelegramPublisher(fetchImpl);
+      expect(await publisher.pin({ externalAccountId: CHAT, secret: SECRET, externalId: `${CHAT}:21`, silent: false, callKey: 'k' })).toEqual({ kind: 'accepted', externalId: `${CHAT}:21` });
+      expect(await publisher.remove({ externalAccountId: CHAT, secret: SECRET, externalId: `${CHAT}:21` })).toEqual({ kind: 'removed' });
+      expect(calls.map((c) => [c.method, c.json])).toEqual([
+        ['pinChatMessage', { chat_id: CHAT, message_id: 21 }],
+        ['deleteMessage', { chat_id: CHAT, message_id: 21 }],
+      ]);
+    });
+
+    it('refuses a poll with media, a question Telegram would refuse or another shape, with nothing sent', async () => {
+      const { fetchImpl, calls } = bot({});
+      const publisher = new TelegramPublisher(fetchImpl);
+      const poll = { options: ['Phở', 'Bún chả'] };
+      expect(await publisher.publish(input({ content: { body: 'Món mới', title: null, linkUrl: null, media: [photo('f1')] }, settings: { poll } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' });
+      expect(await publisher.publish(asked({ poll }, 'x'.repeat(301)))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_TEXT_LENGTH' });
+      expect(await publisher.publish(asked({ poll }, 'x'.repeat(290), 'https://example.com/menu'))).toMatchObject({ code: 'POLL_TEXT_LENGTH' });
+      for (const bad of [{ options: ['Phở'] }, { options: Array.from({ length: 13 }, (_, i) => String(i)) }, { options: ['Phở', 'x'.repeat(101)] }, { options: ['Phở', ' '] }, { ...poll, durationMinutes: 43_801 }, { ...poll, durationMinutes: 0 }, { ...poll, hideTotals: 'yes' }, 'có']) {
+        expect(await publisher.publish(asked({ poll: bad }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' });
+      }
+      expect(calls).toHaveLength(0);
+      // 300 Vietnamese letters typed with combining marks fit: counted in their composed form.
+      const full = bot({ sendPoll: [ok({ message_id: 24 })] });
+      expect(await new TelegramPublisher(full.fetchImpl).publish(asked({ poll: { options: ['ắ'.repeat(100).normalize('NFD'), 'b'] } }, 'ắ'.repeat(300).normalize('NFD')))).toMatchObject({ kind: 'accepted' });
+    });
+  });
+
   it('refuses what Telegram would refuse without calling it, and posts nothing when a file cannot be read', async () => {
     const { fetchImpl, calls } = bot({});
     const publisher = new TelegramPublisher(fetchImpl);
