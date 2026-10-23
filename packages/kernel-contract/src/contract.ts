@@ -88,6 +88,7 @@ import {
   zSocialReviewPlanCreate,
   zSocialReviewPlanLink,
   zSocialActivityItem,
+  zSocialCommentResolved,
   zSocialQueueSet,
   zSocialQueueShuffle,
   zSocialQueueMoveToFront,
@@ -392,6 +393,9 @@ export const contract = {
       // Internal comments (#582): never published; the author may fix one for 15 minutes.
       comment: oc.input(z.strictObject({ postId: zId, variantId: zId.optional(), body: z.string().trim().min(1).max(4000) })).output(z.object({ commentId: zId })),
       editComment: oc.input(z.strictObject({ commentId: zId, body: z.string().trim().min(1).max(4000) })).output(z.object({ commentId: zId, postId: zId })),
+      // Marks a comment as dealt with, or open again (#1168); the text stays.
+      resolveComment: oc.input(z.strictObject({ commentId: zId })).output(zSocialCommentResolved),
+      reopenComment: oc.input(z.strictObject({ commentId: zId })).output(zSocialCommentResolved),
       // The post's timeline, newest first: comments, decisions and what happened to it and its channels.
       activity: oc.input(z.object({ postId: zId })).output(z.object({ items: z.array(zSocialActivityItem), more: z.boolean() })),
       // The post's labels become exactly these (#639); its content and revision stay as they are.

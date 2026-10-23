@@ -12,6 +12,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Checkbox } from '@crove/ui/components/checkbox';
 import { cn } from '@crove/ui/lib/utils';
+import { OpenComments } from './social-activity.tsx';
 import { PostLabels, type SocialLabel } from './social-labels.tsx';
 import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -145,6 +146,7 @@ function Card({
               {providerName(v.provider)} · {t(`status.${variantStatusKey(v)}`)}
             </Badge>
           ))}
+        <OpenComments count={post.openComments} />
       </div>
       {(assignee || post.dueAt) && (
         <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">

@@ -15,6 +15,7 @@ import { cn } from '@crove/ui/lib/utils';
 import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { PEXELS_URL, StockCredit, StockPhotoSearch, pexelsHref, useStockPhotosEnabled } from '../components/social-stock-photos.tsx';
 import { SocialBoard } from '../components/social-board.tsx';
+import { OpenComments } from '../components/social-activity.tsx';
 import { useChannelScope } from '../components/social-channel-access.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
 import { CalendarFeedCard } from '../components/social-calendar-feed.tsx';
@@ -92,6 +93,7 @@ function PostRow({ post, slug, names, labels, right }: { post: Post; slug: strin
         <PostLabels ids={post.labelIds} labels={labels} />
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        <OpenComments count={post.openComments} />
         {isOverdue(post, Date.now()) && <Badge variant="destructive">{t('assign.overdue')}</Badge>}
         {right && <span className="text-xs text-subtle-foreground tabular-nums">{right}</span>}
       </div>

@@ -1,8 +1,10 @@
 // A post's internal comments and timeline (#582): members write a comment on the post or on one channel, the author
 // may fix it for 15 minutes, and everyone sees what happened to the post, newest first. Comments are never published.
+// A comment dealt with is marked resolved (#1168) and shows greyed, with who resolved it and when; it can be reopened.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
+import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
@@ -30,6 +32,16 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
       void queryClient.invalidateQueries({ queryKey: orpc.social.posts.activity.key() });
     },
   });
+  // Resolving or reopening changes the post's open count too, so the post is read again with the timeline.
+  const mark = useMutation({
+    mutationFn: (resolve: boolean) => (resolve ? client.social.posts.resolveComment({ commentId: item.id }) : client.social.posts.reopenComment({ commentId: item.id })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: orpc.social.posts.activity.key() });
+      void queryClient.invalidateQueries({ queryKey: orpc.social.posts.get.key() });
+      void queryClient.invalidateQueries({ queryKey: orpc.social.posts.list.key() });
+    },
+  });
+  const resolved = item.kind === 'comment' && item.resolvedAt !== null;
   const who = item.name ?? t(item.userId ? 'formerMember' : 'system');
   const what =
     item.kind === 'decision'
@@ -46,7 +58,7 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
               ? t(`queueMoved.${item.code}`)
               : t(`kind.${item.kind}`);
   return (
-    <li className={cn('space-y-1 border-l-2 py-1 pl-3 text-sm', item.kind === 'comment' ? 'border-primary' : 'border-border')}>
+    <li className={cn('space-y-1 border-l-2 py-1 pl-3 text-sm', item.kind === 'comment' && !resolved ? 'border-primary' : 'border-border', resolved && 'opacity-60')} data-resolved={resolved || undefined}>
       <p className="text-xs text-muted-foreground">
         <span className="font-medium text-foreground">{item.kind === 'published' || item.kind === 'failed' || item.kind === 'cancelled' || item.kind === 'auto_replied' || item.kind === 'auto_reply_failed' || item.kind === 'reposted' || item.kind === 'repost_failed' ? (channel ?? t('channel')) : who}</span>{' '}
         {what}
@@ -78,16 +90,29 @@ function Entry({ item, channel, canWrite }: { item: Item; channel: string | null
       ) : (
         item.body && (item.kind === 'comment' ? <CommentBody body={item.body} /> : <p className="whitespace-pre-wrap break-words text-foreground">{item.body}</p>)
       )}
-      {item.kind === 'comment' && item.editable && canWrite && editing === null && (
-        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => {
-            const shown = mentionsForEditing(item.body ?? '', labelOf);
-            setPicked(shown.picked);
-            setEditing(shown.text);
-          }}
-        >
-          {t('edit')}
-        </Button>
+      {resolved && item.resolvedAt && (
+        <p className="text-xs text-muted-foreground">{t('resolvedBy', { name: item.resolvedByName ?? t('formerMember'), when: f.dateTime(item.resolvedAt) })}</p>
       )}
+      {item.kind === 'comment' && canWrite && editing === null && (item.editable || item.resolvable) && (
+        <div className="flex flex-wrap gap-1">
+          {item.editable && (
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => {
+                const shown = mentionsForEditing(item.body ?? '', labelOf);
+                setPicked(shown.picked);
+                setEditing(shown.text);
+              }}
+            >
+              {t('edit')}
+            </Button>
+          )}
+          {item.resolvable && (
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={mark.isPending} onClick={() => mark.mutate(!resolved)}>
+              {t(resolved ? 'reopen' : 'resolve')}
+            </Button>
+          )}
+        </div>
+      )}
+      {mark.error && <ErrorText>{errorMessage(mark.error)}</ErrorText>}
     </li>
   );
 }
@@ -159,5 +184,16 @@ export function PostActivity({ postId, channels, canWrite, className }: { postId
         </>
       )}
     </Card>
+  );
+}
+
+// The comments of a post not resolved yet (#1168), on its row in the lists, its board card and the review inbox.
+export function OpenComments({ count }: { count: number }) {
+  const t = useTranslations('social');
+  if (count <= 0) return null;
+  return (
+    <Badge variant="warning" data-testid="open-comments">
+      {t('openComments', { count })}
+    </Badge>
   );
 }

@@ -480,6 +480,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         ),
         comment: os.social.posts.comment.handler(socialCommand('social.post_comment.add')),
         editComment: os.social.posts.editComment.handler(socialCommand('social.post_comment.edit')),
+        resolveComment: os.social.posts.resolveComment.handler(socialCommand('social.post_comment.resolve')),
+        reopenComment: os.social.posts.reopenComment.handler(socialCommand('social.post_comment.reopen')),
         activity: os.social.posts.activity.handler(socialQuery('social.post.activity')),
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         setRecurrence: os.social.posts.setRecurrence.handler(socialCommand('social.post.recurrence_set')),
