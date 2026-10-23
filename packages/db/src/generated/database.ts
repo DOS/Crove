@@ -1373,6 +1373,8 @@ export interface SocialPostVariantTable {
   removed_by: string | null;
   remove_reason: string | null;
   remove_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  outperform_checked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  outperform_notified_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.post_version */
