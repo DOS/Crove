@@ -12,15 +12,14 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
 import { ClientSocialFigures } from '../components/client-social.tsx';
 import { SupportLink } from '../components/support-link.tsx';
+import { DueWhen, TONE_CLASS, usePeriodLabel } from '../components/tax-due.tsx';
 import { DataTable, Empty, ErrorText, Logo, OrgLeftNotice, PageHeader, Spinner } from '../components/ui.tsx';
 import { LocaleSwitcher, useFormat, useLocaleSetting } from '../i18n/provider.tsx';
 import { clientForOrg, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { deadlineTone, periodParts, sortClients, type ClientDeadline } from '../lib/clients.ts';
 import { signOut } from '../lib/session-actions.ts';
-import { canMarkTaxDone, dueAcrossClients, taxPeriodParts, type TaxDueRow } from '../lib/tax-calendar.ts';
-
-const TONE_CLASS = { urgent: 'text-destructive', soon: 'text-warning', later: 'text-foreground' } as const;
+import { canMarkTaxDone, dueAcrossClients, type TaxDueRow } from '../lib/tax-calendar.ts';
 
 function Deadline({ deadline, slug, canChoose }: { deadline: ClientDeadline | null; slug: string; canChoose: boolean }) {
   const t = useTranslations('clients');
@@ -52,32 +51,6 @@ function Deadline({ deadline, slug, canChoose }: { deadline: ClientDeadline | nu
       <span className="block text-xs text-subtle-foreground">
         {period} · {t('daysLeft', { days: deadline.daysLeft })}
       </span>
-    </span>
-  );
-}
-
-// "Tháng 9/2026", "Quý 3/2026" or "Năm 2026".
-function usePeriodLabel() {
-  const t = useTranslations('clients');
-  const tt = useTranslations('taxCalendar');
-  return (period: string) => {
-    const parts = taxPeriodParts(period);
-    if (!parts) return period;
-    if (parts.kind === 'year') return tt('periodYear', { year: String(parts.year) });
-    return parts.kind === 'month'
-      ? t('periodMonth', { month: String(parts.index), year: String(parts.year) })
-      : t('periodQuarter', { quarter: String(parts.index), year: String(parts.year) });
-  };
-}
-
-function DueWhen({ due }: { due: { dueDate: string; daysLeft: number } }) {
-  const tt = useTranslations('taxCalendar');
-  const f = useFormat();
-  const tone = due.daysLeft < 0 ? 'text-destructive' : TONE_CLASS[deadlineTone(due.daysLeft)];
-  return (
-    <span className="block">
-      <span className={cn('font-medium tabular-nums', tone)}>{f.date(due.dueDate)}</span>
-      <span className="block text-xs text-subtle-foreground">{due.daysLeft < 0 ? tt('overdue', { days: -due.daysLeft }) : tt('daysLeft', { days: due.daysLeft })}</span>
     </span>
   );
 }

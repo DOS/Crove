@@ -245,10 +245,11 @@ export const zSocialClientFigures = z.object({
   lastPostAt: z.string().nullable(),
 });
 
-// An org's figures (issue #318), read in its own context. pendingProposals: proposals waiting in the Inbox. failedFiles:
-// files that could not be read among the ones the Inbox lists. lastActivityAt: the newest entry of the org's activity
-// feed. vatDeadline: the next VAT return due, from the org's filing period (null while none is chosen). modules: the
-// figures of the modules this deployment enables (#1261), with no key for a module it leaves out.
+// An org's figures (issue #318), read in its own context: on the multi-client home screen for each org, and on the
+// org's overview (#1249). pendingProposals: proposals waiting in the Inbox. failedFiles: files that could not be read
+// among the ones the Inbox lists. lastActivityAt: the newest entry of the org's activity feed. vatDeadline: the next
+// VAT return due, from the org's filing period (null while none is chosen). modules: the figures of the modules this
+// deployment enables (#1261), with no key for a module it leaves out.
 export const zOrgOverview = z.object({
   pendingProposals: z.number().int().nonnegative(),
   failedFiles: z.number().int().nonnegative(),
