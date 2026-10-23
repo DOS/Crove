@@ -1014,8 +1014,8 @@ describe('REMOVE_READY (#860)', () => {
     const exported: unknown[] = Object.values(channel);
     const adapters = exported.filter((x): x is { name: string; prototype: { remove?: unknown } } => typeof x === 'function' && x.name.endsWith('Publisher'));
     const removers = adapters.filter((a) => typeof a.prototype.remove === 'function').map((a) => a.name);
-    expect(removers.sort()).toEqual(['BlueskyPublisher', 'DiscordPublisher', 'MastodonPublisher', 'SandboxPublisher', 'TelegramPublisher', 'XPublisher']);
-    expect([...REMOVE_READY].sort()).toEqual(['bluesky', 'discord', 'mastodon', 'sandbox', 'telegram', 'x']);
+    expect(removers.sort()).toEqual(['BlueskyPublisher', 'DiscordPublisher', 'FacebookPagePublisher', 'MastodonPublisher', 'SandboxPublisher', 'TelegramPublisher', 'XPublisher', 'YouTubePublisher']);
+    expect([...REMOVE_READY].sort()).toEqual(['bluesky', 'discord', 'facebook_page', 'mastodon', 'sandbox', 'telegram', 'x', 'youtube']);
   });
 });
 

@@ -368,3 +368,47 @@ describe('FacebookPagePublisher Stories and Reels (#644)', () => {
     expect(calls).toEqual([]);
   });
 });
+describe('FacebookPagePublisher.remove (#1137)', () => {
+  const POST = `${PAGE}_42`;
+  const DELETE = `DELETE /${POST}`;
+  const READ = `GET /${POST}`;
+  const remove = (publisher: FacebookPagePublisher, externalId = POST) => publisher.remove({ externalAccountId: PAGE, secret: SECRET, externalId });
+  const gone = { status: 400, body: { error: { message: 'Unsupported delete request. Object with ID does not exist, cannot be loaded due to missing permissions, or does not support this operation', type: 'GraphMethodException', code: 100, error_subcode: 33 } } };
+
+  it('deletes the Page post with the Page token', async () => {
+    const { calls, publisher } = routed({ [DELETE]: [{ body: { success: true } }] });
+    expect(await remove(publisher)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.route, c.host, c.headers.get('authorization')])).toEqual([[DELETE, 'graph.facebook.com', 'Bearer page-token-1']]);
+  });
+
+  it('counts a post Meta no longer has as removed once a read of it says the same', async () => {
+    const { calls, publisher } = routed({ [DELETE]: [gone], [READ]: [{ status: 400, body: { error: { message: 'Object does not exist', type: 'GraphMethodException', code: 100, error_subcode: 33 } } }] });
+    expect(await remove(publisher)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => c.route)).toEqual([DELETE, READ]);
+  });
+
+  it('maps a post Meta keeps, a missing permission, a dead token and a rate limit to clear refusals', async () => {
+    const kept = routed({ [DELETE]: [gone], [READ]: [{ body: { id: POST } }] });
+    expect(await remove(kept.publisher)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'FACEBOOK_CANNOT_DELETE' });
+    expect(await remove(routed({ [DELETE]: [graphError(403, 200, 'Requires pages_manage_posts')] }).publisher)).toMatchObject({ kind: 'rejected', error: 'permission', code: '200' });
+    expect(await remove(routed({ [DELETE]: [graphError(400, 190, 'Error validating access token')] }).publisher)).toMatchObject({ kind: 'rejected', error: 'token_expired', code: '190' });
+    expect(await remove(routed({ [DELETE]: [graphError(400, 32, 'Page request limit reached')] }).publisher)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+  });
+
+  it('leaves an outage, a lost answer and an unconfirmed delete unclear', async () => {
+    expect(await remove(routed({ [DELETE]: [graphError(500, 2, 'Service temporarily unavailable')] }).publisher)).toMatchObject({ kind: 'unknown', code: '2' });
+    expect(await remove(fake(new TypeError('fetch failed')).publisher)).toEqual({ kind: 'unknown', code: 'NETWORK' });
+    expect(await remove(routed({ [DELETE]: [{ body: { success: false } }] }).publisher)).toEqual({ kind: 'unknown', code: 'NOT_DELETED' });
+    // The read after "does not exist" did not answer: the post may still be up.
+    expect(await remove(routed({ [DELETE]: [gone], [READ]: [graphError(500, 1, 'An unknown error occurred')] }).publisher)).toEqual({ kind: 'unknown', code: 'DELETE_UNCONFIRMED' });
+  });
+
+  it('sends only a post id of the connected Page, and nothing without a Page token', async () => {
+    const { calls, publisher } = routed({});
+    expect(await remove(publisher, '42')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await remove(publisher, '999888777_42')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await remove(publisher, `${PAGE}_42/comments`)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await publisher.remove({ externalAccountId: PAGE, secret: '{}', externalId: POST })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' });
+    expect(calls).toEqual([]);
+  });
+});

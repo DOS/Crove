@@ -3250,6 +3250,8 @@ export const vi = {
       unknown: 'Chưa rõ bài đã được gỡ chưa; hãy xem trên kênh rồi thử lại',
       code: {
         TELEGRAM_CANNOT_DELETE: 'Telegram chỉ cho gỡ bài trong 48 giờ sau khi đăng; hãy gỡ trực tiếp trên Telegram',
+        FACEBOOK_CANNOT_DELETE: 'Facebook không cho {brand} gỡ bài này; hãy gỡ trực tiếp trên Trang',
+        RECONNECT_FOR_REMOVE: 'Hãy kết nối lại kênh YouTube và cho phép quản lý video, rồi thử gỡ lại',
         REMOVE_NOT_RUN: 'Yêu cầu gỡ chưa được xử lý; hãy thử lại',
       },
     },

@@ -220,9 +220,9 @@ suite('removing a published post on PostgreSQL (#860)', () => {
     const draftId = (await get(o, draft.postId)).variants[0]?.id as string;
     await expect(exec(o, 'social.variant.remove', { variantId: draftId })).rejects.toMatchObject({ code: 'VARIANT_NOT_PUBLISHED' });
 
-    // A published channel on a platform whose adapter has no remove (as if it were a Facebook Page).
+    // A published channel on a platform whose adapter has no remove (as if it were a Threads account).
     const other = await publishedPost(o, sandbox);
-    await admin((c) => c.query("UPDATE crove_social.post_variant SET provider = 'facebook_page' WHERE id = $1", [other.id]));
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET provider = 'threads' WHERE id = $1", [other.id]));
     await expect(exec(o, 'social.variant.remove', { variantId: other.id })).rejects.toMatchObject({ code: 'REMOVE_NOT_SUPPORTED' });
     // And the job never removes what the command did not ask for.
     expect(await runRemoveJob(deps(sandbox), o.orgId, other.id, 'sandbox', null)).toEqual({ action: 'none', reason: 'provider_mismatch' });

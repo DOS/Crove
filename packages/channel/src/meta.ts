@@ -23,9 +23,11 @@ import type {
   RecentPostsResult,
   ReconcileInput,
   ReconcileResult,
+  RemoveInput,
+  RemoveResult,
   RetrySafety,
 } from './index.ts';
-import { commentResult } from './comment.ts';
+import { commentResult, removeResult } from './comment.ts';
 import { graphTime, pagingCursor, platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { videoCoverOf } from './cover.ts';
 import { postTypeOf } from './post-type.ts';
@@ -96,7 +98,7 @@ export class Graph {
   }
 
   // video: the call goes to Graph's video host; timeoutMs: longer than the default for an upload.
-  async call<T>(method: 'GET' | 'POST', path: string, options: { token?: string; params?: Record<string, string>; form?: Record<string, string>; multipart?: FormData; video?: boolean; timeoutMs?: number } = {}): Promise<T> {
+  async call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, options: { token?: string; params?: Record<string, string>; form?: Record<string, string>; multipart?: FormData; video?: boolean; timeoutMs?: number } = {}): Promise<T> {
     const params = { ...options.params };
     const headers: Record<string, string> = { accept: 'application/json' };
     if (options.token) {
@@ -549,6 +551,38 @@ export class FacebookPagePublisher implements Publisher {
       return { kind: 'accepted', externalId: answer.id.slice(0, 500) };
     } catch (error) {
       return commentResult(graphPublishResult(error));
+    }
+  }
+
+  // Deletes the Page's own post (#1137): `DELETE /{page-post-id}` with the Page token (pages_manage_posts, which connect
+  // requires), answered { success: true }. Every post Crove makes is named as a Page post, <page>_<post>: a feed post
+  // with photos (the photos were uploaded unpublished and belong to the post), a Story, and a video or Reel as
+  // <page>_<video> (#443). Only an id of this Page is sent, so a bare object id never deletes something else. Meta
+  // answers code 100 with subcode 33 both for a post it no longer has and for one it will not delete or let the token
+  // load, so that answer is checked with a read of the post: gone there too counts as removed; a post that is still
+  // there is FACEBOOK_CANNOT_DELETE (a person removes it on Facebook); anything else stays unclear.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const token = pageToken(input.secret);
+    if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
+    const id = /^(\d{1,32})_\d{1,32}$/.exec(input.externalId);
+    if (!id || id[1] !== input.externalAccountId) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      const answer = await this.graph.call<{ success?: unknown }>('DELETE', input.externalId, { token });
+      return answer.success === true ? { kind: 'removed' } : { kind: 'unknown', code: 'NOT_DELETED' };
+    } catch (error) {
+      if (error instanceof GraphError && error.code === 100 && error.subcode === 33) return this.removedAlready(input.externalId, token);
+      return removeResult(graphPublishResult(error));
+    }
+  }
+
+  // After a delete answered "does not exist or cannot be loaded": whether the post is really gone.
+  private async removedAlready(postId: string, token: string): Promise<RemoveResult> {
+    try {
+      await this.graph.call<{ id?: unknown }>('GET', postId, { token, params: { fields: 'id' } });
+      return { kind: 'rejected', error: 'bad_request', code: 'FACEBOOK_CANNOT_DELETE' };
+    } catch (error) {
+      if (error instanceof GraphError && error.code === 100 && error.subcode === 33) return { kind: 'removed' };
+      return { kind: 'unknown', code: 'DELETE_UNCONFIRMED' };
     }
   }
 

@@ -445,3 +445,41 @@ describe('YouTube playlists picked from the list go in as pasted ones (#1131)', 
     expect(await publisher.playlist(item)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'PLAYLIST_NOT_FOUND' });
   });
 });
+
+describe('YouTube remove (#1137)', () => {
+  const VIDEO = 'dQw4w9WgXcQ';
+  const DELETE = 'DELETE www.googleapis.com/youtube/v3/videos';
+  const remove = (fetchImpl: Fetch, externalId = VIDEO) => new YouTubePublisher(APP, fetchImpl).remove({ externalAccountId: CHANNEL, secret: SECRET, externalId });
+  const refusal = (status: number, reason: string, message: string) => ({ status, body: { error: { code: status, message, errors: [{ reason }] } } });
+
+  it('deletes the video with the channel token (204, no body)', async () => {
+    const { fetchImpl, calls } = google({ [DELETE]: [{ status: 204 }] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => [c.route, c.url.searchParams.get('id'), c.headers.get('authorization')])).toEqual([[DELETE, VIDEO, 'Bearer ya29.token-1']]);
+  });
+
+  it('counts a video YouTube no longer has as removed', async () => {
+    const { fetchImpl } = google({ [DELETE]: [refusal(404, 'videoNotFound', 'The video identified by the id parameter could not be found.')] });
+    expect(await remove(fetchImpl)).toEqual({ kind: 'removed' });
+  });
+
+  it('tells a grant without the force-ssl scope, a refused delete, a dead token and a spent quota apart', async () => {
+    const scope = google({ [DELETE]: [refusal(403, 'insufficientPermissions', 'Request had insufficient authentication scopes.')] });
+    expect(await remove(scope.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_REMOVE' });
+    const forbidden = google({ [DELETE]: [refusal(403, 'forbidden', 'The video cannot be deleted.')] });
+    expect(await remove(forbidden.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'forbidden' });
+    const expired = google({ [DELETE]: [refusal(401, 'authError', 'Invalid Credentials')] });
+    expect(await remove(expired.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    const quota = google({ [DELETE]: [refusal(403, 'quotaExceeded', 'The request cannot be completed because you have exceeded your quota.')] });
+    expect(await remove(quota.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'quotaExceeded' });
+  });
+
+  it('leaves an outage unclear, and calls nothing for a malformed id or a missing token', async () => {
+    const down = google({ [DELETE]: [refusal(503, 'backendError', 'Backend Error')] });
+    expect(await remove(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'backendError' });
+    const none = google({});
+    expect(await remove(none.fetchImpl, 'not-a-video-id')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await new YouTubePublisher(APP, none.fetchImpl).remove({ externalAccountId: CHANNEL, secret: '{}', externalId: VIDEO })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
+    expect(none.calls).toHaveLength(0);
+  });
+});
