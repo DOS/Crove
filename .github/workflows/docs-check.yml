@@ -38,3 +38,10 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
           node tools/ci/migration-order.mjs "origin/$BASE_REF" HEAD^1
+
+      # G2 migration-lint (plan §5.5, #1201): the content rules for the migrations this PR adds or changes. The
+      # allowlist of files already on main is read from the base branch, so a PR cannot exempt its own file.
+      - name: Migration lint
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: node tools/ci/migration-lint.mjs --allowlist-ref "origin/$BASE_REF" --since HEAD^1
