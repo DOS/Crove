@@ -96,7 +96,7 @@ REVOKE ALL ON FUNCTION crove_social.digest_due(uuid, int) FROM PUBLIC, crove_ten
 GRANT EXECUTE ON FUNCTION crove_social.digest_due(uuid, int) TO crove_worker;
 
 -- The org purge (#1024) deletes crove_social.digest_week with the org's other Social rows (#1104). The function
--- is copied verbatim from 20261029010000_crove_social_channel_access.sql, with only this table added to v_social;
+-- is copied verbatim from 20261029040000_crove_social_review_checklist.sql, with only this table added to v_social;
 -- the runbook's deletion map already says every crove_social table but post_approval is deleted.
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
 RETURNS TABLE (outcome text, counts jsonb, blob_keys text[])
@@ -142,7 +142,7 @@ DECLARE
     'crove_social.post_comment', 'crove_social.post_media', 'crove_social.post_version', 'crove_social.publish_hold', 'crove_social.report_link',
     'crove_social.report_schedule_run', 'crove_social.report_schedule', 'crove_social.review_feedback',
     'crove_social.review_link_post', 'crove_social.review_link', 'crove_social.short_link_click',
-    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.goal', 'crove_social.banned_word', 'crove_social.external_import', 'crove_social.external_post', 'crove_social.channel_access', 'crove_social.digest_week'];
+    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.goal', 'crove_social.banned_word', 'crove_social.external_import', 'crove_social.external_post', 'crove_social.channel_access', 'crove_social.review_check', 'crove_social.digest_week'];
 BEGIN
   -- Also refuses a definer owner or another role reached through a mistaken grant: only the worker login, in the
   -- sealed system context of the org it purges (execute() of kernel.org.purge).
