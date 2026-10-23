@@ -104,7 +104,8 @@ suite('YouTube playlists and WordPress terms as channel options on PostgreSQL (#
   const optionId = async (o: Org, connectionId: string) =>
     admin(async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_social.channel_option WHERE org_id = $1 AND channel_connection_id = $2', [o.orgId, connectionId])).rows[0]?.id as string);
   const stored = (id: string) => admin(async (c) => (await c.query<{ kind: string; status: string; items: string; error: string | null }>('SELECT kind, status, items::text AS items, error FROM crove_social.channel_option WHERE id = $1', [id])).rows[0]);
-  const job = (o: Org, id: string, publishers: Readonly<Record<string, Publisher>>) => runChannelOptionJob({ runtime: worker, broker: vault, publishers }, o.orgId, id);
+  const job = (o: Org, id: string, publishers: Readonly<Record<string, Publisher>>, deadlineMs?: number) =>
+    runChannelOptionJob({ runtime: worker, broker: vault, publishers, ...(deadlineMs === undefined ? {} : { deadlineMs }) }, o.orgId, id);
   const system = (o: Org) => ({ actor: { type: 'system' as const, component: 'channel-option-kinds-test' }, orgId: o.orgId });
 
   // SQL in the context of a member of the org, as the API's login role runs it; rolled back.
@@ -319,5 +320,53 @@ suite('YouTube playlists and WordPress terms as channel options on PostgreSQL (#
     const odd = { options: async () => ({ options: [{ id: '1', name: 'Không có loại' }] }) } as unknown as Publisher;
     expect(await job(o, await optionId(o, third.connectionId), { wordpress: odd })).toBe('failed');
     expect(await get(o, o.member, third.connectionId)).toMatchObject({ status: 'failed', error: 'no_answer', options: [] });
+  });
+
+  it('answers no list when a site is too slow, without holding the worker, and asks it nothing more', async () => {
+    const o = await org();
+    const w = await wordpress(o);
+    await request(o, o.member, w.connectionId);
+    // A site that answers after ten seconds, whatever the signal says, as a request through the egress guard does.
+    const urls: string[] = [];
+    const slow: Fetch = async (input) => {
+      urls.push(input);
+      await new Promise((resolve) => setTimeout(resolve, 10_000));
+      return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const started = Date.now();
+    expect(await job(o, await optionId(o, w.connectionId), { wordpress: new WordPressPublisher(slow) }, 300)).toBe('failed');
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(await get(o, o.member, w.connectionId)).toMatchObject({ status: 'failed', error: 'no_answer', options: [] });
+    expect(urls).toHaveLength(1);
+    // A platform whose request honours the deadline is aborted at it.
+    const y = await youtube(o);
+    await request(o, o.member, y.connectionId);
+    const hanging: Fetch = (_input, init) => new Promise((_, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true }));
+    expect(await job(o, await optionId(o, y.connectionId), { youtube: new YouTubePublisher(GOOGLE, hanging) }, 300)).toBe('failed');
+    expect(await get(o, o.member, y.connectionId)).toMatchObject({ status: 'failed', error: 'no_answer' });
+  });
+
+  it('stores a list of long names cut at the byte cap, and refuses to record one past it', async () => {
+    const o = await org();
+    const w = await wordpress(o);
+    await request(o, o.member, w.connectionId);
+    const id = await optionId(o, w.connectionId);
+    // Five pages of categories with 200-letter Vietnamese names: 500 of them would pass the CHECK on items.
+    const page = (n: number) => Array.from({ length: 100 }, (_, i) => ({ id: n * 100 + i + 1, name: `${'ệ'.repeat(195)} ${n * 100 + i}` }));
+    const site = platform({ [`GET ${w.host}/wp-json/wp/v2/categories`]: [0, 1, 2, 3, 4].map((n) => ({ body: page(n) })) });
+    expect(await job(o, id, { wordpress: new WordPressPublisher(site.fetchImpl) })).toBe('ready');
+    const listed = (await get(o, o.member, w.connectionId))?.options ?? [];
+    expect(listed.length).toBeGreaterThan(100);
+    expect(listed.length).toBeLessThan(500);
+    const bytes = await admin(async (c) => (await c.query<{ n: number }>('SELECT octet_length(items::text) AS n FROM crove_social.channel_option WHERE id = $1', [id])).rows[0]?.n ?? 0);
+    expect(bytes).toBeLessThanOrEqual(131_072);
+    // The record command refuses a list past the cap with a 422, rather than leaving it to the database.
+    await admin((c) => c.query("UPDATE crove_social.channel_option SET status = 'pending', error = NULL, fetched_at = NULL WHERE id = $1", [id]));
+    const options = [0, 1, 2, 3, 4].flatMap(page).map((t) => ({ id: String(t.id), name: t.name, taxonomy: 'category' }));
+    await expect(worker.execute('social.channel_option.record', { optionId: id, result: { ok: true, options } }, system(o))).rejects.toMatchObject({ status: 422 });
+    // The worker cuts what an adapter hands it to the cap before recording.
+    const loose = { options: async () => ({ options }) } as unknown as Publisher;
+    expect(await job(o, id, { wordpress: loose })).toBe('ready');
+    expect((await get(o, o.member, w.connectionId))?.options.length).toBe(listed.length);
   });
 });

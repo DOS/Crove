@@ -3573,7 +3573,7 @@ export const en = {
     ytPlaylistGone: '{count, plural, one {A chosen playlist is} other {# chosen playlists are}} no longer on the channel',
     ytPlaylistListFailed: {
       token_expired: 'The playlists could not be loaded because the channel needs reconnecting.',
-      permission: 'The playlists could not be loaded because the channel may not read them.',
+      permission: 'The playlists could not be loaded because {brand} was not given the right to read the channel’s playlists.',
       not_found: 'YouTube no longer has this channel.',
       no_answer: 'YouTube did not answer. Try reloading in a few minutes.',
     },

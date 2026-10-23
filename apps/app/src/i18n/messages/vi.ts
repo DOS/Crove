@@ -3572,7 +3572,7 @@ export const vi = {
     ytPlaylistGone: 'Có {count, number} danh sách phát đã chọn không còn trên kênh',
     ytPlaylistListFailed: {
       token_expired: 'Không tải được các danh sách phát vì kênh cần kết nối lại.',
-      permission: 'Không tải được các danh sách phát vì kênh chưa cho phép xem.',
+      permission: 'Không tải được các danh sách phát vì {brand} chưa được cấp quyền xem danh sách phát.',
       not_found: 'Không tìm thấy kênh này trên YouTube.',
       no_answer: 'YouTube chưa trả lời. Hãy thử tải lại sau ít phút.',
     },

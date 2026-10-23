@@ -14,7 +14,7 @@ import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import { SOCIAL_CHANNEL_OPTION_ERRORS, type MemberRole, type SocialChannelOptionError, type SocialChannelOptionKind, type SocialChannelOptionStatus } from '@crove/db';
-import { CHANNEL_OPTIONS_MAX, CHANNEL_OPTION_NAME_MAX, OPTION_NAME_INVISIBLE, WORDPRESS_TAXONOMIES, type ChannelOption, type ChannelOptionsResult, type Publisher } from '@crove/channel';
+import { CHANNEL_OPTIONS_BYTES_MAX, CHANNEL_OPTIONS_DEADLINE_MS, CHANNEL_OPTIONS_MAX, CHANNEL_OPTION_NAME_MAX, OPTION_NAME_INVISIBLE, WORDPRESS_TAXONOMIES, capOptions, withCallSignal, type ChannelOption, type ChannelOptionsResult, type Publisher } from '@crove/channel';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type CredentialBroker, type QueryContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { CHANNEL_OPTION_KIND_OF, isProvider } from './domain/channels.ts';
 import { refuseChannels } from './channel-access.ts';
@@ -57,7 +57,9 @@ const zOptions = z
   .array(zOption)
   .max(CHANNEL_OPTIONS_MAX)
   .refine((list) => new Set(list.map((o) => `${o.taxonomy ?? ''}:${o.id}`)).size === list.length, 'distinct ids')
-  .refine((list) => list.every((o) => o.taxonomy !== undefined) || list.every((o) => o.taxonomy === undefined), 'a taxonomy on every item or on none');
+  .refine((list) => list.every((o) => o.taxonomy !== undefined) || list.every((o) => o.taxonomy === undefined), 'a taxonomy on every item or on none')
+  // Within the CHECK on items, so a list that passes here is stored rather than refused by the database.
+  .refine((list) => capOptions(list).length === list.length, `at most ${CHANNEL_OPTIONS_BYTES_MAX} bytes`);
 
 // Whether a list's items have the shape of its kind: a taxonomy on every WordPress term, on no other item.
 const fitsKind = (kind: SocialChannelOptionKind, options: readonly ChannelOption[]) => options.every((o) => (o.taxonomy !== undefined) === (kind === 'wordpress_term'));
@@ -217,7 +219,11 @@ export interface ChannelOptionDeps {
   runtime: Runtime;
   broker: CredentialBroker;
   publishers: Readonly<Record<string, Publisher>>;
+  // How long the adapter may take for the whole list; CHANNEL_OPTIONS_DEADLINE_MS unless a test sets it.
+  deadlineMs?: number;
 }
+
+class Deadline extends Error {}
 
 // The worker's job for one request: list the options with the channel's token and record them. A credential that will
 // not open (its connecting member left, the connection was dropped) is recorded as refused; a failure to record is
@@ -232,6 +238,7 @@ export async function runChannelOptionJob(deps: ChannelOptionDeps, orgId: string
   };
   const publisher = deps.publishers[target.provider];
   if (!publisher?.options) return record({ ok: false, error: 'no_answer' });
+  const listOptions = publisher.options.bind(publisher);
   let secret: string;
   let externalAccountId: string;
   try {
@@ -242,14 +249,30 @@ export async function runChannelOptionJob(deps: ChannelOptionDeps, orgId: string
     if (error instanceof DomainError && error.status < 500) return record({ ok: false, error: 'permission' });
     throw error;
   }
+  // One queue serves every org, so the list has a deadline (#1131): past it the adapter's requests are aborted (those
+  // through allowlistedFetch at once; it asks no further page), the job stops waiting, and the list is no answer.
+  const call = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
   let result: ChannelOptionsResult = null;
   try {
-    result = await publisher.options({ externalAccountId, secret, kind: target.kind });
+    result = await Promise.race([
+      withCallSignal(call.signal, () => listOptions({ externalAccountId, secret, kind: target.kind, signal: call.signal })),
+      new Promise<never>(
+        (_, reject) =>
+          (timer = setTimeout(() => {
+            reject(new Deadline('channel options took too long'));
+            call.abort(new Deadline('channel options took too long'));
+          }, deps.deadlineMs ?? CHANNEL_OPTIONS_DEADLINE_MS)),
+      ),
+    ]);
   } catch {
     result = null;
+  } finally {
+    clearTimeout(timer);
   }
   if (!result) return record({ ok: false, error: 'no_answer' });
   if ('refused' in result) return record({ ok: false, error: result.refused });
-  const valid = zOptions.safeParse(result.options);
+  // Cut to what a list keeps (500 items, the byte cap), as the adapters do, before it is checked.
+  const valid = zOptions.safeParse(Array.isArray(result.options) ? capOptions(result.options) : result.options);
   return valid.success && fitsKind(target.kind, valid.data) ? record({ ok: true, options: valid.data }) : record({ ok: false, error: 'no_answer' });
 }

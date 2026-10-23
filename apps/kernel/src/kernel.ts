@@ -39,6 +39,7 @@ import {
   ZaloOaConnector,
   ZaloOaPublisher,
   ZaloOaRefresher,
+  CHANNEL_OPTIONS_CALL_TIMEOUT_MS,
   type OAuthConnector,
   type Publisher,
   type Refresher,
@@ -229,8 +230,12 @@ export function channelPublishers(config: ChannelConfig): Record<string, Publish
   if (config.CHANNEL_DISCORD === 'true') publishers.discord = new DiscordPublisher();
   // An instance is the tenant's to name: its calls go through the egress guard, never a plain fetch.
   if (config.CHANNEL_MASTODON === 'true') publishers.mastodon = new MastodonPublisher(egressFetch({ timeoutMs: 300_000, maxBytes: 2_000_000, overLimit: 'fail' }));
-  // A WordPress site is the tenant's to name too (#833); each call, an image upload among them, gets two minutes.
-  if (config.CHANNEL_WORDPRESS === 'true') publishers.wordpress = new WordPressPublisher(egressFetch({ timeoutMs: 120_000, maxBytes: 2_000_000, overLimit: 'fail' }));
+  // A WordPress site is the tenant's to name too (#833); each call, an image upload among them, gets two minutes. A page
+  // of the composer's list of its categories and tags (#1131) gets CHANNEL_OPTIONS_CALL_TIMEOUT_MS, so a slow site cannot
+  // hold the option queue every org shares.
+  if (config.CHANNEL_WORDPRESS === 'true') {
+    publishers.wordpress = new WordPressPublisher(egressFetch({ timeoutMs: 120_000, maxBytes: 2_000_000, overLimit: 'fail' }), egressFetch({ timeoutMs: CHANNEL_OPTIONS_CALL_TIMEOUT_MS, maxBytes: 2_000_000, overLimit: 'fail' }));
+  }
   if (config.CHANNEL_META_APP_ID && config.CHANNEL_META_APP_SECRET) {
     publishers.facebook_page = new FacebookPagePublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
     publishers.instagram = new InstagramPublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });

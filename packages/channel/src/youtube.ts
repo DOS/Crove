@@ -14,7 +14,7 @@
 // variant names (settings.youtube.playlistIds, at most 5), one call each (50 quota units), with the force-ssl scope too.
 // A refused insert (a playlist deleted since) never touches the video. playlists() lists the channel's own playlists
 // (playlists.list mine=true, one quota unit a page) for the composer's picker, through options() (#1131).
-import { CHANNEL_OPTIONS_MAX, optionName, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
+import { CHANNEL_OPTIONS_MAX, OptionList, optionCallSignal, optionName, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
 import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, PlaylistInput, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety } from './index.ts';
 import { coverImageType, videoCoverOf } from './cover.ts';
 import { commentResult } from './comment.ts';
@@ -37,6 +37,7 @@ const PLAYLISTS_PAGE = 50;
 const PAGE_TOKEN_MAX = 200;
 // Google's refusals for the project's quota or a burst, which come as 403 too.
 const QUOTA_REASONS = ['quotaExceeded', 'rateLimitExceeded', 'userRateLimitExceeded', 'dailyLimitExceeded'];
+const titled = (list: OptionList) => list.options.map((o) => ({ id: o.id, title: o.name }));
 const PRIVACY = ['public', 'unlisted', 'private'] as const;
 // YouTube's own limits on a video's metadata.
 const TITLE_MAX = 100;
@@ -112,7 +113,7 @@ class GoogleClient {
   }
 
   // timeoutMs: 30 seconds for a JSON call, more for the video bytes (the PUT of up to 100 MB).
-  async call<T>(method: 'GET' | 'POST' | 'PUT', url: string, token: string, options: { json?: unknown; bytes?: { data: Uint8Array; type: string }; timeoutMs?: number } = {}): Promise<{ body: T | null; location: string | null }> {
+  async call<T>(method: 'GET' | 'POST' | 'PUT', url: string, token: string, options: { json?: unknown; bytes?: { data: Uint8Array; type: string }; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<{ body: T | null; location: string | null }> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     let body: string | Blob | undefined;
     if (options.json !== undefined) {
@@ -122,7 +123,7 @@ class GoogleClient {
       headers['content-type'] = options.bytes.type;
       body = new Blob([new Uint8Array(options.bytes.data)], { type: options.bytes.type });
     }
-    const response = await this.fetch(url, { method, headers, signal: AbortSignal.timeout(options.timeoutMs ?? 30_000), ...(body === undefined ? {} : { body }) });
+    const response = await this.fetch(url, { method, headers, signal: options.signal ?? AbortSignal.timeout(options.timeoutMs ?? 30_000), ...(body === undefined ? {} : { body }) });
     const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!response.ok) throw new YouTubeError(response.status, json);
     return { body: json as T | null, location: response.headers.get('location') };
@@ -398,31 +399,32 @@ export class YouTubePublisher implements Publisher {
   }
 
   // The channel's own playlists (playlists.list mine=true, one quota unit a page of 50), following nextPageToken from
-  // page to page, at most CHANNEL_OPTIONS_MAX; it only reads. Titles are cleaned as every option name is (one line, no
-  // invisible marks, at most CHANNEL_OPTION_NAME_MAX characters). not_found: the account has no channel any more; null:
-  // Google did not answer, or the project's quota is spent (try again later).
-  async playlists(input: { secret: string }): Promise<{ playlists: { id: string; title: string }[] } | { refused: 'token_expired' | 'permission' | 'not_found' } | null> {
+  // page to page, at most CHANNEL_OPTIONS_MAX and the list's byte cap; it only reads. Titles are cleaned as every option
+  // name is (one line, no invisible marks, at most CHANNEL_OPTION_NAME_MAX characters). Each page has its own shorter
+  // timeout, and none is asked once the worker's deadline (signal) has passed. not_found: the account has no channel any
+  // more; null: Google did not answer in time, or the project's quota is spent (try again later).
+  async playlists(input: { secret: string; signal?: AbortSignal | undefined }): Promise<{ playlists: { id: string; title: string }[] } | { refused: 'token_expired' | 'permission' | 'not_found' } | null> {
     const s = youtubeSecretOf(input.secret);
     if (!s) return { refused: 'token_expired' };
-    const playlists: { id: string; title: string }[] = [];
+    const list = new OptionList();
     const seen = new Set<string>();
     let pageToken: string | null = null;
     try {
       for (let page = 0; page < Math.ceil(CHANNEL_OPTIONS_MAX / PLAYLISTS_PAGE); page += 1) {
         const query: string = `part=snippet&mine=true&maxResults=${PLAYLISTS_PAGE}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
-        const answer = await this.client.call<{ items?: unknown; nextPageToken?: unknown }>('GET', `${API}/playlists?${query}`, s.accessToken);
+        input.signal?.throwIfAborted();
+        const answer = await this.client.call<{ items?: unknown; nextPageToken?: unknown }>('GET', `${API}/playlists?${query}`, s.accessToken, { signal: optionCallSignal(input.signal) });
         if (answer.body === null || (answer.body.items !== undefined && !Array.isArray(answer.body.items))) return null;
         for (const item of (answer.body.items ?? []) as ({ id?: unknown; snippet?: { title?: unknown } } | null)[]) {
           if (!item || typeof item.id !== 'string' || !YOUTUBE_PLAYLIST_ID.test(item.id) || seen.has(item.id)) continue;
           seen.add(item.id);
-          playlists.push({ id: item.id, title: (typeof item.snippet?.title === 'string' ? optionName(item.snippet.title) : '') || item.id });
-          if (playlists.length >= CHANNEL_OPTIONS_MAX) return { playlists };
+          if (!list.add({ id: item.id, name: (typeof item.snippet?.title === 'string' ? optionName(item.snippet.title) : '') || item.id })) return { playlists: titled(list) };
         }
         const next = answer.body.nextPageToken;
         pageToken = typeof next === 'string' && next && next.length <= PAGE_TOKEN_MAX ? next : null;
         if (!pageToken) break;
       }
-      return { playlists };
+      return { playlists: titled(list) };
     } catch (error) {
       if (error instanceof YouTubeError && error.status === 401) return { refused: 'token_expired' };
       // The project's daily quota or a burst limit is not the channel's refusal: try again later.
@@ -438,7 +440,7 @@ export class YouTubePublisher implements Publisher {
   async options(input: ChannelOptionsInput): Promise<ChannelOptionsResult> {
     if (!youtubeSecretOf(input.secret)) return { refused: 'token_expired' };
     if (input.kind !== 'youtube_playlist' || !CHANNEL_ID.test(input.externalAccountId)) return { refused: 'not_found' };
-    const listed = await this.playlists({ secret: input.secret });
+    const listed = await this.playlists({ secret: input.secret, signal: input.signal });
     if (listed === null || 'refused' in listed) return listed;
     return { options: listed.playlists.map((p) => ({ id: p.id, name: p.title })) };
   }

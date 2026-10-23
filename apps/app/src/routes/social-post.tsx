@@ -159,7 +159,8 @@ function PlaylistsField({ ids, onChange, disabled, connectionId }: { ids: readon
   const list = useChannelOptions(connectionId);
   const { ready, options } = list;
   const nameOf = (playlist: string) => options.find((o) => o.id === playlist)?.name ?? null;
-  const gone = ready ? ids.filter((playlist) => nameOf(playlist) === null) : [];
+  // Only a list that holds every playlist can tell one is gone.
+  const gone = ready && listedAll(options) ? ids.filter((playlist) => nameOf(playlist) === null) : [];
   const left = options.filter((o) => !ids.includes(o.id));
   const add = () => {
     const playlist = youtubePlaylistIdFrom(text);
@@ -489,8 +490,18 @@ function NamesField({ label, hint, names, max, onChange, disabled }: { label: st
 
 // A WordPress name as the site compares it (#981): spaces collapsed, case ignored.
 const termKeyOf = (name: string) => name.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
-// The most options a list keeps (CHANNEL_OPTIONS_MAX in @crove/channel, which the browser does not import).
+// The most options a list keeps and the bytes they may take (CHANNEL_OPTIONS_MAX and CHANNEL_OPTIONS_BYTES_MAX in
+// @crove/channel, which the browser does not import).
 const CHANNEL_OPTIONS_LISTED_MAX = 500;
+const CHANNEL_OPTIONS_LISTED_BYTES = 131_072;
+// Room for one more option of the longest kind (a 200-character name of 4-byte characters, its id and taxonomy).
+const OPTION_BYTES_ROOM = 1_024;
+// Whether a read list holds everything the platform has: not when it stopped at 500 items or near the byte cap, where
+// what is missing may simply not have fitted.
+function listedAll(options: readonly { id: string; name: string }[]): boolean {
+  const bytes = new TextEncoder().encode(JSON.stringify(options)).length + 8 * options.length;
+  return options.length < CHANNEL_OPTIONS_LISTED_MAX && bytes + OPTION_BYTES_ROOM <= CHANNEL_OPTIONS_LISTED_BYTES;
+}
 
 // A WordPress category or tag chosen by name from the site's list (#1131), added to the names typed above it, as a
 // typed name would be. The names are the site's text, shown as text only; one entry per name.
@@ -541,7 +552,7 @@ function WordPressSettings({ connectionId, settings, onChange, disabled }: { con
   const listedCategories = list.options.filter((o) => o.taxonomy === 'category');
   const listedTags = list.options.filter((o) => o.taxonomy === 'tag');
   // Categories come first in the list, so it holds every one of them unless they alone filled it.
-  const everyCategory = list.ready && (listedTags.length > 0 || list.options.length < CHANNEL_OPTIONS_LISTED_MAX);
+  const everyCategory = list.ready && (listedTags.length > 0 || listedAll(list.options));
   const missingCategories = everyCategory ? names('categories').filter((n) => !listedCategories.some((c) => termKeyOf(c.name) === termKeyOf(n))) : [];
   return (
     <div className="space-y-2">
