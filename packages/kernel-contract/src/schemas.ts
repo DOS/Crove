@@ -1840,6 +1840,8 @@ export const zSocialChannelOptions = z.object({
   options: z.array(z.object({ id: z.string(), name: z.string() })),
   error: z.enum(['token_expired', 'permission', 'not_found', 'no_answer']).nullable(),
   fetchedAt: z.string().nullable(),
+  // A failed read stays the answer this long; asking again before then returns it.
+  retryAfterSeconds: z.number().int().min(0).nullable(),
 });
 
 // In-app notifications (#637): the viewer's newest, how many are unread, and the kinds they turned off.

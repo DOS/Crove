@@ -10,8 +10,9 @@
 --                              options again itself, so nothing here is trusted to reach a platform. Tenant roles
 --                              change only the answer and request columns; nobody deletes a row.
 -- channel_option_before_update outside the system context, the only change is asking again: back to pending with no
---                              error and a later requested_at, items and fetched_at as they were. A failed answer
---                              keeps no items. The list's org, connection, kind and creation never change.
+--                              error and a requested_at no earlier than before (equal passes, so API instances whose
+--                              clocks differ slightly never refuse a quick ask), items and fetched_at as they were. A
+--                              failed answer keeps no items. The list's org, connection, kind and creation never change.
 -- channel_option_before_insert a list of the context's org starts pending, with no items, error or fetched_at; a row
 --                              of another org is left to row-level security, which refuses it.
 SET LOCAL lock_timeout = '2s';
@@ -62,7 +63,7 @@ BEGIN
   END IF;
   IF crove_kernel.ctx_org_id() IS NOT NULL AND crove_kernel.ctx_actor_type() IS DISTINCT FROM 'system'
      AND NOT (NEW.status = 'pending' AND NEW.error IS NULL AND NEW.items = OLD.items
-              AND NEW.fetched_at IS NOT DISTINCT FROM OLD.fetched_at AND NEW.requested_at > OLD.requested_at) THEN
+              AND NEW.fetched_at IS NOT DISTINCT FROM OLD.fetched_at AND NEW.requested_at >= OLD.requested_at) THEN
     RAISE EXCEPTION 'channel option list %: only the worker records an answer; a member may only ask again', OLD.id USING ERRCODE = '42501';
   END IF;
   RETURN NEW;

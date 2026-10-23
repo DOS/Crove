@@ -3569,6 +3569,7 @@ export const vi = {
       no_answer: 'Pinterest chưa trả lời. Hãy thử tải lại sau ít phút.',
     },
     pinSectionReload: 'Tải lại',
+    pinSectionRetryLater: 'Có thể tải lại sau khoảng {minutes, number} phút.',
     pinSectionHint: 'Ghim sẽ nằm trong phần này của bảng. Lúc đăng, hệ thống kiểm tra lại: nếu phần đã bị xóa thì chưa ghim gì và bài đăng sẽ báo cho bạn biết.',
     ttPrivacy: 'Ai xem được bài trên TikTok',
     ttPrivacyChoose: 'Chọn quyền xem',

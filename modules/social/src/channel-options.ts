@@ -20,9 +20,12 @@ import { refuseChannels } from './channel-access.ts';
 // Who composes posts, and so may ask for a channel's options.
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const ACTOR: SystemActor = { type: 'system', component: 'social.channel_option' };
-// An answer is fresh this long; a request in progress is not repeated for this long.
+// An answer is fresh this long; a request in progress is not repeated for this long; a failed read is the answer this
+// long, so asking again at once neither queues another job nor escapes the budget below (which counts lists, not
+// asks).
 export const CHANNEL_OPTION_FRESH_MS = 24 * 60 * 60_000;
 export const CHANNEL_OPTION_RETRY_MS = 2 * 60_000;
+export const CHANNEL_OPTION_FAILED_RETRY_MS = 5 * 60_000;
 // Requests an org may send to the worker per minute.
 export const CHANNEL_OPTION_PER_MINUTE = 20;
 
@@ -34,6 +37,8 @@ export interface ChannelOptionList {
   options: ChannelOption[];
   error: SocialChannelOptionError | null;
   fetchedAt: string | null;
+  // A failed read: how long before asking again queues a new one; null otherwise.
+  retryAfterSeconds: number | null;
 }
 
 type Row = { id: string; status: SocialChannelOptionStatus; items: unknown; error: SocialChannelOptionError | null; requested_at: Date; fetched_at: Date | null };
@@ -50,10 +55,16 @@ const zOptions = z
   .max(CHANNEL_OPTIONS_MAX)
   .refine((list) => new Set(list.map((o) => o.id)).size === list.length, 'distinct ids');
 
+// How long a failed read stays the answer, from now; null for a list that did not fail.
+function retryAfter(r: Row, now: Date): number | null {
+  if (r.status !== 'failed' || r.fetched_at === null) return null;
+  return Math.max(0, Math.ceil((r.fetched_at.getTime() + CHANNEL_OPTION_FAILED_RETRY_MS - now.getTime()) / 1000));
+}
+
 // A stored list as the composer shows it: only a read list has options, and only well-formed ones.
-function view(connectionId: string, kind: SocialChannelOptionKind, r: Row): ChannelOptionList {
+function view(connectionId: string, kind: SocialChannelOptionKind, r: Row, now: Date): ChannelOptionList {
   const parsed = r.status === 'ready' ? zOptions.safeParse(r.items) : null;
-  return { connectionId, kind, status: r.status, options: parsed?.success ? parsed.data : [], error: r.error, fetchedAt: r.fetched_at?.toISOString() ?? null };
+  return { connectionId, kind, status: r.status, options: parsed?.success ? parsed.data : [], error: r.error, fetchedAt: r.fetched_at?.toISOString() ?? null, retryAfterSeconds: retryAfter(r, now) };
 }
 
 type Ctx = Pick<QueryContext, 'trx' | 'orgId' | 'actor' | 'role'>;
@@ -87,7 +98,8 @@ export const channelOptionRequest = defineCommand({
     if (row) {
       const fresh = row.status === 'ready' && row.fetched_at !== null && now - row.fetched_at.getTime() < CHANNEL_OPTION_FRESH_MS;
       const asked = row.status === 'pending' && now - row.requested_at.getTime() < CHANNEL_OPTION_RETRY_MS;
-      if (fresh || asked) return view(input.connectionId, kind, row);
+      const resting = (retryAfter(row, ctx.now) ?? 0) > 0;
+      if (fresh || asked || resting) return view(input.connectionId, kind, row, ctx.now);
     }
     // One request at a time per org decides the budget, so the count below holds until the commit.
     await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtext(${`crove_social.channel_option:${ctx.orgId}`}))`.execute(ctx.trx);
@@ -100,7 +112,8 @@ export const channelOptionRequest = defineCommand({
     const saved = row
       ? await ctx.trx
           .updateTable('crove_social.channel_option')
-          .set({ status: 'pending', error: null, requested_at: ctx.now })
+          // Never earlier than the last ask: another API instance's clock may run a little ahead of this one's.
+          .set({ status: 'pending', error: null, requested_at: ctx.now > row.requested_at ? ctx.now : row.requested_at })
           .where('org_id', '=', ctx.orgId)
           .where('id', '=', row.id)
           .returning(COLUMNS)
@@ -112,9 +125,9 @@ export const channelOptionRequest = defineCommand({
           .returning(COLUMNS)
           .executeTakeFirst();
     // Asked for at the same moment by someone else, who queued it: theirs is the answer.
-    if (!saved) return view(input.connectionId, kind, await find().executeTakeFirstOrThrow());
+    if (!saved) return view(input.connectionId, kind, await find().executeTakeFirstOrThrow(), ctx.now);
     await ctx.emit('social.channel_option.requested', { option_id: saved.id, connection_id: input.connectionId, kind });
-    return view(input.connectionId, kind, saved);
+    return view(input.connectionId, kind, saved, ctx.now);
   },
 });
 
@@ -131,7 +144,7 @@ export const channelOptionGet = defineQuery({
       .where('channel_connection_id', '=', input.connectionId)
       .where('kind', '=', kind)
       .executeTakeFirst();
-    return row ? view(input.connectionId, kind, row) : null;
+    return row ? view(input.connectionId, kind, row, new Date()) : null;
   },
 });
 

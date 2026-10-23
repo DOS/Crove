@@ -3570,6 +3570,7 @@ export const en = {
       no_answer: 'Pinterest did not answer. Try reloading in a few minutes.',
     },
     pinSectionReload: 'Reload',
+    pinSectionRetryLater: 'You can reload in about {minutes, number} min.',
     pinSectionHint: 'The pin goes into this section of the board. It is checked again when publishing: if the section has been deleted, nothing is pinned and the post tells you.',
     ttPrivacy: 'Who can see the post on TikTok',
     ttPrivacyChoose: 'Choose who can watch',

@@ -355,7 +355,12 @@ function PinterestSettings({ connectionId, settings, onChange, disabled }: { con
       {(asked.isError || stalled || latest?.status === 'failed') && (
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-xs text-warning">{latest?.status === 'failed' && latest.error ? t(`pinSectionFailed.${latest.error}`) : stalled ? t('pinSectionFailed.no_answer') : errorMessage(asked.error)}</p>
-          {!disabled && reloadButton}
+          {/* A failed read stays the answer for a few minutes (#1120); asking again before then changes nothing. */}
+          {latest?.status === 'failed' && (latest.retryAfterSeconds ?? 0) > 0 ? (
+            <p className="text-xs text-subtle-foreground">{t('pinSectionRetryLater', { minutes: Math.ceil((latest.retryAfterSeconds ?? 0) / 60) })}</p>
+          ) : (
+            !disabled && reloadButton
+          )}
         </div>
       )}
       {ready && options.length === 0 && <p className="text-xs text-subtle-foreground">{t('pinSectionEmpty')}</p>}

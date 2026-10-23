@@ -185,12 +185,27 @@ suite('channel options on PostgreSQL (#1120)', () => {
       [{ status: 404, body: { code: 40, message: 'Board not found.' } }, 'not_found'],
       [{ status: 503, body: { code: 1, message: 'Service unavailable' } }, 'no_answer'],
     ];
+    // Ages the last failure past the window in which it stays the answer.
+    const rest = () => admin((c) => c.query("UPDATE crove_social.channel_option SET fetched_at = fetched_at - interval '6 minutes' WHERE channel_connection_id = $1", [b.connectionId]));
     for (const [answer, error] of cases) {
       expect((await request(o, o.member, b.connectionId)).status).toBe('pending');
       expect(await job(o, await optionId(o, b.connectionId), sections(b.boardId, [answer]).publisher)).toBe('failed');
       expect(await get(o, o.member, b.connectionId)).toMatchObject({ status: 'failed', error, options: [] });
+      // Asked again at once: the failed read is the answer, with no new job, so a loop of asks cannot dodge the budget.
+      const queued = (await requests(o)).length;
+      const again = await request(o, o.member, b.connectionId);
+      expect(again).toMatchObject({ status: 'failed', error, options: [] });
+      expect(again.retryAfterSeconds).toBeGreaterThan(0);
+      expect(again.retryAfterSeconds).toBeLessThanOrEqual(300);
+      expect(await requests(o)).toHaveLength(queued);
+      await rest();
     }
     expect(await requests(o)).toHaveLength(cases.length);
+    // Past the window, asking again queues a new read.
+    expect((await request(o, o.member, b.connectionId)).retryAfterSeconds).toBeNull();
+    expect(await requests(o)).toHaveLength(cases.length + 1);
+    await job(o, await optionId(o, b.connectionId), sections(b.boardId, [{ status: 500, body: {} }]).publisher);
+    await rest();
     // A list read once, then failed: the failure keeps none of the old options.
     await request(o, o.member, b.connectionId);
     await job(o, await optionId(o, b.connectionId), sections(b.boardId, [{ body: { items: [{ id: SALE, name: 'Khuyến mãi' }] } }]).publisher);
@@ -200,6 +215,7 @@ suite('channel options on PostgreSQL (#1120)', () => {
     const failed = await admin(async (c) => (await c.query('SELECT status, items::text AS items FROM crove_social.channel_option WHERE channel_connection_id = $1', [b.connectionId])).rows[0]);
     expect(failed).toEqual({ status: 'failed', items: '[]' });
     // A credential that no longer opens (dropped since): recorded as refused, nothing asked of Pinterest.
+    await rest();
     await request(o, o.member, b.connectionId);
     await admin((c) => c.query('DELETE FROM crove_kernel.credential WHERE connection_id = $1', [b.connectionId]));
     const none = sections(b.boardId, []);
@@ -258,6 +274,10 @@ suite('channel options on PostgreSQL (#1120)', () => {
     await expect(asMember(o, o.owner, 'UPDATE crove_social.channel_option SET items = $2::jsonb WHERE id = $1', [id, forged])).rejects.toThrow(answerOnly);
     await expect(asMember(o, o.owner, "UPDATE crove_social.channel_option SET status = 'failed', error = 'no_answer', fetched_at = now() WHERE id = $1", [id])).rejects.toThrow(answerOnly);
     await expect(asMember(o, o.owner, "UPDATE crove_social.channel_option SET requested_at = requested_at - interval '1 minute' WHERE id = $1", [id])).rejects.toThrow(answerOnly);
+    // Asking again after a failure with the same requested_at passes: API instances' clocks may differ slightly.
+    await admin((c) => c.query("UPDATE crove_social.channel_option SET status = 'failed', error = 'no_answer', fetched_at = now() WHERE id = $1", [id]));
+    expect((await asMember(o, o.owner, "UPDATE crove_social.channel_option SET status = 'pending', error = NULL WHERE id = $1", [id])).rowCount).toBe(1);
+    await admin((c) => c.query("UPDATE crove_social.channel_option SET status = 'pending', error = NULL, fetched_at = NULL WHERE id = $1", [id]));
     // Asking again, and an update that changes nothing, pass.
     expect((await asMember(o, o.owner, "UPDATE crove_social.channel_option SET status = 'pending', error = NULL, requested_at = requested_at + interval '1 second' WHERE id = $1", [id])).rowCount).toBe(1);
     expect((await asMember(o, o.owner, 'UPDATE crove_social.channel_option SET status = status WHERE id = $1', [id])).rowCount).toBe(1);
