@@ -3,7 +3,7 @@
 // banned-word and duplicate checks, which read them as plain letters). Links, hashtags, @mentions and emoji in the
 // selection are left as they are. The hints say what the letters cost: screen readers read them badly, X counts each
 // as 2, and WordPress, Zalo OA articles and Google Business show them as they are rather than as their own formatting.
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { hasStyledText, styleSelection, type TextStyle } from '@crove/mod-social/contract';
@@ -20,6 +20,12 @@ const AS_IS: ReadonlySet<string> = new Set(['wordpress', 'zalo_oa', 'google_busi
 export function TextStyleButtons({ targetId, value, onChange, disabled }: { targetId: string; value: string; onChange: (text: string) => void; disabled?: boolean }) {
   const t = useTranslations('social.textStyle');
   const [pickFirst, setPickFirst] = useState(false);
+  // The ask to select some text first goes away by itself, as a hint should.
+  useEffect(() => {
+    if (!pickFirst) return;
+    const timer = setTimeout(() => setPickFirst(false), 4000);
+    return () => clearTimeout(timer);
+  }, [pickFirst]);
   if (disabled) return null;
   const apply = (style: TextStyle | null) => {
     const el = document.getElementById(targetId) as HTMLTextAreaElement | null;

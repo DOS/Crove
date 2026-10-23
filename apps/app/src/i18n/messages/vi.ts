@@ -2929,7 +2929,7 @@ export const vi = {
       italic: 'In nghiêng',
       boldItalic: 'Vừa đậm vừa nghiêng',
       plain: 'Bỏ định dạng',
-      plainHint: 'Đưa đoạn chữ đã chọn về chữ thường',
+      plainHint: 'Đưa đoạn chữ đã chọn về chữ không định dạng',
       pickFirst: 'Hãy bôi đen đoạn chữ cần đổi kiểu trước.',
       hint: 'Chữ đậm, chữ nghiêng ở đây là ký tự Unicode đặc biệt, không phải định dạng của mạng xã hội: trình đọc màn hình đọc sai hoặc bỏ qua, công cụ tìm kiếm có thể không thấy. Chỉ nên dùng cho vài chữ cần nhấn mạnh. Hashtag, tên được nhắc (@), liên kết và emoji vẫn giữ nguyên.',
       hintX: 'X tính mỗi chữ đậm hay nghiêng là 2 ký tự, mỗi dấu tiếng Việt trên chữ đó thêm 1.',
