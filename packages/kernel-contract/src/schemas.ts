@@ -1732,7 +1732,20 @@ export const zSocialActivityItem = z.object({
   resolvedBy: zId.nullable(),
   resolvedByName: z.string().nullable(),
   resolvable: z.boolean(),
+  // On a pinned comment (#1180): the file (its bytes through GET /api/files/:id, as the post's media), its type and
+  // name, the spot (x, y in 0..1) on an image or the moment (atSeconds) in a video, and whether the file is still the
+  // post's (current false: on an earlier image); null otherwise.
+  pin: z
+    .object({ fileId: zId, mime: z.string(), filename: z.string(), x: z.number().nullable(), y: z.number().nullable(), atSeconds: z.number().nullable(), current: z.boolean() })
+    .nullable(),
 });
+
+// Where a new internal comment is pinned (#1180): a spot on an image of the post or its channel (x and y in 0..1 from
+// the top left), or a moment in a video, in seconds.
+export const zSocialCommentPin = z.union([
+  z.strictObject({ fileId: zId, x: z.number().min(0).max(1), y: z.number().min(0).max(1) }),
+  z.strictObject({ fileId: zId, atSeconds: z.number().min(0).max(86400) }),
+]);
 
 // A comment after social.post_comment.resolve or .reopen (#1168).
 export const zSocialCommentResolved = z.object({ commentId: zId, postId: zId, resolvedAt: z.string().nullable(), resolvedBy: zId.nullable() });

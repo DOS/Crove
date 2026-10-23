@@ -89,6 +89,7 @@ import {
   zSocialReviewPlanLink,
   zSocialActivityItem,
   zSocialCommentResolved,
+  zSocialCommentPin,
   zSocialQueueSet,
   zSocialQueueShuffle,
   zSocialQueueMoveToFront,
@@ -391,7 +392,8 @@ export const contract = {
         )
         .output(z.object({ posts: z.array(z.object({ postId: zId, submitted: z.number().int() })) })),
       // Internal comments (#582): never published; the author may fix one for 15 minutes.
-      comment: oc.input(z.strictObject({ postId: zId, variantId: zId.optional(), body: z.string().trim().min(1).max(4000) })).output(z.object({ commentId: zId })),
+      // pin (#1180): a spot on one of its images or a moment in one of its videos.
+      comment: oc.input(z.strictObject({ postId: zId, variantId: zId.optional(), body: z.string().trim().min(1).max(4000), pin: zSocialCommentPin.optional() })).output(z.object({ commentId: zId })),
       editComment: oc.input(z.strictObject({ commentId: zId, body: z.string().trim().min(1).max(4000) })).output(z.object({ commentId: zId, postId: zId })),
       // Marks a comment as dealt with, or open again (#1168); the text stays.
       resolveComment: oc.input(z.strictObject({ commentId: zId })).output(zSocialCommentResolved),

@@ -223,7 +223,7 @@ export const FileSource = createContext<{ key: string; fetch: (fileId: string) =
 
 // A stored image, fetched once per file while it is shown (the bytes of a file id never change). Each thumbnail makes
 // its own object URL and revokes it when it goes away. enabled false: nothing is fetched (a document shows a card).
-function useImageUrl(fileId: string, enabled = true) {
+export function useImageUrl(fileId: string, enabled = true) {
   const source = useContext(FileSource);
   const blob = useQuery({ queryKey: [source.key, fileId], queryFn: () => source.fetch(fileId), staleTime: Infinity, enabled });
   const [url, setUrl] = useState<string | null>(null);
