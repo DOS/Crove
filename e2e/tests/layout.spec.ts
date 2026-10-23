@@ -1,4 +1,4 @@
-// The desktop sidebar on a short window (#516): the menu scrolls inside the sidebar and its footer (sign out, language)
+// The desktop sidebar on a short window (#516): the menu scrolls inside the sidebar and its footer (sign out, the account menu)
 // stays in view, and the Social home at phone width (#1043). The sidebar sticks to the top at the window's height, so a footer below the fold could never be
 // scrolled to. The same session walks every screen the sidebar links to under Trusted Types (#681) and expects no CSP
 // violation; it shares this spec's sign-up because every spec draws on one sign-up budget (auth-rate-limits.spec.ts).
@@ -59,5 +59,30 @@ test.describe('at phone width', () => {
     const widths = await page.evaluate(() => ({ page: document.documentElement.scrollWidth, view: document.documentElement.clientWidth, tabs: document.querySelector('[role="tablist"]')?.scrollWidth ?? 0 }));
     expect(widths.page).toBeLessThanOrEqual(widths.view);
     expect(widths.tabs).toBeLessThanOrEqual(widths.view);
+  });
+
+  // The phone's menu (#1245): a drawer with the grouped menu, which closes after a link, on Esc, and on its backdrop.
+  test('the menu button opens a drawer with the grouped menu, and it closes after navigating or on Esc (#1245)', async ({ page }) => {
+    await signInNewUser(page, newEmail('layout-drawer'));
+    await createOrg(page, 'Công ty Menu điện thoại');
+    const open = page.getByRole('button', { name: 'Mở menu' });
+    await open.click();
+    const drawer = page.getByRole('dialog', { name: 'Menu chính' });
+    await expect(drawer.getByRole('region', { name: 'Kế toán' }).getByRole('link', { name: 'Sổ sách' })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: 'Đăng xuất', exact: true })).toBeVisible();
+    await drawer.getByRole('link', { name: 'Sổ sách' }).click();
+    await expect(page).toHaveURL(/\/ledger$/);
+    await expect(drawer).toBeHidden();
+
+    await open.click();
+    await expect(drawer).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(drawer).toBeHidden();
+    await expect(open).toBeFocused();
+
+    // A tap beside the drawer, on the backdrop, closes it too.
+    await open.click();
+    await page.mouse.click(350, 400);
+    await expect(drawer).toBeHidden();
   });
 });
