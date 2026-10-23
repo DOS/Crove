@@ -29,7 +29,11 @@ export function isProvider(value: string): value is Provider {
   return (PROVIDERS as readonly string[]).includes(value);
 }
 
-export type MediaKind = 'image' | 'video';
+// A document (#1119) is a PDF a channel shows as a document of pages (a LinkedIn carousel); only LinkedIn posts one.
+export type MediaKind = 'image' | 'video' | 'document';
+export const DOCUMENT_TYPES: readonly string[] = ['application/pdf'];
+// A post file is a video, a document or an image, by its type (the server read it from the bytes).
+export const mediaKindOf = (mime: string): MediaKind => (mime.startsWith('video/') ? 'video' : DOCUMENT_TYPES.includes(mime.toLowerCase()) ? 'document' : 'image');
 
 // How a platform counts text against its limit. Text is NFC-normalized first, so Vietnamese typed with combining
 // marks (NFD) counts the same as precomposed text.
@@ -65,6 +69,8 @@ export interface MediaRule {
   maxImageBytes: number | null;
   maxVideoBytes: number | null;
   maxVideoSeconds: number | null;
+  // A document's size cap, where kinds takes documents (#1119). A document is always the post's only file.
+  maxDocumentBytes?: number;
 }
 
 export interface ChannelCapabilities {
@@ -718,6 +724,24 @@ export const WORDPRESS_TERM_MAX = 200;
 // YouTube refuses a thumbnail over 2 MB (thumbnails.set).
 export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024 };
 
+// A LinkedIn document's title (#1119), `settings.linkedin.documentTitle`: 1 to DOCUMENT_TITLE_MAX characters once
+// trimmed, counted as LinkedIn counts its text. Unsaid, the adapter sends the post's title or the file's name. The
+// adapter's linkedinDocumentTitleOf in @crove/channel reads the same shape and limit (LinkedIn's docs give none; 58 is
+// the one schedulers that post documents hold to).
+export const DOCUMENT_TITLE_MAX = 58;
+export const DOCUMENT_PROVIDERS: ReadonlySet<Provider> = new Set<Provider>(['linkedin', 'linkedin_page']);
+export function documentTitleOf(settings: Readonly<Record<string, unknown>> | undefined): string | null | 'invalid' {
+  const linkedin = settings?.linkedin;
+  if (linkedin === undefined || linkedin === null) return null;
+  if (typeof linkedin !== 'object' || Array.isArray(linkedin)) return 'invalid';
+  const title = (linkedin as { documentTitle?: unknown }).documentTitle;
+  if (title === undefined || title === null) return null;
+  if (typeof title !== 'string') return 'invalid';
+  const trimmed = title.trim();
+  const size = trimmed.normalize('NFC').length;
+  return size < 1 || size > DOCUMENT_TITLE_MAX ? 'invalid' : trimmed;
+}
+
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'linkedin_page', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord']);
@@ -847,17 +871,18 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
     provider: 'linkedin',
     body: { max: 3000, count: 'utf16', required: false },
     title: null,
-    media: { min: 0, max: 20, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800 },
+    media: { min: 0, max: 20, kinds: ['image', 'video', 'document'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800, maxDocumentBytes: 100 * MB },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['body.max', 'media.max'],
   },
-  // A Company Page posts through the same Posts, Images and Videos APIs as the member (#1077), so the same limits.
+  // A Company Page posts through the same Posts, Images, Videos and Documents APIs as the member (#1077), so the same
+  // limits. A document (#1119) is one PDF of at most 100 MB (LinkedIn's limit; the library holds at most 25 MB).
   linkedin_page: {
     provider: 'linkedin_page',
     body: { max: 3000, count: 'utf16', required: false },
     title: null,
-    media: { min: 0, max: 20, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800 },
+    media: { min: 0, max: 20, kinds: ['image', 'video', 'document'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: null, maxVideoBytes: 500 * MB, maxVideoSeconds: 1800, maxDocumentBytes: 100 * MB },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: ['body.max', 'media.max'],
@@ -1182,7 +1207,7 @@ export function instagramReelOf(settings: Readonly<Record<string, unknown>> | un
 }
 
 // Whether a variant's post is an Instagram Reel: one video, not a Story (a feed post of one video goes out as a Reel).
-export function isInstagramReel(media: readonly { kind: 'image' | 'video' }[], settings: Readonly<Record<string, unknown>> | undefined): boolean {
+export function isInstagramReel(media: readonly { kind: MediaKind }[], settings: Readonly<Record<string, unknown>> | undefined): boolean {
   return media.length === 1 && media[0]?.kind === 'video' && postTypeOf(settings) !== 'story';
 }
 
@@ -1224,7 +1249,7 @@ export function limitWait(starts: readonly Date[], limit: PublishLimit, now: Dat
 // cannot go out, so the composer says so before the post is submitted. Instagram takes a Reel or a video Story without
 // one (Crove uploads the bytes), but not images, carousels or a cover image; Threads, Google Business, Zalo OA (its
 // images) and TikTok photos are fetched by URL always.
-export function needsPublicUrls(provider: Provider, media: readonly { kind: 'image' | 'video' }[], settings?: Readonly<Record<string, unknown>>): boolean {
+export function needsPublicUrls(provider: Provider, media: readonly { kind: MediaKind }[], settings?: Readonly<Record<string, unknown>>): boolean {
   if (media.length === 0) return false;
   switch (provider) {
     case 'instagram': {

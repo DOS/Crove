@@ -125,6 +125,9 @@ export interface PublishInput {
   // A short-lived public URL for one of content.media, for platforms that fetch images themselves (Instagram); null
   // when the deployment's storage cannot hand one out (local disk).
   mediaUrl(fileId: string): Promise<string | null>;
+  // The name one of content.media was uploaded under, for a platform that shows it (a LinkedIn document's title when
+  // the post gives none, #1119); null when unknown. Absent in callers that have no names.
+  mediaName?(fileId: string): Promise<string | null>;
   // The variant's provider settings; a video's cover (#642) is `settings.cover`, read with videoCoverOf. readMedia and
   // mediaUrl also serve a cover image's file.
   settings: Record<string, unknown>;

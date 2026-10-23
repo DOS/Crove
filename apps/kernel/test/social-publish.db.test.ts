@@ -545,6 +545,61 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect((await calls(id)).map((c) => c.state)).toEqual(['failed', 'succeeded']);
   });
 
+  // LinkedIn document posts (#1119): a PDF goes to LinkedIn's adapter with the name it was uploaded under (its default
+  // title), the post's view names it, and the same PDF on a channel that shows no documents is refused before anything
+  // goes out: by the rules at submit, and by the job if a variant ever reached it.
+  it('sends a PDF to LinkedIn with its name, and refuses it on a channel that shows no documents (#1119)', async () => {
+    const o = await org();
+    const pdf = randomUUID();
+    const sha = createHash('sha256').update(pdf).digest('hex');
+    await admin((c) =>
+      c.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source)
+         VALUES ($1, $2, $3, $4, $5, 'bao-gia-q4.pdf', 'application/pdf', 2000000, 'social')`,
+        [o.orgId, pdf, sha, `org/${o.orgId}/${sha}`, `content:${sha}`],
+      ),
+    );
+    const account = `acct-${randomUUID().slice(0, 8)}`;
+    const sealed = vault.seal(JSON.stringify({ accessToken: 'li-1' }), { orgId: o.orgId, provider: 'linkedin', externalAccountId: account });
+    const { connectionId } = await exec<{ connectionId: string }>(o, 'kernel.channel.connect', { provider: 'linkedin', externalAccountId: account, displayName: 'Quán A', scopes: ['w_member_social'], expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } });
+    const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Báo giá quý 4', media: [{ fileId: pdf }], channels: [{ connectionId, settings: { linkedin: { documentTitle: 'Báo giá dịch vụ' } } }] });
+    let post = await get(o, postId);
+    expect(post.variants[0]?.issues).toEqual([]);
+    expect(post.media).toEqual([expect.objectContaining({ fileId: pdf, mime: 'application/pdf', filename: 'bao-gia-q4.pdf', altText: null })]);
+    expect(post.variants[0]?.media[0]?.filename).toBe('bao-gia-q4.pdf');
+    await exec(o, 'social.post.submit', { postId });
+    post = await get(o, postId);
+    await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+    await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+    const seen: { mime: string[]; name: string | null; settings: Record<string, unknown> }[] = [];
+    const linkedin: Publisher = {
+      provider: 'linkedin',
+      publishSafety: 'never',
+      publish: async (input) => {
+        const first = input.content.media[0];
+        seen.push({ mime: input.content.media.map((m) => m.mime), name: first && input.mediaName ? await input.mediaName(first.fileId) : null, settings: input.settings });
+        return { kind: 'accepted', externalId: 'urn:li:share:7500000000000000009', url: null };
+      },
+    };
+    const id = post.variants[0]?.id as string;
+    expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { linkedin }, callTimeoutMs: 2_000 }, o.orgId, id, 'linkedin')).toEqual({ action: 'call', status: 'published' });
+    expect(seen).toEqual([{ mime: ['application/pdf'], name: 'bao-gia-q4.pdf', settings: { linkedin: { documentTitle: 'Báo giá dịch vụ' } } }]);
+
+    // Elsewhere the rules refuse it at submit, with its own code.
+    const other = await duePost(o);
+    const { postId: elsewhere } = await exec<{ postId: string }>(o, 'social.post.create', { body: 'Báo giá', media: [{ fileId: pdf }], channels: [{ connectionId: other.connections[0] as string }] });
+    expect((await get(o, elsewhere)).variants[0]?.issues).toEqual([{ code: 'DOCUMENT_NOT_SUPPORTED', field: 'media.0', limit: null, actual: null }]);
+    await expect(exec(o, 'social.post.submit', { postId: elsewhere })).rejects.toMatchObject({ code: 'VARIANT_INVALID' });
+    // And a variant that reached the job anyway (its media set behind the rules' back) goes out to nobody.
+    const sandboxId = other.variants[0] as string;
+    await admin((c) => c.query('UPDATE crove_social.post_variant SET media = $2::jsonb WHERE id = $1', [sandboxId, JSON.stringify([{ fileId: pdf, generation: `content:${sha}`, altText: null, mime: 'application/pdf', sizeBytes: 2000000 }])]));
+    const platform = new FakePlatform();
+    expect(await run(o, sandboxId, platform)).toMatchObject({ action: 'call', status: 'failed' });
+    expect(platform.posts).toHaveLength(0);
+    expect((await variant(o, other.postId)).error).toMatchObject({ code: 'DOCUMENT_NOT_SUPPORTED' });
+  });
+
   it('waits with nothing sent once an account used its counted limit, and goes out when a post leaves the window (#775)', async () => {
     const o = await org();
     const account = `acct-${randomUUID().slice(0, 8)}`;

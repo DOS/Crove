@@ -30,8 +30,16 @@ export const ACCEPTED_ARCHIVE_TYPES = ['application/zip'];
 // most MAX_EMAIL_ARCHIVE_DOCUMENTS documents (an e-invoice ZIP holds its XML and PDF; a month of invoices is uploaded).
 export const MAX_EMAIL_ARCHIVES = 2;
 export const MAX_EMAIL_ARCHIVE_DOCUMENTS = 20;
-// Images for Social posts (#372): an upload with purpose=social takes these only.
-export const SOCIAL_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+// Images for Social posts (#372).
+export const SOCIAL_PHOTO_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+// PDFs for LinkedIn document posts (#1119), read from the bytes (%PDF-) like any upload. Stored with source 'social',
+// so never sent to extraction, and never given to the image steps (the size from its header, the watermark, AI alt
+// text), which each take image types only.
+export const SOCIAL_DOCUMENT_TYPES = ['application/pdf'];
+// Every file but a video an upload with purpose=social takes: the HTTP edge (ingest in apps/kernel/src/http.ts) checks
+// the type it reads from the bytes against this list, with the 25 MB cap of a document. It keeps the name it had when
+// it held images only; SOCIAL_PHOTO_TYPES is the images alone.
+export const SOCIAL_IMAGE_TYPES = [...SOCIAL_PHOTO_TYPES, ...SOCIAL_DOCUMENT_TYPES];
 // Videos for Social posts (#409): MP4 and QuickTime, up to 100 MB (a staged upload grant allows at most that), at most
 // 3 hours long. The server reads the type and the duration from the file itself.
 export const SOCIAL_VIDEO_TYPES = ['video/mp4', 'video/quicktime'];

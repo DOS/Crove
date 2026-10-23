@@ -67,7 +67,7 @@ function Media({ media, layout, max, cover }: { media: readonly MediaItem[]; lay
         {covered && 'fileId' in covered ? (
           <Thumb fileId={covered.fileId} alt={t('coverImageAlt')} mime="image/jpeg" className={cn(frame, 'mx-auto w-full')} />
         ) : (
-          <Thumb fileId={first.fileId} alt={alt(first, 0)} mime={first.mime} durationMs={first.durationMs} frameMs={covered?.atMs} className={cn(frame, 'mx-auto w-full')} />
+          <Thumb fileId={first.fileId} alt={alt(first, 0)} name={first.filename} mime={first.mime} durationMs={first.durationMs} frameMs={covered?.atMs} className={cn(frame, 'mx-auto w-full')} />
         )}
         {media.length > 1 && (
           <span className="absolute top-2 right-2 rounded-full bg-background/80 px-2 text-xs text-foreground tabular-nums" aria-label={t('previewCount', { count: media.length })}>
@@ -82,7 +82,7 @@ function Media({ media, layout, max, cover }: { media: readonly MediaItem[]; lay
     <div className={cn('mt-3 grid gap-1', shown.length === 1 ? 'grid-cols-1' : 'grid-cols-2')}>
       {shown.map((m, i) => (
         <div key={m.fileId} className={cn('relative', shown.length === 3 && i === 0 && 'row-span-2')}>
-          <Thumb fileId={m.fileId} alt={alt(m, i)} mime={m.mime} durationMs={m.durationMs} className={shown.length === 1 ? 'aspect-[4/3]' : shown.length === 3 && i === 0 ? 'h-full' : 'aspect-square'} />
+          <Thumb fileId={m.fileId} alt={alt(m, i)} name={m.filename} mime={m.mime} durationMs={m.durationMs} className={shown.length === 1 ? 'aspect-[4/3]' : shown.length === 3 && i === 0 ? 'h-full' : 'aspect-square'} />
           {i === shown.length - 1 && media.length > shown.length && (
             <span className="absolute inset-0 flex items-center justify-center rounded-lg bg-background/70 text-lg font-semibold text-foreground">+{media.length - shown.length}</span>
           )}

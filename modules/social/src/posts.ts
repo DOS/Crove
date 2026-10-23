@@ -128,7 +128,7 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
     const f = byId.get(m.fileId);
     // Only images uploaded for posts: an accounting document of the org is never published, whatever its type.
     if (!f || f.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
-    if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP và video MP4, MOV');
+    if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP, video MP4, MOV và tệp PDF');
     return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes), durationMs: f.duration_ms === null ? null : Number(f.duration_ms), width: f.image_width ?? null, height: f.image_height ?? null };
   });
 }
@@ -1166,9 +1166,12 @@ export interface MediaView {
   durationMs: number | null;
   width: number | null;
   height: number | null;
+  // A PDF's name (#1119), for its document card; null for images and videos.
+  filename: string | null;
 }
 
-const mediaView = (list: readonly PostMedia[]): MediaView[] => list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs ?? null, width: m.width ?? null, height: m.height ?? null }));
+const mediaView = (list: readonly PostMedia[], names: ReadonlyMap<string, string>): MediaView[] =>
+  list.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime, sizeBytes: m.sizeBytes, durationMs: m.durationMs ?? null, width: m.width ?? null, height: m.height ?? null, filename: names.get(m.fileId) ?? null }));
 
 export interface PostView {
   id: string;
@@ -1295,6 +1298,16 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
     list.push({ fileId: r.file_id, generation: r.generation, altText: r.alt_text, mime: r.content_type, sizeBytes: Number(r.size_bytes), durationMs: r.duration_ms === null ? null : Number(r.duration_ms), width: r.image_width ?? null, height: r.image_height ?? null });
     mediaByPost.set(r.post_id, list);
   }
+  // The names of the PDFs the view shows (#1119), the post's and its channels' own, read once.
+  const pdfIds = new Set([
+    ...mediaRows.filter((r) => r.content_type === 'application/pdf').map((r) => r.file_id),
+    ...variants.flatMap((v) => (mediaOf(v.media) ?? []).filter((m) => m.mime === 'application/pdf').map((m) => m.fileId)),
+  ]);
+  const names = new Map<string, string>(
+    pdfIds.size === 0
+      ? []
+      : (await ctx.trx.selectFrom('crove_kernel.file').select(['id', 'filename']).where('org_id', '=', ctx.orgId).where('id', 'in', [...pdfIds]).execute()).map((r) => [r.id, r.filename] as const),
+  );
   const labels = await labelsOfPosts(ctx.trx, ctx.orgId, postIds);
   // The review checklist (#1105), read once for every variant of the view.
   const checks = variants.length > 0 ? await reviewChecksOf(ctx.trx, ctx.orgId) : [];
@@ -1311,7 +1324,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
         body: p.body,
         title: p.title,
         linkUrl: p.link_url,
-        media: mediaView(b.media),
+        media: mediaView(b.media, names),
         evergreenDays: p.evergreen_days,
         repostOf: p.repost_of,
         recurrence: parseRecurrence(p.recurrence),
@@ -1342,7 +1355,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
               overrides: overrides(v),
               ownMedia: !v.content_frozen && mediaOf(v.media) !== null,
               effective: effectiveContent(b, overrides(v), v.content_frozen),
-              media: mediaView(mediaFor(b, v)),
+              media: mediaView(mediaFor(b, v), names),
               settings: settingsOf(v),
               revision: v.revision,
               contentHash: v.content_hash,
@@ -1547,7 +1560,8 @@ export const postPreReview = defineQuery({
       const avoid = voices.filter((x) => x.channel_connection_id === null || x.channel_connection_id === v.connectionId).flatMap((x) => x.avoid_words);
       const used = [...new Set(avoid.map((w) => w.trim()).filter((w) => w && text.includes(w.toLowerCase())))];
       if (used.length > 0) findings.push(`${name}: có từ nên tránh theo giọng thương hiệu (${used.slice(0, 5).join(', ')}).`);
-      const undescribed = v.media.filter((m) => !m.altText).length;
+      // A PDF (#1119) goes out as a document with its title and takes no alt text.
+      const undescribed = v.media.filter((m) => !m.altText && m.mime !== 'application/pdf').length;
       if (undescribed > 0) findings.push(`${name}: ${undescribed} ảnh hoặc video chưa có mô tả cho người đọc màn hình (alt text).`);
     }
     const title = view.title?.trim() || view.body.replace(/\s+/g, ' ').trim().slice(0, 120);
