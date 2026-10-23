@@ -314,7 +314,7 @@ function subjectOf(kind: SocialNotificationKind, detail: Record<string, string>,
     case 'queue_low':
       return `Hàng đợi của kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} sắp hết bài`;
     case 'post_outperforming':
-      return `Bài trên ${channel ? oneLine(channel, 60) : 'mạng xã hội'} đang tốt gấp ${(detail.ratio ?? '2').replace('.', ',')} lần thường lệ${about}`;
+      return `Bài trên ${channel ? oneLine(channel, 60) : 'mạng xã hội'} đang được tương tác gấp ${(detail.ratio ?? '2').replace('.', ',')} lần mức thường lệ${about}`;
     default:
       return `Kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} cần kết nối lại`;
   }

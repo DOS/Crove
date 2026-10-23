@@ -21,11 +21,11 @@ const LEAD: Record<string, string> = {
   channel_expired: 'Một kênh đã hết hạn kết nối; bài lên lịch trên kênh này sẽ chờ đến khi bạn kết nối lại.',
   mention: 'Một thành viên đã nhắc đến bạn trong bình luận nội bộ của một bài.',
   queue_low: 'Hàng đợi đăng bài của một kênh sắp hết bài: có ngày đăng sắp tới chưa có bài nào. Hãy viết thêm bài và xếp vào hàng đợi để kênh không bị bỏ trống.',
-  post_outperforming: 'Một bài của bạn đang được tương tác nhiều hơn hẳn thường lệ. Đây là lúc nên đẩy thêm cho bài, trả lời bình luận hoặc dùng lại nội dung này cho bài sau.',
+  post_outperforming: 'Một bài bạn viết hoặc được giao đang được tương tác nhiều hơn hẳn mức thường lệ. Đây là lúc nên đẩy thêm cho bài, trả lời bình luận hoặc dùng lại nội dung này cho bài sau.',
 };
-// A ratio as the notification wrote it (#1132), shown the Vietnamese way (2,5).
+// A ratio as the notification wrote it (#1132), shown the Vietnamese way (2,5); at least `min`, else none.
 const RATIO = /^\d{1,4}(\.\d)?$/;
-const ratioVi = (value: unknown): string | null => (typeof value === 'string' && RATIO.test(value) ? value.replace('.', ',') : null);
+const ratioVi = (value: unknown, min = 0): string | null => (typeof value === 'string' && RATIO.test(value) && Number(value) >= min ? value.replace('.', ',') : null);
 
 export async function renderNotificationMail(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string } | null> {
   const { kind, org, post, channel, decision, removal, days, ratio, reach, path } = input.payload;
@@ -39,10 +39,11 @@ export async function renderNotificationMail(input: MailTemplateInput): Promise<
   const ahead = kind === 'queue_low' && typeof days === 'string' && /^\d{1,2}$/.test(days) ? `${input.brand} kiểm tra các ngày đăng trong ${days} ngày tới.` : null;
   // How much better than usual (#1132): against the channel's recent posts (up to 30), a day after it went out.
   const times = kind === 'post_outperforming' ? ratioVi(ratio) : null;
-  const reachTimes = kind === 'post_outperforming' ? ratioVi(reach) : null;
+  // Reach only when it is at least the usual: "gấp 0,5 lần" would read as more.
+  const reachTimes = kind === 'post_outperforming' ? ratioVi(reach, 1) : null;
   if (kind === 'post_outperforming' && !times) return null;
   const better = times
-    ? `Một ngày sau khi đăng, lượt tương tác của bài đã gấp ${times} lần mức thường thấy của các bài gần đây trên kênh${reachTimes ? `; lượt tiếp cận gấp ${reachTimes} lần` : ''}.`
+    ? `Một ngày sau khi đăng, bài đã được tương tác gấp ${times} lần mức thường lệ của các bài gần đây trên kênh${reachTimes ? `; lượt tiếp cận gấp ${reachTimes} lần` : ''}.`
     : null;
   const lines = [
     leadText,

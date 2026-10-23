@@ -1,17 +1,21 @@
 -- Crove Social: tell the author when a post does much better than usual (issue #1132). Idempotent; applied files stay
 -- untouched.
 --
--- crove_social.post_variant.outperform_notified_at  the once-only marker: when the worker's check
---                                    (social.metrics.check_outperforming) found the variant's 24-hour capture at 2x or
---                                    more of its channel's usual engagement and told the post's author and assignee. Set
---                                    with a conditional update (only while null), so two checks never both tell them;
---                                    never cleared. Null: not told (not checked yet, or not above the usual).
+-- crove_social.post_variant.outperform_checked_at   the once-only marker: when the worker's check
+--                                    (social.metrics.check_outperforming) weighed the variant's 24-hour capture against
+--                                    its channel's usual engagement, whatever it found. Set with a conditional update
+--                                    (only while null), so two checks never both weigh it and only the one that set it
+--                                    tells anyone; never cleared. While null the metrics sweep runs the check after a
+--                                    capture (a failed check sets nothing and is tried again); once set, never again.
+-- crove_social.post_variant.outperform_notified_at  when that check found it at 2x the usual or more and told the
+--                                    post's author and assignee; set with outperform_checked_at, never cleared.
 -- notification kind post_outperforming  in the app and by email, and a member can turn it off like the other kinds.
 --
 -- No new table, no new function: the check runs in the org's system context from the metrics sweep, right after the
 -- capture it looks at is recorded, and reads only the org's own rows.
 SET LOCAL lock_timeout = '2s';
 
+ALTER TABLE crove_social.post_variant ADD COLUMN IF NOT EXISTS outperform_checked_at timestamptz;
 ALTER TABLE crove_social.post_variant ADD COLUMN IF NOT EXISTS outperform_notified_at timestamptz;
 
 -- The new kind. NOT VALID: added without scanning the tables under their exclusive lock; validated below. The list is

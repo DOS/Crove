@@ -12,6 +12,9 @@ export const OUTPERFORM_AFTER_HOURS = 24;
 // The channel's earlier posts the post is set against, newest first, and how many it needs at least.
 export const OUTPERFORM_HISTORY = 30;
 export const OUTPERFORM_MIN_HISTORY = 10;
+// How long after its 24-hour capture a post may still be weighed: a check that failed is tried again at the next
+// captures until then; a post past it is never weighed.
+export const OUTPERFORM_RETRY_HOURS = 24;
 // How many times the usual engagement a post must reach.
 export const OUTPERFORM_RATIO = 2;
 // The largest ratio a notice names; anything above shows as this.

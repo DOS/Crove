@@ -56,7 +56,8 @@ function useLine() {
       // A post doing much better than usual (#1132), with its reach when the channel reports it.
       case 'post_outperforming': {
         const values = { channel: n.channel ?? (provider || t('aChannel')), ratio: Number(n.detail.ratio ?? 0) };
-        return n.detail.reach ? t('text.post_outperforming_reach', { ...values, reach: Number(n.detail.reach) }) : t('text.post_outperforming', values);
+        // Reach only when it is at least the usual (#1132).
+        return Number(n.detail.reach ?? 0) >= 1 ? t('text.post_outperforming_reach', { ...values, reach: Number(n.detail.reach) }) : t('text.post_outperforming', values);
       }
       // The org's publishing held or released (#946).
       case 'publishing_hold': {

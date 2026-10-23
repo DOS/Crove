@@ -1,18 +1,21 @@
 // A post doing much better than usual (#1132) on PostgreSQL 17: a variant's 24-hour capture at twice its channel's
 // usual engagement or more tells the post's author and assignee once, in the app and by email; nothing at 1.5x, never
-// twice (two checks at once included), nothing for a channel with fewer than 10 earlier posts, for a Story or before
-// the 24-hour capture; a muted member hears nothing, Social mail off keeps the mail only, and a member limited to some
-// channels (#1081) hears only of posts on theirs. The worker's check and dispatch are run here by hand. Set
+// twice (two checks at once included), nothing for a channel with fewer than 10 earlier posts, for a Story, before
+// the 24-hour capture or a day after it; a post found usual is weighed once, and a check that failed is tried again at
+// the next capture; a muted member hears nothing, Social mail off keeps the mail only, and a member limited to some
+// channels (#1081) hears only of posts on theirs. The metrics sweep runs the check only while a post waits to be
+// weighed, so later captures add no command or audit row. The worker's check and dispatch are run here by hand. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime } from '@crove/kernel-runtime';
-import { socialCommands, socialQueries, type NotificationItem, type OutperformState } from '@crove/mod-social';
+import type { Publisher } from '@crove/channel';
+import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
+import { socialCommands, socialQueries, sweepMetrics, type NotificationItem, type OutperformState } from '@crove/mod-social';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -29,6 +32,7 @@ suite('social posts doing much better than usual on PostgreSQL (#1132)', () => {
   let worker: Runtime;
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
   const system = { type: 'system' as const, component: 'test' };
+  const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
 
   async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
     const client = new pg.Client({ connectionString: adminUrl });
@@ -142,6 +146,7 @@ suite('social posts doing much better than usual on PostgreSQL (#1132)', () => {
         ).rows,
     );
   const marker = (variantId: string) => admin(async (c) => (await c.query<{ at: Date | null }>('SELECT outperform_notified_at AS at FROM crove_social.post_variant WHERE id = $1', [variantId])).rows[0]?.at ?? null);
+  const checked = (variantId: string) => admin(async (c) => (await c.query<{ at: Date | null }>('SELECT outperform_checked_at AS at FROM crove_social.post_variant WHERE id = $1', [variantId])).rows[0]?.at ?? null);
 
   beforeAll(async () => {
     const root = new pg.Client({ connectionString: ADMIN });
@@ -197,7 +202,7 @@ suite('social posts doing much better than usual on PostgreSQL (#1132)', () => {
     for (const user of [o.owner, o.admin]) expect(await notices(o, user)).toEqual([]);
     const sent = await mails(o);
     expect(sent.map((m) => m.user_id).sort()).toEqual([o.author, o.assignee].sort());
-    expect(sent[0]?.subject).toBe('Bài trên Trang thử đang tốt gấp 2 lần thường lệ: Bài 25 giờ trước');
+    expect(sent[0]?.subject).toBe('Bài trên Trang thử đang được tương tác gấp 2 lần mức thường lệ: Bài 25 giờ trước');
 
     // Never twice: the same capture checked again, and a later capture.
     expect((await check(o, variantId)).state).toBe('skipped');
@@ -208,12 +213,16 @@ suite('social posts doing much better than usual on PostgreSQL (#1132)', () => {
     expect(await notices(o, o.author)).toHaveLength(1);
   });
 
-  it('tells nobody at 1.5x the usual engagement', async () => {
+  it('tells nobody at 1.5x the usual engagement, and weighs the post once', async () => {
     const o = await org();
     await history(o, o.a, 12, 10);
     const { variantId } = await published(o, o.a, 26, { reactions: 15 });
     expect(await check(o, variantId)).toEqual({ state: 'usual', ratio: null });
     expect(await marker(variantId)).toBeNull();
+    expect(await checked(variantId)).not.toBeNull();
+    // A later capture far above the usual changes nothing: the 24-hour capture was weighed.
+    await capture(o, variantId, { reactions: 500 });
+    expect((await check(o, variantId)).state).toBe('skipped');
     expect(await events(o)).toBe(0);
   });
 
@@ -240,7 +249,7 @@ suite('social posts doing much better than usual on PostgreSQL (#1132)', () => {
     expect(await events(o)).toBe(0);
   });
 
-  it('tells nobody for a Story, before the 24-hour capture, or after a later capture already came', async () => {
+  it('tells nobody for a Story, before the 24-hour capture or a day after it, and weighs the 24-hour capture itself', async () => {
     const o = await org();
     await history(o, o.a, 10, 10);
     const story = await published(o, o.a, 25, { reactions: 100 }, { story: true });
@@ -248,10 +257,14 @@ suite('social posts doing much better than usual on PostgreSQL (#1132)', () => {
     // Twelve hours old: its 24-hour capture is still to come.
     const young = await published(o, o.a, 12, { reactions: 100 });
     expect((await check(o, young.variantId)).state).toBe('skipped');
-    // Already weighed at its 24-hour capture (with nothing to tell), then a later capture: not weighed again.
+    // A later capture far above the usual: the 24-hour capture (at the usual) is what is weighed.
     const older = await published(o, o.a, 40, { reactions: 10 }, { capturedHoursAgo: 14 });
     await capture(o, older.variantId, { reactions: 100 });
-    expect((await check(o, older.variantId)).state).toBe('skipped');
+    expect((await check(o, older.variantId)).state).toBe('usual');
+    // Its 24-hour capture was taken more than a day ago (a post already past it when this shipped): never weighed.
+    const stale = await published(o, o.a, 80, { reactions: 100 }, { capturedHoursAgo: 50 });
+    expect((await check(o, stale.variantId)).state).toBe('skipped');
+    expect(await checked(stale.variantId)).toBeNull();
     // An empty capture (a failed try) is not the 24-hour capture.
     const failed = await published(o, o.a, 30, {}, { capturedHoursAgo: 4 });
     expect((await check(o, failed.variantId)).state).toBe('skipped');
@@ -275,16 +288,77 @@ suite('social posts doing much better than usual on PostgreSQL (#1132)', () => {
 
   it('tells a member limited to some channels only of posts on theirs', async () => {
     const o = await org();
-    await history(o, o.a, 10, 10);
-    const { variantId } = await published(o, o.a, 25, { reactions: 30 });
+    await history(o, o.a, 10, 10, 1000);
+    // Reach below the usual is not named: "0.4 times" would read as more.
+    const { variantId } = await published(o, o.a, 25, { reactions: 30, reach: 400 });
     // The author may use this channel; the assignee only another one.
     await exec(o, o.admin, 'social.channel_access.set', { userId: o.author, channelConnectionIds: [o.a] });
     await exec(o, o.admin, 'social.channel_access.set', { userId: o.assignee, channelConnectionIds: [o.b] });
     expect((await check(o, variantId)).state).toBe('notified');
     expect(await deliver(o)).toBe(1);
-    expect(await notices(o, o.author)).toHaveLength(1);
+    expect((await notices(o, o.author)).map((n) => n.detail)).toEqual([{ provider: 'sandbox', ratio: '3' }]);
     expect(await notices(o, o.assignee)).toEqual([]);
     expect((await mails(o)).map((m) => m.user_id)).toEqual([o.author]);
+  });
+
+  it('runs the check from the sweep only for the 24-hour capture, so later captures add no audit row', async () => {
+    const o = await org();
+    const sealed = vault.seal(JSON.stringify({ accessToken: 'sbx_test' }), { orgId: o.orgId, provider: 'sandbox', externalAccountId: 'acct-sweep' });
+    const { connectionId: conn } = await exec<{ connectionId: string }>(o, o.owner, 'kernel.channel.connect', {
+      provider: 'sandbox',
+      externalAccountId: 'acct-sweep',
+      displayName: 'Trang thử',
+      scopes: ['publish'],
+      expiresAt: null,
+      credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') },
+    });
+    // Captured just now, so the first sweep does not ask about them, and weighed long ago.
+    await history(o, conn, 10, 10);
+    await admin((c) => c.query('UPDATE crove_social.post_variant SET outperform_checked_at = now() WHERE org_id = $1', [o.orgId]));
+    // Past its 24-hour capture by more than a day; already weighed; too young; one due for its 24-hour capture; and one
+    // whose check failed at its 24-hour capture six hours ago (rolled back, so nothing is set), tried again now.
+    const stale = await published(o, conn, 60, { reactions: 10 }, { capturedHoursAgo: 30 });
+    const weighed = await published(o, conn, 50, null);
+    await admin((c) => c.query('UPDATE crove_social.post_variant SET outperform_checked_at = now() WHERE id = $1', [weighed.variantId]));
+    const young = await published(o, conn, 5, null);
+    const fresh = await published(o, conn, 25, null);
+    const retry = await published(o, conn, 31, { reactions: 50 }, { capturedHoursAgo: 6 });
+    const asked: string[] = [];
+    const platform = {
+      metrics: async (input: { externalId: string }) => {
+        asked.push(input.externalId);
+        return { metrics: { reactions: 30 } };
+      },
+    } as unknown as Publisher;
+    const audits = () =>
+      admin(
+        async (c) =>
+          (await c.query<{ target_id: string }>("SELECT target_id FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'social.metrics.check_outperforming'", [o.orgId])).rows.map(
+            (r) => r.target_id,
+          ),
+      );
+    const snapshots = (variantId: string) =>
+      admin(async (c) => (await c.query<{ n: number }>("SELECT count(*)::int AS n FROM crove_social.metric_snapshot WHERE variant_id = $1 AND metrics <> '{}'::jsonb", [variantId])).rows[0]?.n ?? 0);
+
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb: createDb(workerPool), publishers: { sandbox: platform } });
+    for (const v of [weighed, young, fresh]) expect(await snapshots(v.variantId)).toBe(1);
+    expect({ stale: await snapshots(stale.variantId), retry: await snapshots(retry.variantId) }).toEqual({ stale: 2, retry: 2 });
+    expect((await audits()).sort()).toEqual([fresh.variantId, retry.variantId].sort());
+    expect(await marker(fresh.variantId)).not.toBeNull();
+    // The retry weighs its 24-hour capture (50 against the usual 10), not the capture just taken (30).
+    expect(await marker(retry.variantId)).not.toBeNull();
+    expect(await deliver(o)).toBe(4);
+    expect((await notices(o, o.author)).map((n) => n.detail.ratio).sort()).toEqual(['3', '5']);
+
+    // Seven hours on (the captures in an earlier bucket), every one of them is captured again: no check runs.
+    await admin((c) => c.query("UPDATE crove_social.metric_snapshot SET captured_at = captured_at - interval '7 hours', capture_key = capture_key || '-before' WHERE org_id = $1", [o.orgId]));
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET published_at = published_at - interval '7 hours' WHERE org_id = $1", [o.orgId]));
+    const before = asked.length;
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb: createDb(workerPool), publishers: { sandbox: platform } });
+    expect(asked.length).toBeGreaterThan(before);
+    expect(await snapshots(fresh.variantId)).toBe(2);
+    expect((await audits()).sort()).toEqual([fresh.variantId, retry.variantId].sort());
+    expect(await events(o)).toBe(2);
   });
 
   it('runs for the system only', async () => {

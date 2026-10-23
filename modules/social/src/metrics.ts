@@ -20,6 +20,7 @@ import { csvCell } from './domain/csv.ts';
 import { STORY_EXPIRED_KEY, STORY_FINAL_KEY, storyCapture } from './domain/story-metrics.ts';
 import { channelScope, connectionInScope, type ChannelScope } from './channel-access.ts';
 import { OUTPERFORM_AFTER_HOURS } from './domain/outperform.ts';
+import { pendingWeigh } from './outperforming.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // How often a published variant is asked again, and how far back the summary looks by default.
@@ -68,11 +69,15 @@ export const metricsTarget = defineQuery({
   handler: async (ctx, input) => {
     const row = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['channel_connection_id', 'external_post_id', 'provider', 'status', 'settings', 'published_at'])
+      .select(['id', 'channel_connection_id', 'external_post_id', 'provider', 'status', 'settings', 'published_at', 'outperform_checked_at'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.variantId)
       .executeTakeFirst();
     if (!row || row.status !== 'published' || !row.external_post_id) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy bài đã đăng này');
+    const postType = postTypeOf((row.settings ?? {}) as Record<string, unknown>);
+    // Whether the variant still waits to be weighed (#1132): the sweep runs the check only then, so a post is weighed
+    // (and audited) once, not after every later capture; the check keeps its own guards.
+    const outperformCheck = await pendingWeigh(ctx.trx, ctx.orgId, row);
     const reply = autoReplyOf((row.settings ?? {}) as Record<string, unknown>);
     const repostOf = (s: unknown) => {
       const rule = repostRuleOf((s ?? {}) as Record<string, unknown>);
@@ -86,8 +91,9 @@ export const metricsTarget = defineQuery({
       provider: row.provider,
       autoReplyLikes: reply && reply !== 'invalid' ? reply.likes : null,
       repost: repostOf(row.settings),
-      postType: postTypeOf((row.settings ?? {}) as Record<string, unknown>),
+      postType,
       publishedAt: row.published_at ? row.published_at.toISOString() : null,
+      outperformCheck,
     };
   },
 });
@@ -436,6 +442,8 @@ interface MetricsTarget {
   repost: { likes: number | null; afterHours: number | null } | null;
   postType: PostType | null;
   publishedAt: string | null;
+  // Whether the variant still waits to be weighed at its 24-hour capture (#1132).
+  outperformCheck: boolean;
 }
 
 interface SealedChannelCredential {
@@ -499,9 +507,11 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
       if (!result || 'refused' in result) out.skipped += 1;
       const done = await deps.runtime.execute<{ recorded: boolean }>('social.metrics.record', { variantId: row.variant_id, captureKey: captureKeyOf, ...input }, options);
       if (done.recorded && result && !('refused' in result)) out.recorded += 1;
-      // A capture with counts a day or more after the post went out may be its 24-hour capture: the check tells the
-      // author when it does much better than usual (#1132). Its failure never touches the metrics.
-      if (done.recorded && result && !('refused' in result) && story === null && target.publishedAt && now.getTime() - Date.parse(target.publishedAt) >= OUTPERFORM_AFTER_HOURS * 3_600_000) {
+      // A capture with counts a day or more after the post went out, while the post waits to be weighed: the check tells
+      // the author when its 24-hour capture does much better than usual (#1132). Once weighed, later captures run no
+      // check and add no audit row; a failed check is tried again at the next capture. Its failure never touches the
+      // metrics.
+      if (done.recorded && result && !('refused' in result) && story === null && target.outperformCheck && target.publishedAt && now.getTime() - Date.parse(target.publishedAt) >= OUTPERFORM_AFTER_HOURS * 3_600_000) {
         await deps.runtime
           .execute('social.metrics.check_outperforming', { variantId: row.variant_id }, options)
           .catch((error: unknown) => console.warn(`[social-outperforming] variant ${row.variant_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error'));
