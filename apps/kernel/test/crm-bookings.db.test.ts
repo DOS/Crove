@@ -157,7 +157,8 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     expect(event).toMatchObject({ user_id: o.host, kind: 'booking', title: 'Tư vấn thuế: Nguyễn Văn Khách' });
     const party = (await admin((c) => c.query('SELECT name, email, phone, kind, source_trust FROM crove_kernel.party WHERE org_id = $1 AND id = $2', [o.orgId, booking?.party_id]))).rows[0];
     expect(party).toMatchObject({ name: 'Nguyễn Văn Khách', email: 'khach@example.test', phone: '0901234567', kind: 'person', source_trust: 'external' });
-    const activity = (await admin((c) => c.query<{ kind: string; summary: string }>("SELECT kind, summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 ORDER BY occurred_at, id", [o.orgId, booking?.party_id]))).rows;
+    // A confirmation writes the party's creation and the booking at the same instant: the creation sorts first.
+    const activity = (await admin((c) => c.query<{ kind: string; summary: string }>("SELECT kind, summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 ORDER BY occurred_at, kind <> 'party.created', id", [o.orgId, booking?.party_id]))).rows;
     expect(activity.map((a) => a.kind)).toEqual(['party.created', 'crm.booking.confirmed']);
     expect(activity[1]?.summary).toContain('Tư vấn thuế lúc 09:00');
     // The slot is gone from the page.
@@ -302,7 +303,8 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     expect(await remind(at(day, 720), '1h')).toEqual({ sent: false });
     expect((await mails()).length).toBe(before - 1);
     expect((await mails()).filter((m) => m.source === 'crm.booking.cancelled').map((m) => m.payload.recipient)).toEqual(['visitor', 'host']);
-    const activity = (await admin((c) => c.query<{ kind: string }>('SELECT kind FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 ORDER BY occurred_at, id', [o.orgId, booking?.party_id]))).rows;
+    // Same instant for the party's creation and the confirmation: the creation sorts first.
+    const activity = (await admin((c) => c.query<{ kind: string }>('SELECT kind FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 ORDER BY occurred_at, kind <> \'party.created\', id', [o.orgId, booking?.party_id]))).rows;
     expect(activity.map((a) => a.kind)).toEqual(['party.created', 'crm.booking.confirmed', 'crm.booking.moved', 'crm.booking.cancelled']);
     // Bad asks are turned away before anything is recorded.
     await expect(bookingManageAsk(app, o.slug, 'tu-van', { manage: second, action: 'drop' })).rejects.toMatchObject({ code: 'VALIDATION' });
