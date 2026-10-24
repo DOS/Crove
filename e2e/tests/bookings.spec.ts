@@ -16,8 +16,8 @@ test('a visitor books on the public page, the host sees it in the app, cancels i
     const vars = { slug, email };
     // Every day, all day, in Vietnam time, and no notice: the test finds a slot whatever day it runs.
     exec(
-      `INSERT INTO crove_kernel.availability_rule (org_id, user_id, weekday, start_minute, end_minute, time_zone)
-       SELECT t.org_id, u.id, d, 0, 1440, 'Asia/Ho_Chi_Minh'
+      `INSERT INTO crove_kernel.availability_rule (org_id, user_id, weekday, start_minute, end_minute, time_zone, created_by)
+       SELECT t.org_id, u.id, d, 0, 1440, 'Asia/Ho_Chi_Minh', u.id
          FROM crove_kernel.tenant t, crove_kernel.user_account u, generate_series(1, 7) d
         WHERE t.slug = :'slug' AND lower(u.email) = lower(:'email')`,
       vars,
