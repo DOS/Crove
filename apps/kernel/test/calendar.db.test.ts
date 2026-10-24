@@ -124,6 +124,15 @@ suite('calendar core on PostgreSQL (#1313)', () => {
     expect(audit.rows.map((r) => r.command)).toEqual(['kernel.calendar.hours.save', 'kernel.calendar.hours.save']);
   });
 
+  it('keeps one whole set of hours when two first saves of a member race', async () => {
+    const o = await org();
+    const mon = { timeZone: VN, windows: [{ weekday: 1, start: 480, end: 600 }] };
+    const tue = { timeZone: VN, windows: [{ weekday: 2, start: 540, end: 720 }, { weekday: 3, start: 540, end: 720 }] };
+    await Promise.all([o.exec(o.member, 'kernel.calendar.hours.save', mon), o.exec(o.member, 'kernel.calendar.hours.save', tue)]);
+    const { hours } = await o.query<MyCalendar>(o.member, 'kernel.calendar.get', dayRange(nextWorkday()));
+    expect([mon, tue]).toContainEqual(hours);
+  });
+
   it('takes a busy event out of the free slots and gives it back when cancelled', async () => {
     const o = await org();
     const day = nextWorkday();

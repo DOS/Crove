@@ -18,6 +18,7 @@ import {
   type MyCalendar,
   type WorkingHours,
 } from '@crove/kernel-contract';
+import { sql } from 'kysely';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 
@@ -139,8 +140,10 @@ export const calendarHoursSave = defineCommand({
   handler: async (ctx, input) => {
     const userId = userOf(ctx.actor);
     if (input.windows.length === 0) throw new DomainError('WORKING_HOURS_EMPTY', 422, 'Hãy chọn ít nhất một khung giờ làm việc');
+    // The whole set at once, one save of a member at a time: without the lock, two first saves would both delete
+    // nothing and both insert their windows.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_kernel.availability_rule:${ctx.orgId}:${userId}`}, 0))`.execute(ctx.trx);
     const before = await workingHoursOf(ctx, userId);
-    // The whole set at once: two saves of one member at the same time end with one of them, whole.
     await ctx.trx.deleteFrom('crove_kernel.availability_rule').where('org_id', '=', ctx.orgId).where('user_id', '=', userId).execute();
     const windows = [...input.windows].sort((a, b) => a.weekday - b.weekday || a.start - b.start);
     await ctx.trx
