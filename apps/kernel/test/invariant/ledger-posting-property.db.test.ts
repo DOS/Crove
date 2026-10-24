@@ -26,7 +26,9 @@ const ACCOUNTS = ['111', '112', '1331', '156', '331', '642', '6422'];
 type Line = { line_no: number; account_code: string; debit: string; credit: string };
 type Side = { account: string; debit: boolean; units: bigint };
 
-// Amounts in units of 0.0001 (the scale of crove_finance.amount), as decimal strings.
+// Amounts in units of 0.0001 (the scale of crove_finance.amount), as decimal strings. The org books in VND, which has
+// no minor units (ADR-0021 decision 1, #1282), so the generated lines use whole dong: one dong is DONG units.
+const DONG = 10_000n;
 const amount = (units: bigint) => money(units.toString()).dividedBy(10_000).toFixed(4);
 const toLines = (sides: Side[]): Line[] =>
   sides.map((s, i) => ({
@@ -39,7 +41,7 @@ const toLines = (sides: Side[]): Line[] =>
 const side = fc.record({
   account: fc.constantFrom(...ACCOUNTS),
   debit: fc.boolean(),
-  units: fc.bigInt({ min: 1n, max: 10n ** 15n }),
+  units: fc.bigInt({ min: 1n, max: 10n ** 11n }).map((dong) => dong * DONG),
 });
 
 // Any lines at all (mostly unbalanced, including 0 and 1 line).
@@ -51,10 +53,10 @@ const balance = (sides: Side[]): Side[] => {
   return [...sides, { account: '331', debit: net < 0n, units: net < 0n ? -net : net }];
 };
 const balanced = fc.array(side, { minLength: 1, maxLength: 5 }).map(balance);
-// Balanced, then one line off by the smallest amount.
+// Balanced, then one line off by the smallest amount (one dong).
 const nearlyBalanced = fc
   .tuple(balanced, fc.nat())
-  .map(([sides, pick]) => sides.map((s, i) => (i === pick % sides.length ? { ...s, units: s.units + 1n } : s)));
+  .map(([sides, pick]) => sides.map((s, i) => (i === pick % sides.length ? { ...s, units: s.units + DONG } : s)));
 
 const lineSets = fc.oneof(raw, balanced, nearlyBalanced).map(toLines);
 
