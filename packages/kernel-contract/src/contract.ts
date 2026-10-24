@@ -13,6 +13,7 @@ import {
   zAiAmount,
   zChart,
   zClientOverviews,
+  zOrgOverview,
   zJobDescription,
   zModuleId,
   zPositionStatus,
@@ -204,6 +205,8 @@ export const contract = {
     // A retry with the same idempotencyKey returns the org the first request created.
     create: oc.input(z.object({ name: z.string().trim().min(1).max(200), idempotencyKey: zId })).output(zOrgSummary),
     get: oc.output(zOrgDetail),
+    // The org's overview (#1249): its figures, the same as the multi-client home screen reads for it. Every role.
+    overview: oc.output(zOrgOverview),
     // Owners and admins (issue #313): the org's own tax code (MST), or null to clear it. Stored normalized; a value
     // that is not a Vietnamese tax code is refused. Invoices read from then on whose seller has it become sales.
     setTaxCode: oc.input(z.object({ taxCode: z.string().trim().max(20).nullable() })).output(z.object({ taxCode: z.string().nullable() })),

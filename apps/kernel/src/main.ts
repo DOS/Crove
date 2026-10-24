@@ -1,5 +1,6 @@
 // Crove kernel entry point. One image, several roles:
-//   migrate      apply SQL migrations (the job schema included) and set role passwords
+//   migrate      apply SQL migrations (the job schema included), set role passwords and install the DDL watch's
+//                event triggers (#1202) where the admin role may
 //   auth-grants  after Supabase Auth has started: let the session check read auth.sessions, auth.users and
 //                auth.mfa_factors (user_id, status)
 //   api          HTTP API + web UI
@@ -18,7 +19,7 @@
 //                 apply the offboarding deletion map to an org in offboarding whose export is old enough, and close
 //                 it (issue #1024); run it in the worker's container
 // It wires the open-source default adapters into the composition root (createKernel, ADR-0030).
-import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
+import { applyAuthGrants, installDdlWatch, migrate, setRolePasswords } from '@crove/db/migrate';
 import { liveAuthUrl, loadConfig, type Config } from './config.ts';
 import { createKernel, defaultAdapters, type ServerRole } from './kernel.ts';
 import { describeMailer } from './mail.ts';
@@ -41,6 +42,9 @@ async function runMigrate(config: Config) {
     crove_reporter: config.CROVE_REPORTER_DB_PASSWORD,
     supabase_auth_admin: config.AUTH_DB_PASSWORD,
   });
+  // The superuser step of the DDL watch (#1202): skipped, with a log line, where the admin role may not create event
+  // triggers.
+  await installDdlWatch({ adminUrl, log: (m) => console.log(`[migrate] ${m}`) });
   console.log(`[migrate] done, ${applied.length} new migration(s)`);
 }
 

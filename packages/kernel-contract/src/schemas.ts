@@ -232,27 +232,27 @@ export const zOrgDetail = z.object({
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
-// One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures read in its own
-// context. pendingProposals: proposals waiting in the Inbox. failedFiles: files that could not be read among the ones
-// the Inbox lists. lastActivityAt: the newest entry of the org's activity feed. vatDeadline: the next VAT return due,
-// from the org's filing period (null while none is chosen).
-export const zClientOverview = zOrgSummary.extend({
-  overview: z.object({
-    pendingProposals: z.number().int().nonnegative(),
-    failedFiles: z.number().int().nonnegative(),
-    lastActivityAt: z.string().nullable(),
-    vatFilingPeriod: zVatFilingPeriod.nullable(),
-    vatDeadline: z
-      .object({
-        period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/),
-        dueDate: zLocalDate,
-        daysLeft: z.number().int().nonnegative(),
-      })
-      .nullable(),
-    // The tax calendar (#921): what is due in the next 30 days, or overdue and not marked done, by due date.
-    taxDues: z.array(zTaxDueView),
-  }),
+// An org's figures (issue #318), read in its own context: on the multi-client home screen for each org, and on the
+// org's overview (#1249). pendingProposals: proposals waiting in the Inbox. failedFiles: files that could not be read
+// among the ones the Inbox lists. lastActivityAt: the newest entry of the org's activity feed. vatDeadline: the next
+// VAT return due, from the org's filing period (null while none is chosen).
+export const zOrgOverview = z.object({
+  pendingProposals: z.number().int().nonnegative(),
+  failedFiles: z.number().int().nonnegative(),
+  lastActivityAt: z.string().nullable(),
+  vatFilingPeriod: zVatFilingPeriod.nullable(),
+  vatDeadline: z
+    .object({
+      period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2]|Q[1-4])$/),
+      dueDate: zLocalDate,
+      daysLeft: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  // The tax calendar (#921): what is due in the next 30 days, or overdue and not marked done, by due date.
+  taxDues: z.array(zTaxDueView),
 });
+// One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures.
+export const zClientOverview = zOrgSummary.extend({ overview: zOrgOverview });
 // The home screen's answer (#495): at most 200 orgs, and how many the user has, so a cut list says so.
 export const zClientOverviews = z.object({ clients: z.array(zClientOverview), total: z.number().int().nonnegative() });
 // What the public tax registry says about a tax code (issue #324), to prefill a new org: the normalized tax code, the
