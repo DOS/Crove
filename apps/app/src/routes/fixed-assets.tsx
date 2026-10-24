@@ -10,6 +10,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
@@ -108,7 +109,7 @@ function AssetFormCard({ onClose }: { onClose: () => void }) {
           </label>
           <label className="block text-xs">
             <span className="text-subtle-foreground">{t('startMonth')}</span>
-            <Input className="mt-1" type="month" value={form.startMonth} onChange={(e) => set({ startMonth: e.target.value })} />
+            <DateInput kind="month" className="mt-1 w-full" value={form.startMonth} onChange={(startMonth) => set({ startMonth })} />
           </label>
           <label className="block text-xs">
             <span className="text-subtle-foreground">{t('months')}</span>
@@ -211,7 +212,7 @@ function EndForm({ asset, onClose }: { asset: FixedAsset; onClose: () => void })
     >
       <label className="text-xs">
         <span className="text-subtle-foreground">{t('endMonth')}</span>
-        <Input className="mt-1 w-40" type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+        <DateInput kind="month" className="mt-1 w-40" value={month} onChange={setMonth} />
       </label>
       <label className="grow text-xs">
         <span className="text-subtle-foreground">{t('endReason')}</span>

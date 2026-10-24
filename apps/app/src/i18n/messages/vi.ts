@@ -3,6 +3,9 @@
 // names and types of every t() call against these messages (see ../catalog.ts).
 export const vi = {
   common: {
+    datePlaceholder: 'dd/mm/yyyy',
+    monthPlaceholder: 'mm/yyyy',
+    openCalendar: 'Mở lịch',
     error: 'Đã có lỗi xảy ra',
     unknownError: 'Lỗi không xác định',
     httpError: 'Lỗi {status}',

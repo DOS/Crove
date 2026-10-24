@@ -5,6 +5,9 @@ import type { Messages } from './vi.ts';
 // or tags differ from the Vietnamese one, fails the typecheck.
 export const en = {
   common: {
+    datePlaceholder: 'dd/mm/yyyy',
+    monthPlaceholder: 'mm/yyyy',
+    openCalendar: 'Open the calendar',
     error: 'Something went wrong',
     unknownError: 'Unknown error',
     httpError: 'Error {status}',
