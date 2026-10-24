@@ -19,7 +19,7 @@ const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.
 const ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant'];
 
 // The read-only check of #1282: journal lines with more decimals than their org's book currency uses, and purchase
-// documents with fractional VND amounts. Same text as in 20261029233100_crove_finance_currency_scale.sql.
+// documents with fractional VND amounts. Same text as in 20261030000100_crove_finance_currency_scale.sql.
 const BREAKING_ROWS = `
   SELECT 'journal_line' AS source, l.org_id, l.entry_id AS id, l.line_no, t.base_currency AS currency, l.debit, l.credit
   FROM crove_finance.journal_line l

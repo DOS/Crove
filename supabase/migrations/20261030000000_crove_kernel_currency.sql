@@ -3,7 +3,7 @@
 --
 -- crove_kernel.currency   ISO 4217 code and minor units: how many decimals the currency uses (0 for VND and JPY, 2 for
 --                         USD, at most 4, the scale of crove_finance.amount). The posting definer refuses an amount with
---                         more decimals than the book currency uses (20261029233100). A global reference table with no
+--                         more decimals than the book currency uses (20261030000100). A global reference table with no
 --                         org_id: every runtime role reads all of it and none writes it; rows are added by migrations
 --                         only and never changed or removed (immutable once published). In the kernel, not in finance,
 --                         because kernel tables name currencies too (tenant.base_currency, a legal entity's book
