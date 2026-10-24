@@ -1,6 +1,6 @@
 # 0034. Outbound email: one kernel pipeline, an optional Email module
 
-- Status: proposed (plan Decision 18); the owner accepts it before step E1 of the [Email plan](../plan/email.md)
+- Status: accepted (owner, 2026-10-24; plan Decision 18). Proposed 2026-10-19; steps E1 and E2 of the [Email plan](../plan/email.md) (#538, #539) were built on it before the acceptance was recorded.
 - Date: 2026-10-19
 - Deciders: owner (JOY)
 - Builds on: ADR-0025 (channel layer: `external_call`, credential store, retry safety per step), ADR-0030 (composition root), ADR-0031 (module enablement)
