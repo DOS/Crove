@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { isVietnamHoliday, zonedDate, zonedInstant, type EventType } from '@crove/kernel-contract';
+import { isVietnamHoliday, zonedDate, zonedInstant, type EventType, type PersonalDataErasure, type PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { crmCommands, crmQueries } from '@crove/mod-crm';
 import { bookingRequest, bookingStatus, bookingView } from '../src/booking-page.ts';
@@ -169,6 +169,17 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     const second = (await o.bookings())[1];
     expect(await o.confirm(second?.id as string)).toMatchObject({ status: 'confirmed' });
     expect((await o.bookings())[1]?.party_id).toBe(booking?.party_id);
+
+    // The visitor asks to be erased: both bookings lose the name, email, phone and note, and the finder sees none.
+    const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
+    const erased = await app.execute<PersonalDataErasure>('kernel.personal_data.erase', { value: 'khach@example.test' }, { actor: asMfa(o.owner), orgId: o.orgId, idempotencyKey: randomUUID() });
+    expect(erased.erased).toEqual(
+      expect.arrayContaining(['visitor_name', 'email', 'phone', 'note'].map((c) => expect.objectContaining({ column: `crove_crm.booking.${c}`, rows: 2 }))),
+    );
+    const left = (await admin((c) => c.query('SELECT visitor_name, email, phone, note FROM crove_crm.booking WHERE org_id = $1', [o.orgId]))).rows;
+    expect(left).toEqual([0, 1].map(() => ({ visitor_name: null, email: null, phone: null, note: null })));
+    const found = await app.query<PersonalDataResult>('kernel.personal_data.find', { value: '0901234567' }, { actor: asUser(o.owner), orgId: o.orgId });
+    expect(found.matches.filter((m) => m.column.startsWith('crove_crm.booking'))).toEqual([]);
   });
 
   it('refuses a taken time, a full day and an archived type, and turns away bad requests at once', async () => {

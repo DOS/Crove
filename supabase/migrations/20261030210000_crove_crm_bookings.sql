@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS crove_crm.booking (
   CONSTRAINT booking_party_fk FOREIGN KEY (org_id, party_id) REFERENCES crove_kernel.party (org_id, id)
 );
 CREATE INDEX IF NOT EXISTS booking_event_type_idx ON crove_crm.booking (org_id, event_type_id, starts_at);
+-- The hourly request cap of booking_request counts a type's recent rows.
+CREATE INDEX IF NOT EXISTS booking_event_type_created_idx ON crove_crm.booking (org_id, event_type_id, created_at);
 CREATE INDEX IF NOT EXISTS booking_calendar_event_idx ON crove_crm.booking (org_id, calendar_event_id) WHERE calendar_event_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS booking_party_idx ON crove_crm.booking (org_id, party_id) WHERE party_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS booking_request_token_uq ON crove_crm.booking (request_token_sha256) WHERE request_token_sha256 IS NOT NULL;

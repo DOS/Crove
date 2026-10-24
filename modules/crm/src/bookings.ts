@@ -29,8 +29,10 @@ function wallTime(timeZone: string, at: number): string {
   return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} ngày ${d}/${m}/${y}`;
 }
 
-// The party with this email in the org, or a new person with the visitor's name, email and phone.
+// The party with this email in the org, or a new person with the visitor's name, email and phone. Confirmations for
+// different hosts run in parallel, so the same visitor booking two of them at once takes this lock first.
 async function partyFor(ctx: CommandContext, name: string, email: string, phone: string | null): Promise<string> {
+  await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_crm.party:${ctx.orgId}:${email.toLowerCase()}`}, 0))`.execute(ctx.trx);
   const existing = await ctx.trx
     .selectFrom('crove_kernel.party')
     .select('id')
