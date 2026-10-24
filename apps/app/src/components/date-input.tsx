@@ -23,17 +23,23 @@ export function DateInput({
   const t = useTranslations('common');
   const [text, setText] = useState(() => formatDateValue(value, kind));
   const picker = useRef<HTMLInputElement>(null);
+  const field = useRef<HTMLInputElement>(null);
   // A value set from outside (a reset, a prefill, the picker) shows as typed text, unless the text already says it.
   useEffect(() => {
     setText((current) => (parseDateText(current, kind) === value ? current : formatDateValue(value, kind)));
   }, [value, kind]);
   const partial = text.trim() !== '' && parseDateText(text, kind) === null;
+  // A half-typed or impossible date blocks the form's submit, which would otherwise send the last valid value.
+  useEffect(() => {
+    field.current?.setCustomValidity(partial ? (kind === 'day' ? t('invalidDate') : t('invalidMonth')) : '');
+  }, [partial, kind, t]);
   const locked = props.disabled || props.readOnly;
 
   return (
     <span className={cn('relative inline-flex', className)}>
       <Input
         {...props}
+        ref={field}
         type="text"
         inputMode="numeric"
         autoComplete="off"
@@ -51,13 +57,13 @@ export function DateInput({
           if (partial) setText(formatDateValue(value, kind));
         }}
       />
-      {/* The browser's picker, opened from the button: never focused or read on its own. */}
+      {/* The browser's picker, laid over the button so its popover opens there: never focused or read on its own. */}
       <input
         ref={picker}
         type={kind === 'day' ? 'date' : 'month'}
         tabIndex={-1}
         aria-hidden="true"
-        className="pointer-events-none absolute right-0 bottom-0 h-0 w-0 opacity-0"
+        className="pointer-events-none absolute inset-y-0 right-0 w-9 opacity-0"
         value={value}
         {...(min !== undefined ? { min } : {})}
         {...(max !== undefined ? { max } : {})}

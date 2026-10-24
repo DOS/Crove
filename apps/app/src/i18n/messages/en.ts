@@ -8,6 +8,8 @@ export const en = {
     datePlaceholder: 'dd/mm/yyyy',
     monthPlaceholder: 'mm/yyyy',
     openCalendar: 'Open the calendar',
+    invalidDate: 'Not a valid date: type it as dd/mm/yyyy',
+    invalidMonth: 'Not a valid month: type it as mm/yyyy',
     error: 'Something went wrong',
     unknownError: 'Unknown error',
     httpError: 'Error {status}',
