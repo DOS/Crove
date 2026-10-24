@@ -34,7 +34,7 @@ export interface Label {
 }
 
 // NFC, so a name typed with combining marks matches the same name typed precomposed.
-const zName = z
+export const zLabelName = z
   .string()
   .trim()
   .transform((s) => s.normalize('NFC'))
@@ -109,7 +109,7 @@ async function lockLabel(ctx: CommandContext, id: string) {
 export const labelCreate = defineCommand({
   name: 'social.label.create',
   // A campaign's dates and tags (#1169) only from owners and admins; members create plain labels.
-  input: z.strictObject({ name: zName, color: zColor.optional(), ...zCampaign }),
+  input: z.strictObject({ name: zLabelName, color: zColor.optional(), ...zCampaign }),
   risk: 'R1',
   access: MEMBERS,
   handler: async (ctx, input) => {
@@ -132,7 +132,7 @@ export const labelCreate = defineCommand({
 export const labelUpdate = defineCommand({
   name: 'social.label.update',
   // The campaign's fields (#1169) are optional: absent ones stay as they are, null (or empty tags) clears one.
-  input: z.strictObject({ labelId: zId, name: zName, color: zColor, ...zCampaign }),
+  input: z.strictObject({ labelId: zId, name: zLabelName, color: zColor, ...zCampaign }),
   risk: 'R1',
   access: ADMINS,
   handler: async (ctx, input) => {

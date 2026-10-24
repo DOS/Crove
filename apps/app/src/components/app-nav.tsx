@@ -18,6 +18,8 @@ export const NAV_GROUPS = [
   {
     id: 'work',
     items: [
+      // What waits for the user in this org today (#1249).
+      { to: '/o/$slug/overview', label: 'overview', module: 'kernel' },
       { to: '/o/$slug/inbox', label: 'inbox', module: 'kernel' },
       // In-app notifications of the kernel and finance (#671), with the unread count.
       { to: '/o/$slug/notifications', label: 'alerts', module: 'kernel' },
