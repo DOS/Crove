@@ -1,6 +1,7 @@
 // Client review links on the post screen (#589): owners and admins make one (shown once, to copy and send, often over
 // Zalo), revoke it, and everyone sees what clients answered. A client's answer is a signal for the team, never one of
-// the approvals a channel needs. The plan links the post is in (#902) are listed too.
+// the approvals a channel needs. The plan links the post is in (#902) are listed too. Members and above answer each
+// client answer with one team reply (#1301), which the client sees under it signed with the org's name.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -9,6 +10,8 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { Textarea } from '@crove/ui/components/textarea';
+import { useMemberNames } from './social-mentions.tsx';
 import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -20,10 +23,90 @@ const DAYS = [3, 7, 14, 30] as const;
 // REVIEW_PLAN_ANSWERS_PER_POST for this post of a plan link, #902).
 const nearlyFull = (used: number, max: number) => used >= Math.ceil(max * 0.9);
 
-export function ReviewLinks({ postId, canDecide }: { postId: string; canDecide: boolean }) {
+// The longest team reply (REVIEW_REPLY_MAX on the server), as long as a client's own comment.
+export const REPLY_MAX = 2000;
+
+type Feedback = {
+  id: string;
+  name: string;
+  verdict: 'approved' | 'changes_requested' | 'comment';
+  body: string | null;
+  changed: boolean;
+  createdAt: string;
+  reply: { body: string; by: string; at: string } | null;
+};
+
+// One client answer with the team's reply under it (#1301): members and above write, edit and remove the reply; the
+// client sees it on the link's page signed with the org's name, never the member's.
+export function ClientAnswer({ fb, canReply, nameOf }: { fb: Feedback; canReply: boolean; nameOf: (userId: string) => string | null }) {
+  const t = useTranslations('social.reviewLinks');
+  const f = useFormat();
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState('');
+  const save = useMutation({
+    mutationFn: (body: string | null) => client.social.reviewLinks.reply({ feedbackId: fb.id, body }),
+    onSuccess: () => {
+      setEditing(false);
+      void queryClient.invalidateQueries({ queryKey: orpc.social.reviewLinks.list.key() });
+    },
+  });
+  const open = () => {
+    setText(fb.reply?.body ?? '');
+    setEditing(true);
+  };
+  return (
+    <li className="space-y-1 border-l-2 border-border py-1 pl-3 text-sm">
+      <p className="text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{fb.name}</span> · <Badge variant={fb.verdict === 'approved' ? 'secondary' : 'outline'}>{t(`verdict.${fb.verdict}`)}</Badge> ·{' '}
+        {f.dateTime(fb.createdAt)}
+        {fb.changed ? ` · ${t('answeredChanged')}` : ''}
+      </p>
+      {fb.body && <p className="whitespace-pre-wrap break-words text-foreground">{fb.body}</p>}
+      {fb.reply && !editing && (
+        <div className="ml-2 space-y-0.5 rounded-md bg-muted/50 px-2 py-1.5">
+          <p className="text-xs text-muted-foreground">{t('repliedBy', { name: nameOf(fb.reply.by) ?? t('formerMember'), when: f.dateTime(fb.reply.at) })}</p>
+          <p className="whitespace-pre-wrap break-words text-foreground">{fb.reply.body}</p>
+          {canReply && (
+            <div className="flex gap-1">
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={open}>
+                {t('replyEdit')}
+              </Button>
+              <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={save.isPending} onClick={() => window.confirm(t('replyClearConfirm')) && save.mutate(null)}>
+                {t('replyClear')}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+      {canReply && !fb.reply && !editing && (
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={open}>
+          {t('reply')}
+        </Button>
+      )}
+      {canReply && editing && (
+        <div className="space-y-1.5">
+          <Textarea aria-label={t('replyLabel', { name: fb.name })} value={text} rows={2} maxLength={REPLY_MAX} placeholder={t('replyPlaceholder')} onChange={(e) => setText(e.target.value)} />
+          <p className="text-xs text-subtle-foreground">{t('replyHint')}</p>
+          <div className="flex gap-2">
+            <Button size="sm" disabled={save.isPending || !text.trim()} onClick={() => save.mutate(text)}>
+              {fb.reply ? t('replySave') : t('replySend')}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={save.isPending} onClick={() => setEditing(false)}>
+              {t('replyCancel')}
+            </Button>
+          </div>
+        </div>
+      )}
+      {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
+    </li>
+  );
+}
+
+export function ReviewLinks({ postId, canDecide, canReply = false }: { postId: string; canDecide: boolean; canReply?: boolean }) {
   const t = useTranslations('social.reviewLinks');
   const f = useFormat();
   const list = useQuery(orpc.social.reviewLinks.list.queryOptions({ input: { postId } }));
+  const { nameOf } = useMemberNames();
   const [days, setDays] = useState<number>(7);
   const [made, setMade] = useState<{ url: string; expiresAt: string } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -128,14 +211,7 @@ export function ReviewLinks({ postId, canDecide }: { postId: string; canDecide: 
       {feedback.length > 0 && (
         <ol className="space-y-2">
           {feedback.map((fb) => (
-            <li key={fb.id} className="space-y-1 border-l-2 border-border py-1 pl-3 text-sm">
-              <p className="text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">{fb.name}</span> · <Badge variant={fb.verdict === 'approved' ? 'secondary' : 'outline'}>{t(`verdict.${fb.verdict}`)}</Badge> ·{' '}
-                {f.dateTime(fb.createdAt)}
-                {fb.changed ? ` · ${t('answeredChanged')}` : ''}
-              </p>
-              {fb.body && <p className="whitespace-pre-wrap break-words text-foreground">{fb.body}</p>}
-            </li>
+            <ClientAnswer key={fb.id} fb={fb} canReply={canReply} nameOf={nameOf} />
           ))}
         </ol>
       )}

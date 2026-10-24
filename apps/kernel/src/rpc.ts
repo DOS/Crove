@@ -996,6 +996,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         createPlan: os.social.reviewLinks.createPlan.handler(socialCommand('social.review_link.create_plan')),
         plans: os.social.reviewLinks.plans.handler(socialQuery('social.review_link.list_plans')),
         revoke: os.social.reviewLinks.revoke.handler(socialCommand('social.review_link.revoke')),
+        reply: os.social.reviewLinks.reply.handler(socialCommand('social.review.reply')),
       },
       media: {
         list: os.social.media.list.handler(socialQuery('social.media.list')),

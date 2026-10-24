@@ -3,6 +3,7 @@
 // plan link (#902) shows each of its posts in schedule order and takes an answer on each.
 // The token stays after the # (browsers never send it to a server in the address) and goes to the API in a POST
 // body only. With the org's white-label branding (#1053) it shows the agency's logo, name and accent instead of Crove's.
+// The team's reply to an answer (#1301) shows under it, signed with that same name, never a member's.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -23,7 +24,8 @@ import { planProgress } from '../lib/social-plan-review.ts';
 import { pageBrand, type ReportBrand } from '../lib/social-report-branding.ts';
 
 type Verdict = 'approved' | 'changes_requested' | 'comment';
-type Answer = { name: string; verdict: Verdict; body: string | null; at: string };
+// reply (#1301): the team's reply under the answer, or null; absent from a server without it.
+type Answer = { name: string; verdict: Verdict; body: string | null; at: string; reply?: { body: string; at: string } | null };
 // signature (#1190): the channel's signature, or null; shown after the body as it is sent (fullText).
 type Channel = { provider: string; channel: string; status: string; body: string; signature: string | null; title: string | null; linkUrl: string | null };
 interface ReviewPage {
@@ -37,7 +39,11 @@ interface ReviewPage {
   feedback: Answer[];
 }
 // A content plan (#902): its posts in schedule order, each answered on its own; a post cancelled since is only gone.
-type PlanPost = { id: string; gone: true } | { id: string; gone: false; at: string | null; changed: boolean; channels: (Channel & { media: { id: string; type: string }[] })[]; answers: number; feedback: Answer[] };
+// The post's body comes once (#930): a channel's body is null when it shows the post's.
+type PlanChannel = Omit<Channel, 'body'> & { body: string | null; media: { id: string; type: string }[] };
+type PlanPost =
+  | { id: string; gone: true }
+  | { id: string; gone: false; at: string | null; changed: boolean; body?: string | null; channels: PlanChannel[]; answers: number; feedback: Answer[] };
 interface PlanPage {
   kind: 'plan';
   org: string;
@@ -52,6 +58,24 @@ type FileFetcher = { key: string; fetch: (fileId: string) => Promise<Blob> };
 // The text a channel sends (#1190): its body with its signature after it, as effectiveContent appends it, so the client
 // approves the whole text. Plain text, in the same preview as the body.
 const fullText = (c: Channel) => withSignature(c.body, { signature: c.signature ?? null });
+
+// A plan channel's own body, or the post's when it shows that one (#930).
+export const planChannel = (post: { body?: string | null }, c: PlanChannel): Channel & { media: PlanChannel['media'] } => ({ ...c, body: c.body ?? post.body ?? '' });
+
+// The team's reply under a client's answer (#1301), signed with the org's or its branding's name; the text is plain
+// text, which React escapes.
+export function TeamReply({ reply, from }: { reply: { body: string; at: string }; from: string }) {
+  const t = useTranslations('social.clientReview');
+  const f = useFormat();
+  return (
+    <div className="mt-1 border-l-2 border-border pl-3">
+      <p className="text-xs text-muted-foreground">
+        <span className="font-medium text-foreground">{t('teamReply', { org: from })}</span> · {f.dateTime(reply.at)}
+      </p>
+      <p className="whitespace-pre-wrap break-words text-foreground">{reply.body}</p>
+    </div>
+  );
+}
 
 const NAME_KEY = 'crove.review.name';
 const tokenOf = () => {
@@ -96,7 +120,7 @@ const saveName = (name: string) => {
 };
 
 // One post of a plan: its previews, its answers through the link, and the client's answer on it alone.
-function PlanPostCard({ token, item, index, name, files, onAnswered }: { token: string; item: PlanPost; index: number; name: string; files: FileFetcher; onAnswered: () => void }) {
+function PlanPostCard({ token, item, index, name, from, files, onAnswered }: { token: string; item: PlanPost; index: number; name: string; from: string; files: FileFetcher; onAnswered: () => void }) {
   const t = useTranslations('social.clientReview');
   const f = useFormat();
   const [body, setBody] = useState('');
@@ -134,15 +158,18 @@ function PlanPostCard({ token, item, index, name, files, onAnswered }: { token: 
       </div>
       {item.changed && <p className="rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm">{t('planChanged')}</p>}
       <div className="grid gap-4 md:grid-cols-2">
-        {item.channels.map((c, i) => (
-          <FileSource.Provider key={i} value={files}>
-            <PlatformPreview
-              channel={c.channel}
-              provider={c.provider}
-              content={{ body: fullText(c), title: c.title ?? '', linkUrl: c.linkUrl ?? '', media: c.media.map((m) => ({ fileId: m.id, altText: '', mime: m.type, sizeBytes: 0 })) }}
-            />
-          </FileSource.Provider>
-        ))}
+        {item.channels.map((pc, i) => {
+          const c = planChannel(item, pc);
+          return (
+            <FileSource.Provider key={i} value={files}>
+              <PlatformPreview
+                channel={c.channel}
+                provider={c.provider}
+                content={{ body: fullText(c), title: c.title ?? '', linkUrl: c.linkUrl ?? '', media: c.media.map((m) => ({ fileId: m.id, altText: '', mime: m.type, sizeBytes: 0 })) }}
+              />
+            </FileSource.Provider>
+          );
+        })}
       </div>
       <div className="space-y-1.5">
         <Label htmlFor={bodyId}>{t('comment')}</Label>
@@ -167,6 +194,7 @@ function PlanPostCard({ token, item, index, name, files, onAnswered }: { token: 
             <li key={i}>
               <span className="font-medium text-foreground">{fb.name}</span> · {t(`verdict.${fb.verdict}`)} · {f.dateTime(fb.at)}
               {fb.body && <span className="block whitespace-pre-wrap break-words text-foreground">{fb.body}</span>}
+              {fb.reply && <TeamReply reply={fb.reply} from={from} />}
             </li>
           ))}
         </ul>
@@ -197,7 +225,7 @@ function PlanReview({ token, data, brand, files, onAnswered }: { token: string; 
         <p className="text-xs text-subtle-foreground">{t('planNote')}</p>
       </Card>
       {data.posts.map((item, i) => (
-        <PlanPostCard key={`${token}:${item.id}`} token={token} item={item} index={i} name={name} files={files} onAnswered={onAnswered} />
+        <PlanPostCard key={`${token}:${item.id}`} token={token} item={item} index={i} name={name} from={brand?.name ?? data.org} files={files} onAnswered={onAnswered} />
       ))}
     </>
   );
@@ -306,6 +334,7 @@ export function SocialReviewPage() {
                       <span className="font-medium text-foreground">{fb.name}</span> · {t(`verdict.${fb.verdict}`)} · {f.dateTime(fb.at)}
                     </p>
                     {fb.body && <p className="whitespace-pre-wrap break-words">{fb.body}</p>}
+                    {fb.reply && <TeamReply reply={fb.reply} from={brand?.name ?? data.org} />}
                   </Card>
                 ))}
               </div>
