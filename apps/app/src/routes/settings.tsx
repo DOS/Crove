@@ -13,6 +13,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
 import { ChartOfAccountsCard } from './accounts.tsx';
 import { LegalEntitiesCard } from './legal-entities.tsx';
+import { WorkingHoursCard } from './working-hours.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -1027,6 +1028,8 @@ export function SettingsPage() {
             </>
           )}
         </Card>
+        {/* The member's own working hours and days off (#1313). */}
+        {org.data && <WorkingHoursCard key={org.data.slug} canEdit={org.data.role !== 'viewer'} />}
         {/* The legal entities the books are kept for (#1278), with the finance module; owners and admins only. */}
         {getConfig().modules.includes('finance') && canManage && <LegalEntitiesCard key={org.data?.slug} />}
         {/* The chart of accounts belongs to the finance module (#319). */}
