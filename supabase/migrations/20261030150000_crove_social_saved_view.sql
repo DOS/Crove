@@ -68,8 +68,8 @@ CREATE POLICY saved_view_delete ON crove_social.saved_view AS RESTRICTIVE FOR DE
     OR ((SELECT crove_kernel.ctx_user_id()) IS NULL AND (SELECT crove_kernel.ctx_agent_id()) IS NULL));
 
 -- The org purge (#1024) deletes crove_social.saved_view with the org's other Social rows (#1300). The function is
--- copied verbatim from 20261029215000_crove_social_push_subscription.sql, with only this table added to v_social; the
--- runbook's deletion map already says every crove_social table but post_approval is deleted.
+-- copied verbatim from 20261030120000_crove_kernel_calendar.sql, with only this table added to v_social; the
+-- runbook's deletion map says every crove_social table but post_approval is deleted.
 -- migration-lint: cross-module the org purge re-created with crove_social.saved_view added to v_social, per the owner's standing approval to add each new Social table to crove_kernel.org_purge in its feature migration (#1213).
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
 RETURNS TABLE (outcome text, counts jsonb, blob_keys text[])
@@ -103,7 +103,7 @@ DECLARE
     'crove_kernel.proposal_policy', 'crove_kernel.refusal_tally', 'crove_kernel.tax_obligation_done',
     'crove_kernel.tax_profile', 'crove_kernel.usage_deferral', 'crove_kernel.file_upload',
     'crove_kernel.budget_policy', 'crove_kernel.kill_switch', 'crove_kernel.credential',
-    'crove_finance.vendor_account_rule'];
+    'crove_finance.vendor_account_rule', 'crove_kernel.availability_rule', 'crove_kernel.calendar_event'];
   v_social text[] := ARRAY[
     'crove_social.account_snapshot', 'crove_social.bio_click', 'crove_social.bio_page', 'crove_social.brand_voice',
     'crove_social.calendar_feed', 'crove_social.calendar_note', 'crove_social.channel_policy',
