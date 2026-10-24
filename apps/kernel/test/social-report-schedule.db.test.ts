@@ -2,7 +2,8 @@
 // worker runs the due ones, queues one mail per recipient with the period's numbers and moves the next send on; the
 // mail goes out through the queue with a report link minted for that recipient (its token only in the mail), which
 // opens the report of the period; a test goes to the person who asks; mail off is recorded; other orgs and members see
-// nothing. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
+// nothing; a schedule's note, label and sections reach its mail and each mail's link (#1259). Set CROVE_TEST_ADMIN_URL
+// to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -69,6 +70,7 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
       const { rows } = await c.query<{ id: string }>("UPDATE crove_social.post_variant SET status = 'published', published_at = $2 WHERE post_id = $1 RETURNING id", [postId, at]);
       await c.query("INSERT INTO crove_social.metric_snapshot (org_id, variant_id, capture_key, metrics) VALUES ($1, $2, 'k', $3)", [o.orgId, rows[0]?.id, JSON.stringify(metrics)]);
     });
+    return postId;
   }
   const weekly = { name: 'Báo cáo tuần', cadence: 'weekly', weekday: 1, sendHour: 8, timeZone: 'Asia/Ho_Chi_Minh', period: 'previous_week', connectionIds: [] as string[] };
   // What the worker does: the queue's sweep and each job, with the deployment's templates.
@@ -275,6 +277,93 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
     await exec(o, o.owner, 'social.report_schedule.remove', { scheduleId });
     expect(await linkOf(tokens[0])).toMatchObject({ revoked_at: expect.any(Date) });
     expect(await reportView(rt, { token: tokens[0] })).toBeNull();
+  });
+
+  // #1259: a schedule has a link's options; its mail and each mail's link follow them.
+  it("runs a campaign schedule: only the label's posts, the note, the chosen sections in the mail and on its link (#1259)", async () => {
+    const o = await org();
+    const stranger = await org();
+    const conn = await connection(o.orgId, o.owner);
+    const sale = (await exec<{ labelId: string }>(o, o.owner, 'social.label.create', { name: 'Khuyến mãi' })).labelId;
+    const tagged = await published(o, conn, '2026-10-13T03:00:00Z', { reach: 1200, reactions: 40, replies: 4 });
+    await published(o, conn, '2026-10-14T03:00:00Z', { reach: 7777, reactions: 900 });
+    await exec(o, o.owner, 'social.post.set_labels', { postId: tagged, labelIds: [sale] });
+    const theirs = (await exec<{ labelId: string }>(stranger, stranger.owner, 'social.label.create', { name: 'Của họ' })).labelId;
+    const recipients = ['camp@example.vn'];
+    await expect(exec(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients, labelId: theirs })).rejects.toMatchObject({ code: 'LABEL_NOT_FOUND' });
+    await expect(exec(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients, sections: ['top'], includeAudience: true })).rejects.toMatchObject({ code: 'VALIDATION' });
+    const { scheduleId } = await exec<{ scheduleId: string }>(o, o.owner, 'social.report_schedule.save', {
+      ...weekly,
+      recipients,
+      note: 'Chào anh chị <b>',
+      labelId: sale,
+      sections: ['note', 'top', 'channels'],
+      topCount: 3,
+    });
+    expect((await list(o))[0]).toMatchObject({ note: 'Chào anh chị <b>', labelId: sale, includeAudience: false, sections: ['note', 'top', 'channels'], topCount: 3 });
+    // Pausing through a save without the options keeps them.
+    await exec(o, o.owner, 'social.report_schedule.save', { ...weekly, scheduleId, recipients, paused: true });
+    expect((await list(o))[0]).toMatchObject({ paused: true, note: 'Chào anh chị <b>', labelId: sale, sections: ['note', 'top', 'channels'], topCount: 3 });
+    await exec(o, o.owner, 'social.report_schedule.save', { ...weekly, scheduleId, recipients, paused: false });
+    await admin((c) => c.query("UPDATE crove_social.report_schedule SET next_run_at = '2026-10-19T01:00:00Z' WHERE id = $1", [scheduleId]));
+    expect(await sweepReportSchedules({ runtime: worker, workerDb })).toBe(1);
+    // The mail's data: the label's post alone, no totals (not chosen), the note; no goals under a label.
+    const payload = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.mail_message WHERE org_id = $1 AND source = 'social.report_schedule.run'", [o.orgId])).rows[0]?.payload);
+    expect(payload).toMatchObject({ posts: 1, note: 'Chào anh chị <b>' });
+    for (const key of ['reach', 'impressions', 'engagement', 'goals']) expect(payload).not.toHaveProperty(key);
+
+    const { mailer, sent } = capturing();
+    await deliver(mailer);
+    const mail = sent.find((m) => m.to === 'camp@example.vn') as OutboundMail;
+    expect(mail.text).toContain('Bài đã đăng: 1');
+    expect(mail.text).not.toContain('Lượt tiếp cận');
+    expect(mail.text).toContain('Chào anh chị <b>');
+    expect(mail.html).toContain('Chào anh chị &lt;b&gt;');
+    // Its link reports on the label's posts only, with the schedule's sections.
+    const token = /\/-\/report#([A-Za-z0-9_-]{43})/.exec(mail.text)?.[1];
+    const page = (await reportView(rt, { token })) as unknown as Record<string, unknown> & { top: unknown[]; channels: { totals: Record<string, number> }[] };
+    expect(page).toMatchObject({ posts: 1, note: 'Chào anh chị <b>', sections: ['note', 'top', 'channels'], totals: null, audience: null, previous: null, goals: null });
+    expect(page.top).toHaveLength(1);
+    expect(page.channels[0]?.totals).toEqual({ reach: 1200, reactions: 40 });
+    expect(JSON.stringify(page)).not.toContain('7777');
+    // Deleting the label deletes the schedule (and its links with the label), never widening it to every post.
+    await exec(o, o.owner, 'social.label.delete', { labelId: sale });
+    expect(await list(o)).toEqual([]);
+    expect(await reportView(rt, { token })).toBeNull();
+  });
+
+  it('keeps a schedule to the allowed sections and best posts, and lets the tenant role write its new columns (#1259)', async () => {
+    const o = await org();
+    const recipients = ['k@example.vn'];
+    for (const bad of [{ sections: [] }, { sections: ['note', 'note'] }, { topCount: 21 }, { note: 'x'.repeat(2001) }]) {
+      await expect(exec(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients, ...bad })).rejects.toMatchObject({ status: 422 });
+    }
+    const { scheduleId } = await exec<{ scheduleId: string }>(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients });
+    // A schedule without the options is as before: every section, every post, the audience.
+    expect((await list(o))[0]).toMatchObject({ note: null, labelId: null, includeAudience: true, sections: null, topCount: null });
+    const update = (set: string, value: unknown) => admin((c) => c.query(`UPDATE crove_social.report_schedule SET ${set} = $2 WHERE id = $1`, [scheduleId, value]));
+    for (const [set, value] of [
+      ['sections', ['top', 'top']],
+      ['sections', ['secret']],
+      ['sections', []],
+      ['top_count', 2],
+      ['note', ''],
+    ] as const) {
+      await expect(update(set, value)).rejects.toMatchObject({ code: '23514' });
+    }
+    // Another org's label: the composite FK refuses it.
+    const other = await org();
+    const theirs = (await exec<{ labelId: string }>(other, other.owner, 'social.label.create', { name: 'Của họ' })).labelId;
+    await expect(update('label_id', theirs)).rejects.toMatchObject({ code: '23503' });
+    const privileges = await admin(async (c) =>
+      (
+        await c.query<{ col: string; ok: boolean }>(
+          `SELECT col, pg_catalog.has_column_privilege('crove_tenant', 'crove_social.report_schedule', col, 'UPDATE') AND pg_catalog.has_column_privilege('crove_tenant', 'crove_social.report_schedule', col, 'INSERT') AS ok
+             FROM unnest(ARRAY['sections', 'top_count', 'note', 'label_id', 'include_audience']) col ORDER BY 1`,
+        )
+      ).rows,
+    );
+    expect(privileges.every((p) => p.ok)).toBe(true);
   });
 
   it('sends a test to the person who asks, records mail off, and limits tests', async () => {

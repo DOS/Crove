@@ -1,6 +1,7 @@
 // Scheduled client report mail on the Metrics tab (#704): owners and admins set a schedule (weekly or monthly, at an
 // hour of their time zone), the period each mail covers, the channels and up to 10 recipients; pause, test or remove
-// it, and see each recent send with every mail's delivery status.
+// it, and see each recent send with every mail's delivery status. A schedule has a report link's options (#1259): a
+// note, one label's posts, and the sections its report shows (the audience among them); pausing keeps them.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -17,7 +18,9 @@ import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName } from '../lib/social.ts';
-import { parseRecipients } from '../lib/social-report.ts';
+import { defaultSections, parseRecipients, sectionsOf, topCountOf } from '../lib/social-report.ts';
+import { useLabels } from './social-labels.tsx';
+import { ReportSectionsPicker } from './social-report-sections.tsx';
 
 type Schedule = Awaited<ReturnType<typeof client.social.reportSchedules.list>>[number];
 type Period = Schedule['period'];
@@ -35,7 +38,8 @@ const browserZone = () => {
   }
 };
 
-function Form({ channels, onDone }: { channels: readonly { id: string; displayName: string; provider: string }[]; onDone: () => void }) {
+// The form of a new schedule; exported for its test.
+export function ScheduleForm({ channels, onDone }: { channels: readonly { id: string; displayName: string; provider: string }[]; onDone: () => void }) {
   const t = useTranslations('social.reportSchedules');
   const [name, setName] = useState('');
   const [cadence, setCadence] = useState<'weekly' | 'monthly'>('weekly');
@@ -45,6 +49,12 @@ function Form({ channels, onDone }: { channels: readonly { id: string; displayNa
   const [period, setPeriod] = useState<Period>('previous_week');
   const [recipients, setRecipients] = useState('');
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [note, setNote] = useState('');
+  const [labelId, setLabelId] = useState('');
+  const [sections, setSections] = useState(defaultSections);
+  const labels = useLabels();
+  const chosen = sectionsOf(sections);
+  const topCount = topCountOf(sections);
   const parsed = parseRecipients(recipients);
   const save = useMutation({
     mutationFn: () =>
@@ -57,11 +67,18 @@ function Form({ channels, onDone }: { channels: readonly { id: string; displayNa
         period,
         connectionIds: [...picked],
         recipients: parsed.valid,
+        ...(note.trim() ? { note } : {}),
+        ...(labelId ? { labelId } : {}),
+        ...(chosen ? { sections: chosen } : {}),
+        ...(topCount !== null ? { topCount } : {}),
       }),
     onSuccess: () => {
       setName('');
       setRecipients('');
       setPicked(new Set());
+      setNote('');
+      setLabelId('');
+      setSections(defaultSections());
       onDone();
     },
   });
@@ -71,7 +88,7 @@ function Form({ channels, onDone }: { channels: readonly { id: string; displayNa
     else next.add(id);
     setPicked(next);
   };
-  const ok = name.trim().length > 0 && parsed.valid.length > 0 && parsed.valid.length <= 10 && parsed.invalid.length === 0;
+  const ok = name.trim().length > 0 && parsed.valid.length > 0 && parsed.valid.length <= 10 && parsed.invalid.length === 0 && chosen?.length !== 0;
   return (
     <div className="space-y-3 rounded-lg border p-3">
       <div className="grid gap-3 sm:grid-cols-2">
@@ -153,6 +170,25 @@ function Form({ channels, onDone }: { channels: readonly { id: string; displayNa
           </div>
         </fieldset>
       )}
+      {(labels.data ?? []).length > 0 && (
+        <div className="space-y-1.5">
+          <Label htmlFor="schedule-label">{t('label')}</Label>
+          <NativeSelect id="schedule-label" value={labelId} onChange={(e) => setLabelId(e.target.value)}>
+            <NativeSelectOption value="">{t('labelAll')}</NativeSelectOption>
+            {(labels.data ?? []).map((l) => (
+              <NativeSelectOption key={l.id} value={l.id}>
+                {l.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <p className="text-xs text-subtle-foreground">{t('labelHint')}</p>
+        </div>
+      )}
+      <div className="space-y-1.5">
+        <Label htmlFor="schedule-note">{t('note')}</Label>
+        <Textarea id="schedule-note" rows={2} maxLength={2000} value={note} placeholder={t('notePlaceholder')} onChange={(e) => setNote(e.target.value)} />
+      </div>
+      <ReportSectionsPicker id="schedule-sections" value={sections} onChange={setSections} />
       <p className="text-xs text-subtle-foreground">{t('zoneHint', { zone: browserZone() })}</p>
       <Button size="sm" disabled={!ok || save.isPending} onClick={() => save.mutate()}>
         {t('save')}
@@ -162,8 +198,9 @@ function Form({ channels, onDone }: { channels: readonly { id: string; displayNa
   );
 }
 
-function Item({ s, names }: { s: Schedule; names: Map<string, string> }) {
+function Item({ s, names, labelNames }: { s: Schedule; names: Map<string, string>; labelNames: Map<string, string> }) {
   const t = useTranslations('social.reportSchedules');
+  const ts = useTranslations('social.reportSections');
   const f = useFormat();
   const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.social.reportSchedules.list.key() });
   const toggle = useMutation({
@@ -195,6 +232,9 @@ function Item({ s, names }: { s: Schedule; names: Map<string, string> }) {
           <span className="block truncate text-sm font-medium text-foreground">{s.name}</span>
           <span className="block text-xs text-subtle-foreground">
             {when} · {t(`periods.${s.period}`)} · {s.connectionIds.length === 0 ? t('allChannels') : s.connectionIds.map((id) => names.get(id) ?? t('goneChannel')).join(', ')}
+            {s.labelId && labelNames.has(s.labelId) ? ` · ${t('withLabel', { name: labelNames.get(s.labelId) ?? '' })}` : ''}
+            {s.note ? ` · ${t('withNote')}` : ''}
+            {s.sections ? ` · ${ts('custom', { count: s.sections.length })}` : ''}
           </span>
           <span className="block text-xs text-subtle-foreground">{t('to', { list: s.recipients.join(', ') })}</span>
         </span>
@@ -252,7 +292,9 @@ export function ReportSchedules({ channels }: { channels: readonly { id: string;
   const canManage = role === 'owner' || role === 'admin';
   const list = useQuery({ ...orpc.social.reportSchedules.list.queryOptions({ input: {} }), enabled: canManage });
   const [adding, setAdding] = useState(false);
+  const labels = useLabels();
   if (!canManage) return null;
+  const labelNames = new Map((labels.data ?? []).map((l) => [l.id, l.name]));
   const schedules = list.data ?? [];
   const names = new Map(channels.map((c) => [c.id, c.displayName]));
   return (
@@ -269,7 +311,7 @@ export function ReportSchedules({ channels }: { channels: readonly { id: string;
         )}
       </div>
       {adding && (
-        <Form
+        <ScheduleForm
           channels={channels}
           onDone={() => {
             setAdding(false);
@@ -281,7 +323,7 @@ export function ReportSchedules({ channels }: { channels: readonly { id: string;
       {schedules.length > 0 ? (
         <ul className="divide-y rounded-lg border">
           {schedules.map((s) => (
-            <Item key={s.id} s={s} names={names} />
+            <Item key={s.id} s={s} names={names} labelNames={labelNames} />
           ))}
         </ul>
       ) : (
