@@ -254,13 +254,13 @@ test('keeps uploaded images in the library with the posts that use them', async 
   await page.getByRole('button', { name: 'Lưu trữ', exact: true }).click();
   await expect(page.getByText('Đã lưu trữ 1 tệp')).toBeVisible();
   await expect(item).toHaveCount(0);
-  await page.getByLabel('Hiện', { exact: true }).selectOption('archived');
+  await page.getByLabel('Xem', { exact: true }).selectOption('archived');
   await expect(item).toHaveCount(1);
   await item.click();
   await page.getByRole('button', { name: 'Khôi phục', exact: true }).click();
   await expect(page.getByText('Đã khôi phục 1 tệp')).toBeVisible();
   await expect(item).toHaveCount(0);
-  await page.getByLabel('Hiện', { exact: true }).selectOption('active');
+  await page.getByLabel('Xem', { exact: true }).selectOption('active');
   await expect(item).toHaveCount(1);
 });
 

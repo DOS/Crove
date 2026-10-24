@@ -174,7 +174,8 @@ export function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; o
   const t = useTranslations('social');
   const [search, setSearch] = useState('');
   const [tag, setTag] = useState<string | null>(null);
-  const library = useLibrary(search, tag);
+  // Only the files this member may attach (#1081, #1302): another channel's own media would be refused on save.
+  const library = useLibrary(search, tag, true, true);
   const all = library.data?.pages.flatMap((p) => p.items) ?? [];
   const items = all.filter((item) => !only || only.includes(item.mime));
   const chosen = new Set(media.map((m) => m.fileId));
