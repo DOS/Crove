@@ -43,6 +43,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.availability_rule',
+  'crove_kernel.calendar_event',
   'crove_kernel.role_assignment',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -174,6 +176,8 @@ const socialShortLinkRows = (o: { id: string; owner: string }) => {
 let portalListYear = 2000;
 // A tax obligation is marked done once per period (#921): each row its own year.
 let taxObligationYear = 2000;
+// Calendar events of one member never overlap while busy (#1313): each row its own hour.
+let calendarHour = 0;
 // An org's weekly digest is marked sent once per ISO week (#1104): each row its own year.
 let digestWeekYear = 2000;
 const portalListRow = (o: { id: string; file: string }) => ({
@@ -439,8 +443,21 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     }),
   },
   'crove_kernel.auth_session_org': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, session_id: randomUUID() } }) },
+  // #1313: a member's weekly working hours, one row per weekday window.
+  'crove_kernel.availability_rule': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, weekday: 1, start_minute: 540, end_minute: 1020, time_zone: 'Asia/Ho_Chi_Minh', created_by: o.owner } }),
+  },
   'crove_kernel.budget_policy': {
     make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), monthly_limit: '100', updated_by: o.owner } }),
+  },
+  // #1313: an event on a member's calendar; busy events of one member never overlap, so each row takes its own hour.
+  'crove_kernel.calendar_event': {
+    make: (o) => {
+      const start = new Date(Date.UTC(2030, 0, 1) + 3_600_000 * calendarHour++);
+      return {
+        row: { org_id: o.id, id: randomUUID(), user_id: o.owner, starts_at: start.toISOString(), ends_at: new Date(start.getTime() + 1_800_000).toISOString(), time_zone: 'Asia/Ho_Chi_Minh', title: 'RLS matrix event', created_by: o.owner },
+      };
+    },
   },
   'crove_kernel.channel_connection': { make: (o) => ({ row: channelConnectionRow(o) }) },
   // Definer-only machinery: the sealed token of a connection, one row per connection. The envelope is opaque bytes
