@@ -123,7 +123,7 @@ The images go to the repository's GHCR packages with the run's own token, so no 
 
 Some migrations tighten a rule on data that already exists. Before tagging the first release that contains one, run its read-only check against the environment's database (`psql` as any role that can read the tables, inside a `READ ONLY` transaction). If a check lists anything, **stop**: do not tag the release, and raise it on the migration's issue. Nothing here changes data.
 
-### Amounts the book currency cannot hold (#1282, `20261030000100_crove_finance_currency_scale.sql`)
+### Amounts the book currency cannot hold (#1282, `20261030002100_crove_finance_currency_scale.sql`)
 
 From this migration on, `post_journal_entry()` refuses an amount with more decimals than the org's book currency uses (VND has none). An entry posted earlier with a fraction of a dong could then never be reversed or replaced, since its mirror carries the same fraction, and a purchase document with one could not be posted again. The check lists journal lines with more decimals than their org's book currency, and purchase documents and lines with fractional VND amounts (a purchase document's amounts are in VND, #918). It must return no rows:
 

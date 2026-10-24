@@ -1,5 +1,5 @@
 -- Per-currency amount scale and the fx_rate domain (issue #1282, ADR-0021 decision 1). Idempotent; applied files stay
--- untouched. The currency table with each currency's minor units is crove_kernel.currency (20261030000000).
+-- untouched. The currency table with each currency's minor units is crove_kernel.currency (20261030002000).
 --
 -- crove_finance.fx_rate                 numeric(24,10), CHECK (VALUE > 0): an exchange rate, as a direct quote (units
 --                                       of the book currency per 1 unit of the foreign currency). Now the type of
