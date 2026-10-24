@@ -90,6 +90,7 @@ docker compose run --rm --no-deps worker org-purge <org slug or id> --reason "Ow
 | `crove_kernel.inbound_address`, `org_usage`, `external_call`, `outbox_archive` | **Kept** | Indefinitely | Inbound addresses are permanent tombstones (#37); usage counts, the ledger of calls to social platforms and the list of archived outbox days (#997) hold no personal data. |
 | Other `crove_finance` tables (`cash_voucher`, `bank_line`, `journal_voucher`, `fixed_asset`, `depreciation_line`, `input_vat_check`, `purchase_document_void`, `period_lock`) | **Kept** | Same as the ledger | The rest of the books. |
 | `tenant` row | Keep with `status = 'closed'` | While any kept record references it | The kept records reference it; deleting it would cascade into append-only tables, which is refused. |
+| `crove_kernel.legal_entity` | **Kept** | Same as the tenant row | The companies and branches the books are kept for (#1278): name, kind, tax code and parent, the same public business data as the tenant row. The ledger will reference them (ADR-0021), and no role deletes one. |
 | AI payloads, DLQ payloads, eval store | Delete by org prefix | After the export | Plan §7.9 step 3 (none of these stores exist in the open-source core yet). |
 
 Crypto-shredding of personal data inside immutable stores (plan §4.10, `subject_key`) is not built yet; until it is, personal data in kept records stays as long as the records do.

@@ -240,7 +240,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
   // to its rows.
   it('has a rule for every table with an org_id', async () => {
     const kept = [
-      'crove_kernel.tenant', 'crove_kernel.audit_event', 'crove_kernel.outbox_event', 'crove_kernel.inbound_address',
+      'crove_kernel.tenant', 'crove_kernel.legal_entity', 'crove_kernel.audit_event', 'crove_kernel.outbox_event', 'crove_kernel.inbound_address',
       'crove_kernel.org_usage', 'crove_kernel.outbox_archive', 'crove_kernel.external_call', 'crove_social.post_approval', 'crove_kernel.task_comment',
       'crove_finance.bank_line', 'crove_finance.cash_voucher', 'crove_finance.depreciation_line', 'crove_finance.fixed_asset',
       'crove_finance.input_vat_check', 'crove_finance.journal_entry', 'crove_finance.journal_line', 'crove_finance.journal_voucher',
@@ -332,6 +332,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
     // Members, invites, proposals, extractions, activity: gone. Every other table of the org is empty.
     const keptTables = new Set([
       'crove_kernel.tenant',
+      'crove_kernel.legal_entity',
       'crove_kernel.audit_event',
       'crove_kernel.outbox_event',
       'crove_kernel.inbound_address',
@@ -347,6 +348,8 @@ suite('org purge on PostgreSQL (#1024)', () => {
     ]);
     const leftovers = Object.entries(after).filter(([t, n]) => n > 0 && !keptTables.has(t) && !(t.startsWith('crove_finance.') && t !== 'crove_finance.vendor_account_rule'));
     expect(leftovers).toEqual([]);
+    // The org's default legal entity stays with the tenant row (#1278).
+    expect(after['crove_kernel.legal_entity']).toBe(1);
     expect(before['crove_kernel.tenant_member']).toBe(2);
     expect(before['crove_kernel.proposal']).toBe(2);
 

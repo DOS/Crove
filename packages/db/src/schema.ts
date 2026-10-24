@@ -99,6 +99,12 @@ export type TaxProfileTable = Refine<
 >;
 export type TaxObligationDoneTable = Refine<G.KernelTaxObligationDoneTable, { obligation: (typeof TAX_OBLIGATION_CODES)[number] }>;
 
+// The legal entities of an org (issue #1278): a company or other organization, a branch or other dependent unit, or a
+// household or individual business. One default per org, created with the org.
+export const LEGAL_ENTITY_KINDS = ['company', 'branch', 'household'] as const;
+export type LegalEntityKind = (typeof LEGAL_ENTITY_KINDS)[number];
+export type LegalEntityTable = Refine<G.KernelLegalEntityTable, { kind: Generated<LegalEntityKind> }>;
+
 // A pending, accepted or revoked invite (issue #35). Tenant roles insert invites and may only set status,
 // revoked_at and revoked_by; crove_kernel.invite_accept() is the only writer of accepted_at and accepted_by.
 export const INVITE_ROLES = ['admin', 'member', 'viewer'] as const;
@@ -558,6 +564,7 @@ export type SocialPostApprovalTable = Refine<
 >;
 
 type Refined = Tables<{
+  'crove_kernel.legal_entity': LegalEntityTable;
   'crove_kernel.tax_obligation_done': TaxObligationDoneTable;
   'crove_kernel.tax_profile': TaxProfileTable;
   'crove_kernel.tenant': TenantTable;

@@ -246,6 +246,7 @@ suite('org offboarding on PostgreSQL (#38)', () => {
     expect(await rowsOf('kernel.tenant')).toEqual([expect.not.objectContaining({ inbound_token: expect.anything() })]);
     expect((await rowsOf('kernel.member_invite')).every((r) => !('token_sha256' in r))).toBe(true);
     expect((await rowsOf('kernel.tenant_member')).map((r) => r.user_id).sort()).toEqual([owner.id, member.id].sort());
+    expect((await rowsOf('kernel.legal_entity')).map((r) => [r.name, r.is_default])).toEqual([[expect.any(String), true]]);
     expect((await rowsOf('kernel.audit_event')).some((r) => r.command === 'kernel.org.offboard')).toBe(true);
     const manifest = JSON.parse(decode(sealer.open(await store.get(record.manifestKey), exportAad(org.orgId, 'manifest'), 'aes-256-gcm'))) as OrgExportManifest;
     expect(manifest).toMatchObject({ orgId: org.orgId, generatedAt: '2026-10-16T00:00:00.000Z', snapshot: 'repeatable read', fileCount: 1, parts: record.parts });
