@@ -266,6 +266,9 @@ export const ACTIVITY_KINDS = [
   // Its labels changed, or who it is assigned to or its due date (#1057), one post at a time or many at once.
   'labeled',
   'assigned',
+  // Archived, or brought back from the archive (#1299).
+  'archived',
+  'unarchived',
 ] as const;
 export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
 
@@ -349,6 +352,9 @@ const AUDITED: Record<string, ActivityKind> = {
   'social.post.set_labels': 'labeled',
   'social.post.assign': 'assigned',
   'social.variant.edit_published': 'live_edit',
+  // The bulk archive and restore (#1299) run these once per post too.
+  'social.post.archive': 'archived',
+  'social.post.restore': 'unarchived',
 };
 
 export const postActivity = defineQuery({
@@ -396,6 +402,8 @@ export const postActivity = defineQuery({
         SELECT id, command, actor_id, actor_type, occurred_at, target_type, target_id FROM crove_kernel.audit_event
         WHERE org_id = ${ctx.orgId}::uuid AND occurred_at >= ${post.created_at} AND outcome = 'ok'
           AND command = ANY(${Object.keys(AUDITED)}::text[])
+          -- An archive or restore that found the post already so (#1299) names no post in its facts: nothing happened.
+          AND (command NOT IN ('social.post.archive', 'social.post.restore') OR detail ? 'post_id')
           AND ((target_type = 'social.post' AND target_id = ${post.id}::uuid)
             OR (target_type = 'social.post_variant' AND target_id = ANY(${variantIds}::uuid[])))
         ORDER BY occurred_at DESC LIMIT ${ACTIVITY_LIMIT}`.execute(ctx.trx),

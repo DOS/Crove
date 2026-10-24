@@ -1368,6 +1368,8 @@ export interface SocialPostTable {
   recurrence_last_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   recurrence_next_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   recurrence_source_id: string | null;
+  archived_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  archived_by: string | null;
 }
 
 /** crove_social.post_variant */

@@ -48,6 +48,8 @@ export const reviewInbox = defineQuery({
       .select(['v.id as variant_id', 'v.post_id', 'v.provider', 'v.revision', 'v.content_hash', 'v.channel_connection_id', 'v.scheduled_at', 'v.updated_at', 'v.body as variant_body', 'c.display_name', 'p.body', 'p.title', 'p.scheduled_at as post_scheduled_at', 'p.author_user_id'])
       .where('v.org_id', '=', ctx.orgId)
       .where('v.status', '=', 'in_review')
+      // Nothing of an archived post (#1299) waits for a review.
+      .where('p.archived_at', 'is', null)
       .orderBy('v.updated_at', 'asc')
       .orderBy('v.id', 'asc')
       .limit(REVIEW_SCAN_MAX)

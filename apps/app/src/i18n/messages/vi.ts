@@ -3033,6 +3033,8 @@ export const vi = {
         restored: 'đã khôi phục một phiên bản cũ',
         labeled: 'đã đổi nhãn',
         assigned: 'đã đổi người phụ trách hoặc hạn',
+        archived: 'đã lưu trữ bài',
+        unarchived: 'đã đưa bài ra khỏi lưu trữ',
       },
       queueMoved: {
         shuffle: 'đã xáo trộn hàng đợi',
@@ -3092,8 +3094,9 @@ export const vi = {
       selectAll: 'Chọn mọi bài đang hiện',
       selected: 'Đã chọn {count, number} bài',
       clear: 'Bỏ chọn',
-      action: { approve: 'Duyệt', submit: 'Gửi duyệt', queue: 'Đưa vào hàng đợi', cancel: 'Hủy bài', move: 'Dời lịch', labels: 'Gắn nhãn', assign: 'Giao việc', replace: 'Tìm và thay', addChannel: 'Thêm kênh', duplicate: 'Nhân bản' },
+      action: { approve: 'Duyệt', submit: 'Gửi duyệt', queue: 'Đưa vào hàng đợi', cancel: 'Hủy bài', move: 'Dời lịch', labels: 'Gắn nhãn', assign: 'Giao việc', replace: 'Tìm và thay', addChannel: 'Thêm kênh', duplicate: 'Nhân bản', archive: 'Lưu trữ', restore: 'Khôi phục' },
       confirmCancel: 'Hủy {count, number} bài trên mọi kênh chưa đăng?',
+      confirmArchive: 'Lưu trữ {count, number} bài? Các bài này sẽ không còn hiện trong danh sách, lịch và bảng, và bạn có thể khôi phục lại ở thẻ Đã lưu trữ.',
       result: '{action}: xong {done, number}, {skipped, number} bài không có gì để làm, {refused, number} bài bị từ chối.',
       move: {
         direction: 'Dời',
@@ -3207,6 +3210,8 @@ export const vi = {
           banned_words: 'nội dung sau khi thay có từ bị cấm',
           already_on: 'bài đã có kênh này',
           too_many_channels: 'bài đã đủ 20 kênh',
+          scheduled: 'có kênh đã lên lịch đăng, hãy bỏ lịch trước',
+          removing: 'có kênh đang chờ gỡ khỏi nền tảng',
         },
       },
     },
@@ -3242,7 +3247,7 @@ export const vi = {
     publishNow: 'Duyệt và lên lịch',
     publishNowHint: 'Lưu bài, tự duyệt và lên lịch: vào giờ đã hẹn, hoặc theo hàng đợi của từng kênh. Kênh cần người khác duyệt sẽ chờ người đó.',
     publishNowChanged: 'Danh sách kiểm tra hoặc quy định duyệt vừa thay đổi, nên bài đã được gửi duyệt thay vì đăng ngay. Hãy duyệt trong bảng duyệt.',
-    tabs: { upcoming: 'Lịch đăng', calendar: 'Xem lịch', board: 'Bảng', review: 'Cần duyệt', attention: 'Cần xử lý', drafts: 'Nháp', done: 'Đã đăng', metrics: 'Số liệu', library: 'Thư viện ảnh' },
+    tabs: { upcoming: 'Lịch đăng', calendar: 'Xem lịch', board: 'Bảng', review: 'Cần duyệt', attention: 'Cần xử lý', drafts: 'Nháp', done: 'Đã đăng', archived: 'Đã lưu trữ', metrics: 'Số liệu', library: 'Thư viện ảnh' },
     filters: {
       channel: 'Kênh',
       allChannels: 'Tất cả kênh',
@@ -3256,7 +3261,8 @@ export const vi = {
       loadMore: 'Xem thêm',
       noMatch: 'Không có bài nào khớp với bộ lọc',
     },
-    empty: { review: 'Không có bài nào chờ duyệt', attention: 'Không có bài nào lỗi hay cần bạn xem', drafts: 'Chưa có bản nháp', done: 'Chưa có bài nào được đăng', metrics: 'Chưa có bài nào đăng trong khoảng này' },
+    empty: { review: 'Không có bài nào chờ duyệt', attention: 'Không có bài nào lỗi hay cần bạn xem', drafts: 'Chưa có bản nháp', done: 'Chưa có bài nào được đăng', archived: 'Chưa có bài nào được lưu trữ', metrics: 'Chưa có bài nào đăng trong khoảng này' },
+    archivedAt: 'Lưu trữ lúc {when}',
     metricsDays: '{days} ngày',
     grid: {
       title: 'Lưới Instagram',
@@ -4063,6 +4069,19 @@ export const vi = {
     },
     duplicate: 'Nhân bản',
     duplicateHint: 'Tạo bản nháp mới với cùng nội dung, ảnh và các kênh còn kết nối; không giữ lịch đăng hay lượt duyệt.',
+    // Archived posts (#1299).
+    archive: {
+      action: 'Lưu trữ',
+      hint: 'Cất bài khỏi danh sách, lịch và bảng mà không xóa; bạn có thể khôi phục lại bất cứ lúc nào.',
+      confirm: 'Lưu trữ bài này? Bài sẽ không còn hiện trong danh sách, lịch và bảng. Chế độ tự đăng lại, lịch lặp lại và các liên kết gửi khách duyệt của bài sẽ bị tắt. Bạn có thể khôi phục bài ở thẻ Đã lưu trữ.',
+      banner: 'Bài này đã được lưu trữ lúc {when} nên không hiện trong danh sách, lịch hay bảng. Muốn sửa, gửi duyệt hay lên lịch, hãy khôi phục bài trước.',
+      restore: 'Khôi phục',
+      blocked: {
+        in_flight: 'Bài có kênh đang đăng hoặc đang chờ người xử lý, nên chưa lưu trữ được',
+        scheduled: 'Bài có kênh đã lên lịch đăng; hãy bỏ lịch trước khi lưu trữ',
+        removing: 'Bài có kênh đang chờ gỡ khỏi nền tảng; hãy đợi gỡ xong',
+      },
+    },
     repostOf: 'Bài này đăng lại nội dung của một bài trước.',
     repostOfLink: 'Xem bài gốc',
     evergreenTitle: 'Tự đăng lại',
@@ -4575,6 +4594,10 @@ export const vi = {
       TAXPAYER_NAME_REQUIRED: 'Tổ chức chưa có tên. Nhập tên tổ chức trong Cài đặt rồi xuất lại.',
       // Crove Social and connected channels.
       POST_NOT_FOUND: 'Không tìm thấy bài đăng này',
+      POST_ARCHIVED: 'Bài này đã được lưu trữ; hãy khôi phục bài trước khi sửa, gửi duyệt hay lên lịch',
+      POST_ARCHIVE_IN_FLIGHT: 'Bài có kênh đang đăng hoặc đang chờ người xử lý; hãy xử lý xong rồi lưu trữ',
+      POST_ARCHIVE_SCHEDULED: 'Bài có kênh đã lên lịch đăng; hãy bỏ lịch đăng rồi lưu trữ',
+      POST_ARCHIVE_REMOVING: 'Bài có kênh đang chờ gỡ khỏi nền tảng; hãy đợi gỡ xong rồi lưu trữ',
       VARIANT_NOT_FOUND: 'Không tìm thấy kênh này của bài đăng',
       ASSIGNEE_NOT_MEMBER: 'Người này không phải thành viên của tổ chức',
       SNIPPET_NOT_FOUND: 'Không tìm thấy đoạn mẫu này',

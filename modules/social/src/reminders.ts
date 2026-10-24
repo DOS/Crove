@@ -53,6 +53,18 @@ export const reviewRemind = defineCommand({
       throw error;
     });
     if (!post) return { stage: null };
+    // An archived post (#1299) waits for nobody: its channels in review are marked as reminded without telling anyone,
+    // so the worker's scan (oldest review first) moves past it instead of finding it again on every pass.
+    if (post.archived_at !== null) {
+      await ctx.trx
+        .updateTable('crove_social.post_variant')
+        .set((eb) => ({ reminded_waiting_at: eb.fn.coalesce('reminded_waiting_at', eb.val(ctx.now)), reminded_due_at: eb.fn.coalesce('reminded_due_at', eb.val(ctx.now)) }))
+        .where('org_id', '=', ctx.orgId)
+        .where('post_id', '=', post.id)
+        .where('status', '=', 'in_review')
+        .execute();
+      return { stage: null };
+    }
     const { rows } = await sql<{ id: string; review_since: Date | null; reminded_waiting_at: Date | null; reminded_due_at: Date | null; at: Date | null }>`
       SELECT v.id, v.review_since, v.reminded_waiting_at, v.reminded_due_at, coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) AS at
       FROM crove_social.post_variant v

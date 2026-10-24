@@ -51,7 +51,7 @@ type Tab = SocialTab;
 const TABS = SOCIAL_TABS;
 // Posts a list page shows; Load more asks for the next ones.
 const PAGE = 50;
-type ListTab = 'review' | 'attention' | 'drafts' | 'done';
+type ListTab = 'review' | 'attention' | 'drafts' | 'done' | 'archived';
 type PostCursor = { updatedAt: string; postId: string };
 // The counts the analytics table shows, in order; a platform that does not report one shows a dash.
 const METRIC_COLUMNS = ['reach', 'reactions', 'comments', 'shares'] as const;
@@ -593,12 +593,19 @@ export function SocialPage() {
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
   const canWrite = role === 'owner' || role === 'admin' || role === 'member';
   const upcoming = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { ...range, ...filters, limit: 200 } }), enabled: tab === 'upcoming', refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
-  const listTab: ListTab | null = tab === 'review' || tab === 'attention' || tab === 'drafts' || tab === 'done' ? tab : null;
+  const listTab: ListTab | null = tab === 'review' || tab === 'attention' || tab === 'drafts' || tab === 'done' || tab === 'archived' ? tab : null;
   // The server filters and pages (#574); a page at a time, newest change first.
   const list = useInfiniteQuery({
     ...orpc.social.posts.list.infiniteOptions({
       // The board (#1022) is the same list without a stage: every post, in a column per status.
-      input: (before: PostCursor | undefined) => ({ ...(listTab ? { stage: listTab } : {}), ...filters, ...dayRange(search.from, search.to), limit: PAGE, ...(before ? { before } : {}) }),
+      // The Archived tab (#1299) lists the archived posts, whatever their stage; every other list leaves them out.
+      input: (before: PostCursor | undefined) => ({
+        ...(listTab === 'archived' ? { archived: true as const } : listTab ? { stage: listTab } : {}),
+        ...filters,
+        ...dayRange(search.from, search.to),
+        limit: PAGE,
+        ...(before ? { before } : {}),
+      }),
       initialPageParam: undefined as PostCursor | undefined,
       getNextPageParam: (page: Post[]) => {
         const last = page.at(-1);
@@ -632,11 +639,11 @@ export function SocialPage() {
   const bulkActions: readonly BulkAction[] = !canWrite
     ? []
     : listTab === 'review'
-      ? canDecide ? ['approve', 'move', 'cancel'] : ['cancel']
+      ? canDecide ? ['approve', 'move', 'cancel', 'archive'] : ['cancel', 'archive']
       : listTab === 'drafts'
-        ? canDecide ? ['submit', 'queue', 'move', 'cancel'] : ['submit', 'cancel']
+        ? canDecide ? ['submit', 'queue', 'move', 'cancel', 'archive'] : ['submit', 'cancel', 'archive']
         : listTab === 'attention'
-          ? canDecide ? ['submit', 'move', 'cancel'] : ['submit', 'cancel']
+          ? canDecide ? ['submit', 'move', 'cancel', 'archive'] : ['submit', 'cancel', 'archive']
           : [];
   // Labels and the assignee on many posts at once (#1057), find and replace (#1144) and a channel added (#1178), for
   // members and above, in the lists, the board and the calendar. So are copies moved by days or weeks (#1192), which the
@@ -644,7 +651,18 @@ export function SocialPage() {
   const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign', 'replace', 'addChannel', 'duplicate'] : [];
   // The channels a member may add to posts: live, and theirs (#1081).
   const channelOptions = (channels.data ?? []).filter((c) => c.status !== 'revoked' && scope.allows(c.id)).map((c) => ({ id: c.id, name: `${c.displayName} · ${providerName(c.provider)}` }));
-  const listActions: readonly BulkAction[] = bulkActions.length > 0 ? [...bulkActions, ...editActions] : listTab === 'done' && canWrite ? ['duplicate'] : [];
+  // Archived posts (#1299) are only brought back from their tab; a member's own posts, an owner's or admin's any (the
+  // server leaves the others out and says why).
+  const listActions: readonly BulkAction[] = !canWrite
+    ? []
+    : listTab === 'archived'
+      ? ['restore']
+      : bulkActions.length > 0
+        ? [...bulkActions, ...editActions]
+        : listTab === 'done'
+          ? ['duplicate', 'archive']
+          : [];
+  const boardActions: readonly BulkAction[] = editActions.length > 0 ? [...editActions, 'archive'] : [];
   const agendaActions: readonly BulkAction[] = [...(canDecide ? (['move'] as const) : []), ...editActions];
   const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: canWrite });
   const members = (org.data?.members ?? []).map((m) => ({ userId: m.userId, name: m.displayName ?? m.email }));
@@ -844,11 +862,11 @@ export function SocialPage() {
                 <ErrorText>{errorMessage(list.error)}</ErrorText>
               ) : (
                 <>
-                  {editActions.length > 0 && (
+                  {boardActions.length > 0 && (
                     <div className="mb-2">
                       <BulkBar
                         posts={rows.filter((p) => picked.has(p.id))}
-                        actions={editActions}
+                        actions={boardActions}
                         canDecide={canDecide}
                         excerptOf={excerptOf}
                         channelName={channelName}
@@ -893,7 +911,7 @@ export function SocialPage() {
           </div>
         </TabsContent>
         <TabsContent value="library">{tab === 'library' && <Library slug={slug} canWrite={canWrite} />}</TabsContent>
-        {(['review', 'attention', 'drafts', 'done'] as const).map((id) => (
+        {(['review', 'attention', 'drafts', 'done', 'archived'] as const).map((id) => (
           <TabsContent key={id} value={id}>
             {tab === id && (
               <>
@@ -938,7 +956,7 @@ export function SocialPage() {
                       <div key={post.id} className="flex items-center gap-2">
                         {listActions.length > 0 && <Checkbox checked={picked.has(post.id)} onCheckedChange={() => toggle(post.id)} aria-label={t('bulk.select', { text: excerpt(post.body, 40) || t('emptyText') })} />}
                         <div className="min-w-0 flex-1">
-                          <PostRow post={post} slug={slug} names={names} labels={labelList} right={f.dateTime(post.updatedAt)} />
+                          <PostRow post={post} slug={slug} names={names} labels={labelList} right={id === 'archived' && post.archivedAt ? t('archivedAt', { when: f.dateTime(post.archivedAt) }) : f.dateTime(post.updatedAt)} />
                         </div>
                       </div>
                     ))}

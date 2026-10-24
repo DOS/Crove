@@ -25,6 +25,9 @@ import {
   zOAuthProvider,
   zOAuthState,
   zSocialBulkAddChannel,
+  zSocialBulkArchive,
+  zSocialPostArchive,
+  zSocialPostArchived,
   zSocialBulkAddChannelResult,
   zSocialBulkAssign,
   zSocialBulkLabels,
@@ -351,6 +354,8 @@ export const contract = {
             assignee: z.literal('me').optional(),
             // Drafts with no planned time and no channel time (#1145), for the calendar's side list.
             undated: z.literal(true).optional(),
+            // Archived posts only (#1299); without it, the lists leave them out.
+            archived: z.literal(true).optional(),
             search: z.string().trim().min(1).max(200).optional(),
             // The last post of the previous page (newest change first).
             before: z.strictObject({ updatedAt: z.iso.datetime({ offset: true }), postId: zId }).optional(),
@@ -452,6 +457,13 @@ export const contract = {
       // One channel added to up to 100 posts (#1178), each through the single add; the answer names each post left out
       // and why, and what each added channel still lacks for its rules.
       bulkAddChannel: oc.input(zSocialBulkAddChannel).output(zSocialBulkAddChannelResult),
+      // Archives a post, or brings an archived one back unchanged (#1299): members their own posts, owners and admins
+      // any. Refused while a channel is scheduled, going out, paused, waiting for a person or being taken down.
+      archive: oc.input(zSocialPostArchive).output(zSocialPostArchived),
+      restore: oc.input(zSocialPostArchive).output(zSocialPostArchived),
+      // The same for up to 100 posts at once; the answer names each post left out and why.
+      bulkArchive: oc.input(zSocialBulkArchive).output(zSocialBulkResult),
+      bulkRestore: oc.input(zSocialBulkArchive).output(zSocialBulkResult),
       // One draft per library file (#1080), all or none: every file is checked against every channel first, and a file
       // that does not fit one is reported with nothing saved. A retry with the same idempotencyKey returns the first answer.
       createFromMedia: oc.input(zSocialDraftsFromMediaFields.extend({ idempotencyKey: zId }).refine(channelsOrSet, 'channels or a channel set')).output(zSocialDraftsFromMediaResult),

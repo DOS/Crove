@@ -36,6 +36,7 @@ import { pushCommands, pushQueries } from './push.ts';
 import { outperformingCommands } from './outperforming.ts';
 import { assignCommands } from './assign.ts';
 import { bulkEditCommands, bulkEditQueries } from './bulk-edit.ts';
+import { archiveCommands } from './archive.ts';
 import { coverProblem } from './cover-check.ts';
 import { bulkDraftCommands } from './bulk-drafts.ts';
 import { publishingCommands } from './publishing.ts';
@@ -82,7 +83,7 @@ import { editCallsOf, editPublishedCommands, editState, type EditState } from '.
 import { approvalsRequired, channelSignatures, clientApprovalOn, clientVerdict, decisionsOf, fourEyesOn, policyCommands, policyQueries, shortOfPolicy } from './policy.ts';
 import { withChannelSignature } from './domain/signature.ts';
 import { clientReviewCommands } from './client-review.ts';
-import { CLEAR_ERROR, MAX_CHANNELS_PER_POST, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseRemoveAtMisfit, setVariant, settingsOf, step, takenSlots, variantPost, type PostRow, type QueueState, type VariantRow } from './variants.ts';
+import { CLEAR_ERROR, MAX_CHANNELS_PER_POST, MOVABLE, POLICY_RAISED, POST_COLUMNS, SLOT_FREED, approvedValues, base, editValues, mediaFor, type PostContent, freezeValues, hashOf, issuesOf, latestDecision, lockPost, lockQueue, lockVariants, mediaOf, overrides, pick, providerOf, refreshPostStatus, refuseArchived, refuseRemoveAtMisfit, setVariant, settingsOf, step, takenSlots, variantPost, type PostRow, type QueueState, type VariantRow } from './variants.ts';
 import { queueOrderCommands } from './queue-order.ts';
 import { versionQueries, withVersion } from './versions.ts';
 import { bannedChecker, bannedCheckerOf, bannedCommandBudget, bannedForView, bannedWordsOf, bannedWordCommands, bannedWordQueries, isBlocked, refuseBannedWords, type BannedWordsStatus } from './banned-words.ts';
@@ -456,6 +457,7 @@ export const postAddChannels = defineCommand({
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     // Not on a post the member cannot see (#1081): its content belongs to other channels.
     await refusePostOutside(ctx, post.id);
+    refuseArchived(post);
     const existing = await lockVariants(ctx.trx, ctx.orgId, post.id);
     if (existing.length + input.channels.length > MAX_CHANNELS_PER_POST) {
       throw new DomainError('TOO_MANY_CHANNELS', 422, `Một bài đăng có tối đa ${MAX_CHANNELS_PER_POST} kênh`);
@@ -549,6 +551,7 @@ export const postUpdate = defineCommand({
     const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     if (post.revision !== input.revision) throw new DomainError('STALE_REVISION', 409, 'Bài đăng đã được sửa ở nơi khác, hãy tải lại', { revision: post.revision });
     await refusePostOutside(ctx, post.id);
+    refuseArchived(post);
     const { postId: _postId, revision: _revision, ...edit } = input;
     return withVersion(ctx, post.id, () => editPost(ctx, post, edit));
   },
@@ -614,6 +617,7 @@ export const variantUpdate = defineCommand({
     const post = await lockPost(ctx.trx, ctx.orgId, postId);
     const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]) as [VariantRow];
     await refuseChannels(ctx, [v.channel_connection_id]);
+    refuseArchived(post);
     if (v.revision !== input.revision) throw new DomainError('STALE_REVISION', 409, 'Kênh này đã được sửa ở nơi khác, hãy tải lại', { revision: v.revision });
     return withVersion(ctx, postId, async () => {
       const { revision, changed } = await editVariant(ctx, post, v, input);
@@ -680,6 +684,7 @@ export const postRestoreVersion = defineCommand({
       scope,
       current.filter((v) => editable(v) && content.variants.some((s) => s.variantId === v.id)).map((v) => v.channel_connection_id),
     );
+    refuseArchived(post);
     const seen = Object.entries(input.variantRevisions ?? {});
     const stale = seen.filter(([id, revision]) => current.find((v) => v.id === id)?.revision !== revision).map(([id]) => id);
     if (stale.length > 0) throw new DomainError('STALE_REVISION', 409, 'Có kênh đã được sửa ở nơi khác, hãy tải lại', { variantIds: stale });
@@ -724,6 +729,7 @@ export const postSubmit = defineCommand({
     const all = await lockVariants(ctx.trx, ctx.orgId, post.id);
     // A member limited to some channels (#1081) submits those: by default the ones they may use, and never another.
     const scope = await refusePostOutside(ctx, post.id);
+    refuseArchived(post);
     const chosen = input.variantIds ? pick(all, input.variantIds) : inScope(scope, all).filter((v) => ['draft', 'changes_requested', 'rejected'].includes(v.status));
     refuseOutside(
       scope,
@@ -785,6 +791,7 @@ export const variantDecide = defineCommand({
       chosen.map((v) => v.channel_connection_id),
     );
     const seen = new Map(input.variants.map((x) => [x.variantId, x]));
+    refuseArchived(post);
     // A channel with a blocked word (#1055), added to the list since it was submitted, is not approved; a request for
     // changes or a rejection still goes.
     if (input.decision === 'approved') await refuseBannedWords(ctx, base(post), chosen);
@@ -929,6 +936,7 @@ export const variantSchedule = defineCommand({
       scope,
       chosen.map((v) => v.channel_connection_id),
     );
+    refuseArchived(post);
     if (chosen.length === 0) throw new DomainError('NOTHING_TO_SCHEDULE', 409, 'Không có kênh nào đã duyệt để lên lịch');
     // A blocked word (#1055), also one added to the list after the approval, refuses this schedule. A variant already
     // scheduled, queued, retried or resumed is not checked again before it goes out.
@@ -1036,6 +1044,7 @@ export const variantReschedule = defineCommand({
     const [v] = pick(await lockVariants(ctx.trx, ctx.orgId, postId), [input.variantId]);
     if (!v) throw new DomainError('VARIANT_NOT_FOUND', 404, 'Không tìm thấy kênh này của bài đăng');
     await refuseChannels(ctx, [v.channel_connection_id]);
+    refuseArchived(post);
     // The same time the lists and the calendar show for it (effectiveAt), read under the post's lock.
     const current = v.error_retry_at ?? v.queue_slot_at ?? v.scheduled_at ?? post.scheduled_at;
     if (input.expectedAt !== undefined && current?.getTime() !== Date.parse(input.expectedAt)) {
@@ -1335,6 +1344,9 @@ export interface PostView {
   openComments: number;
   // The idea it was made from (#701); on a single post's read only.
   idea?: { id: string; title: string } | null;
+  // When and by whom it was archived (#1299); null while it is not. A single read shows an archived post as it is.
+  archivedAt: string | null;
+  archivedBy: string | null;
 }
 
 const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
@@ -1497,6 +1509,8 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
         updatedAt: iso(p.updated_at) ?? '',
         labelIds: (labels.get(p.id) ?? []).map((l) => l.id),
         openComments: openComments.get(p.id) ?? 0,
+        archivedAt: iso(p.archived_at),
+        archivedBy: p.archived_by,
         variants: variants
           .filter((v) => v.post_id === p.id)
           .map((v) => {
@@ -1777,6 +1791,8 @@ export const postList = defineQuery({
     assignee: z.literal('me').optional(),
     // Drafts with no planned time and no channel time (#1145), the calendar's side list.
     undated: z.literal(true).optional(),
+    // Archived posts only (#1299); without it, the lists leave them out.
+    archived: z.literal(true).optional(),
     // In the post's or a channel's own text or title; wildcards are matched as themselves.
     search: z.string().trim().min(1).max(200).optional(),
     // The last post of the previous page, newest change first.
@@ -1937,6 +1953,7 @@ export const socialCommands = [
   ...snippetCommands,
   ...labelCommands,
   ...bulkEditCommands,
+  ...archiveCommands,
   ...bulkDraftCommands,
   ...mediaTagCommands,
   ...stockPhotoCommands,
