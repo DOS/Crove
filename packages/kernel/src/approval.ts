@@ -84,10 +84,13 @@ async function permissionHolders(
   let query = trx
     .selectFrom('crove_kernel.role_assignment as a')
     .innerJoin('crove_kernel.role_permission as p', 'p.role_key', 'a.role_key')
+    // A viewer (the read-only base role) holds no permission, whatever they were given before a demotion (#1279).
+    .innerJoin('crove_kernel.tenant_member as m', (join) => join.onRef('m.org_id', '=', 'a.org_id').onRef('m.user_id', '=', 'a.user_id'))
     .select('a.user_id')
     .where('a.org_id', '=', orgId)
     .where('a.legal_entity_id', 'is', null)
     .where('p.permission', '=', permission)
+    .where('m.role', '<>', 'viewer')
     .orderBy('a.user_id')
     .orderBy('a.id');
   if (options.userIds) query = query.where('a.user_id', 'in', options.userIds);

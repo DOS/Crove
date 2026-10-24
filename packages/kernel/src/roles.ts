@@ -1,5 +1,5 @@
 // Role assignments (issue #1279, plan §4.6): the built-in roles a member can hold on top of their base role
-// (crove_kernel.role, role_permission, role_assignment, 20261030130000_crove_kernel_roles.sql).
+// (crove_kernel.role, role_permission, role_assignment, 20261030160000_crove_kernel_roles.sql).
 // - kernel.member.roles.list: owners and admins read the roles the deployment offers and who holds which.
 // - kernel.member.role.assign / kernel.member.role.revoke: owners only, R3 (fresh MFA, P11), like every membership
 //   change. The runtime audits each one; the detail names the member, the role, the legal entity and whether anything
@@ -77,11 +77,14 @@ export async function myPermissions(ctx: QueryContext): Promise<string[]> {
   const rows = await ctx.trx
     .selectFrom('crove_kernel.role_assignment as a')
     .innerJoin('crove_kernel.role_permission as p', 'p.role_key', 'a.role_key')
+    // A viewer holds no permission (crove_kernel.ctx_has_permission says the same).
+    .innerJoin('crove_kernel.tenant_member as m', (join) => join.onRef('m.org_id', '=', 'a.org_id').onRef('m.user_id', '=', 'a.user_id'))
     .select('p.permission')
     .distinct()
     .where('a.org_id', '=', ctx.orgId)
     .where('a.user_id', '=', ctx.actor.userId)
     .where('a.legal_entity_id', 'is', null)
+    .where('m.role', '<>', 'viewer')
     .orderBy('p.permission')
     .execute();
   return rows.map((r) => r.permission);
@@ -133,6 +136,18 @@ function roleRefusal(error: unknown): never {
         throw new DomainError('LEGAL_ENTITY_NOT_FOUND', 422, 'Không tìm thấy pháp nhân này trong tổ chức');
       case 'ROLE_SCOPE_NOT_FOR_ADMINS':
         throw new DomainError('ROLE_SCOPE_NOT_FOR_ADMINS', 422, 'Chủ sở hữu và quản trị viên luôn xem được mọi pháp nhân, nên không giới hạn theo pháp nhân được');
+      case 'ROLE_PRIVILEGED_FOR_VIEWER':
+        throw new DomainError(
+          'ROLE_PRIVILEGED_FOR_VIEWER',
+          422,
+          'Người có vai trò Chỉ xem không được giao vai trò có quyền duyệt hay mở khóa sổ; hãy đổi họ thành Thành viên trước',
+        );
+      case 'ROLE_GRANT_WIDENS_SCOPE':
+        throw new DomainError(
+          'ROLE_GRANT_WIDENS_SCOPE',
+          409,
+          'Thành viên này đang chỉ được xem một số pháp nhân. Giao vai trò cho cả tổ chức sẽ cho họ xem mọi pháp nhân, nên không giao được. Nếu muốn họ làm việc với cả tổ chức, hãy thu hồi các vai trò theo pháp nhân trước; pháp nhân cuối cùng chỉ gỡ được khi đổi họ thành Quản trị hoặc xóa họ khỏi tổ chức rồi mời lại',
+        );
       case 'ROLE_ASSIGNMENT_NOT_FOUND':
         throw new DomainError('ROLE_ASSIGNMENT_NOT_FOUND', 404, 'Không tìm thấy vai trò này của thành viên');
       case 'ROLE_REVOKE_WIDENS_SCOPE':

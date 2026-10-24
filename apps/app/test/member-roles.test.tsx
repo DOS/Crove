@@ -80,6 +80,10 @@ describe('assignableRoles', () => {
     const held = data.assignments;
     expect(assignableRoles(data.roles, held, 'member').map((r) => r.key)).toEqual(['finance.accountant', 'external_accountant']);
     expect(assignableRoles(data.roles, [], 'admin').map((r) => r.key)).toEqual(['finance.chief_accountant', 'finance.accountant']);
+    // A viewer never gets a role that grants a permission; a member limited to an entity gets no org-wide role.
+    expect(assignableRoles(data.roles, [], 'viewer').map((r) => r.key)).toEqual(['finance.accountant', 'external_accountant']);
+    const limited = [{ roleKey: 'external_accountant' as const, legalEntityId: branch }];
+    expect(assignableRoles(data.roles, limited, 'member').map((r) => r.key)).toEqual(['external_accountant']);
     expect(roleNeedsEntity({ scope: 'legal_entity' })).toBe(true);
     expect(roleNeedsEntity({ scope: 'org' })).toBe(false);
   });

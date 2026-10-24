@@ -310,12 +310,16 @@ suite('role assignments on PostgreSQL (#1279)', () => {
       message: 'ROLE_REVOKE_WIDENS_SCOPE',
     });
 
-    // An org-wide role is the owner's explicit choice of the whole org.
-    const wide = await o.assign(asMfa(o.owner), o.viewer, 'finance.viewer');
-    expect(await scopeOf(o.viewer, o.orgId)).toEqual(['*']);
-    // Revoking it narrows back to the entity.
-    await o.revoke(asMfa(o.owner), wide.assignmentId);
+    // An org-wide role would lift the scoped viewer to every entity too: refused the same way, in the definer as well.
+    await expect(o.assign(asMfa(o.owner), o.viewer, 'finance.viewer')).rejects.toMatchObject({ code: 'ROLE_GRANT_WIDENS_SCOPE', status: 409 });
+    await expect(
+      inContext(o.owner, o.orgId, (c) => c.query(`SELECT * FROM crove_kernel.role_assignment_grant($1::uuid, 'finance.viewer', NULL)`, [o.viewer])),
+    ).rejects.toMatchObject({ message: 'ROLE_GRANT_WIDENS_SCOPE' });
     expect(await scopeOf(o.viewer, o.orgId)).toEqual([o.branch]);
+    // A member who already holds an org-wide role stays org-wide when given an entity role too.
+    await o.assign(asMfa(o.owner), o.member, 'finance.accountant');
+    await o.assign(asMfa(o.owner), o.member, 'external_accountant', o.branch);
+    expect(await scopeOf(o.member, o.orgId)).toEqual(['*']);
 
     // Removing the member removes their assignments; they enter no more.
     await o.exec(asMfa(o.owner), 'kernel.member.remove', { userId: o.viewer });
@@ -422,5 +426,26 @@ suite('role assignments on PostgreSQL (#1279)', () => {
     expect((await rt.query<{ permissions: string[] }>('kernel.org.get', {}, { actor: asUser(o.chief), orgId: o.orgId })).permissions).toEqual([]);
     // The owner still unlocks.
     await expect(unlock(asMfa(o.owner))).resolves.toMatchObject({ lockedThrough: null });
+  });
+
+  it('never gives a viewer a role that grants a permission, and a viewer demoted after the grant holds none', async () => {
+    const o = await org();
+    await expect(o.assign(asMfa(o.owner), o.viewer, 'finance.chief_accountant')).rejects.toMatchObject({ code: 'ROLE_PRIVILEGED_FOR_VIEWER', status: 422 });
+    await expect(
+      inContext(o.owner, o.orgId, (c) => c.query(`SELECT * FROM crove_kernel.role_assignment_grant($1::uuid, 'finance.chief_accountant', NULL)`, [o.viewer])),
+    ).rejects.toMatchObject({ message: 'ROLE_PRIVILEGED_FOR_VIEWER' });
+    // A role without permissions is fine.
+    await expect(o.assign(asMfa(o.owner), o.viewer, 'finance.viewer')).resolves.toMatchObject({ created: true });
+
+    // A chief accountant demoted to viewer keeps the row but holds nothing: no unlock, no approval, no permission shown.
+    await o.assign(asMfa(o.owner), o.chief, 'finance.chief_accountant');
+    await o.exec(asUser(o.owner), 'finance.period.lock', { month: '2026-01' });
+    await o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.chief, role: 'viewer' });
+    await expect(o.exec(asMfa(o.chief), 'finance.period.unlock', { month: '2026-01', reason: 'Sửa sai sót' })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    await expect(inContext(o.chief, o.orgId, (c) => c.query(`SELECT crove_finance.unlock_period('2026-01-01'::date)`))).rejects.toMatchObject({
+      message: 'PERIOD_LOCK_FORBIDDEN',
+    });
+    await expect(o.exec(asMfa(o.chief), 'kernel.proposal.approve', { id: randomUUID(), revision: 1 })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    expect((await rt.query<{ permissions: string[] }>('kernel.org.get', {}, { actor: asUser(o.chief), orgId: o.orgId })).permissions).toEqual([]);
   });
 });

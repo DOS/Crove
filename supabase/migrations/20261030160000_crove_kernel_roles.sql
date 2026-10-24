@@ -18,7 +18,9 @@
 -- Crove owner), through the audited R3 commands kernel.member.role.assign and kernel.member.role.revoke. Tenant roles
 -- only read the table; the two definers below write it and check again that the context is a user who owns the org,
 -- so neither a raw call, an admin, nor a system or agent context grants anything. Revoking the last legal-entity
--- assignment of a member or viewer is refused: it would lift their scope to every entity (see enter_context below).
+-- assignment of a member or viewer is refused, and so is an org-wide role for one who holds only legal-entity
+-- assignments: either would lift their scope to every entity (see enter_context below). A role that grants a permission
+-- is never given to a viewer, and a viewer holds no permission whatever they were given before a demotion.
 --
 -- What reads assignments: enter_context (the le_scope below), crove_kernel.ctx_has_permission (the runtime's gate for
 -- commands that declare a permission, and finance's unlock_period), and the approval policy (P12). Each reads them in
@@ -114,8 +116,12 @@ REVOKE ALL ON FUNCTION crove_kernel.assert_role_manager() FROM PUBLIC, crove_ten
 -- one of its legal entities, as the role's scope requires. Answers the assignment and whether this call created it
 -- (false: the member already held it). Refusals, all P0001 with the code as message: ROLE_MEMBER_NOT_FOUND,
 -- ROLE_NOT_FOUND, ROLE_SCOPE_REQUIRED (an entity role without an entity), ROLE_SCOPE_NOT_ALLOWED (an org-wide role
--- with one), ROLE_LEGAL_ENTITY_NOT_FOUND, and ROLE_SCOPE_NOT_FOR_ADMINS: an owner or admin sees every entity whatever
--- they hold, so an entity assignment would limit nothing.
+-- with one), ROLE_LEGAL_ENTITY_NOT_FOUND, ROLE_SCOPE_NOT_FOR_ADMINS (an owner or admin sees every entity whatever they
+-- hold, so an entity assignment would limit nothing), ROLE_PRIVILEGED_FOR_VIEWER (a role that grants a permission is
+-- never given to a viewer, the read-only base role) and ROLE_GRANT_WIDENS_SCOPE: an org-wide role given to a member or
+-- viewer limited to some legal entities would lift them to every entity (enter_context), the mirror of
+-- ROLE_REVOKE_WIDENS_SCOPE. A grant may narrow what a member reaches, never widen it: org-wide access for such a member
+-- is a membership decision (make them admin, or remove them and invite them again), never a side effect of a role.
 CREATE OR REPLACE FUNCTION crove_kernel.role_assignment_grant(p_user_id uuid, p_role_key text, p_legal_entity_id uuid)
 RETURNS TABLE (assignment_id uuid, created boolean)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -151,6 +157,16 @@ BEGIN
     IF v_member_role IN ('owner', 'admin') THEN
       RAISE EXCEPTION 'ROLE_SCOPE_NOT_FOR_ADMINS';
     END IF;
+  END IF;
+  IF v_member_role = 'viewer' AND EXISTS (SELECT 1 FROM crove_kernel.role_permission p WHERE p.role_key = p_role_key) THEN
+    RAISE EXCEPTION 'ROLE_PRIVILEGED_FOR_VIEWER';
+  END IF;
+  IF p_legal_entity_id IS NULL AND v_member_role NOT IN ('owner', 'admin')
+     AND EXISTS (SELECT 1 FROM crove_kernel.role_assignment a
+                 WHERE a.org_id = v_org AND a.user_id = p_user_id AND a.legal_entity_id IS NOT NULL)
+     AND NOT EXISTS (SELECT 1 FROM crove_kernel.role_assignment a
+                     WHERE a.org_id = v_org AND a.user_id = p_user_id AND a.legal_entity_id IS NULL) THEN
+    RAISE EXCEPTION 'ROLE_GRANT_WIDENS_SCOPE';
   END IF;
   INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by)
   VALUES (v_org, p_user_id, p_role_key, p_legal_entity_id, crove_kernel.ctx_user_id())
@@ -207,7 +223,8 @@ END $$;
 REVOKE ALL ON FUNCTION crove_kernel.role_assignment_revoke(uuid) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_kernel.role_assignment_revoke(uuid) TO crove_tenant;
 
--- Whether the user of the sealed context holds p_permission in the org in context through an org-wide assignment. An
+-- Whether the user of the sealed context holds p_permission in the org in context through an org-wide assignment, while
+-- their base role is not viewer (a viewer demoted after the grant holds no permission, whatever they were given). An
 -- assignment for one legal entity grants no permission yet: no record names an entity, so nothing could be checked
 -- against it (P12's legal-entity part waits for legal_entity_id on proposals). Every other actor, and no context,
 -- holds none. SECURITY INVOKER: a tenant role reads its own org's rows through RLS; the finance definer that calls it
@@ -217,8 +234,9 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
   SELECT COALESCE(crove_kernel.ctx_actor_type() = 'user', false) AND EXISTS (
     SELECT 1 FROM crove_kernel.role_assignment a
     JOIN crove_kernel.role_permission p ON p.role_key = a.role_key
+    JOIN crove_kernel.tenant_member m ON m.org_id = a.org_id AND m.user_id = a.user_id
     WHERE a.org_id = crove_kernel.ctx_org_id() AND a.user_id = crove_kernel.ctx_user_id()
-      AND a.legal_entity_id IS NULL AND p.permission = p_permission
+      AND a.legal_entity_id IS NULL AND p.permission = p_permission AND m.role <> 'viewer'
   )
 $$;
 REVOKE ALL ON FUNCTION crove_kernel.ctx_has_permission(text) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
