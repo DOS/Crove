@@ -712,7 +712,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
       {!plain && unverified && (
         <Card className="mb-4 block space-y-2 border border-destructive/60 p-4 ring-0" data-testid="signature-unverified">
           <p className="text-sm font-medium text-foreground">{t('signatureUnverifiedTitle')}</p>
-          <p className="text-sm text-muted-foreground">{signatureCheck ? invoiceCheckMessage(signatureCheck, root, money) : t('signatureUnverifiedTitle')}</p>
+          <p className="text-sm text-muted-foreground">{signatureCheck ? invoiceCheckMessage(signatureCheck, root, { money, date: f.date }) : t('signatureUnverifiedTitle')}</p>
           <p className="text-sm text-muted-foreground">{t('signatureUnverifiedHint')}</p>
           {pending && item.canApprove && (
             <Label className="font-normal text-muted-foreground">
@@ -855,7 +855,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                 {payload.checks.map((c) => (
                   <li key={c.id} className="flex items-start gap-2 text-sm">
                     <Badge variant={CHECK_TONE[c.status]}>{CHECK_ICON[c.status]}</Badge>
-                    <span className="text-muted-foreground">{invoiceCheckMessage(c, root, money)}</span>
+                    <span className="text-muted-foreground">{invoiceCheckMessage(c, root, { money, date: f.date })}</span>
                   </li>
                 ))}
               </ul>
