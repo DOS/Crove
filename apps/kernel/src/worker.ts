@@ -55,6 +55,8 @@ const NOTIFY_COMMANDS: ReadonlyMap<string, { module: string; command: string }> 
   ...FINANCE_NOTIFYING_EVENTS.map((type): [string, { module: string; command: string }] => [type, { module: 'finance', command: 'finance.notification.dispatch' }]),
 ]);
 const NOTIFY_RETRY_LIMIT = 3;
+// A booking's confirmation (#1318): a failure retries soon, since the visitor's page is waiting on it.
+const BOOKING_RETRY_LIMIT = 3;
 const NOTIFYING: ReadonlySet<string> = new Set(NOTIFYING_EVENTS);
 // Team chat alerts (#863): one job per alerting event, never retried. pg-boss refuses a second job with the same
 // singleton key in the same slot of this many seconds, even once the first is done, so a relay batch sent again after a
@@ -99,6 +101,11 @@ interface InboundRow {
   raw_sha256: string;
   size_bytes: string;
   recipient: string;
+}
+
+interface BookingJob {
+  orgId: string;
+  bookingId: string;
 }
 
 interface AgentWakeJob {
@@ -395,6 +402,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   // Reading files is the finance module's job today: without it an uploaded file is stored and stays unread.
   const finance = deps.runtime.installed('finance');
   const social = deps.runtime.installed('social');
+  const crm = deps.runtime.installed('crm');
   // Background, agent and bulk queues, paused under back-pressure (#894, plan §4.9). Registered with background.add.
   const background = new PausableWork(boss);
 
@@ -641,6 +649,14 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (!job) return;
       const done = await runLinkPreviewJob({ runtime: deps.runtime, extract: deps.extract }, job.data.orgId, job.data.previewId);
       if (done !== 'none') console.log(`[social-link-preview] ${job.data.previewId.slice(0, 8)}: ${done}`);
+    });
+  }
+
+  // Bookings of the public booking page (#1318): one job per request, run as the system; the page polls its status.
+  if (crm) {
+    await boss.work<BookingJob>(QUEUES.crmBooking, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      await deps.runtime.execute('crm.booking.confirm', { bookingId: job.data.bookingId }, { actor: { type: 'system', component: 'crm.booking' }, orgId: job.data.orgId });
     });
   }
 
@@ -1234,6 +1250,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   singletonKey: `${row.org_id}:${optionId}`,
                   retryLimit: CHANNEL_OPTION_RETRY_LIMIT,
                   retryDelay: 10,
+                  retryBackoff: true,
+                });
+              }
+              // A visitor's booking (#1318): the worker confirms or refuses it as the system.
+              if (crm && row.type === 'crm.booking.requested') {
+                const bookingId = String(row.payload.booking_id);
+                return boss.send(QUEUES.crmBooking, { orgId: row.org_id, bookingId } satisfies BookingJob, {
+                  singletonKey: `${row.org_id}:${bookingId}`,
+                  retryLimit: BOOKING_RETRY_LIMIT,
+                  retryDelay: 2,
                   retryBackoff: true,
                 });
               }
