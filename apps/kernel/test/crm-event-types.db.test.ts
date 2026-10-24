@@ -134,6 +134,12 @@ suite('crm event types on PostgreSQL (#1314)', () => {
       c.query<{ command: string }>("SELECT command FROM crove_kernel.audit_event WHERE org_id = $1 AND command LIKE 'crm.event_type.%' AND outcome = 'ok' ORDER BY occurred_at, id", [o.orgId]),
     );
     expect(audit.rows.map((r) => r.command)).toEqual(['crm.event_type.create', 'crm.event_type.create', 'crm.event_type.update']);
+    // The update's audit names the changed fields, never their free-text values.
+    const detail = await admin((c) =>
+      c.query<{ detail: { changed: string[] } }>("SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'crm.event_type.update' AND outcome = 'ok'", [o.orgId]),
+    );
+    expect(detail.rows[0]?.detail.changed.sort()).toEqual(['dailyLimit', 'durationMin', 'title']);
+    expect(JSON.stringify(detail.rows[0]?.detail)).not.toContain('meet.example.test');
   });
 
   it('archives and restores instead of deleting', async () => {

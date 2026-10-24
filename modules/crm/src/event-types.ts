@@ -189,7 +189,12 @@ export const eventTypeUpdate = defineCommand({
       .returning(COLUMNS)
       .executeTakeFirstOrThrow()
       .catch(onWrite(fields.slug));
-    ctx.audit({ eventTypeId, previous: view(before), eventType: view(row) });
+    // Field names only: the description and location are free text that may hold personal data, and audit rows are
+    // kept after a personal-data erasure.
+    const previous = view(before);
+    const next = view(row);
+    const changed = (Object.keys(next) as (keyof EventType)[]).filter((k) => k !== 'updatedAt' && previous[k] !== next[k]);
+    ctx.audit({ eventTypeId, slug: row.slug, hostUserId: row.host_user_id, previousHostUserId: before.host_user_id, changed });
     return view(row);
   },
 });
