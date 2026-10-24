@@ -1,7 +1,8 @@
 // Property test of the posting path (issue #138, External-tenant gate T3) on a real PostgreSQL 17: a random set of
 // journal lines is accepted by crove_finance.post_journal_entry(), run as the API login role in a tenant context and
-// committed, exactly when it has at least 2 lines and its debits equal its credits. Accepted entries are stored as
-// given; refused ones fail with a check violation and leave nothing behind.
+// committed, exactly when it has at least 2 lines, every amount fits the book currency (VND: whole dong, #1282) and its
+// debits equal its credits. Accepted entries are stored as given; refused ones fail with a check violation, or with
+// AMOUNT_SCALE for a fraction of a dong, and leave nothing behind.
 // Bounded and deterministic: a fixed seed and 100 runs (override with FC_SEED / FC_RUNS to explore locally; a
 // failure prints the seed and the shrunk counterexample).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
@@ -58,13 +59,26 @@ const nearlyBalanced = fc
   .tuple(balanced, fc.nat())
   .map(([sides, pick]) => sides.map((s, i) => (i === pick % sides.length ? { ...s, units: s.units + DONG } : s)));
 
-const lineSets = fc.oneof(raw, balanced, nearlyBalanced).map(toLines);
+// Balanced, plus a debit and a credit line of the same amount with a fraction of a dong (0.0001 to 0.9999): it still
+// balances, but VND has no minor units, so it is refused (#1282) rather than stored as given or rounded.
+const fractional = fc
+  .tuple(balanced, fc.bigInt({ min: 1n, max: 10n ** 11n }), fc.bigInt({ min: 1n, max: DONG - 1n }))
+  .map(([sides, dong, fraction]): Side[] => [
+    ...sides,
+    { account: '1331', debit: true, units: dong * DONG + fraction },
+    { account: '331', debit: false, units: dong * DONG + fraction },
+  ]);
 
-function expectAccepted(lines: Line[]): boolean {
-  if (lines.length < 2) return false;
+const lineSets = fc.oneof(raw, balanced, nearlyBalanced, fractional).map(toLines);
+
+// accepted: at least 2 lines, whole dong, balanced; scale: at least 2 lines and an amount with a fraction of a dong
+// (refused before the balance is looked at); refused: anything else.
+function expectedOutcome(lines: Line[]): 'accepted' | 'scale' | 'refused' {
+  if (lines.length < 2) return 'refused';
+  if (lines.some((l) => !money(l.debit).isInteger() || !money(l.credit).isInteger())) return 'scale';
   const debit = lines.reduce((acc, l) => acc.plus(money(l.debit)), money(0));
   const credit = lines.reduce((acc, l) => acc.plus(money(l.credit)), money(0));
-  return debit.equals(credit);
+  return debit.equals(credit) ? 'accepted' : 'refused';
 }
 
 const suite = ADMIN ? describe : describe.skip;
@@ -130,8 +144,8 @@ suite('posting path property (#138)', () => {
     }
   }
 
-  it('accepts a line set exactly when it has at least 2 lines and balances', { timeout: 120_000 }, async () => {
-    const seen = { accepted: 0, refused: 0 };
+  it('accepts a line set exactly when it has at least 2 lines, whole dong and balances', { timeout: 120_000 }, async () => {
+    const seen = { accepted: 0, refused: 0, scale: 0 };
     await fc.assert(
       fc.asyncProperty(lineSets, async (lines) => {
         const sourceId = randomUUID();
@@ -143,7 +157,8 @@ suite('posting path property (#138)', () => {
           [orgId, sourceId],
         );
         const row = stored.rows[0];
-        if (expectAccepted(lines)) {
+        const outcome = expectedOutcome(lines);
+        if (outcome === 'accepted') {
           expect(result).toHaveProperty('id');
           seen.accepted += 1;
           expect(row?.n).toBe(lines.length);
@@ -151,10 +166,14 @@ suite('posting path property (#138)', () => {
           expect(money(row?.debit ?? '0').equals(money(row?.credit ?? '0'))).toBe(true);
         } else {
           expect(result).toHaveProperty('error');
-          seen.refused += 1;
+          seen[outcome] += 1;
           const { error } = result as { error: { code?: string; message: string } };
-          expect(error.code).toBe('23514');
-          expect(error.message).toMatch(/needs at least 2 lines|does not balance/);
+          if (outcome === 'scale') {
+            expect(error).toMatchObject({ code: '22023', message: 'AMOUNT_SCALE' });
+          } else {
+            expect(error.code).toBe('23514');
+            expect(error.message).toMatch(/needs at least 2 lines|does not balance/);
+          }
           // Nothing of a refused entry is left.
           expect(row?.n ?? 0).toBe(0);
           const entries = await admin.query<{ n: number }>(`SELECT count(*)::int AS n FROM crove_finance.journal_entry WHERE org_id = $1 AND source_id = $2`, [
@@ -166,8 +185,9 @@ suite('posting path property (#138)', () => {
       }),
       { seed: SEED, numRuns: RUNS },
     );
-    // The generators reach both outcomes, so neither half of the property is vacuous.
+    // The generators reach every outcome, so no part of the property is vacuous.
     expect(seen.accepted).toBeGreaterThan(0);
     expect(seen.refused).toBeGreaterThan(0);
+    expect(seen.scale).toBeGreaterThan(0);
   });
 });

@@ -3,7 +3,7 @@
 // The database refuses direct inserts, and lines added to an entry after the transaction that created it.
 // A reversal (reversal.ts) is posted here too, as a new entry naming the one it reverses; the database checks
 // that its lines mirror the original's. Nothing posts into a locked month, nor on or before the org's opening entry
-// (period-lock.ts).
+// (period-lock.ts), and no amount has more decimals than the book currency uses (AMOUNT_SCALE, #1282).
 import { sql } from 'kysely';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
 import type { Money } from '@crove/l10n-vn';
@@ -48,11 +48,39 @@ export async function postJournalEntry(ctx: CommandContext, posting: Posting): P
         ${posting.reversesEntryId ?? null}::uuid
       ) AS id`.execute(ctx.trx));
   } catch (error) {
-    // An entry dated in a locked month, or on or before the opening entry (period-lock.ts): say so instead of a
-    // system error.
-    throw postingGuardError(error, posting.beforeOpening) ?? error;
+    // An entry dated in a locked month, or on or before the opening entry (period-lock.ts), or an amount the book
+    // currency cannot hold: say so instead of a system error.
+    throw postingGuardError(error, posting.beforeOpening) ?? amountScaleError(error) ?? error;
   }
   const id = rows[0]?.id;
   if (!id) throw new DomainError('INTERNAL', 500, 'Không ghi được bút toán');
   return id;
+}
+
+// The definer's refusal of an amount with more decimals than the book currency uses (22023 AMOUNT_SCALE, with the line,
+// currency, minor units and amount as JSON detail), or null for any other error. The ledger never rounds it silently.
+export function amountScaleError(error: unknown): DomainError | null {
+  const pg = error as { code?: string; message?: string; detail?: string } | null;
+  if (pg?.code !== '22023' || pg.message !== 'AMOUNT_SCALE') return null;
+  let detail: { lineNo?: unknown; currency?: unknown; minorUnits?: unknown; amount?: unknown } = {};
+  try {
+    detail = JSON.parse(pg.detail ?? '{}') as typeof detail;
+  } catch {
+    detail = {};
+  }
+  const lineNo = typeof detail.lineNo === 'number' ? detail.lineNo : null;
+  const currency = typeof detail.currency === 'string' ? detail.currency : null;
+  const minorUnits = typeof detail.minorUnits === 'number' ? detail.minorUnits : null;
+  const amount = typeof detail.amount === 'string' ? detail.amount : null;
+  const line = lineNo === null ? 'Một dòng' : `Dòng ${lineNo}`;
+  const rule =
+    minorUnits === 0 || minorUnits === null
+      ? `sổ ghi bằng ${currency ?? 'VND'} không có số lẻ`
+      : `${currency ?? 'đồng tiền ghi sổ'} chỉ có ${minorUnits} chữ số sau dấu phẩy`;
+  return new DomainError(
+    'AMOUNT_SCALE',
+    422,
+    `${line} có số tiền ${amount ?? ''} lẻ hơn mức cho phép: ${rule}. Sổ không tự làm tròn; hãy sửa số tiền trên chứng từ rồi ghi lại.`,
+    { lineNo, currency, minorUnits, amount },
+  );
 }

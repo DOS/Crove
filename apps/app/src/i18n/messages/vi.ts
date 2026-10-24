@@ -4485,6 +4485,7 @@ export const vi = {
       OPENING_REVERSAL_DATE: 'Bút toán số dư đầu kỳ chỉ được đảo vào đúng ngày của nó',
       BEFORE_OPENING_BALANCE: 'Bút toán này có ngày trùng hoặc trước ngày số dư đầu kỳ nên không ghi được; hãy chọn một ngày sau ngày số dư đầu kỳ',
       OPENING_BALANCE_INVALID: 'Bảng số dư có dòng không hợp lệ; hãy xem lại trước khi ghi sổ',
+      AMOUNT_SCALE: 'Có số tiền lẻ hơn mức đồng tiền ghi sổ cho phép (sổ VND không có số lẻ). Sổ không tự làm tròn; hãy sửa số tiền trên chứng từ rồi ghi lại',
       PERIOD_LOCKED: 'Sổ đã khóa đến tháng của bút toán này nên không ghi được; chủ sở hữu có thể mở khóa tháng đó nếu cần sửa',
       POSTING_DATE_NOT_ALLOWED: 'Không dùng được ngày ghi sổ này: chỉ hóa đơn mua vào thuộc tháng đã khóa sổ mới được ghi sổ muộn, vào một ngày từ ngày hóa đơn trở đi',
       POSTING_DATE_IN_FUTURE: 'Ngày ghi sổ chưa tới; hãy chọn hôm nay hoặc một ngày trước đó',
