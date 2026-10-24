@@ -27,7 +27,9 @@ const REVIEWER_MAX = 40;
 const SEEN_MAX = 10_000;
 const SYSTEM: Actor = { type: 'system', component: 'social.chat_alert' };
 
-export const CHAT_ALERT_TEST_TEXT = 'Crove: tin thử. Từ giờ nhóm sẽ nhận tin báo về bài đăng mạng xã hội tại đây.';
+// The owner's test line, named by the product name users see (BRAND_NAME, #1045).
+export const chatAlertTestText = (brand: string) => `${brand}: tin thử. Từ giờ nhóm sẽ nhận tin báo về bài đăng mạng xã hội tại đây.`;
+export const CHAT_ALERT_TEST_TEXT = chatAlertTestText('Crove');
 
 // ---------------------------------------------------------------------------
 // The line
@@ -178,6 +180,8 @@ export interface ChatAlertSenderDeps {
   broker: CredentialBroker;
   // PUBLIC_URL, where the post's link points; without it the line has no link.
   publicUrl: string;
+  // BRAND_NAME (#1045), which opens the test line; "Crove" when not given.
+  brand?: string;
   // The platforms' fetch (tests); every call still goes through the adapters' host allowlist.
   fetch?: Fetch;
   perMinute?: number;
@@ -255,7 +259,7 @@ export class ChatAlertSender {
       if (!to) code = 'CHAT_ALERT_UNREADABLE';
       else {
         try {
-          await sendLine(to, CHAT_ALERT_TEST_TEXT, this.deps.fetch);
+          await sendLine(to, chatAlertTestText(this.deps.brand ?? 'Crove'), this.deps.fetch);
         } catch (error) {
           code = FAILURE_CODES[chatAlertFailure(error)];
           console.warn(`[social-chat-alert] ${label}: not sent to ${sealed.kind}: ${failureNote(error)}`);

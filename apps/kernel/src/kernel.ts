@@ -193,7 +193,7 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
 // OAuth connectors of the providers this deployment has app credentials for (Social plan S6); a provider without
 // them is not offered.
 type ChannelConfig = Pick<Config, 'CHANNEL_SANDBOX' | 'CHANNEL_BLUESKY' | 'CHANNEL_TELEGRAM' | 'CHANNEL_MASTODON' | 'CHANNEL_DISCORD' | 'CHANNEL_WORDPRESS' | 'CHANNEL_THREADS_APP_ID' | 'CHANNEL_THREADS_APP_SECRET' | 'CHANNEL_LINKEDIN_CLIENT_ID' | 'CHANNEL_LINKEDIN_CLIENT_SECRET' | 'CHANNEL_GOOGLE_CLIENT_ID' | 'CHANNEL_GOOGLE_CLIENT_SECRET' | 'CHANNEL_GOOGLE_BUSINESS' | 'CHANNEL_TIKTOK_CLIENT_KEY' | 'CHANNEL_TIKTOK_CLIENT_SECRET' | 'CHANNEL_TIKTOK_VIDEO_LIST' | 'CHANNEL_TIKTOK_INBOX' | 'CHANNEL_X_CLIENT_ID' | 'CHANNEL_X_CLIENT_SECRET' | 'CHANNEL_PINTEREST_APP_ID' | 'CHANNEL_PINTEREST_APP_SECRET' | 'CHANNEL_META_APP_ID' | 'CHANNEL_META_APP_SECRET' | 'CHANNEL_META_GRAPH_VERSION' | 'CHANNEL_ZALO_APP_ID' | 'CHANNEL_ZALO_APP_SECRET'> &
-  Partial<Pick<Config, 'CHANNEL_X_METRICS' | 'CHANNEL_LINKEDIN_ANALYTICS' | 'CHANNEL_LINKEDIN_ORGANIZATIONS' | 'CHANNEL_LINKEDIN_PAGE_CLIENT_ID' | 'CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET'>>;
+  Partial<Pick<Config, 'CHANNEL_X_METRICS' | 'CHANNEL_LINKEDIN_ANALYTICS' | 'CHANNEL_LINKEDIN_ORGANIZATIONS' | 'CHANNEL_LINKEDIN_PAGE_CLIENT_ID' | 'CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET' | 'BRAND_NAME'>>;
 // The LinkedIn app, for Company Pages too once it has the Community Management API (#1077).
 // The Company Pages app: its own when set (LinkedIn grants the Community Management API only to an app with no other
 // product), the member app otherwise.
@@ -252,7 +252,7 @@ export function channelPublishers(config: ChannelConfig): Record<string, Publish
     publishers.instagram = new InstagramPublisher({ appSecret: config.CHANNEL_META_APP_SECRET, graphVersion: config.CHANNEL_META_GRAPH_VERSION });
   }
   const zalo = zaloApp(config);
-  if (zalo) publishers.zalo_oa = new ZaloOaPublisher(zalo);
+  if (zalo) publishers.zalo_oa = new ZaloOaPublisher({ ...zalo, ...(config.BRAND_NAME ? { defaultAuthor: config.BRAND_NAME } : {}) });
   if (config.CHANNEL_THREADS_APP_ID && config.CHANNEL_THREADS_APP_SECRET) publishers.threads = new ThreadsPublisher();
   if (config.CHANNEL_LINKEDIN_CLIENT_ID && config.CHANNEL_LINKEDIN_CLIENT_SECRET) publishers.linkedin = new LinkedInPublisher({ analytics: config.CHANNEL_LINKEDIN_ANALYTICS === 'true' });
   if (linkedinPagesApp(config)) publishers.linkedin_page = new LinkedInPagePublisher();
@@ -436,6 +436,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             evidenceLockDays: config.EVIDENCE_LOCK_DAYS,
             channels: { broker: resolved.broker, publishers: channelPublishers(config), refreshers: channelRefreshers(config) },
             publicUrl: config.PUBLIC_URL,
+            brand: config.BRAND_NAME,
             // Bounce reports reach this deployment only with both inbound settings (as for the invite mail).
             mail: { mailer: resolved.mail, templates: MAIL_TEMPLATES, brand: config.BRAND_NAME, bounceDomain: config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null },
             archive: { store: archiveStore, lagSeconds: config.ARCHIVE_LAG_SECONDS },

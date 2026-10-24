@@ -91,7 +91,9 @@ export function icsTime(at: Date): string {
   return at.toISOString().replace(/\.\d{3}Z$/, 'Z').replace(/[-:]/g, '');
 }
 
-export function renderIcs(feed: CalendarFeed, publicUrl: string, now: Date): string {
+// brand: the product name users see (BRAND_NAME, #1045), in the calendar's name and each event's link line. PRODID and
+// UID keep "Crove": they identify the software, not the product.
+export function renderIcs(feed: CalendarFeed, publicUrl: string, now: Date, brand = 'Crove'): string {
   const base = publicUrl.replace(/\/+$/, '');
   const stamp = icsTime(now);
   const lines = [
@@ -100,7 +102,7 @@ export function renderIcs(feed: CalendarFeed, publicUrl: string, now: Date): str
     'PRODID:-//Crove//Social//VI',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
-    `X-WR-CALNAME:${escapeText(`${feed.name} - Crove`)}`,
+    `X-WR-CALNAME:${escapeText(`${feed.name} - ${brand}`)}`,
     // How often clients that honour it should fetch the feed again.
     'REFRESH-INTERVAL;VALUE=DURATION:PT1H',
     'X-PUBLISHED-TTL:PT1H',
@@ -117,7 +119,7 @@ export function renderIcs(feed: CalendarFeed, publicUrl: string, now: Date): str
       `DTSTART:${icsTime(at)}`,
       'DURATION:PT15M',
       `SUMMARY:${escapeText(e.title ? `${label}: ${e.title}` : label)}`,
-      `DESCRIPTION:${escapeText(`Trạng thái: ${STATUS[e.status] ?? e.status}\nMở trong Crove: ${url}`)}`,
+      `DESCRIPTION:${escapeText(`Trạng thái: ${STATUS[e.status] ?? e.status}\nMở trong ${brand}: ${url}`)}`,
       `URL:${url}`,
       'END:VEVENT',
     );

@@ -4,7 +4,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTranslator } from 'use-intl/core';
-import { DEFAULT_BRAND, brandCatalog, brandName, setBrandName, withBrand } from '../src/i18n/brand.ts';
+import { DEFAULT_BRAND, brandCatalog, brandFileName, brandName, setBrandName, withBrand } from '../src/i18n/brand.ts';
 import { LOCALES } from '../src/i18n/locale.ts';
 import { SOURCE_CATALOGS, catalog, translator } from '../src/i18n/runtime.ts';
 import { firmGuide } from '../src/lib/firm-guide.ts';
@@ -82,6 +82,20 @@ describe('brand name (#1040)', () => {
     const guides = [...quickGuide(), ...firmGuide()].flatMap((step) => [step.title, ...step.items]).join('\n');
     expect(guides).toContain('Tên Mới');
     expect(guides).not.toMatch(/\bCrove\b|\{brand\}/);
+  });
+
+  // #1045: downloaded files are named after the product too, so no message spells a file name with "crove-".
+  it('names downloaded files after the brand', () => {
+    for (const locale of LOCALES) {
+      const offenders = messages(SOURCE_CATALOGS[locale]).filter(([, text]) => /\bcrove-/.test(text));
+      expect(offenders, locale).toEqual([]);
+    }
+    expect(catalog('vi').journal.exportFile).toBe('crove-but-toan-{org}.xlsx');
+    setBrandName('Tên Mới');
+    expect(catalog('vi').journal.exportFile).toBe('ten-moi-but-toan-{org}.xlsx');
+    expect(brandFileName('crove-ke-hoach-2026-10.csv')).toBe('ten-moi-ke-hoach-2026-10.csv');
+    expect(brandFileName('chung-tu.pdf')).toBe('chung-tu.pdf');
+    expect(withBrand('Tệp {brandSlug}-but-toan.xlsx của {brand}')).toBe('Tệp ten-moi-but-toan.xlsx của Tên Mới');
   });
 
   it('keeps an apostrophe literal inside ICU messages', () => {

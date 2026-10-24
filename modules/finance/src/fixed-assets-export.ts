@@ -8,9 +8,10 @@ import { setMoneyCell as setMoney, setTextCell as setText } from './export.ts';
 
 const monthLabel = (month: string) => `${month.slice(5, 7)}/${month.slice(0, 4)}`;
 
-export async function buildFixedAssetsWorkbook(assets: readonly FixedAsset[], orgName: string): Promise<Uint8Array> {
+// brand: the product name users see (BRAND_NAME, #1045), as the file's creator.
+export async function buildFixedAssetsWorkbook(assets: readonly FixedAsset[], orgName: string, brand = 'Crove'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Crove';
+  workbook.creator = brand;
   workbook.title = `Sổ tài sản cố định và chi phí trả trước ${orgName}`;
   const sheet = workbook.addWorksheet('Sổ tài sản');
   sheet.columns = [

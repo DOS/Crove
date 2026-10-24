@@ -115,7 +115,7 @@ export const portalSyncCall = defineCommand({
         throw new DomainError(
           'PORTAL_PASSWORD_GUARD',
           429,
-          `Đã có ${PORTAL_WRONG_PASSWORD_LIMIT} lần đăng nhập cổng thuế không thành công cho khách hàng này kể từ lần đăng nhập được gần nhất. Crove tạm dừng đăng nhập để tài khoản của khách hàng không bị khóa; hãy kiểm tra lại mật khẩu với khách hàng (hoặc đăng nhập thử trên hoadondientu.gdt.gov.vn) rồi thử lại sau một ngày`,
+          `Đã có ${PORTAL_WRONG_PASSWORD_LIMIT} lần đăng nhập cổng thuế không thành công cho khách hàng này kể từ lần đăng nhập được gần nhất. Hệ thống tạm dừng đăng nhập để tài khoản của khách hàng không bị khóa; hãy kiểm tra lại mật khẩu với khách hàng (hoặc đăng nhập thử trên hoadondientu.gdt.gov.vn) rồi thử lại sau một ngày`,
         );
       }
       // Another login for this client is still waiting for the portal (perhaps on another API instance).

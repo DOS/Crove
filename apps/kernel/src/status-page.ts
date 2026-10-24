@@ -106,7 +106,10 @@ function vietnamTime(iso: string): string {
 
 // Every text on the page is a constant of this file or a formatted date: nothing from the request or the file is
 // written into it as text.
-export function renderStatusPage(view: StatusView): string {
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+
+// brand: the product name users see (BRAND_NAME, #1045).
+export function renderStatusPage(view: StatusView, brand = 'Crove'): string {
   const rows = view.components
     .map((c) => `<li><span>${c.label}</span><span class="state ${c.state}">${STATE_TEXT[c.state]}</span></li>`)
     .join('\n');
@@ -124,7 +127,7 @@ export function renderStatusPage(view: StatusView): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <meta http-equiv="refresh" content="300">
-<title>Trạng thái hệ thống - Crove</title>
+<title>Trạng thái hệ thống - ${escapeHtml(brand)}</title>
 <style>
 :root { color-scheme: light dark; --bg: #fafafa; --fg: #18181b; --muted: #52525b; --card: #ffffff; --line: #e4e4e7; --ok: #15803d; --problem: #b91c1c; }
 @media (prefers-color-scheme: dark) { :root { --bg: #09090b; --fg: #fafafa; --muted: #a1a1aa; --card: #18181b; --line: #27272a; --ok: #4ade80; --problem: #f87171; } }
