@@ -115,7 +115,7 @@ suite('WORM fact stream: archive and tamper detection on PostgreSQL (#891)', () 
       users.push(userId);
       orgs.push(orgId);
       await post(userId, orgId, '100000');
-      await post(userId, orgId, '250000.5');
+      await post(userId, orgId, '250001');
     }
     await age();
     dir = mkdtempSync(join(tmpdir(), 'crove-worm-'));

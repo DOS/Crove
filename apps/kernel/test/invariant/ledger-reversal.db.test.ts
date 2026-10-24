@@ -581,8 +581,8 @@ suite('journal reversal on PostgreSQL (#138)', () => {
   it('reverses a large entry once, checked once per entry', async () => {
     const lines: Line[] = [];
     for (let i = 1; i <= 400; i += 2) {
-      lines.push({ line_no: i, account_code: '6422', debit: `${i}.25`, credit: '0', memo: `dòng ${i}` });
-      lines.push({ line_no: i + 1, account_code: '331', debit: '0', credit: `${i}.25`, memo: null });
+      lines.push({ line_no: i, account_code: '6422', debit: `${i}250`, credit: '0', memo: `dòng ${i}` });
+      lines.push({ line_no: i + 1, account_code: '331', debit: '0', credit: `${i}250`, memo: null });
     }
     const entry = await original(users.solo, solo, lines);
     const { proposalId } = await request(solo, users.solo, { entryId: entry });
