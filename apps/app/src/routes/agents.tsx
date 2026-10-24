@@ -557,6 +557,7 @@ function Templates({ perms }: { perms: AgentPermissions }) {
 
 function BudgetForm({ agents }: { agents: Agent[] }) {
   const t = useTranslations('agents');
+  const moduleName = useModuleName();
   const modules = getConfig().modules;
   const [scope, setScope] = useState<(typeof SCOPES)[number]>('org');
   const [target, setTarget] = useState('*');
@@ -566,7 +567,7 @@ function BudgetForm({ agents }: { agents: Agent[] }) {
   const [touched, setTouched] = useState(false);
   const set = useMutation(orpc.agents.setBudget.mutationOptions({ onSuccess: refresh }));
   const targets: Array<{ value: string; label: string }> =
-    scope === 'org' ? [{ value: '*', label: t('scope.org') }] : scope === 'module' ? modules.map((m) => ({ value: m, label: m })) : agents.map((a) => ({ value: a.id, label: a.displayName }));
+    scope === 'org' ? [{ value: '*', label: t('scope.org') }] : scope === 'module' ? modules.map((m) => ({ value: m, label: moduleName(m) })) : agents.map((a) => ({ value: a.id, label: a.displayName }));
   const amountOk = isBudgetAmount(limit);
   const warn = Number(warnPercent);
   const warnOk = Number.isInteger(warn) && warn >= 1 && warn <= 100;
@@ -636,10 +637,11 @@ function BudgetForm({ agents }: { agents: Agent[] }) {
 
 function Budgets({ agents, perms }: { agents: Agent[]; perms: AgentPermissions }) {
   const t = useTranslations('agents');
+  const moduleName = useModuleName();
   const f = useFormat();
   const budgets = useQuery(orpc.agents.budgets.queryOptions());
   const targetText = (scope: string, target: string) =>
-    scope === 'org' ? t('scope.org') : scope === 'module' ? t('scopeModule', { module: target }) : t('scopeAgent', { name: agents.find((a) => a.id === target)?.displayName ?? target });
+    scope === 'org' ? t('scope.org') : scope === 'module' ? t('scopeModule', { module: moduleName(target) }) : t('scopeAgent', { name: agents.find((a) => a.id === target)?.displayName ?? target });
   return (
     <section className="mt-8">
       <h2 className="text-sm font-semibold text-foreground">{t('budgetsTitle')}</h2>
