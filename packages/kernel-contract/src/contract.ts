@@ -81,6 +81,8 @@ import {
   zSocialChannelOptions,
   zSocialNotificationKind,
   zSocialNotifications,
+  zSocialPushStatus,
+  zSocialPushSubscribe,
   zSocialAccountTrend,
   zSocialSnippet,
   zSocialSnippetCreate,
@@ -782,6 +784,14 @@ export const contract = {
       mute: oc.input(z.strictObject({ kind: zSocialNotificationKind, muted: z.boolean() })).output(z.object({ kind: zSocialNotificationKind, muted: z.boolean() })),
       // The viewer's Social emails on or off (#579).
       mail: oc.input(z.strictObject({ enabled: z.boolean() })).output(z.object({ enabled: z.boolean() })),
+      // Browser push (#1238), per device: whether the deployment offers it (VAPID keys set) with the key browsers
+      // subscribe with, the viewer's devices and whether the asking browser (its endpoint) is one; subscribe answers
+      // PUSH_DISABLED without the keys. Each member sees and changes only their own; no endpoint or key comes back.
+      push: {
+        status: oc.input(z.strictObject({ endpoint: z.string().max(2048).nullable() })).output(zSocialPushStatus),
+        subscribe: oc.input(zSocialPushSubscribe).output(z.object({ id: zId })),
+        unsubscribe: oc.input(z.union([z.strictObject({ endpoint: z.string().min(1).max(2048) }), z.strictObject({ id: zId })])).output(z.object({ removed: z.number().int() })),
+      },
     },
     // Account growth (#645): each channel's daily followers and reach over the last days.
     accounts: {

@@ -15,6 +15,7 @@ import type { Db, MemberRole, SocialReportSection } from '@crove/db';
 import { createMailMessage } from '@crove/kernel';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type Runtime } from '@crove/kernel-runtime';
 import { isValidTimeZone } from './domain/queue.ts';
+import { storedZone } from './zones.ts';
 import { nextReportRun, reportPeriodAt, type ReportScheduleSpec } from './domain/report-schedule.ts';
 import { audienceOf, newReportToken, reportTokenHash, zReportNote } from './report-links.ts';
 import { reportGoals } from './goals.ts';
@@ -75,6 +76,8 @@ export const reportScheduleSave = defineCommand({
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
     if (!isValidTimeZone(input.timeZone)) throw new DomainError('VALIDATION', 422, 'Múi giờ không hợp lệ');
+    // As PostgreSQL spells it (#1115), so the digest's zone rule finds it.
+    const timeZone = await storedZone(ctx.trx, input.timeZone);
     const weekly = input.cadence === 'weekly';
     const weekday = weekly ? (input.weekday ?? null) : null;
     const monthDay = weekly ? null : (input.monthDay ?? null);
@@ -85,7 +88,7 @@ export const reportScheduleSave = defineCommand({
       const found = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', ids).execute();
       if (found.length !== ids.length) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
     }
-    const spec: ReportScheduleSpec = { cadence: input.cadence, weekday, monthDay, sendHour: input.sendHour, timeZone: input.timeZone };
+    const spec: ReportScheduleSpec = { cadence: input.cadence, weekday, monthDay, sendHour: input.sendHour, timeZone };
     // The link options as saved: what the input says, else the schedule's own (a change) or none (a new one).
     const current = input.scheduleId
       ? await ctx.trx
@@ -113,7 +116,7 @@ export const reportScheduleSave = defineCommand({
       weekday,
       month_day: monthDay,
       send_hour: input.sendHour,
-      time_zone: input.timeZone,
+      time_zone: timeZone,
       period: input.period,
       connection_ids: ids,
       recipients,
