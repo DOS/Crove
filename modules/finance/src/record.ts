@@ -181,6 +181,25 @@ async function assertDirection(ctx: CommandContext, payload: PurchaseProposal): 
 // months). Whether the invoice's own date is closed (its month locked, or on or before the opening entry) is checked
 // once the entry is posted (lateReason), under the lock the posting guard holds. The guard itself refuses a posting date
 // inside the locked months or on or before the opening entry.
+// The first amount a proposal books in VND that has a fraction of a dong (a line or a total), or null. A foreign-currency
+// invoice's booked amounts are its VND conversion, so they are read the same way.
+export function belowOneDongBooked(payload: Pick<PurchaseProposal, 'invoice' | 'lines'>): string | null {
+  const amounts = [...payload.lines.map((l) => l.amount), payload.invoice.subtotal, payload.invoice.vatTotal, payload.invoice.total];
+  return amounts.find((a) => !money(a).isInteger()) ?? null;
+}
+
+// The refusal of an invoice with an amount below one dong (#1282). Nothing is rounded: where the difference goes is the
+// accountant's decision (#1308).
+export function amountBelowDongError(amount: string | null): DomainError {
+  const shown = amount === null ? '' : ` (${amount})`;
+  return new DomainError(
+    'AMOUNT_BELOW_DONG',
+    422,
+    `Hóa đơn có số tiền lẻ dưới một đồng${shown}, mà sổ VND không ghi số lẻ, nên chưa ghi sổ được. Kế toán cần quyết định cách làm tròn; trong lúc chờ, có thể từ chối đề xuất và xin người bán hóa đơn điều chỉnh.`,
+    amount === null ? undefined : { amount },
+  );
+}
+
 export function latePostingRefusal(direction: DocumentDirection, issueDate: string, postingDate: string, today: string): DomainError | null {
   if (direction === 'sale') {
     return new DomainError('POSTING_DATE_NOT_ALLOWED', 422, 'Hóa đơn bán ra ghi sổ theo ngày lập hóa đơn, không chọn được ngày ghi sổ khác', { postingDate });
@@ -340,6 +359,13 @@ export const recordPurchase = defineCommand({
       throw new DomainError('FOREIGN_MISMATCH', 422, 'Hóa đơn VND không có tỷ giá quy đổi');
     }
     const failed = payload.checks.filter((c) => c.status === 'fail');
+    // An amount below one dong (#1282): the VND ledger refuses it rather than round it, and how to round is the
+    // accountant's decision (#1308). Read from the amounts being booked, so a proposal stored before the amount_scale
+    // check is held here too, before anything is written, and never only at the posting definer.
+    const fraction = belowOneDongBooked(payload);
+    if (fraction !== null || failed.some((c) => c.id === 'amount_scale')) {
+      throw amountBelowDongError(fraction);
+    }
     if (failed.some((c) => BLOCKING_CHECK_IDS.includes(c.id))) {
       throw new DomainError('CHECKS_BLOCKING', 422, 'Số tiền trên hóa đơn không khớp nhau nên không ghi sổ được; hãy từ chối và xin hóa đơn điều chỉnh');
     }
