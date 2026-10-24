@@ -46,6 +46,7 @@ import {
   validMove,
   validReplace,
   type AddChannelResult,
+  type ArchiveAction,
   type AssignEdit,
   type BulkAction,
   type BulkDuplicate,
@@ -93,16 +94,19 @@ const previewReplace = (edit: ReplaceEdit) => (postIds: string[]) => client.soci
 const editReplace = (edit: ReplaceEdit) => (postIds: string[]) => client.social.posts.bulkReplace({ postIds, ...edit });
 // One channel on every post (#1178).
 const editAddChannel = (connectionId: string) => (postIds: string[]) => client.social.posts.bulkAddChannel({ postIds, connectionId });
+// Out of the lists, or back (#1299).
+const archivePosts = (action: ArchiveAction) => (postIds: string[]) => (action === 'archive' ? client.social.posts.bulkArchive({ postIds }) : client.social.posts.bulkRestore({ postIds }));
 
 type Outcome =
   | { action: Exclude<PostAction, 'submit'>; result: BulkResult }
   | { action: 'submit'; result: SubmitResult }
   | { action: 'move'; move: BulkMove; results: MovePostResult[] }
   | { action: 'duplicate'; duplicate: BulkDuplicate; results: DuplicatePostResult[] }
-  | { action: Exclude<EditAction, 'addChannel'>; result: EditResult }
+  | { action: Exclude<EditAction, 'addChannel'> | ArchiveAction; result: EditResult }
   | { action: 'addChannel'; connectionId: string; result: AddChannelResult };
 type Job =
   | { action: PostAction }
+  | { action: ArchiveAction }
   | { action: 'move'; move: BulkMove }
   | { action: 'duplicate'; duplicate: BulkDuplicate }
   | { action: 'labels'; edit: LabelEdit }
@@ -203,6 +207,7 @@ export function BulkBar({
       if (job.action === 'assign') return { action: 'assign', result: await runEdit(ids, editAssign(job.input), step) };
       if (job.action === 'replace') return { action: 'replace', result: await runEdit(ids, editReplace(job.edit), step, BULK_REPLACE_MAX) };
       if (job.action === 'addChannel') return { action: 'addChannel', connectionId: job.connectionId, result: await runAddChannel(ids, editAddChannel(job.connectionId), step) };
+      if (job.action === 'archive' || job.action === 'restore') return { action: job.action, result: await runEdit(ids, archivePosts(job.action), step) };
       if (job.action === 'submit') return { action: 'submit', result: submitResult(await runBulk(posts, 'submit', canDecide, send)) };
       return { action: job.action, result: await runBulk(posts, job.action, canDecide, send) };
     },
@@ -238,6 +243,7 @@ export function BulkBar({
       return;
     }
     if (action === 'cancel' && !window.confirm(t('confirmCancel', { count: posts.length }))) return;
+    if (action === 'archive' && !window.confirm(t('confirmArchive', { count: posts.length }))) return;
     snapshot();
     run.mutate({ action });
   };
@@ -316,7 +322,7 @@ export function BulkBar({
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-sm text-foreground">{t('selected', { count: posts.length })}</span>
             {shown.map((a) => (
-              <Button key={a} size="sm" variant={a === 'cancel' || form === a ? 'outline' : 'default'} disabled={busy} aria-expanded={FORMS.includes(a) ? form === a : undefined} onClick={() => start(a)}>
+              <Button key={a} size="sm" variant={a === 'cancel' || a === 'archive' || form === a ? 'outline' : 'default'} disabled={busy} aria-expanded={FORMS.includes(a) ? form === a : undefined} onClick={() => start(a)}>
                 {t(`action.${a}`)}
               </Button>
             ))}
@@ -490,7 +496,16 @@ export function BulkBar({
           )}
           {progress && (
             <p className="text-xs text-muted-foreground">
-              {t(previewing.isPending ? 'replace.progress' : form === 'duplicate' ? 'duplicate.progress' : form === 'labels' || form === 'assign' || form === 'replace' || form === 'addChannel' ? 'edit.progress' : 'move.progress', { done: progress.done, total: progress.total })}
+              {t(
+                previewing.isPending
+                  ? 'replace.progress'
+                  : form === 'duplicate'
+                    ? 'duplicate.progress'
+                    : form === 'labels' || form === 'assign' || form === 'replace' || form === 'addChannel' || run.variables?.action === 'archive' || run.variables?.action === 'restore'
+                      ? 'edit.progress'
+                      : 'move.progress',
+                { done: progress.done, total: progress.total },
+              )}
             </p>
           )}
         </Card>
@@ -590,7 +605,7 @@ export function BulkBar({
           ))}
         </Card>
       )}
-      {(result?.action === 'labels' || result?.action === 'assign' || result?.action === 'replace') && (
+      {(result?.action === 'labels' || result?.action === 'assign' || result?.action === 'replace' || result?.action === 'archive' || result?.action === 'restore') && (
         <Card className="block space-y-1 p-3 text-sm">
           <p className="text-foreground">{t('edit.result', { action: t(`action.${result.action}`), done: result.result.done.length, skipped: result.result.skipped.length, refused: result.result.refused.length })}</p>
           {result.result.skipped.map((s) => (

@@ -13,7 +13,7 @@ import { duplicatesOf } from './duplicates.ts';
 import { insertVariants, writePostMedia } from './posts.ts';
 import { refuseUnusableMedia } from './library.ts';
 import { coverOf } from './domain/channels.ts';
-import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
+import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, refuseArchived, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
 import { publishingHeld } from './publish-hold.ts';
 import { bannedCheckerOf, isBlocked } from './banned-words.ts';
@@ -256,10 +256,12 @@ export const postSetEvergreen = defineCommand({
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
-    await lockPost(ctx.trx, ctx.orgId, input.postId);
+    const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     // A member limited to some channels (#1081) turns reposts on or off only for a post wholly on those: the worker
     // reposts every channel it went out on, so either way the other channels' reposts would change.
     await refusePostWholly(ctx, input.postId);
+    // Turned on only for a post out of the archive (#1299); turning it off is always allowed.
+    if (input.days !== null) refuseArchived(post);
     // One kind of repeat per post (#979): a series' copies would hold its evergreen reposts back, and the other way round.
     if (input.days !== null) {
       const series = await ctx.trx.selectFrom('crove_social.post').select('recurrence').where('org_id', '=', ctx.orgId).where('id', '=', input.postId).executeTakeFirstOrThrow();

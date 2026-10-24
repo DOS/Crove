@@ -170,6 +170,17 @@ describe('BulkBar', () => {
     }
   });
 
+  it('offers archiving next to the list actions and restoring on the archived list (#1299)', () => {
+    const html = bar(false, ['submit', 'cancel', 'archive']);
+    expect(html).toContain(t.action.archive);
+    expect(html).not.toContain(t.action.restore);
+    const archived = bar(false, ['restore']);
+    expect(archived).toContain(t.action.restore);
+    expect(archived).not.toContain(t.action.archive);
+    expect(t.confirmArchive).toContain('Đã lưu trữ');
+    expect(enMessages.social.bulk.confirmArchive).toContain('Archived');
+  });
+
   it('names every skip reason the server gives, in both languages', () => {
     for (const reason of SOCIAL_BULK_SKIP_REASONS) {
       expect(t.edit.skip[reason]).toBeTruthy();

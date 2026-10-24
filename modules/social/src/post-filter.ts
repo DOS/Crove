@@ -1,5 +1,7 @@
 // Which posts the Social lists show for a filter (#574, #579, #1081): the one place social.post.list and the
 // multi-client home's figures (#1261, client-overview.ts) decide it, so a count on the home equals the list it opens.
+// Archived posts (#1299) are left out of every list, the calendar and the board, and are the only ones listed with
+// archived.
 import { sql } from 'kysely';
 import type { QueryContext } from '@crove/kernel-runtime';
 import { connectionInScope, postInScope, type ChannelScope } from './channel-access.ts';
@@ -14,6 +16,8 @@ export interface PostFilter {
   labelId?: string | undefined;
   assignee?: 'me' | undefined;
   undated?: true | undefined;
+  // Archived posts only (#1299); without it, none.
+  archived?: true | undefined;
   search?: string | undefined;
 }
 
@@ -22,7 +26,12 @@ export interface PostFilter {
 // connectionId outside the scope before (it lists nothing).
 export function postFilterQuery(ctx: Pick<QueryContext, 'trx' | 'orgId' | 'actor'>, scope: ChannelScope, input: PostFilter) {
   const mine = connectionInScope(scope, 'v.channel_connection_id');
-  let q = ctx.trx.selectFrom('crove_social.post as p').select('p.id').where('p.org_id', '=', ctx.orgId).where(postInScope(scope));
+  let q = ctx.trx
+    .selectFrom('crove_social.post as p')
+    .select('p.id')
+    .where('p.org_id', '=', ctx.orgId)
+    .where('p.archived_at', input.archived ? 'is not' : 'is', null)
+    .where(postInScope(scope));
   if (input.status) q = q.where('p.status', '=', input.status);
   if (input.assignee === 'me') q = q.where('p.assignee_user_id', '=', ctx.actor.type === 'user' ? ctx.actor.userId : '00000000-0000-0000-0000-000000000000');
   const variantWhere = (status: 'in_review' | null) =>

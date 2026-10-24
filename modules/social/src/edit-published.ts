@@ -19,7 +19,7 @@ import { effectiveContent } from './domain/approval.ts';
 import { editRefusal } from './domain/channels.ts';
 import { callRevision, publishCallKey } from './domain/publish.ts';
 import { COMMENT_STALE_MS, type CommentCall } from './comments.ts';
-import { base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, mediaKind, overrides, setVariant, settingsOf, variantPost, type PostRow, type Trx, type VariantRow } from './variants.ts';
+import { base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, mediaKind, overrides, refuseArchived, setVariant, settingsOf, variantPost, type PostRow, type Trx, type VariantRow } from './variants.ts';
 import { refuseChannels } from './channel-access.ts';
 import { bannedCheckerOf, isBlocked, refuseBannedWords } from './banned-words.ts';
 import { publishingHeld } from './publish-hold.ts';
@@ -159,6 +159,8 @@ export const variantEditPublished = defineCommand({
     const { post, v } = await lockVariant(ctx, input.variantId);
     // Only on a channel the caller may use (#1081).
     await refuseChannels(ctx, [v.channel_connection_id]);
+    // Not on an archived post (#1299): restored first, as for any other edit.
+    refuseArchived(post);
     if (v.status !== 'published') throw new DomainError('EDIT_NOT_PUBLISHED', 409, 'Chỉ sửa được nội dung của kênh đã đăng', { variantId: v.id, status: v.status });
     // Confirmed by hand as published (social.variant.resolve) without the platform's id, or a draft kept in the
     // platform's app (#903): nothing to name in the call.

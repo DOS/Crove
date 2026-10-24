@@ -30,7 +30,8 @@
 // - in_flight: the change would reach a channel going out;
 // - over_limit: a field over what an edit takes, or a channel that fitted its rules and would no longer;
 // - invalid_link: a link that would no longer be one;
-// - banned_words: a channel the change would give a 'block' word it did not have (#1055).
+// - banned_words: a channel the change would give a 'block' word it did not have (#1055);
+// - archived: the post is archived (#1299), and is restored before it is edited.
 // A refusal of a post's first nested command leaves only that post out; one of a later nested command of the same post
 // fails the whole command, so a post is never left half replaced (the checks above make it rare).
 //
@@ -291,6 +292,8 @@ function planPost(postId: string, loaded: LoadedPost | undefined, scope: Channel
   if (!loaded) return leave('not_found', []);
   const { post, variants } = loaded;
   if (scope !== null && !variants.some((v) => scope.has(v.channel_connection_id))) return leave('not_allowed', []);
+  // An archived post (#1299) is not edited until it is restored.
+  if (post.archived_at !== null) return leave('archived', []);
   const live = variants.filter((v) => !FROZEN.has(v.status));
   // A channel's own content is replaced while it can still be edited, and only on the caller's channels.
   const editable = live.filter((v) => !v.content_frozen);
@@ -398,7 +401,7 @@ async function planReplace(ctx: Pick<QueryContext, 'trx' | 'orgId' | 'actor' | '
 }
 
 // The refusals of a post's first nested edit that leave only that post out.
-const LEFT_OUT: Readonly<Partial<Record<string, SocialBulkSkipReason>>> = { FORBIDDEN: 'not_allowed', CHANNEL_NOT_ALLOWED: 'not_allowed', VARIANT_IN_FLIGHT: 'in_flight', VARIANT_STATE: 'in_flight' };
+const LEFT_OUT: Readonly<Partial<Record<string, SocialBulkSkipReason>>> = { FORBIDDEN: 'not_allowed', CHANNEL_NOT_ALLOWED: 'not_allowed', VARIANT_IN_FLIGHT: 'in_flight', VARIANT_STATE: 'in_flight', POST_ARCHIVED: 'archived' };
 
 // The post's nested edits, one after another: the reason it was left out, or null when it changed.
 async function applyPlan(ctx: CommandContext, plan: ReplacePlan, revision: number): Promise<SocialBulkSkipReason | null> {
@@ -462,6 +465,7 @@ const ADD_LEFT_OUT: Readonly<Partial<Record<string, SocialBulkSkipReason>>> = {
   POST_NOT_FOUND: 'not_found',
   CHANNEL_ALREADY_IN_POST: 'already_on',
   TOO_MANY_CHANNELS: 'too_many_channels',
+  POST_ARCHIVED: 'archived',
 };
 
 // Why a post would be left out, or null when the channel can be added to it.
@@ -469,6 +473,7 @@ function addSkip(loaded: LoadedPost | undefined, scope: ChannelScope, connection
   if (!loaded) return 'not_found';
   const { variants } = loaded;
   if (scope !== null && !variants.some((v) => scope.has(v.channel_connection_id))) return 'not_allowed';
+  if (loaded.post.archived_at !== null) return 'archived';
   if (variants.every((v) => FROZEN.has(v.status))) return 'published';
   // One live variant per channel (a cancelled one is history: the channel can be added again).
   if (variants.some((v) => v.channel_connection_id === connectionId && v.status !== 'cancelled')) return 'already_on';

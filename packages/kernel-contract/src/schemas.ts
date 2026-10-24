@@ -1421,6 +1421,9 @@ export const zSocialPost = z.object({
   openComments: z.number().int().min(0),
   // The idea it was made from (#701); on a single post's read only.
   idea: z.object({ id: zId, title: z.string() }).nullable().optional(),
+  // When and by whom it was archived (#1299); null while it is not.
+  archivedAt: z.string().nullable(),
+  archivedBy: zId.nullable(),
 });
 
 // What a variant says, as the review diff compares it (#944); a media file's mime is null when the org no longer has it.
@@ -1671,7 +1674,9 @@ export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelNam
 // post may carry. A find and replace (#1144) also leaves out a post where nothing matches, one with a channel going out
 // that the change would reach, one the change would take over a length or channel limit, one whose link would no longer
 // be a link, and one the change would give a blocked word. Adding a channel (#1178) also leaves out a post already on
-// that channel and one with as many channels as a post may have.
+// that channel and one with as many channels as a post may have. Archiving (#1299) also leaves out a post with a channel
+// scheduled or paused waiting to go out, one with a channel going out or waiting for a person, and one with a takedown
+// from its platform on its way.
 export const SOCIAL_BULK_EDIT_MAX = 100;
 export const SOCIAL_BULK_SKIP_REASONS = [
   'not_found',
@@ -1686,6 +1691,12 @@ export const SOCIAL_BULK_SKIP_REASONS = [
   'banned_words',
   'already_on',
   'too_many_channels',
+  'scheduled',
+  'removing',
+  // Find and replace and adding a channel leave out an archived post (#1299): it is restored first. Archiving leaves out
+  // an open copy of an evergreen or recurring post, which holds its source's next repeat back.
+  'archived',
+  'repeat_copy',
 ] as const;
 export type SocialBulkSkipReason = (typeof SOCIAL_BULK_SKIP_REASONS)[number];
 const unique = (ids: readonly string[]) => new Set(ids).size === ids.length;
@@ -1700,6 +1711,10 @@ export const zSocialBulkLabels = z
 // The assignee (null: nobody) of every post; dueAt null clears the due date, left out keeps each post's own.
 export const zSocialBulkAssign = z.strictObject({ postIds: zBulkPostIds, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable().optional() });
 export const zSocialBulkResult = z.object({ done: z.array(zId), skipped: z.array(z.object({ postId: zId, reason: z.enum(SOCIAL_BULK_SKIP_REASONS) })) });
+// Posts archived or restored (#1299): one, or up to SOCIAL_BULK_EDIT_MAX from the bulk bar with the bulk answer.
+export const zSocialPostArchive = z.strictObject({ postId: zId });
+export const zSocialPostArchived = z.object({ postId: zId, archived: z.boolean(), changed: z.boolean() });
+export const zSocialBulkArchive = z.strictObject({ postIds: zBulkPostIds });
 // One channel added to every post (#1178), as a draft with the post's content and planned time; the answer also says,
 // per channel added, what its rules still miss (an empty list: it already fits them).
 export const zSocialBulkAddChannel = z.strictObject({ postIds: zBulkPostIds, connectionId: zId });
@@ -1871,7 +1886,7 @@ export const zSocialSuggestionDecided = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'live_edit', 'live_edited', 'live_edit_failed', 'queue_moved', 'restored', 'labeled', 'assigned']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'live_edit', 'live_edited', 'live_edit_failed', 'queue_moved', 'restored', 'labeled', 'assigned', 'archived', 'unarchived']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),

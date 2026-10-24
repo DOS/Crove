@@ -526,6 +526,10 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         bulkReplacePreview: os.social.posts.bulkReplacePreview.handler(socialQuery('social.post.bulk_replace_preview')),
         bulkReplace: os.social.posts.bulkReplace.handler(socialCommand('social.post.bulk_replace')),
         bulkAddChannel: os.social.posts.bulkAddChannel.handler(socialCommand('social.post.bulk_add_channel')),
+        archive: os.social.posts.archive.handler(socialCommand('social.post.archive')),
+        restore: os.social.posts.restore.handler(socialCommand('social.post.restore')),
+        bulkArchive: os.social.posts.bulkArchive.handler(socialCommand('social.post.bulk_archive')),
+        bulkRestore: os.social.posts.bulkRestore.handler(socialCommand('social.post.bulk_restore')),
         createFromMedia: os.social.posts.createFromMedia.handler(({ context, input }) =>
           inSocial(context, (orgId, actor) => {
             const { idempotencyKey, ...rest } = input;
