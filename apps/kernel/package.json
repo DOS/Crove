@@ -24,6 +24,7 @@
     "@crove/kernel-runtime": "workspace:*",
     "@crove/l10n-vn": "workspace:*",
     "@crove/mail": "workspace:*",
+    "@crove/mod-crm": "workspace:*",
     "@crove/mod-finance": "workspace:*",
     "@crove/mod-social": "workspace:*",
     "@hono/node-server": "catalog:",
