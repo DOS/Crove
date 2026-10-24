@@ -181,6 +181,7 @@ import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts'
 import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
 import { zCalendarEventAdd, zCalendarEventCancel, zCalendarEventView, zCalendarRange, zCalendarSlot, zCalendarSlotsQuery, zMyCalendar, zWorkingHours } from './calendar.ts';
+import { zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
@@ -356,6 +357,16 @@ export const contract = {
           skipped: z.number().int().min(0),
         }),
       ),
+  },
+  // Crove CRM's booking slice (issue #1314), when the deployment runs the crm module: the org's event types, which
+  // everyone reads; owners and admins manage them all, a member those they host.
+  crm: {
+    eventTypes: {
+      list: oc.output(z.array(zEventType)),
+      create: oc.input(zEventTypeInput).output(zEventType),
+      update: oc.input(zEventTypeUpdate).output(zEventType),
+      setActive: oc.input(zEventTypeSetActive).output(zEventType),
+    },
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
   social: {

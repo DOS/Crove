@@ -1,0 +1,20 @@
+{
+  "name": "@crove/mod-crm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "description": "CRM module: booking pages first, event types hosted by members (plan docs/plan/calendar.md)",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@crove/db": "workspace:*",
+    "@crove/kernel-contract": "workspace:*",
+    "@crove/kernel-runtime": "workspace:*",
+    "zod": "catalog:"
+  }
+}
