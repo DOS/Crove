@@ -58,6 +58,11 @@ export const PERSONAL_DATA_COLUMNS = {
   },
   'crove_kernel.party.email': { kind: 'email', handling: 'erase', reason: 'Contact detail, not part of the books' },
   'crove_kernel.party.phone': { kind: 'phone', handling: 'erase', reason: 'Contact detail, not part of the books' },
+  // A visitor's booking on a public booking page (#1318).
+  'crove_crm.booking.visitor_name': { kind: 'name', handling: 'erase', reason: 'The name a visitor gave when booking a meeting' },
+  'crove_crm.booking.email': { kind: 'email', handling: 'erase', reason: 'The address a visitor gave when booking a meeting' },
+  'crove_crm.booking.phone': { kind: 'phone', handling: 'erase', reason: 'The number a visitor gave when booking a meeting' },
+  'crove_crm.booking.note': { kind: 'other', handling: 'erase', reason: 'Free text a visitor wrote when booking a meeting, which may name or describe them' },
   'crove_kernel.party.address': {
     kind: 'address',
     handling: 'erase',
@@ -230,6 +235,7 @@ export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
 //   recorded invoice, voucher or journal line names also loses its tax code and its name (a placeholder);
 // - the sender of forwarded mails and the recipient of mails Crove sent (the keyed hash stays, so a suppression holds);
 // - the org's contact email;
+// - the visitor's name, email, phone and note on bookings from a public booking page;
 // - the address in Social report schedules (a schedule left with nobody to mail is deleted).
 // What the law or an append-only record keeps (the names and tax codes of parties in the books and of the legal entities
 // the org keeps books for, #1312, cash vouchers, the tax portal's lists, invites, review feedback, and the original files
@@ -286,6 +292,22 @@ export const personalDataErase = defineCommand({
       } else {
         keptParties += 1;
       }
+    }
+
+    // Bookings the visitor made on a public booking page (#1318), matched by their email or phone: the visitor's name,
+    // email, phone and note all go (the booking keeps its time and its link to the calendar event).
+    const bookingMatch = sql<boolean>`(${match('email', 'b.email') ?? never} OR ${match('phone', 'b.phone') ?? never})`;
+    const { rows: bookings } = await sql<{ visitor_name: boolean; email: boolean; phone: boolean; note: boolean }>`
+      UPDATE crove_crm.booking b SET visitor_name = NULL, email = NULL, phone = NULL, note = NULL
+        FROM crove_crm.booking o
+       WHERE o.org_id = b.org_id AND o.id = b.id AND b.org_id = ${ctx.orgId}::uuid AND ${bookingMatch}
+       RETURNING o.visitor_name IS NOT NULL AS visitor_name, o.email IS NOT NULL AS email, o.phone IS NOT NULL AS phone,
+                 o.note IS NOT NULL AS note`.execute(ctx.trx);
+    for (const b of bookings) {
+      add('crove_crm.booking.visitor_name', Number(b.visitor_name));
+      add('crove_crm.booking.email', Number(b.email));
+      add('crove_crm.booking.phone', Number(b.phone));
+      add('crove_crm.booking.note', Number(b.note));
     }
 
     if (probe.kind === 'email') {

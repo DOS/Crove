@@ -35,6 +35,8 @@ const PUBLIC: Record<string, string> = {
   '/cal/:file': 'the posting calendar feed (#862): an unguessable feed token in the file name is the credential',
   '/l/:code': 'short link redirects (#706): public by design, they only redirect to the stored target',
   '/b/:slug': 'link-in-bio pages (#707): public by design',
+  '/api/booking/:org/:type':
+    "a booking page's event type, its free slots and the booking itself (#1318): public by design, rate limited per IP and per event type; it shows free slots only, nothing of the host's calendar, and books through one command",
   '/b/:slug/go/:target': 'a link-in-bio link: public by design, redirects to the stored target',
   '/b/:slug/img/:file': 'a link-in-bio image: public by design',
   '/assets/*': "the SPA's static files",
@@ -45,10 +47,7 @@ const PUBLIC: Record<string, string> = {
 // Public routes an open PR adds. CI runs the base branch's copy of this suite on a PR, so a new public route is listed
 // here first, in a PR of its own; the PR that adds the route moves it into PUBLIC. A route here may be public and may
 // not exist yet; the stale-list check below skips it, and nothing else does.
-const PENDING: Record<string, string> = {
-  '/api/booking/:org/:type':
-    "a booking page's event type, its free slots and the booking itself (#1318): public by design, rate limited per IP and per event type; it shows free slots only, nothing of the host's calendar, and books through one command",
-};
+const PENDING: Record<string, string> = {};
 const isPublic = (path: string) => Object.hasOwn(PUBLIC, path) || Object.hasOwn(PENDING, path);
 
 const WEB_DIST = mkdtempSync(join(tmpdir(), 'crove-route-coverage-'));
@@ -65,7 +64,7 @@ function app(authenticate: HttpDeps['authenticate']) {
     STATUS_FILE: join(WEB_DIST, 'status.json'),
     WEB_DIST,
   });
-  const runtime = { installed: () => true, modules: () => ['kernel', 'finance', 'social'] } as unknown as Runtime;
+  const runtime = { installed: () => true, modules: () => ['kernel', 'finance', 'social', 'crm'] } as unknown as Runtime;
   const unused = {} as never;
   return createHttpApp({
     config,
