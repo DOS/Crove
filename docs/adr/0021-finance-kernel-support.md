@@ -98,6 +98,18 @@ Reading the numbers:
 - **Close in order, reopen newest first.** A period can be closed only when every earlier period is closed (`EARLIER_PERIOD_OPEN`), and only the latest closed period can be reopened (`LATER_PERIOD_CLOSED`). Reopening is an R3 command (P11 fresh MFA), restricted to the chief accountant and owner, and needs a reason (`REASON_REQUIRED`).
 - **Corrections to a closed period are new entries in an open period**: a reversal of a January entry is dated in October and posts normally (measured).
 - `period_balance` stays as the plan has it (written only by the posting definer, reconciled nightly); the spike did not build it.
+- **As built for #1284** (`supabase/migrations/20261031030000_crove_finance_period_balance.sql`, `20261031030100_crove_finance_period_balance_backfill.sql`):
+  - The balances are append-only deltas, `crove_finance.period_balance_delta`: one row per (org, entry, account) with the entry's debit and credit totals and line count on that account in the entry's month, appended by `post_journal_entry()` after the entry balances. A replay appends nothing; a reversal appends its own swapped lines in its own month. A month's balance of an account is the sum of its rows. Tenant roles read their org's rows; only `crove_definer_tenant` inserts; the append-only triggers refuse every update and delete. Keyed per org until journal lines carry a legal entity (#1280).
+  - Not one row per (account, month) updated in place: that row is locked by every posting on the account until the posting commits, so all postings of an org on a shared account (331, 1111, 1331) would queue behind each other across series and document types, past this ADR's one counter row lock per posting. Measured on the real posting definer (postgres:17 in Docker on the owner's workstation, `pgbench` as `crove_app`, 2-line entries 6422 / 331 in one month, a new source each; two runs where shown):
+
+    | Variant | 1 client x 1,000 | 50 clients x 40 | 50 x 40, plus 5 ms more work after the posting in the same transaction |
+    |---|---|---|---|
+    | No balance table | 610 tps | 3,444 to 3,553 tps, p95 16 to 18 ms | not run |
+    | One row per account and month, `INSERT ... ON CONFLICT DO UPDATE` in account order | 495 tps | 904 to 939 tps, p95 147 to 151 ms | 142 tps, p95 1.27 s, max 4.0 s |
+    | Append-only deltas (as built) | 593 tps | 3,267 to 3,448 tps, p95 16 to 19 ms | 3,315 tps, p95 18 ms |
+
+  - The worker compares the deltas with the journal lines every night at 03:40 Vietnam time (`finance-period-balance-verify`, `crove_finance.period_balance_differences`, a definer owned by the tables' owner that only the worker login may call, reading both tables in one snapshot). Any difference fails the job without a retry, so the prober alerts on the dead letter as for the WORM verifier; the error names the org, account, month and entry and never an amount ([incidents.md](../runbooks/incidents.md)).
+  - Entries posted before the deltas get theirs from the second migration, under a `SHARE` lock on the ledger tables so a posting still running the old body is waited for. It skips entries that have deltas, so running it again only fills in what is missing.
 - A terminal "locked" state (after year-end finalization or a tax audit) is deferred to the customer interviews; it would be a status that `reopen_period()` refuses.
 - **As built for #329** (`supabase/migrations/20261020070000_crove_finance_period_lock.sql`, months only):
   - Because months close in order and reopen newest first, the closed months are always one range. They are stored as one `period_lock` row per org (`locked_from`, `locked_through`), not one `accounting_period` row per month.

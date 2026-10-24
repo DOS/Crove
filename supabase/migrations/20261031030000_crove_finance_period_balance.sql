@@ -70,6 +70,10 @@ SELECT crove_kernel.make_append_only('crove_finance.period_balance_delta');
 REVOKE INSERT ON crove_finance.period_balance_delta FROM crove_tenant;
 GRANT INSERT ON crove_finance.period_balance_delta TO crove_definer_tenant;
 
+-- The worker's queue for the nightly reconciliation (QUEUES.periodBalanceVerify in apps/kernel/src/jobs-schema.ts);
+-- create_queue skips a queue that exists.
+SELECT crove_jobs.create_queue('finance-period-balance-verify', '{"policy":"standard"}'::jsonb);
+
 -- ---------------------------------------------------------------------------
 -- The posting path, appending the deltas
 -- ---------------------------------------------------------------------------
