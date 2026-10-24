@@ -464,22 +464,19 @@ export const reviewReply = defineCommand({
     if (!answer) throw new DomainError('REVIEW_FEEDBACK_NOT_FOUND', 404, 'Không tìm thấy ý kiến này của khách');
     await refusePostOutside(ctx, answer.post_id);
     const body = input.body ? input.body : null;
-    const unchanged = body === answer.reply_body;
-    if (!unchanged) {
-      await ctx.trx
+    let row = { reply_body: answer.reply_body, replied_by: answer.replied_by, replied_at: answer.replied_at };
+    if (body !== answer.reply_body) {
+      // The guard trigger stamps replied_at with the database's time; the value set here is only a placeholder.
+      row = await ctx.trx
         .updateTable('crove_social.review_feedback')
         .set({ reply_body: body, replied_by: body === null ? null : userId, replied_at: body === null ? null : ctx.now })
         .where('org_id', '=', ctx.orgId)
         .where('id', '=', answer.id)
-        .execute();
+        .returning(['reply_body', 'replied_by', 'replied_at'])
+        .executeTakeFirstOrThrow();
     }
     ctx.audit({ post_id: answer.post_id, link_id: answer.link_id, cleared: body === null });
-    const reply =
-      body === null
-        ? null
-        : unchanged && answer.replied_by !== null && answer.replied_at !== null
-          ? { body, by: answer.replied_by, at: answer.replied_at.toISOString() }
-          : { body, by: userId, at: ctx.now.toISOString() };
+    const reply = row.reply_body !== null && row.replied_by !== null && row.replied_at !== null ? { body: row.reply_body, by: row.replied_by, at: row.replied_at.toISOString() } : null;
     return { feedbackId: answer.id, postId: answer.post_id, reply };
   },
 });

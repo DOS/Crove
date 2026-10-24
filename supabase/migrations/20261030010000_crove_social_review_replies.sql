@@ -6,7 +6,8 @@
 --                               three set or all three null. Members and above write them through
 --                               social.review.reply, so crove_tenant may update these three columns and nothing else
 --                               (a column grant); review_feedback_reply_guard refuses a change to the client's own
---                               fields whoever makes it, and a reply in another member's name. A reply is a column of
+--                               fields whoever makes it, and a reply in another member's name, and stamps a reply's
+--                               time itself (replied_at is the database's now()). A reply is a column of
 --                               the answer, never a row: the link's answer caps and the client's verdict count rows
 --                               and verdicts only, so they are unchanged.
 -- crove_social.review_link_post crove_tenant loses INSERT (#930): a plan's posts are frozen when the link is made, and
@@ -14,7 +15,8 @@
 --                               caller's org that has no posts yet, for the owner or admin who made it.
 --
 -- review_plan_page(link)        sends each post's body once (#930): the post carries it, and a channel's body is null
---                               when it shows the post's body, its own text otherwise; each answer carries the team's
+--                               when it shows the post's body, its own text otherwise; the post's body is null when no
+--                               live channel shows it, so text the client would not see never leaves; each answer carries the team's
 --                               reply ({ body, at } or null). Copied verbatim from
 --                               20261029160000_crove_social_channel_signature.sql with only those changes.
 -- review_link_view(token)       each answer carries the team's reply ({ body, at } or null). Copied verbatim from
@@ -42,7 +44,7 @@ END $$;
 GRANT UPDATE (reply_body, replied_by, replied_at) ON crove_social.review_feedback TO crove_tenant;
 
 -- The client's own fields never change, whoever updates the row (the column grant already keeps crove_tenant to the
--- reply), and a reply set or changed names the member of the context as its author.
+-- reply), and a reply set or changed names the member of the context as its author and takes the database's time.
 CREATE OR REPLACE FUNCTION crove_social.review_feedback_reply_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
@@ -54,6 +56,10 @@ BEGIN
      AND (NEW.reply_body, NEW.replied_by, NEW.replied_at) IS DISTINCT FROM (OLD.reply_body, OLD.replied_by, OLD.replied_at)
      AND NEW.replied_by IS DISTINCT FROM crove_kernel.ctx_user_id() THEN
     RAISE EXCEPTION 'REVIEW_REPLY_AUTHOR' USING ERRCODE = '42501';
+  END IF;
+  -- The caller never chooses a reply's time.
+  IF NEW.reply_body IS NOT NULL AND (NEW.reply_body, NEW.replied_by, NEW.replied_at) IS DISTINCT FROM (OLD.reply_body, OLD.replied_by, OLD.replied_at) THEN
+    NEW.replied_at := pg_catalog.now();
   END IF;
   RETURN NEW;
 END $$;
@@ -133,8 +139,12 @@ RETURNS jsonb LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
             'gone', false,
             'at', w.at,
             'changed', crove_social.review_content_key(p.org_id, p.id) <> lp.content_key,
-            -- The post's body, once (#930); a channel that shows it says null.
-            'body', p.body,
+            -- The post's body, once (#930), and only when a live channel shows it; such a channel says null.
+            'body', CASE WHEN EXISTS (
+                SELECT 1 FROM crove_social.post_variant v
+                WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status <> 'cancelled'
+                  AND (CASE WHEN v.content_frozen THEN coalesce(v.body, '') ELSE coalesce(v.body, p.body) END) IS NOT DISTINCT FROM p.body
+              ) THEN p.body END,
             'channels', coalesce((
               SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_object(
                 'provider', v.provider,

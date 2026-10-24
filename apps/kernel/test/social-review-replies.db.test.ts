@@ -242,6 +242,19 @@ suite('social review replies on PostgreSQL (#1301, #930)', () => {
       ['Zalo OA', 'Ưu đãi riêng Zalo'],
     ]);
     expect(page?.posts?.find((p) => p.id === second)?.feedback?.[0]?.reply).toBeNull();
+    // A post whose every channel has its own text: the post's own text is shown nowhere, so it is not sent either.
+    const { postId: ownTexts } = await exec<{ postId: string }>(o, o.member, 'social.post.create', {
+      body: 'Ghi chú nội bộ của nhóm',
+      scheduledAt: new Date(Date.now() + DAY).toISOString(),
+      channels: [
+        { connectionId: a, body: 'Bản Fanpage' },
+        { connectionId: b, body: 'Bản Zalo' },
+      ],
+    });
+    const own = await exec<{ token: string }>(o, o.owner, 'social.review_link.create_plan', { postIds: [ownTexts] });
+    const ownPage = await view(own.token);
+    expect(ownPage?.posts?.[0]).toMatchObject({ body: null, channels: [{ body: 'Bản Fanpage' }, { body: 'Bản Zalo' }] });
+    expect(JSON.stringify(ownPage)).not.toContain('Ghi chú nội bộ của nhóm');
     expect(JSON.stringify(page)).not.toContain(o.member);
     // Only the reply changed: the counts and the rest of the page are what they were.
     const withoutReplies = (p: Page) => JSON.parse(JSON.stringify(p), (key, value: unknown) => (key === 'reply' ? undefined : value)) as unknown;
@@ -293,6 +306,15 @@ suite('social review replies on PostgreSQL (#1301, #930)', () => {
       expect.objectContaining({ ok: false, code: '23514' }),
     );
     expect(await raw(o, o.member, 'UPDATE crove_social.review_feedback SET reply_body = $2, replied_by = $3, replied_at = now() WHERE id = $1', [id, 'Dạ', o.member])).toEqual({ ok: true, rows: 1 });
+    // The caller never chooses the reply's time: the guard stamps the database's now(), on a new text or a new time alike.
+    const stamped = async () => (await admin(async (c) => (await c.query<{ at: Date }>('SELECT replied_at AS at FROM crove_social.review_feedback WHERE id = $1', [id])).rows[0]?.at)) as Date;
+    const first = await stamped();
+    expect(Math.abs(first.getTime() - Date.now())).toBeLessThan(60_000);
+    expect(await raw(o, o.member, "UPDATE crove_social.review_feedback SET replied_at = '2020-01-01T00:00:00Z' WHERE id = $1", [id])).toEqual({ ok: true, rows: 1 });
+    expect((await stamped()).getTime()).toBeGreaterThanOrEqual(first.getTime());
+    expect(await raw(o, o.member, "UPDATE crove_social.review_feedback SET reply_body = 'Dạ ạ', replied_by = $2, replied_at = '2099-01-01T00:00:00Z' WHERE id = $1", [id, o.member])).toEqual({ ok: true, rows: 1 });
+    expect(Math.abs((await stamped()).getTime() - Date.now())).toBeLessThan(60_000);
+    expect(await raw(o, o.member, "UPDATE crove_social.review_feedback SET reply_body = 'Dạ', replied_at = '2099-01-01T00:00:00Z' WHERE id = $1", [id])).toEqual({ ok: true, rows: 1 });
     // Another org's answer is out of reach (RLS): nothing updated.
     const other = await org();
     expect(await raw(other, other.member, 'UPDATE crove_social.review_feedback SET reply_body = NULL, replied_by = NULL, replied_at = NULL WHERE id = $1', [id])).toEqual({ ok: true, rows: 0 });
