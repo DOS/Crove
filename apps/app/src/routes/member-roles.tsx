@@ -188,7 +188,7 @@ export function MemberRolesRow({
   const held = data.assignments.filter((a) => a.userId === userId);
   if (held.length === 0 && !isOwner) return null;
   return (
-    <div className="mt-2 flex flex-col items-end gap-2" aria-label={t('rolesOf', { name })}>
+    <div role="group" className="mt-2 flex flex-col items-end gap-2" aria-label={t('rolesOf', { name })}>
       {held.length > 0 && (
         <ul className="flex flex-col items-end gap-1">
           {held.map((a) => (
