@@ -29,8 +29,8 @@ function report(input: VatInvoiceView[], output: VatInvoiceView[] | null): VatRe
   return { period: vatPeriod('2026-09'), input: inputSide, output: outputSide, indicators: form01Indicators(inputSide.totals, outputSide.totals), paymentChecks: { items: [], vatAtRisk: '0', notDeductibleVat: '0', unchecked: 0, suggested25: inputSide.totals.vat } };
 }
 
-async function readBack(r: VatReport): Promise<ExcelJS.Workbook> {
-  const bytes = await buildVatWorkbook(r, 'demo');
+async function readBack(r: VatReport, brand?: string): Promise<ExcelJS.Workbook> {
+  const bytes = await buildVatWorkbook(r, 'demo', brand);
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
   return workbook;
@@ -77,6 +77,17 @@ describe('buildVatWorkbook', () => {
       [2, '2026-09-15', 'C26TAB', '99', '0101234564', 'Công ty TNHH ABC', '10%', 1000001, 100001, 'Thuế GTGT chia theo thuế suất là số ước tính'],
       [undefined, undefined, undefined, undefined, undefined, 'Tổng cộng', undefined, 3133334, 306668],
     ]);
+  });
+
+  // #1045: the file's creator and its notes name the product by BRAND_NAME, "Crove" when not given.
+  it('names the product by the brand it is given', async () => {
+    const crove = await readBack(report([], null));
+    expect(crove.creator).toBe('Crove');
+    const renamed = await readBack(report([], null), 'Tên Mới');
+    expect(renamed.creator).toBe('Tên Mới');
+    const text = renamed.worksheets.flatMap((sheet) => rowsOf(sheet).flat()).join('\n');
+    expect(text).toContain('Chưa nhập mã số thuế của tổ chức nên Tên Mới chưa nhận ra hóa đơn bán ra');
+    expect(text).not.toContain('Crove');
   });
 
   it('says when sales at an unknown rate are in no indicator, and names a VAT mismatch (#358)', async () => {

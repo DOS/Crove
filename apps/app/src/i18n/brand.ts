@@ -1,7 +1,8 @@
 // The product name users see (BRAND_NAME, issue #1040). Messages and guides say `{brand}` where they name the
 // product; the catalogs handed to use-intl have it filled in, so no t() call passes it. The kernel serves the name in
 // /api/config; main.tsx sets it once, before the first render, and "Crove" stands until then (or when the server
-// sends none).
+// sends none). `{brandSlug}` is the same name as a file-name prefix ("crove", "ten-moi"; #1045).
+import { brandSlug } from '@crove/kernel-contract';
 
 export const DEFAULT_BRAND = 'Crove';
 
@@ -32,9 +33,15 @@ export function subscribeBrand(listener: () => void): () => void {
   };
 }
 
-// Plain text (a guide line, a template sheet) with `{brand}` filled in.
+// Plain text (a guide line, a template sheet) with `{brand}` and `{brandSlug}` filled in.
 export function withBrand(text: string, brand = current): string {
-  return text.replaceAll('{brand}', brand);
+  return text.replaceAll('{brandSlug}', brandSlug(brand)).replaceAll('{brand}', brand);
+}
+
+// A downloaded file's name with the product name as its prefix: `crove-ke-hoach-2026-10.csv` under BRAND_NAME "Tên Mới"
+// is saved as `ten-moi-ke-hoach-2026-10.csv`. Names the kernel or a module chose keep their `crove-` there (#1045).
+export function brandFileName(name: string, brand = current): string {
+  return name.startsWith('crove-') ? `${brandSlug(brand)}-${name.slice('crove-'.length)}` : name;
 }
 
 // The name as literal text inside an ICU message: an apostrophe is doubled, the only character of the allowed set
@@ -45,13 +52,15 @@ function icuLiteral(brand: string): string {
 
 // `{brand}` replaced in every message of a catalog, at the type level too: use-intl then sees no `brand` argument, so
 // callers pass none. "Crove" stands in for the name in the types; only the arguments matter there.
+type FillSlug<S extends string> = S extends `${infer Head}{brandSlug}${infer Tail}` ? `${Head}crove${FillSlug<Tail>}` : S;
 type FillBrand<S extends string> = S extends `${infer Head}{brand}${infer Tail}` ? `${Head}Crove${FillBrand<Tail>}` : S;
-export type Branded<T> = { readonly [K in keyof T]: T[K] extends string ? FillBrand<T[K]> : Branded<T[K]> };
+export type Branded<T> = { readonly [K in keyof T]: T[K] extends string ? FillSlug<FillBrand<T[K]>> : Branded<T[K]> };
 
 export function brandCatalog<T extends object>(messages: T, brand: string): Branded<T> {
   const literal = icuLiteral(brand);
+  const slug = brandSlug(brand);
   const fill = (value: unknown): unknown => {
-    if (typeof value === 'string') return value.replaceAll('{brand}', literal);
+    if (typeof value === 'string') return value.replaceAll('{brandSlug}', slug).replaceAll('{brand}', literal);
     if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, fill(inner)]));
     return value;
   };

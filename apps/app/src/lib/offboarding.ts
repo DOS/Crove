@@ -1,5 +1,6 @@
 // Pure helpers for the offboarding card in settings (issue #212). No browser or API imports, so they are unit tested.
 import type { Locale } from '../i18n/locale.ts';
+import { brandFileName } from '../i18n/brand.ts';
 import type { Translate } from '../i18n/runtime.ts';
 import { describeError } from './errors.ts';
 
@@ -51,7 +52,7 @@ export function formatBytes(bytes: number, number: (value: number) => string): s
   return `${number(Math.round(value * 10) / 10)} ${units[unit]}`;
 }
 
-// The file name a download is saved as.
+// The file name a download is saved as, prefixed by the product name (BRAND_NAME, #1045).
 export function exportFileName(slug: string, part: string): string {
-  return `crove-${slug}-${part}.${part === 'manifest' ? 'json' : 'ndjson'}`;
+  return brandFileName(`crove-${slug}-${part}.${part === 'manifest' ? 'json' : 'ndjson'}`);
 }

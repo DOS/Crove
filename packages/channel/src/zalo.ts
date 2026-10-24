@@ -29,6 +29,9 @@ const IMAGE_MAX_BYTES = 1024 * 1024;
 export interface ZaloAppConfig {
   appId: string;
   appSecret: string;
+  // The article's author when the channel sets none: the product name users see (BRAND_NAME, #1045), "Crove" when not
+  // given.
+  defaultAuthor?: string;
 }
 
 // What the kernel seals for a Zalo OA connection. Both tokens rotate on every refresh.
@@ -252,10 +255,10 @@ interface ArticleImage {
 // the cover. The cover is shown at the top of the article, so the other images follow the text as image blocks, in
 // order, each captioned with its alt text (Zalo's caption is optional). Comments are on unless settings.comments is
 // false (#943).
-function articleOf(input: PublishInput, images: readonly ArticleImage[]) {
+function articleOf(input: PublishInput, images: readonly ArticleImage[], defaultAuthor = 'Crove') {
   const body = input.content.body.trim();
   const description = (body.split('\n').find((line) => line.trim()) ?? body).trim().slice(0, DESCRIPTION_MAX);
-  const author = typeof input.settings.author === 'string' && input.settings.author.trim() ? input.settings.author.trim().slice(0, AUTHOR_MAX) : 'Crove';
+  const author = typeof input.settings.author === 'string' && input.settings.author.trim() ? input.settings.author.trim().slice(0, AUTHOR_MAX) : defaultAuthor.slice(0, AUTHOR_MAX);
   const paragraphs = body.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
   if (input.content.linkUrl) paragraphs.push(input.content.linkUrl);
   const [cover, ...rest] = images;
@@ -278,9 +281,11 @@ export class ZaloOaPublisher implements Publisher {
   readonly provider = 'zalo_oa' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
   private readonly client: ZaloClient;
+  private readonly defaultAuthor: string;
 
   constructor(app: ZaloAppConfig, fetchImpl?: Fetch) {
     this.client = new ZaloClient(app, fetchImpl);
+    this.defaultAuthor = app.defaultAuthor ?? 'Crove';
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -298,7 +303,7 @@ export class ZaloOaPublisher implements Publisher {
     const images = media.map((m, i) => ({ url: urls[i] as string, caption: m.altText?.trim() || null }));
     let token: string;
     try {
-      const answer = await this.client.api<CreateAnswer>('POST', 'article/create', s.accessToken, { json: articleOf(input, images) });
+      const answer = await this.client.api<CreateAnswer>('POST', 'article/create', s.accessToken, { json: articleOf(input, images, this.defaultAuthor) });
       if (typeof answer?.token !== 'string' || !answer.token) return { kind: 'unknown', code: 'NO_ARTICLE_TOKEN' };
       token = answer.token;
     } catch (error) {

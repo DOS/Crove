@@ -85,9 +85,10 @@ export function setTextCell(cell: ExcelJS.Cell, value: string | null | undefined
   cell.numFmt = TEXT_FORMAT;
 }
 
-export async function buildJournalWorkbook(entries: JournalEntryView[], orgName: string): Promise<Uint8Array> {
+// brand: the product name users see (BRAND_NAME, #1045), as the file's creator.
+export async function buildJournalWorkbook(entries: JournalEntryView[], orgName: string, brand = 'Crove'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Crove';
+  workbook.creator = brand;
   const sheet = workbook.addWorksheet('Bút toán');
   sheet.columns = [
     { header: 'Ngày hạch toán', key: 'entryDate', width: 14 },

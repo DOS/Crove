@@ -181,7 +181,7 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
     .limit(VAT_PERIOD_LIMIT + 1)
     .execute();
   if (docs.length > VAT_PERIOD_LIMIT) {
-    throw new DomainError('PERIOD_TOO_LARGE', 422, `Kỳ này có hơn ${VAT_PERIOD_LIMIT} hóa đơn; Crove chưa lập được bảng kê lớn như vậy`);
+    throw new DomainError('PERIOD_TOO_LARGE', 422, `Kỳ này có hơn ${VAT_PERIOD_LIMIT} hóa đơn; hệ thống chưa lập được bảng kê lớn như vậy`);
   }
   if (docs.length === 0) return [];
   const lines = await ctx.trx

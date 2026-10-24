@@ -95,9 +95,9 @@ export const variantRemove = defineCommand({
     await refuseChannels(ctx, [v.channel_connection_id]);
     if (v.status === 'removed') return { postId: v.post_id, variantId: v.id, status: v.status, queued: false };
     if (v.status !== 'published') throw new DomainError('VARIANT_NOT_PUBLISHED', 409, 'Chỉ gỡ được kênh đã đăng', { variantId: v.id, status: v.status });
-    if (!isProvider(v.provider) || !REMOVE_READY.has(v.provider)) throw new DomainError('REMOVE_NOT_SUPPORTED', 422, 'Crove chưa gỡ được bài trên kênh này; hãy gỡ trực tiếp trên nền tảng', { variantId: v.id });
+    if (!isProvider(v.provider) || !REMOVE_READY.has(v.provider)) throw new DomainError('REMOVE_NOT_SUPPORTED', 422, 'Chưa gỡ được bài trên kênh này; hãy gỡ trực tiếp trên nền tảng', { variantId: v.id });
     // Confirmed by hand as published (social.variant.resolve) without the platform's id: nothing to name in the call.
-    if (!v.external_post_id) throw new DomainError('REMOVE_NO_PLATFORM_ID', 409, 'Crove không có mã bài trên nền tảng nên không gỡ được; hãy gỡ trực tiếp trên nền tảng', { variantId: v.id });
+    if (!v.external_post_id) throw new DomainError('REMOVE_NO_PLATFORM_ID', 409, 'Không có mã bài trên nền tảng nên không gỡ được; hãy gỡ trực tiếp trên nền tảng', { variantId: v.id });
     const calls = (await removeCallsOf(ctx.trx, ctx.orgId, [v])).get(v.id) ?? [];
     if (removeState(calls, v.remove_requested_at, ctx.now)?.state === 'pending') return { postId: v.post_id, variantId: v.id, status: v.status, queued: false };
     const reason = input.reason ? input.reason : null;

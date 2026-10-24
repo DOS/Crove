@@ -175,9 +175,10 @@ function partySheet(workbook: ExcelJS.Workbook, name: string, title: string, led
   setText(note.getCell('party'), 'Số âm: khoản trả trước');
 }
 
-export async function buildLedgerWorkbook(book: LedgerBook, orgName: string): Promise<Uint8Array> {
+// brand: the product name users see (BRAND_NAME, #1045), as the file's creator.
+export async function buildLedgerWorkbook(book: LedgerBook, orgName: string, brand = 'Crove'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Crove';
+  workbook.creator = brand;
   workbook.title = `Sổ sách ${book.period.period} ${orgName}`;
   const range = `kỳ ${book.period.period} (${book.period.from} đến ${book.period.to})`;
   trialBalanceSheet(workbook, book, range);

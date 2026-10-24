@@ -388,7 +388,7 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string, period
     .limit(PORTAL_RECONCILE_LIMIT + 1)
     .execute();
   if (documents.length + proposals.length > PORTAL_RECONCILE_LIMIT) {
-    throw new DomainError('PERIOD_TOO_LARGE', 422, `Kỳ này có hơn ${PORTAL_RECONCILE_LIMIT} hóa đơn mua vào; Crove chưa đối chiếu được khối lượng này`);
+    throw new DomainError('PERIOD_TOO_LARGE', 422, `Kỳ này có hơn ${PORTAL_RECONCILE_LIMIT} hóa đơn mua vào; hệ thống chưa đối chiếu được khối lượng này`);
   }
   const out: CroveInvoice[] = documents.map((d) => ({
     kind: 'document',

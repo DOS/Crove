@@ -57,9 +57,10 @@ function statementSheet(
   return sheet;
 }
 
-export async function buildStatementsWorkbook(statements: FinancialStatements, orgName: string): Promise<Uint8Array> {
+// brand: the product name users see (BRAND_NAME, #1045), as the file's creator.
+export async function buildStatementsWorkbook(statements: FinancialStatements, orgName: string, brand = 'Crove'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Crove';
+  workbook.creator = brand;
   workbook.title = `Báo cáo tài chính ${statements.period.period} ${orgName}`;
   const b01 = statementSheet(
     workbook,
