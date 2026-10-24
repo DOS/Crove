@@ -21,6 +21,7 @@ import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
+import { archiveBlock, mayArchive } from '../lib/social-archive.ts';
 import { PostActivity } from '../components/social-activity.tsx';
 import { boardMedia } from '../components/social-comment-pins.tsx';
 import { ReviewChanges } from '../components/social-review-diff.tsx';
@@ -3722,6 +3723,9 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
     },
   });
   const unschedule = useMutation({ mutationFn: (variantId: string) => client.social.variants.unschedule({ variantIds: [variantId] }), onSuccess: refresh });
+  // Out of every list, or back (#1299); the post stays open here either way.
+  const archive = useMutation({ mutationFn: () => client.social.posts.archive({ postId }), onSuccess: refresh });
+  const unarchive = useMutation({ mutationFn: () => client.social.posts.restore({ postId }), onSuccess: refresh });
   // The first comment again (#587); the worker posts it in a moment.
   const retryComment = useMutation({ mutationFn: (variantId: string) => client.social.variants.retryComment({ variantId }), onSuccess: refresh });
   const retryThread = useMutation({ mutationFn: (variantId: string) => client.social.variants.retryThread({ variantId }), onSuccess: refresh });
@@ -3815,8 +3819,12 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
     setOwn(changed);
   };
   const dirty = editsOf(origin);
-  const editable = canWrite && p.variants.some((v) => EDITABLE.includes(v.status));
-  const submittable = p.variants.filter((v) => SUBMITTABLE.includes(v.status));
+  // An archived post (#1299) is read only until it is restored: the server refuses edits, review and scheduling.
+  const archived = p.archivedAt !== null;
+  const archiver = mayArchive({ canDecide, canWrite, userId }, p);
+  const blocked = archiveBlock(p.variants);
+  const editable = canWrite && !archived && p.variants.some((v) => EDITABLE.includes(v.status));
+  const submittable = archived ? [] : p.variants.filter((v) => SUBMITTABLE.includes(v.status));
   const onKey = (e: KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === 's' && dirty && !save.isPending) {
       e.preventDefault();
@@ -3825,8 +3833,8 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   };
   const published = p.variants.some((v) => v.status === 'published');
   const metricsOf = new Map((metrics.data ?? []).map((r) => [r.variantId, r]));
-  const error = save.error ?? submit.error ?? retryComment.error ?? retryThread.error ?? repost.error ?? duplicate.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
-  const reviewable = !dirty && !stale;
+  const error = save.error ?? submit.error ?? retryComment.error ?? retryThread.error ?? repost.error ?? duplicate.error ?? archive.error ?? unarchive.error ?? unschedule.error ?? cancel.error ?? retry.error ?? resolve.error;
+  const reviewable = !dirty && !stale && !archived;
   // The AI rewrite box of the text a channel sends (#1156): its own text's, or the shared text's.
   const rewriteTarget = (v: Variant): string | null =>
     getConfig().aiEnabled === true && canWrite && EDITABLE.includes(v.status) && !save.isPending ? ((own[v.id] ?? ownOf(v)).custom ? ownRewriteId(v.connectionId) : SHARED_REWRITE_ID) : null;
@@ -3868,9 +3876,34 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 {t('duplicate')}
               </Button>
             )}
+            {archiver && !archived && (
+              <Button
+                variant="outline"
+                size="lg"
+                disabled={dirty || blocked !== null || archive.isPending}
+                title={dirty ? t('saveFirst') : blocked ? t(`archive.blocked.${blocked}`) : t('archive.hint')}
+                onClick={() => {
+                  if (window.confirm(t('archive.confirm'))) archive.mutate();
+                }}
+              >
+                {archive.isPending ? <Spinner className="text-current" /> : null}
+                {t('archive.action')}
+              </Button>
+            )}
           </>
         }
       />
+      {archived && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-foreground" role="status" data-testid="post-archived">
+          <span>{t('archive.banner', { when: f.dateTime(p.archivedAt ?? p.updatedAt) })}</span>
+          {archiver && (
+            <Button variant="outline" size="sm" disabled={unarchive.isPending} onClick={() => unarchive.mutate()}>
+              {unarchive.isPending ? <Spinner className="text-current" /> : null}
+              {t('archive.restore')}
+            </Button>
+          )}
+        </div>
+      )}
       {restorePost && (
         <Notice>
           <div className="flex flex-wrap items-center gap-2">
@@ -4014,9 +4047,9 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
               .map((v) => ({ name: names.get(v.connectionId) ?? providerName(v.provider), settings: (own[v.id] ?? ownOf(v)).settings, linkUrl: v.overrides.linkUrl ?? orNull(base.linkUrl), at: v.effectiveAt }))}
             timeZone={p.timeZone}
           />
-          {canWrite && p.recurrence === null && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
+          {canWrite && !archived && p.recurrence === null && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
           {/* One kind of repeat per post (#979); a copy of a series repeats with its series post. */}
-          {canWrite && p.evergreenDays === null && p.recurrenceSourceId === null && (
+          {canWrite && !archived && p.evergreenDays === null && p.recurrenceSourceId === null && (
             <RecurrencePanel key={`${JSON.stringify(p.recurrence)}:${p.recurrenceCount}`} post={p} published={published} onDone={refresh} />
           )}
           {/* The texts an evergreen or series post's copies rotate through (#1260); a copy of a series takes its series'. */}

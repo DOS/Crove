@@ -118,7 +118,7 @@ async function weekData(ctx: CommandContext, week: DigestWeek): Promise<DigestWe
       SELECT v.id AS variant_id, v.post_id, v.channel_connection_id AS connection_id, coalesce(v.title, p.title) AS title, coalesce(v.body, p.body) AS body
       FROM crove_social.post_variant v
       JOIN crove_social.post p ON p.org_id = v.org_id AND p.id = v.post_id
-      WHERE v.org_id = ${org}::uuid AND v.status IN ('failed', 'needs_attention')
+      WHERE v.org_id = ${org}::uuid AND v.status IN ('failed', 'needs_attention') AND p.archived_at IS NULL
         AND v.updated_at >= ${week.lastStart}::timestamptz AND v.updated_at < ${week.thisStart}::timestamptz
       ORDER BY v.updated_at DESC, v.id
       LIMIT ${SCAN_MAX}::int`.execute(ctx.trx),
@@ -195,6 +195,8 @@ async function reviewsFor(ctx: CommandContext, approvers: readonly string[]): Pr
     .select(['v.id as variant_id', 'v.post_id', 'v.revision', 'v.content_hash', 'v.channel_connection_id', 'p.title', 'p.body', 'p.author_user_id'])
     .where('v.org_id', '=', ctx.orgId)
     .where('v.status', '=', 'in_review')
+    // Nothing of an archived post (#1299) waits for a review.
+    .where('p.archived_at', 'is', null)
     .orderBy('v.review_since', 'asc')
     .orderBy('v.id', 'asc')
     .limit(REVIEW_SCAN_MAX)

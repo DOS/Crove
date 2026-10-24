@@ -23,6 +23,8 @@ export interface PostRow {
   time_zone: string;
   scheduled_at: Date | null;
   revision: number;
+  // When it was archived (#1299); null while it is not.
+  archived_at: Date | null;
   // The post's images in order (crove_social.post_media), loaded with the row.
   media: readonly PostMedia[];
 }
@@ -57,7 +59,7 @@ export interface VariantRow {
   updated_at: Date;
 }
 
-export const POST_COLUMNS = ['id', 'body', 'title', 'link_url', 'time_zone', 'scheduled_at', 'revision'] as const;
+export const POST_COLUMNS = ['id', 'body', 'title', 'link_url', 'time_zone', 'scheduled_at', 'revision', 'archived_at'] as const;
 export const VARIANT_COLUMNS = [
   'id',
   'post_id',
@@ -206,6 +208,12 @@ export async function lockPost(trx: Trx, orgId: string, postId: string): Promise
   return { ...post, media: await loadPostMedia(trx, orgId, postId) };
 }
 
+// An archived post (#1299) is out of every list until it is restored: nothing edits it, adds a channel, sends it to
+// review, approves, schedules or retries it, and no repeat is set on it, so it never goes out from where nobody sees it.
+export function refuseArchived(post: Pick<PostRow, 'archived_at'>): void {
+  if (post.archived_at !== null) throw new DomainError('POST_ARCHIVED', 409, 'Bài này đã được lưu trữ; hãy khôi phục bài trước khi sửa, gửi duyệt hay lên lịch');
+}
+
 export interface QueueState {
   id: string;
   spec: QueueSpec;
@@ -314,12 +322,13 @@ export function regateValues(v: VariantRow): Record<string, unknown> {
 }
 
 // What the approval that completes the count sets: approved, or scheduled again for a variant a raised policy took out
-// of the schedule, when its kept time (or queue slot) is still ahead; past it, a person schedules it again.
-export function approvedValues(v: VariantRow, now: Date): Record<string, unknown> {
+// of the schedule, when its kept time (or queue slot) is still ahead; past it, a person schedules it again. Never
+// scheduled on an archived post (#1299): it stays approved, for a person to schedule once it is restored.
+export function approvedValues(v: VariantRow, now: Date, post: Pick<PostRow, 'archived_at'>): Record<string, unknown> {
   const status = step(v, { type: 'approve' });
   if (v.error_code !== POLICY_RAISED) return { status };
   const at = v.scheduled_at ?? v.queue_slot_at;
-  const back = v.error_action === 'reschedule' && at !== null && at.getTime() > now.getTime();
+  const back = post.archived_at === null && v.error_action === 'reschedule' && at !== null && at.getTime() > now.getTime();
   return { ...CLEAR_ERROR, status: back ? step({ id: v.id, status }, { type: 'schedule' }) : status };
 }
 

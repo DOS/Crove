@@ -52,6 +52,8 @@ export const attentionInbox = defineQuery({
       .innerJoin('crove_kernel.channel_connection as c', (j) => j.onRef('c.org_id', '=', 'v.org_id').onRef('c.id', '=', 'v.channel_connection_id'))
       .select(['v.id as variant_id', 'v.post_id', 'v.provider', 'v.status', 'v.error_code', 'v.updated_at', 'v.body as variant_body', 'p.body', 'c.display_name'])
       .where('v.org_id', '=', ctx.orgId)
+      // Not an archived post's (#1299): a failed channel of it waits for its restore.
+      .where('p.archived_at', 'is', null)
       // A paused variant waits on its channel: it needs a person only while that channel is not active.
       .where((w) => w.or([w('v.status', 'in', ['failed', 'needs_attention']), w.and([w('v.status', '=', 'paused'), w('c.status', '<>', 'active')])]))
       .orderBy('v.updated_at', 'asc')
