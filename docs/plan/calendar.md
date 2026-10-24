@@ -42,10 +42,10 @@ Let a member of an org publish a booking page, so a client books a meeting in a 
 
 ### 3.1 Data (all tenant tables: `org_id`, `PRIMARY KEY (org_id, id)`, RLS through `apply_tenant_rls`)
 
-- `crove_kernel.calendar_event`: `member_id`, `starts_at`, `ends_at` (UTC), `time_zone` (IANA), `busy` (bool), `source` (`booking`, `manual`, later `google`/`microsoft`/`caldav`), `source_id`, `title`, `party_id` (nullable). Exclusion constraint: `EXCLUDE USING gist (org_id WITH =, member_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH &&) WHERE (busy AND NOT cancelled)` (needs `btree_gist`).
-- `crove_kernel.availability`: per member, a weekly schedule (weekday, start minute, end minute, time zone) and dates off; one default schedule per member.
+- `crove_kernel.calendar_event`: `user_id` (the member), `starts_at`, `ends_at` (UTC), `time_zone` (IANA), `title`, `kind` (`manual`, `time_off`, `booking`; later `google`, `microsoft`, `caldav` with a `source_id`), `status` (`active`, `cancelled`, with `cancelled_at` and `cancelled_by`). Every active event is busy time. No two active bookings of one member overlap: `EXCLUDE USING gist (int8range(h, h, '[]') WITH &&, tstzrange(starts_at, ends_at, '[)') WITH &&) WHERE (kind = 'booking' AND status = 'active')`, where `h` is `hashtextextended(org_id || ':' || user_id, 0)`, because Crove uses no extension (so no `btree_gist`); a hash collision only refuses a booking, never allows a double one. Manual events may overlap; the booking command checks them under a per-member lock.
+- `crove_kernel.availability_rule`: a member's weekly working hours, one row per window (`weekday` 1 to 7, `start_minute`, `end_minute`, `time_zone`); no row means the default (Monday to Friday, 8:00 to 17:00, Vietnam time). Dates off are `time_off` events.
 - `crove_crm.event_type`: `slug` (unique per org), `title`, `duration_min`, `buffer_before_min`, `buffer_after_min`, `min_notice_min`, `horizon_days`, `daily_limit`, `location_kind`, `location_value`, `host_member_id`, `active`, `description`.
-- `crove_crm.booking`: `event_type_id`, `calendar_event_id`, `party_id`, visitor name, email, phone, note, `status` (`confirmed`, `cancelled`, `rescheduled`), `manage_token_hash` (single use per action, stored hashed like invite tokens), `revision`.
+- `crove_crm.booking`: `event_type_id`, `calendar_event_id`, `party_id`, `visitor_name`, `email`, `phone`, `note`, `status` (`confirmed`, `cancelled`, `rescheduled`), `manage_token_hash` (single use per action, stored hashed like invite tokens), `revision`.
 
 ### 3.2 Slots
 

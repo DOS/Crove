@@ -228,7 +228,7 @@ footer{margin-top:56px;border-top:1px solid var(--line);padding-top:20px;font-si
 
 <h2 id="kien-truc">Kiến trúc</h2>
 <ul>
-<li><strong>Kernel:</strong> bảng <code>calendar_event</code> (giờ lưu UTC kèm múi giờ) và <code>availability</code> (giờ làm việc, ngày nghỉ). Ràng buộc trong database chặn hai sự kiện bận chồng giờ của cùng một người.</li>
+<li><strong>Kernel:</strong> bảng <code>calendar_event</code> (giờ lưu UTC kèm múi giờ; ngày nghỉ cũng là một sự kiện) và <code>availability_rule</code> (giờ làm việc trong tuần). Ràng buộc trong database chặn hai lịch hẹn chồng giờ của cùng một người.</li>
 <li><strong>Module <code>crm</code>:</strong> bảng <code>event_type</code> (loại hẹn) và <code>booking</code> (lượt đặt). Bật tắt bằng <code>CROVE_MODULES</code> như các module khác.</li>
 <li><strong>Dùng lại:</strong> khách hàng (<code>party</code>), dòng thời gian (<code>activity</code>), hàng đợi thư và mẫu thư, job nhắc lịch, giới hạn tần suất, tên sản phẩm theo <code>BRAND_NAME</code>.</li>
 <li><strong>Chống lạm dụng:</strong> giới hạn theo IP và theo loại hẹn; Turnstile (ô kiểm tra người thật) bật khi có khóa.</li>
