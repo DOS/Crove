@@ -22,6 +22,7 @@ export * from './goals.ts';
 export * from './domain/period-summary.ts';
 export * from './period-summary.ts';
 export * from './plan-export.ts';
+export * from './domain/plan-csv.ts';
 export * from './domain/team-report.ts';
 export * from './team-report.ts';
 export * from './evergreen.ts';

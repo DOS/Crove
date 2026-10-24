@@ -29,6 +29,7 @@ import { ChatAlertSaveBudget, ChatAlertTestBudget, requestChatAlertTest, saveCha
 import { actorOf, type AuthUser } from './auth.ts';
 import { ConcurrencyLimiter } from './concurrency.ts';
 import type { StockPhotos } from './stock-photos.ts';
+import type { MediaUrls } from './media-urls.ts';
 import type { InviteRole, SendInviteMail } from './invite-mail.ts';
 import type { Delivery, DeliveryResult } from './mail.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
@@ -206,6 +207,9 @@ export interface RpcChannels {
   // made. Not a channel: it rides on this object because the HTTP edge hands it to the RPC handler unchanged, so the
   // feature needs no change to http.ts.
   stockPhotos?: StockPhotos;
+  // The CSV import's image URLs (#1258), fetched into the library through the egress guard; unset: refused. Rides here
+  // for the same reason as stockPhotos.
+  mediaUrls?: MediaUrls;
   // Browser push for Social notifications (#1238, VAPID_*): the public key browsers subscribe with; unset: no push is
   // offered. Rides here for the same reason.
   push?: { publicKey: string };
@@ -314,6 +318,18 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       const ticket = stock.budget.take(orgId, actor.userId);
       if (!ticket.allowed) throw new DomainError('RATE_LIMITED', 429, 'Bạn đã tìm hoặc lưu nhiều ảnh trong phút này, hãy thử lại sau ít phút', { retryAfterSeconds: ticket.retryAfterSeconds });
       return fn(orgId, actor, stock);
+    });
+  };
+  // The CSV import's image URLs (#1258): members and above, in an org with Social; the budget is per URL, so each
+  // refused one says so on its row.
+  const mediaUrlScope = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor, urls: MediaUrls) => Promise<T>) => {
+    if (!social) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun mạng xã hội chưa được bật' });
+    return guard(async () => {
+      const { orgId, role } = await resolveMembership(runtime, context.user, context.orgSlug);
+      if (role === 'viewer') throw new DomainError('FORBIDDEN', 403, 'Người xem không thêm được ảnh vào thư viện');
+      const urls = channels?.mediaUrls;
+      if (!urls) throw new DomainError('MEDIA_URLS_DISABLED', 404, 'Máy chủ này chưa tải ảnh từ đường dẫn');
+      return fn(orgId, actorOf(context.user), urls);
     });
   };
   const oauthRedirectUri = (provider: string) => `${(channels?.publicUrl ?? '').replace(/\/$/, '')}/channels/oauth/${provider}/callback`;
@@ -508,6 +524,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         setRecurrence: os.social.posts.setRecurrence.handler(socialCommand('social.post.recurrence_set')),
         clearRecurrence: os.social.posts.clearRecurrence.handler(socialCommand('social.post.recurrence_clear')),
+        aiPhotos: os.social.posts.aiPhotos.handler(({ context }) => inSocial(context, async () => ({ enabled: Boolean(socialWriter?.draftStored) }))),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
           inSocial(context, async (orgId, actor) => {
             // The model costs money: only those who may write posts get to call it, checked before anything else (the
@@ -985,6 +1002,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         tags: os.social.media.tags.handler(socialQuery('social.media.tags')),
         tag: os.social.media.tag.handler(socialCommand('social.media.tag')),
         untag: os.social.media.untag.handler(socialCommand('social.media.untag')),
+        resolve: os.social.media.resolve.handler(socialQuery('social.media.resolve')),
+        fetchUrls: os.social.media.fetchUrls.handler(({ context, input }) => mediaUrlScope(context, (orgId, actor, urls) => urls.fetch(runtime, actor, orgId, input.urls))),
       },
       stockPhotos: {
         status: os.social.stockPhotos.status.handler(({ context }) => inSocial(context, async () => ({ enabled: Boolean(channels?.stockPhotos), provider: 'pexels' as const }))),
