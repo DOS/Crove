@@ -7,7 +7,8 @@ import { cn } from '@crove/ui/lib/utils';
 import { daysSince, socialFigures, type SocialFigure, type SocialFigures } from '../lib/clients.ts';
 
 const TONE = { urgent: 'font-medium text-destructive', waiting: 'font-medium text-link', plain: 'text-muted-foreground' } as const;
-const LINK = 'hover:underline focus-visible:underline';
+// Each figure is its own link on its own line: a 24px line box, the least target size (WCAG 2.5.8).
+const LINK = 'inline-block min-h-6 leading-6 hover:underline focus-visible:underline';
 
 function FigureLink({ slug, figure, className, children }: { slug: string; figure: SocialFigure; className: string; children: string }) {
   if (figure.link.to === 'channels') {

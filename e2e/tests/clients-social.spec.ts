@@ -37,7 +37,7 @@ test('an agency sees each client’s Social figures on the overview and opens th
     const binhMinh = page.getByRole('row').filter({ hasText: 'Công ty Bình Minh' });
     await expect(anBinh.getByRole('link', { name: '1 bài chờ duyệt' })).toBeVisible();
     await expect(anBinh.getByRole('link', { name: 'Chưa đăng bài nào' })).toBeVisible();
-    await expect(binhMinh.getByRole('link', { name: 'Chưa có bài nào trong 7 ngày tới' })).toBeVisible();
+    await expect(binhMinh.getByRole('link', { name: 'Chưa có bài nào sẽ đăng trong 7 ngày tới' })).toBeVisible();
     await expect(binhMinh.getByRole('link', { name: /bài chờ duyệt/ })).toHaveCount(0);
   });
 

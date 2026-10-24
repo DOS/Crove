@@ -10,7 +10,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
-import { bestTimes, engagementRateOfBases, type PublishedSample } from '@crove/mod-social/contract';
+import { AGENDA_STATUSES, bestTimes, engagementRateOfBases, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { PEXELS_URL, StockCredit, StockPhotoSearch, pexelsHref, useStockPhotosEnabled } from '../components/social-stock-photos.tsx';
@@ -490,7 +490,7 @@ function Agenda({
   const f = useFormat();
   // One line per variant going out, grouped by local day.
   const items = posts
-    .flatMap((post) => post.variants.filter((v) => ['scheduled', 'paused', 'publishing', 'processing'].includes(v.status) && v.effectiveAt).map((v) => ({ post, v })))
+    .flatMap((post) => post.variants.filter((v) => (AGENDA_STATUSES as readonly string[]).includes(v.status) && v.effectiveAt).map((v) => ({ post, v })))
     .sort((a, b) => Date.parse(a.v.effectiveAt as string) - Date.parse(b.v.effectiveAt as string));
   if (items.length === 0) return <Empty title={t('agendaEmpty')} hint={t('agendaEmptyHint')} />;
   const days = new Map<string, Array<{ post: Post; v: Variant }>>();

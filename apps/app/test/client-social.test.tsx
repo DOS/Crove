@@ -66,17 +66,17 @@ describe('ClientSocialFigures', () => {
       { to: '/o/an-binh/social/channels', tab: '', text: '1 kênh cần kết nối lại' },
       { to: '/o/an-binh/social', tab: 'review', text: '3 bài chờ duyệt' },
       { to: '/o/an-binh/social', tab: 'review', text: 'trong đó 1 bài chờ khách duyệt' },
-      { to: '/o/an-binh/social', tab: '', text: '5 bài trong 7 ngày tới' },
+      { to: '/o/an-binh/social', tab: '', text: '5 bài sẽ đăng trong 7 ngày tới' },
       { to: '/o/an-binh/social', tab: 'done', text: 'Bài gần nhất đăng 4 ngày trước' },
     ]);
     expect(html).toContain('text-destructive');
   });
 
   it('says a quiet client has nothing planned and has not posted, in Vietnamese and English', () => {
-    expect(links(render(<ClientSocialFigures slug="binh-minh" figures={figures()} now={NOW} />)).map((l) => l.text)).toEqual(['Chưa có bài nào trong 7 ngày tới', 'Chưa đăng bài nào']);
+    expect(links(render(<ClientSocialFigures slug="binh-minh" figures={figures()} now={NOW} />)).map((l) => l.text)).toEqual(['Chưa có bài nào sẽ đăng trong 7 ngày tới', 'Chưa đăng bài nào']);
     expect(links(render(<ClientSocialFigures slug="binh-minh" figures={figures({ review: 1, lastPostAt: new Date(2026, 9, 23, 8).toISOString() })} now={NOW} />, 'en')).map((l) => l.text)).toEqual([
       '1 post in review',
-      'Nothing in the next 7 days',
+      'Nothing going out in the next 7 days',
       'Last post yesterday',
     ]);
   });

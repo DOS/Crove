@@ -130,33 +130,58 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) 
   return out;
 }
 
+// After this many server failures in a row (status 500 or above, or no domain error at all), the store is taken as down:
+// the answer fails at once instead of opening a transaction for every other org (#1261 review).
+export const OVERVIEW_FAIL_FAST = 3;
+
 // Refusals that mean the user may no longer read the org: leave it out of the list.
 const GONE = new Set(['NOT_A_MEMBER', 'SESSION_REVOKED_IN_ORG']);
 
 // The home screen: the user's orgs (the same list as me.get), each with its figures read in its own context, and how
 // many orgs the user has, so a list cut at MAX_CLIENT_ORGS says so. An org whose figures fail is an error row with the
 // error's code (#495), so one slow or broken org no longer fails the screen; a refusal of the user themselves (no
-// session or a revoked one, 401) still fails the answer, since every other org would refuse them too.
+// session or a revoked one, 401) still fails the answer, since every other org would refuse them too, and so do
+// OVERVIEW_FAIL_FAST server failures in a row (503 OVERVIEW_UNAVAILABLE). Failures are logged once per answer: the
+// first with its org, and how many there were.
 export async function clientOverviews(runtime: Runtime, actor: UserActor, options: { signal?: AbortSignal } = {}): Promise<ClientOverviews> {
   const all = await runtime.forUser(actor, (db) => sessionOrgs(db, actor.userId, actor.sessionId ?? null));
   const orgs = all.slice(0, MAX_CLIENT_ORGS);
-  const rows = await mapLimit(
-    orgs,
-    OVERVIEW_CONCURRENCY,
-    async (org): Promise<ClientOverview | null> => {
-      try {
-        const overview = await runtime.query<OrgOverview>('kernel.org.overview', {}, { actor, orgId: org.orgId });
-        return { ...org, overview, error: null };
-      } catch (error) {
-        if (error instanceof DomainError && GONE.has(error.code)) return null;
-        if (error instanceof DomainError && error.status === 401) throw error;
-        // The client went away: the answer fails once the orgs already running finish.
-        if (options.signal?.aborted) throw error;
-        if (!(error instanceof DomainError) || error.status >= 500) console.error('[clients] org overview failed', org.orgId, error);
-        return { ...org, overview: null, error: error instanceof DomainError ? error.code : 'INTERNAL' };
-      }
-    },
-    options.signal,
-  );
+  let failures = 0;
+  let streak = 0;
+  let first: { orgId: string; error: unknown } | null = null;
+  const log = () => {
+    if (first) console.error(`[clients] ${failures} org overview(s) failed; the first, of org ${first.orgId}:`, first.error);
+  };
+  let rows: (ClientOverview | null)[];
+  try {
+    rows = await mapLimit(
+      orgs,
+      OVERVIEW_CONCURRENCY,
+      async (org): Promise<ClientOverview | null> => {
+        try {
+          const overview = await runtime.query<OrgOverview>('kernel.org.overview', {}, { actor, orgId: org.orgId });
+          streak = 0;
+          return { ...org, overview, error: null };
+        } catch (error) {
+          if (error instanceof DomainError && GONE.has(error.code)) return null;
+          if (error instanceof DomainError && error.status === 401) throw error;
+          // The client went away: the answer fails once the orgs already running finish.
+          if (options.signal?.aborted) throw error;
+          if (!(error instanceof DomainError) || error.status >= 500) {
+            failures += 1;
+            streak += 1;
+            first ??= { orgId: org.orgId, error };
+            if (streak >= OVERVIEW_FAIL_FAST) {
+              throw new DomainError('OVERVIEW_UNAVAILABLE', 503, 'Chưa tải được số liệu các doanh nghiệp, hãy thử lại sau ít phút', { retryAfterSeconds: 10 });
+            }
+          }
+          return { ...org, overview: null, error: error instanceof DomainError ? error.code : 'INTERNAL' };
+        }
+      },
+      options.signal,
+    );
+  } finally {
+    log();
+  }
   return { clients: rows.filter((row): row is ClientOverview => row !== null), total: all.length };
 }

@@ -1,8 +1,9 @@
 // Social figures on the multi-client home (#1261) on PostgreSQL 17: me.clients gives each org the Social figures its
-// member sees on that org's own Social screens (the Review and Attention tabs, the channels to reconnect, the Upcoming
-// agenda's next 7 days, the last post), for an owner and for a member limited to some channels (#1081), read in the
-// org's own context; a deployment without the Social module shows no Social figures; and one org whose figures fail
-// is an error row while the others load (#495).
+// member sees on that org's own Social screens (the Review and Attention tabs, the channels to reconnect for owners and
+// admins, the Upcoming agenda's next 7 days, which leaves out drafts and posts in review with a planned time, the last
+// post), for an owner and for a member limited to some channels (#1081), read in the org's own context, and the org's
+// own overview (org.overview, #1249) gives the same; a deployment without the Social module shows no Social figures;
+// and one org whose figures fail is an error row while the others load (#495).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -15,7 +16,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { zClientOverviews } from '@crove/kernel-contract';
 import { clientOverviews, createOrg, kernelCommands, kernelQueries, upsertIdentity, type ClientOverview } from '@crove/kernel';
 import { Runtime, defineQuery } from '@crove/kernel-runtime';
-import { socialCommands, socialOverviewContributions, socialQueries, type PostView, type SocialClientFigures } from '@crove/mod-social';
+import { AGENDA_STATUSES, socialCommands, socialOverviewContributions, socialQueries, type PostView, type SocialClientFigures } from '@crove/mod-social';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -74,19 +75,23 @@ suite('Social figures on the multi-client home on PostgreSQL (#1261)', () => {
     return row?.overview?.modules.social as SocialClientFigures | undefined;
   };
 
-  // What the member sees on the org's own Social screens, read with the queries those screens call.
+  // What the member sees on the org's own Social screens, read with the queries those screens call: the tabs' lists,
+  // the attention inbox's channels (owners and admins only), and the Upcoming agenda's lines (a variant in
+  // AGENDA_STATUSES at its time) in the next 7 days.
   async function screens(user: string, orgId: string) {
     const list = (input: Record<string, unknown>) => query<PostView[]>(user, 'social.post.list', { ...input, limit: 200 }, orgId);
     const review = await list({ stage: 'review' });
     const now = Date.now();
-    const mine = await query<{ limited: boolean; connectionIds: string[] }>(user, 'social.channel_access.mine', {}, orgId);
-    const channels = await query<{ id: string; status: string }[]>(user, 'kernel.channel.list', {}, orgId);
+    const inbox = await query<{ channels: unknown[] }>(user, 'social.attention.inbox', {}, orgId);
+    const agenda = await list({ from: new Date(now - DAY).toISOString(), to: new Date(now + 8 * DAY).toISOString() });
     return {
       review: review.length,
       waitingClient: review.filter((p) => p.variants.some((v) => v.status === 'in_review' && v.review.client && v.review.approvedBy.length >= v.review.required)).length,
       attention: (await list({ stage: 'attention' })).length,
-      reconnect: channels.filter((c) => (!mine.limited || mine.connectionIds.includes(c.id)) && (c.status === 'expired' || c.status === 'error')).length,
-      upcoming: (await list({ from: new Date(now).toISOString(), to: new Date(now + 7 * DAY).toISOString() })).length,
+      reconnect: inbox.channels.length,
+      upcoming: agenda.filter((p) =>
+        p.variants.some((v) => (AGENDA_STATUSES as readonly string[]).includes(v.status) && v.effectiveAt !== null && Date.parse(v.effectiveAt) >= now && Date.parse(v.effectiveAt) < now + 7 * DAY),
+      ).length,
     };
   }
 
@@ -127,10 +132,19 @@ suite('Social figures on the multi-client home on PostgreSQL (#1261)', () => {
     // A post on A and B whose B channel failed: it needs attention, but not for the freelancer, who cannot see B.
     const failed = await post(owner, [ch.a, ch.b], 'Bài lỗi trên B');
     await admin((c) => c.query("UPDATE crove_social.post_variant SET status = 'failed', error_code = 'TOKEN_EXPIRED' WHERE post_id = $1 AND channel_connection_id = $2", [failed, ch.b]));
-    // Planned in the next 7 days on A and on B, and one later on B.
-    await post(owner, [ch.a], 'Bài tuần này trên A', { scheduledAt: new Date(Date.now() + 2 * DAY).toISOString() });
-    await post(owner, [ch.b], 'Bài tuần này trên B', { scheduledAt: new Date(Date.now() + 3 * DAY).toISOString() });
-    await post(owner, [ch.b], 'Bài tháng sau trên B', { scheduledAt: new Date(Date.now() + 10 * DAY).toISOString() });
+    // Scheduled in the next 7 days on A and on B, and one later on B: the agenda's lines.
+    const scheduled = async (connection: string, body: string, days: number) => {
+      const postId = await post(owner, [connection], body);
+      await exec(owner, 'social.post.submit', { postId });
+      await exec(owner, 'social.variant.decide', { postId, decision: 'approved', variants: seen(await query<PostView>(owner, 'social.post.get', { postId })) });
+      await exec(owner, 'social.variant.schedule', { postId, at: new Date(Date.now() + days * DAY).toISOString() });
+    };
+    await scheduled(ch.a, 'Bài tuần này trên A', 2);
+    await scheduled(ch.b, 'Bài tuần này trên B', 3);
+    await scheduled(ch.b, 'Bài tháng sau trên B', 10);
+    // A draft on A and a post in review on B with a planned time this week: not on the agenda, so not counted.
+    await post(owner, [ch.a], 'Nháp có giờ trên A', { scheduledAt: new Date(Date.now() + 2 * DAY).toISOString() });
+    await exec(owner, 'social.post.submit', { postId: await post(owner, [ch.b], 'Bài chờ duyệt có giờ trên B', { scheduledAt: new Date(Date.now() + 2 * DAY).toISOString() }) });
     // Gone out: on A three days ago, on B yesterday.
     const outA = await post(owner, [ch.a], 'Bài đã đăng trên A');
     const outB = await post(owner, [ch.b], 'Bài đã đăng trên B');
@@ -153,9 +167,11 @@ suite('Social figures on the multi-client home on PostgreSQL (#1261)', () => {
     const rows = await home(owner);
     expect(rows.map((r) => r.orgId).sort()).toEqual([anBinh, binhMinh].sort());
     const figures = socialOf(rows, anBinh);
-    expect(figures).toEqual({ review: 3, waitingClient: 1, attention: 1, reconnect: 2, upcoming: 2, lastPostAt: at.lastByOwner });
+    expect(figures).toEqual({ review: 4, waitingClient: 1, attention: 1, reconnect: 2, upcoming: 2, lastPostAt: at.lastByOwner });
     const { lastPostAt: _, ...counts } = figures as SocialClientFigures;
     expect(counts).toEqual(await screens(owner, anBinh));
+    // The org's own overview (org.overview, #1249) reads the same figures.
+    expect(await query(owner, 'kernel.org.overview', {})).toEqual(rows.find((r) => r.orgId === anBinh)?.overview);
     // The other company has nothing yet.
     expect(socialOf(rows, binhMinh)).toEqual({ review: 0, waitingClient: 0, attention: 0, reconnect: 0, upcoming: 0, lastPostAt: null });
     expect(await screens(owner, binhMinh)).toEqual({ review: 0, waitingClient: 0, attention: 0, reconnect: 0, upcoming: 0 });
@@ -166,14 +182,15 @@ suite('Social figures on the multi-client home on PostgreSQL (#1261)', () => {
     // The freelancer belongs to An Bình only.
     expect(rows.map((r) => r.orgId)).toEqual([anBinh]);
     const figures = socialOf(rows, anBinh);
-    expect(figures).toEqual({ review: 1, waitingClient: 0, attention: 0, reconnect: 1, upcoming: 1, lastPostAt: at.lastByFreelancer });
+    // Channels to reconnect are for owners and admins, who can reconnect them.
+    expect(figures).toEqual({ review: 1, waitingClient: 0, attention: 0, reconnect: 0, upcoming: 1, lastPostAt: at.lastByFreelancer });
     const { lastPostAt: _, ...counts } = figures as SocialClientFigures;
     expect(counts).toEqual(await screens(freelancer, anBinh));
     // Lifting the limit gives them every channel's figures, as their screens then show.
     await exec(owner, 'social.channel_access.set', { userId: freelancer, channelConnectionIds: [] });
     try {
       const all = socialOf(await home(freelancer), anBinh);
-      expect(all).toMatchObject({ review: 3, waitingClient: 1, attention: 1, reconnect: 2, upcoming: 2, lastPostAt: at.lastByOwner });
+      expect(all).toMatchObject({ review: 4, waitingClient: 1, attention: 1, reconnect: 0, upcoming: 2, lastPostAt: at.lastByOwner });
       const { lastPostAt: __, ...lifted } = all as SocialClientFigures;
       expect(lifted).toEqual(await screens(freelancer, anBinh));
     } finally {
@@ -222,7 +239,7 @@ suite('Social figures on the multi-client home on PostgreSQL (#1261)', () => {
       expect(failed?.error).not.toBe('');
       const ok = rows.find((r) => r.orgId === anBinh);
       expect(ok?.error).toBeNull();
-      expect(ok?.overview?.modules.social).toMatchObject({ review: 3, attention: 1 });
+      expect(ok?.overview?.modules.social).toMatchObject({ review: 4, attention: 1 });
       expect(logged).toHaveBeenCalled();
       // Nothing of the failure reaches the answer but its code.
       expect(JSON.stringify(rows)).not.toContain('division by zero');

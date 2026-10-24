@@ -264,7 +264,9 @@ export const zOrgOverview = z.object({
     .nullable(),
   // The tax calendar (#921): what is due in the next 30 days, or overdue and not marked done, by due date.
   taxDues: z.array(zTaxDueView),
-  modules: z.object({ social: zSocialClientFigures.optional() }),
+  // Social's figures are checked; another module's contribution passes as it is, so a new one needs no contract change
+  // to reach the app.
+  modules: z.object({ social: zSocialClientFigures.optional() }).catchall(z.unknown()),
 });
 // One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures; or, for an org
 // whose figures could not be read, overview null and the error's code (#495), so the other orgs still show.

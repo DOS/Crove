@@ -3,7 +3,7 @@
 // is left out; any other failure of one org is an error row (#495), and a refusal of the user fails the answer. The
 // database side is in clients.db.test.ts and clients-social.db.test.ts.
 import { describe, expect, it } from 'vitest';
-import { MAX_CLIENT_ORGS, clientOverviews, type OrgOverview } from '@crove/kernel';
+import { MAX_CLIENT_ORGS, OVERVIEW_FAIL_FAST, clientOverviews, type OrgOverview } from '@crove/kernel';
 import { DomainError, type Runtime, type UserActor } from '@crove/kernel-runtime';
 
 const USER = '0198a3a0-0000-7000-8000-000000000001';
@@ -73,6 +73,43 @@ describe('clientOverviews', () => {
     } finally {
       console.error = error;
     }
+  });
+
+  it('fails fast with 503 after OVERVIEW_FAIL_FAST server failures in a row, logging once (#1261 review)', async () => {
+    const orgs = Array.from({ length: 40 }, (_, i) => org(i + 1));
+    const { runtime, calls } = fakeRuntime(orgs, () => {
+      throw new Error('connection refused');
+    });
+    const error = console.error;
+    const logged: unknown[][] = [];
+    console.error = (...args: unknown[]) => void logged.push(args);
+    try {
+      await expect(clientOverviews(runtime, actor)).rejects.toMatchObject({ code: 'OVERVIEW_UNAVAILABLE', status: 503 });
+    } finally {
+      console.error = error;
+    }
+    // The orgs already running finish; no other starts.
+    expect(calls.length).toBeLessThanOrEqual(OVERVIEW_FAIL_FAST + 3);
+    expect(logged).toHaveLength(1);
+  });
+
+  it('keeps going when server failures are not in a row', async () => {
+    const orgs = Array.from({ length: 12 }, (_, i) => org(i + 1));
+    const { runtime } = fakeRuntime(orgs, (orgId) => {
+      if (Number(orgId.slice(-2)) % 2 === 0) throw new DomainError('INTERNAL', 500, 'boom');
+      return figures(1);
+    });
+    const error = console.error;
+    const logged: unknown[][] = [];
+    console.error = (...args: unknown[]) => void logged.push(args);
+    try {
+      const { clients: rows } = await clientOverviews(runtime, actor);
+      expect(rows.filter((r) => r.error === 'INTERNAL')).toHaveLength(6);
+      expect(rows.filter((r) => r.error === null)).toHaveLength(6);
+    } finally {
+      console.error = error;
+    }
+    expect(logged).toHaveLength(1);
   });
 
   it('fails the answer when the user themselves is refused, since every org would refuse them', async () => {

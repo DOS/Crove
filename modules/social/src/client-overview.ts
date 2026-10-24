@@ -6,19 +6,20 @@
 // in the org's own transaction, as the member). Each figure is read as the screen it links to reads it, so a count
 // equals what the member sees there: the Review and Attention tabs' lists (postFilterQuery, the same filter as
 // social.post.list, at most the 200 posts those tabs count), the channels the attention inbox names as needing a
-// reconnect, the Upcoming agenda's posts for the next 7 days, and the newest post that went out. A member limited to
-// some channels (#1081) gets the figures of those channels only.
+// reconnect (for owners and admins, who reconnect them, as the inbox shows them), the posts the Upcoming agenda shows
+// going out in the next 7 days (a variant in AGENDA_STATUSES at its time), and the newest post that went out. A member
+// limited to some channels (#1081) gets the figures of those channels only.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import type { OverviewContribution } from '@crove/kernel';
 import { defineQuery } from '@crove/kernel-runtime';
 import { ATTENTION_CHANNEL_STATUSES } from './attention-inbox.ts';
-import { channelScope, connectionInScope } from './channel-access.ts';
+import { channelScope, connectionInScope, postInScope, type ChannelScope } from './channel-access.ts';
 import { approvalsInRound } from './domain/approval.ts';
+import { AGENDA_STATUSES } from './domain/state.ts';
 import { approvalsRequired, decisionsOf } from './policy.ts';
 import { postFilterQuery } from './post-filter.ts';
-import { REVIEW_SCAN_MAX } from './review-inbox.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const DAY = 86_400_000;
@@ -35,9 +36,10 @@ export interface SocialClientFigures {
   waitingClient: number;
   // Posts with a channel that failed, needs a person, or waits paused (the Attention tab, #579).
   attention: number;
-  // Channels whose sign-in expired or broke (the attention inbox's channels, #771).
+  // Channels whose sign-in expired or broke (the attention inbox's channels, #771); 0 for members and viewers, who
+  // cannot reconnect them.
   reconnect: number;
-  // Posts with a channel going out in the next 7 days (the Upcoming agenda).
+  // Posts with a channel set to go out in the next 7 days (the Upcoming agenda's lines).
   upcoming: number;
   // When a channel of a post last went out; null when none has.
   lastPostAt: string | null;
@@ -58,14 +60,16 @@ export function socialFiguresQuery(options: { now?: () => Date } = {}) {
       const from = now();
       const review = await count(postFilterQuery(ctx, scope, { stage: 'review' }));
       const attention = await count(postFilterQuery(ctx, scope, { stage: 'attention' }));
-      const upcoming = await count(postFilterQuery(ctx, scope, { from: from.toISOString(), to: new Date(from.getTime() + SOCIAL_NEXT_DAYS * DAY).toISOString() }));
-      const reconnect = await ctx.trx
-        .selectFrom('crove_kernel.channel_connection')
-        .select(sql<string>`count(*)`.as('n'))
-        .where('org_id', '=', ctx.orgId)
-        .where('status', 'in', [...ATTENTION_CHANNEL_STATUSES])
-        .where(connectionInScope(scope, 'id'))
-        .executeTakeFirstOrThrow();
+      const upcoming = await upcomingCount(ctx, scope, from, new Date(from.getTime() + SOCIAL_NEXT_DAYS * DAY));
+      const admin = ctx.actor.type === 'user' && (ctx.role === 'owner' || ctx.role === 'admin');
+      const reconnect = admin
+        ? await ctx.trx
+            .selectFrom('crove_kernel.channel_connection')
+            .select(sql<string>`count(*)`.as('n'))
+            .where('org_id', '=', ctx.orgId)
+            .where('status', 'in', [...ATTENTION_CHANNEL_STATUSES])
+            .executeTakeFirstOrThrow()
+        : { n: '0' };
       const last = await ctx.trx
         .selectFrom('crove_social.post_variant')
         .select(sql<Date | null>`max(published_at)`.as('at'))
@@ -78,22 +82,48 @@ export function socialFiguresQuery(options: { now?: () => Date } = {}) {
   });
 }
 
+// Posts the Upcoming agenda shows in [from, to): with a variant the member may use in AGENDA_STATUSES whose time (as
+// the post view gives it: a retry, the queue slot, its own time, else the post's) falls in the window. At most
+// SOCIAL_FIGURE_MAX, as the lists count.
+async function upcomingCount(ctx: Parameters<typeof channelScope>[0], scope: ChannelScope, from: Date, to: Date): Promise<number> {
+  const mine = connectionInScope(scope, 'v.channel_connection_id');
+  const posts = ctx.trx
+    .selectFrom('crove_social.post as p')
+    .select('p.id')
+    .where('p.org_id', '=', ctx.orgId)
+    .where(postInScope(scope))
+    .where(
+      sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status IN (${sql.join([...AGENDA_STATUSES])}) AND coalesce(v.error_retry_at, v.queue_slot_at, v.scheduled_at, p.scheduled_at) >= ${from} AND coalesce(v.error_retry_at, v.queue_slot_at, v.scheduled_at, p.scheduled_at) < ${to})`,
+    )
+    .limit(SOCIAL_FIGURE_MAX);
+  const row = await ctx.trx.selectFrom(posts.as('x')).select(sql<string>`count(*)`.as('n')).executeTakeFirstOrThrow();
+  return Number(row.n);
+}
+
 // Posts with a channel in review that waits only for the client: the channel asks for the client's approval and its
 // current content has every team approval its policy asks for (an approval that completes the round with the client's
-// yes already given moves the channel on, so in review it still waits for the client). Read oldest first, as the
-// review inbox reads, at most REVIEW_SCAN_MAX channels.
-async function waitingClient(ctx: Parameters<typeof channelScope>[0], scope: Awaited<ReturnType<typeof channelScope>>): Promise<number> {
+// yes already given moves the channel on, so in review it still waits for the client). Among the posts the Review tab
+// lists: its first page, newest change first, of SOCIAL_FIGURE_MAX posts.
+async function waitingClient(ctx: Parameters<typeof channelScope>[0], scope: ChannelScope): Promise<number> {
+  const page = await postFilterQuery(ctx, scope, { stage: 'review' })
+    .orderBy(sql`date_trunc('milliseconds', p.updated_at)`, 'desc')
+    .orderBy('p.id', 'desc')
+    .limit(SOCIAL_FIGURE_MAX)
+    .execute();
+  if (page.length === 0) return 0;
   const rows = await ctx.trx
     .selectFrom('crove_social.post_variant as v')
     .innerJoin('crove_social.channel_policy as cp', (j) => j.onRef('cp.org_id', '=', 'v.org_id').onRef('cp.channel_connection_id', '=', 'v.channel_connection_id'))
     .select(['v.id', 'v.post_id', 'v.channel_connection_id', 'v.revision', 'v.content_hash'])
     .where('v.org_id', '=', ctx.orgId)
+    .where(
+      'v.post_id',
+      'in',
+      page.map((r) => r.id),
+    )
     .where('v.status', '=', 'in_review')
     .where('cp.client_approval', '=', true)
     .where(connectionInScope(scope, 'v.channel_connection_id'))
-    .orderBy('v.updated_at', 'asc')
-    .orderBy('v.id', 'asc')
-    .limit(REVIEW_SCAN_MAX)
     .execute();
   if (rows.length === 0) return 0;
   const required = await approvalsRequired(ctx.trx, ctx.orgId, [...new Set(rows.map((r) => r.channel_connection_id))]);
@@ -107,7 +137,7 @@ async function waitingClient(ctx: Parameters<typeof channelScope>[0], scope: Awa
     const given = approvalsInRound(decisions.get(r.id) ?? [], { revision: r.revision, contentHash: r.content_hash });
     if (given.length >= (required.get(r.channel_connection_id) ?? 1)) posts.add(r.post_id);
   }
-  return Math.min(posts.size, SOCIAL_FIGURE_MAX);
+  return posts.size;
 }
 
 export const socialFigures = socialFiguresQuery();
