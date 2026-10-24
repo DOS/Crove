@@ -18,6 +18,7 @@ import { SocialBoard } from '../components/social-board.tsx';
 import { OpenComments } from '../components/social-activity.tsx';
 import { useChannelScope } from '../components/social-channel-access.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
+import { SavedViews } from '../components/social-saved-views.tsx';
 import { CalendarFeedCard } from '../components/social-calendar-feed.tsx';
 import { InstagramGrid } from '../components/social-instagram-grid.tsx';
 import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
@@ -51,7 +52,7 @@ type Tab = SocialTab;
 const TABS = SOCIAL_TABS;
 // Posts a list page shows; Load more asks for the next ones.
 const PAGE = 50;
-type ListTab = 'review' | 'attention' | 'drafts' | 'done';
+type ListTab = 'review' | 'attention' | 'drafts' | 'done' | 'archived';
 type PostCursor = { updatedAt: string; postId: string };
 // The counts the analytics table shows, in order; a platform that does not report one shows a dash.
 const METRIC_COLUMNS = ['reach', 'reactions', 'comments', 'shares'] as const;
@@ -578,7 +579,7 @@ export function SocialPage() {
     const timer = setTimeout(() => setSearch({ q }), 300);
     return () => clearTimeout(timer);
   }, [text, search.q, setSearch]);
-  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.label ? { labelId: search.label } : {}), ...(search.q ? { search: search.q } : {}), ...(search.mine ? { assignee: 'me' as const } : {}) };
+  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.label ? { labelId: search.label } : {}), ...(search.q ? { search: search.q } : {}), ...(search.assignee ? { assignee: search.assignee } : {}), ...(search.author ? { author: search.author } : {}) };
   // The agenda window starts now; a new day does not need a reload to move it, a refetch does.
   const range = useMemo(() => {
     const from = new Date(Date.now() - DAY);
@@ -593,12 +594,19 @@ export function SocialPage() {
   const role = me.data?.orgs.find((o) => o.slug === slug)?.role;
   const canWrite = role === 'owner' || role === 'admin' || role === 'member';
   const upcoming = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { ...range, ...filters, limit: 200 } }), enabled: tab === 'upcoming', refetchInterval: pollEvery(live, 30_000, SAFETY_POLL_MS) });
-  const listTab: ListTab | null = tab === 'review' || tab === 'attention' || tab === 'drafts' || tab === 'done' ? tab : null;
+  const listTab: ListTab | null = tab === 'review' || tab === 'attention' || tab === 'drafts' || tab === 'done' || tab === 'archived' ? tab : null;
   // The server filters and pages (#574); a page at a time, newest change first.
   const list = useInfiniteQuery({
     ...orpc.social.posts.list.infiniteOptions({
       // The board (#1022) is the same list without a stage: every post, in a column per status.
-      input: (before: PostCursor | undefined) => ({ ...(listTab ? { stage: listTab } : {}), ...filters, ...dayRange(search.from, search.to), limit: PAGE, ...(before ? { before } : {}) }),
+      // The Archived tab (#1299) lists the archived posts, whatever their stage; every other list leaves them out.
+      input: (before: PostCursor | undefined) => ({
+        ...(listTab === 'archived' ? { archived: true as const } : listTab ? { stage: listTab } : {}),
+        ...filters,
+        ...dayRange(search.from, search.to),
+        limit: PAGE,
+        ...(before ? { before } : {}),
+      }),
       initialPageParam: undefined as PostCursor | undefined,
       getNextPageParam: (page: Post[]) => {
         const last = page.at(-1);
@@ -618,25 +626,25 @@ export function SocialPage() {
   const rows = list.data?.pages.flat() ?? [];
   const reviewCount = review.data?.length ?? 0;
   const attentionCount = attention.data?.length ?? 0;
-  const filtered = Boolean(search.channel || search.label || search.q || search.from || search.to || search.mine);
+  const filtered = Boolean(search.channel || search.label || search.q || search.from || search.to || search.assignee || search.author);
   // The post filters (label, channel, search, mine) are the same in the lists, the board and the calendar (#1022): one
   // state, in the address. The metrics take the label only; the calendar's own month or week is its date range.
   const postFilters = tab === 'upcoming' || listTab !== null || tab === 'board' || tab === 'calendar';
   const labelFilter = (postFilters || tab === 'metrics') && (labelList.length > 0 || Boolean(search.label));
   // Posts picked for a bulk action (#635), in the list on screen; a new tab or filter starts afresh.
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.mine]);
+  useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.assignee, search.author]);
   const canDecide = role === 'owner' || role === 'admin';
   // Moving by days or hours (#945) is for owners and admins, like a single reschedule; the agenda offers only that.
   // Members and above send drafts to review in bulk on the Drafts and Attention lists (#1178).
   const bulkActions: readonly BulkAction[] = !canWrite
     ? []
     : listTab === 'review'
-      ? canDecide ? ['approve', 'move', 'cancel'] : ['cancel']
+      ? canDecide ? ['approve', 'move', 'cancel', 'archive'] : ['cancel', 'archive']
       : listTab === 'drafts'
-        ? canDecide ? ['submit', 'queue', 'move', 'cancel'] : ['submit', 'cancel']
+        ? canDecide ? ['submit', 'queue', 'move', 'cancel', 'archive'] : ['submit', 'cancel', 'archive']
         : listTab === 'attention'
-          ? canDecide ? ['submit', 'move', 'cancel'] : ['submit', 'cancel']
+          ? canDecide ? ['submit', 'move', 'cancel', 'archive'] : ['submit', 'cancel', 'archive']
           : [];
   // Labels and the assignee on many posts at once (#1057), find and replace (#1144) and a channel added (#1178), for
   // members and above, in the lists, the board and the calendar. So are copies moved by days or weeks (#1192), which the
@@ -644,10 +652,44 @@ export function SocialPage() {
   const editActions: readonly BulkAction[] = canWrite ? ['labels', 'assign', 'replace', 'addChannel', 'duplicate'] : [];
   // The channels a member may add to posts: live, and theirs (#1081).
   const channelOptions = (channels.data ?? []).filter((c) => c.status !== 'revoked' && scope.allows(c.id)).map((c) => ({ id: c.id, name: `${c.displayName} · ${providerName(c.provider)}` }));
-  const listActions: readonly BulkAction[] = bulkActions.length > 0 ? [...bulkActions, ...editActions] : listTab === 'done' && canWrite ? ['duplicate'] : [];
+  // Archived posts (#1299) are only brought back from their tab; a member's own posts, an owner's or admin's any (the
+  // server leaves the others out and says why).
+  const listActions: readonly BulkAction[] = !canWrite
+    ? []
+    : listTab === 'archived'
+      ? ['restore']
+      : bulkActions.length > 0
+        ? [...bulkActions, ...editActions]
+        : listTab === 'done'
+          ? ['duplicate', 'archive']
+          : [];
+  const boardActions: readonly BulkAction[] = editActions.length > 0 ? [...editActions, 'archive'] : [];
   const agendaActions: readonly BulkAction[] = [...(canDecide ? (['move'] as const) : []), ...editActions];
-  const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: canWrite });
+  // The members, for the bulk bar's assignee and the whose-posts filters (#1300), which every role may use.
+  const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: role !== undefined });
   const members = (org.data?.members ?? []).map((m) => ({ userId: m.userId, name: m.displayName ?? m.email }));
+  const myId = me.data?.userId;
+  // A whose-posts filter: anyone, the viewer, or a member; a link naming someone not in the list still shows it.
+  const memberFilter = (key: 'assignee' | 'author') => {
+    // The viewer's own id (a link someone else sent) is "me", never a former member.
+    const value = search[key] !== undefined && search[key] === myId ? 'me' : search[key];
+    const others = members.filter((m) => m.userId !== myId);
+    return (
+      <label className="text-xs">
+        <span className="text-subtle-foreground">{t(`filters.${key}`)}</span>
+        <NativeSelect className="mt-1 w-48" value={value ?? ''} onChange={(e) => setSearch({ [key]: e.target.value || undefined })}>
+          <NativeSelectOption value="">{t('filters.anyone')}</NativeSelectOption>
+          <NativeSelectOption value="me">{t('filters.me')}</NativeSelectOption>
+          {others.map((m) => (
+            <NativeSelectOption key={m.userId} value={m.userId}>
+              {m.name}
+            </NativeSelectOption>
+          ))}
+          {value && value !== 'me' && !others.some((m) => m.userId === value) && <NativeSelectOption value={value}>{t('filters.formerMember')}</NativeSelectOption>}
+        </NativeSelect>
+      </label>
+    );
+  };
   const toggle = (id: string) => setPicked((now) => { const next = new Set(now); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const excerptOf = (postId: string) => excerpt((rows.find((p) => p.id === postId) ?? upcoming.data?.find((p) => p.id === postId))?.body ?? '', 60) || t('emptyText');
   const channelName = (connectionId: string) => names.get(connectionId) ?? t('bulk.move.channelGone');
@@ -717,6 +759,15 @@ export function SocialPage() {
             </TabsTrigger>
           ))}
         </TabsList>
+        {/* Named filters, private or shared with the team (#1300): applied in one click, the address takes them. */}
+        {postFilters && (
+          <SavedViews
+            search={search}
+            members={members}
+            canShare={canWrite}
+            onApply={(next) => void navigate({ to: '/o/$slug/social', params: { slug }, search: next, replace: true })}
+          />
+        )}
         {(postFilters || labelFilter) && (
           <div className="flex flex-wrap items-end gap-3">
             {labelFilter && (
@@ -764,13 +815,13 @@ export function SocialPage() {
               </>
             )}
             {postFilters && (
-              <label className="flex items-center gap-2 pb-2 text-xs text-muted-foreground">
-                <Checkbox checked={search.mine === true} onCheckedChange={(on) => setSearch({ mine: on === true ? true : undefined })} />
-                {t('assign.mine')}
-              </label>
+              <>
+                {memberFilter('assignee')}
+                {memberFilter('author')}
+              </>
             )}
             {(postFilters ? filtered : Boolean(search.label)) && (
-              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, label: undefined, q: undefined, from: undefined, to: undefined, mine: undefined })}>
+              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, label: undefined, q: undefined, from: undefined, to: undefined, assignee: undefined, author: undefined })}>
                 {t('filters.clear')}
               </Button>
             )}
@@ -810,6 +861,8 @@ export function SocialPage() {
                 canDecide={role === 'owner' || role === 'admin'}
                 canWrite={canWrite}
                 filters={filters}
+                period={{ view: search.view, date: search.date }}
+                onPeriod={(next) => setSearch(next)}
                 bulk={
                   editActions.length > 0
                     ? (selected, clear) => (
@@ -844,11 +897,11 @@ export function SocialPage() {
                 <ErrorText>{errorMessage(list.error)}</ErrorText>
               ) : (
                 <>
-                  {editActions.length > 0 && (
+                  {boardActions.length > 0 && (
                     <div className="mb-2">
                       <BulkBar
                         posts={rows.filter((p) => picked.has(p.id))}
-                        actions={editActions}
+                        actions={boardActions}
                         canDecide={canDecide}
                         excerptOf={excerptOf}
                         channelName={channelName}
@@ -893,7 +946,7 @@ export function SocialPage() {
           </div>
         </TabsContent>
         <TabsContent value="library">{tab === 'library' && <Library slug={slug} canWrite={canWrite} />}</TabsContent>
-        {(['review', 'attention', 'drafts', 'done'] as const).map((id) => (
+        {(['review', 'attention', 'drafts', 'done', 'archived'] as const).map((id) => (
           <TabsContent key={id} value={id}>
             {tab === id && (
               <>
@@ -938,7 +991,7 @@ export function SocialPage() {
                       <div key={post.id} className="flex items-center gap-2">
                         {listActions.length > 0 && <Checkbox checked={picked.has(post.id)} onCheckedChange={() => toggle(post.id)} aria-label={t('bulk.select', { text: excerpt(post.body, 40) || t('emptyText') })} />}
                         <div className="min-w-0 flex-1">
-                          <PostRow post={post} slug={slug} names={names} labels={labelList} right={f.dateTime(post.updatedAt)} />
+                          <PostRow post={post} slug={slug} names={names} labels={labelList} right={id === 'archived' && post.archivedAt ? t('archivedAt', { when: f.dateTime(post.archivedAt) }) : f.dateTime(post.updatedAt)} />
                         </div>
                       </div>
                     ))}

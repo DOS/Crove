@@ -225,7 +225,7 @@ export function SocialNotificationsPage() {
     else if (target?.to === 'channels') void navigate({ to: '/o/$slug/social/channels', params: { slug } });
     else if (target?.to === 'feeds') void navigate({ to: '/o/$slug/social/feeds', params: { slug } });
     else if (target?.to === 'compose') void navigate({ to: '/o/$slug/social/new', params: { slug }, search: { channel: target.channelId } });
-    else if (target?.to === 'mine') void navigate({ to: '/o/$slug/social', params: { slug }, search: { mine: true } });
+    else if (target?.to === 'mine') void navigate({ to: '/o/$slug/social', params: { slug }, search: { assignee: 'me' } });
   };
   const items = list.data?.items ?? [];
   return (

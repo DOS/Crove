@@ -25,6 +25,9 @@ import {
   zOAuthProvider,
   zOAuthState,
   zSocialBulkAddChannel,
+  zSocialBulkArchive,
+  zSocialPostArchive,
+  zSocialPostArchived,
   zSocialBulkAddChannelResult,
   zSocialBulkAssign,
   zSocialBulkLabels,
@@ -170,6 +173,9 @@ import {
   zPeriodUnlockInput,
   zTaxRegistryEntry,
   zVoucherType,
+  zSocialMemberFilter,
+  zSocialSavedView,
+  zSocialSavedViewSave,
 } from './schemas.ts';
 import { zCashVoucherPage, zCashVoucherRequest, zVoucherCursor } from './cash-voucher.ts';
 import { zDepreciationRequest, zJournalVoucherRequest, zYearClosingRequest } from './journal-voucher.ts';
@@ -379,10 +385,14 @@ export const contract = {
             connectionId: zId.optional(),
             // Posts with this label (#639).
             labelId: zId.optional(),
-            // Posts assigned to the viewer (#640).
-            assignee: z.literal('me').optional(),
+            // Posts assigned to the viewer (#640) or to a member (#1300).
+            assignee: zSocialMemberFilter.optional(),
+            // Posts written by the viewer or a member (#1300).
+            author: zSocialMemberFilter.optional(),
             // Drafts with no planned time and no channel time (#1145), for the calendar's side list.
             undated: z.literal(true).optional(),
+            // Archived posts only (#1299); without it, the lists leave them out.
+            archived: z.literal(true).optional(),
             search: z.string().trim().min(1).max(200).optional(),
             // The last post of the previous page (newest change first).
             before: z.strictObject({ updatedAt: z.iso.datetime({ offset: true }), postId: zId }).optional(),
@@ -484,6 +494,13 @@ export const contract = {
       // One channel added to up to 100 posts (#1178), each through the single add; the answer names each post left out
       // and why, and what each added channel still lacks for its rules.
       bulkAddChannel: oc.input(zSocialBulkAddChannel).output(zSocialBulkAddChannelResult),
+      // Archives a post, or brings an archived one back unchanged (#1299): members their own posts, owners and admins
+      // any. Refused while a channel is scheduled, going out, paused, waiting for a person or being taken down.
+      archive: oc.input(zSocialPostArchive).output(zSocialPostArchived),
+      restore: oc.input(zSocialPostArchive).output(zSocialPostArchived),
+      // The same for up to 100 posts at once; the answer names each post left out and why.
+      bulkArchive: oc.input(zSocialBulkArchive).output(zSocialBulkResult),
+      bulkRestore: oc.input(zSocialBulkArchive).output(zSocialBulkResult),
       // One draft per library file (#1080), all or none: every file is checked against every channel first, and a file
       // that does not fit one is reported with nothing saved. A retry with the same idempotencyKey returns the first answer.
       createFromMedia: oc.input(zSocialDraftsFromMediaFields.extend({ idempotencyKey: zId }).refine(channelsOrSet, 'channels or a channel set')).output(zSocialDraftsFromMediaResult),
@@ -664,6 +681,13 @@ export const contract = {
       add: oc.input(z.strictObject({ url: z.url({ protocol: /^https?$/ }).max(2000), connectionIds: z.array(zId).min(1).max(20) })).output(z.object({ feedId: zId })),
       update: oc.input(z.strictObject({ feedId: zId, connectionIds: z.array(zId).min(1).max(20).optional(), paused: z.boolean().optional() })).output(z.object({ feedId: zId })),
       remove: oc.input(z.strictObject({ feedId: zId })).output(z.object({ feedId: zId })),
+    },
+    // Saved views of the posts (#1300): named filters, private or shared with the org, at most 20 per member. Members
+    // see their own and the shared ones; the owner changes and deletes a view, and owners and admins a shared one.
+    savedViews: {
+      list: oc.input(z.object({})).output(z.array(zSocialSavedView)),
+      save: oc.input(zSocialSavedViewSave).output(z.object({ viewId: zId })),
+      remove: oc.input(z.strictObject({ viewId: zId })).output(z.object({ viewId: zId })),
     },
     // Saved snippets (#584): members create them and change their own; owners and admins any.
     snippets: {

@@ -226,10 +226,14 @@ export const groupMovable = (group: Pick<CalendarGroup, 'items'>, may: Ability):
 // shown at (expectedAt, #956), and its drafts at the post's planned time through one social.post.update on the revision
 // shown (#1145); the others stay, each with its reason. 'past' when the time is gone, refused here with nothing sent;
 // null when nothing would move or the minute would not change.
+// Under a channel filter a chip holds that channel only (#1044), but the planned time is the post's, one for all its
+// drafts as the composer sets it: moving it moves the drafts of the channels outside the filter too (#1233). They move
+// along rather than being split off, and the plan names them (outside), so the result counts and names every channel
+// that moved. A scheduled channel has its own time and moves alone.
 export interface GroupMove {
   at: Date;
   reschedules: { item: CalendarItem; request: { variantId: string; at: string; expectedAt: string } }[];
-  plan: { request: PlanRequest; items: CalendarItem[] } | null;
+  plan: { request: PlanRequest; items: CalendarItem[]; outside: CalendarItem[] } | null;
   stayed: { item: CalendarItem; reason: Stay }[];
 }
 
@@ -246,13 +250,20 @@ export function groupDrop(group: CalendarGroup, day: Date, now: Date, may: Abili
     else if (m === 'reschedule') move.reschedules.push({ item, request: { variantId: item.v.id, at: at.toISOString(), expectedAt: item.v.effectiveAt ?? item.at.toISOString() } });
     else move.stayed.push({ item, reason: m });
   }
-  if (planned.length > 0) move.plan = { request: { postId: group.post.id, revision: group.post.revision, scheduledAt: at.toISOString() }, items: planned };
+  if (planned.length > 0) {
+    const shown = new Set(group.items.map((i) => i.v.id));
+    const outside = calendarItems([group.post]).filter((i) => !shown.has(i.v.id) && followsPlan(i));
+    move.plan = { request: { postId: group.post.id, revision: group.post.revision, scheduledAt: at.toISOString() }, items: planned, outside };
+  }
   return move;
 }
 
 export interface GroupMoveResult {
   at: Date;
+  // Every channel that moved, those outside a channel filter included.
   moved: CalendarItem[];
+  // The drafts outside the channel filter that moved with the post's planned time (#1233).
+  alongside: CalendarItem[];
   stayed: { item: CalendarItem; reason: Stay }[];
   refused: { item: CalendarItem; error: unknown }[];
 }
@@ -263,7 +274,7 @@ export async function runGroupMove(
   move: GroupMove,
   api: { reschedule: (request: GroupMove['reschedules'][number]['request']) => Promise<unknown>; plan: (request: PlanRequest) => Promise<unknown> },
 ): Promise<GroupMoveResult> {
-  const result: GroupMoveResult = { at: move.at, moved: [], stayed: move.stayed, refused: [] };
+  const result: GroupMoveResult = { at: move.at, moved: [], alongside: [], stayed: move.stayed, refused: [] };
   for (const r of move.reschedules) {
     try {
       await api.reschedule(r.request);
@@ -275,7 +286,8 @@ export async function runGroupMove(
   if (move.plan) {
     try {
       await api.plan(move.plan.request);
-      result.moved.push(...move.plan.items);
+      result.moved.push(...move.plan.items, ...move.plan.outside);
+      result.alongside = move.plan.outside;
     } catch (error) {
       result.refused.push(...move.plan.items.map((item) => ({ item, error })));
     }

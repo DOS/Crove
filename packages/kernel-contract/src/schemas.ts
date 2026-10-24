@@ -1421,6 +1421,9 @@ export const zSocialPost = z.object({
   openComments: z.number().int().min(0),
   // The idea it was made from (#701); on a single post's read only.
   idea: z.object({ id: zId, title: z.string() }).nullable().optional(),
+  // When and by whom it was archived (#1299); null while it is not.
+  archivedAt: z.string().nullable(),
+  archivedBy: zId.nullable(),
 });
 
 // What a variant says, as the review diff compares it (#944); a media file's mime is null when the org no longer has it.
@@ -1552,6 +1555,43 @@ export const zSocialSnippet = z.object({
 const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string().trim().min(1).max(10_000), provider: z.string().min(1).max(32).nullable(), isTemplate: z.boolean() };
 export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
 export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
+// Whose posts (#1300): the viewer ("me") or a member by id; the list refuses an id that is not a member of the org.
+export const zSocialMemberFilter = z.union([z.literal('me'), zId]);
+// The Social home's tabs a saved view may open (#1300): the post lists, the calendar and the board.
+export const SOCIAL_VIEW_TABS = ['upcoming', 'calendar', 'board', 'review', 'attention', 'drafts', 'done', 'archived'] as const;
+// A saved view's filters (#1300), as the Social home's link carries them: the tab, the channel, the label, the text,
+// the list's days, whose posts (assignee, author) and the calendar's month or week. Never the calendar's date: a view
+// opens on today.
+export const zSocialViewFilters = z.strictObject({
+  tab: z.enum(SOCIAL_VIEW_TABS).optional(),
+  channel: zId.optional(),
+  label: zId.optional(),
+  q: z.string().trim().min(1).max(200).optional(),
+  from: zLocalDate.optional(),
+  to: zLocalDate.optional(),
+  assignee: zSocialMemberFilter.optional(),
+  author: zSocialMemberFilter.optional(),
+  view: z.enum(['month', 'week']).optional(),
+});
+// A saved view of the posts (#1300): the viewer's own (mine) or one shared with the org by another member (ownerId);
+// canChange: the viewer may rename, change or delete it (their own, or a shared one for an owner or admin).
+export const zSocialSavedView = z.object({
+  id: zId,
+  name: z.string(),
+  filters: zSocialViewFilters,
+  shared: z.boolean(),
+  ownerId: zId,
+  mine: z.boolean(),
+  canChange: z.boolean(),
+  updatedAt: z.string(),
+});
+// A new view (no viewId) or a change of one: its name (unique per owner), filters and whether the org sees it.
+export const zSocialSavedViewSave = z.strictObject({
+  viewId: zId.optional(),
+  name: z.string().trim().min(1).max(60),
+  filters: zSocialViewFilters,
+  shared: z.boolean(),
+});
 // What works (#705): a group of a channel's posts and its median engagement against the channel's; a format group also
 // the median average watch time in milliseconds of its posts that report one (#1147, Reels). A group and a channel carry
 // their engagement rate (#1157) when their posts report reach or impressions.
@@ -1661,7 +1701,9 @@ export const zSocialLabelUpdate = z.strictObject({ labelId: zId, name: zLabelNam
 // post may carry. A find and replace (#1144) also leaves out a post where nothing matches, one with a channel going out
 // that the change would reach, one the change would take over a length or channel limit, one whose link would no longer
 // be a link, and one the change would give a blocked word. Adding a channel (#1178) also leaves out a post already on
-// that channel and one with as many channels as a post may have.
+// that channel and one with as many channels as a post may have. Archiving (#1299) also leaves out a post with a channel
+// scheduled or paused waiting to go out, one with a channel going out or waiting for a person, and one with a takedown
+// from its platform on its way.
 export const SOCIAL_BULK_EDIT_MAX = 100;
 export const SOCIAL_BULK_SKIP_REASONS = [
   'not_found',
@@ -1676,6 +1718,12 @@ export const SOCIAL_BULK_SKIP_REASONS = [
   'banned_words',
   'already_on',
   'too_many_channels',
+  'scheduled',
+  'removing',
+  // Find and replace and adding a channel leave out an archived post (#1299): it is restored first. Archiving leaves out
+  // an open copy of an evergreen or recurring post, which holds its source's next repeat back.
+  'archived',
+  'repeat_copy',
 ] as const;
 export type SocialBulkSkipReason = (typeof SOCIAL_BULK_SKIP_REASONS)[number];
 const unique = (ids: readonly string[]) => new Set(ids).size === ids.length;
@@ -1690,6 +1738,10 @@ export const zSocialBulkLabels = z
 // The assignee (null: nobody) of every post; dueAt null clears the due date, left out keeps each post's own.
 export const zSocialBulkAssign = z.strictObject({ postIds: zBulkPostIds, assigneeUserId: zId.nullable(), dueAt: z.iso.datetime({ offset: true }).nullable().optional() });
 export const zSocialBulkResult = z.object({ done: z.array(zId), skipped: z.array(z.object({ postId: zId, reason: z.enum(SOCIAL_BULK_SKIP_REASONS) })) });
+// Posts archived or restored (#1299): one, or up to SOCIAL_BULK_EDIT_MAX from the bulk bar with the bulk answer.
+export const zSocialPostArchive = z.strictObject({ postId: zId });
+export const zSocialPostArchived = z.object({ postId: zId, archived: z.boolean(), changed: z.boolean() });
+export const zSocialBulkArchive = z.strictObject({ postIds: zBulkPostIds });
 // One channel added to every post (#1178), as a draft with the post's content and planned time; the answer also says,
 // per channel added, what its rules still miss (an empty list: it already fits them).
 export const zSocialBulkAddChannel = z.strictObject({ postIds: zBulkPostIds, connectionId: zId });
@@ -1861,7 +1913,7 @@ export const zSocialSuggestionDecided = z.object({
 // One entry of a post's timeline (#582): a comment, a decision, or what happened to the post or one of its channels.
 export const zSocialActivityItem = z.object({
   id: z.string(),
-  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'live_edit', 'live_edited', 'live_edit_failed', 'queue_moved', 'restored', 'labeled', 'assigned']),
+  kind: z.enum(['created', 'comment', 'edited', 'channels_added', 'submitted', 'decision', 'scheduled', 'rescheduled', 'evergreen', 'recurrence', 'published', 'failed', 'cancelled', 'auto_replied', 'auto_reply_failed', 'reposted', 'repost_failed', 'removed', 'live_edit', 'live_edited', 'live_edit_failed', 'queue_moved', 'restored', 'labeled', 'assigned', 'archived', 'unarchived']),
   at: z.string(),
   userId: zId.nullable(),
   name: z.string().nullable(),
