@@ -92,7 +92,8 @@ test('import the tax portal purchase list and see which invoices Crove lacks', a
   const form = page.getByRole('form', { name: 'Mã số thuế' });
   await form.getByLabel('Mã số thuế').fill(BUYER_TAX_CODE);
   await form.getByRole('button', { name: 'Lưu' }).click();
-  await expect(page.getByText(BUYER_TAX_CODE, { exact: true })).toBeVisible();
+  // The org's own field (a <dd>): the legal entities card shows the default entity's code too (#1278).
+  await expect(page.getByRole('definition').getByText(BUYER_TAX_CODE, { exact: true })).toBeVisible();
 
   await test.step('upload a purchase e-invoice; it waits in the Inbox', async () => {
     await nav.getByRole('link', { name: 'Hộp thư chứng từ' }).click();
