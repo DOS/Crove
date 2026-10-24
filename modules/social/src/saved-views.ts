@@ -78,7 +78,7 @@ export const savedViewSave = defineCommand({
     // Sharing shows the view to the whole org: not for viewers, who only read.
     if (input.shared && ctx.role === 'viewer') throw new DomainError('FORBIDDEN', 403, 'Người chỉ xem không chia sẻ được chế độ xem');
     // Whose posts: a member of the org, as the list asks.
-    if ((await membersOutside(ctx, input.filters)).length > 0) throw new DomainError('MEMBER_NOT_FOUND', 422, 'Người này không phải thành viên của tổ chức');
+    if ((await membersOutside(ctx, input.filters)).length > 0) throw new DomainError('MEMBER_NOT_FOUND', 404, 'Không tìm thấy thành viên này trong tổ chức');
     // The contract bounds every field, so the object stays well under the table's 2 KB check.
     const filters = JSON.stringify(compact(input.filters));
 

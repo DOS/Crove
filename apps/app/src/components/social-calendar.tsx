@@ -460,6 +460,7 @@ function MoveResult({ result, names }: { result: GroupMoveResult; names: Map<str
   return (
     <div className="space-y-0.5">
       <p>{t('groupDone', { count: result.moved.length, when: f.dateTime(result.at.toISOString()) })}</p>
+      {result.alongside.length > 0 && <p>{t('groupAlongside', { channels: result.alongside.map((i) => channelLabel(i, names)).join(', ') })}</p>}
       {result.stayed.map((s) => (
         <p key={s.item.v.id}>{t('groupStayed', { channel: channelLabel(s.item, names), reason: t(`stay.${s.reason}`) })}</p>
       ))}
@@ -475,7 +476,9 @@ function MoveResult({ result, names }: { result: GroupMoveResult; names: Map<str
 // Every post and channel of a day (#1220), opened by its "+N": a modal dialog, as the command palette is, so focus stays
 // in it, Esc closes it, and the focus goes back to the button that opened it (DESIGN 4.5). It starts on the heading, so
 // a long day is read from the top. Each row links to its post and carries what the chip's menu and picking offer
-// (actions). children: the date editor and the notices, shown here while the dialog is open.
+// (actions). children: the date editor and the notices, shown here while the dialog is open. returnTo (#1233): where
+// the focus goes on close, asked then, since the "+N" may be gone by then (the day now shows every chip) and Safari on
+// macOS does not focus a button on click; without it, the element that had the focus when the dialog opened.
 export function DayDialog({
   title,
   groups,
@@ -484,6 +487,7 @@ export function DayDialog({
   editing,
   actions,
   onClose,
+  returnTo,
   children,
 }: {
   title: string;
@@ -493,8 +497,13 @@ export function DayDialog({
   editing: boolean;
   actions: (group: CalendarGroup, text: string) => ReactNode;
   onClose: () => void;
+  returnTo?: () => HTMLElement | null;
   children: ReactNode;
 }) {
+  const back = useRef(returnTo);
+  useEffect(() => {
+    back.current = returnTo;
+  });
   const t = useTranslations('social');
   const f = useFormat();
   const dialog = useRef<HTMLDialogElement>(null);
@@ -508,7 +517,8 @@ export function DayDialog({
     heading.current?.focus();
     return () => {
       if (el.open) el.close();
-      if (trigger?.isConnected) trigger.focus();
+      const to = back.current ? back.current() : trigger;
+      if (to?.isConnected) to.focus();
     };
   }, []);
   // The editor closed (saved or cancelled): the focus, left on a button now gone, goes back to the top.
@@ -573,8 +583,15 @@ export function DayDialog({
 
 // filters: the Social home's post filters (label #639, channel, text, mine #640), the same as the lists and the board
 // (#1022). canWrite: may add and change notes on dates (#794) and plan drafts (#1145).
-export type CalendarFilters = { connectionId?: string; labelId?: string; search?: string; assignee?: 'me' };
+export type CalendarFilters = { connectionId?: string; labelId?: string; search?: string; assignee?: string; author?: string };
+// The month or week shown and its day (YYYY-MM-DD), kept in the address by the Social home (#1300); date undefined is
+// today.
+export interface CalendarPeriod {
+  view?: View | undefined;
+  date?: string | undefined;
+}
 // bulk: the bulk bar for the posts picked in the month or week shown, with a way to clear them; without it, no picking.
+// period and onPeriod: the period shown, held by the caller; without them the calendar holds it itself.
 export function SocialCalendar({
   slug,
   names,
@@ -582,6 +599,8 @@ export function SocialCalendar({
   canWrite,
   filters = {},
   bulk,
+  period,
+  onPeriod,
 }: {
   slug: string;
   names: Map<string, string>;
@@ -589,12 +608,24 @@ export function SocialCalendar({
   canWrite: boolean;
   filters?: CalendarFilters;
   bulk?: ((posts: Post[], clear: () => void) => ReactNode) | undefined;
+  period?: CalendarPeriod;
+  onPeriod?: (next: CalendarPeriod) => void;
 }) {
   const t = useTranslations('social');
   const f = useFormat();
   const navigate = useNavigate();
-  const [view, setView] = useState<View>('month');
-  const [anchor, setAnchor] = useState(() => startOfDay(new Date()));
+  const [ownPeriod, setOwnPeriod] = useState<CalendarPeriod>({});
+  const shownPeriod = onPeriod ? (period ?? {}) : ownPeriod;
+  const view: View = shownPeriod.view ?? 'month';
+  const anchorDay = shownPeriod.date;
+  const anchor = useMemo(() => {
+    const m = anchorDay ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(anchorDay) : null;
+    return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : startOfDay(new Date());
+  }, [anchorDay]);
+  const setPeriod = (next: CalendarPeriod) => (onPeriod ? onPeriod(next) : setOwnPeriod(next));
+  // Today is no date in the address, so a link without one always opens on the day it is opened.
+  const setView = (next: View) => setPeriod({ view: next === 'month' ? undefined : next, date: anchorDay });
+  const setAnchor = (day: Date) => setPeriod({ view: shownPeriod.view, date: dayId(day) === dayId(new Date()) ? undefined : dayId(day) });
   const days = useMemo(() => viewDays(view, anchor), [view, anchor]);
   const range = useMemo(() => ({ from: (days[0] as Date).toISOString(), to: addDays(days.at(-1) as Date, 1).toISOString() }), [days]);
   const posts = useQuery(orpc.social.posts.list.queryOptions({ input: { ...range, ...filters, limit: 200 } }));
@@ -625,6 +656,14 @@ export function SocialCalendar({
   const byDay = useMemo(() => groupsByDay(groups), [groups]);
   // The day whose full list is open (#1220).
   const [dayOpen, setDayOpen] = useState<string | null>(null);
+  // Where the focus goes back when the day's list closes (#1233): its "+N", or the day itself once the "+N" is gone.
+  const moreButtons = useRef(new Map<string, HTMLButtonElement>());
+  const dayCells = useRef(new Map<string, HTMLDivElement>());
+  const keep = <E extends HTMLElement>(map: Map<string, E>, id: string) => (el: E | null) => void (el ? map.set(id, el) : map.delete(id));
+  const focusBackTo = (id: string) => () => {
+    const more = moreButtons.current.get(id);
+    return more?.isConnected ? more : (dayCells.current.get(id) ?? null);
+  };
   const [over, setOver] = useState<string | null>(null);
   const [dragged, setDragged] = useState<Dragged | null>(null);
   // Set after the drag has started: changing the page in dragstart itself ends some browsers' drag at once.
@@ -728,7 +767,7 @@ export function SocialCalendar({
   };
   const may = { canDecide, canWrite };
   const today = dayId(new Date());
-  const shift = (n: number) => setAnchor((a) => (view === 'month' ? new Date(a.getFullYear(), a.getMonth() + n, 1) : addDays(a, 7 * n)));
+  const shift = (n: number) => setAnchor(view === 'month' ? new Date(anchor.getFullYear(), anchor.getMonth() + n, 1) : addDays(anchor, 7 * n));
   const draggedOf = (e: DragEvent): Dragged | null => {
     const data = e.dataTransfer.getData('text/plain');
     return dragged ?? (data.startsWith('post:') ? { kind: 'post', id: data.slice(5) } : data.startsWith('group:') ? { kind: 'group', key: data.slice(6) } : null);
@@ -909,7 +948,9 @@ export function SocialCalendar({
       ) : (
         canWrite && <p className="text-xs text-subtle-foreground">{t(canDecide ? 'calendar.dragHint' : 'calendar.dragHintMember')}</p>
       )}
-      {!picking && canWrite && openSlots.length > 0 && <p className="text-xs text-subtle-foreground">{t(canDecide ? 'calendar.slotHint' : 'calendar.slotHintMember')}</p>}
+      {/* Under a channel filter a chip is that channel alone, but a draft's planned time is the post's (#1233). */}
+      {!picking && canWrite && connectionId !== undefined && <p className="text-xs text-subtle-foreground">{t('calendar.filteredDragHint')}</p>}
+      {!picking && canWrite && openSlots.length > 0 &&<p className="text-xs text-subtle-foreground">{t(canDecide ? 'calendar.slotHint' : 'calendar.slotHintMember')}</p>}
       {noteDraft && <NoteEditor key={'note' in noteDraft ? noteDraft.note.id : noteDraft.day} draft={noteDraft} onClose={() => setNoteDraft(null)} />}
       {exporting && canWrite && <PlanExportPanel slug={slug} month={anchor} onClose={() => setExporting(false)} />}
       {!dayOpen && editor}
@@ -970,13 +1011,16 @@ export function SocialCalendar({
                     <div
                       key={id}
                       data-day={id}
+                      ref={keep(dayCells.current, id)}
+                      // Focusable by script only: where the focus lands when the day's list closes and its "+N" is gone.
+                      tabIndex={-1}
                       onDragOver={target ? (e) => (e.preventDefault(), setOver(id)) : undefined}
                       onDragLeave={() => setOver((o) => (o === id ? null : o))}
                       onDrop={target ? drop(d) : undefined}
                       title={off ? t('calendar.outsideCampaign') : undefined}
                       data-off-campaign={off || undefined}
                       className={cn(
-                        'group flex min-h-24 flex-col gap-1 bg-background p-1.5',
+                        'group flex min-h-24 flex-col gap-1 bg-background p-1.5 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset',
                         outside && 'bg-muted/40',
                         off && 'bg-muted/80',
                         over === id && 'ring-2 ring-primary ring-inset',
@@ -1031,6 +1075,7 @@ export function SocialCalendar({
                         <button
                           type="button"
                           aria-haspopup="dialog"
+                          ref={keep(moreButtons.current, id)}
                           onClick={() => setDayOpen(id)}
                           data-testid="calendar-more"
                           className="inline-flex min-h-6 self-start items-center rounded px-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
@@ -1129,6 +1174,7 @@ export function SocialCalendar({
           names={names}
           editing={planning !== null}
           onClose={() => setDayOpen(null)}
+          returnTo={focusBackTo(dayOpen)}
           actions={(group, text) => {
             const target = menuOf(group);
             if (!target && !bulk) return null;

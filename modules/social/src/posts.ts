@@ -1800,7 +1800,7 @@ export const postList = defineQuery({
     const scope = await channelScope(ctx);
     if (input.connectionId && scope !== null && !scope.has(input.connectionId)) return [];
     // Whose posts (#1300): only a member of the org, so an id from elsewhere is said, not answered with an empty list.
-    if ((await membersOutside(ctx, input)).length > 0) throw new DomainError('MEMBER_NOT_FOUND', 422, 'Người này không phải thành viên của tổ chức');
+    if ((await membersOutside(ctx, input)).length > 0) throw new DomainError('MEMBER_NOT_FOUND', 404, 'Không tìm thấy thành viên này trong tổ chức');
     let q = postFilterQuery(ctx, scope, input);
     // Ordered and paged by the change time as the answer carries it (milliseconds), so a page boundary inside one
     // millisecond neither repeats nor skips a post.
