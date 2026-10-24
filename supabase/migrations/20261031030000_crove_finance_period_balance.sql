@@ -1,29 +1,37 @@
--- Balances per account and month, written only by the posting definer and reconciled nightly (issue #1284, plan §13
--- Phase 2a exit criteria, ADR-0021 section 3). Idempotent; applied files stay untouched.
+-- Balances per account and month as append-only deltas, written only by the posting definer and reconciled nightly
+-- (issue #1284, plan §13 Phase 2a exit criteria, ADR-0021 section 3). Idempotent; applied files stay untouched.
 --
--- crove_finance.period_balance   one row per (org, account, month): the debit and credit totals and the line count of
---                                every journal line whose entry is dated in that month. Kept as gross totals, not a net
---                                amount, so a reversal adds its own (swapped) lines to its own month, exactly as the
---                                ledger has them. Tenant roles read their org's rows; only crove_definer_tenant, the
---                                owner of post_journal_entry(), inserts and updates them, and no runtime role deletes
---                                one. Keyed per org, not per legal entity: journal lines carry no legal_entity_id yet
---                                (ADR-0021 section 7); the key gains it when they do.
+-- crove_finance.period_balance_delta   what one journal entry adds to one account in its month: the debit and credit
+--                                      totals and the line count of the entry's lines on that account. One row per
+--                                      (org, entry, account), appended in the transaction that posts the entry, never
+--                                      updated or deleted (append-only triggers). A month's balance of an account is
+--                                      the sum of its rows; a reversal appends its own (swapped) lines in its own
+--                                      month, as the ledger has them. Tenant roles read their org's rows; only
+--                                      crove_definer_tenant, the owner of post_journal_entry(), inserts them. Keyed per
+--                                      org, not per legal entity: journal lines carry no legal_entity_id yet (#1280,
+--                                      ADR-0021 section 7); a legal entity column joins when they do.
+--
+-- Why deltas and not one row per account and month updated in place (decided on #1284): an updated row is locked by
+-- every posting that touches the account until that posting commits, so all postings of an org on a shared account
+-- (331, 1111, 1331) would queue behind each other, across document types and series. ADR-0021 allows a posting one
+-- counter row lock (its voucher series). Measured with 50 concurrent postings and 5 ms of work after the posting in
+-- the same transaction: 142 tps with a row updated in place, 3,315 with appended deltas (the ADR's measurement
+-- section has the table).
 --
 -- crove_finance.post_journal_entry(date, text, text, uuid, jsonb, uuid, int)
 --   Same body as 20261031000000, plus one statement after the entry has balanced: the request's lines, summed per
---   account, are added to the entry month's rows (INSERT ... ON CONFLICT DO UPDATE), in account order so two postings
---   never take the same rows in opposite orders. A replay returns before it and adds nothing; a refusal rolls back
---   with it. This takes one row lock per distinct account of the entry, held until the posting transaction ends;
---   the measurement and the decision against ADR-0021's lock cap are in docs/adr/0021-finance-kernel-support.md.
+--   account, are appended as the entry's deltas. A replay returns before it and appends nothing; a refusal rolls back
+--   with it; the unique key (org, entry, account) refuses a second delta for the same entry and account.
 --
 -- crove_finance.period_balance_differences(int)
---   For the nightly reconciler (crove_worker only): every (org, account, month) whose totals or line count differ
---   between period_balance and the journal lines, with which of them differ, at most p_limit rows. Owned by the
---   migration runner, which owns journal_line and period_balance and is not filtered by their row security, so it
---   compares every line whatever a tenant role could see (as require_entry_balanced does, #76). It returns no amounts.
+--   For the nightly reconciler (crove_worker only): every (org, entry, account, month) where the deltas and the journal
+--   lines disagree, with what differs, at most p_limit rows. Compared per entry, so an entry and its delta that agree
+--   per month but sit in different entries still show. Owned by the migration runner, which owns both tables and is
+--   not filtered by their row security, so it compares every line whatever a tenant role could see (as
+--   require_entry_balanced does, #76). It returns references only, no amounts.
 --
--- The existing lines are summed into the table by the next migration (20261031030100), in its own transaction, once
--- this body is the one every new posting runs.
+-- The entries posted before this migration get their deltas from the next one (20261031030100), in its own
+-- transaction, once this body is the one every new posting runs.
 SET LOCAL lock_timeout = '2s';
 
 -- A runner that is not a superuser (hosted PostgreSQL) needs the definer role's privileges to replace the posting
@@ -38,30 +46,34 @@ END $$;
 -- ---------------------------------------------------------------------------
 -- The table
 -- ---------------------------------------------------------------------------
--- migration-lint: cross-module the balance rows belong to an org: a foreign key to the kernel's tenant row, as every tenant table has.
-CREATE TABLE IF NOT EXISTS crove_finance.period_balance (
+-- Totals are plain numeric: the sum of an entry's lines on one account is not limited to one line's amount domain, so
+-- a large entry is never refused for its delta. Every value is still a sum of amount values (4 decimals at most).
+CREATE TABLE IF NOT EXISTS crove_finance.period_balance_delta (
   org_id uuid NOT NULL REFERENCES crove_kernel.tenant (org_id) ON DELETE CASCADE,
   id uuid NOT NULL DEFAULT crove_kernel.uuid_v7(),
+  entry_id uuid NOT NULL,
   account_code text NOT NULL,
   period_month date NOT NULL,
-  debit crove_finance.amount NOT NULL DEFAULT 0 CHECK (debit >= 0),
-  credit crove_finance.amount NOT NULL DEFAULT 0 CHECK (credit >= 0),
-  line_count bigint NOT NULL DEFAULT 0 CHECK (line_count >= 0),
+  debit numeric NOT NULL CHECK (debit >= 0),
+  credit numeric NOT NULL CHECK (credit >= 0),
+  line_count int NOT NULL CHECK (line_count > 0),
   PRIMARY KEY (org_id, id),
-  CONSTRAINT period_balance_account_month_uq UNIQUE (org_id, account_code, period_month),
-  CONSTRAINT period_balance_month_start CHECK (EXTRACT(DAY FROM period_month) = 1)
+  -- One delta per entry and account; it also backs the entry foreign key (G3).
+  CONSTRAINT period_balance_delta_entry_account_uq UNIQUE (org_id, entry_id, account_code),
+  CONSTRAINT period_balance_delta_entry_fk FOREIGN KEY (org_id, entry_id) REFERENCES crove_finance.journal_entry (org_id, id),
+  CONSTRAINT period_balance_delta_month_start CHECK (EXTRACT(DAY FROM period_month) = 1)
 );
 
-SELECT crove_kernel.apply_tenant_rls('crove_finance.period_balance');
--- Tenant roles read; only the posting definer writes. Nothing deletes a row but the cascade from its tenant row,
--- which the kept ledger rows already refuse.
-REVOKE INSERT, UPDATE, DELETE ON crove_finance.period_balance FROM crove_tenant;
-GRANT SELECT, INSERT, UPDATE ON crove_finance.period_balance TO crove_definer_tenant;
+SELECT crove_kernel.apply_tenant_rls('crove_finance.period_balance_delta', true);
+SELECT crove_kernel.make_append_only('crove_finance.period_balance_delta');
+-- Tenant roles read; only the posting definer inserts (as for journal_entry and journal_line, 20261014090100).
+REVOKE INSERT ON crove_finance.period_balance_delta FROM crove_tenant;
+GRANT INSERT ON crove_finance.period_balance_delta TO crove_definer_tenant;
 
 -- ---------------------------------------------------------------------------
--- The posting path, keeping the balances
+-- The posting path, appending the deltas
 -- ---------------------------------------------------------------------------
--- Same as 20261031000000 up to the balance check; the balance statement follows it.
+-- Same as 20261031000000 up to the balance check; the delta statement follows it.
 CREATE OR REPLACE FUNCTION crove_finance.post_journal_entry(
   p_entry_date date,
   p_description text,
@@ -183,18 +195,14 @@ BEGIN
   FROM pg_catalog.jsonb_to_recordset(p_lines) AS l (line_no int, account_code text, debit numeric, credit numeric, party_id uuid, memo text);
   PERFORM crove_finance.assert_entry_balanced(v_org, v_entry);
 
-  -- The balances, last, so their row locks are held for as short a time as the posting allows. Summed from the
-  -- request, which is exactly what the insert above stored (the lines are not read back: a line hidden from this role
-  -- by a policy would otherwise be missed). Account order, so concurrent postings lock shared rows in one order and
-  -- cannot deadlock on them.
-  INSERT INTO crove_finance.period_balance AS b (org_id, account_code, period_month, debit, credit, line_count)
-  SELECT v_org, l.account_code, pg_catalog.date_trunc('month', p_entry_date)::date,
+  -- The entry's deltas, summed from the request, which is exactly what the insert above stored (the lines are not read
+  -- back: a line hidden from this role by a policy would otherwise be missed). Appended rows lock nothing another
+  -- posting needs.
+  INSERT INTO crove_finance.period_balance_delta (org_id, entry_id, account_code, period_month, debit, credit, line_count)
+  SELECT v_org, v_entry, l.account_code, pg_catalog.date_trunc('month', p_entry_date)::date,
          pg_catalog.sum(coalesce(l.debit, 0)), pg_catalog.sum(coalesce(l.credit, 0)), pg_catalog.count(*)
   FROM pg_catalog.jsonb_to_recordset(p_lines) AS l (account_code text, debit numeric, credit numeric)
-  GROUP BY l.account_code
-  ORDER BY l.account_code COLLATE "C"
-  ON CONFLICT (org_id, account_code, period_month) DO UPDATE
-    SET debit = b.debit + EXCLUDED.debit, credit = b.credit + EXCLUDED.credit, line_count = b.line_count + EXCLUDED.line_count;
+  GROUP BY l.account_code;
   RETURN v_entry;
 END $$;
 REVOKE ALL ON FUNCTION crove_finance.post_journal_entry(date, text, text, uuid, jsonb, uuid, int) FROM PUBLIC;
@@ -208,11 +216,12 @@ REVOKE CREATE ON SCHEMA crove_finance FROM crove_definer_tenant;
 -- ---------------------------------------------------------------------------
 -- The reconciler's comparison
 -- ---------------------------------------------------------------------------
--- One statement, so the ledger and the balances are read from one snapshot: a posting is in both or in neither.
--- mismatch lists what differs: 'debit', 'credit', 'lines', or 'missing' (lines with no balance row) and 'extra' (a
--- balance row with no lines). Ordered by org, account and month; at most p_limit rows (1 to 1000).
+-- One statement, so the ledger and the deltas are read from one snapshot: a posting is in both or in neither.
+-- mismatch lists what differs: 'debit', 'credit', 'lines', or 'missing' (lines with no delta) and 'extra' (a delta
+-- with no lines; also a delta whose month is not its entry's, which shows as one of each). Ordered by org, account,
+-- month and entry; at most p_limit rows (1 to 1000).
 CREATE OR REPLACE FUNCTION crove_finance.period_balance_differences(p_limit int)
-RETURNS TABLE (org_id uuid, account_code text, period_month date, mismatch text[])
+RETURNS TABLE (org_id uuid, account_code text, period_month date, entry_id uuid, mismatch text[])
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   IF NOT pg_catalog.pg_has_role(SESSION_USER, 'crove_worker', 'MEMBER') THEN
@@ -223,29 +232,29 @@ BEGIN
   END IF;
   RETURN QUERY
   WITH ledger AS (
-    SELECT l.org_id, l.account_code, pg_catalog.date_trunc('month', e.entry_date)::date AS period_month,
+    SELECT l.org_id, l.entry_id, l.account_code, pg_catalog.date_trunc('month', e.entry_date)::date AS period_month,
            pg_catalog.sum(l.debit) AS debit, pg_catalog.sum(l.credit) AS credit, pg_catalog.count(*) AS line_count
     FROM crove_finance.journal_line l
     JOIN crove_finance.journal_entry e ON e.org_id = l.org_id AND e.id = l.entry_id
-    GROUP BY 1, 2, 3
+    GROUP BY 1, 2, 3, 4
   ), compared AS (
-    SELECT coalesce(g.org_id, b.org_id) AS org_id, coalesce(g.account_code, b.account_code) AS account_code,
-           coalesce(g.period_month, b.period_month) AS period_month,
-           ARRAY(SELECT m FROM (VALUES
-             (CASE WHEN b.org_id IS NULL THEN 'missing' END),
+    SELECT coalesce(g.org_id, d.org_id) AS org_id, coalesce(g.account_code, d.account_code) AS account_code,
+           coalesce(g.period_month, d.period_month) AS period_month, coalesce(g.entry_id, d.entry_id) AS entry_id,
+           ARRAY(SELECT v.m FROM (VALUES
+             (CASE WHEN d.org_id IS NULL THEN 'missing' END),
              (CASE WHEN g.org_id IS NULL THEN 'extra' END),
-             (CASE WHEN g.org_id IS NOT NULL AND b.org_id IS NOT NULL AND g.debit <> b.debit THEN 'debit' END),
-             (CASE WHEN g.org_id IS NOT NULL AND b.org_id IS NOT NULL AND g.credit <> b.credit THEN 'credit' END),
-             (CASE WHEN g.org_id IS NOT NULL AND b.org_id IS NOT NULL AND g.line_count <> b.line_count THEN 'lines' END)
-           ) AS v (m) WHERE m IS NOT NULL) AS mismatch
+             (CASE WHEN g.org_id IS NOT NULL AND d.org_id IS NOT NULL AND g.debit <> d.debit THEN 'debit' END),
+             (CASE WHEN g.org_id IS NOT NULL AND d.org_id IS NOT NULL AND g.credit <> d.credit THEN 'credit' END),
+             (CASE WHEN g.org_id IS NOT NULL AND d.org_id IS NOT NULL AND g.line_count <> d.line_count THEN 'lines' END)
+           ) AS v (m) WHERE v.m IS NOT NULL) AS mismatch
     FROM ledger g
-    FULL JOIN crove_finance.period_balance b
-      ON b.org_id = g.org_id AND b.account_code = g.account_code AND b.period_month = g.period_month
+    FULL JOIN crove_finance.period_balance_delta d
+      ON d.org_id = g.org_id AND d.entry_id = g.entry_id AND d.account_code = g.account_code AND d.period_month = g.period_month
   )
-  SELECT c.org_id, c.account_code, c.period_month, c.mismatch
+  SELECT c.org_id, c.account_code, c.period_month, c.entry_id, c.mismatch
   FROM compared c
   WHERE pg_catalog.cardinality(c.mismatch) > 0
-  ORDER BY c.org_id, c.account_code COLLATE "C", c.period_month
+  ORDER BY c.org_id, c.account_code COLLATE "C", c.period_month, c.entry_id
   LIMIT p_limit;
 END $$;
 REVOKE ALL ON FUNCTION crove_finance.period_balance_differences(int) FROM PUBLIC;
