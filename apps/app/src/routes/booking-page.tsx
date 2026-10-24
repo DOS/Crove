@@ -134,7 +134,7 @@ function Manage({ path, token, zone }: { path: string; token: string; zone: stri
   const view = useQuery({
     queryKey: ['booking-manage', path, token],
     queryFn: () => post<BookingManage>(path, { manage: token }),
-    refetchInterval: (q) => (asked && q.state.data?.requestId === asked && q.state.data.outcome === null && Date.now() - since < POLL_FOR_MS ? POLL_MS : false),
+    refetchInterval: (q) => (asked && q.state.data?.requestId === asked && q.state.data?.outcome === null && Date.now() - since < POLL_FOR_MS ? POLL_MS : false),
   });
   const ask = useMutation({
     mutationFn: (body: Record<string, unknown>) => post<{ requestId: string }>(path, { manage: token, ...body }),

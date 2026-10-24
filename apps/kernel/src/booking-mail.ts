@@ -109,7 +109,8 @@ export async function renderBookingMail(input: MailTemplateInput, now: () => Dat
   if (!parsed.success) return null;
   const data = await input.execute<BookingMailData>('crm.booking.mail_data', { bookingId: parsed.data.bookingId });
   const visitor = data.visitor;
-  const p: Booking = { ...parsed.data, visitorName: visitor?.name ? [...oneLine(visitor.name)].slice(0, 100).join('') : 'Khách' };
+  const name = [...oneLine(visitor?.name ?? '')].slice(0, 100).join('');
+  const p: Booking = { ...parsed.data, visitorName: name || 'Khách' };
   const base = input.publicUrl.replace(/\/+$/, '');
   // The visitor's link to cancel or move, while the booking stands; its token goes in the fragment, which browsers never
   // send to a server.
@@ -127,7 +128,7 @@ export async function renderBookingMail(input: MailTemplateInput, now: () => Dat
     if (visitor?.note) details.push(['Ghi chú', visitor.note]);
   }
   const footer = `Thư này được gửi từ ${input.brand} thay mặt ${oneLine(p.orgName)}.`;
-  const greeting = p.recipient === 'visitor' && visitor?.name ? `Chào ${p.visitorName},` : 'Chào bạn,';
+  const greeting = p.recipient === 'visitor' && name ? `Chào ${name},` : 'Chào bạn,';
   const text = [
     greeting,
     '',

@@ -98,6 +98,8 @@ describe('booking mails (#1319)', () => {
     expect(mail?.text).not.toContain('Nguyễn');
     expect(mail?.text).not.toContain('khach@');
     expect(mail?.text).toContain('Khách: Khách');
+    const blank = await renderBookingMail(input(base, TOKEN, { ...VISITOR, name: '  \n ' }), () => NOW);
+    expect(blank?.text).toContain('Chào bạn,');
   });
 
   it('fails a mail whose data is not what the template expects', async () => {
