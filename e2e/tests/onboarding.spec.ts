@@ -36,7 +36,8 @@ test('a firm adds a client company by tax code, then opens the form again for th
   const slug = new URL(page.url()).pathname.split('/')[2] ?? '';
 
   await test.step('the new org has its tax code and address, and the invite form holds the contact', async () => {
-    await expect(page.getByText(TAX_CODE, { exact: true })).toBeVisible();
+    // The org's own field (a <dd>): the legal entities card shows the default entity's code too (#1278).
+    await expect(page.getByRole('definition').getByText(TAX_CODE, { exact: true })).toBeVisible();
     await expect(page.getByText('Số 1 Phố Huế, Hà Nội', { exact: true })).toBeVisible();
     await expect(page.getByPlaceholder('email@congty.vn')).toHaveValue(contact);
     // Inviting is R3: a user without a second factor is asked to enable one first.

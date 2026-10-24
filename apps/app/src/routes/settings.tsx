@@ -12,6 +12,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
 import { ChartOfAccountsCard } from './accounts.tsx';
+import { LegalEntitiesCard } from './legal-entities.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -524,6 +525,8 @@ function TaxCodeField({ taxCode, canManage }: { taxCode: string | null; canManag
       onSuccess: async () => {
         setEditing(false);
         await queryClient.invalidateQueries({ queryKey: orpc.org.get.key() });
+        // The default legal entity has the org's tax code (#1278).
+        await queryClient.invalidateQueries({ queryKey: orpc.legalEntities.list.key() });
       },
     }),
   );
@@ -1024,6 +1027,8 @@ export function SettingsPage() {
             </>
           )}
         </Card>
+        {/* The legal entities the books are kept for (#1278), with the finance module; owners and admins only. */}
+        {getConfig().modules.includes('finance') && canManage && <LegalEntitiesCard key={org.data?.slug} />}
         {/* The chart of accounts belongs to the finance module (#319). */}
         {getConfig().modules.includes('finance') && <ChartOfAccountsCard canManage={canManage} />}
         <TwoFactorCard />

@@ -174,6 +174,7 @@ import { zDepreciationRequest, zJournalVoucherRequest, zYearClosingRequest } fro
 import { zFixedAsset, zFixedAssetCreate, zFixedAssetEnd } from './fixed-asset.ts';
 import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts';
 import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
+import { zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
@@ -268,6 +269,13 @@ export const contract = {
   // Org-less (issue #324): the public tax registry's name and address for a tax code, to prefill a new org. Answers
   // TAX_LOOKUP_DISABLED (404) when the server has no lookup configured (TAX_CODE_LOOKUP_URL), INVALID_TAX_CODE (422),
   // TAX_CODE_NOT_FOUND (404) when the registry does not know the code, and TAX_LOOKUP_UNAVAILABLE (503).
+  // The org's legal entities (issue #1278): owners and admins list them, add one, and change one (the whole entity).
+  // The default entity is the org's own, created with it; changing its tax code changes the org's (org.setTaxCode).
+  legalEntities: {
+    list: oc.output(z.array(zLegalEntity)),
+    create: oc.input(zLegalEntityInput).output(zLegalEntity),
+    update: oc.input(zLegalEntityInput.extend({ legalEntityId: zId })).output(zLegalEntity),
+  },
   taxRegistry: {
     lookup: oc.input(z.object({ taxCode: z.string().trim().max(20) })).output(zTaxRegistryEntry),
   },
