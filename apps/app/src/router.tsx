@@ -38,6 +38,7 @@ import { SocialFeedsPage } from './routes/social-feeds.tsx';
 import { OCCASION_IDS } from './lib/social-occasions.ts';
 import { SocialReviewPage } from './routes/social-review.tsx';
 import { SocialReportPage } from './routes/social-report.tsx';
+import { BookingPage } from './routes/booking-page.tsx';
 import { SocialPlanPrintPage } from './routes/social-plan-print.tsx';
 import { parsePlanSearch } from './lib/social-plan-export.ts';
 import { parseSocialSearch } from './lib/social.ts';
@@ -118,6 +119,15 @@ const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: '/login'
 const reviewRoute = createRoute({ getParentRoute: () => rootRoute, path: '/-/review', component: SocialReviewPage });
 // A client's report link (#643): /-/report#<token>, the same way.
 const reportRoute = createRoute({ getParentRoute: () => rootRoute, path: '/-/report', component: SocialReportPage });
+// A booking page of the crm module (#1318): /-/b/<org>/<event type>, no account. The API answers 404 without crm.
+const bookingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/-/b/$org/$type',
+  component: function BookingRouteView() {
+    const { org, type } = bookingRoute.useParams();
+    return <BookingPage org={org} type={type} />;
+  },
+});
 
 // Accept links are /-/invite#<token>. The token is moved from the address bar to storage before the sign-in
 // check, so it survives the detour through /login (and email confirmation after signing up).
@@ -332,6 +342,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   loginRoute,
   reviewRoute,
+  bookingRoute,
   reportRoute,
   shareRoute,
   socialPlanPrintRoute,

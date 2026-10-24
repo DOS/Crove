@@ -13,6 +13,7 @@ export type Database = CroveFinanceSchema & CroveKernelSchema & CroveSocialSchem
 export type NotGranted = undefined;
 
 export interface CroveCrmSchema {
+  'crove_crm.booking': CrmBookingTable;
   'crove_crm.event_type': CrmEventTypeTable;
 }
 
@@ -131,6 +132,27 @@ export interface CroveSocialSchema {
   'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
   'crove_social.watermark': SocialWatermarkTable;
+}
+
+/** crove_crm.booking */
+export interface CrmBookingTable {
+  org_id: string;
+  id: Generated<string>;
+  event_type_id: string;
+  starts_at: ColumnType<Date, Date | string, Date | string>;
+  ends_at: ColumnType<Date, Date | string, Date | string>;
+  status: Generated<string>;
+  refusal: string | null;
+  calendar_event_id: string | null;
+  party_id: string | null;
+  visitor_name: string | null;
+  email: string | null;
+  phone: string | null;
+  note: string | null;
+  time_zone: string;
+  request_token_sha256: Buffer | null;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  decided_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_crm.event_type */

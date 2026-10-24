@@ -99,6 +99,7 @@ import { reviewAnswer, reviewFile, reviewMedia, reviewView, REVIEW_ANSWERS_PER_M
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
 import { CALENDAR_FEED_HITS_PER_MINUTE, calendarFeed, renderIcs } from './calendar-feed.ts';
 import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
+import { BOOKING_POLLS_PER_MINUTE, BOOKING_REQUESTS_PER_MINUTE, BOOKING_VIEWS_PER_MINUTE, bookingRequest, bookingStatus, bookingView } from './booking-page.ts';
 import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
 import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
@@ -148,6 +149,8 @@ export interface HttpDeps {
   calendarFeedLimit?: RateLimiter;
   // The per-client budget of link-in-bio pages, their links and images (#707), replaceable in tests.
   bioLimit?: RateLimiter;
+  // The public booking page (#1318): page reads, requests per address, and requests per event type.
+  bookingLimits?: { views: RateLimiter; requests: RateLimiter; perType: RateLimiter; polls: RateLimiter };
   // The per-client budget of short link redirects (#706), replaceable in tests.
   shortLinkLimit?: RateLimiter;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
@@ -581,6 +584,61 @@ export function createHttpApp(deps: HttpDeps) {
         // Stored and queued only; the worker parses it and files the attachments (External-tenant gate T5).
         const result = await acceptInboundEmail({ runtime, store, domain }, raw, c.req.header('x-crove-recipient') ?? null);
         return c.json(result, 202);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+  }
+
+  // The public booking page (#1318), with the crm module: no account. GET reads an event type's free slots; POST either
+  // asks for a slot (a body with the visitor's details, answered 202 with a request token) or follows a request (a body
+  // with only that token, which stays out of the URL and so out of access logs). Each address has budgets, and each
+  // event type one for requests whatever the address; the request definer caps requests per type per hour too.
+  if (runtime.installed('crm')) {
+    const limits = deps.bookingLimits ?? {
+      views: new RateLimiter({ perMinute: BOOKING_VIEWS_PER_MINUTE }),
+      requests: new RateLimiter({ perMinute: BOOKING_REQUESTS_PER_MINUTE }),
+      perType: new RateLimiter({ perMinute: 20 }),
+      polls: new RateLimiter({ perMinute: BOOKING_POLLS_PER_MINUTE }),
+    };
+    const refused = (c: Context, retryAfterSeconds: number) => {
+      warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
+      c.header('retry-after', String(retryAfterSeconds));
+      return c.json({ code: 'RATE_LIMITED', message: 'Bạn gửi quá nhiều yêu cầu, hãy thử lại sau', retryAfterSeconds }, 429);
+    };
+    const budget = (c: Context, bucket: RateLimiter, key = clientBucket(clientIp(c, config.TRUSTED_PROXY_HOPS))) => {
+      const decision = bucket.take(key);
+      return decision.allowed ? null : refused(c, decision.retryAfterSeconds);
+    };
+    const notFound = (c: Context) => c.json({ code: 'BOOKING_PAGE_NOT_FOUND', message: 'Không tìm thấy trang đặt lịch này' }, 404);
+    app.get('/api/booking/:org/:type', async (c) => {
+      const limited = budget(c, limits.views);
+      if (limited) return limited;
+      c.header('cache-control', 'no-store');
+      try {
+        const page = await bookingView(runtime, c.req.param('org'), c.req.param('type'), { from: c.req.query('from'), to: c.req.query('to') });
+        return page ? c.json(page) : notFound(c);
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+    app.post('/api/booking/:org/:type', bodyLimit({ maxSize: 4096 }), async (c) => {
+      c.header('cache-control', 'no-store');
+      const body: unknown = await c.req.json().catch(() => null);
+      const org = c.req.param('org');
+      const type = c.req.param('type');
+      try {
+        // Following a request: the token alone.
+        if (body && typeof body === 'object' && Object.keys(body).length === 1 && 'token' in body) {
+          const limited = budget(c, limits.polls);
+          if (limited) return limited;
+          const status = await bookingStatus(runtime, org, type, body);
+          return status ? c.json(status) : c.json({ code: 'BOOKING_REQUEST_NOT_FOUND', message: 'Không tìm thấy yêu cầu đặt lịch này' }, 404);
+        }
+        const limited = budget(c, limits.requests) ?? budget(c, limits.perType, `${org}/${type}`);
+        if (limited) return limited;
+        const request = await bookingRequest(runtime, org, type, body);
+        return request ? c.json(request, 202) : notFound(c);
       } catch (error) {
         return problem(c, error);
       }
