@@ -288,3 +288,14 @@ BEGIN
     'flags', '[]'::jsonb));
   RETURN v_role;
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- A tenant row is never deleted: an org is closed by crove_kernel.org_purge and kept, and the audit trail and the inbound
+-- address ledger reference it. Their foreign keys already refuse a delete, but which refusal a delete met first depended
+-- on the order PostgreSQL fires the tenant's referential triggers, whose names follow OIDs (issue #1357; this file's new
+-- objects shifted those OIDs in CI). A row trigger fires before them, so every delete, by any role, superusers included,
+-- now meets the same refusal first. It adds no new way to delete or change anything.
+-- ---------------------------------------------------------------------------
+DROP TRIGGER IF EXISTS tenant_no_delete ON crove_kernel.tenant;
+CREATE TRIGGER tenant_no_delete BEFORE DELETE ON crove_kernel.tenant
+  FOR EACH ROW EXECUTE FUNCTION crove_kernel.reject_mutation();
