@@ -2079,7 +2079,7 @@ export const en = {
       digestMailOff: 'Turn on "Email me too" to get the weekly digest.',
       // Browser push on this device (#1238).
       push: 'Push notifications on this device',
-      pushHint: 'When something needs you (a post to review, a review result, a failed post, a channel to reconnect, a queue running low, a mention, or a post doing much better than usual), this browser shows a notification even when {brand} is not open. Notifications never include the post text.',
+      pushHint: 'When something needs you (a post to review, a review result, a failed post, a channel to reconnect, a queue running low, a mention, a post doing much better than usual, a post assigned to you, or an assigned post nearly due or overdue), this browser shows a notification even when {brand} is not open. Notifications never include the post text.',
       pushUnsupported: 'This browser cannot receive push notifications. Open {brand} in Chrome, Edge, Firefox or Safari over https.',
       pushDenied: 'Your browser blocks notifications from {brand}. Allow notifications in the browser site settings, then turn this on again.',
       pushDevices: 'Devices receiving push notifications',
@@ -2103,6 +2103,7 @@ export const en = {
         publishing_hold: 'Publishing paused or resumed for the organization',
         queue_low: 'A channel queue running low',
         post_outperforming: 'A post doing much better than usual',
+        assignment_due: 'Due date reminders for posts assigned to you',
       },
       text: {
         review_requested: '{actor} sent a post for review',
@@ -2129,6 +2130,8 @@ export const en = {
         queue_low: 'The queue of {channel} is running low: only {filled} of {posting} posting days in {days, plural, one {the next day} other {the next # days}} have a post. Write more to fill the gaps.',
         post_outperforming: 'A post on {channel} is getting {ratio, number}× its usual engagement',
         post_outperforming_reach: 'A post on {channel} is getting {ratio, number}× its usual engagement and {reach, number}× its usual reach',
+        assignment_due_soon: 'A post assigned to you is due at {due}',
+        assignment_overdue: 'A post assigned to you was due at {due} and is not out yet',
       },
     },
     threadsExtras: {

@@ -5,7 +5,8 @@
 'use strict';
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const PATH = new RegExp(`^/o/[a-z0-9][a-z0-9-]{0,62}/social/(channels|${UUID}|new\\?channel=${UUID})$`);
+// A post, the channels page, a new post for a channel, or the posts assigned to the reader (#1359).
+const PATH = new RegExp(`^/o/[a-z0-9][a-z0-9-]{0,62}/social(/(channels|${UUID}|new\\?channel=${UUID})|\\?assignee=me)$`);
 const text = (value, max) => (typeof value === 'string' ? value.replace(/\p{Cc}+/gu, ' ').trim().slice(0, max) : '');
 const safePath = (value) => (typeof value === 'string' && PATH.test(value) ? value : null);
 
