@@ -127,13 +127,13 @@ Some migrations tighten a rule on data that already exists. Before tagging the f
 
 From this migration on, `post_journal_entry()` refuses an amount with more decimals than the org's book currency uses (VND has none). An entry posted earlier with a fraction of a dong could then never be reversed or replaced, since its mirror carries the same fraction, and a purchase document with one could not be posted again. The check lists journal lines with more decimals than their org's book currency, and purchase documents and lines with fractional VND amounts (a purchase document's amounts are in VND, #918). It must return no rows:
 
+The check runs before the release's migrations, so `crove_kernel.currency` does not exist yet; every org books in VND until a command sets another `base_currency`, so the journal part uses the VND rule:
+
 ```sql
 BEGIN READ ONLY;
-SELECT 'journal_line' AS source, l.org_id, l.entry_id AS id, l.line_no, t.base_currency AS currency, l.debit, l.credit
+SELECT 'journal_line' AS source, l.org_id, l.entry_id AS id, l.line_no, 'VND' AS currency, l.debit, l.credit
 FROM crove_finance.journal_line l
-JOIN crove_kernel.tenant t ON t.org_id = l.org_id
-LEFT JOIN crove_kernel.currency c ON c.code = t.base_currency
-WHERE c.code IS NULL OR l.debit <> pg_catalog.round(l.debit, c.minor_units) OR l.credit <> pg_catalog.round(l.credit, c.minor_units)
+WHERE l.debit <> pg_catalog.round(l.debit, 0) OR l.credit <> pg_catalog.round(l.credit, 0)
 UNION ALL
 SELECT 'purchase_document', d.org_id, d.id, NULL, 'VND', d.subtotal, d.total
 FROM crove_finance.purchase_document d
@@ -146,7 +146,7 @@ WHERE p.amount <> pg_catalog.round(p.amount, 0) OR p.vat_amount <> pg_catalog.ro
 ROLLBACK;
 ```
 
-On a database where the migration has not run yet, `crove_kernel.currency` does not exist: replace the `LEFT JOIN` and its condition with the VND rule, `WHERE l.debit <> pg_catalog.round(l.debit, 0) OR l.credit <> pg_catalog.round(l.credit, 0)` (every org books in VND until a command sets another `base_currency`). The same query, run after the migration, is in `apps/kernel/test/finance-currency-scale.db.test.ts`.
+After the migration has run, the journal part can use each org's book currency instead: `JOIN crove_kernel.tenant t ON t.org_id = l.org_id LEFT JOIN crove_kernel.currency c ON c.code = t.base_currency WHERE c.code IS NULL OR l.debit <> pg_catalog.round(l.debit, c.minor_units) OR l.credit <> pg_catalog.round(l.credit, c.minor_units)`. That post-migration form is the one `apps/kernel/test/finance-currency-scale.db.test.ts` runs.
 
 ## Deploy a release
 
