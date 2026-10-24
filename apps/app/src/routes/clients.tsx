@@ -1,6 +1,8 @@
 // The multi-client home screen (issue #318): every org the user belongs to, with what waits in it and when its next VAT
 // return is due, and the tax calendar of every client (#921): what is due in the next 30 days or overdue, which a member
-// marks done here; one click opens the org. Each org's figures are read in that org on the server (me.clients).
+// marks done here; one click opens the org. Each org's figures are read in that org on the server (me.clients), with
+// the Social figures of each client when Social is on (#1261); an org whose figures could not be read is one row that
+// says so, with a retry (#495).
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
@@ -8,6 +10,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
+import { ClientSocialFigures } from '../components/client-social.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { DueWhen, TONE_CLASS, usePeriodLabel } from '../components/tax-due.tsx';
 import { DataTable, Empty, ErrorText, Logo, OrgLeftNotice, PageHeader, Spinner } from '../components/ui.tsx';
@@ -125,8 +128,16 @@ export function ClientsPage() {
   // ten seconds, and a failed refetch keeps the list already shown.
   const clients = useQuery({ ...orpc.me.clients.queryOptions(), staleTime: 60_000 });
   const finance = getConfig().modules.includes('finance');
+  const social = getConfig().modules.includes('social');
   const rows = clients.data ? sortClients(clients.data.clients, locale) : [];
-  const head = [t('columns.company'), t('columns.pending'), t('columns.failed'), t('columns.lastActivity'), ...(finance ? [t('columns.vatDeadline'), t('columns.nextObligation')] : [])];
+  const head = [
+    t('columns.company'),
+    ...(social ? [t('columns.social')] : []),
+    t('columns.pending'),
+    t('columns.failed'),
+    t('columns.lastActivity'),
+    ...(finance ? [t('columns.vatDeadline'), t('columns.nextObligation')] : []),
+  ];
   const dues = clients.data ? dueAcrossClients(clients.data.clients, locale) : [];
   const periodLabel = usePeriodLabel();
   const tt = useTranslations('taxCalendar');
@@ -165,8 +176,8 @@ export function ClientsPage() {
           <>
             <div className="overflow-x-auto">
               <DataTable head={head}>
-                {rows.map((c) => (
-                  <TableRow key={c.orgId}>
+                {rows.map((c) => {
+                  const company = (
                     <TableCell className="px-4 py-3">
                       <Link to="/o/$slug/inbox" params={{ slug: c.slug }} className="font-medium text-foreground hover:text-link hover:underline">
                         {c.name}
@@ -175,45 +186,69 @@ export function ClientsPage() {
                         {root(`roles.${c.role}`)}
                       </Badge>
                     </TableCell>
-                    <TableCell className="px-4 py-3 tabular-nums">
-                      {c.overview.pendingProposals > 0 ? (
-                        <Link to="/o/$slug/inbox" params={{ slug: c.slug }} className="font-medium text-link hover:underline">
-                          {f.number(c.overview.pendingProposals)}
-                        </Link>
-                      ) : (
-                        <span className="text-subtle-foreground">0</span>
+                  );
+                  if (!c.overview) {
+                    return (
+                      <TableRow key={c.orgId}>
+                        {company}
+                        <TableCell colSpan={head.length - 1} className="px-4 py-3">
+                          <span className="text-destructive">{t('loadError')}</span>{' '}
+                          <Button size="sm" variant="link" className="h-auto p-0" onClick={() => void clients.refetch()} disabled={clients.isFetching}>
+                            {t('retry')}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  }
+                  const socialFigures = c.overview.modules.social;
+                  return (
+                    <TableRow key={c.orgId}>
+                      {company}
+                      {social && (
+                        <TableCell className="px-4 py-3 align-top">
+                          {socialFigures ? <ClientSocialFigures slug={c.slug} figures={socialFigures} /> : <span className="text-subtle-foreground">-</span>}
+                        </TableCell>
                       )}
-                    </TableCell>
-                    <TableCell className="px-4 py-3 tabular-nums">
-                      {c.overview.failedFiles > 0 ? (
-                        <Badge variant="destructive">{f.number(c.overview.failedFiles)}</Badge>
-                      ) : (
-                        <span className="text-subtle-foreground">0</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="px-4 py-3 text-muted-foreground">
-                      {c.overview.lastActivityAt ? f.dateTime(c.overview.lastActivityAt) : <span className="text-subtle-foreground">{t('noActivity')}</span>}
-                    </TableCell>
-                    {finance && (
-                      <TableCell className="px-4 py-3">
-                        <Deadline deadline={c.overview.vatDeadline} slug={c.slug} canChoose={c.role === 'owner' || c.role === 'admin'} />
-                      </TableCell>
-                    )}
-                    {finance && (
-                      <TableCell className="px-4 py-3">
-                        {c.overview.taxDues[0] ? (
-                          <span className="block">
-                            <span className="block">{tt(`obligations.${c.overview.taxDues[0].obligation}`)}</span>
-                            <span className="block text-xs text-subtle-foreground">{periodLabel(c.overview.taxDues[0].period)}</span>
-                            <DueWhen due={c.overview.taxDues[0]} />
-                          </span>
+                      <TableCell className="px-4 py-3 tabular-nums">
+                        {c.overview.pendingProposals > 0 ? (
+                          <Link to="/o/$slug/inbox" params={{ slug: c.slug }} className="font-medium text-link hover:underline">
+                            {f.number(c.overview.pendingProposals)}
+                          </Link>
                         ) : (
-                          <span className="text-subtle-foreground">{tt('nothingDue')}</span>
+                          <span className="text-subtle-foreground">0</span>
                         )}
                       </TableCell>
-                    )}
-                  </TableRow>
-                ))}
+                      <TableCell className="px-4 py-3 tabular-nums">
+                        {c.overview.failedFiles > 0 ? (
+                          <Badge variant="destructive">{f.number(c.overview.failedFiles)}</Badge>
+                        ) : (
+                          <span className="text-subtle-foreground">0</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="px-4 py-3 text-muted-foreground">
+                        {c.overview.lastActivityAt ? f.dateTime(c.overview.lastActivityAt) : <span className="text-subtle-foreground">{t('noActivity')}</span>}
+                      </TableCell>
+                      {finance && (
+                        <TableCell className="px-4 py-3">
+                          <Deadline deadline={c.overview.vatDeadline} slug={c.slug} canChoose={c.role === 'owner' || c.role === 'admin'} />
+                        </TableCell>
+                      )}
+                      {finance && (
+                        <TableCell className="px-4 py-3">
+                          {c.overview.taxDues[0] ? (
+                            <span className="block">
+                              <span className="block">{tt(`obligations.${c.overview.taxDues[0].obligation}`)}</span>
+                              <span className="block text-xs text-subtle-foreground">{periodLabel(c.overview.taxDues[0].period)}</span>
+                              <DueWhen due={c.overview.taxDues[0]} />
+                            </span>
+                          ) : (
+                            <span className="text-subtle-foreground">{tt('nothingDue')}</span>
+                          )}
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  );
+                })}
               </DataTable>
             </div>
             {clients.data && clients.data.total > clients.data.clients.length && (
