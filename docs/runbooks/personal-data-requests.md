@@ -31,6 +31,7 @@ The search covers the columns listed in `packages/kernel/src/personal-data.ts`. 
      A party that no recorded invoice, voucher or journal line names also loses its tax code, and its name becomes "Đã xóa theo yêu cầu".
    - **Kept by law** (Accounting Law 88/2015, Art. 41: at least 10 years):
      - the name and tax code of a party on recorded invoices, vouchers or journal lines;
+     - the name and tax code of a legal entity the org keeps books for (**Cài đặt > Pháp nhân**): a client company, a branch, or a household business, whose 12-digit code is its owner's national ID number (#1312). The org's default entity is the org itself and is reported as the org's own. The org purge keeps every entity until the lawyer decides otherwise (#1315);
      - the payer or payee named on a phiếu thu or phiếu chi;
      - the tax portal's invoice lists;
      - the original files of posted invoices that name the party (`crove_kernel.file`), with the date their retention hold runs to: erasure clears data in the database only and never deletes a stored file (#1009, `docs/runbooks/evidence-holds.md`).
