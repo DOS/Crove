@@ -232,10 +232,24 @@ export const zOrgDetail = z.object({
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
+// An org's Social figures on the multi-client home (#1261), read as the member in that org, each as the Social screen it
+// links to counts it (at most 200 for the post lists): posts in review (the Review tab), of those the ones waiting only
+// for the client's approval, posts needing attention (the Attention tab), channels to reconnect (expired or broken),
+// posts going out in the next 7 days, and when a post last went out.
+export const zSocialClientFigures = z.object({
+  review: z.number().int().nonnegative(),
+  waitingClient: z.number().int().nonnegative(),
+  attention: z.number().int().nonnegative(),
+  reconnect: z.number().int().nonnegative(),
+  upcoming: z.number().int().nonnegative(),
+  lastPostAt: z.string().nullable(),
+});
+
 // An org's figures (issue #318), read in its own context: on the multi-client home screen for each org, and on the
 // org's overview (#1249). pendingProposals: proposals waiting in the Inbox. failedFiles: files that could not be read
 // among the ones the Inbox lists. lastActivityAt: the newest entry of the org's activity feed. vatDeadline: the next
-// VAT return due, from the org's filing period (null while none is chosen).
+// VAT return due, from the org's filing period (null while none is chosen). modules: the figures of the modules this
+// deployment enables (#1261), with no key for a module it leaves out.
 export const zOrgOverview = z.object({
   pendingProposals: z.number().int().nonnegative(),
   failedFiles: z.number().int().nonnegative(),
@@ -250,9 +264,13 @@ export const zOrgOverview = z.object({
     .nullable(),
   // The tax calendar (#921): what is due in the next 30 days, or overdue and not marked done, by due date.
   taxDues: z.array(zTaxDueView),
+  // Social's figures are checked; another module's contribution passes as it is, so a new one needs no contract change
+  // to reach the app.
+  modules: z.object({ social: zSocialClientFigures.optional() }).catchall(z.unknown()),
 });
-// One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures.
-export const zClientOverview = zOrgSummary.extend({ overview: zOrgOverview });
+// One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures; or, for an org
+// whose figures could not be read, overview null and the error's code (#495), so the other orgs still show.
+export const zClientOverview = zOrgSummary.extend({ overview: zOrgOverview.nullable(), error: z.string().nullable() });
 // The home screen's answer (#495): at most 200 orgs, and how many the user has, so a cut list says so.
 export const zClientOverviews = z.object({ clients: z.array(zClientOverview), total: z.number().int().nonnegative() });
 // What the public tax registry says about a tax code (issue #324), to prefill a new org: the normalized tax code, the
@@ -2133,6 +2151,22 @@ export const zSocialNotifications = z.object({
   muted: z.array(zSocialNotificationKind),
   // Social emails turned off by the viewer (#579).
   mailOff: z.boolean(),
+});
+
+// Browser push (#1238): the deployment's VAPID public key (null: push is off), the viewer's devices in the org and
+// whether the asking browser is one of them.
+export const zSocialPushStatus = z.object({
+  enabled: z.boolean(),
+  publicKey: z.string().nullable(),
+  subscribed: z.boolean(),
+  devices: z.array(z.object({ id: zId, label: z.string().nullable(), createdAt: z.string(), lastUsedAt: z.string().nullable(), current: z.boolean() })),
+});
+// A browser's push subscription as PushSubscription.toJSON() gives it; the command checks the URL and the keys.
+export const zSocialPushSubscribe = z.strictObject({
+  endpoint: z.string().min(12).max(2048),
+  p256dh: z.string().min(1).max(128),
+  auth: z.string().min(1).max(128),
+  label: z.string().max(200).optional(),
 });
 
 // Who follows a channel's account (#1146), as Instagram and Threads give it: shares of the followers by age bucket

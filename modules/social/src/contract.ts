@@ -12,6 +12,8 @@ export { localTime, zonedToEpoch, type LocalTime } from './domain/queue.ts';
 // The placement `social.queue.set` runs, so a copy of a queue to other channels (#1166) says beforehand how many queued
 // posts each one places again.
 export { placeQueued, retime, type QueuedPost, type QueueSpec } from './domain/queue.ts';
+// The variants the Upcoming agenda lists, which the multi-client home's "next 7 days" counts too (#1261).
+export { AGENDA_STATUSES } from './domain/state.ts';
 // Recurring posts (#979): the rule's next occurrence, for the post page's preview.
 export * from './domain/recurrence.ts';
 export * from './domain/text-variations.ts';

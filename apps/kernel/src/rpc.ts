@@ -210,6 +210,9 @@ export interface RpcChannels {
   // The CSV import's image URLs (#1258), fetched into the library through the egress guard; unset: refused. Rides here
   // for the same reason as stockPhotos.
   mediaUrls?: MediaUrls;
+  // Browser push for Social notifications (#1238, VAPID_*): the public key browsers subscribe with; unset: no push is
+  // offered. Rides here for the same reason.
+  push?: { publicKey: string };
 }
 
 // A provider's refusal or failure during the code exchange, as the answer the user sees. Never the provider's own
@@ -963,6 +966,24 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         read: os.social.notifications.read.handler(socialCommand('social.notification.read')),
         mute: os.social.notifications.mute.handler(socialCommand('social.notification.mute')),
         mail: os.social.notifications.mail.handler(socialCommand('social.notification.mail')),
+        push: {
+          status: os.social.notifications.push.status.handler(({ context, input }) =>
+            inSocial(context, async (orgId, actor) => {
+              const push = channels?.push;
+              const own = await runtime.query<{ devices: { id: string; label: string | null; createdAt: string; lastUsedAt: string | null; current: boolean }[]; subscribed: boolean }>('social.push.devices', input, { actor, orgId });
+              return { enabled: Boolean(push), publicKey: push?.publicKey ?? null, ...own };
+            }),
+          ),
+          // Without VAPID keys nothing could ever be sent: refused before a row is written.
+          subscribe: os.social.notifications.push.subscribe.handler(({ context, input }) =>
+            inSocial(context, (orgId, actor) => {
+              if (!channels?.push) throw new DomainError('PUSH_DISABLED', 404, 'Máy chủ này chưa bật thông báo đẩy');
+              return runtime.execute<{ id: string }>('social.push.subscribe', input, { actor, orgId });
+            }),
+          ),
+          // Turning a device off works whatever the keys, so a member can always clean up.
+          unsubscribe: os.social.notifications.push.unsubscribe.handler(socialCommand('social.push.unsubscribe')),
+        },
       },
       accounts: {
         trends: os.social.accounts.trends.handler(socialQuery('social.account.trends')),

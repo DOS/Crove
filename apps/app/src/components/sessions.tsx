@@ -7,6 +7,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, orpc, queryClient } from '../lib/api.ts';
 import { accessToken, auth } from '../lib/auth.ts';
 import { forgetInvite } from '../lib/invite.ts';
+import { forgetPushDevice } from '../lib/push.ts';
 import {
   describeUserAgent,
   otherActiveSessionIds,
@@ -23,9 +24,10 @@ import { Input } from '@crove/ui/components/input';
 import { ErrorText, Spinner } from './ui.tsx';
 
 // Signs this tab out; auth-js tells the other tabs, and main.tsx sends every tab to /login.
+// This browser's push subscription goes first (#1238), as with the menu's sign-out.
 function signOutHere(): void {
   forgetInvite();
-  void auth().signOut({ scope: 'local' });
+  void forgetPushDevice((endpoint) => client.social.notifications.push.unsubscribe({ endpoint })).finally(() => void auth().signOut({ scope: 'local' }));
 }
 
 function useCurrentSessionId() {

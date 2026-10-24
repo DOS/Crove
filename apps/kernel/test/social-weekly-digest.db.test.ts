@@ -249,6 +249,47 @@ suite('social weekly digest on PostgreSQL (#1104)', () => {
     expect(await markers(o)).toHaveLength(1);
   });
 
+  it('mails no disabled account, and skips a recipient whose mail cannot be written instead of the whole digest (#1115)', async () => {
+    const o = await org();
+    const conn = await connection(o, 'Trang chính');
+    const week = await weekIn(ZONE);
+    await published(o, conn, 'Bài tuần trước', hours(week.last_start, 30), 5);
+    await planned(o, conn, 'Bài tuần này', hours(week.this_start, 24 * 6 + 10));
+    await admin((c) => c.query('UPDATE crove_kernel.user_account SET disabled_at = now() WHERE id = $1', [o.member]));
+    // The admin's mail fails to be written every time, as a constraint or trigger would refuse it.
+    const refused = await emailOf(o.admin);
+    await admin(async (c) => {
+      await c.query('CREATE SCHEMA IF NOT EXISTS test_1115');
+      await c.query(
+        `CREATE OR REPLACE FUNCTION test_1115.refuse() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ BEGIN IF NEW.to_address = '${refused}' THEN RAISE EXCEPTION 'refused for the test'; END IF; RETURN NEW; END $$`,
+      );
+      await c.query('GRANT USAGE ON SCHEMA test_1115 TO PUBLIC');
+      await c.query('CREATE TRIGGER test_1115_refuse BEFORE INSERT ON crove_kernel.mail_message FOR EACH ROW EXECUTE FUNCTION test_1115.refuse()');
+    });
+    try {
+      await sweep();
+    } finally {
+      await admin((c) => c.query('DROP TRIGGER IF EXISTS test_1115_refuse ON crove_kernel.mail_message'));
+    }
+    expect(await markers(o)).toHaveLength(1);
+    expect((await digests(o)).map((m) => m.to_address)).toEqual([await emailOf(o.owner)]);
+    // The claim and the owner's mail committed; the admin's was skipped, and the disabled member got none.
+    expect(await digestOf(o, o.admin)).toEqual([]);
+    expect(await digestOf(o, o.member)).toEqual([]);
+  });
+
+  it('saves a goal zone as PostgreSQL spells it, so the digest finds it (#1115)', async () => {
+    const o = await org(null);
+    await exec(o, o.owner, 'social.goal.set', { connectionId: null, targets: { posts: 5 }, timeZone: 'asia/ho_chi_minh' });
+    expect(await one<{ time_zone: string }>('SELECT time_zone FROM crove_social.goal WHERE org_id = $1', [o.orgId])).toEqual([{ time_zone: HCM }]);
+    await exec(o, o.owner, 'social.goal.set', { connectionId: null, targets: { posts: 6 }, timeZone: 'EUROPE/LONDON' });
+    expect(await one<{ time_zone: string }>('SELECT time_zone FROM crove_social.goal WHERE org_id = $1', [o.orgId])).toEqual([{ time_zone: 'Europe/London' }]);
+    // An empty or unknown zone is refused, never saved to fall back later.
+    await expect(exec(o, o.owner, 'social.goal.set', { connectionId: null, targets: { posts: 6 }, timeZone: '' })).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(exec(o, o.owner, 'social.goal.set', { connectionId: null, targets: { posts: 6 }, timeZone: 'Mars/Olympus' })).rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(await one<{ time_zone: string }>('SELECT time_zone FROM crove_social.goal WHERE org_id = $1', [o.orgId])).toEqual([{ time_zone: 'Europe/London' }]);
+  });
+
   it('claims a week once when two commands run at the same time', async () => {
     const o = await org();
     const conn = await connection(o, 'Trang thử');

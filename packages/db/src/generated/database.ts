@@ -107,6 +107,7 @@ export interface CroveSocialSchema {
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_version': SocialPostVersionTable;
   'crove_social.publish_hold': SocialPublishHoldTable;
+  'crove_social.push_subscription': SocialPushSubscriptionTable;
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
   'crove_social.report_branding': SocialReportBrandingTable;
@@ -1447,6 +1448,20 @@ export interface SocialPublishHoldTable {
   held_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   released_by: string | null;
   released_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_social.push_subscription */
+export interface SocialPushSubscriptionTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  endpoint: ColumnType<string, string, NotGranted>;
+  p256dh: string;
+  auth: string;
+  user_agent: string | null;
+  failure_count: Generated<number>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  last_used_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.queue_slot */
