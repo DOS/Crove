@@ -38,3 +38,6 @@ export * from './domain/campaign.ts';
 export * from './domain/signature.ts';
 // A long text split into a thread (#1222): the composer splits with the channel's own count and the thread rules.
 export * from './domain/thread-split.ts';
+// The content plan's CSV file (#978) and the import's cells that hold several values (#1258): the app reads a sheet
+// with the rules the export writes it with.
+export * from './domain/plan-csv.ts';

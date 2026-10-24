@@ -2,13 +2,20 @@
 // across posts, find by name and see where each is used. A library item is a crove_kernel.file row with source
 // 'social'; an upload of the same bytes is the same file, so an image is in the library once. Members tag files to
 // find them again (#904, media-tags.ts).
-import { sql } from 'kysely';
+//
+// The files a member may use (#1081, #1196, #1258): a member limited to some channels may not use another channel's own
+// media, a file that only variants on other channels list as their own media, in no post's shared media and in no own
+// media of a channel of theirs. mediaHidden says it in SQL for every reader and command that picks library files: the
+// photo draft picker (social.media.list { usable }), the AI draft's photos, the CSV import's file names and the import
+// itself. The library's list stays org-wide otherwise (#1099).
+import { sql, type RawBuilder } from 'kysely';
 import { z } from 'zod';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
-import { DomainError, defineQuery } from '@crove/kernel-runtime';
+import { DomainError, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { normalizeMediaTag } from './domain/media-tags.ts';
-import { channelScope, postInScope } from './channel-access.ts';
+import { isFileId } from './domain/plan-csv.ts';
+import { channelScope, postInScope, type ChannelScope } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -59,11 +66,42 @@ const postsUsing = sql`(
   SELECT v.post_id FROM crove_social.post_variant v WHERE v.org_id = f.org_id AND v.media @> jsonb_build_array(jsonb_build_object('fileId', f.id::text))
 )`;
 
+// SQL over a file row (alias f by default): the file is another channel's own media only, for a member limited to some
+// channels; FALSE for everyone else.
+export function mediaHidden(scope: ChannelScope, alias = 'f'): RawBuilder<boolean> {
+  if (scope === null) return sql<boolean>`FALSE`;
+  const org = sql.ref(`${alias}.org_id`);
+  const id = sql.ref(`${alias}.id`);
+  const ids = [...scope];
+  const own = (mine: boolean) =>
+    sql`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = ${org} AND v.media @> jsonb_build_array(jsonb_build_object('fileId', ${id}::text)) AND ${
+      mine ? sql`v.channel_connection_id = ANY(${ids}::uuid[])` : sql`NOT (v.channel_connection_id = ANY(${ids}::uuid[]))`
+    })`;
+  return sql<boolean>`(${own(false)} AND NOT EXISTS (SELECT 1 FROM crove_social.post_media m WHERE m.org_id = ${org} AND m.file_id = ${id}) AND NOT ${own(true)})`;
+}
+
+// Refuses a file of these that the caller may not use, with 403 MEDIA_NOT_ALLOWED naming it.
+export async function refuseHiddenMedia(ctx: Pick<CommandContext, 'trx' | 'orgId' | 'actor' | 'role'>, fileIds: readonly string[]): Promise<void> {
+  if (fileIds.length === 0) return;
+  const scope = await channelScope(ctx);
+  if (scope === null) return;
+  const hidden = await ctx.trx
+    .selectFrom('crove_kernel.file as f')
+    .select('f.id')
+    .where('f.org_id', '=', ctx.orgId)
+    .where('f.id', 'in', [...new Set(fileIds)])
+    .where(mediaHidden(scope))
+    .orderBy('f.id')
+    .executeTakeFirst();
+  if (hidden) throw new DomainError('MEDIA_NOT_ALLOWED', 403, 'Ảnh này chỉ thuộc riêng một kênh bạn không được dùng', { fileId: hidden.id });
+}
+
 // LIKE wildcards in a search are matched as themselves.
 export const likeTerm = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 // Newest first, 60 a page; before is the last item of the previous page. search matches the file name, tag one of
-// its tags whatever the case (#904); both together narrow the list.
+// its tags whatever the case (#904); both together narrow the list. usable leaves out the files the caller may not use
+// (#1196), for the pickers that attach or send them.
 export const mediaList = defineQuery({
   name: 'social.media.list',
   input: z.object({
@@ -71,6 +109,7 @@ export const mediaList = defineQuery({
     tag: z.string().max(200).transform(normalizeMediaTag).optional(),
     before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(),
     limit: z.number().int().min(1).max(100).optional(),
+    usable: z.boolean().optional(),
   }),
   access: ALL,
   handler: async (ctx, input): Promise<{ items: LibraryItem[]; more: boolean }> => {
@@ -98,6 +137,7 @@ export const mediaList = defineQuery({
       .where('f.org_id', '=', ctx.orgId)
       .where('f.source', '=', 'social')
       .where('f.content_type', 'in', [...LIBRARY_MEDIA_TYPES]);
+    if (input.usable) q = q.where(sql<boolean>`NOT ${mediaHidden(await channelScope(ctx))}`);
     if (input.search) q = q.where(sql<boolean>`f.filename ILIKE ${likeTerm(input.search)}`);
     if (input.tag) {
       const tag = input.tag;
@@ -195,10 +235,6 @@ export const mediaDraftImages = defineQuery({
   access: MEMBERS,
   handler: async (ctx, input): Promise<{ fileId: string; storageKey: string; generation: string | null; sha256: string; contentType: string; sizeBytes: number }[]> => {
     const scope = await channelScope(ctx);
-    const own = (inScope: boolean) =>
-      sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = f.org_id AND v.media @> jsonb_build_array(jsonb_build_object('fileId', f.id::text)) AND ${
-        scope === null ? sql`TRUE` : inScope ? sql`v.channel_connection_id = ANY(${[...scope]}::uuid[])` : sql`NOT (v.channel_connection_id = ANY(${[...scope]}::uuid[]))`
-      })`;
     const rows = await ctx.trx
       .selectFrom('crove_kernel.file as f')
       .select([
@@ -208,10 +244,7 @@ export const mediaDraftImages = defineQuery({
         'f.sha256',
         'f.content_type',
         'f.size_bytes',
-        (scope === null
-          ? sql<boolean>`FALSE`
-          : sql<boolean>`(${own(false)} AND NOT EXISTS (SELECT 1 FROM crove_social.post_media m WHERE m.org_id = f.org_id AND m.file_id = f.id) AND NOT ${own(true)})`
-        ).as('hidden'),
+        mediaHidden(scope).as('hidden'),
       ])
       .where('f.org_id', '=', ctx.orgId)
       .where('f.id', 'in', [...new Set(input.fileIds)])
@@ -227,4 +260,70 @@ export const mediaDraftImages = defineQuery({
   },
 });
 
-export const libraryQueries = [mediaList, mediaUsage, mediaStored, mediaDraftImages];
+// A library file as the CSV import shows and attaches it.
+export interface ResolvedMedia {
+  fileId: string;
+  filename: string;
+  mime: string;
+  sizeBytes: number;
+  durationMs: number | null;
+  width: number | null;
+  height: number | null;
+}
+export type MediaRefProblem = 'UNKNOWN_FILE' | 'AMBIGUOUS_FILE' | 'FILE_NOT_ALLOWED';
+
+// The library files a CSV import's media cells name (#1258): a file id, or a file name whatever the case (NFC, so a
+// name saved by a Mac matches one typed). A name finds the one file of the library by that name the caller may use;
+// several such files are AMBIGUOUS_FILE (the export writes an id then), and a name or an id that only finds another
+// channel's own media is FILE_NOT_ALLOWED (#1081). The import command checks the files again.
+export const mediaResolve = defineQuery({
+  name: 'social.media.resolve',
+  input: z.strictObject({ refs: z.array(z.string().trim().min(1).max(255)).min(1).max(200) }),
+  access: MEMBERS,
+  handler: async (ctx, input): Promise<{ ref: string; file: ResolvedMedia | null; problem: MediaRefProblem | null }[]> => {
+    const scope = await channelScope(ctx);
+    const keyOf = (ref: string) => (isFileId(ref) ? ref.toLowerCase() : ref.normalize('NFC').toLowerCase());
+    const ids = [...new Set(input.refs.filter(isFileId).map((r) => r.toLowerCase()))];
+    const names = [...new Set(input.refs.filter((r) => !isFileId(r)).map(keyOf))];
+    const rows = await ctx.trx
+      .selectFrom('crove_kernel.file as f')
+      .select([
+        'f.id',
+        'f.filename',
+        'f.content_type',
+        'f.size_bytes',
+        'f.duration_ms',
+        'f.image_width',
+        'f.image_height',
+        sql<string>`lower(normalize(f.filename, NFC))`.as('name_key'),
+        mediaHidden(scope).as('hidden'),
+      ])
+      .where('f.org_id', '=', ctx.orgId)
+      .where('f.source', '=', 'social')
+      .where('f.content_type', 'in', [...LIBRARY_MEDIA_TYPES])
+      .where((eb) =>
+        eb.or([
+          ...(ids.length > 0 ? [eb('f.id', 'in', ids)] : []),
+          ...(names.length > 0 ? [sql<boolean>`lower(normalize(f.filename, NFC)) = ANY(${names}::text[])`] : []),
+        ]),
+      )
+      .orderBy('f.created_at', 'desc')
+      .execute();
+    return input.refs.map((ref) => {
+      const key = keyOf(ref);
+      const found = rows.filter((r) => (isFileId(ref) ? r.id === key : r.name_key === key));
+      const usable = found.filter((r) => !r.hidden);
+      if (usable.length === 1) {
+        const f = usable[0] as (typeof usable)[number];
+        return {
+          ref,
+          file: { fileId: f.id, filename: f.filename, mime: f.content_type, sizeBytes: Number(f.size_bytes), durationMs: f.duration_ms === null ? null : Number(f.duration_ms), width: f.image_width, height: f.image_height },
+          problem: null,
+        };
+      }
+      return { ref, file: null, problem: usable.length > 1 ? 'AMBIGUOUS_FILE' : found.length > 0 ? 'FILE_NOT_ALLOWED' : 'UNKNOWN_FILE' };
+    });
+  },
+});
+
+export const libraryQueries = [mediaList, mediaUsage, mediaStored, mediaDraftImages, mediaResolve];
