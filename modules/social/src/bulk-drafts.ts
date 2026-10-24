@@ -17,6 +17,7 @@ import { nextFreeSlot } from './domain/queue.ts';
 import { validateVariant, type MediaItem } from './domain/validate.ts';
 import { MAX_CHANNELS_PER_POST, lockQueue, mediaKind, providerOf, setVariant, takenSlots, type QueueState } from './variants.ts';
 import { refuseChannels } from './channel-access.ts';
+import { refuseUnusableMedia } from './library.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
@@ -113,6 +114,12 @@ export const postCreateFromMedia = defineCommand({
       }
     }
     const files = await libraryFiles(ctx, input.fileIds);
+    // An archived file (#1302), or another channel's own media for a member limited to some channels (#1081), is
+    // refused with 403 MEDIA_NOT_ALLOWED before any draft is made (#1273).
+    await refuseUnusableMedia(
+      ctx,
+      files.map((f) => f.id),
+    );
     const caption = input.caption ?? { kind: 'none' as const };
     let snippet = '';
     if (caption.kind === 'snippet') {

@@ -8,6 +8,14 @@
 // media of a channel of theirs. mediaHidden says it in SQL for every reader and command that picks library files: the
 // photo draft picker (social.media.list { usable }), the AI draft's photos, the CSV import's file names and the import
 // itself. The library's list stays org-wide otherwise (#1099).
+//
+// Archived files (#1302): members take failed crops and rejected designs out of the library with social.media.archive
+// and bring them back with social.media.restore, up to 100 at once. The mark lives in crove_social.media_archive, since
+// crove_kernel.file never changes. An archived file leaves the library's list (shown only when asked for) and every
+// picker; posts that already use it keep it, since publishing and previews read the file itself. Every command that
+// attaches files refuses an archived file, and a file the member may not use, with 403 MEDIA_NOT_ALLOWED
+// (refuseUnusableMedia, #1273): the post and variant create and edit, add channels, duplicate, drafts from media, the
+// CSV import and the AI draft's photos; a file a post or channel already holds stays attached.
 import { sql, type RawBuilder } from 'kysely';
 import { z } from 'zod';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
@@ -40,6 +48,8 @@ export interface LibraryItem {
   tags: string[];
   // Who took it and where it came from, for a photo saved from a stock photo site (#1106); null for an upload.
   credit: MediaCredit | null;
+  // When it was archived (#1302); null for a file in the library.
+  archivedAt: string | null;
 }
 
 // A stock photo's credit as Pexels gave it (#1106): shown under the image with links back, and its description offered
@@ -80,20 +90,33 @@ export function mediaHidden(scope: ChannelScope, alias = 'f'): RawBuilder<boolea
   return sql<boolean>`(${own(false)} AND NOT EXISTS (SELECT 1 FROM crove_social.post_media m WHERE m.org_id = ${org} AND m.file_id = ${id}) AND NOT ${own(true)})`;
 }
 
-// Refuses a file of these that the caller may not use, with 403 MEDIA_NOT_ALLOWED naming it.
-export async function refuseHiddenMedia(ctx: Pick<CommandContext, 'trx' | 'orgId' | 'actor' | 'role'>, fileIds: readonly string[]): Promise<void> {
-  if (fileIds.length === 0) return;
+// SQL over a file row (alias f by default): the file is archived (#1302).
+export function mediaArchived(alias = 'f'): RawBuilder<boolean> {
+  return sql<boolean>`EXISTS (SELECT 1 FROM crove_social.media_archive x WHERE x.org_id = ${sql.ref(`${alias}.org_id`)} AND x.file_id = ${sql.ref(`${alias}.id`)})`;
+}
+
+// Why a file may not be attached: another channel's own media (#1081), or archived (#1302).
+export function mediaNotAllowed(fileId: string, reason: 'channel' | 'archived'): DomainError {
+  const message = reason === 'archived' ? 'Ảnh này đã được lưu trữ; hãy khôi phục trong thư viện rồi dùng lại' : 'Ảnh này chỉ thuộc riêng một kênh bạn không được dùng';
+  return new DomainError('MEDIA_NOT_ALLOWED', 403, message, { fileId, reason });
+}
+
+// Refuses a file of these that the caller may not attach, with 403 MEDIA_NOT_ALLOWED naming it (#1273): another
+// channel's own media for a member limited to some channels (#1081), or an archived file (#1302). kept: the files the
+// post or channel being changed already holds, which stay attached whatever their state.
+export async function refuseUnusableMedia(ctx: Pick<CommandContext, 'trx' | 'orgId' | 'actor' | 'role'>, fileIds: readonly string[], kept: ReadonlySet<string> = new Set()): Promise<void> {
+  const ids = [...new Set(fileIds)].filter((id) => !kept.has(id));
+  if (ids.length === 0) return;
   const scope = await channelScope(ctx);
-  if (scope === null) return;
-  const hidden = await ctx.trx
+  const found = await ctx.trx
     .selectFrom('crove_kernel.file as f')
-    .select('f.id')
+    .select(['f.id', mediaHidden(scope).as('hidden')])
     .where('f.org_id', '=', ctx.orgId)
-    .where('f.id', 'in', [...new Set(fileIds)])
-    .where(mediaHidden(scope))
+    .where('f.id', 'in', ids)
+    .where(sql<boolean>`(${mediaHidden(scope)} OR ${mediaArchived()})`)
     .orderBy('f.id')
     .executeTakeFirst();
-  if (hidden) throw new DomainError('MEDIA_NOT_ALLOWED', 403, 'Ảnh này chỉ thuộc riêng một kênh bạn không được dùng', { fileId: hidden.id });
+  if (found) throw mediaNotAllowed(found.id, found.hidden ? 'channel' : 'archived');
 }
 
 // LIKE wildcards in a search are matched as themselves.
@@ -101,7 +124,8 @@ export const likeTerm = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)
 
 // Newest first, 60 a page; before is the last item of the previous page. search matches the file name, tag one of
 // its tags whatever the case (#904); both together narrow the list. usable leaves out the files the caller may not use
-// (#1196), for the pickers that attach or send them.
+// (#1196), for the pickers that attach or send them. Archived files (#1302) are left out, or listed alone with
+// archived (never with usable).
 export const mediaList = defineQuery({
   name: 'social.media.list',
   input: z.object({
@@ -110,6 +134,7 @@ export const mediaList = defineQuery({
     before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(),
     limit: z.number().int().min(1).max(100).optional(),
     usable: z.boolean().optional(),
+    archived: z.boolean().optional(),
   }),
   access: ALL,
   handler: async (ctx, input): Promise<{ items: LibraryItem[]; more: boolean }> => {
@@ -117,6 +142,7 @@ export const mediaList = defineQuery({
     let q = ctx.trx
       .selectFrom('crove_kernel.file as f')
       .leftJoin('crove_social.media_attribution as a', (j) => j.onRef('a.org_id', '=', 'f.org_id').onRef('a.file_id', '=', 'f.id'))
+      .leftJoin('crove_social.media_archive as x', (j) => j.onRef('x.org_id', '=', 'f.org_id').onRef('x.file_id', '=', 'f.id'))
       .select([
         'f.id',
         'f.filename',
@@ -133,10 +159,12 @@ export const mediaList = defineQuery({
         'a.photographer_url',
         'a.source_url',
         'a.alt_text',
+        'x.archived_at',
       ])
       .where('f.org_id', '=', ctx.orgId)
       .where('f.source', '=', 'social')
-      .where('f.content_type', 'in', [...LIBRARY_MEDIA_TYPES]);
+      .where('f.content_type', 'in', [...LIBRARY_MEDIA_TYPES])
+      .where('x.id', input.archived && !input.usable ? 'is not' : 'is', null);
     if (input.usable) q = q.where(sql<boolean>`NOT ${mediaHidden(await channelScope(ctx))}`);
     if (input.search) q = q.where(sql<boolean>`f.filename ILIKE ${likeTerm(input.search)}`);
     if (input.tag) {
@@ -168,6 +196,7 @@ export const mediaList = defineQuery({
           r.provider === null || r.photographer === null || r.photographer_url === null || r.source_url === null
             ? null
             : { provider: r.provider, photographer: r.photographer, photographerUrl: r.photographer_url, sourceUrl: r.source_url, altText: r.alt_text },
+        archivedAt: r.archived_at === null ? null : r.archived_at.toISOString(),
       })),
       more: rows.length > limit,
     };
@@ -228,7 +257,8 @@ export const mediaStored = defineQuery({
 // The photos an AI draft is written from (#1191), as stored, in the order asked: only the org's own Social uploads, as
 // for alt text. A member limited to some channels (#1081) may not use a channel's own media they cannot see: a file
 // that only variants on other channels list as their own media, in no post's shared media and in no own media of a
-// channel of theirs, is refused with 403 MEDIA_NOT_ALLOWED. The caller checks the types and the sizes.
+// channel of theirs, is refused with 403 MEDIA_NOT_ALLOWED, and so is an archived file (#1302). The caller checks the
+// types and the sizes.
 export const mediaDraftImages = defineQuery({
   name: 'social.media.draft_images',
   input: z.strictObject({ fileIds: z.array(zId).min(1).max(4) }),
@@ -245,6 +275,7 @@ export const mediaDraftImages = defineQuery({
         'f.content_type',
         'f.size_bytes',
         mediaHidden(scope).as('hidden'),
+        mediaArchived().as('archived'),
       ])
       .where('f.org_id', '=', ctx.orgId)
       .where('f.id', 'in', [...new Set(input.fileIds)])
@@ -254,7 +285,8 @@ export const mediaDraftImages = defineQuery({
     return input.fileIds.map((fileId) => {
       const file = byId.get(fileId);
       if (!file) throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này', { fileId });
-      if (file.hidden) throw new DomainError('MEDIA_NOT_ALLOWED', 403, 'Ảnh này chỉ thuộc riêng một kênh bạn không được dùng', { fileId });
+      if (file.hidden) throw mediaNotAllowed(fileId, 'channel');
+      if (file.archived) throw mediaNotAllowed(fileId, 'archived');
       return { fileId, storageKey: file.storage_key, generation: file.generation, sha256: file.sha256, contentType: file.content_type, sizeBytes: Number(file.size_bytes) };
     });
   },
@@ -275,7 +307,8 @@ export type MediaRefProblem = 'UNKNOWN_FILE' | 'AMBIGUOUS_FILE' | 'FILE_NOT_ALLO
 // The library files a CSV import's media cells name (#1258): a file id, or a file name whatever the case (NFC, so a
 // name saved by a Mac matches one typed). A name finds the one file of the library by that name the caller may use;
 // several such files are AMBIGUOUS_FILE (the export writes an id then), and a name or an id that only finds another
-// channel's own media is FILE_NOT_ALLOWED (#1081). The import command checks the files again.
+// channel's own media (#1081) or an archived file (#1302) is FILE_NOT_ALLOWED. The import command checks the files
+// again.
 export const mediaResolve = defineQuery({
   name: 'social.media.resolve',
   input: z.strictObject({ refs: z.array(z.string().trim().min(1).max(255)).min(1).max(200) }),
@@ -297,6 +330,7 @@ export const mediaResolve = defineQuery({
         'f.image_height',
         sql<string>`lower(normalize(f.filename, NFC))`.as('name_key'),
         mediaHidden(scope).as('hidden'),
+        mediaArchived().as('archived'),
       ])
       .where('f.org_id', '=', ctx.orgId)
       .where('f.source', '=', 'social')
@@ -312,7 +346,7 @@ export const mediaResolve = defineQuery({
     return input.refs.map((ref) => {
       const key = keyOf(ref);
       const found = rows.filter((r) => (isFileId(ref) ? r.id === key : r.name_key === key));
-      const usable = found.filter((r) => !r.hidden);
+      const usable = found.filter((r) => !r.hidden && !r.archived);
       if (usable.length === 1) {
         const f = usable[0] as (typeof usable)[number];
         return {
