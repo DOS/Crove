@@ -313,8 +313,11 @@ suite('archived media library files and the attach checks (#1302, #1273)', () =>
     await admin((c) => c.query('INSERT INTO crove_social.channel_access (org_id, user_id, channel_connection_id, created_by) VALUES ($1, $2, $3, $4)', [o.orgId, o.limited, second, o.owner]));
     await expect(exec(o, o.limited, 'social.post.add_channels', { postId, channels: [{ connectionId: second, media: [{ fileId: hidden }] }] })).rejects.toMatchObject(hiddenRefusal(hidden));
 
-    // The owner and an unlimited member may use it.
+    // The owner and an unlimited member may use it (no channel scope: mediaHidden is FALSE), and archive it.
     await create(o, o.member, { body: 'Bài', media: [{ fileId: hidden }], channels: [{ connectionId: o.mine }] });
+    await create(o, o.owner, { body: 'Bài', media: [{ fileId: hidden }], channels: [{ connectionId: o.mine }] });
+    expect(await archive(o, [hidden], o.owner)).toEqual({ archived: [hidden] });
+    expect(await restore(o, [hidden], o.owner)).toEqual({ restored: [hidden] });
   });
 
   it('removes the archive marks with their file', async () => {

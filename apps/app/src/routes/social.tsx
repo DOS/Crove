@@ -337,9 +337,11 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
   // Archive the files picked or opened, or restore them in the archived view (#1302).
   const archiveFiles = useMutation({
-    mutationFn: async (fileIds: string[]) => (archived ? (await client.social.media.restore({ fileIds })).restored.length : (await client.social.media.archive({ fileIds })).archived.length),
-    onSuccess: (count) => {
-      setArchiveDone(t(archived ? 'libraryRestored' : 'libraryArchived', { count }));
+    // restore travels with the call, so a view switched meanwhile cannot change what it does or what it reports.
+    mutationFn: async ({ fileIds, restore }: { fileIds: string[]; restore: boolean }) =>
+      restore ? (await client.social.media.restore({ fileIds })).restored.length : (await client.social.media.archive({ fileIds })).archived.length,
+    onSuccess: (count, { restore }) => {
+      setArchiveDone(t(restore ? 'libraryRestored' : 'libraryArchived', { count }));
       setPicked([]);
       setOpen(null);
       void queryClient.invalidateQueries({ queryKey: ['social-library'] });
@@ -402,7 +404,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               {t('bulkDrafts.open')}
             </Button>
           )}
-          <Button size="sm" variant={archived ? 'default' : 'outline'} className={cn(archived && 'ml-auto')} disabled={archiveFiles.isPending} onClick={() => archiveFiles.mutate(picked.map((p) => p.fileId))}>
+          <Button size="sm" variant={archived ? 'default' : 'outline'} className={cn(archived && 'ml-auto')} disabled={archiveFiles.isPending} onClick={() => archiveFiles.mutate({ fileIds: picked.map((p) => p.fileId), restore: archived })}>
             {archiveFiles.isPending ? <Spinner className="text-current" /> : null}
             {t(archived ? 'libraryRestorePicked' : 'libraryArchivePicked', { count: picked.length })}
           </Button>
@@ -494,7 +496,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               {canWrite && aiPhotos && !open.archivedAt && <DraftFromPhotoLink slug={slug} item={open} />}
               {canWrite && (
                 <div className="space-y-1">
-                  <Button size="sm" variant="outline" disabled={archiveFiles.isPending} onClick={() => archiveFiles.mutate([open.fileId])}>
+                  <Button size="sm" variant="outline" disabled={archiveFiles.isPending} onClick={() => archiveFiles.mutate({ fileIds: [open.fileId], restore: open.archivedAt !== null })}>
                     {t(open.archivedAt ? 'libraryRestore' : 'libraryArchive')}
                   </Button>
                   {!open.archivedAt && <p className="text-xs text-subtle-foreground">{t('libraryArchiveHint')}</p>}
