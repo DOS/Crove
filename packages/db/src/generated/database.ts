@@ -49,6 +49,7 @@ export interface CroveKernelSchema {
   'crove_kernel.idempotency_key': KernelIdempotencyKeyTable;
   'crove_kernel.inbound_message': KernelInboundMessageTable;
   'crove_kernel.kill_switch': KernelKillSwitchTable;
+  'crove_kernel.legal_entity': KernelLegalEntityTable;
   'crove_kernel.mail_event': KernelMailEventTable;
   'crove_kernel.mail_message': KernelMailMessageTable;
   'crove_kernel.mail_suppression': KernelMailSuppressionTable;
@@ -623,6 +624,21 @@ export interface KernelKillSwitchTable {
   engaged_at: ColumnType<Date, Date | string | undefined, Date | string>;
   released_by: string | null;
   released_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
+/** crove_kernel.legal_entity */
+export interface KernelLegalEntityTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  name: string;
+  kind: Generated<string>;
+  tax_code: string | null;
+  parent_id: string | null;
+  is_default: ColumnType<boolean, boolean | undefined, NotGranted>;
+  created_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_by: string | null;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_kernel.mail_event */
@@ -1368,6 +1384,8 @@ export interface SocialPostTable {
   recurrence_last_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   recurrence_next_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   recurrence_source_id: string | null;
+  text_variations: ColumnType<unknown, string | undefined, string>;
+  text_variation_next: Generated<number>;
   archived_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   archived_by: string | null;
 }

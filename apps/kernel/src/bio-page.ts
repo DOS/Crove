@@ -61,7 +61,8 @@ export async function bioImage(runtime: Runtime, store: BlobStore, slug: string,
 
 const escape = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 
-export function renderBioPage(slug: string, view: BioView): string {
+// brand: the product name users see (BRAND_NAME, #1045), in the footer.
+export function renderBioPage(slug: string, view: BioView, brand = 'Crove'): string {
   const base = `/b/${slug}`;
   const buttons = view.buttons.map((b, i) => `<a class="button" href="${base}/go/button:${i}" rel="noopener">${escape(b.label)}</a>`).join('\n');
   const posts = view.posts
@@ -103,7 +104,7 @@ ${avatar}
 ${view.about ? `<p class="about">${escape(view.about)}</p>` : ''}
 ${buttons}
 ${posts ? `<div class="grid">\n${posts}\n</div>` : ''}
-<footer>Crove</footer>
+<footer>${escape(brand)}</footer>
 </main>
 </body>
 </html>`;

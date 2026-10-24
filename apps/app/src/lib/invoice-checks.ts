@@ -44,6 +44,8 @@ export function invoiceCheckMessage(check: Check, t: Translate, money: (amount: 
     case 'issue_date.future':
     case 'tax_authority_code.present':
     case 'tax_authority_code.missing':
+      return t(`invoiceChecks.${code}`);
+    // Its own case: grouped with the codes above, every one of them read "Chữ ký số hợp lệ, đã xác minh".
     case 'signature.verified':
       return has('signer') ? t('invoiceChecks.signature.verifiedBy', { signer: p.signer ?? '' }) : t('invoiceChecks.signature.verified');
     case 'signature.unverified':

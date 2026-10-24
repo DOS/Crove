@@ -15,6 +15,7 @@ import { IntakePanel, useIntake } from '../components/intake.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
+import { SM_UP, useMediaQuery } from '../lib/media.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
@@ -36,6 +37,9 @@ interface BulkRun {
 
 // Expired proposals (#876) waited past the org's expiry; their author may ask for them again.
 type Tab = 'pending' | 'executed' | 'rejected' | 'expired';
+
+// One proposal as the Inbox lists it.
+type InboxItem = Awaited<ReturnType<typeof client.inbox.list>>[number];
 
 const TABS: Tab[] = ['pending', 'executed', 'rejected', 'expired'];
 
@@ -236,6 +240,44 @@ export function InboxPage() {
   const bulkRefused = bulk?.progress.results.flatMap((r) => (r.outcome === 'refused' ? [r] : [])) ?? [];
   const bulkNotSent = bulk ? bulk.total - bulk.progress.results.length : 0;
 
+  const wide = useMediaQuery(SM_UP);
+  // The bulk checkbox and the check badges of one proposal, for the table and the phone's blocks alike (#1270).
+  const selectBox = (item: InboxItem) =>
+    bulkSelectable(item, REVERSAL_KIND) ? (
+      <Checkbox
+        checked={selected.has(item.id)}
+        disabled={sending}
+        aria-label={t('bulk.select', { name: proposalName(item) })}
+        onCheckedChange={(checked) =>
+          setSelected((current) => {
+            const next = new Set(current);
+            if (checked) next.add(item.id);
+            else next.delete(item.id);
+            return next;
+          })
+        }
+      />
+    ) : (
+      <Checkbox checked={false} disabled aria-label={t('bulk.notSelectable')} title={t('bulk.notSelectable')} />
+    );
+  const checkBadges = (item: InboxItem) => (
+    <div className="flex flex-wrap gap-1">
+      {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}
+      {item.kind === REVERSAL_KIND && <Badge variant="secondary">{t('reversalKind')}</Badge>}
+      {item.kind === VOUCHER_KIND && <Badge variant="secondary">{t('voucherKind')}</Badge>}
+      {item.kind === JOURNAL_VOUCHER_KIND && <Badge variant="secondary">{t('journalVoucherKind')}</Badge>}
+      {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
+      {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
+      {item.signatureStatus === 'unverified' && <Badge variant="destructive">{t('signatureUnverified')}</Badge>}
+      {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
+      {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
+      {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
+      {showMatched(item, REVERSAL_KIND, VOUCHER_KIND, JOURNAL_VOUCHER_KIND) && (
+        <Badge variant="success">{t('matched')}</Badge>
+      )}
+    </div>
+  );
+
   const dropTarget = {
     onDragOver: (e: DragEvent) => {
       e.preventDefault();
@@ -381,13 +423,16 @@ export function InboxPage() {
           setSelected(new Set());
         }}
       >
-        <TabsList variant="line" className="w-full justify-start border-b">
-          {TABS.map((id) => (
-            <TabsTrigger key={id} value={id} className="flex-none px-3">
-              {t(`tabs.${id}`)}
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        {/* On a narrow screen the tabs scroll inside their row (#1270), as the ledger's do (#615). */}
+        <div className="-mb-1 overflow-x-auto pb-1">
+          <TabsList variant="line" className="w-max min-w-full justify-start border-b">
+            {TABS.map((id) => (
+              <TabsTrigger key={id} value={id} className="flex-none px-3">
+                {t(`tabs.${id}`)}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
 
       <TabsContent value={tab}>
         {bulk && isStepUpRequired(bulkError) && (
@@ -484,72 +529,68 @@ export function InboxPage() {
             }
           />
         ) : (
-          <DataTable
-            numeric={[bulkEnabled ? 3 : 2]}
-            head={[
-              ...(bulkEnabled ? [''] : []),
-              t('columns.document'),
-              t('columns.issueDate'),
-              t('columns.total'),
-              t('columns.checks'),
-              t('columns.received'),
-            ]}
-          >
-            {items.data?.map((item) => (
-              <TableRow key={item.id}>
-                {bulkEnabled && (
-                  <TableCell className="w-10 px-4 py-3">
-                    {bulkSelectable(item, REVERSAL_KIND) ? (
-                      <Checkbox
-                        checked={selected.has(item.id)}
-                        disabled={sending}
-                        aria-label={t('bulk.select', { name: proposalName(item) })}
-                        onCheckedChange={(checked) =>
-                          setSelected((current) => {
-                            const next = new Set(current);
-                            if (checked) next.add(item.id);
-                            else next.delete(item.id);
-                            return next;
-                          })
-                        }
-                      />
-                    ) : (
-                      <Checkbox checked={false} disabled aria-label={t('bulk.notSelectable')} title={t('bulk.notSelectable')} />
+          // The table from sm up; a phone reads each proposal as one block (#1270), the table needing more width
+          // than it has. One layout is rendered, so each proposal is on the page once.
+          wide ? (
+            <DataTable
+              numeric={[bulkEnabled ? 3 : 2]}
+              head={[
+                ...(bulkEnabled ? [''] : []),
+                t('columns.document'),
+                t('columns.issueDate'),
+                t('columns.total'),
+                t('columns.checks'),
+                t('columns.received'),
+              ]}
+            >
+              {items.data?.map((item) => (
+                <TableRow key={item.id}>
+                  {bulkEnabled && (
+                    <TableCell className="w-10 px-4 py-3">
+                      {selectBox(item)}
+                    </TableCell>
+                  )}
+                  <TableCell className="px-4 py-3">
+                    <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
+                      {proposalName(item)}
+                    </Link>
+                    <p className="text-xs text-subtle-foreground">{item.title}</p>
+                    {item.status === 'expired' && item.expiredAfterDays !== null && (
+                      <p className="text-xs text-warning">{t('expiredReason', { days: item.expiredAfterDays })}</p>
                     )}
                   </TableCell>
-                )}
-                <TableCell className="px-4 py-3">
-                  <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
-                    {proposalName(item)}
-                  </Link>
-                  <p className="text-xs text-subtle-foreground">{item.title}</p>
-                  {item.status === 'expired' && item.expiredAfterDays !== null && (
-                    <p className="text-xs text-warning">{t('expiredReason', { days: item.expiredAfterDays })}</p>
-                  )}
-                </TableCell>
-                <TableCell className="px-4 py-3 text-muted-foreground">{f.date(item.issueDate)}</TableCell>
-                <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(item.total)}</TableCell>
-                <TableCell className="px-4 py-3">
-                  <div className="flex flex-wrap gap-1">
-                    {/* A reversal a user asked for has no invoice checks; its card shows the entry it reverses. */}
-                    {item.kind === REVERSAL_KIND && <Badge variant="secondary">{t('reversalKind')}</Badge>}
-                    {item.kind === VOUCHER_KIND && <Badge variant="secondary">{t('voucherKind')}</Badge>}
-                    {item.kind === JOURNAL_VOUCHER_KIND && <Badge variant="secondary">{t('journalVoucherKind')}</Badge>}
-                    {item.direction === 'sale' && <Badge variant="secondary">{t('saleKind')}</Badge>}
-                    {item.duplicateOf && <Badge variant="warning">{t('maybeDuplicate')}</Badge>}
-                    {item.signatureStatus === 'unverified' && <Badge variant="destructive">{t('signatureUnverified')}</Badge>}
-                    {item.failedChecks > 0 && <Badge variant="destructive">{t('failedChecks', { count: item.failedChecks })}</Badge>}
-                    {item.warnChecks > 0 && <Badge variant="warning">{t('warnChecks', { count: item.warnChecks })}</Badge>}
-                    {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
-                    {showMatched(item, REVERSAL_KIND, VOUCHER_KIND, JOURNAL_VOUCHER_KIND) && (
-                      <Badge variant="success">{t('matched')}</Badge>
+                  <TableCell className="px-4 py-3 text-muted-foreground">{f.date(item.issueDate)}</TableCell>
+                  <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(item.total)}</TableCell>
+                  <TableCell className="px-4 py-3">
+                    {checkBadges(item)}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-xs text-subtle-foreground">{f.dateTime(item.createdAt)}</TableCell>
+                </TableRow>
+              ))}
+            </DataTable>
+          ) : (
+            <ul className="space-y-2">
+              {items.data?.map((item) => (
+                <li key={item.id} className="flex gap-3 rounded-xl border bg-card p-3">
+                  {bulkEnabled && <div className="pt-0.5">{selectBox(item)}</div>}
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="min-w-0 font-medium text-foreground hover:text-link">
+                        {proposalName(item)}
+                      </Link>
+                      <span className="shrink-0 text-right text-foreground tabular-nums">{f.money(item.total)}</span>
+                    </div>
+                    <p className="text-xs text-subtle-foreground">{item.title}</p>
+                    <p className="text-xs text-muted-foreground">{f.date(item.issueDate)}</p>
+                    {item.status === 'expired' && item.expiredAfterDays !== null && (
+                      <p className="text-xs text-warning">{t('expiredReason', { days: item.expiredAfterDays })}</p>
                     )}
+                    {checkBadges(item)}
                   </div>
-                </TableCell>
-                <TableCell className="px-4 py-3 text-xs text-subtle-foreground">{f.dateTime(item.createdAt)}</TableCell>
-              </TableRow>
-            ))}
-          </DataTable>
+                </li>
+              ))}
+            </ul>
+          )
         )}
       </TabsContent>
       </Tabs>

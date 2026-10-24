@@ -42,6 +42,7 @@ import {
   zSocialDecide,
   zSocialPost,
   zSocialRecurrence,
+  zSocialTextVariations,
   zSocialReviewDiff,
   zSocialPreReview,
   zSocialPostVersions,
@@ -176,6 +177,7 @@ import { zDepreciationRequest, zJournalVoucherRequest, zYearClosingRequest } fro
 import { zFixedAsset, zFixedAssetCreate, zFixedAssetEnd } from './fixed-asset.ts';
 import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts';
 import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
+import { zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
@@ -270,6 +272,13 @@ export const contract = {
   // Org-less (issue #324): the public tax registry's name and address for a tax code, to prefill a new org. Answers
   // TAX_LOOKUP_DISABLED (404) when the server has no lookup configured (TAX_CODE_LOOKUP_URL), INVALID_TAX_CODE (422),
   // TAX_CODE_NOT_FOUND (404) when the registry does not know the code, and TAX_LOOKUP_UNAVAILABLE (503).
+  // The org's legal entities (issue #1278): owners and admins list them, add one, and change one (the whole entity).
+  // The default entity is the org's own, created with it; changing its tax code changes the org's (org.setTaxCode).
+  legalEntities: {
+    list: oc.output(z.array(zLegalEntity)),
+    create: oc.input(zLegalEntityInput).output(zLegalEntity),
+    update: oc.input(zLegalEntityInput.extend({ legalEntityId: zId })).output(zLegalEntity),
+  },
   taxRegistry: {
     lookup: oc.input(z.object({ taxCode: z.string().trim().max(20) })).output(zTaxRegistryEntry),
   },
@@ -477,6 +486,11 @@ export const contract = {
       // for its occurrence and sent to review. Setting it makes the post a series; clearing it ends the series.
       setRecurrence: oc.input(z.strictObject({ postId: zId, recurrence: zSocialRecurrence })).output(z.object({ postId: zId, recurrence: zSocialRecurrence })),
       clearRecurrence: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
+      // The text variations of an evergreen or series post (#1260), replacing the list; the next copy's stays on the same
+      // text when it is kept.
+      setTextVariations: oc
+        .input(z.strictObject({ postId: zId, variations: zSocialTextVariations }))
+        .output(z.object({ postId: zId, variations: z.array(z.object({ text: z.string(), ai: z.boolean() })), next: z.number().int() })),
       // Whether this server writes AI drafts from photos (#1191, #1196): an AI model that takes images (AI_VISION).
       aiPhotos: oc.input(z.object({})).output(z.object({ enabled: z.boolean() })),
       // AI drafting (Social plan §3.7): the server asks the deployment's model for a draft from the brief and saves it as
@@ -510,13 +524,14 @@ export const contract = {
       // A rewrite of one text, as a proposal the member accepts or discards (#583); nothing is saved. With a channel,
       // the rewrite is told its limits. proofread (#1167): spelling, diacritics, spacing and punctuation only; the
       // text comes back unchanged when there is nothing to fix, and an answer that changed a link, hashtag, mention,
-      // number or price, or emoji is refused with AI_PROOFREAD_CHANGED.
+      // number or price, or emoji is refused with AI_PROOFREAD_CHANGED. variation (#1260): another wording of the text, for
+      // the post's text variations; it only fills the form until a person saves it.
       rewriteWithAi: oc
         .input(
           z.strictObject({
             text: z.string().trim().min(1).max(20_000),
             title: z.string().trim().max(500).nullable().optional(),
-            action: z.enum(['shorten', 'formal', 'casual', 'translate_en', 'translate_vi', 'proofread']),
+            action: z.enum(['shorten', 'formal', 'casual', 'translate_en', 'translate_vi', 'proofread', 'variation']),
             connectionId: zId.optional(),
           }),
         )

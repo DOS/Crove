@@ -43,6 +43,7 @@ import { DuplicateNote, ownRewriteId, SHARED_REWRITE_ID } from '../components/so
 import { SignatureToggle, signatureSettings } from '../components/social-signature.tsx';
 import { ThreadSplitField } from '../components/social-thread-split.tsx';
 import { ProofreadProposal } from '../components/social-proofread.tsx';
+import { TextVariationsCard } from '../components/social-text-variations.tsx';
 import { ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -4050,6 +4051,10 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           {/* One kind of repeat per post (#979); a copy of a series repeats with its series post. */}
           {canWrite && !archived && p.evergreenDays === null && p.recurrenceSourceId === null && (
             <RecurrencePanel key={`${JSON.stringify(p.recurrence)}:${p.recurrenceCount}`} post={p} published={published} onDone={refresh} />
+          )}
+          {/* The texts an evergreen or series post's copies rotate through (#1260); a copy of a series takes its series'. */}
+          {canWrite && p.recurrenceSourceId === null && (p.evergreenDays !== null || p.recurrence !== null) && (
+            <TextVariationsCard key={`${JSON.stringify(p.textVariations)}:${p.textVariationNext}`} post={p} onDone={refresh} />
           )}
             <ReviewLinks postId={p.id} canDecide={canDecide} />
             <AssignCard post={p} canEdit={canDecide || (canWrite && p.authorUserId !== null && p.authorUserId === userId)} />

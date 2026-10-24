@@ -162,9 +162,9 @@ export const variantEditPublished = defineCommand({
     if (v.status !== 'published') throw new DomainError('EDIT_NOT_PUBLISHED', 409, 'Chỉ sửa được nội dung của kênh đã đăng', { variantId: v.id, status: v.status });
     // Confirmed by hand as published (social.variant.resolve) without the platform's id, or a draft kept in the
     // platform's app (#903): nothing to name in the call.
-    if (!v.external_post_id) throw new DomainError('EDIT_NO_PLATFORM_ID', 409, 'Crove không có mã bài trên nền tảng nên không sửa được; hãy sửa trực tiếp trên nền tảng', { variantId: v.id });
+    if (!v.external_post_id) throw new DomainError('EDIT_NO_PLATFORM_ID', 409, 'Không có mã bài trên nền tảng nên không sửa được; hãy sửa trực tiếp trên nền tảng', { variantId: v.id });
     const refusal = editRefusal(v.provider, settingsOf(v), mediaKinds(post, v));
-    if (refusal) throw new DomainError('EDIT_NOT_SUPPORTED', 422, 'Crove chưa sửa được bài đã đăng trên kênh này; hãy sửa trực tiếp trên nền tảng', { variantId: v.id, reason: refusal });
+    if (refusal) throw new DomainError('EDIT_NOT_SUPPORTED', 422, 'Chưa sửa được bài đã đăng trên kênh này; hãy sửa trực tiếp trên nền tảng', { variantId: v.id, reason: refusal });
     if (v.revision !== input.revision) throw new DomainError('STALE_REVISION', 409, 'Kênh này đã được sửa ở nơi khác, hãy tải lại', { revision: v.revision });
     const calls = (await editCallsOf(ctx.trx, ctx.orgId, [v])).get(v.id) ?? [];
     if (editState(calls, v, ctx.now)?.state === 'pending') throw new DomainError('EDIT_PENDING', 409, 'Bản sửa trước đang được gửi lên kênh; hãy chờ kết quả rồi sửa tiếp', { variantId: v.id });

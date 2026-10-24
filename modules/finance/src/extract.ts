@@ -203,7 +203,7 @@ function relatedCheck(related: RelatedInvoiceRef): InvoiceCheck {
         status: 'pass',
         code: 'related.replaces',
         params: { invoice },
-        message: `Hóa đơn thay thế cho hóa đơn ${invoice}: khi duyệt, Crove đảo bút toán và hủy chứng từ của hóa đơn gốc`,
+        message: `Hóa đơn thay thế cho hóa đơn ${invoice}: khi duyệt, hệ thống đảo bút toán và hủy chứng từ của hóa đơn gốc`,
       }
     : {
         id: 'related',

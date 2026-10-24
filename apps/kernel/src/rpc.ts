@@ -172,7 +172,7 @@ function telegramFailure(code: string | undefined): DomainError | null {
   if (code === 'TELEGRAM_CHANNEL_INVALID') return new DomainError('TELEGRAM_CHANNEL_INVALID', 422, 'Hãy nhập tên kênh dạng @tenkenh, đường dẫn t.me hoặc mã số của kênh');
   if (code === 'TELEGRAM_TOKEN_REFUSED') return new DomainError('TELEGRAM_TOKEN_REFUSED', 422, 'Telegram không chấp nhận mã bot này; có thể mã đã bị đổi trong @BotFather');
   if (code === 'TELEGRAM_CHANNEL_NOT_FOUND') return new DomainError('TELEGRAM_CHANNEL_NOT_FOUND', 422, 'Bot không thấy kênh này; hãy kiểm tra tên kênh và thêm bot vào kênh');
-  if (code === 'TELEGRAM_NOT_A_CHANNEL') return new DomainError('TELEGRAM_NOT_A_CHANNEL', 422, 'Đây không phải một kênh Telegram; Crove chỉ đăng lên kênh, không đăng vào nhóm');
+  if (code === 'TELEGRAM_NOT_A_CHANNEL') return new DomainError('TELEGRAM_NOT_A_CHANNEL', 422, 'Đây không phải một kênh Telegram; chỉ đăng được lên kênh, không đăng vào nhóm');
   if (code === 'TELEGRAM_BOT_CANNOT_POST') return new DomainError('TELEGRAM_BOT_CANNOT_POST', 422, 'Bot chưa được đăng bài trong kênh; hãy đặt bot làm quản trị viên có quyền đăng bài');
   return null;
 }
@@ -528,6 +528,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         setRecurrence: os.social.posts.setRecurrence.handler(socialCommand('social.post.recurrence_set')),
         clearRecurrence: os.social.posts.clearRecurrence.handler(socialCommand('social.post.recurrence_clear')),
+        setTextVariations: os.social.posts.setTextVariations.handler(socialCommand('social.post.set_text_variations')),
         aiPhotos: os.social.posts.aiPhotos.handler(({ context }) => inSocial(context, async () => ({ enabled: Boolean(socialWriter?.draftStored) }))),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
           inSocial(context, async (orgId, actor) => {
@@ -1078,7 +1079,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
               if (error.code === 'PrivilegedAppPassword') {
                 return new DomainError('BLUESKY_APP_PASSWORD_PRIVILEGED', 422, 'Mật khẩu ứng dụng này được đọc cả tin nhắn riêng; hãy tạo mật khẩu ứng dụng mới không bật quyền tin nhắn');
               }
-              if (error.code === 'UnsupportedPds') return new DomainError('BLUESKY_PDS_UNSUPPORTED', 422, 'Crove không gọi được máy chủ lưu tài khoản Bluesky này (PDS phải là tên miền công khai, qua https)');
+              if (error.code === 'UnsupportedPds') return new DomainError('BLUESKY_PDS_UNSUPPORTED', 422, 'Không gọi được máy chủ lưu tài khoản Bluesky này (PDS phải là tên miền công khai, qua https)');
               if (error.status === 401 || error.status === 400) return new DomainError('BLUESKY_LOGIN_FAILED', 422, 'Bluesky không chấp nhận tên tài khoản hoặc mật khẩu ứng dụng này');
             }
             return new DomainError('OAUTH_PROVIDER_FAILED', 503, 'Nền tảng không phản hồi đúng, hãy thử lại sau');
@@ -1302,6 +1303,12 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           return { connections, failed, skipped: accounts.length - taken.length };
         }),
       ),
+    },
+    // The org's legal entities (#1278): owners and admins.
+    legalEntities: {
+      list: os.legalEntities.list.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.legal_entity.list', {}, { actor, orgId }))),
+      create: os.legalEntities.create.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.legal_entity.create', input, { actor, orgId }))),
+      update: os.legalEntities.update.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.legal_entity.update', input, { actor, orgId }))),
     },
     // Org-less: any signed-in user may look up a tax code before the org exists. Nothing is written, so no command.
     taxRegistry: {

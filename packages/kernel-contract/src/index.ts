@@ -3,6 +3,7 @@ export * from './contract.ts';
 export * from './opening-balance.ts';
 export * from './accounts.ts';
 export * from './tax-code.ts';
+export * from './legal-entity.ts';
 export * from './cash-voucher.ts';
 export * from './journal-voucher.ts';
 export * from './personal-data.ts';
@@ -69,3 +70,4 @@ export const STREAM_CLOSE_REASONS = ['session', 'session_revoked_in_org', 'mfa',
 export type StreamCloseReason = (typeof STREAM_CLOSE_REASONS)[number];
 export * from './fixed-asset.ts';
 export * from './statements-htkk.ts';
+export * from './brand.ts';

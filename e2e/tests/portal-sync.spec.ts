@@ -40,7 +40,8 @@ test('fetch the period purchase list and invoice XML from the tax portal', async
   const form = page.getByRole('form', { name: 'Mã số thuế' });
   await form.getByLabel('Mã số thuế').fill(BUYER_TAX_CODE);
   await form.getByRole('button', { name: 'Lưu' }).click();
-  await expect(page.getByText(BUYER_TAX_CODE, { exact: true })).toBeVisible();
+  // The org's own field (a <dd>): the legal entities card shows the default entity's code too (#1278).
+  await expect(page.getByRole('definition').getByText(BUYER_TAX_CODE, { exact: true })).toBeVisible();
 
   await nav.getByRole('link', { name: 'Đối chiếu cổng thuế' }).click();
   await choosePeriod(page);
