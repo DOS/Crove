@@ -36,6 +36,10 @@ const VARIANTS: ParsedInvoice[] = [
     i.taxAuthorityCode = null;
     i.hasSignature = false;
   }),
+  // A VND invoice with an amount below one dong (#1282).
+  invoice((i) => {
+    i.total = `${i.total}.5`;
+  }),
   invoice((i) => {
     i.seller.taxCode = 'not a code';
     i.issueDate = '2026-02-30';
@@ -100,6 +104,24 @@ describe('invoice check codes', () => {
     expect(byCode.get('lines_sum.mismatch')?.params).toEqual({ lines: expect.any(String), subtotal: '1' });
     expect(byCode.get('seller_tax_code.ok')?.params).toEqual({ taxCode: VALID_CODE });
     expect(byCode.get('issue_date.ok')?.params).toEqual({ date: parsed.issueDate });
+    expect(byCode.get('amount_scale.fraction')?.params).toEqual({ amount: '1980000.5' });
+  });
+
+  it('fails a VND invoice with an amount below one dong, and not a foreign one or a whole-dong one (#1282)', () => {
+    const scale = (i: ParsedInvoice) => checkInvoice(i, '2026-10-13').filter((c) => c.id === 'amount_scale');
+    expect(scale(invoice())).toEqual([]);
+    expect(scale(invoice((i) => (i.lines[0]!.amount = `${i.lines[0]!.amount}.0000`)))).toEqual([]);
+    expect(scale(invoice((i) => (i.lines[0]!.amount = `${i.lines[0]!.amount}.25`)))).toMatchObject([{ status: 'fail', code: 'amount_scale.fraction' }]);
+    expect(scale(invoice((i) => (i.vatTotal = `${i.vatTotal}.5`)))).toMatchObject([{ status: 'fail' }]);
+    expect(
+      scale(
+        invoice((i) => {
+          i.currency = 'USD';
+          i.exchangeRate = '25450';
+          i.total = '100.25';
+        }),
+      ),
+    ).toEqual([]);
   });
 
   it('shows only the start of a currency that is not a code, so the check always fits its schema', () => {

@@ -42,6 +42,7 @@ export interface CroveKernelSchema {
   'crove_kernel.audit_event': KernelAuditEventTable;
   'crove_kernel.budget_policy': KernelBudgetPolicyTable;
   'crove_kernel.channel_connection': KernelChannelConnectionTable;
+  'crove_kernel.currency': KernelCurrencyTable;
   'crove_kernel.external_call': KernelExternalCallTable;
   'crove_kernel.extraction': KernelExtractionTable;
   'crove_kernel.file': KernelFileTable;
@@ -520,6 +521,12 @@ export interface KernelChannelConnectionTable {
   expires_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   connected_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_kernel.currency */
+export interface KernelCurrencyTable {
+  code: ColumnType<string, NotGranted, NotGranted>;
+  minor_units: ColumnType<number, NotGranted, NotGranted>;
 }
 
 /** crove_kernel.external_call */
