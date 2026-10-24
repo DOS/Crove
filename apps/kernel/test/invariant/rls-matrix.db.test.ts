@@ -46,6 +46,7 @@ const PENDING_TABLES = new Set<string>([
   'crove_crm.booking',
   'crove_kernel.role_assignment',
   'crove_social.media_archive',
+  'crove_social.saved_view',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -1056,6 +1057,12 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         row: { org_id: o.id, id: randomUUID(), link_id: link.id, post_id: post.id, position: 0 },
       };
     },
+  },
+  // A member's saved view of the posts (#1300): a name and the filters it applies, private or shared with the org,
+  // under a restrictive policy that shows a private view to its owner alone; the factory's rows belong to the owner,
+  // the user every member-context actor enters as. One name per member, so every row gets its own.
+  'crove_social.saved_view': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, name: `rls-${tag()}`, filters: '{"assignee":"me"}' } }),
   },
   // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
   // A post's link as Crove shortened it when the variant went out (#706); the worker writes it.
