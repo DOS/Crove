@@ -29,10 +29,18 @@ export type PersonalDataHandling = (typeof PERSONAL_DATA_HANDLINGS)[number];
 export const PERSONAL_DATA_KINDS = ['email', 'phone', 'address', 'name', 'tax_code', 'email_list', 'other'] as const;
 export type PersonalDataKind = (typeof PERSONAL_DATA_KINDS)[number];
 
+// The handlings of personal data held in the org's own tables: what the finder reports and an erasure reads.
+const SEARCHABLE_HANDLINGS = ['erase', 'keep_legal', 'keep_org', 'keep_record'] as const;
+type SearchableHandling = (typeof SEARCHABLE_HANDLINGS)[number];
+const searchable = (handling: PersonalDataHandling): handling is SearchableHandling => (SEARCHABLE_HANDLINGS as readonly string[]).includes(handling);
+
 export interface PersonalDataColumn {
   kind: PersonalDataKind;
   handling: PersonalDataHandling;
   reason: string;
+  // A row whose boolean column `when` is true is handled as this says instead (the org's default legal entity is the
+  // business itself; the other entities are the businesses and households it keeps books for).
+  override?: { when: string; handling: SearchableHandling; reason: string };
 }
 
 // Keyed by schema.table.column.
@@ -74,10 +82,20 @@ export const PERSONAL_DATA_COLUMNS = {
   'crove_kernel.tenant.tax_code': { kind: 'tax_code', handling: 'keep_org', reason: "The business's own tax code" },
   'crove_kernel.tenant.address': { kind: 'address', handling: 'keep_org', reason: "The business's registered address, printed on its returns" },
   'crove_kernel.tenant.contact_email': { kind: 'email', handling: 'erase', reason: 'A contact person of the business' },
+  // Legal entities (#1278): the companies, branches and household businesses the org keeps books for. In an accounting
+  // firm's org they are its clients, and a household's name and 12-digit code are usually its owner's name and national
+  // ID number, so only the default entity, the org itself, is the org's own identity (#1312).
+  'crove_kernel.legal_entity.name': {
+    kind: 'name',
+    handling: 'keep_legal',
+    reason: "The legal name of a business or household the org keeps books for; a household's is usually its owner's name. Kept with its books",
+    override: { when: 'is_default', handling: 'keep_org', reason: "The name of the org's default legal entity, the business itself" },
+  },
   'crove_kernel.legal_entity.tax_code': {
     kind: 'tax_code',
-    handling: 'keep_org',
-    reason: "The tax code of a company, branch or household business the org keeps books for (#1278); the default entity's is the org's own",
+    handling: 'keep_legal',
+    reason: "The tax code of a business or household the org keeps books for; a household's is its owner's national ID number. Kept with its books",
+    override: { when: 'is_default', handling: 'keep_org', reason: "The tax code of the org's default legal entity, the org's own" },
   },
   // Agents and connected accounts.
   'crove_kernel.agent.display_name': { kind: 'other', handling: 'not_personal', reason: 'The name of an AI agent' },
@@ -152,10 +170,12 @@ function columnMatch(kind: PersonalDataKind, probe: Probe, column: RawBuilder<un
   return null;
 }
 
-// The registry's columns an erasure or a search reads: personal data held in the org's own tables.
-const SEARCHABLE_HANDLINGS = ['erase', 'keep_legal', 'keep_org', 'keep_record'] as const;
-const searchable = (handling: PersonalDataHandling): handling is (typeof SEARCHABLE_HANDLINGS)[number] =>
-  (SEARCHABLE_HANDLINGS as readonly string[]).includes(handling);
+// What an erasure does to one matched row: the column's handling, or its override when the row says so.
+export function rowHandling(entry: PersonalDataColumn, row: Record<string, unknown>): { handling: PersonalDataHandling; reason: string } {
+  const override = entry.override;
+  if (override && row[override.when] === true) return { handling: override.handling, reason: override.reason };
+  return { handling: entry.handling, reason: entry.reason };
+}
 
 function requireProbe(value: string): Probe {
   const probe = personalDataProbe(value);
@@ -168,8 +188,7 @@ async function findPersonalData(trx: QueryContext['trx'], orgId: string, probe: 
   const matches: PersonalDataResult['matches'] = [];
   let truncated = false;
   for (const [key, entry] of Object.entries(PERSONAL_DATA_COLUMNS) as Array<[string, PersonalDataColumn]>) {
-    const handling = entry.handling;
-    if (!searchable(handling)) continue;
+    if (!searchable(entry.handling)) continue;
     const [schema, table, column] = key.split('.') as [string, string, string];
     const match = columnMatch(entry.kind, probe, sql.ref(`t.${column}`));
     if (!match) continue;
@@ -180,7 +199,9 @@ async function findPersonalData(trx: QueryContext['trx'], orgId: string, probe: 
        LIMIT ${PERSONAL_DATA_ROW_LIMIT + 1}`.execute(trx);
     if (rows.length > PERSONAL_DATA_ROW_LIMIT) truncated = true;
     for (const { row } of rows.slice(0, PERSONAL_DATA_ROW_LIMIT)) {
-      matches.push({ column: key, handling, reason: entry.reason, rowId: typeof row.id === 'string' ? row.id : null, row });
+      const { handling, reason } = rowHandling(entry, row);
+      if (!searchable(handling)) continue;
+      matches.push({ column: key, handling, reason, rowId: typeof row.id === 'string' ? row.id : null, row });
     }
   }
   return { kind: probe.kind === 'email' ? 'email' : 'digits', matches, truncated };
@@ -210,10 +231,10 @@ export const ERASED_PARTY_NAME = 'Đã xóa theo yêu cầu';
 // - the sender of forwarded mails and the recipient of mails Crove sent (the keyed hash stays, so a suppression holds);
 // - the org's contact email;
 // - the address in Social report schedules (a schedule left with nobody to mail is deleted).
-// What the law or an append-only record keeps (the names and tax codes of parties in the books, cash vouchers, the tax
-// portal's lists, invites, review feedback, and the original files of posted invoices naming the party, under their
-// retention hold, #1009) is left as it is and listed with its reason. The audit row holds counts
-// only, never the value or the rows.
+// What the law or an append-only record keeps (the names and tax codes of parties in the books and of the legal entities
+// the org keeps books for, #1312, cash vouchers, the tax portal's lists, invites, review feedback, and the original files
+// of posted invoices naming the party, under their retention hold, #1009) is left as it is and listed with its reason.
+// The audit row holds counts only, never the value or the rows.
 export const personalDataErase = defineCommand({
   name: 'kernel.personal_data.erase',
   input: zPersonalDataQuery,
@@ -295,11 +316,14 @@ export const personalDataErase = defineCommand({
 
     // What stays, with its reason: the finder's answer after the erasure (the cleared values no longer match).
     const after = await findPersonalData(ctx.trx, ctx.orgId, probe);
-    const kept = new Map<string, { rows: number; reason: string }>();
+    // Grouped by column and reason: rows of one column may be kept for different reasons (the default legal entity and
+    // the others).
+    const kept = new Map<string, { column: string; rows: number; reason: string }>();
     for (const m of after.matches) {
-      const k = kept.get(m.column) ?? { rows: 0, reason: m.reason };
+      const group = `${m.column}\n${m.reason}`;
+      const k = kept.get(group) ?? { column: m.column, rows: 0, reason: m.reason };
       k.rows += 1;
-      kept.set(m.column, k);
+      kept.set(group, k);
     }
     // The original files behind posted entries that name these parties (issue #1009): accounting evidence the erasure
     // never deletes, held in the bucket for the legal period. Reported with the date the hold runs to, when it is set.
@@ -314,14 +338,16 @@ export const personalDataErase = defineCommand({
           JOIN crove_kernel.file f ON f.org_id = d.org_id AND f.id = d.source_file_id
          WHERE d.org_id = ${ctx.orgId}::uuid AND d.party_id = ANY(${partyIds}::uuid[])`.execute(ctx.trx);
       const files = Number(held[0]?.files ?? 0);
-      if (files > 0) kept.set('crove_kernel.file', { rows: files, reason: heldFilesReason(held[0]?.until ?? null) });
+      if (files > 0) kept.set('crove_kernel.file', { column: 'crove_kernel.file', rows: files, reason: heldFilesReason(held[0]?.until ?? null) });
     }
+    const keptRows = new Map<string, number>();
+    for (const k of kept.values()) keptRows.set(k.column, (keptRows.get(k.column) ?? 0) + k.rows);
     const result: PersonalDataErasure = {
       erased: [...erased].map(([column, rows]) => ({ column, rows })),
-      kept: [...kept].map(([column, k]) => ({ column, rows: k.rows, reason: k.reason })),
+      kept: [...kept.values()].map((k) => ({ column: k.column, rows: k.rows, reason: k.reason })),
     };
     // Counts only: the value and the rows never reach the audit log.
-    ctx.audit({ kind: probe.kind, erased: Object.fromEntries(erased), kept: Object.fromEntries([...kept].map(([c, k]) => [c, k.rows])), kept_parties: keptParties });
+    ctx.audit({ kind: probe.kind, erased: Object.fromEntries(erased), kept: Object.fromEntries(keptRows), kept_parties: keptParties });
     return result;
   },
 });

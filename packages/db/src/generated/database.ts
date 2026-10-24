@@ -40,7 +40,9 @@ export interface CroveKernelSchema {
   'crove_kernel.agent_wakeup': KernelAgentWakeupTable;
   'crove_kernel.ai_run': KernelAiRunTable;
   'crove_kernel.audit_event': KernelAuditEventTable;
+  'crove_kernel.availability_rule': KernelAvailabilityRuleTable;
   'crove_kernel.budget_policy': KernelBudgetPolicyTable;
+  'crove_kernel.calendar_event': KernelCalendarEventTable;
   'crove_kernel.channel_connection': KernelChannelConnectionTable;
   'crove_kernel.currency': KernelCurrencyTable;
   'crove_kernel.external_call': KernelExternalCallTable;
@@ -492,6 +494,19 @@ export interface KernelAuditEventTable {
   detail: ColumnType<unknown, string | null | undefined, NotGranted>;
 }
 
+/** crove_kernel.availability_rule */
+export interface KernelAvailabilityRuleTable {
+  org_id: string;
+  id: Generated<string>;
+  user_id: string;
+  weekday: number;
+  start_minute: number;
+  end_minute: number;
+  time_zone: string;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 /** crove_kernel.budget_policy */
 export interface KernelBudgetPolicyTable {
   org_id: string;
@@ -503,6 +518,23 @@ export interface KernelBudgetPolicyTable {
   hard_stop: Generated<boolean>;
   updated_by: string;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_kernel.calendar_event */
+export interface KernelCalendarEventTable {
+  org_id: string;
+  id: Generated<string>;
+  user_id: string;
+  starts_at: ColumnType<Date, Date | string, Date | string>;
+  ends_at: ColumnType<Date, Date | string, Date | string>;
+  time_zone: string;
+  title: string | null;
+  kind: Generated<string>;
+  status: Generated<string>;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  cancelled_by: string | null;
+  cancelled_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_kernel.channel_connection */
