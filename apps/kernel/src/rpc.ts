@@ -1307,6 +1307,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       create: os.legalEntities.create.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.legal_entity.create', input, { actor, orgId }))),
       update: os.legalEntities.update.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.legal_entity.update', input, { actor, orgId }))),
     },
+    // The member's own calendar (#1313).
+    calendar: {
+      get: os.calendar.get.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.calendar.get', input, { actor, orgId }))),
+      slots: os.calendar.slots.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.calendar.slots', input, { actor, orgId }))),
+      saveHours: os.calendar.saveHours.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.hours.save', input, { actor, orgId }))),
+      addEvent: os.calendar.addEvent.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.event.add', input, { actor, orgId }))),
+      cancelEvent: os.calendar.cancelEvent.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.event.cancel', input, { actor, orgId }))),
+    },
     // Org-less: any signed-in user may look up a tax code before the org exists. Nothing is written, so no command.
     taxRegistry: {
       lookup: os.taxRegistry.lookup.handler(({ context, input }) =>
