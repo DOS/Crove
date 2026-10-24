@@ -145,6 +145,8 @@ suite('org purge on PostgreSQL (#1024)', () => {
         Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 7)]).toString('base64url'),
         Buffer.alloc(16, 9).toString('base64url'),
       ]);
+      // The owner's saved view of the posts, shared with the org (#1300): deleted with the org's other Social rows.
+      await c.query(`INSERT INTO crove_social.saved_view (org_id, user_id, name, filters, shared) VALUES ($1, $2, 'Tuần này', '{"tab":"calendar"}', true)`, [org.orgId, owner]);
       return { stray, position, parent, pinned, free, ledgerParty };
     });
     return { org, owner, ownerEmail, member, booked, loose, partyEmail, proposalId, ...ids };
@@ -371,6 +373,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
     expect(before['crove_kernel.tenant_member']).toBe(2);
     expect(before['crove_kernel.proposal']).toBe(2);
     expect(before['crove_social.push_subscription']).toBe(1);
+    expect(before['crove_social.saved_view']).toBe(1);
 
     // One audit row: by the system, with counts and the reason, and no personal data.
     const audits = await purgeAudits(s.org.orgId);
@@ -383,7 +386,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
         minDays: 30,
         blobs: { deleted: 1, held: 0 },
         counts: {
-          deleted: expect.objectContaining({ 'crove_kernel.tenant_member': 2, 'crove_kernel.file': 1, 'crove_kernel.party': 1, 'crove_kernel.task': 1, 'crove_kernel.proposal': 1, 'crove_social.push_subscription': 1 }),
+          deleted: expect.objectContaining({ 'crove_kernel.tenant_member': 2, 'crove_kernel.file': 1, 'crove_kernel.party': 1, 'crove_kernel.task': 1, 'crove_kernel.proposal': 1, 'crove_social.push_subscription': 1, 'crove_social.saved_view': 1 }),
           pinned: expect.objectContaining({ 'crove_kernel.task_comment': 1, 'crove_kernel.task': 2, 'crove_kernel.position': 1 }),
           anonymized: { 'crove_kernel.party': 2 },
           keptFiles: 1,
