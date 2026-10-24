@@ -115,8 +115,8 @@ async function assertHost(ctx: CommandContext, hostUserId: string): Promise<void
 // Another event type took the slug after the check (the unique constraint).
 function onWrite(slug: string) {
   return (error: unknown): never => {
-    const pg = error as { code?: string; constraint?: string };
-    if (pg.code === '23505' && pg.constraint === 'event_type_slug_uq') throw slugTaken(slug);
+    const pg = error as { code?: string; constraint?: string } | null | undefined;
+    if (pg?.code === '23505' && pg.constraint === 'event_type_slug_uq') throw slugTaken(slug);
     throw error;
   };
 }
