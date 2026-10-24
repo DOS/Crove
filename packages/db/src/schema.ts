@@ -583,8 +583,16 @@ export type SocialPostApprovalTable = Refine<
 // The crm module (issue #1314): event types of booking pages.
 export const EVENT_TYPE_LOCATION_KINDS = ['in_person', 'phone', 'video'] as const;
 export type CrmEventTypeTable = Refine<G.CrmEventTypeTable, { location_kind: Generated<(typeof EVENT_TYPE_LOCATION_KINDS)[number]> }>;
+// Bookings of the public booking page (#1318): requested, then confirmed or refused by the worker.
+export const BOOKING_STATUSES = ['pending', 'confirmed', 'refused', 'cancelled'] as const;
+export const BOOKING_REFUSALS = ['taken', 'unavailable'] as const;
+export type CrmBookingTable = Refine<
+  G.CrmBookingTable,
+  { status: Generated<(typeof BOOKING_STATUSES)[number]>; refusal: (typeof BOOKING_REFUSALS)[number] | null }
+>;
 
 type Refined = Tables<{
+  'crove_crm.booking': CrmBookingTable;
   'crove_crm.event_type': CrmEventTypeTable;
   'crove_kernel.calendar_event': CalendarEventTable;
   'crove_kernel.legal_entity': LegalEntityTable;
