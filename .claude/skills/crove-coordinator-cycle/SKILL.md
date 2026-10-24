@@ -21,6 +21,7 @@ All agents share one GitHub account, so comments on the coordinator log, https:/
 - Open PRs: `gh pr list --repo DOS/Crove --state open`.
 - Board items with Status `In progress`, in project 8 (`gh project item-list 8 --owner DOS`), and the last comment on each.
 - Your linked worker sessions: `list_sessions` with `linked: true`.
+- Every other agent session the owner runs on Crove: `list_sessions` without `linked`, plus their last turns with `list_events`. The app tells the coordinator only when a session it started ends a turn, so an owner-made session ("Agent 1", "Agent 2", ...) can sit idle unnoticed. A session that finished its issue and is idle gets the next one at once, through SendMessage with a full brief. If the only blocker is an open PR, the brief stacks the new work on that PR's branch instead of telling the session to wait. Ask each such session to message the coordinator when it is READY or blocked.
 - Issues missing from the board: open issues, and issues closed in the last day, that are not items of project 8. Add each one with its right Status. Use Backlog for an unclaimed follow-up, In progress for a claimed one, and Done for a closed one. The board is the shared view of who works on what, so an issue missing from it is invisible to every agent. On 2026-10-24, six such issues were found: four worker follow-ups and two Social issues.
 - Any worker notes that arrived since the last cycle.
 
