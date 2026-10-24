@@ -18,8 +18,9 @@ const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 const ROLES = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant'];
 
-// The read-only check of #1282: journal lines with more decimals than their org's book currency uses, and purchase
-// documents with fractional VND amounts. Same text as in 20261030000100_crove_finance_currency_scale.sql.
+// The read-only pre-deploy check of #1282: journal lines with more decimals than their org's book currency uses, and
+// purchase documents and lines with fractional VND amounts. Same query as in docs/runbooks/deploy.md ("Pre-deploy
+// checks"), which stops a deploy when it lists anything.
 const BREAKING_ROWS = `
   SELECT 'journal_line' AS source, l.org_id, l.entry_id AS id, l.line_no, t.base_currency AS currency, l.debit, l.credit
   FROM crove_finance.journal_line l
@@ -30,7 +31,11 @@ const BREAKING_ROWS = `
   SELECT 'purchase_document', d.org_id, d.id, NULL, 'VND', d.subtotal, d.total
   FROM crove_finance.purchase_document d
   WHERE d.subtotal <> pg_catalog.round(d.subtotal, 0) OR d.vat_amount <> pg_catalog.round(d.vat_amount, 0)
-     OR d.total <> pg_catalog.round(d.total, 0)`;
+     OR d.total <> pg_catalog.round(d.total, 0)
+  UNION ALL
+  SELECT 'purchase_line', p.org_id, p.document_id, p.line_no, 'VND', p.amount, p.vat_amount
+  FROM crove_finance.purchase_line p
+  WHERE p.amount <> pg_catalog.round(p.amount, 0) OR p.vat_amount <> pg_catalog.round(p.vat_amount, 0)`;
 
 type Line = { line_no: number; account_code: string; debit: string; credit: string };
 const pair = (amount: string): Line[] => [
@@ -179,7 +184,7 @@ suite('currency amount scale (#1282)', () => {
     const refused = await post(orgs.vnd, pair('100.5'));
     expect(refused).toMatchObject({ error: { code: '22023', message: 'AMOUNT_SCALE' } });
     if ('error' in refused) {
-      expect(JSON.parse(refused.error.detail ?? '{}')).toEqual({ lineNo: 1, currency: 'VND', minorUnits: 0, amount: '100.5' });
+      expect(JSON.parse(refused.error.detail ?? '{}')).toEqual({ lineNo: 1, account: '6422', currency: 'VND', minorUnits: 0, amount: '100.5' });
     }
     // A fifth decimal that numeric(20,4) would round away is refused too, on either side.
     expect(await post(orgs.vnd, pair('1.00005'))).toMatchObject({ error: { code: '22023', message: 'AMOUNT_SCALE' } });
@@ -189,7 +194,7 @@ suite('currency amount scale (#1282)', () => {
       { line_no: 3, account_code: '331', debit: '0', credit: '0.0001' },
     ]);
     expect(credit).toMatchObject({ error: { code: '22023', message: 'AMOUNT_SCALE' } });
-    if ('error' in credit) expect(JSON.parse(credit.error.detail ?? '{}')).toMatchObject({ lineNo: 2, amount: '99.9999' });
+    if ('error' in credit) expect(JSON.parse(credit.error.detail ?? '{}')).toMatchObject({ lineNo: 2, account: '331', amount: '99.9999' });
     expect(await linesOf(orgs.vnd)).toBe(0);
 
     expect(await post(orgs.vnd, pair('1500000.0000'))).toMatchObject({ id: expect.any(String) });
@@ -203,6 +208,21 @@ suite('currency amount scale (#1282)', () => {
     expect(refused).toMatchObject({ error: { code: '22023', message: 'AMOUNT_SCALE' } });
     if ('error' in refused) expect(JSON.parse(refused.error.detail ?? '{}')).toMatchObject({ currency: 'USD', minorUnits: 2, amount: '1.005' });
     expect(await linesOf(orgs.usd)).toBe(2);
+  });
+
+  it('refuses NaN and infinite amounts, which the scale comparison alone would let through', async () => {
+    const before = await linesOf(orgs.vnd);
+    // A jsonb string reads as numeric, so "NaN" is numeric NaN, and PostgreSQL holds NaN equal to round(NaN, 0).
+    for (const bad of ['NaN', 'Infinity', '-Infinity']) {
+      const lines = [
+        { line_no: 1, account_code: '6422', debit: '100', credit: '0' },
+        { line_no: 2, account_code: '331', debit: '0', credit: bad },
+      ];
+      const refused = await post(orgs.vnd, lines);
+      expect(refused, bad).toMatchObject({ error: { code: '22023', message: 'AMOUNT_INVALID' } });
+      if ('error' in refused) expect(JSON.parse(refused.error.detail ?? '{}')).toEqual({ lineNo: 2, account: '331' });
+    }
+    expect(await linesOf(orgs.vnd)).toBe(before);
   });
 
   it('refuses to post for an org whose book currency is not in the table', async () => {

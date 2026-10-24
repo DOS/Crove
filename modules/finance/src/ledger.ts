@@ -58,21 +58,24 @@ export async function postJournalEntry(ctx: CommandContext, posting: Posting): P
 }
 
 // The definer's refusal of an amount with more decimals than the book currency uses (22023 AMOUNT_SCALE, with the line,
-// currency, minor units and amount as JSON detail), or null for any other error. The ledger never rounds it silently.
+// account, currency, minor units and amount as JSON detail), or null for any other error. The ledger never rounds it
+// silently. The line is the journal line, after amounts are added up per account, so the message names the account.
+// An invoice with such an amount is refused earlier, before posting (record.ts AMOUNT_BELOW_DONG).
 export function amountScaleError(error: unknown): DomainError | null {
   const pg = error as { code?: string; message?: string; detail?: string } | null;
   if (pg?.code !== '22023' || pg.message !== 'AMOUNT_SCALE') return null;
-  let detail: { lineNo?: unknown; currency?: unknown; minorUnits?: unknown; amount?: unknown } = {};
+  let detail: { lineNo?: unknown; account?: unknown; currency?: unknown; minorUnits?: unknown; amount?: unknown } = {};
   try {
     detail = JSON.parse(pg.detail ?? '{}') as typeof detail;
   } catch {
     detail = {};
   }
   const lineNo = typeof detail.lineNo === 'number' ? detail.lineNo : null;
+  const account = typeof detail.account === 'string' ? detail.account : null;
   const currency = typeof detail.currency === 'string' ? detail.currency : null;
   const minorUnits = typeof detail.minorUnits === 'number' ? detail.minorUnits : null;
   const amount = typeof detail.amount === 'string' ? detail.amount : null;
-  const line = lineNo === null ? 'Một dòng' : `Dòng ${lineNo}`;
+  const where = account === null ? 'Bút toán có số tiền' : `Số tiền ghi vào tài khoản ${account}`;
   const rule =
     minorUnits === 0 || minorUnits === null
       ? `sổ ghi bằng ${currency ?? 'VND'} không có số lẻ`
@@ -80,7 +83,7 @@ export function amountScaleError(error: unknown): DomainError | null {
   return new DomainError(
     'AMOUNT_SCALE',
     422,
-    `${line} có số tiền ${amount ?? ''} lẻ hơn mức cho phép: ${rule}. Sổ không tự làm tròn; hãy sửa số tiền trên chứng từ rồi ghi lại.`,
-    { lineNo, currency, minorUnits, amount },
+    `${where}${amount === null ? '' : ` (${amount})`} lẻ hơn mức cho phép: ${rule}. Sổ không tự làm tròn; hãy sửa số tiền ở dòng đó thành số đã làm tròn rồi ghi lại.`,
+    { lineNo, account, currency, minorUnits, amount },
   );
 }

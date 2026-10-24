@@ -199,6 +199,18 @@ export function invoiceExchangeRate(invoice: Pick<ParsedInvoice, 'source' | 'cur
   return rate.greaterThan(0) && rate.decimalPlaces() <= 10 && rate.lessThan('1e13') ? rate.toFixed() : null;
 }
 
+// The first amount of a VND invoice that has a fraction of a dong (a line, the VAT breakdown or a total), or null.
+export function belowOneDong(invoice: Pick<ParsedInvoice, 'lines' | 'taxBreakdown' | 'subtotal' | 'vatTotal' | 'total'>): Money | null {
+  const amounts = [
+    ...invoice.lines.map((l) => l.amount),
+    ...invoice.taxBreakdown.flatMap((t) => [t.taxableAmount, t.vatAmount]),
+    invoice.subtotal,
+    invoice.vatTotal,
+    invoice.total,
+  ];
+  return amounts.find((a) => !money(a).isInteger()) ?? null;
+}
+
 // Deterministic checks. Confidence comes from these, never from a model's self-assessment.
 export function checkInvoice(
   invoice: ParsedInvoice,
@@ -237,6 +249,23 @@ export function checkInvoice(
       ? { id: 'total', status: 'pass', code: 'total.ok', message: 'Tiền trước thuế + VAT khớp tổng thanh toán' }
       : { id: 'total', status: 'fail', code: 'total.mismatch', message: 'Tiền trước thuế + VAT lệch tổng thanh toán' },
   );
+
+  // VND has no minor units (ADR-0021, #1282): the ledger refuses an amount below one dong instead of rounding it, so an
+  // invoice in VND with one cannot be posted as it is. Where a rounding difference would be booked is the accountant's
+  // decision (#1308); until it is made, the invoice is held here, visibly, rather than at posting. A foreign-currency
+  // invoice is booked in VND after conversion, which rounds to the dong.
+  if (invoice.currency.trim().toUpperCase() === 'VND') {
+    const fraction = belowOneDong(invoice);
+    if (fraction !== null) {
+      checks.push({
+        id: 'amount_scale',
+        status: 'fail',
+        code: 'amount_scale.fraction',
+        params: { amount: fraction },
+        message: `Hóa đơn có số tiền lẻ dưới một đồng (${fraction}); kế toán cần quyết định cách làm tròn trước khi ghi sổ`,
+      });
+    }
+  }
 
   if (invoice.taxBreakdown.length > 0) {
     const vat = sum(invoice.taxBreakdown.map((t) => t.vatAmount));

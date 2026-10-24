@@ -6,25 +6,17 @@
 --                                       purchase_document.exchange_rate, which had the same size and a table CHECK.
 -- crove_finance.post_journal_entry()    refuses a line whose debit or credit has more decimals than the book
 --                                       currency (the org's base_currency) uses: AMOUNT_SCALE, SQLSTATE 22023, with
---                                       the line, currency and minor units as JSON detail. numeric(20,4) would round
---                                       a fifth decimal silently and keep 100.5 VND as given; neither may reach the
---                                       ledger. Trailing zeros are fine ('100.0000' VND posts). An org whose
---                                       base_currency is not in the table is refused too (UNKNOWN_CURRENCY, 22023).
+--                                       the line, account, currency, minor units and amount as JSON detail.
+--                                       numeric(20,4) would round a fifth decimal silently and keep 100.5 VND as
+--                                       given; neither may reach the ledger. Trailing zeros are fine ('100.0000' VND
+--                                       posts). NaN and infinite amounts are refused (AMOUNT_INVALID, 22023), and so
+--                                       is an org whose base_currency is not in the table (UNKNOWN_CURRENCY, 22023).
 --
--- Rows posted before this rule are not checked again. This read-only query lists journal lines whose amounts use
--- more decimals than their org's book currency, and purchase documents whose amounts do so for VND (their amounts
--- are in VND, #918); it returned no rows on every database this migration was tested on (#1282):
---
---   SELECT 'journal_line' AS source, l.org_id, l.entry_id AS id, l.line_no, t.base_currency AS currency, l.debit, l.credit
---   FROM crove_finance.journal_line l
---   JOIN crove_kernel.tenant t ON t.org_id = l.org_id
---   LEFT JOIN crove_kernel.currency c ON c.code = t.base_currency
---   WHERE c.code IS NULL OR l.debit <> pg_catalog.round(l.debit, c.minor_units) OR l.credit <> pg_catalog.round(l.credit, c.minor_units)
---   UNION ALL
---   SELECT 'purchase_document', d.org_id, d.id, NULL, 'VND', d.subtotal, d.total
---   FROM crove_finance.purchase_document d
---   WHERE d.subtotal <> pg_catalog.round(d.subtotal, 0) OR d.vat_amount <> pg_catalog.round(d.vat_amount, 0)
---      OR d.total <> pg_catalog.round(d.total, 0);
+-- Rows posted before this rule are not checked again, and an entry with a fraction of a dong could no longer be
+-- reversed or replaced (its mirror carries the fraction). So the pre-deploy check of docs/runbooks/deploy.md
+-- (#1282) runs a read-only query listing journal lines with more decimals than their org's book currency, and
+-- purchase documents and lines with fractional VND amounts; the deploy stops if it lists anything. It listed nothing
+-- on every database this migration was tested on.
 SET LOCAL lock_timeout = '2s';
 
 -- A runner that is not a superuser (hosted PostgreSQL) needs the definer role's privileges to replace the posting
@@ -48,8 +40,9 @@ BEGIN
 END $$;
 GRANT USAGE ON TYPE crove_finance.fx_rate TO crove_tenant;
 
--- Same base type and size, so no rewrite: PostgreSQL only checks the existing rows against the domain (the table's
--- own CHECK already holds them to > 0).
+-- PostgreSQL 17 rewrites the table for this change (a domain with a CHECK is not a binary-coercible type change), under
+-- an ACCESS EXCLUSIVE lock on purchase_document for the length of the rewrite; lock_timeout bounds only the wait for
+-- that lock. The table is small (one row per invoice), and the table's own CHECK already holds every rate to > 0.
 DO $$
 BEGIN
   IF (SELECT a.atttypid FROM pg_catalog.pg_attribute a
@@ -62,7 +55,7 @@ END $$;
 -- ---------------------------------------------------------------------------
 -- The posting path: amounts within the book currency's minor units
 -- ---------------------------------------------------------------------------
--- Same body as 20261016210000 plus the scale check before the insert. Org and author still come from the context,
+-- Same body as 20261016210000 plus the amount checks before the insert. Org and author still come from the context,
 -- never from parameters; the book currency is the org's base_currency, read through the tenant's row-level security.
 CREATE OR REPLACE FUNCTION crove_finance.post_journal_entry(
   p_entry_date date,
@@ -94,17 +87,29 @@ BEGIN
     RAISE EXCEPTION 'UNKNOWN_CURRENCY' USING ERRCODE = '22023',
       DETAIL = pg_catalog.json_build_object('currency', v_currency)::text;
   END IF;
+  -- NaN and infinity (a jsonb string such as "NaN" reads as numeric NaN) are no amount; NaN would also pass the
+  -- comparison below, since PostgreSQL holds NaN equal to itself.
+  SELECT l.line_no, l.account_code, l.debit, l.credit INTO v_bad
+  FROM pg_catalog.jsonb_to_recordset(p_lines) AS l (line_no int, account_code text, debit numeric, credit numeric)
+  WHERE l.debit IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)
+     OR l.credit IN ('NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric)
+  ORDER BY l.line_no
+  LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'AMOUNT_INVALID' USING ERRCODE = '22023',
+      DETAIL = pg_catalog.json_build_object('lineNo', v_bad.line_no, 'account', v_bad.account_code)::text;
+  END IF;
   -- Compared after rounding, so trailing zeros pass and any further decimal, however small, is refused before the
   -- amount domain could round it away.
-  SELECT l.line_no, l.debit, l.credit INTO v_bad
-  FROM pg_catalog.jsonb_to_recordset(p_lines) AS l (line_no int, debit numeric, credit numeric)
+  SELECT l.line_no, l.account_code, l.debit, l.credit INTO v_bad
+  FROM pg_catalog.jsonb_to_recordset(p_lines) AS l (line_no int, account_code text, debit numeric, credit numeric)
   WHERE l.debit <> pg_catalog.round(l.debit, v_minor) OR l.credit <> pg_catalog.round(l.credit, v_minor)
   ORDER BY l.line_no
   LIMIT 1;
   IF FOUND THEN
     RAISE EXCEPTION 'AMOUNT_SCALE' USING ERRCODE = '22023',
       DETAIL = pg_catalog.json_build_object(
-        'lineNo', v_bad.line_no, 'currency', v_currency, 'minorUnits', v_minor,
+        'lineNo', v_bad.line_no, 'account', v_bad.account_code, 'currency', v_currency, 'minorUnits', v_minor,
         'amount', CASE WHEN v_bad.debit <> pg_catalog.round(v_bad.debit, v_minor) THEN v_bad.debit ELSE v_bad.credit END::text)::text;
   END IF;
   INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id, created_by, reverses_entry_id)

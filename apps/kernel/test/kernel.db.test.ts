@@ -461,6 +461,31 @@ suite('kernel on PostgreSQL', () => {
       code: 'CHECKS_BLOCKING',
     });
 
+    // In VND with half a dong on a line (#1282): every amount adds up, but VND books hold no fraction and how to round
+    // is the accountant's decision (#1308), so the proposal carries a blocking amount_scale check and approval is
+    // refused before anything is written, even when confirmed; the posting definer is never reached.
+    const halfDong = await propose(
+      variant('1301', (xml) =>
+        xml
+          .replace('<DGia>1000000</DGia><ThTien>1000000</ThTien>', '<DGia>1000000.5</DGia><ThTien>1000000.5</ThTien>')
+          .replace('<ThTien>1800000</ThTien>', '<ThTien>1800000.5</ThTien>')
+          .replace('<TgTCThue>1800000</TgTCThue>', '<TgTCThue>1800000.5</TgTCThue>')
+          .replace('<TgTTTBSo>1980000</TgTTTBSo>', '<TgTTTBSo>1980000.5</TgTTTBSo>'),
+      ),
+    );
+    const halfDongDetail = await runtime.query<{ payload: { checks: Array<{ id: string; status: string; code: string }> } }>(
+      'kernel.inbox.get',
+      { id: halfDong.id },
+      asAdmin,
+    );
+    expect(halfDongDetail.payload.checks.filter((c) => c.status === 'fail')).toEqual([
+      expect.objectContaining({ id: 'amount_scale', code: 'amount_scale.fraction' }),
+    ]);
+    await expect(runtime.execute('kernel.proposal.approve', { ...halfDong, acceptFailedChecks: true }, asAdmin)).rejects.toMatchObject({
+      code: 'AMOUNT_BELOW_DONG',
+      details: { amount: '1000000.5' },
+    });
+
     // In USD without a rate (no TGia): its amounts stay the invoice's and it cannot be recorded, even when confirmed.
     const usd = await propose(variant('1236', (xml) => xml.replace('<DVTTe>VND</DVTTe>', '<DVTTe>USD</DVTTe>').replace('<TGia>1</TGia>', '')));
     await expect(runtime.execute('kernel.proposal.approve', { ...usd, acceptFailedChecks: true }, asAdmin)).rejects.toMatchObject({
