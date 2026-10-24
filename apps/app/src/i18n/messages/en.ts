@@ -502,6 +502,8 @@ export const en = {
     pickEntity: 'Choose a legal entity',
     confirmAssign: 'Give the role',
     stepUpAssign: 'give the role {role} to {name}',
+    retry: 'Load again',
+    loadFailed: "The members' job roles could not be loaded ({reason}). Load them again; until then, do not read the list as nobody holding a role.",
   },
   workingHours: {
     title: 'Working hours and days off',

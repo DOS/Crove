@@ -104,8 +104,11 @@ function AssignRole({ userId, name, baseRole, catalog, held, entities }: {
     if (!role) return;
     assign.mutate({ userId, roleKey: role.key, legalEntityId: needsEntity ? entityId || null : null, idempotencyKey: key });
   };
+  // The step-up prompt is a form of its own, so it sits beside this one, never inside it: its submit must not submit
+  // the assignment.
   return (
-    <form className="w-full max-w-sm space-y-2" onSubmit={submit} aria-label={t('assignTo', { name })}>
+    <div className="w-full max-w-sm space-y-2">
+    <form className="space-y-2" onSubmit={submit} aria-label={t('assignTo', { name })}>
       <NativeSelect
         size="sm"
         className="w-full"
@@ -126,7 +129,17 @@ function AssignRole({ userId, name, baseRole, catalog, held, entities }: {
       </NativeSelect>
       {role && <p className="text-xs text-subtle-foreground">{t(`hints.${role.key}`)}</p>}
       {needsEntity && (
-        <NativeSelect size="sm" className="w-full" value={entityId} onChange={(e) => setEntityId(e.target.value)} aria-label={t('entity')}>
+        <NativeSelect
+          size="sm"
+          className="w-full"
+          value={entityId}
+          onChange={(e) => {
+            // A pending retry (after the step-up) must not send the entity the owner just replaced.
+            setEntityId(e.target.value);
+            assign.reset();
+          }}
+          aria-label={t('entity')}
+        >
           <NativeSelectOption value="">{t('pickEntity')}</NativeSelectOption>
           {entities
             .filter((e) => !held.some((a) => a.roleKey === role?.key && a.legalEntityId === e.id))
@@ -153,6 +166,7 @@ function AssignRole({ userId, name, baseRole, catalog, held, entities }: {
           {tc('cancel')}
         </Button>
       </div>
+    </form>
       {assign.error &&
         (isStepUpRequired(assign.error) ? (
           <StepUpPrompt
@@ -164,7 +178,7 @@ function AssignRole({ userId, name, baseRole, catalog, held, entities }: {
         ) : (
           <ErrorText>{errorMessage(assign.error)}</ErrorText>
         ))}
-    </form>
+    </div>
   );
 }
 

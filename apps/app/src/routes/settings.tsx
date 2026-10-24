@@ -1037,6 +1037,23 @@ export function SettingsPage() {
               </li>
             ))}
           </ul>
+          {/* The roles could not be read: say so with a retry, instead of showing members as holding none (#1279). */}
+          {(memberRoles.error || entities.error) && (
+            <div className="mt-2 flex flex-wrap items-center gap-2" role="alert">
+              <ErrorText>{root('memberRoles.loadFailed', { reason: errorMessage(memberRoles.error ?? entities.error) })}</ErrorText>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (memberRoles.error) void memberRoles.refetch();
+                  if (entities.error) void entities.refetch();
+                }}
+              >
+                {root('memberRoles.retry')}
+              </Button>
+            </div>
+          )}
           {canManage && (
             <>
               <InviteMember isOwner={isOwner} initialEmail={search.invite} />

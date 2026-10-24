@@ -500,6 +500,8 @@ export const vi = {
     pickEntity: 'Chọn pháp nhân',
     confirmAssign: 'Giao vai trò',
     stepUpAssign: 'giao vai trò {role} cho {name}',
+    retry: 'Tải lại',
+    loadFailed: 'Chưa tải được vai trò nghiệp vụ của các thành viên ({reason}). Hãy tải lại; khi chưa tải được, đừng coi là họ không có vai trò nào.',
   },
   workingHours: {
     title: 'Giờ làm việc và ngày nghỉ',
