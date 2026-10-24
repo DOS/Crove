@@ -1558,7 +1558,7 @@ export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippet
 // Whose posts (#1300): the viewer ("me") or a member by id; the list refuses an id that is not a member of the org.
 export const zSocialMemberFilter = z.union([z.literal('me'), zId]);
 // The Social home's tabs a saved view may open (#1300): the post lists, the calendar and the board.
-export const SOCIAL_VIEW_TABS = ['upcoming', 'calendar', 'board', 'review', 'attention', 'drafts', 'done'] as const;
+export const SOCIAL_VIEW_TABS = ['upcoming', 'calendar', 'board', 'review', 'attention', 'drafts', 'done', 'archived'] as const;
 // A saved view's filters (#1300), as the Social home's link carries them: the tab, the channel, the label, the text,
 // the list's days, whose posts (assignee, author) and the calendar's month or week. Never the calendar's date: a view
 // opens on today.
