@@ -47,6 +47,8 @@ const link = (over: Record<string, unknown>) => ({
   includeExternal: false,
   labelId: null,
   includeAudience: true,
+  sections: null,
+  topCount: null,
   ...over,
 });
 
@@ -125,7 +127,8 @@ describe('a campaign report link, its audience choice and Reels watch time (#115
       expect(html).toContain('id="report-label"');
       expect(html).toContain(`>${escaped(t.reportLinks.labelAll)}</option>`);
       expect(html).toContain(`value="${SALE}">Khuyến mãi</option>`);
-      expect(html).toContain(escaped(t.reportLinks.includeAudience));
+      // The audience is one of the report's sections (#1259).
+      expect(html).toContain(escaped(t.reportSections.block.audience));
       // The audience is on for a new link.
       expect(html).toMatch(/role="checkbox"[^>]*aria-checked="true"/);
       expect(html).toContain(escaped(t.reportLinks.withLabel.replace('{name}', 'Khuyến mãi')));

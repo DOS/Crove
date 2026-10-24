@@ -11,6 +11,7 @@ import { startLocaleSync } from './i18n/runtime.ts';
 import { startThemeSync } from './lib/theme-runtime.ts';
 import { queryClient } from './lib/api.ts';
 import { forgetShare } from './lib/social-share.ts';
+import { forgetPushDevice } from './lib/push.ts';
 import { auth, loadConfig, settleCallback } from './lib/auth.ts';
 import './styles.css';
 
@@ -42,6 +43,8 @@ async function start() {
     if (event === 'SIGNED_OUT') {
       // Signed out here, in another tab or by expiry: a share waiting in this tab is not the next person's.
       forgetShare();
+      // Nor are this browser's push notices (#1238); the session is gone, so only the browser's subscription ends.
+      void forgetPushDevice();
       queryClient.clear();
       void router.navigate({ to: '/login' });
     }

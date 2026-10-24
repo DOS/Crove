@@ -5,16 +5,19 @@
 // the kernel's mail pipeline (Email E1b), with the period's headline numbers (and its monthly goals, #1056) as merge data. The link to the full
 // report carries a secret token, so it is not in the queue: social.report_schedule.mint_link makes one per recipient
 // when the mail goes out (the mail template calls it). Removing a schedule revokes the links it sent. "Send a test" mails the person
-// who asks, for the latest period.
+// who asks, for the latest period. A schedule has a report link's options (#1259): the agency's note, one label's posts
+// (a campaign report, #1159), the audience (#1155), and the sections the report shows with how many best posts; the
+// mail carries only the chosen sections' numbers, and each mail's link takes the options when it is minted.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zId } from '@crove/kernel-contract';
-import type { Db, MemberRole } from '@crove/db';
+import { zId, zSocialReportSections, zSocialReportTopCount } from '@crove/kernel-contract';
+import type { Db, MemberRole, SocialReportSection } from '@crove/db';
 import { createMailMessage } from '@crove/kernel';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type Runtime } from '@crove/kernel-runtime';
 import { isValidTimeZone } from './domain/queue.ts';
+import { storedZone } from './zones.ts';
 import { nextReportRun, reportPeriodAt, type ReportScheduleSpec } from './domain/report-schedule.ts';
-import { newReportToken, reportTokenHash } from './report-links.ts';
+import { audienceOf, newReportToken, reportTokenHash, zReportNote } from './report-links.ts';
 import { reportGoals } from './goals.ts';
 import { reportBrandingOf } from './report-branding.ts';
 
@@ -40,6 +43,12 @@ const zSchedule = z.strictObject({
   connectionIds: z.array(zId).max(50),
   recipients: z.array(z.email().max(320)).min(1).max(REPORT_RECIPIENTS_MAX),
   paused: z.boolean().optional(),
+  // The link options (#1259). Left out, a change keeps the schedule's own and a new one has none; null clears one.
+  note: zReportNote.nullable().optional(),
+  labelId: zId.nullable().optional(),
+  includeAudience: z.boolean().optional(),
+  sections: zSocialReportSections.nullable().optional(),
+  topCount: zSocialReportTopCount.nullable().optional(),
 });
 
 function requireUser(ctx: CommandContext): string {
@@ -67,6 +76,8 @@ export const reportScheduleSave = defineCommand({
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
     if (!isValidTimeZone(input.timeZone)) throw new DomainError('VALIDATION', 422, 'Múi giờ không hợp lệ');
+    // As PostgreSQL spells it (#1115), so the digest's zone rule finds it.
+    const timeZone = await storedZone(ctx.trx, input.timeZone);
     const weekly = input.cadence === 'weekly';
     const weekday = weekly ? (input.weekday ?? null) : null;
     const monthDay = weekly ? null : (input.monthDay ?? null);
@@ -77,18 +88,44 @@ export const reportScheduleSave = defineCommand({
       const found = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', ids).execute();
       if (found.length !== ids.length) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
     }
-    const spec: ReportScheduleSpec = { cadence: input.cadence, weekday, monthDay, sendHour: input.sendHour, timeZone: input.timeZone };
+    const spec: ReportScheduleSpec = { cadence: input.cadence, weekday, monthDay, sendHour: input.sendHour, timeZone };
+    // The link options as saved: what the input says, else the schedule's own (a change) or none (a new one).
+    const current = input.scheduleId
+      ? await ctx.trx
+          .selectFrom('crove_social.report_schedule')
+          .select(['note', 'label_id', 'include_audience', 'sections', 'top_count'])
+          .where('org_id', '=', ctx.orgId)
+          .where('id', '=', input.scheduleId)
+          .forUpdate()
+          .executeTakeFirst()
+      : undefined;
+    if (input.scheduleId && !current) throw new DomainError('REPORT_SCHEDULE_NOT_FOUND', 404, 'Không tìm thấy lịch gửi báo cáo này');
+    const labelId = input.labelId !== undefined ? input.labelId : (current?.label_id ?? null);
+    if (labelId && labelId !== current?.label_id) {
+      // Held until the commit, so the label cannot go between this check and the write (its FK cascades to the schedule).
+      const label = await ctx.trx.selectFrom('crove_social.label').select('id').where('org_id', '=', ctx.orgId).where('id', '=', labelId).forShare().executeTakeFirst();
+      if (!label) throw new DomainError('LABEL_NOT_FOUND', 404, 'Không tìm thấy nhãn này');
+    }
+    const sections = input.sections !== undefined ? input.sections : (current?.sections ?? null);
+    // With the sections chosen, the audience is theirs; without, the option or the schedule's own.
+    const includeAudience = audienceOf(sections, input.includeAudience ?? (sections ? undefined : current?.include_audience));
+    const note = input.note !== undefined ? input.note || null : (current?.note ?? null);
     const values = {
       name: input.name,
       cadence: input.cadence,
       weekday,
       month_day: monthDay,
       send_hour: input.sendHour,
-      time_zone: input.timeZone,
+      time_zone: timeZone,
       period: input.period,
       connection_ids: ids,
       recipients,
       paused: input.paused ?? false,
+      note,
+      label_id: labelId,
+      include_audience: includeAudience,
+      sections,
+      top_count: input.topCount !== undefined ? input.topCount : (current?.top_count ?? null),
       next_run_at: new Date(nextReportRun(spec, ctx.now.getTime())),
       updated_at: ctx.now,
     };
@@ -152,7 +189,13 @@ interface ScheduleRow {
   connection_ids: string[];
   recipients: string[];
   created_by: string;
+  note: string | null;
+  label_id: string | null;
+  sections: readonly SocialReportSection[] | null;
 }
+
+// A section of the schedule's report (#1259): in its own list, or every one when it has none.
+const shows = (s: { sections: readonly SocialReportSection[] | null }, section: SocialReportSection) => s.sections === null || s.sections.includes(section);
 
 export interface ReportHeadline {
   posts: number;
@@ -162,8 +205,9 @@ export interface ReportHeadline {
 }
 
 // What went out in the period on the schedule's channels, with the totals of the latest counts (as the report link
-// adds them up): posts, reach, impressions, and engagement (reactions, comments, shares, saves, clicks).
-async function headline(ctx: CommandContext, start: Date, end: Date, ids: readonly string[]): Promise<ReportHeadline> {
+// adds them up): posts, reach, impressions, and engagement (reactions, comments, shares, saves, clicks). Under a label
+// (#1159, #1259), only the posts with it, as the report link counts them.
+async function headline(ctx: CommandContext, start: Date, end: Date, ids: readonly string[], labelId: string | null): Promise<ReportHeadline> {
   const { rows } = await sql<{ posts: string; reach: string | null; impressions: string | null; engagement: string | null }>`
     WITH v AS (
       SELECT v.id, coalesce(s.metrics, '{}'::jsonb) AS metrics
@@ -175,6 +219,8 @@ async function headline(ctx: CommandContext, start: Date, end: Date, ids: readon
       ) s ON true
       WHERE v.org_id = ${ctx.orgId} AND v.status = 'published' AND v.published_at >= ${start} AND v.published_at < ${end}
         AND (cardinality(${ids}::uuid[]) = 0 OR v.channel_connection_id = ANY (${ids}::uuid[]))
+        AND (${labelId}::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ${labelId}::uuid))
       LIMIT 5000
     ),
     n AS (
@@ -196,9 +242,13 @@ export const REPORT_MAILS_PER_RECIPIENT_PER_DAY = 5;
 async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' | 'test', period: { start: number; end: number }, recipients: readonly string[], createdBy: string | null) {
   const start = new Date(period.start);
   const end = new Date(period.end);
-  const numbers = await headline(ctx, start, end, s.connection_ids);
-  // The month's goals (#1056) when the period is exactly one month in the goals' zone, as the report shows them.
-  const goals = await reportGoals(ctx.trx, ctx.orgId, start, end, s.connection_ids, ctx.now.getTime());
+  const numbers = await headline(ctx, start, end, s.connection_ids, s.label_id);
+  // Only the chosen sections' numbers (#1259): the posts always, the totals with theirs.
+  const counts = shows(s, 'totals') ? numbers : { posts: numbers.posts };
+  // The month's goals (#1056) when the period is exactly one month in the goals' zone, as the report shows them; none
+  // under a label, as the report link (#1159), or without the goals section.
+  const goals = s.label_id === null && shows(s, 'goals') ? await reportGoals(ctx.trx, ctx.orgId, start, end, s.connection_ids, ctx.now.getTime()) : null;
+  const note = shows(s, 'note') && s.note ? s.note : null;
   // The sending org, named in the mail's footer.
   const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('name').where('org_id', '=', ctx.orgId).executeTakeFirst();
   const run = await ctx.trx
@@ -224,7 +274,7 @@ async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' |
       templateKey: REPORT_MAIL_TEMPLATE,
       to,
       subject: `Báo cáo mạng xã hội: ${s.name}`,
-      payload: { name: s.name, periodStart: start.toISOString(), periodEnd: end.toISOString(), timeZone: s.time_zone, test: kind === 'test', ...(org?.name ? { orgName: org.name } : {}), ...numbers, ...(goals ? { goals: { month: goals.month, items: goals.goals.slice(0, REPORT_MAIL_GOALS_MAX) } } : {}) },
+      payload: { name: s.name, periodStart: start.toISOString(), periodEnd: end.toISOString(), timeZone: s.time_zone, test: kind === 'test', ...(org?.name ? { orgName: org.name } : {}), ...counts, ...(note ? { note } : {}), ...(goals ? { goals: { month: goals.month, items: goals.goals.slice(0, REPORT_MAIL_GOALS_MAX) } } : {}) },
       ...(capped.has(to) ? { status: 'suppressed' as const, errorCode: 'recipient_daily_cap' } : { status: 'queued' as const }),
     });
     if (mail.status === 'suppressed') suppressed++;
@@ -234,7 +284,7 @@ async function queueRun(ctx: CommandContext, s: ScheduleRow, kind: 'scheduled' |
   return { runId: run.id, mails, suppressed };
 }
 
-const SCHEDULE_COLUMNS = ['id', 'name', 'cadence', 'weekday', 'month_day', 'send_hour', 'time_zone', 'period', 'connection_ids', 'recipients', 'created_by'] as const;
+const SCHEDULE_COLUMNS = ['id', 'name', 'cadence', 'weekday', 'month_day', 'send_hour', 'time_zone', 'period', 'connection_ids', 'recipients', 'created_by', 'note', 'label_id', 'include_audience', 'sections', 'top_count'] as const;
 
 // The worker runs a due schedule: the period before the time it was due, every recipient, then the next send. A
 // schedule paused, changed or already run since the scan finds nothing to do.
@@ -298,7 +348,8 @@ export const reportScheduleTest = defineCommand({
 
 // The report link of one mail, made when the mail goes out (the mail template runs this in the worker): only for a
 // mail of a schedule run that is being sent now, for the run's period and the schedule's channels, valid two weeks
-// for a weekly schedule and six for a monthly one (a week for a test). The token leaves only in this answer.
+// for a weekly schedule and six for a monthly one (a week for a test), with the schedule's note, label, audience,
+// sections and best posts' count (#1259). The token leaves only in this answer.
 export const reportScheduleMintLink = defineCommand({
   name: 'social.report_schedule.mint_link',
   input: z.strictObject({ messageId: zId }),
@@ -318,7 +369,22 @@ export const reportScheduleMintLink = defineCommand({
     const run = await ctx.trx
       .selectFrom('crove_social.report_schedule_run as r')
       .innerJoin('crove_social.report_schedule as s', (j) => j.onRef('s.org_id', '=', 'r.org_id').onRef('s.id', '=', 'r.schedule_id'))
-      .select(['r.kind', 'r.period_start', 'r.period_end', 'r.created_by', 's.id as schedule_id', 's.name', 's.cadence', 's.connection_ids', 's.created_by as schedule_by'])
+      .select([
+        'r.kind',
+        'r.period_start',
+        'r.period_end',
+        'r.created_by',
+        's.id as schedule_id',
+        's.name',
+        's.cadence',
+        's.connection_ids',
+        's.created_by as schedule_by',
+        's.note',
+        's.label_id',
+        's.include_audience',
+        's.sections',
+        's.top_count',
+      ])
       .where('r.org_id', '=', ctx.orgId)
       .where('r.id', '=', mail.source_id)
       .executeTakeFirst();
@@ -344,6 +410,11 @@ export const reportScheduleMintLink = defineCommand({
         period_start: run.period_start,
         period_end: run.period_end,
         connection_ids: run.connection_ids,
+        note: run.note,
+        label_id: run.label_id,
+        include_audience: run.include_audience,
+        sections: run.sections,
+        top_count: run.top_count,
         created_by: by,
         created_at: ctx.now,
         expires_at: expiresAt,
@@ -369,6 +440,12 @@ export interface ReportScheduleView {
   period: 'previous_week' | 'previous_month' | 'last_7_days' | 'last_30_days';
   connectionIds: string[];
   recipients: string[];
+  // The link options (#1259).
+  note: string | null;
+  labelId: string | null;
+  includeAudience: boolean;
+  sections: SocialReportSection[] | null;
+  topCount: number | null;
   paused: boolean;
   nextRunAt: string;
   lastRunAt: string | null;
@@ -426,6 +503,11 @@ export const reportScheduleList = defineQuery({
       period: s.period,
       connectionIds: s.connection_ids,
       recipients: s.recipients,
+      note: s.note,
+      labelId: s.label_id,
+      includeAudience: s.include_audience,
+      sections: s.sections,
+      topCount: s.top_count,
       paused: s.paused,
       nextRunAt: s.next_run_at.toISOString(),
       lastRunAt: s.last_run_at?.toISOString() ?? null,

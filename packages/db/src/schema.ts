@@ -480,6 +480,9 @@ export const SOCIAL_IDEA_ORIGINS = ['human', 'ai'] as const;
 export const SOCIAL_REPORT_CADENCES = ['weekly', 'monthly'] as const;
 export const SOCIAL_REPORT_PERIODS = ['previous_week', 'previous_month', 'last_7_days', 'last_30_days'] as const;
 export const SOCIAL_REPORT_RUN_KINDS = ['scheduled', 'test'] as const;
+// The sections of a client report (#1259), on a report link and a report schedule: a list of these, each at most once
+// (an array CHECK, which check-unions.db.test.ts does not read), or null for every section.
+export const SOCIAL_REPORT_SECTIONS = ['note', 'goals', 'totals', 'comparison', 'channels', 'top', 'reels', 'stories', 'audience', 'clicks'] as const;
 // A banned or sensitive word (#1055): shown as a warning, or blocking submit, approval and scheduling.
 export const SOCIAL_BANNED_WORD_LEVELS = ['warn', 'block'] as const;
 // A suggested edit on a post comment (#1236): the text it changes (the post's own, or the comment's channel's own), and
@@ -505,6 +508,7 @@ export type SocialChatAlertKind = (typeof SOCIAL_CHAT_ALERT_KINDS)[number];
 export type SocialReportCadence = (typeof SOCIAL_REPORT_CADENCES)[number];
 export type SocialReportPeriod = (typeof SOCIAL_REPORT_PERIODS)[number];
 export type SocialReportRunKind = (typeof SOCIAL_REPORT_RUN_KINDS)[number];
+export type SocialReportSection = (typeof SOCIAL_REPORT_SECTIONS)[number];
 export type SocialBannedWordLevel = (typeof SOCIAL_BANNED_WORD_LEVELS)[number];
 
 export type SocialPostTable = Refine<
@@ -550,7 +554,8 @@ export type SocialWatermarkTable = Refine<G.SocialWatermarkTable, { corner: Soci
 export type SocialChatAlertTable = Refine<G.SocialChatAlertTable, { kind: SocialChatAlertTarget; events: SocialChatAlertKind[] }>;
 export type SocialLabelTable = Refine<G.SocialLabelTable, { color: Generated<SocialLabelColor> }>;
 export type SocialIdeaTable = Refine<G.SocialIdeaTable, { stage: Generated<SocialIdeaStage>; origin: ColumnType<SocialIdeaOrigin, SocialIdeaOrigin | undefined, never> }>;
-export type SocialReportScheduleTable = Refine<G.SocialReportScheduleTable, { cadence: SocialReportCadence; period: SocialReportPeriod }>;
+export type SocialReportScheduleTable = Refine<G.SocialReportScheduleTable, { cadence: SocialReportCadence; period: SocialReportPeriod; sections: SocialReportSection[] | null }>;
+export type SocialReportLinkTable = Refine<G.SocialReportLinkTable, { sections: SocialReportSection[] | null }>;
 export type SocialReportScheduleRunTable = Refine<G.SocialReportScheduleRunTable, { kind: SocialReportRunKind }>;
 export type SocialBannedWordTable = Refine<G.SocialBannedWordTable, { level: SocialBannedWordLevel }>;
 export type SocialPostCommentTable = Refine<G.SocialPostCommentTable, { suggest_field: SocialSuggestField | null; suggest_state: SocialSuggestState | null }>;
@@ -618,6 +623,7 @@ type Refined = Tables<{
   'crove_social.label': SocialLabelTable;
   'crove_social.idea': SocialIdeaTable;
   'crove_social.report_schedule': SocialReportScheduleTable;
+  'crove_social.report_link': SocialReportLinkTable;
   'crove_social.report_schedule_run': SocialReportScheduleRunTable;
   'crove_social.banned_word': SocialBannedWordTable;
   'crove_social.post_comment': SocialPostCommentTable;

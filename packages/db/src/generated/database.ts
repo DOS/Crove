@@ -108,6 +108,7 @@ export interface CroveSocialSchema {
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_version': SocialPostVersionTable;
   'crove_social.publish_hold': SocialPublishHoldTable;
+  'crove_social.push_subscription': SocialPushSubscriptionTable;
   'crove_social.queue': SocialQueueTable;
   'crove_social.queue_slot': SocialQueueSlotTable;
   'crove_social.report_branding': SocialReportBrandingTable;
@@ -1463,6 +1464,20 @@ export interface SocialPublishHoldTable {
   released_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
+/** crove_social.push_subscription */
+export interface SocialPushSubscriptionTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  endpoint: ColumnType<string, string, NotGranted>;
+  p256dh: string;
+  auth: string;
+  user_agent: string | null;
+  failure_count: Generated<number>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  last_used_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+}
+
 /** crove_social.queue_slot */
 export interface SocialQueueSlotTable {
   org_id: string;
@@ -1522,6 +1537,8 @@ export interface SocialReportLinkTable {
   include_external: ColumnType<boolean, boolean | undefined, NotGranted>;
   label_id: ColumnType<string | null, string | null, NotGranted>;
   include_audience: ColumnType<boolean, boolean | undefined, NotGranted>;
+  sections: ColumnType<string[] | null, string[] | null, NotGranted>;
+  top_count: ColumnType<number | null, number | null, NotGranted>;
 }
 
 /** crove_social.report_schedule_run */
@@ -1557,6 +1574,11 @@ export interface SocialReportScheduleTable {
   created_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  sections: string[] | null;
+  top_count: number | null;
+  note: string | null;
+  label_id: string | null;
+  include_audience: Generated<boolean>;
 }
 
 /** crove_social.review_check */

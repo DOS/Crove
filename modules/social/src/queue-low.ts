@@ -1,6 +1,7 @@
 // A warning when a channel's queue runs low (#1079), as Buffer's "your queue is running low". Owners and admins set
 // low_days on a queue (social.queue.set); the worker's sweep pages through the queues that have it (queue_low_due:
-// not paused, an active channel, an active org with no publishing hold) and runs social.queue.check_low for each.
+// not paused, an active channel, an active org with no publishing hold) and runs social.queue.check_low for each, which
+// checks the org, the hold, the queue and the channel again in its own transaction.
 // The check measures the queue with queueRunway (domain/queue.ts): of the posting days in the next low_days days, how
 // many have a post in one of their slots. When a posting day ahead is empty, it tells the team once: it sets the dip
 // marker (low_alerted_at) with a conditional update and emits social.queue.low, which the notification dispatch turns
@@ -40,6 +41,9 @@ export const queueCheckLow = defineCommand({
   target: (input) => ({ type: 'social.queue', id: input.queueId }),
   handler: async (ctx, input): Promise<{ state: QueueLowState; postingDays: number; filledDays: number }> => {
     const none = { postingDays: 0, filledDays: 0 };
+    // Closed or offboarding since the scan (#1095): nobody is told.
+    const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('status').where('org_id', '=', ctx.orgId).executeTakeFirst();
+    if (org?.status !== 'active') return { state: 'skipped', ...none };
     // Held since the scan: nothing goes out, so nothing is missing yet.
     if (await publishingHeld(ctx)) return { state: 'skipped', ...none };
     const queue = await ctx.trx

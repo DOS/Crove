@@ -29,6 +29,7 @@ import {
   type GoalStatus,
 } from './domain/goals.ts';
 import { isValidTimeZone } from './domain/queue.ts';
+import { storedZone } from './zones.ts';
 import { periodTotals } from './metrics.ts';
 import type { Trx } from './variants.ts';
 import { channelScope, mayUse } from './channel-access.ts';
@@ -76,6 +77,8 @@ export const goalSet = defineCommand({
       if (!found) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
     }
     await lockOrg(ctx);
+    // As PostgreSQL spells it (#1115), so the digest's zone rule finds it.
+    const timeZone = await storedZone(ctx.trx, input.timeZone);
     // bigint columns take decimal strings.
     const count = (n: number | null | undefined) => (typeof n === 'number' ? String(n) : null);
     const values = {
@@ -101,7 +104,7 @@ export const goalSet = defineCommand({
     if (existing) {
       await ctx.trx
         .updateTable('crove_social.goal')
-        .set({ ...values, time_zone: input.timeZone, updated_by: userId, updated_at: ctx.now })
+        .set({ ...values, time_zone: timeZone, updated_by: userId, updated_at: ctx.now })
         .where('org_id', '=', ctx.orgId)
         .where('id', '=', existing.id)
         .execute();
@@ -111,7 +114,7 @@ export const goalSet = defineCommand({
       if (Number(rows.n) >= GOALS_MAX) throw new DomainError('GOAL_LIMIT', 409, `Mỗi tổ chức đặt tối đa ${GOALS_MAX} nhóm mục tiêu`);
       const row = await ctx.trx
         .insertInto('crove_social.goal')
-        .values({ org_id: ctx.orgId, connection_id: input.connectionId, time_zone: input.timeZone, ...values, created_by: userId, created_at: ctx.now, updated_by: userId, updated_at: ctx.now })
+        .values({ org_id: ctx.orgId, connection_id: input.connectionId, time_zone: timeZone, ...values, created_by: userId, created_at: ctx.now, updated_by: userId, updated_at: ctx.now })
         .returning('id')
         .executeTakeFirstOrThrow();
       goalId = row.id;
@@ -119,11 +122,11 @@ export const goalSet = defineCommand({
     // Every goal of the org is counted in the same zone.
     await ctx.trx
       .updateTable('crove_social.goal')
-      .set({ time_zone: input.timeZone, updated_by: userId, updated_at: ctx.now })
+      .set({ time_zone: timeZone, updated_by: userId, updated_at: ctx.now })
       .where('org_id', '=', ctx.orgId)
-      .where('time_zone', '<>', input.timeZone)
+      .where('time_zone', '<>', timeZone)
       .execute();
-    ctx.audit({ goal_id: goalId, connection_id: input.connectionId, time_zone: input.timeZone, targets: Object.fromEntries(targets.map((t) => [t.metric, t.target])) });
+    ctx.audit({ goal_id: goalId, connection_id: input.connectionId, time_zone: timeZone, targets: Object.fromEntries(targets.map((t) => [t.metric, t.target])) });
     return { goalId };
   },
 });
