@@ -124,7 +124,10 @@ export function createMediaUrls(options: MediaUrlsOptions): MediaUrls {
       answer = await fetchImage(url.toString(), { timeoutMs: IMAGE_TIMEOUT_MS, maxBytes: MAX_UPLOAD_BYTES, overLimit: 'fail', maxRedirects: MAX_REDIRECTS, accept: IMAGE_ACCEPT });
     } catch (error) {
       if (error instanceof EgressError) return refused(refusal(error));
-      throw error;
+      // Anything else the fetch throws (a reset socket, a resolver failure) is this URL's problem only: the batch's
+      // other URLs still answer. The detail stays in the server's log, never in the answer.
+      console.warn(`[media-urls] an image fetch failed: ${error instanceof Error ? error.name : typeof error}`);
+      return refused('MEDIA_URL_UNREACHABLE');
     }
     // Every hop went through the guard; the one that answered must be https too.
     if (new URL(answer.url).protocol !== 'https:') return refused('MEDIA_URL_INVALID');

@@ -67,11 +67,40 @@ export const isMediaUrl = (ref: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(ref);
 // import does not read as an id or an address. Whether it names one file only is the export's to check.
 export const plainMediaName = (name: string) => name.trim() === name && name !== '' && !/[;\r\n]/.test(name) && !isFileId(name) && !isMediaUrl(name);
 
+const isSeparator = (ch: string | undefined) => ch === ',' || (ch !== undefined && ch.trim() === '');
+
+// A part of a media cell split before each http:// or https:// that follows a comma or white space, with the
+// separators before it dropped. A linear scan, not a regular expression: a cell is the sheet's, and a pattern with a
+// repeated separator before a lookahead backtracks on a long run of spaces or tabs (CodeQL js/polynomial-redos).
+function splitUrls(part: string): string[] {
+  const lower = part.toLowerCase();
+  const out: string[] = [];
+  let start = 0;
+  for (let at = lower.indexOf('http', 1); at !== -1; at = lower.indexOf('http', at + 1)) {
+    const url = lower.startsWith('https://', at) || lower.startsWith('http://', at);
+    if (!url || !isSeparator(part[at - 1])) continue;
+    let end = at;
+    while (end > start && isSeparator(part[end - 1])) end--;
+    out.push(part.slice(start, end));
+    start = at;
+  }
+  out.push(part.slice(start));
+  return out;
+}
+
+// The lines of a text joined by one space each, blank ones left out.
+const oneLine = (text: string) =>
+  text
+    .split(/\r\n|\r|\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(' ');
+
 // The references of a media cell, in order, empty ones left out.
 export function mediaRefsOf(cell: string): string[] {
   return cell
-    .split(/[;\r\n]+/)
-    .flatMap((part) => part.split(/[\s,]+(?=https?:\/\/)/i))
+    .split(/[;\r\n]/)
+    .flatMap(splitUrls)
     .map((s) => s.trim())
     .filter(Boolean);
 }
@@ -81,7 +110,7 @@ export function mediaRefsOf(cell: string): string[] {
 export function altsOf(cell: string, count: number): (string | null)[] {
   const text = cell.trim();
   if (text === '') return [];
-  if (count <= 1) return [text.replace(/\s*[\r\n]+\s*/g, ' ')];
+  if (count <= 1) return [oneLine(text)];
   const lines = text.split(/\r?\n/).map((s) => s.trim());
   return lines.map((s) => (s === '' ? null : s));
 }
@@ -90,7 +119,7 @@ export function altsOf(cell: string, count: number): (string | null)[] {
 export function labelNamesOf(cell: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const raw of cell.split(/[,;\r\n]+/)) {
+  for (const raw of cell.split(/[,;\r\n]/)) {
     const name = raw.trim().normalize('NFC');
     if (name === '' || seen.has(name.toLowerCase())) continue;
     seen.add(name.toLowerCase());
@@ -103,7 +132,7 @@ export function labelNamesOf(cell: string): string[] {
 // space, so each stays on its line).
 export const mediaCell = (media: readonly PlanMedia[]) => media.map((m) => m.ref).join('\n');
 export function altCell(media: readonly PlanMedia[]): string {
-  const alts = media.map((m) => (m.altText ?? '').replace(/\s*[\r\n]+\s*/g, ' ').trim());
+  const alts = media.map((m) => oneLine(m.altText ?? ''));
   while (alts.length > 0 && alts.at(-1) === '') alts.pop();
   return alts.join('\n');
 }

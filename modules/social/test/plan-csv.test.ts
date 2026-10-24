@@ -80,6 +80,18 @@ describe('cells with several values (#1258)', () => {
     expect(mediaRefsOf('')).toEqual([]);
   });
 
+  it('splits a long run of tabs, spaces or commas in linear time (CodeQL js/polynomial-redos)', () => {
+    for (const run of ['\t', ' ', ',', '\t,']) {
+      const long = run.repeat(50_000);
+      const started = performance.now();
+      expect(mediaRefsOf(`a.jpg${long}x`)).toEqual([`a.jpg${long}x`.trim()]);
+      expect(mediaRefsOf(`https://cdn.example/a.jpg${long}https://cdn.example/b.jpg`)).toEqual(['https://cdn.example/a.jpg', 'https://cdn.example/b.jpg']);
+      expect(altsOf(`${'\n\t'.repeat(50_000)}Quầy${'\t\r\n'.repeat(50_000)}mới`, 1)).toEqual(['Quầy mới']);
+      expect(performance.now() - started).toBeLessThan(1000);
+    }
+    expect(mediaRefsOf('HTTPS://cdn.example/a.jpg,http://cdn.example/b.jpg;ftp://x.example/c')).toEqual(['HTTPS://cdn.example/a.jpg', 'http://cdn.example/b.jpg', 'ftp://x.example/c']);
+  });
+
   it('reads alt texts one per image, the whole cell for one image', () => {
     expect(altsOf('Ổ bánh mì\n\nQuầy bán', 3)).toEqual(['Ổ bánh mì', null, 'Quầy bán']);
     expect(altsOf('Dòng một\nDòng hai', 1)).toEqual(['Dòng một Dòng hai']);

@@ -106,6 +106,50 @@ describe('media, alt texts, labels and a first comment in the import (#1258)', (
   });
 });
 
+describe('formula cells in the exported plan (#978, #1258)', () => {
+  it('writes every cell a spreadsheet would run as text, and the import drops the guard again', () => {
+    const exported = planCsv(
+      [
+        {
+          postId: 'p1',
+          variantId: 'v1',
+          connectionId: 'fb1',
+          channel: 'Quán A',
+          provider: 'facebook_page',
+          status: 'draft',
+          at: AT,
+          title: '@title',
+          body: '=HYPERLINK("https://evil.example")',
+          linkUrl: null,
+          media: [
+            { ref: '@banh-mi.jpg', altText: '=1+1' },
+            { ref: 'quay.png', altText: '-giảm 20%' },
+          ],
+          firstComment: '\tthẻ',
+          labels: ['+Sale', 'Tết'],
+          assignee: null,
+        },
+      ],
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+    const cells = exported.slice(1).split('\r\n')[1] ?? '';
+    // Each cell that would start with =, +, -, @ or a tab starts with a quote instead.
+    expect(cells).toContain(`"'=HYPERLINK(""https://evil.example"")",'@title,,Quán A,`);
+    expect(cells).toContain(`"'@banh-mi.jpg\nquay.png","'=1+1\n-giảm 20%",'\tthẻ,"'+Sale, Tết",draft`);
+    const [row] = importRows(parseCsv(exported), channels, NOW) ?? [];
+    expect([row?.body, row?.title, row?.media, row?.firstComment, row?.labels]).toEqual([
+      '=HYPERLINK("https://evil.example")',
+      '@title',
+      [
+        { kind: 'file', ref: '@banh-mi.jpg', altText: '=1+1' },
+        { kind: 'file', ref: 'quay.png', altText: '-giảm 20%' },
+      ],
+      '	thẻ',
+      ['+Sale', 'Tết'],
+    ]);
+  });
+});
+
 describe('a plan exported and imported again (#978, #1258)', () => {
   const plan = (over: Partial<PlanRow>): PlanRow => ({
     postId: 'p1',
