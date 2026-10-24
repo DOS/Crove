@@ -31,7 +31,8 @@ function Actions({ booking, slug, zone }: { booking: BookingItem; slug: string; 
   };
   const cancel = useMutation(orpc.crm.bookings.cancel.mutationOptions({ onSuccess: done }));
   const move = useMutation(orpc.crm.bookings.move.mutationOptions({ onSuccess: done }));
-  const error = cancel.error ?? move.error;
+  // Only the error of the action shown: a failed cancel is not left on the move picker.
+  const error = mode === 'cancel' ? cancel.error : mode === 'move' ? move.error : null;
   if (mode === 'cancel') {
     return (
       <div className="space-y-2">
@@ -108,10 +109,10 @@ export function BookingsPage() {
         )}
       </div>
       <p className="mb-2 text-xs text-muted-foreground">{t('zone', { zone })}</p>
-      {org.isPending || bookings.isPending ? (
+      {org.error || bookings.error ? (
+        <ErrorText>{errorMessage(org.error ?? bookings.error)}</ErrorText>
+      ) : !bookings.data ? (
         <Spinner />
-      ) : bookings.error ? (
-        <ErrorText>{errorMessage(bookings.error)}</ErrorText>
       ) : bookings.data.length === 0 ? (
         <Empty title={t(period === 'upcoming' ? 'emptyUpcoming' : 'emptyPast')} hint={t('emptyHint')} />
       ) : (
