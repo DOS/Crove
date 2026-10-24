@@ -63,6 +63,11 @@ export const en = {
       actions: 'Commands',
     },
   },
+  modules: {
+    kernel: 'Core',
+    finance: 'Accounting',
+    social: 'Social',
+  },
   nav: {
     org: 'Organization',
     allClients: 'All companies',

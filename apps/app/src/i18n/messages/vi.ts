@@ -61,6 +61,11 @@ export const vi = {
       actions: 'Lệnh',
     },
   },
+  modules: {
+    kernel: 'Hệ thống chung',
+    finance: 'Kế toán',
+    social: 'Mạng xã hội',
+  },
   nav: {
     org: 'Tổ chức',
     allClients: 'Tất cả doanh nghiệp',
