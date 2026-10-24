@@ -2047,7 +2047,7 @@ export const vi = {
       digestMailOff: 'Bật "Gửi cả email cho tôi" để nhận bản tin hằng tuần.',
       // Browser push on this device (#1238).
       push: 'Thông báo đẩy trên thiết bị này',
-      pushHint: 'Khi có việc cần bạn xử lý (bài chờ duyệt, kết quả duyệt, bài đăng lỗi, kênh cần kết nối lại, hàng đợi sắp hết bài, có người nhắc tên bạn hoặc bài hiệu quả hơn hẳn thường lệ), trình duyệt này hiện thông báo ngay cả khi bạn không mở {brand}. Thông báo không kèm nội dung bài.',
+      pushHint: 'Khi có việc cần bạn xử lý (bài chờ duyệt, kết quả duyệt, bài đăng lỗi, kênh cần kết nối lại, hàng đợi sắp hết bài, có người nhắc tên bạn, bài hiệu quả hơn hẳn thường lệ, bài mới được giao cho bạn hoặc bài được giao sắp đến hạn, quá hạn), trình duyệt này hiện thông báo ngay cả khi bạn không mở {brand}. Thông báo không kèm nội dung bài.',
       pushUnsupported: 'Trình duyệt này chưa nhận được thông báo đẩy. Hãy mở {brand} bằng Chrome, Edge, Firefox hoặc Safari qua địa chỉ https.',
       pushDenied: 'Trình duyệt đang chặn thông báo từ {brand}. Hãy cho phép thông báo trong phần cài đặt trang web của trình duyệt rồi bật lại.',
       pushDevices: 'Các thiết bị đang nhận thông báo đẩy',
@@ -2071,6 +2071,7 @@ export const vi = {
         publishing_hold: 'Khi tổ chức tạm dừng hoặc tiếp tục đăng bài',
         queue_low: 'Hàng đợi của kênh sắp hết bài',
         post_outperforming: 'Bài hiệu quả hơn hẳn thường lệ',
+        assignment_due: 'Nhắc hạn bài được giao cho bạn',
       },
       text: {
         review_requested: '{actor} gửi một bài cần duyệt',
@@ -2097,6 +2098,8 @@ export const vi = {
         queue_low: 'Hàng đợi của {channel} sắp hết bài: trong {days, plural, other {# ngày}} tới mới có {filled}/{posting} ngày đăng có bài. Viết thêm bài để lấp chỗ trống.',
         post_outperforming: 'Bài trên {channel} đang được tương tác gấp {ratio, number} lần mức thường lệ',
         post_outperforming_reach: 'Bài trên {channel} đang được tương tác gấp {ratio, number} lần mức thường lệ, lượt tiếp cận gấp {reach, number} lần',
+        assignment_due_soon: 'Bài được giao cho bạn sắp đến hạn lúc {due}',
+        assignment_overdue: 'Bài được giao cho bạn đã quá hạn từ {due} mà vẫn chưa đăng',
       },
     },
     threadsExtras: {

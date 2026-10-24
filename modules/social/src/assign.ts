@@ -1,5 +1,6 @@
 // A post's assignee and due date (issue #640): who should move it along and by when. Owners, admins and the post's
-// author set them; the assignee must be a member of the org. They are not content: no revision, no new review.
+// author set them; the assignee must be a member of the org. They are not content: no revision, no new review. A new
+// due date or a new assignee arms the due date reminders again (#1359), each once.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
@@ -27,7 +28,7 @@ export const postAssign = defineCommand({
     const userId = ctx.actor.userId;
     const post = await ctx.trx
       .selectFrom('crove_social.post')
-      .select(['id', 'author_user_id', 'assignee_user_id'])
+      .select(['id', 'author_user_id', 'assignee_user_id', 'due_at'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.postId)
       .forUpdate()
@@ -44,9 +45,12 @@ export const postAssign = defineCommand({
       const { rows } = await sql<{ user_id: string }>`SELECT user_id FROM crove_kernel.member_profiles(${[input.assigneeUserId]}::uuid[])`.execute(ctx.trx);
       if (rows.length === 0) throw new DomainError('ASSIGNEE_NOT_MEMBER', 422, 'Người được giao không phải thành viên của tổ chức');
     }
+    const dueAt = input.dueAt ? new Date(Date.parse(input.dueAt)) : null;
+    // The reminders were about the old due date or the old assignee (#1359): both go again for the new ones.
+    const rearm = (dueAt?.getTime() ?? null) !== (post.due_at?.getTime() ?? null) || input.assigneeUserId !== post.assignee_user_id;
     await ctx.trx
       .updateTable('crove_social.post')
-      .set({ assignee_user_id: input.assigneeUserId, due_at: input.dueAt ? new Date(Date.parse(input.dueAt)) : null })
+      .set({ assignee_user_id: input.assigneeUserId, due_at: dueAt, ...(rearm ? { due_soon_reminded_at: null, overdue_reminded_at: null } : {}) })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', post.id)
       .execute();

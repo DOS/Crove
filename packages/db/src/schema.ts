@@ -454,7 +454,7 @@ export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment
 export const SOCIAL_REVIEW_LINK_KINDS = ['post', 'plan'] as const;
 // What an in-app notification is about (#637); a member may turn each kind off. weekly_digest is the weekly email
 // digest (#1104): never a notification row, only a member's switch to turn the digest off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold', 'queue_low', 'weekly_digest', 'post_outperforming'] as const;
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold', 'queue_low', 'weekly_digest', 'post_outperforming', 'assignment_due'] as const;
 // Why a channel's daily account snapshot has no counts (#645), and why a bring-in of its outside posts found none (#1054).
 export const SOCIAL_ACCOUNT_SNAPSHOT_ERRORS = ['no_answer', 'token_expired', 'permission'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;

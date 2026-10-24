@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runEditJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runEditJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepAssignmentReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
@@ -840,7 +840,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const recurringTimer = deps.runtime.installed('social') ? setInterval(() => void recurringSweep(), RECURRING_SWEEP_MS) : null;
   void recurringSweep();
 
-  // Review reminders (#703): every 15 minutes, the posts whose review has waited a day or whose time is close.
+  // Review reminders (#703): every 15 minutes, the posts whose review has waited a day or whose time is close; then the
+  // due date reminders of assigned posts (#1359), due within a day or overdue.
   let reminding = false;
   const reminderSweep = async () => {
     if (reminding) return;
@@ -850,6 +851,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (sent > 0) console.log(`[social-reminders] reminded ${sent}`);
     } catch (error) {
       console.error('[social-reminders] sweep', error);
+    }
+    try {
+      const sent = await sweepAssignmentReminders({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (sent > 0) console.log(`[social-assign-reminders] reminded ${sent} assignee(s)`);
+    } catch (error) {
+      console.error('[social-assign-reminders] sweep', error instanceof Error ? error.name : 'error');
     } finally {
       reminding = false;
     }
