@@ -228,6 +228,8 @@ export interface FinanceJournalEntryTable {
   created_xact_start: ColumnType<Date | null, NotGranted, NotGranted>;
   reverses_entry_id: ColumnType<string | null, NotGranted, NotGranted>;
   search: ColumnType<string | null, NotGranted, NotGranted>;
+  source_revision: ColumnType<number, NotGranted, NotGranted>;
+  payload_sha256: ColumnType<Buffer | null, NotGranted, NotGranted>;
 }
 
 /** crove_finance.journal_line */

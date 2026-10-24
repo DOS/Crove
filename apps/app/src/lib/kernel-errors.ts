@@ -158,6 +158,10 @@ export const KERNEL_ERROR_CODES = [
   'VOUCHER_NOT_BANK',
   // An amount with more decimals than the book currency uses (#1282).
   'AMOUNT_SCALE',
+  // Source revisions of journal entries (#1283).
+  'IDEMPOTENCY_CONFLICT',
+  'REVISION_OUT_OF_ORDER',
+  'SOURCE_STILL_POSTED',
   // A VND invoice with an amount below one dong; the rounding policy is the accountant's decision (#1308).
   'AMOUNT_BELOW_DONG',
   // Period lock (#329).
