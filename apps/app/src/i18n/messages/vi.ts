@@ -3,6 +3,11 @@
 // names and types of every t() call against these messages (see ../catalog.ts).
 export const vi = {
   common: {
+    datePlaceholder: 'dd/mm/yyyy',
+    monthPlaceholder: 'mm/yyyy',
+    openCalendar: 'Mở lịch',
+    invalidDate: 'Ngày không hợp lệ, hãy nhập theo dạng dd/mm/yyyy',
+    invalidMonth: 'Tháng không hợp lệ, hãy nhập theo dạng mm/yyyy',
     error: 'Đã có lỗi xảy ra',
     unknownError: 'Lỗi không xác định',
     httpError: 'Lỗi {status}',
@@ -1401,6 +1406,8 @@ export const vi = {
       'Số tiền trên hóa đơn không khớp nhau (hoặc là hóa đơn ngoại tệ) nên không ghi sổ được. Hãy từ chối và xin người bán hóa đơn điều chỉnh.',
     blockedAi:
       'Số tiền AI đọc được không khớp nhau, có thể do đọc sai một chữ số. Hãy từ chối và tải lên tệp XML của hóa đơn điện tử này để ghi sổ chính xác.',
+    blockedBelowDong:
+      'Hóa đơn có số tiền lẻ dưới một đồng, mà sổ VND không ghi số lẻ, nên chưa ghi sổ được. Kế toán cần quyết định cách làm tròn; trong lúc chờ, có thể từ chối và xin người bán hóa đơn điều chỉnh.',
     failedChecks: 'Có {count, number} kiểm tra không đạt. Hãy đối chiếu với chứng từ gốc trước khi duyệt.',
     acceptFailed: 'Tôi đã đối chiếu chứng từ gốc và vẫn muốn ghi sổ',
     signatureUnverifiedTitle: 'Chưa xác minh được chữ ký số của hóa đơn này',
@@ -4412,6 +4419,8 @@ export const vi = {
     },
     lines_sum: { ok: 'Tổng các dòng khớp tiền trước thuế', mismatch: 'Tổng các dòng ({lines}) lệch tiền trước thuế ({subtotal})' },
     total: { ok: 'Tiền trước thuế + VAT khớp tổng thanh toán', mismatch: 'Tiền trước thuế + VAT lệch tổng thanh toán' },
+    // A VND invoice with an amount below one dong (#1282); the rounding policy is the accountant's decision (#1308).
+    amount_scale: { fraction: 'Hóa đơn có số tiền lẻ dưới một đồng ({amount}); kế toán cần quyết định cách làm tròn trước khi ghi sổ' },
     vat_breakdown: { ok: 'Bảng thuế suất khớp tổng VAT', mismatch: 'Bảng thuế suất lệch tổng VAT' },
     seller_tax_code: {
       unreadable: 'Không đọc được MST người bán',
@@ -4579,6 +4588,8 @@ export const vi = {
       OPENING_REVERSAL_DATE: 'Bút toán số dư đầu kỳ chỉ được đảo vào đúng ngày của nó',
       BEFORE_OPENING_BALANCE: 'Bút toán này có ngày trùng hoặc trước ngày số dư đầu kỳ nên không ghi được; hãy chọn một ngày sau ngày số dư đầu kỳ',
       OPENING_BALANCE_INVALID: 'Bảng số dư có dòng không hợp lệ; hãy xem lại trước khi ghi sổ',
+      AMOUNT_SCALE: 'Có số tiền ghi vào một tài khoản lẻ hơn mức đồng tiền ghi sổ cho phép (sổ VND không có số lẻ). Sổ không tự làm tròn; hãy sửa số tiền ở dòng đó thành số đã làm tròn rồi ghi lại',
+      AMOUNT_BELOW_DONG: 'Hóa đơn có số tiền lẻ dưới một đồng, mà sổ VND không ghi số lẻ, nên chưa ghi sổ được. Kế toán cần quyết định cách làm tròn; trong lúc chờ, có thể từ chối đề xuất và xin người bán hóa đơn điều chỉnh',
       PERIOD_LOCKED: 'Sổ đã khóa đến tháng của bút toán này nên không ghi được; chủ sở hữu có thể mở khóa tháng đó nếu cần sửa',
       POSTING_DATE_NOT_ALLOWED: 'Không dùng được ngày ghi sổ này: chỉ hóa đơn mua vào thuộc tháng đã khóa sổ mới được ghi sổ muộn, vào một ngày từ ngày hóa đơn trở đi',
       POSTING_DATE_IN_FUTURE: 'Ngày ghi sổ chưa tới; hãy chọn hôm nay hoặc một ngày trước đó',

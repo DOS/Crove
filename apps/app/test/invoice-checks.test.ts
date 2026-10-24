@@ -6,7 +6,7 @@ import { INVOICE_CHECK_CODES, type Check } from '@crove/kernel-contract';
 import { translatorFor } from '../src/i18n/runtime.ts';
 import { invoiceCheckMessage } from '../src/lib/invoice-checks.ts';
 
-const PARAMS = { currency: 'USD', rate: '25450', lines: '1800000', subtotal: '1900000', taxCode: '0101234564', date: '2026-10-13', invoice: 'C26TAB/1234' };
+const PARAMS = { currency: 'USD', rate: '25450', lines: '1800000', subtotal: '1900000', taxCode: '0101234564', date: '2026-10-13', invoice: 'C26TAB/1234', amount: '1000000.5' };
 const check = (code: string | undefined, params: Record<string, string> | null = PARAMS): Check => ({
   id: code?.split('.')[0] ?? 'x',
   status: 'warn',

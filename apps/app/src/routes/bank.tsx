@@ -14,6 +14,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -378,7 +379,7 @@ export function BankPage() {
             </label>
             <label className="text-xs">
               <span className="text-subtle-foreground">{t('month')}</span>
-              <Input type="month" aria-label={t('month')} className="mt-1 w-44" value={month} onChange={(e) => setMonth(e.target.value)} />
+              <DateInput kind="month" aria-label={t('month')} className="mt-1 w-44" value={month} onChange={setMonth} />
             </label>
           </div>
           {canImport && current?.active && (

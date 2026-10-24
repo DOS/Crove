@@ -19,6 +19,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
@@ -169,7 +170,7 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
           </div>
           <label className="block text-xs">
             <span className="text-subtle-foreground">{t('form.date')}</span>
-            <Input type="date" required value={date} disabled={prefill !== null} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full" />
+            <DateInput required value={date} disabled={prefill !== null} onChange={setDate} className="mt-1 w-full" />
           </label>
           <div className="text-xs">
             <label className="block">
@@ -397,11 +398,11 @@ export function VouchersPage() {
         </label>
         <label className="text-xs">
           <span className="text-subtle-foreground">{t('from')}</span>
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="mt-1 w-44" />
+          <DateInput value={from} onChange={setFrom} className="mt-1 w-44" />
         </label>
         <label className="text-xs">
           <span className="text-subtle-foreground">{t('to')}</span>
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 w-44" />
+          <DateInput value={to} onChange={setTo} className="mt-1 w-44" />
         </label>
       </div>
       {vouchers.isLoading ? (

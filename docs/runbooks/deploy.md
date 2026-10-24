@@ -119,9 +119,38 @@ Create the environment (`pilot`, later `beta`) under Settings, Environments. A r
 
 The images go to the repository's GHCR packages with the run's own token, so no registry secret is needed. The deploy job's token can only read packages; only the build job, which never talks to the host, can push.
 
+## Pre-deploy checks
+
+Some migrations tighten a rule on data that already exists. Before tagging the first release that contains one, run its read-only check against the environment's database (`psql` as any role that can read the tables, inside a `READ ONLY` transaction). If a check lists anything, **stop**: do not tag the release, and raise it on the migration's issue. Nothing here changes data.
+
+### Amounts the book currency cannot hold (#1282, `20261030002100_crove_finance_currency_scale.sql`)
+
+From this migration on, `post_journal_entry()` refuses an amount with more decimals than the org's book currency uses (VND has none). An entry posted earlier with a fraction of a dong could then never be reversed or replaced, since its mirror carries the same fraction, and a purchase document with one could not be posted again. The check lists journal lines with more decimals than their org's book currency, and purchase documents and lines with fractional VND amounts (a purchase document's amounts are in VND, #918). It must return no rows:
+
+The check runs before the release's migrations, so `crove_kernel.currency` does not exist yet; every org books in VND until a command sets another `base_currency`, so the journal part uses the VND rule:
+
+```sql
+BEGIN READ ONLY;
+SELECT 'journal_line' AS source, l.org_id, l.entry_id AS id, l.line_no, 'VND' AS currency, l.debit, l.credit
+FROM crove_finance.journal_line l
+WHERE l.debit <> pg_catalog.round(l.debit, 0) OR l.credit <> pg_catalog.round(l.credit, 0)
+UNION ALL
+SELECT 'purchase_document', d.org_id, d.id, NULL, 'VND', d.subtotal, d.total
+FROM crove_finance.purchase_document d
+WHERE d.subtotal <> pg_catalog.round(d.subtotal, 0) OR d.vat_amount <> pg_catalog.round(d.vat_amount, 0)
+   OR d.total <> pg_catalog.round(d.total, 0)
+UNION ALL
+SELECT 'purchase_line', p.org_id, p.document_id, p.line_no, 'VND', p.amount, p.vat_amount
+FROM crove_finance.purchase_line p
+WHERE p.amount <> pg_catalog.round(p.amount, 0) OR p.vat_amount <> pg_catalog.round(p.vat_amount, 0);
+ROLLBACK;
+```
+
+After the migration has run, the journal part can use each org's book currency instead: select `t.base_currency AS currency` in place of `'VND' AS currency`, and use `JOIN crove_kernel.tenant t ON t.org_id = l.org_id LEFT JOIN crove_kernel.currency c ON c.code = t.base_currency WHERE c.code IS NULL OR l.debit <> pg_catalog.round(l.debit, c.minor_units) OR l.credit <> pg_catalog.round(l.credit, c.minor_units)`. That post-migration form is the one `apps/kernel/test/finance-currency-scale.db.test.ts` runs.
+
 ## Deploy a release
 
-1. Merge to `main` and wait for CI.
+1. Merge to `main` and wait for CI. Run the [pre-deploy checks](#pre-deploy-checks) of every migration the release adds that has one.
 2. Tag the commit and push the tag: `git tag v0.3.0 <commit>` then `git push origin v0.3.0`. (Or create a release with that tag in the GitHub interface.)
 3. The `deploy` workflow runs. Its summary shows the image digests, the result on the host and the public smoke test.
 
