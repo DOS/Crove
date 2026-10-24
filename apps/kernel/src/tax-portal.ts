@@ -177,10 +177,14 @@ export function createTaxPortalClient(options: TaxPortalOptions = {}): TaxPortal
   async function send(path: string, req: GuardedRequest, maxBytes: number, step?: StepLimit): Promise<EgressResponse> {
     const left = step ? step.deadline - now() : timeoutMs;
     if (left <= 0 || step?.signal?.aborted) throw new TaxPortalError('TOO_SLOW');
+    // The step's time left, not the request's own limit, bounds this request: its timeout is the step's deadline.
+    const cutByStep = step !== undefined && left <= timeoutMs;
     try {
       return await request(`${prefix}${path}`, req, egress(maxBytes, Math.min(timeoutMs, left)));
     } catch (error) {
-      if (error instanceof EgressError && error.code === 'timeout' && step && step.deadline - now() <= 0) throw new TaxPortalError('TOO_SLOW');
+      // Decided from the bound, not by reading the clock again: a timer may fire a millisecond before Date.now()
+      // reaches the deadline, and the step would then be reported as an outage (#1117).
+      if (error instanceof EgressError && error.code === 'timeout' && step && (cutByStep || step.deadline - now() <= 0)) throw new TaxPortalError('TOO_SLOW');
       if (error instanceof EgressError && error.code === 'too_large') throw new TaxPortalError('TOO_LARGE');
       // A refused address, a timeout, DNS or the network: the portal cannot be reached.
       throw new TaxPortalError('UNAVAILABLE');
