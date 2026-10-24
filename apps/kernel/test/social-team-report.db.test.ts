@@ -291,6 +291,32 @@ suite('social team report on PostgreSQL (#1058)', () => {
     expect(theirs.client).toEqual({ answers: 1, approved: 1, changesRequested: 0, medianSeconds: 1800 });
   });
 
+  // #1064: the scans stay flat as history grows. Submissions are read back TEAM_REPORT_LOOKBACK_DAYS (90) before the
+  // period only, and clients' answers only on links that could take one in it (a link lives at most 31 days).
+  it('reads submissions 90 days back at most and answers only on links that could take one in the period (#1064)', async () => {
+    const c = await org();
+    const one = await connection(c);
+    // Submitted in May, decided in September: older than the lookback, so its creation in April stands for it.
+    const old = await post(c, c.writer, at('04-01', '00:00'), [one]);
+    await submit(c, c.writer, old, at('05-01', '00:00'));
+    await decide(c, c.reviewer, old, 'approved', at('09-02', '00:00'));
+    // Submitted on 20 August, inside the lookback: its own submission counts, 12 days and 12 hours.
+    const recent = await post(c, c.writer, at('07-01', '00:00'), [one]);
+    await submit(c, c.writer, recent, at('08-20', '00:00'));
+    await decide(c, c.second, recent, 'approved', at('09-01', '12:00'));
+    // A link made long before the period, with an answer written into it (no live link could take one), is not read;
+    // a link whose first answer came before the period has none in it.
+    const stale = await link(c, at('07-01', '00:00'), [recent]);
+    await answer(c, stale, recent, 'approved', at('09-02', '00:00'));
+    const early = await link(c, at('08-15', '00:00'), [old]);
+    await answer(c, early, old, 'changes_requested', at('08-20', '00:00'));
+    await answer(c, early, old, 'approved', at('09-03', '00:00'));
+    const r = await report(c, c.owner);
+    expect(r.members.find((m) => m.userId === c.reviewer)).toMatchObject({ decisions: 1, decisionSeconds: (Date.parse(at('09-02', '00:00')) - Date.parse(at('04-01', '00:00'))) / 1000 });
+    expect(r.members.find((m) => m.userId === c.second)).toMatchObject({ decisions: 1, decisionSeconds: 12 * 24 * HOUR + 12 * HOUR });
+    expect(r.client).toEqual({ answers: 0, approved: 0, changesRequested: 0, medianSeconds: null });
+  });
+
   it('refuses members and viewers', async () => {
     expect(await refusal(report(a, a.writer))).toBe('FORBIDDEN');
     expect(await refusal(report(a, a.viewer))).toBe('FORBIDDEN');

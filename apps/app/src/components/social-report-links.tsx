@@ -2,7 +2,8 @@
 // channel or the ones they pick, shown once to copy and send; the list says which are live, and revokes them. A link
 // may count only one label's posts (#1159, a campaign report; the client never sees the label's name) and may leave out
 // who follows the channels (#1155). Its note may start from an AI summary of the period (#1237), written into the field
-// and saved only with the link.
+// and saved only with the link. The link may choose its sections, their order and how many best posts (#1259); the
+// audience is one of them.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -19,7 +20,8 @@ import { ErrorText } from './ui.tsx';
 import { useLabels } from './social-labels.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
-import { lastMonth, reportPeriod, reportUrl } from '../lib/social-report.ts';
+import { defaultSections, hasBlock, lastMonth, reportPeriod, reportUrl, sectionsOf, topCountOf } from '../lib/social-report.ts';
+import { ReportSectionsPicker } from './social-report-sections.tsx';
 import { labelPeriod } from '../lib/social-labels.ts';
 import { providerName } from '../lib/social.ts';
 import { browserTimeZone, useCanSummarize, useSummaryLanguage } from './social-summary.tsx';
@@ -28,6 +30,7 @@ const DAYS = [7, 30, 90] as const;
 
 export function ReportLinks({ channels }: { channels: readonly { id: string; displayName: string; provider: string }[] }) {
   const t = useTranslations('social.reportLinks');
+  const ts = useTranslations('social.reportSections');
   const f = useFormat();
   const { slug } = useParams({ strict: false }) as { slug: string };
   const me = useQuery(orpc.me.get.queryOptions());
@@ -43,7 +46,9 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
   const [labelId, setLabelId] = useState('');
   // The campaign label whose dates the period was set to, while they are the ones shown.
   const [datesFrom, setDatesFrom] = useState<string | null>(null);
-  const [audience, setAudience] = useState(true);
+  const [sections, setSections] = useState(defaultSections);
+  const chosen = sectionsOf(sections);
+  const topCount = topCountOf(sections);
   const labels = useLabels();
   const [made, setMade] = useState<{ url: string; expiresAt: string } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -60,7 +65,9 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
         ...(note.trim() ? { note } : {}),
         // A label report counts only Crove's posts.
         ...(labelId ? { labelId } : outside ? { includeExternal: true } : {}),
-        ...(audience ? {} : { includeAudience: false }),
+        // Every section in the page's order saves none, as a link before sections; the audience is one of them.
+        ...(chosen ? { sections: chosen } : {}),
+        ...(topCount !== null ? { topCount } : {}),
       });
     },
     onSuccess: (r) => {
@@ -221,15 +228,9 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
         </label>
         <p className="text-xs text-subtle-foreground">{t('includeExternalHint')}</p>
       </div>
-      <div className="space-y-0.5">
-        <label className="flex items-center gap-2 text-sm text-foreground">
-          <Checkbox checked={audience} onCheckedChange={(v) => setAudience(v === true)} />
-          {t('includeAudience')}
-        </label>
-        <p className="text-xs text-subtle-foreground">{t('includeAudienceHint')}</p>
-      </div>
+      <ReportSectionsPicker id="report-sections" value={sections} onChange={setSections} />
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={!range || create.isPending} onClick={() => create.mutate()}>
+        <Button size="sm" disabled={!range || !hasBlock(sections) || create.isPending} onClick={() => create.mutate()}>
           {t('create')}
         </Button>
         {!range && <span className="text-xs text-warning">{t('periodInvalid')}</span>}
@@ -261,7 +262,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
                     {l.connectionIds.length === 0 ? t('allChannels') : l.connectionIds.map((id) => names.get(id) ?? t('goneChannel')).join(', ')}
                     {l.includeExternal ? ` · ${t('withExternal')}` : ''}
                     {l.labelId && labelNames.has(l.labelId) ? ` · ${t('withLabel', { name: labelNames.get(l.labelId) ?? '' })}` : ''}
-                    {l.includeAudience ? '' : ` · ${t('withoutAudience')}`}
+                    {l.sections ? ` · ${ts('custom', { count: l.sections.length })}` : l.includeAudience ? '' : ` · ${t('withoutAudience')}`}
                   </span>
                   {l.note && <span className="block truncate text-xs text-subtle-foreground">{l.note}</span>}
                 </span>

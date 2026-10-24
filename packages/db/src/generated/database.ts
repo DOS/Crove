@@ -1521,6 +1521,8 @@ export interface SocialReportLinkTable {
   include_external: ColumnType<boolean, boolean | undefined, NotGranted>;
   label_id: ColumnType<string | null, string | null, NotGranted>;
   include_audience: ColumnType<boolean, boolean | undefined, NotGranted>;
+  sections: ColumnType<string[] | null, string[] | null, NotGranted>;
+  top_count: ColumnType<number | null, number | null, NotGranted>;
 }
 
 /** crove_social.report_schedule_run */
@@ -1556,6 +1558,11 @@ export interface SocialReportScheduleTable {
   created_by: string;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  sections: string[] | null;
+  top_count: number | null;
+  note: string | null;
+  label_id: string | null;
+  include_audience: Generated<boolean>;
 }
 
 /** crove_social.review_check */

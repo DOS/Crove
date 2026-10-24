@@ -1969,6 +1969,20 @@ export const zSocialQueueOpenSlots = z.object({
   capped: z.boolean(),
 });
 
+// The sections of a client report (#1259), on a link and a schedule: the ones it shows, in the order the page shows
+// them, each once; null (or left out) for every section as before. comparison (the period before), stories (the Story
+// counts) and clicks (the clicks on Crove's short links) have no place of their own. The best posts are 3 to 20 long.
+export const SOCIAL_REPORT_SECTIONS = ['note', 'goals', 'totals', 'comparison', 'channels', 'top', 'reels', 'stories', 'audience', 'clicks'] as const;
+export type SocialReportSection = (typeof SOCIAL_REPORT_SECTIONS)[number];
+export const zSocialReportSections = z
+  .array(z.enum(SOCIAL_REPORT_SECTIONS))
+  .min(1)
+  .max(SOCIAL_REPORT_SECTIONS.length)
+  .refine((list) => new Set(list).size === list.length, 'each section at most once')
+  // An extra alone (the period before, the Story counts, the short link clicks) would make an empty report.
+  .refine((list) => list.some((s) => s !== 'comparison' && s !== 'stories' && s !== 'clicks'), 'at least one section of the page');
+export const zSocialReportTopCount = z.number().int().min(3).max(20);
+
 // A client report link of a period (#643); its token is in the create answer only.
 export const zSocialReportLink = z.object({
   id: zId,
@@ -1987,6 +2001,9 @@ export const zSocialReportLink = z.object({
   // channels (#1155).
   labelId: zId.nullable(),
   includeAudience: z.boolean(),
+  // The sections it shows (#1259), or null for every section; how many best posts, null for 10.
+  sections: z.array(z.enum(SOCIAL_REPORT_SECTIONS)).nullable(),
+  topCount: z.number().int().nullable(),
 });
 export const zSocialReportLinkCreate = z.strictObject({
   periodStart: z.iso.datetime({ offset: true }),
@@ -2000,6 +2017,9 @@ export const zSocialReportLinkCreate = z.strictObject({
   // Only the posts with this label (#1159), without outside posts; the audience shown unless false (#1155).
   labelId: zId.optional(),
   includeAudience: z.boolean().optional(),
+  // The sections the report shows (#1259); every one when left out. Without audience, includeAudience is false.
+  sections: zSocialReportSections.optional(),
+  topCount: zSocialReportTopCount.optional(),
 });
 
 // Monthly goals (#1056): a scope's targets (the org's when connectionId is null), and how the month stands.
@@ -2062,6 +2082,13 @@ export const zSocialReportSchedule = z.object({
   period: z.enum(['previous_week', 'previous_month', 'last_7_days', 'last_30_days']),
   connectionIds: z.array(zId),
   recipients: z.array(z.string()),
+  // What each mail's report link carries (#1259), as a report link's: the note, one label's posts, the audience, the
+  // sections (null for every one) and how many best posts (null for 10).
+  note: z.string().nullable(),
+  labelId: zId.nullable(),
+  includeAudience: z.boolean(),
+  sections: z.array(z.enum(SOCIAL_REPORT_SECTIONS)).nullable(),
+  topCount: z.number().int().nullable(),
   paused: z.boolean(),
   nextRunAt: z.string(),
   lastRunAt: z.string().nullable(),
@@ -2088,6 +2115,13 @@ export const zSocialReportScheduleSave = z.strictObject({
   connectionIds: z.array(zId).max(50),
   recipients: z.array(z.email().max(320)).min(1).max(10),
   paused: z.boolean().optional(),
+  // The link options (#1259): left out, a change keeps the schedule's own and a new schedule has none (every post, the
+  // audience, every section); null clears one.
+  note: z.string().max(2000).nullable().optional(),
+  labelId: zId.nullable().optional(),
+  includeAudience: z.boolean().optional(),
+  sections: zSocialReportSections.nullable().optional(),
+  topCount: zSocialReportTopCount.nullable().optional(),
 });
 
 // A link's preview card (#641): pending until the worker read the page; failed with why.

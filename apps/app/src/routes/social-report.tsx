@@ -6,9 +6,11 @@
 // (#1056), and who follows each channel, from the latest weekly capture in the period (#1146). The engagement rate
 // (#1157) of the period, each channel and each best post is worked out on the page from the counts it already gets.
 // A campaign report (#1159) counts one label's posts and shows only the link's title, never the label; a link may
-// leave out the audience (an empty list), and the period's Reels show their watch time (#1151).
+// leave out the audience (an empty list), and the period's Reels show their watch time (#1151). A link may choose its
+// sections and their order (#1259): the server returns the others as null, and the page shows what came back, in the
+// link's order.
 import { useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -24,7 +26,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage } from '../lib/api.ts';
 import { apiErrorFromResponse } from '../lib/errors.ts';
 import { usePrintInLight } from '../lib/print.ts';
-import { REPORT_METRICS } from '../lib/social-report.ts';
+import { REPORT_METRICS, pageBlocks, type ReportBlock } from '../lib/social-report.ts';
 import { reportReels, watchDuration, watchSeconds } from '../lib/social-insights.ts';
 import { reportGoalGroups, type ReportGoals } from '../lib/social-goals.ts';
 import { pageBrand } from '../lib/social-report-branding.ts';
@@ -40,15 +42,20 @@ interface ReportPage {
   periodEnd: string;
   expiresAt: string;
   posts: number;
-  totals: Counts;
+  // The sections the link chose, in order (#1259); null or absent for every section. A section left out comes back as
+  // null below: totals (with rateBases), previous (the comparison, also in each channel), channels, top, note, goals,
+  // audience and reels.
+  sections?: unknown;
+  totals: Counts | null;
+  rateBases?: RateBases | null;
   // The period of the same length just before (#947), on the same channels; absent from a server without it.
-  previous?: { periodStart: string; periodEnd: string; posts: number; totals: Counts };
+  previous?: { periodStart: string; periodEnd: string; posts: number; totals: Counts; rateBases?: RateBases } | null;
   // rateBases (#1164): what each channel's engagement rate is made of, in each period; absent from a server without it,
   // which leaves the rate to the plain sums as before.
-  channels: { channel: string; provider: string; posts: number; totals: Counts; rateBases?: RateBases; previous?: { posts: number; totals: Counts; rateBases?: RateBases } }[];
+  channels: { channel: string; provider: string; posts: number; totals: Counts; rateBases?: RateBases; previous?: { posts: number; totals: Counts; rateBases?: RateBases } | null }[] | null;
   // external (#1054): the post went out outside Crove; includesExternal: the report counts such posts. Both absent from
   // a server without them.
-  top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Counts; external?: boolean }[];
+  top: { channel: string; provider: string; excerpt: string; publishedAt: string; url: string | null; metrics: Counts; external?: boolean }[] | null;
   includesExternal?: boolean;
   // The agency's note (#1056), plain text; null or absent when there is none or from a server without notes.
   note?: string | null;
@@ -152,11 +159,19 @@ export function SocialReportPage() {
   const [token] = useState(tokenOf);
   const page = useQuery({ queryKey: ['client-report', token], queryFn: () => load(token as string), enabled: token !== null, retry: false });
   const data = page.data;
-  const metrics = data ? shown(data.totals) : [];
+  // The counts shown: the totals', or the channels' when the report has no totals (#1259).
+  const metrics = data ? shown(data.totals ?? Object.assign({}, ...(data.channels ?? []).map((c) => c.totals))) : [];
   // The engagement rate (#1157) from the channels' rate sums (#1164): engagement over the reach of the posts that report
-  // it (else impressions), for this period and the one before.
-  const rate = data ? engagementRateOfBases(data.channels.map(basesOf)) : null;
-  const rateBefore = data ? engagementRateOfBases(data.channels.map((c) => (c.previous ? basesOf(c.previous) : {}))) : null;
+  // it (else impressions), for this period and the one before; from the period's own sums without the channels (#1259).
+  const rate = data ? (data.channels ? engagementRateOfBases(data.channels.map(basesOf)) : engagementRateOfBases([data.rateBases])) : null;
+  const rateBefore = data
+    ? data.channels
+      ? engagementRateOfBases(data.channels.map((c) => (c.previous ? basesOf(c.previous) : {})))
+      : engagementRateOfBases([data.previous?.rateBases])
+    : null;
+  const blocks = data ? pageBlocks(data.sections) : [];
+  // Nothing went out: one note in place of the first block with numbers.
+  const emptyAt = blocks.find((b) => b === 'totals' || b === 'reels' || b === 'channels' || b === 'top');
   const rateLine = useRatePhrase('line');
   const against = t('against');
   const brand = data ? pageBrand(data.brand) : null;
@@ -165,6 +180,111 @@ export function SocialReportPage() {
   const loading = token !== null && page.isLoading;
   // A printed report is on paper: the light theme while printing, whatever the screen uses.
   usePrintInLight();
+  // One section of the report, as the server returned it (#1259): a section the link left out came back null and shows
+  // nothing. With nothing out in the period, the first section with numbers says so and the others show nothing.
+  const section = (b: ReportBlock) => {
+    if (!data) return null;
+    if (data.posts === 0 && (b === 'totals' || b === 'reels' || b === 'channels' || b === 'top')) {
+      return b === emptyAt ? <Card className="block p-6 text-sm text-muted-foreground">{t('empty')}</Card> : null;
+    }
+    const { totals, channels, top } = data;
+    switch (b) {
+      case 'note':
+        return typeof data.note === 'string' && data.note.trim() !== '' ? <ReportNote org={data.org} note={data.note} /> : null;
+      case 'goals':
+        return <ReportGoalsSection data={data} nowMs={Date.now()} />;
+      case 'totals':
+        return totals && metrics.length > 0 ? (
+          <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 print:grid-cols-4">
+            {metrics.map((m) => (
+              <Card key={m} className="block p-4 print:break-inside-avoid">
+                <p className="text-xs text-subtle-foreground">{tm(m)}</p>
+                <p className="mt-1 text-xl font-semibold tabular-nums">{f.number(totals[m] ?? 0)}</p>
+                <ChangeChip current={totals[m]} previous={data.previous?.totals[m]} against={against} withPrevious className="mt-1" />
+              </Card>
+            ))}
+            <EngagementRateCard current={rate} previous={data.previous ? rateBefore : null} against={against} className="print:break-inside-avoid" />
+          </section>
+        ) : null;
+      case 'reels':
+        return <ReportReels reels={data.reels} total={totals?.totalWatchTimeMs} previous={data.previous?.totals.totalWatchTimeMs} against={against} />;
+      case 'channels':
+        return channels ? (
+          <section className="space-y-2 print:break-inside-avoid">
+            <h2 className="text-base font-semibold">{t('byChannel')}</h2>
+            <div className="overflow-x-auto rounded-xl border print:overflow-visible">
+              <table className="w-full text-sm">
+                <thead className="bg-muted text-xs text-subtle-foreground print:bg-transparent">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">{t('channel')}</th>
+                    <th className="px-3 py-2 text-right font-medium">{t('postsColumn')}</th>
+                    {metrics.map((m) => (
+                      <th key={m} className="px-3 py-2 text-right font-medium">
+                        {tm(m)}
+                      </th>
+                    ))}
+                    <th className="px-3 py-2 text-right font-medium">{tr('label')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {channels.map((c, i) => (
+                    <tr key={`${c.channel}-${i}`} className="border-t align-top">
+                      <td className="px-3 py-2">
+                        {c.channel} <span className="text-xs text-subtle-foreground">· {providerName(c.provider)}</span>
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums">
+                        <span className="block">{f.number(c.posts)}</span>
+                        <ChangeChip current={c.posts} previous={c.previous?.posts} against={against} />
+                      </td>
+                      {metrics.map((m) => (
+                        <td key={m} className="px-3 py-2 text-right tabular-nums">
+                          {/* A channel that posted only in the period before (#947) shows 0 now where it had a count then. */}
+                          <span className="block">{c.totals[m] !== undefined ? f.number(c.totals[m]) : c.previous?.totals[m] !== undefined ? f.number(0) : '-'}</span>
+                          <ChangeChip current={c.totals[m]} previous={c.previous?.totals[m]} against={against} />
+                        </td>
+                      ))}
+                      <EngagementRateCell current={basesOf(c)} previous={c.previous ? basesOf(c.previous) : undefined} against={against} />
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ) : null;
+      case 'top':
+        return top ? (
+          <section className="space-y-2">
+            <h2 className="text-base font-semibold">{t('top')}</h2>
+            <ol className="space-y-2">
+              {top.map((p, i) => (
+                <li key={`${p.publishedAt}-${i}`} className="rounded-xl border p-3 print:break-inside-avoid">
+                  <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-subtle-foreground">
+                    <span>
+                      {p.channel} · {providerName(p.provider)} · {f.dateTime(p.publishedAt)}
+                    </span>
+                    {p.external === true && <OutsideChip label={t('direct')} />}
+                  </p>
+                  <p className="mt-1 text-sm break-words">{p.excerpt || t('noText')}</p>
+                  <p className="mt-1 text-xs text-muted-foreground tabular-nums">
+                    {shown(p.metrics)
+                      .map((m) => `${tm(m)}: ${f.number(p.metrics[m] ?? 0)}`)
+                      .join(' · ')}
+                  </p>
+                  {engagementRate(p.metrics) && <p className="text-xs text-muted-foreground tabular-nums">{rateLine(engagementRate(p.metrics))}</p>}
+                  {p.url && (
+                    <a href={p.url} target="_blank" rel="noopener noreferrer nofollow" className="mt-1 inline-block text-xs text-link hover:underline print:hidden">
+                      {t('open')}
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </section>
+        ) : null;
+      case 'audience':
+        return <ReportAudiences entries={data.audience} />;
+    }
+  };
   return (
     <div className="min-h-screen bg-background px-4 py-6 text-foreground print:px-0 print:py-0" style={accentStyle(brand)}>
       <div className="mx-auto max-w-4xl space-y-5">
@@ -202,95 +322,9 @@ export function SocialReportPage() {
               )}
               {data.includesExternal === true && <p className="text-xs text-subtle-foreground">{t('withExternal')}</p>}
             </header>
-            {typeof data.note === 'string' && data.note.trim() !== '' && <ReportNote org={data.org} note={data.note} />}
-            <ReportGoalsSection data={data} nowMs={Date.now()} />
-            {data.posts === 0 ? (
-              <Card className="block p-6 text-sm text-muted-foreground">{t('empty')}</Card>
-            ) : (
-              <>
-                {metrics.length > 0 && (
-                  <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 print:grid-cols-4">
-                    {metrics.map((m) => (
-                      <Card key={m} className="block p-4 print:break-inside-avoid">
-                        <p className="text-xs text-subtle-foreground">{tm(m)}</p>
-                        <p className="mt-1 text-xl font-semibold tabular-nums">{f.number(data.totals[m] ?? 0)}</p>
-                        <ChangeChip current={data.totals[m]} previous={data.previous?.totals[m]} against={against} withPrevious className="mt-1" />
-                      </Card>
-                    ))}
-                    <EngagementRateCard current={rate} previous={data.previous ? rateBefore : null} against={against} className="print:break-inside-avoid" />
-                  </section>
-                )}
-                <ReportReels reels={data.reels} total={data.totals.totalWatchTimeMs} previous={data.previous?.totals.totalWatchTimeMs} against={against} />
-                <section className="space-y-2 print:break-inside-avoid">
-                  <h2 className="text-base font-semibold">{t('byChannel')}</h2>
-                  <div className="overflow-x-auto rounded-xl border print:overflow-visible">
-                    <table className="w-full text-sm">
-                      <thead className="bg-muted text-xs text-subtle-foreground print:bg-transparent">
-                        <tr>
-                          <th className="px-3 py-2 text-left font-medium">{t('channel')}</th>
-                          <th className="px-3 py-2 text-right font-medium">{t('postsColumn')}</th>
-                          {metrics.map((m) => (
-                            <th key={m} className="px-3 py-2 text-right font-medium">
-                              {tm(m)}
-                            </th>
-                          ))}
-                          <th className="px-3 py-2 text-right font-medium">{tr('label')}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.channels.map((c, i) => (
-                          <tr key={`${c.channel}-${i}`} className="border-t align-top">
-                            <td className="px-3 py-2">
-                              {c.channel} <span className="text-xs text-subtle-foreground">· {providerName(c.provider)}</span>
-                            </td>
-                            <td className="px-3 py-2 text-right tabular-nums">
-                              <span className="block">{f.number(c.posts)}</span>
-                              <ChangeChip current={c.posts} previous={c.previous?.posts} against={against} />
-                            </td>
-                            {metrics.map((m) => (
-                              <td key={m} className="px-3 py-2 text-right tabular-nums">
-                                {/* A channel that posted only in the period before (#947) shows 0 now where it had a count then. */}
-                                <span className="block">{c.totals[m] !== undefined ? f.number(c.totals[m]) : c.previous?.totals[m] !== undefined ? f.number(0) : '-'}</span>
-                                <ChangeChip current={c.totals[m]} previous={c.previous?.totals[m]} against={against} />
-                              </td>
-                            ))}
-                            <EngagementRateCell current={basesOf(c)} previous={c.previous ? basesOf(c.previous) : undefined} against={against} />
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-                <section className="space-y-2">
-                  <h2 className="text-base font-semibold">{t('top')}</h2>
-                  <ol className="space-y-2">
-                    {data.top.map((p, i) => (
-                      <li key={`${p.publishedAt}-${i}`} className="rounded-xl border p-3 print:break-inside-avoid">
-                        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-subtle-foreground">
-                          <span>
-                            {p.channel} · {providerName(p.provider)} · {f.dateTime(p.publishedAt)}
-                          </span>
-                          {p.external === true && <OutsideChip label={t('direct')} />}
-                        </p>
-                        <p className="mt-1 text-sm break-words">{p.excerpt || t('noText')}</p>
-                        <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-                          {shown(p.metrics)
-                            .map((m) => `${tm(m)}: ${f.number(p.metrics[m] ?? 0)}`)
-                            .join(' · ')}
-                        </p>
-                        {engagementRate(p.metrics) && <p className="text-xs text-muted-foreground tabular-nums">{rateLine(engagementRate(p.metrics))}</p>}
-                        {p.url && (
-                          <a href={p.url} target="_blank" rel="noopener noreferrer nofollow" className="mt-1 inline-block text-xs text-link hover:underline print:hidden">
-                            {t('open')}
-                          </a>
-                        )}
-                      </li>
-                    ))}
-                  </ol>
-                </section>
-              </>
-            )}
-            <ReportAudiences entries={data.audience} />
+            {blocks.map((b) => (
+              <Fragment key={b}>{section(b)}</Fragment>
+            ))}
             <p className="text-xs text-subtle-foreground">{t('footer', { until: f.date(data.expiresAt) })}</p>
             <MadeWithCrove brand={brand} />
           </>

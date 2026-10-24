@@ -8,9 +8,15 @@
 //
 // The submission a decision answers is the latest successful social.post.submit of its post at or before it; a post
 // that went to review when it was made (an import or a copy with submit) has none, and its creation stands for it.
+// The scans stay flat as history grows (#1064): the submissions are read from TEAM_REPORT_LOOKBACK_DAYS before the
+// period on (a decision whose submission is older falls back to its post's creation, which can only lengthen its
+// wait), and the clients' answers only on the review links that could take an answer in the period, those made at most
+// REVIEW_LINK_MAX_DAYS before it (a link expires within 31 days, so their first answers are all on them). "Sent to
+// review" counts the social.post.submit rows only: a post imported or created with submit, or sent back by a policy,
+// is not in it (the Metrics tab's card says so).
 import { sql } from 'kysely';
 import { z } from 'zod';
-import type { MemberRole } from '@crove/db';
+import { SOCIAL_REVIEW_LINK_KINDS, type MemberRole } from '@crove/db';
 import { DomainError, defineQuery } from '@crove/kernel-runtime';
 import { TEAM_REPORT_DST_SLACK_MS, TEAM_REPORT_MAX_DAYS, medianOrNull, type TeamMemberRow, type TeamReport } from './domain/team-report.ts';
 
@@ -18,6 +24,9 @@ const MANAGERS: readonly MemberRole[] = ['owner', 'admin'];
 // Members of these roles are listed even without anything in the period; a viewer only with something.
 const LISTED: readonly string[] = ['owner', 'admin', 'member'];
 const DAY_MS = 86_400_000;
+export const TEAM_REPORT_LOOKBACK_DAYS = 90;
+// review_link_expiry: a client review link lives at most 31 days.
+const REVIEW_LINK_MAX_DAYS = 31;
 const zInstant = z.iso.datetime({ offset: true });
 
 const count = (v: string | number | null | undefined) => Number(v ?? 0);
@@ -33,6 +42,8 @@ export const teamReport = defineQuery({
       throw new DomainError('TEAM_RANGE_INVALID', 422, `Khoảng ngày phải kết thúc sau ngày bắt đầu và dài tối đa ${TEAM_REPORT_MAX_DAYS} ngày`);
     }
     const org = ctx.orgId;
+    const lookback = new Date(from.getTime() - TEAM_REPORT_LOOKBACK_DAYS * DAY_MS);
+    const linksFrom = new Date(from.getTime() - REVIEW_LINK_MAX_DAYS * DAY_MS);
     const [created, submitted, approved, published, assigned, decisions, answers, members] = await Promise.all([
       sql<{ user_id: string; n: string }>`
         SELECT p.author_user_id AS user_id, pg_catalog.count(*) AS n FROM crove_social.post p
@@ -69,7 +80,8 @@ export const teamReport = defineQuery({
         WHERE p.org_id = ${org}::uuid AND p.assignee_user_id IS NOT NULL AND p.due_at >= ${from} AND p.due_at < ${to} AND p.status <> 'cancelled'
         GROUP BY p.assignee_user_id`.execute(ctx.trx),
       // One decision per reviewer, post, verdict and moment: a decision on several channels writes a row per channel in
-      // one transaction. The submissions are read once, for the decided posts, from the first one's creation on.
+      // one transaction. The submissions are read once, for the decided posts, from the first one's creation on but
+      // never before the lookback (#1064).
       sql<{ user_id: string; seconds: number }>`
         WITH d AS (
           SELECT DISTINCT a.decided_by, a.post_id, a.decision, a.created_at FROM crove_social.post_approval a
@@ -79,7 +91,7 @@ export const teamReport = defineQuery({
           WHERE p.org_id = ${org}::uuid AND p.id IN (SELECT d.post_id FROM d)
         ), s AS MATERIALIZED (
           SELECT e.target_id AS post_id, e.occurred_at FROM crove_kernel.audit_event e
-          WHERE e.org_id = ${org}::uuid AND e.occurred_at >= (SELECT pg_catalog.min(p.created_at) FROM p) AND e.occurred_at < ${to}
+          WHERE e.org_id = ${org}::uuid AND e.occurred_at >= GREATEST((SELECT pg_catalog.min(p.created_at) FROM p), ${lookback}::timestamptz) AND e.occurred_at < ${to}
             AND e.command = 'social.post.submit' AND e.outcome = 'ok' AND e.target_type = 'social.post'
             AND e.target_id IN (SELECT p.id FROM p)
         )
@@ -87,15 +99,20 @@ export const teamReport = defineQuery({
                pg_catalog.date_part('epoch', d.created_at - coalesce(
                  (SELECT pg_catalog.max(s.occurred_at) FROM s WHERE s.post_id = d.post_id AND s.occurred_at <= d.created_at), p.created_at))::float8 AS seconds
         FROM d JOIN p ON p.id = d.post_id`.execute(ctx.trx),
-      // A client's first answer per link and post; only one given in the period counts.
+      // A client's first answer per link and post; only one given in the period counts. Only the links made in the
+      // REVIEW_LINK_MAX_DAYS before the period or in it can have one (#1064), read by review_link_kind_idx (every kind
+      // a link has), their answers by review_feedback_link_idx.
       sql<{ verdict: string; seconds: number }>`
-        WITH f AS (
+        WITH l AS (
+          SELECT l.id, l.created_at FROM crove_social.review_link l
+          WHERE l.org_id = ${org}::uuid AND l.kind = ANY (${[...SOCIAL_REVIEW_LINK_KINDS]}::text[]) AND l.created_at >= ${linksFrom} AND l.created_at < ${to}
+        ), f AS (
           SELECT DISTINCT ON (f.link_id, f.post_id) f.link_id, f.verdict, f.created_at FROM crove_social.review_feedback f
-          WHERE f.org_id = ${org}::uuid AND f.verdict IN ('approved', 'changes_requested') AND f.created_at < ${to}
+          WHERE f.org_id = ${org}::uuid AND f.link_id IN (SELECT l.id FROM l) AND f.verdict IN ('approved', 'changes_requested') AND f.created_at < ${to}
           ORDER BY f.link_id, f.post_id, f.created_at, f.id
         )
         SELECT f.verdict, pg_catalog.date_part('epoch', f.created_at - l.created_at)::float8 AS seconds
-        FROM f JOIN crove_social.review_link l ON l.org_id = ${org}::uuid AND l.id = f.link_id
+        FROM f JOIN l ON l.id = f.link_id
         WHERE f.created_at >= ${from}`.execute(ctx.trx),
       ctx.trx.selectFrom('crove_kernel.tenant_member').select(['user_id', 'role']).where('org_id', '=', org).execute(),
     ]);
