@@ -2,7 +2,7 @@
 // CROVE_MODULES=kernel registers no finance command, query, job or route, a lookup into finance answers
 // not_installed, and the kernel's own flows still work. Migrations still apply to every schema. Set
 // CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
@@ -141,8 +141,8 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
   });
 
   it('applies migrations to every schema, whatever CROVE_MODULES says', async () => {
-    const schemas = await adminQuery<{ nspname: string }>("SELECT nspname FROM pg_namespace WHERE nspname IN ('crove_kernel', 'crove_finance')");
-    expect(schemas.map((s) => s.nspname).sort()).toEqual(['crove_finance', 'crove_kernel']);
+    const schemas = await adminQuery<{ nspname: string }>("SELECT nspname FROM pg_namespace WHERE nspname IN ('crove_kernel', 'crove_finance', 'crove_crm')");
+    expect(schemas.map((s) => s.nspname).sort()).toEqual(['crove_crm', 'crove_finance', 'crove_kernel']);
   });
 
   it('registers only the enabled modules', () => {
@@ -153,6 +153,10 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
     const all = moduleDefinitions(configFor(undefined));
     expect(all.commands.map((c) => c.name)).toContain('finance.purchase.record');
     expect(all.queries.map((q) => q.name)).toContain('finance.journal.list');
+    // The crm module (#1314) the same way.
+    expect(all.commands.map((c) => c.name)).toContain('crm.event_type.create');
+    const crmOnly = moduleDefinitions(configFor('crm'));
+    expect([...new Set([...crmOnly.commands, ...crmOnly.queries].map((d) => d.name.split('.')[0]))].sort()).toEqual(['crm', 'kernel']);
   });
 
   it('answers COMMAND_NOT_FOUND for a disabled module and not_installed for a lookup into it', async () => {
@@ -217,6 +221,10 @@ suite('module enablement on PostgreSQL (plan Decision 12, ADR-0031)', () => {
         expect(await exported.json()).toEqual({ code: 'NOT_FOUND' });
       }
       for (const [path, input] of [['journal/list', {}], ['accounts/list', {}], ['parties/list', {}], ['documents/list', {}], ['vat/period', { period: '2026-09' }], ['ledger/period', { period: '2026-09' }], ['ledger/account', { period: '2026-09', accountCode: '331' }], ['ledger/statements', { period: '2026-09' }], ['ledger/statementsHtkkCheck', { year: 2026 }], ['fixedAssets/list', {}], ['bank/lines', { bankAccount: '1121', period: '2026-09' }]] as const) {
+        expect((await rpc(path, input)).status, path).toBe(404);
+      }
+      // Nor are the crm module's (#1314).
+      for (const [path, input] of [['crm/eventTypes/list', {}], ['crm/eventTypes/setActive', { eventTypeId: randomUUID(), active: false }]] as const) {
         expect((await rpc(path, input)).status, path).toBe(404);
       }
 

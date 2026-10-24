@@ -170,6 +170,8 @@ packages/extract-contract  limits, schemas and the worker's client for crove-ext
 packages/l10n-vn   Vietnamese invoice checks, tax codes, TT133 accounting rules (no parser)
 packages/agent     AI extraction (only package that talks to a model)
 modules/finance    purchase invoices, journal entries, export
+modules/social     compose, approve, schedule and publish posts
+modules/crm        booking pages: event types hosted by members (calendar plan)
 supabase/migrations  the only place for schema changes
 ```
 

@@ -24,7 +24,7 @@ SELECT crove_kernel.apply_tenant_rls('crove_social.media_archive');
 REVOKE UPDATE ON crove_social.media_archive FROM crove_tenant;
 
 -- The org purge (#1024) deletes crove_social.media_archive with the org's other Social rows (#1302). The function is
--- copied verbatim from 20261030120000_crove_kernel_calendar.sql, with only this table added to v_social.
+-- copied verbatim from 20261030130100_crove_kernel_org_purge_crm.sql, with only this table added to v_social.
 -- migration-lint: cross-module the org purge re-created with crove_social.media_archive added to v_social, per the owner's standing approval to add each new Social table to crove_kernel.org_purge in its feature migration (#1213).
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
 RETURNS TABLE (outcome text, counts jsonb, blob_keys text[])
@@ -58,7 +58,8 @@ DECLARE
     'crove_kernel.proposal_policy', 'crove_kernel.refusal_tally', 'crove_kernel.tax_obligation_done',
     'crove_kernel.tax_profile', 'crove_kernel.usage_deferral', 'crove_kernel.file_upload',
     'crove_kernel.budget_policy', 'crove_kernel.kill_switch', 'crove_kernel.credential',
-    'crove_finance.vendor_account_rule', 'crove_kernel.availability_rule', 'crove_kernel.calendar_event'];
+    'crove_finance.vendor_account_rule', 'crove_kernel.availability_rule', 'crove_kernel.calendar_event',
+    'crove_crm.event_type'];
   v_social text[] := ARRAY[
     'crove_social.account_snapshot', 'crove_social.bio_click', 'crove_social.bio_page', 'crove_social.brand_voice',
     'crove_social.calendar_feed', 'crove_social.calendar_note', 'crove_social.channel_policy',
