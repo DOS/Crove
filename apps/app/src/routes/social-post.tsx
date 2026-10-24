@@ -4023,7 +4023,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           {canWrite && p.recurrenceSourceId === null && (p.evergreenDays !== null || p.recurrence !== null) && (
             <TextVariationsCard key={`${JSON.stringify(p.textVariations)}:${p.textVariationNext}`} post={p} onDone={refresh} />
           )}
-            <ReviewLinks postId={p.id} canDecide={canDecide} />
+            <ReviewLinks postId={p.id} canDecide={canDecide} canReply={canWrite} />
             <AssignCard post={p} canEdit={canDecide || (canWrite && p.authorUserId !== null && p.authorUserId === userId)} />
           <PostVersions
             postId={p.id}

@@ -273,7 +273,8 @@ suite('social channel signatures on PostgreSQL (#1190)', () => {
 
   // The client review link (#1190): each channel's signature beside its body, so the page shows the text that is sent.
   type ReviewChannel = { channel: string; body: string; signature: string | null };
-  type ReviewPage = { kind?: 'plan'; channels?: ReviewChannel[]; posts?: { id: string; channels?: ReviewChannel[] }[] };
+  // A plan sends each post's body once (#930): a channel's body is null when it shows the post's.
+  type ReviewPage = { kind?: 'plan'; channels?: ReviewChannel[]; posts?: { id: string; body?: string | null; channels?: (Omit<ReviewChannel, 'body'> & { body: string | null })[] }[] };
   const review = async (token: string) => (await pool.query<{ page: ReviewPage | null }>('SELECT crove_social.review_link_view($1) AS page', [token])).rows[0]?.page ?? null;
   // A post on a signed channel, a channel without one and a signed channel left off, with an answer.
   async function reviewed(o: Org) {
@@ -298,7 +299,8 @@ suite('social channel signatures on PostgreSQL (#1190)', () => {
     const { postId, single, plan } = await reviewed(o);
     const sent = (await get(o, postId)).variants.map((v) => v.effective.body);
     expect(sent[0]).toBe(`Bánh mới ra lò\n\n${SIGNATURE}`);
-    for (const channels of [(await review(single))?.channels, (await review(plan))?.posts?.[0]?.channels]) {
+    const planPost = (await review(plan))?.posts?.[0];
+    for (const channels of [(await review(single))?.channels, planPost?.channels?.map((c) => ({ ...c, body: c.body ?? planPost.body ?? '' }))]) {
       expect(channels?.map((c) => ({ body: c.body, signature: c.signature }))).toEqual([
         { body: 'Bánh mới ra lò', signature: SIGNATURE },
         { body: 'Riêng kênh này', signature: null },
@@ -313,7 +315,8 @@ suite('social channel signatures on PostgreSQL (#1190)', () => {
   });
 
   // The migration re-created review_plan_page and review_link_view with only 'signature' added: both kinds of link give
-  // byte for byte what the previous definitions (migrations 20261023233000 and 20261028150000) give, but for it.
+  // byte for byte what the previous definitions (migrations 20261023233000 and 20261028150000) give, but for it. Later
+  // migrations re-create them again (#1301), so the definitions of this one are compared, in the same transaction.
   it('gives exactly the previous review link output, but for the signature', async () => {
     const o = await org();
     const { single, plan } = await reviewed(o);
@@ -329,9 +332,11 @@ suite('social channel signatures on PostgreSQL (#1190)', () => {
     const linkView = previous('20261028150000_crove_social_report_branding.sql', 'crove_social.review_link_view');
     const pages = await admin(async (c) => {
       const read = async (token: string) => (await c.query<{ page: string }>('SELECT crove_social.review_link_view($1)::text AS page', [token])).rows[0]?.page as string;
-      const now = [await read(single), await read(plan)];
       await c.query('BEGIN');
       try {
+        await c.query(previous('20261029160000_crove_social_channel_signature.sql', 'crove_social.review_plan_page'));
+        await c.query(previous('20261029160000_crove_social_channel_signature.sql', 'crove_social.review_link_view'));
+        const now = [await read(single), await read(plan)];
         await c.query(planPage);
         await c.query(linkView);
         return { now, before: [await read(single), await read(plan)] };

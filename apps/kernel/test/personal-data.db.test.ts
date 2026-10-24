@@ -1,6 +1,8 @@
 // A person's data under the PDPL (issue #923), on PostgreSQL 17. Finding: an owner or admin looks up an email address,
 // a phone number in any common spelling, or a tax code, and gets every matching row of the org with what an erasure
-// would do to it; another org's rows never show; members cannot search; a value that is none of these is refused.
+// would do to it; another org's rows never show; members cannot search; a value that is none of these is refused. A
+// legal entity the org keeps books for (a household's 12-digit code is its owner's ID number) is found and kept by law,
+// the default entity as the org's own (#1312).
 // Erasing (owners, R3): the contact fields go, a party nothing in the books names loses its name and tax code too, a
 // party in the books keeps them, the mail recipient goes but its hash stays, a report schedule loses the address (and
 // goes when nobody is left), and the audit row holds counts only.
@@ -11,7 +13,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
-import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
+import { createOrg, kernelCommands, kernelQueries, PERSONAL_DATA_COLUMNS, upsertIdentity, type PersonalDataColumn } from '@crove/kernel';
 import type { PersonalDataErasure, PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 
@@ -126,6 +128,63 @@ suite('finding a person in the org (#923)', () => {
     await expect(find('mau.nguyen@example.vn', org.member)).rejects.toMatchObject({ status: 403 });
     await expect(find('Nguyễn Văn Mẫu')).rejects.toMatchObject({ code: 'PERSONAL_DATA_QUERY', status: 422 });
     expect((await find('nobody@example.vn')).matches).toEqual([]);
+  });
+
+  it("finds the legal entities the org keeps books for, kept by law, and the default one as the org's own (#1312)", async () => {
+    const exec = <T>(command: string, input: unknown, user = org.owner) =>
+      rt.execute<T>(command, input, { actor: asUser(user), orgId: org.orgId, idempotencyKey: randomUUID() });
+    await exec('kernel.org.set_tax_code', { taxCode: '0108888881' });
+    const household = await exec<{ id: string }>('kernel.legal_entity.create', { name: 'Hộ kinh doanh Phạm Thị Hộ', kind: 'household', taxCode: '079091001234', parentId: null });
+    const client = await exec<{ id: string }>('kernel.legal_entity.create', { name: 'Công ty TNHH Khách', kind: 'company', taxCode: '0317777773', parentId: null }, org.admin);
+
+    // The household's 12-digit code, a person's national ID number, in any spelling: the row carries the name.
+    const byId = await find('0790 9100 1234');
+    expect(byId.matches).toEqual([
+      {
+        column: 'crove_kernel.legal_entity.tax_code',
+        handling: 'keep_legal',
+        reason: expect.stringContaining('national ID number'),
+        rowId: household.id,
+        row: expect.objectContaining({ name: 'Hộ kinh doanh Phạm Thị Hộ', kind: 'household', is_default: false, org_id: org.orgId }),
+      },
+    ]);
+    // An admin finds a client company the same way; another org does not.
+    expect((await find('0317777773', org.admin)).matches).toEqual([
+      expect.objectContaining({ column: 'crove_kernel.legal_entity.tax_code', handling: 'keep_legal', rowId: client.id, row: expect.objectContaining({ name: 'Công ty TNHH Khách' }) }),
+    ]);
+    expect((await find('079091001234', other.owner, other.orgId)).matches).toEqual([]);
+    // The default entity carries the org's own code, as the tenant row does.
+    const own = await find('0108888881');
+    expect(own.matches.map((m) => [m.column, m.handling]).sort()).toEqual([
+      ['crove_kernel.legal_entity.tax_code', 'keep_org'],
+      ['crove_kernel.tenant.tax_code', 'keep_org'],
+    ]);
+    expect(own.matches.find((m) => m.column === 'crove_kernel.legal_entity.tax_code')).toMatchObject({
+      reason: expect.stringContaining('default legal entity'),
+      row: expect.objectContaining({ is_default: true }),
+    });
+
+    // Erasing by the ID number keeps the entity as it is and says why.
+    const erased = await erase('079091001234');
+    expect(erased.erased).toEqual([]);
+    expect(erased.kept).toEqual([{ column: 'crove_kernel.legal_entity.tax_code', rows: 1, reason: expect.stringContaining('Kept with its books') }]);
+    const row = (await admin((c) => c.query('SELECT name, kind, tax_code FROM crove_kernel.legal_entity WHERE id = $1', [household.id]))).rows[0];
+    expect(row).toEqual({ name: 'Hộ kinh doanh Phạm Thị Hộ', kind: 'household', tax_code: '079091001234' });
+
+    // Every override names a boolean column of its table.
+    for (const [key, entry] of Object.entries(PERSONAL_DATA_COLUMNS) as Array<[string, PersonalDataColumn]>) {
+      if (!entry.override) continue;
+      const [schema, table] = key.split('.');
+      const { when } = entry.override;
+      const { rows } = await admin((c) =>
+        c.query<{ type: string }>(`SELECT data_type AS type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3`, [
+          schema,
+          table,
+          when,
+        ]),
+      );
+      expect(rows, key).toEqual([{ type: 'boolean' }]);
+    }
   });
 
   it('erases the contact fields and keeps what the books name, telling which and why', async () => {

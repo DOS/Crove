@@ -30,7 +30,8 @@ const zAnswer = z.strictObject({
 
 // signature (#1190): the variant's signature, sent after the body, or null; the page appends it as effectiveContent does.
 type ReviewChannel = { provider: string; channel: string; status: string; body: string; signature: string | null; title: string | null; linkUrl: string | null };
-type ReviewAnswer = { name: string; verdict: string; body: string | null; at: string };
+// reply (#1301): the team's reply under the answer, which the page signs with the org's name, or null.
+type ReviewAnswer = { name: string; verdict: string; body: string | null; at: string; reply: { body: string; at: string } | null };
 export interface ReviewPostPage {
   kind?: undefined;
   org: string;
@@ -42,6 +43,7 @@ export interface ReviewPostPage {
   feedback: ReviewAnswer[];
 }
 // A plan link's page (#902): its posts in schedule order, each with its files' ids, or only gone when cancelled since.
+// Each post's body comes once (#930): a channel's body is null when it shows the post's body.
 export interface ReviewPlanPage {
   kind: 'plan';
   org: string;
@@ -51,7 +53,16 @@ export interface ReviewPlanPage {
   to: string | null;
   posts: (
     | { id: string; gone: true }
-    | { id: string; gone: false; at: string | null; changed: boolean; channels: (ReviewChannel & { media: { id: string; type: string }[] })[]; answers: number; feedback: ReviewAnswer[] }
+    | {
+        id: string;
+        gone: false;
+        at: string | null;
+        changed: boolean;
+        body: string | null;
+        channels: (Omit<ReviewChannel, 'body'> & { body: string | null; media: { id: string; type: string }[] })[];
+        answers: number;
+        feedback: ReviewAnswer[];
+      }
   )[];
 }
 export type ReviewPage = ReviewPostPage | ReviewPlanPage;
