@@ -434,6 +434,7 @@ export const vi = {
     taken: 'Rất tiếc, giờ này vừa có người đặt.',
     unavailable: 'Rất tiếc, giờ này không còn nhận đặt lịch.',
     pickAnother: 'Chọn giờ khác',
+    requestNotFound: 'Không tìm thấy yêu cầu đặt lịch này; hãy tải lại trang và đặt lại.',
   },
   eventTypes: {
     title: 'Loại lịch hẹn',

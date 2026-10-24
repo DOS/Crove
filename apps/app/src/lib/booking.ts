@@ -1,6 +1,6 @@
 // Helpers for the public booking page (issue #1318): the free slots grouped by day and shown in the visitor's own time
 // zone, the week the page reads, and the visitor's zone itself.
-import { zonedDate, type BookingPage } from '@crove/kernel-contract';
+import { zonedDate, zonedInstant, type BookingPage } from '@crove/kernel-contract';
 import type { Locale } from '../i18n/locale.ts';
 
 export type Slot = BookingPage['slots'][number];
@@ -14,10 +14,14 @@ export function visitorTimeZone(): string {
   }
 }
 
-/** The range of the week starting `weeks` weeks from `now` (whole days, UTC instants): what one page read covers. */
-export function weekRange(now: number, weeks: number): { from: string; to: string } {
-  const from = now + weeks * 7 * 86_400_000;
-  return { from: new Date(from).toISOString(), to: new Date(from + 7 * 86_400_000).toISOString() };
+/**
+ * The week `weeks` weeks after today in `timeZone`: from local midnight to local midnight seven days later, so a day is
+ * never split between two weeks. What one page read covers.
+ */
+export function weekRange(now: number, weeks: number, timeZone: string): { from: string; to: string } {
+  const start = Date.parse(`${zonedDate(timeZone, now)}T12:00:00Z`) + weeks * 7 * 86_400_000;
+  const day = (offset: number) => new Date(start + offset * 86_400_000).toISOString().slice(0, 10);
+  return { from: new Date(zonedInstant(timeZone, day(0), 0)).toISOString(), to: new Date(zonedInstant(timeZone, day(7), 0)).toISOString() };
 }
 
 /** The slots by day in `timeZone`, days in order, each day's slots in order. */

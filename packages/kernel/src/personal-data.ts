@@ -62,6 +62,7 @@ export const PERSONAL_DATA_COLUMNS = {
   'crove_crm.booking.visitor_name': { kind: 'name', handling: 'erase', reason: 'The name a visitor gave when booking a meeting' },
   'crove_crm.booking.email': { kind: 'email', handling: 'erase', reason: 'The address a visitor gave when booking a meeting' },
   'crove_crm.booking.phone': { kind: 'phone', handling: 'erase', reason: 'The number a visitor gave when booking a meeting' },
+  'crove_crm.booking.note': { kind: 'other', handling: 'erase', reason: 'Free text a visitor wrote when booking a meeting, which may name or describe them' },
   'crove_kernel.party.address': {
     kind: 'address',
     handling: 'erase',

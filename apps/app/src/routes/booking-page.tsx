@@ -38,6 +38,8 @@ function Followed({ path, token, when, onAgain }: { path: string; token: string;
   });
   const s = status.data;
   if (status.error) return <ErrorText>{errorMessage(status.error)}</ErrorText>;
+  // The API no longer knows the request (another page's token, or data erased): say so rather than wait.
+  if (s === null) return <ErrorText>{t('requestNotFound')}</ErrorText>;
   if (!s || s.status === 'pending') {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -74,7 +76,7 @@ export function BookingPage({ org, type }: { org: string; type: string }) {
   const [form, setForm] = useState({ name: '', email: '', phone: '', note: '' });
   const [token, setToken] = useState<string | null>(null);
   const path = `/api/booking/${encodeURIComponent(org)}/${encodeURIComponent(type)}`;
-  const range = weekRange(now, week);
+  const range = weekRange(now, week, zone);
   const page = useQuery({
     queryKey: ['booking-page', path, range.from],
     queryFn: () => call<Page>(`${path}?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`),
@@ -89,7 +91,7 @@ export function BookingPage({ org, type }: { org: string; type: string }) {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!slot) return;
+    if (!slot || request.isPending) return;
     request.mutate({ startsAt: slot.start, name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() || null, note: form.note.trim() || null, timeZone: zone });
   };
   const again = () => {

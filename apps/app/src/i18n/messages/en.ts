@@ -436,6 +436,7 @@ export const en = {
     taken: 'Sorry, someone just booked this time.',
     unavailable: 'Sorry, this time is no longer offered.',
     pickAnother: 'Pick another time',
+    requestNotFound: 'This booking request was not found; reload the page and book again.',
   },
   eventTypes: {
     title: 'Event types',

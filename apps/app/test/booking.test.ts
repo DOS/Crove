@@ -22,9 +22,12 @@ describe('booking page helpers', () => {
     expect(dayLabel('2026-11-02', 'vi')).toContain('02/11/2026');
   });
 
-  it('reads one week at a time', () => {
+  it('reads one week at a time, from local midnight to local midnight', () => {
+    // 10:00 UTC is 17:00 on 24 October in Vietnam.
     const now = Date.parse('2026-10-24T10:00:00.000Z');
-    expect(weekRange(now, 0)).toEqual({ from: '2026-10-24T10:00:00.000Z', to: '2026-10-31T10:00:00.000Z' });
-    expect(weekRange(now, 2).from).toBe('2026-11-07T10:00:00.000Z');
+    expect(weekRange(now, 0, 'Asia/Ho_Chi_Minh')).toEqual({ from: '2026-10-23T17:00:00.000Z', to: '2026-10-30T17:00:00.000Z' });
+    expect(weekRange(now, 2, 'Asia/Ho_Chi_Minh').from).toBe('2026-11-06T17:00:00.000Z');
+    // Berlin leaves summer time on 25 October: the week starts at +2 and ends at +1.
+    expect(weekRange(now, 0, 'Europe/Berlin')).toEqual({ from: '2026-10-23T22:00:00.000Z', to: '2026-10-30T23:00:00.000Z' });
   });
 });
