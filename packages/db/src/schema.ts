@@ -586,9 +586,17 @@ export type CrmEventTypeTable = Refine<G.CrmEventTypeTable, { location_kind: Gen
 // Bookings of the public booking page (#1318): requested, then confirmed or refused by the worker.
 export const BOOKING_STATUSES = ['pending', 'confirmed', 'refused', 'cancelled'] as const;
 export const BOOKING_REFUSALS = ['taken', 'unavailable'] as const;
+// A visitor's ask from a manage link (#1319), and the worker's answer to it.
+export const BOOKING_MANAGE_ACTIONS = ['cancel', 'move'] as const;
+export const BOOKING_MANAGE_OUTCOMES = ['cancelled', 'moved', 'taken', 'unavailable'] as const;
 export type CrmBookingTable = Refine<
   G.CrmBookingTable,
-  { status: Generated<(typeof BOOKING_STATUSES)[number]>; refusal: (typeof BOOKING_REFUSALS)[number] | null }
+  {
+    status: Generated<(typeof BOOKING_STATUSES)[number]>;
+    refusal: (typeof BOOKING_REFUSALS)[number] | null;
+    manage_action: (typeof BOOKING_MANAGE_ACTIONS)[number] | null;
+    manage_outcome: (typeof BOOKING_MANAGE_OUTCOMES)[number] | null;
+  }
 >;
 
 type Refined = Tables<{

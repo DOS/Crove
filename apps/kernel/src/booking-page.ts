@@ -10,9 +10,12 @@ import {
   DEFAULT_WORKING_HOURS,
   freeSlots,
   isTimeZone,
+  zBookingManage,
+  zBookingManageAsk,
   zBookingRequest,
   zBookingStatus,
   zonedDate,
+  type BookingManage,
   type BookingPage,
   type BookingStatus,
   type WorkingHours,
@@ -152,4 +155,44 @@ export async function bookingStatus(runtime: Runtime, org: string, type: string,
     endsAt: new Date(String((row as { endsAt: string }).endsAt)).toISOString(),
   });
   return status;
+}
+
+const iso = (value: unknown) => new Date(String(value)).toISOString();
+
+/** The booking a manage token names on this page (#1319), or null when it names none. */
+export async function bookingManageView(runtime: Runtime, org: string, type: string, body: unknown): Promise<BookingManage | null> {
+  const s = slugs(org, type);
+  const parsed = z.strictObject({ manage: z.string().max(100) }).safeParse(body);
+  if (!parsed.success) return null;
+  const row = await runtime.orgless(async (db) => {
+    const { rows } = await sql<{ view: Record<string, unknown> | null }>`SELECT crove_crm.booking_manage_view(${s.org}, ${s.type}, ${parsed.data.manage}) AS view`.execute(db);
+    return rows[0]?.view ?? null;
+  });
+  if (!row) return null;
+  return zBookingManage.parse({ ...row, startsAt: iso(row.startsAt), endsAt: iso(row.endsAt) });
+}
+
+/**
+ * A visitor's ask from a manage link: cancel the booking, or move it to another time. Returns the ask's id, which the
+ * page follows with bookingManageView, or null when the link names nothing here or no longer works.
+ */
+export async function bookingManageAsk(runtime: Runtime, org: string, type: string, body: unknown): Promise<{ requestId: string } | null> {
+  const s = slugs(org, type);
+  const parsed = zBookingManageAsk.safeParse(body);
+  if (!parsed.success) throw invalid();
+  const ask = parsed.data;
+  const startsAt = ask.action === 'move' ? new Date(ask.startsAt) : null;
+  const id = await runtime.orgless(async (db) => {
+    try {
+      const { rows } = await sql<{ id: string | null }>`
+        SELECT crove_crm.booking_manage_request(${s.org}, ${s.type}, ${ask.manage}, ${ask.action}, ${startsAt}) AS id`.execute(db);
+      return rows[0]?.id ?? null;
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      if (code === '22023') throw invalid();
+      if (code === '55000') throw new DomainError('BOOKING_TIME_UNAVAILABLE', 409, 'Khung giờ này không còn nhận đặt lịch');
+      throw error;
+    }
+  });
+  return id ? { requestId: id } : null;
 }

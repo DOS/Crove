@@ -76,6 +76,7 @@ export function createSmtpProvider(options: SmtpOptions): MailProvider {
           html: mail.html,
           ...(mail.messageId ? { messageId: mail.messageId } : {}),
           ...(mail.replyTo ? { replyTo: mail.replyTo } : {}),
+          ...(mail.attachments?.length ? { attachments: mail.attachments.map((a) => ({ filename: a.filename, contentType: a.contentType, content: a.content })) } : {}),
           // The From header stays; only the envelope sender, where bounce reports go, changes.
           ...(mail.returnPath ? { envelope: { from: mail.returnPath, to: mail.to } } : {}),
         });

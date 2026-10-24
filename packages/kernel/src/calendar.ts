@@ -55,14 +55,18 @@ export async function workingHoursOf(ctx: Reader, userId: string): Promise<{ hou
   };
 }
 
-/** A member's busy time that overlaps [from, to): every active event, whatever its kind. */
-export async function busyOf(ctx: Reader, userId: string, from: Date, to: Date): Promise<Interval[]> {
+/**
+ * A member's busy time that overlaps [from, to): every active event, whatever its kind, but `exceptEventId` (a booking
+ * being moved does not stand in its own way).
+ */
+export async function busyOf(ctx: Reader, userId: string, from: Date, to: Date, exceptEventId?: string): Promise<Interval[]> {
   const rows = await ctx.trx
     .selectFrom('crove_kernel.calendar_event')
     .select(['starts_at', 'ends_at'])
     .where('org_id', '=', ctx.orgId)
     .where('user_id', '=', userId)
     .where('status', '=', 'active')
+    .$if(exceptEventId !== undefined, (q) => q.where('id', '<>', exceptEventId as string))
     .where('starts_at', '<', to)
     .where('starts_at', '>', new Date(from.getTime() - EVENT_MAX_MS))
     .where('ends_at', '>', from)
