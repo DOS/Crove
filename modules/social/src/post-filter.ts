@@ -1,4 +1,4 @@
-// Which posts the Social lists show for a filter (#574, #579, #1081): the one place social.post.list and the
+// Which posts the Social lists show for a filter (#574, #579, #1081, #1300): the one place social.post.list and the
 // multi-client home's figures (#1261, client-overview.ts) decide it, so a count on the home equals the list it opens.
 import { sql } from 'kysely';
 import type { QueryContext } from '@crove/kernel-runtime';

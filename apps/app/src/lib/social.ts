@@ -240,7 +240,7 @@ export function parseSocialSearch(search: Record<string, unknown>): SocialSearch
 export type ViewFilters = Omit<SocialSearch, 'date' | 'tab'> & { tab?: (typeof SOCIAL_VIEW_TABS)[number] };
 export function viewFiltersOf(search: SocialSearch): ViewFilters {
   const out = Object.fromEntries(Object.entries(search).filter(([k, v]) => k !== 'date' && k !== 'tab' && v !== undefined && v !== '')) as ViewFilters;
-  if (search.tab && (SOCIAL_VIEW_TABS as readonly string[]).includes(search.tab)) out.tab = search.tab as ViewFilters['tab'];
+  if (search.tab && (SOCIAL_VIEW_TABS as readonly string[]).includes(search.tab)) out.tab = search.tab as NonNullable<ViewFilters['tab']>;
   return out;
 }
 

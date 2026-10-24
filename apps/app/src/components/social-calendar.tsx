@@ -18,7 +18,7 @@
 // post's planned time through social.post.update), and the result names the channels that stayed and why. A day with
 // more chips than it shows has a "+N" button opening a dialog with every post and channel of the day, their times and
 // statuses, each with its link, its "Đặt ngày" or slot, and a tick for the bulk bar. A drop while a move is still
-// running is refused and said so (#1044).
+// running is refused and said so (#1044). The Social home keeps the month or week and its day in the address (#1300).
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
