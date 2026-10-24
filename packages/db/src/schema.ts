@@ -580,7 +580,12 @@ export type SocialPostApprovalTable = Refine<
   }
 >;
 
+// The crm module (issue #1314): event types of booking pages.
+export const EVENT_TYPE_LOCATION_KINDS = ['in_person', 'phone', 'video'] as const;
+export type CrmEventTypeTable = Refine<G.CrmEventTypeTable, { location_kind: Generated<(typeof EVENT_TYPE_LOCATION_KINDS)[number]> }>;
+
 type Refined = Tables<{
+  'crove_crm.event_type': CrmEventTypeTable;
   'crove_kernel.calendar_event': CalendarEventTable;
   'crove_kernel.legal_entity': LegalEntityTable;
   'crove_kernel.tax_obligation_done': TaxObligationDoneTable;
