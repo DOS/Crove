@@ -11,7 +11,7 @@ import { catalog } from '../src/i18n/runtime.ts';
 
 vi.mock('../src/lib/api.ts', () => ({
   client: { social: { media: { list: () => Promise.resolve({ items: [], more: false }) } } },
-  orpc: {},
+  orpc: { social: { posts: { aiPhotos: { queryOptions: () => ({ queryKey: ['ai-photos'], queryFn: () => Promise.resolve({ enabled: true }) }) } } } },
   queryClient: null,
   errorMessage: (e: unknown) => String(e),
   fetchFile: () => Promise.reject(new Error('not fetched')),
@@ -26,7 +26,7 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-const { AiPhotoPicker, DraftFromPhotoLink, aiDraftInput, togglePhoto, usablePhoto } = await import('../src/components/social-ai-photos.tsx');
+const { AiPhotoPicker, DraftFromPhotoLink, aiDraftInput, togglePhoto, unlisted, usablePhoto } = await import('../src/components/social-ai-photos.tsx');
 
 const jpeg = { fileId: 'f-1', altText: '', mime: 'image/jpeg', sizeBytes: 200_000, filename: 'banh-mi.jpg' };
 const png = { fileId: 'f-2', altText: '', mime: 'image/png', sizeBytes: 300_000, filename: 'cua-tiem.png' };
@@ -70,6 +70,16 @@ describe('the AI photo picker', () => {
     expect(html).toContain('Chỉ chọn được tối đa 4 ảnh');
     expect(html).toMatch(/<button[^>]*aria-label="Chọn ảnh them.jpg"[^>]*disabled=""/);
     expect(html).not.toMatch(/<button[^>]*aria-label="Bỏ chọn ảnh banh-mi.jpg"[^>]*disabled=""/);
+  });
+
+  it('shows a photo picked that no list shows, such as one from ?photo= past the first page, so it can be un-picked (#1196)', () => {
+    const html = wrap(<AiPhotoPicker postMedia={[jpeg]} picked={['f-1', 'f-77']} disabled={false} onChange={() => undefined} />);
+    expect(html).toContain('Ảnh khác đã chọn');
+    expect(html).toContain('aria-label="Bỏ chọn ảnh số 2"');
+    expect(html).not.toContain('aria-label="Bỏ chọn ảnh số 1"');
+    expect(wrap(<AiPhotoPicker postMedia={[jpeg]} picked={['f-1']} disabled={false} onChange={() => undefined} />)).not.toContain('Ảnh khác đã chọn');
+    expect(wrap(<AiPhotoPicker postMedia={[]} picked={['f-77']} disabled={false} onChange={() => undefined} />, 'en')).toContain('aria-label="Unpick the image number 1"');
+    expect(unlisted(['a', 'b', 'c'], ['b'])).toEqual(['a', 'c']);
   });
 
   it('keeps at most four photos in the order picked, and takes one out on a second click', () => {

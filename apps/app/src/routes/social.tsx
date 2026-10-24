@@ -10,7 +10,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
-import { bestTimes, engagementRateOfBases, type PublishedSample } from '@crove/mod-social/contract';
+import { AGENDA_STATUSES, bestTimes, engagementRateOfBases, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { PEXELS_URL, StockCredit, StockPhotoSearch, pexelsHref, useStockPhotosEnabled } from '../components/social-stock-photos.tsx';
@@ -24,7 +24,7 @@ import { PostLabels, useLabels, type SocialLabel } from '../components/social-la
 import { isOverdue } from '../lib/social-assign.ts';
 import { BulkBar } from '../components/social-bulk.tsx';
 import { DraftsFromMediaPanel } from '../components/social-bulk-drafts.tsx';
-import { DraftFromPhotoLink } from '../components/social-ai-photos.tsx';
+import { DraftFromPhotoLink, useAiPhotos } from '../components/social-ai-photos.tsx';
 import { DRAFTS_FROM_MEDIA_MAX, togglePick } from '../lib/social-bulk-drafts.ts';
 import { PlanFromPosts, PlanReviewCard } from '../components/social-plan-review.tsx';
 import { ReportLinks } from '../components/social-report-links.tsx';
@@ -328,6 +328,8 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const picker = useRef<HTMLInputElement>(null);
   // Free photos from Pexels (#1106), for those who may add to the library, when the server offers them.
   const stockEnabled = useStockPhotosEnabled();
+  // *Soạn bài từ ảnh này* (#1191) where the server's model reads images (#1196).
+  const aiPhotos = useAiPhotos(canWrite && getConfig().aiEnabled === true);
   const [stock, setStock] = useState(false);
   const library = useLibrary(search, tag);
   const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
@@ -452,7 +454,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
                   </a>
                 </div>
               )}
-              {canWrite && getConfig().aiEnabled === true && <DraftFromPhotoLink slug={slug} item={open} />}
+              {canWrite && aiPhotos && <DraftFromPhotoLink slug={slug} item={open} />}
               <MediaTagEditor key={`${open.fileId}:${open.tags.join('\n')}`} fileId={open.fileId} tags={open.tags} canWrite={canWrite} />
               <p className="text-sm font-medium text-muted-foreground">{t('libraryUsageTitle')}</p>
               <Usage fileId={open.fileId} slug={slug} />
@@ -490,7 +492,7 @@ function Agenda({
   const f = useFormat();
   // One line per variant going out, grouped by local day.
   const items = posts
-    .flatMap((post) => post.variants.filter((v) => ['scheduled', 'paused', 'publishing', 'processing'].includes(v.status) && v.effectiveAt).map((v) => ({ post, v })))
+    .flatMap((post) => post.variants.filter((v) => (AGENDA_STATUSES as readonly string[]).includes(v.status) && v.effectiveAt).map((v) => ({ post, v })))
     .sort((a, b) => Date.parse(a.v.effectiveAt as string) - Date.parse(b.v.effectiveAt as string));
   if (items.length === 0) return <Empty title={t('agendaEmpty')} hint={t('agendaEmptyHint')} />;
   const days = new Map<string, Array<{ post: Post; v: Variant }>>();

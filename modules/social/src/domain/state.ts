@@ -23,6 +23,10 @@ export const VARIANT_STATUSES = [
 ] as const;
 export type VariantStatus = (typeof VARIANT_STATUSES)[number];
 
+// The variants the Upcoming agenda shows (a line each, at its time): set to go out, or on their way. The multi-client
+// home's "next 7 days" counts the same (#1261).
+export const AGENDA_STATUSES = ['scheduled', 'paused', 'publishing', 'processing'] as const satisfies readonly VariantStatus[];
+
 export const POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
 export type PostStatus = (typeof POST_STATUSES)[number];
 

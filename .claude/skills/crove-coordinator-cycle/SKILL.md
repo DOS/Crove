@@ -59,10 +59,12 @@ Keep at most 3 issues `In progress` across all agents, at least 2 of them in the
    3. Read the comments again; if someone else claimed first, pick another issue.
 5. Start the worker:
    - Use `start_session` with `initiation: "user_asked"`, `context: "fresh"`, `use_worktree: true` and `wake_when_done: true`, and the brief in section 5.
-   - The app allows this only on the owner's own turn, or on a side-session event chained from it. On a `/loop` or other automated turn the call is refused. If it is refused:
-     1. Release the claim at once: set Status back to `Backlog` and comment `Claim released: the worker could not start on an automated turn`.
-     2. Propose the worker with `initiation: "own_initiative"`.
-     3. Tell the owner one card is waiting. Do not retry.
+   - The app allows this only on the owner's own turn, or on a side-session event chained from it. It refuses on a `/loop` or other automated turn, and while a phone is attached over Remote Control it cannot even show a card. If it is refused, do not wait for the owner: run the same worker as a background subagent instead.
+     - Use the Agent tool with `run_in_background: true`, `isolation: "worktree"` and the same brief.
+     - The subagent's completion notification wakes the coordinator.
+     - For a protected-path PR, the subagent ends with the READY line. The coordinator reviews, then resumes it with SendMessage (`approved, merge head <sha>`, or the findings to fix).
+     - The claim comment names the subagent instead of a session.
+   - Release the claim only if neither route can start (comment `Claim released: <reason>`, Status back to `Backlog`). Then propose a card with `initiation: "own_initiative"`.
 
 ## 4. Log and end the cycle
 
@@ -73,8 +75,18 @@ Keep at most 3 issues `In progress` across all agents, at least 2 of them in the
    - started or proposed;
    - blocked on people;
    - next check.
-2. Once a day, or when something new needs a person, send the owner a short Vietnamese report following the "Writing to the owner" rules in `AGENTS.md`: what each open item is, who must act, your recommendation, and what happens without an answer.
-3. End the turn. The next cycle comes from a worker's wake-up, the owner, or the `/loop` fallback (self-paced, 30 to 60 minutes when workers run, longer when idle).
+2. Once a day, send the owner one short Vietnamese digest following the "Writing to the owner" rules in `AGENTS.md`: what merged, what runs, and every item waiting on a person, each with who must act, your recommendation and what happens without an answer. Do not send separate questions in between, and never stop work to wait for an answer; carry on with everything else. Alert at once only for a real high or critical security finding or a broken `main`.
+3. End the turn. The next cycle comes from a worker's wake-up, the owner, or the `/loop` fallback: self-paced, 30 to 60 minutes while workers run, 60 minutes when idle. Never stop the loop because the board is empty. An idle cycle still audits the board, and once a day it re-runs the derive step (section 3, item 2), since owner decisions, merges and new plan text unlock work.
+
+## Decide, don't ask
+
+The owner does not want to be asked what the coordinator can decide. Decide these yourself, and write each decision and its reason in the issue or PR:
+- milestones and priorities by the `AGENTS.md` rules, triage, and board hygiene;
+- which issue goes next and to which worker, and splitting work into PRs;
+- technical and design choices inside the plans, and review verdicts;
+- syncing plan or status text with what `main` already does, and follow-up placement.
+
+Ask the owner only for the stop cases in `AGENTS.md`: losing or rewriting data; weakening tenancy, authentication, approval or ledger rules; going against a written decision or accepted ADR; new spending, production or credentials; anything a person must sign off. Collect those into the daily digest.
 
 After a compaction, run section 1 again before acting: never assume that an action you remember starting finished (a merge, a claim, a message), since compaction is where background agents have lost or redone work. A coordinator conversation gets long. Once it has been compacted twice, or after a day, tell the owner to start a fresh coordinator session that runs this skill. State lives on GitHub, so nothing is lost.
 

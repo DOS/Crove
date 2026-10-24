@@ -342,7 +342,7 @@ export function VatPage() {
           <section>
             <h2 className="mb-2 text-base font-semibold text-foreground">{t('inputTitle', { count: f.number(data.input.documents.length) })}</h2>
             {data.input.documents.length === 0 ? (
-              <Empty title={t('emptyInput')} />
+              <Empty title={t('emptyInput')} hint={t('emptyInputHint')} />
             ) : (
               <InvoiceTable invoices={data.input.documents} partyLabel={t('columns.seller')} />
             )}
