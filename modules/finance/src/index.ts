@@ -96,6 +96,7 @@ export {
 export { CHIEF_ACCOUNTANT_TEMPLATE, chiefAccountantReview, financeAgentPrograms, reviewText } from './agent.ts';
 export * from './domain/money.ts';
 export * from './domain/ledger.ts';
+export { sourceRevisionError } from './ledger.ts';
 export * from './domain/tt133-reports.ts';
 export * from './domain/vat-return.ts';
 export * from './domain/vat-01gtgt-xml.ts';

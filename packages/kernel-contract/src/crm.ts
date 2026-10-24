@@ -49,3 +49,39 @@ export type EventType = z.infer<typeof zEventType>;
 
 export const zEventTypeUpdate = zEventTypeInput.extend({ eventTypeId: zId });
 export const zEventTypeSetActive = z.strictObject({ eventTypeId: zId, active: z.boolean() });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The public booking page (issue #1318): what a visitor sees and sends. The page shows free slots only.
+
+export const zBookingPage = z.strictObject({
+  orgName: z.string(),
+  eventType: z.strictObject({
+    slug: z.string(),
+    title: z.string(),
+    description: z.string().nullable(),
+    durationMin: z.number().int(),
+    locationKind: z.enum(EVENT_TYPE_LOCATION_KINDS),
+  }),
+  slots: z.array(z.strictObject({ start: z.string(), end: z.string() })),
+});
+export type BookingPage = z.infer<typeof zBookingPage>;
+
+export const zBookingRequest = z.strictObject({
+  startsAt: z.iso.datetime({ offset: true }),
+  name: z.string().trim().min(1).max(100),
+  email: z.email().max(254),
+  phone: z.string().trim().max(30).nullable().optional(),
+  note: z.string().trim().max(1000).nullable().optional(),
+  timeZone: z.string().min(1).max(64),
+});
+export type BookingRequest = z.infer<typeof zBookingRequest>;
+
+export const BOOKING_STATUSES = ['pending', 'confirmed', 'refused', 'cancelled'] as const;
+export const zBookingStatus = z.strictObject({
+  status: z.enum(BOOKING_STATUSES),
+  refusal: z.enum(['taken', 'unavailable']).nullable(),
+  startsAt: z.string(),
+  endsAt: z.string(),
+  timeZone: z.string(),
+});
+export type BookingStatus = z.infer<typeof zBookingStatus>;

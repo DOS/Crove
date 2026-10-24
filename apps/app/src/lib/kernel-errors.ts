@@ -106,6 +106,10 @@ export const KERNEL_ERROR_CODES = [
   'EVENT_TYPE_SLUG_TAKEN',
   'EVENT_TYPE_HOST_FORBIDDEN',
   'EVENT_TYPE_HOST_INVALID',
+  // The public booking page (#1318).
+  'BOOKING_PAGE_NOT_FOUND',
+  'BOOKING_REQUEST_NOT_FOUND',
+  'BOOKING_TIME_UNAVAILABLE',
   // Legal entities (#1278).
   'INVALID_LEGAL_ENTITY_NAME',
   'LEGAL_ENTITY_NOT_FOUND',
@@ -177,6 +181,11 @@ export const KERNEL_ERROR_CODES = [
   'VOUCHER_NOT_BANK',
   // An amount with more decimals than the book currency uses (#1282).
   'AMOUNT_SCALE',
+  // Source revisions of journal entries (#1283).
+  'IDEMPOTENCY_CONFLICT',
+  'REVISION_OUT_OF_ORDER',
+  'SOURCE_STILL_POSTED',
+  'REVERSAL_REVISION',
   // A VND invoice with an amount below one dong; the rounding policy is the accountant's decision (#1308).
   'AMOUNT_BELOW_DONG',
   // Period lock (#329).

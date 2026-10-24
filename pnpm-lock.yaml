@@ -592,12 +592,18 @@ importers:
       '@crove/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@crove/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
       '@crove/kernel-contract':
         specifier: workspace:*
         version: link:../../packages/kernel-contract
       '@crove/kernel-runtime':
         specifier: workspace:*
         version: link:../../packages/kernel-runtime
+      kysely:
+        specifier: 'catalog:'
+        version: 0.29.6
       zod:
         specifier: 'catalog:'
         version: 4.6.7
