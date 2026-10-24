@@ -345,6 +345,8 @@ const AUDITED: Record<string, ActivityKind> = {
   'social.post.set_evergreen': 'evergreen',
   'social.post.recurrence_set': 'recurrence',
   'social.post.recurrence_clear': 'recurrence',
+  // The texts its copies rotate through (#1260).
+  'social.post.set_text_variations': 'edited',
   // A bulk edit (#1057) runs these once per post, so each post's timeline shows its own change.
   'social.post.set_labels': 'labeled',
   'social.post.assign': 'assigned',

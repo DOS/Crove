@@ -236,6 +236,15 @@ export function InboxPage() {
   const bulkRefused = bulk?.progress.results.flatMap((r) => (r.outcome === 'refused' ? [r] : [])) ?? [];
   const bulkNotSent = bulk ? bulk.total - bulk.progress.results.length : 0;
 
+  const dropTarget = {
+    onDragOver: (e: DragEvent) => {
+      e.preventDefault();
+      setDragging(true);
+    },
+    onDragLeave: () => setDragging(false),
+    onDrop,
+  };
+
   return (
     <>
       <PageHeader
@@ -261,44 +270,66 @@ export function InboxPage() {
         }}
       />
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      {/* The full welcome until the first file arrives; then one row (#1268), so the proposals sit near the top. */}
+      {(files.data?.length ?? 0) > 0 ? (
         <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
+          {...dropTarget}
           className={cn(
-            'flex flex-col items-center justify-center rounded-xl border border-dashed px-6 py-8 text-center transition-colors lg:col-span-2',
+            'flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-dashed px-4 py-3 transition-colors',
             dragging ? 'border-ring bg-primary/10' : 'bg-card',
           )}
         >
-          <p className="text-sm font-medium text-foreground">{t('dropHere')}</p>
-          <p className="mt-1 text-xs text-subtle-foreground">{config.aiEnabled ? t('formatsAll') : t('formatsXml')}</p>
-          {!config.aiEnabled && (
-            <p className="mt-3 text-xs text-warning">{t('noAi')}</p>
-          )}
-          <p className="mt-1 text-xs text-subtle-foreground">{t('formatsZip')}</p>
-        </div>
-        <Card className="block p-4">
-          <p className="text-sm font-medium text-muted-foreground">{t('forwardTitle')}</p>
-          {org.isLoading ? (
-            <div className="mt-3">
-              <Spinner />
-            </div>
-          ) : org.data?.inboundAddress ? (
-            <>
-              <p className="mt-2 font-mono text-sm break-all text-foreground">{org.data.inboundAddress}</p>
-              <Button variant="outline" size="lg" className="mt-3" onClick={() => void navigator.clipboard.writeText(org.data?.inboundAddress ?? '')}>
+          <div className="min-w-0">
+            {/* A phone has nothing to drag from: it keeps the formats and the header's upload button. */}
+            <p className="hidden text-sm text-foreground sm:block">{t('dropHereCompact')}</p>
+            <p className="text-xs text-subtle-foreground">{config.aiEnabled ? t('formatsAll') : t('formatsXml')}</p>
+            {!config.aiEnabled && <p className="text-xs text-warning">{t('noAi')}</p>}
+          </div>
+          {org.data?.inboundAddress && (
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:ml-auto">
+              <span className="text-xs text-subtle-foreground">{t('forwardTo')}</span>
+              <span className="min-w-0 font-mono text-xs break-all text-foreground">{org.data.inboundAddress}</span>
+              <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(org.data?.inboundAddress ?? '')}>
                 {t('copyAddress')}
               </Button>
-            </>
-          ) : (
-            <p className="mt-2 text-sm text-muted-foreground">{t('noInbound')}</p>
+            </div>
           )}
-        </Card>
-      </div>
+        </div>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div
+            {...dropTarget}
+            className={cn(
+              'flex flex-col items-center justify-center rounded-xl border border-dashed px-6 py-8 text-center transition-colors lg:col-span-2',
+              dragging ? 'border-ring bg-primary/10' : 'bg-card',
+            )}
+          >
+            <p className="text-sm font-medium text-foreground">{t('dropHere')}</p>
+            <p className="mt-1 text-xs text-subtle-foreground">{config.aiEnabled ? t('formatsAll') : t('formatsXml')}</p>
+            {!config.aiEnabled && (
+              <p className="mt-3 text-xs text-warning">{t('noAi')}</p>
+            )}
+            <p className="mt-1 text-xs text-subtle-foreground">{t('formatsZip')}</p>
+          </div>
+          <Card className="block p-4">
+            <p className="text-sm font-medium text-muted-foreground">{t('forwardTitle')}</p>
+            {org.isLoading ? (
+              <div className="mt-3">
+                <Spinner />
+              </div>
+            ) : org.data?.inboundAddress ? (
+              <>
+                <p className="mt-2 font-mono text-sm break-all text-foreground">{org.data.inboundAddress}</p>
+                <Button variant="outline" size="lg" className="mt-3" onClick={() => void navigator.clipboard.writeText(org.data?.inboundAddress ?? '')}>
+                  {t('copyAddress')}
+                </Button>
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-muted-foreground">{t('noInbound')}</p>
+            )}
+          </Card>
+        </div>
+      )}
 
       <IntakePanel intake={intake} />
       {config.modules.includes('finance') && <OpenBankLines slug={slug} />}

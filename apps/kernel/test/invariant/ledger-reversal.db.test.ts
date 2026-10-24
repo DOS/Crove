@@ -127,9 +127,9 @@ suite('journal reversal on PostgreSQL (#138)', () => {
     });
 
   const SALE: Line[] = [
-    { line_no: 1, account_code: '6422', debit: '100.5', credit: '0', memo: 'Văn phòng phẩm' },
-    { line_no: 2, account_code: '1331', debit: '10.05', credit: '0', memo: null },
-    { line_no: 3, account_code: '331', debit: '0', credit: '110.55', party_id: randomUUID(), memo: 'Phải trả' },
+    { line_no: 1, account_code: '6422', debit: '100500', credit: '0', memo: 'Văn phòng phẩm' },
+    { line_no: 2, account_code: '1331', debit: '10050', credit: '0', memo: null },
+    { line_no: 3, account_code: '331', debit: '0', credit: '110550', party_id: randomUUID(), memo: 'Phải trả' },
   ];
 
   beforeAll(async () => {
@@ -218,9 +218,9 @@ suite('journal reversal on PostgreSQL (#138)', () => {
     expect(net.every((r) => /^0(\.0+)?$/.test(r.net))).toBe(true);
     // Line by line: same number, account, party and memo, debit and credit swapped.
     expect(lines).toEqual([
-      { line_no: 1, account_code: '6422', debit: '0.0000', credit: '100.5000', party_id: null, memo: 'Văn phòng phẩm' },
-      { line_no: 2, account_code: '1331', debit: '0.0000', credit: '10.0500', party_id: null, memo: null },
-      { line_no: 3, account_code: '331', debit: '110.5500', credit: '0.0000', party_id: SALE[2]?.party_id, memo: 'Phải trả' },
+      { line_no: 1, account_code: '6422', debit: '0.0000', credit: '100500.0000', party_id: null, memo: 'Văn phòng phẩm' },
+      { line_no: 2, account_code: '1331', debit: '0.0000', credit: '10050.0000', party_id: null, memo: null },
+      { line_no: 3, account_code: '331', debit: '110550.0000', credit: '0.0000', party_id: SALE[2]?.party_id, memo: 'Phải trả' },
     ]);
     expect(entry).toEqual({ reverses_entry_id: soloEntry, source_type: 'kernel.proposal', source_id: proposalId, created_by: users.solo, entry_date: '2026-10-15' });
     expect(proposal).toMatchObject({
@@ -463,7 +463,7 @@ suite('journal reversal on PostgreSQL (#138)', () => {
   it('holds every writer to the mirror rules in the database', async () => {
     const entry = await original(users.solo, solo, SALE);
     // Not a mirror: an amount changed (the pair still balances, so only the mirror check refuses it).
-    const changed = mirror(SALE).map((l) => (l.line_no === 1 ? { ...l, credit: '90.5' } : l.line_no === 3 ? { ...l, debit: '100.55' } : l));
+    const changed = mirror(SALE).map((l) => (l.line_no === 1 ? { ...l, credit: '90500' } : l.line_no === 3 ? { ...l, debit: '100550' } : l));
     await expect(asApp(users.solo, solo, (c) => postSql(c, '2026-10-15', changed, entry))).rejects.toThrow(/does not mirror the entry it reverses/);
     // Not a mirror: another account, or a line missing (the rest rebalanced).
     const moved = mirror(SALE).map((l) => (l.line_no === 2 ? { ...l, account_code: '6422' } : l));
@@ -581,8 +581,8 @@ suite('journal reversal on PostgreSQL (#138)', () => {
   it('reverses a large entry once, checked once per entry', async () => {
     const lines: Line[] = [];
     for (let i = 1; i <= 400; i += 2) {
-      lines.push({ line_no: i, account_code: '6422', debit: `${i}.25`, credit: '0', memo: `dòng ${i}` });
-      lines.push({ line_no: i + 1, account_code: '331', debit: '0', credit: `${i}.25`, memo: null });
+      lines.push({ line_no: i, account_code: '6422', debit: `${i}250`, credit: '0', memo: `dòng ${i}` });
+      lines.push({ line_no: i + 1, account_code: '331', debit: '0', credit: `${i}250`, memo: null });
     }
     const entry = await original(users.solo, solo, lines);
     const { proposalId } = await request(solo, users.solo, { entryId: entry });

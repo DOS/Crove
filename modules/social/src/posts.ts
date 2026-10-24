@@ -70,6 +70,8 @@ import { planExportCommands } from './plan-export.ts';
 import { evergreenCommands } from './evergreen.ts';
 import { recurringCommands } from './recurring.ts';
 import { parseRecurrence, type Recurrence } from './domain/recurrence.ts';
+import { cursorOf, parseTextVariations, type TextVariation } from './domain/text-variations.ts';
+import { textVariationCommands } from './text-variations.ts';
 import { commentCallsOf, commentCommands, commentStatus, type CommentStatus } from './comments.ts';
 import { threadCallsOf, threadCommands, threadStatus } from './thread.ts';
 import { autoReplyCommands } from './auto-reply.ts';
@@ -1316,6 +1318,9 @@ export interface PostView {
   recurrence: Recurrence | null;
   recurrenceCount: number;
   recurrenceSourceId: string | null;
+  // Its text variations, and the position of the one its next evergreen or recurring copy takes (#1260).
+  textVariations: TextVariation[];
+  textVariationNext: number;
   timeZone: string;
   scheduledAt: string | null;
   revision: number;
@@ -1473,6 +1478,7 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
     .filter((p): p is (typeof posts)[number] => p !== undefined)
     .map((p) => {
       const b: PostContent = { body: p.body, title: p.title, linkUrl: p.link_url, media: mediaByPost.get(p.id) ?? [] };
+      const textVariations = parseTextVariations(p.text_variations);
       return {
         id: p.id,
         body: p.body,
@@ -1484,6 +1490,8 @@ async function viewPosts(ctx: QueryContext, requested: string[], options: { bann
         recurrence: parseRecurrence(p.recurrence),
         recurrenceCount: p.recurrence_count,
         recurrenceSourceId: p.recurrence_source_id,
+        textVariations,
+        textVariationNext: cursorOf(textVariations.length, p.text_variation_next),
         timeZone: p.time_zone,
         scheduledAt: iso(p.scheduled_at),
         revision: p.revision,
@@ -1922,6 +1930,7 @@ export const socialCommands = [
   ...planExportCommands,
   ...evergreenCommands,
   ...recurringCommands,
+  ...textVariationCommands,
   ...commentCommands,
   ...threadCommands,
   ...autoReplyCommands,
