@@ -29,6 +29,7 @@ const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.social
 
 function useLine() {
   const t = useTranslations('social.notifications');
+  const f = useFormat();
   return (n: NotificationItem): string => {
     const actor = n.actorName ?? t('someone');
     const provider = n.detail.provider ? providerName(n.detail.provider) : '';
@@ -70,6 +71,9 @@ function useLine() {
       // A bulk assignment (#1062): one item for all its posts.
       case 'assigned':
         return n.detail.count ? t('text.assigned_many', { actor, count: Number(n.detail.count) }) : t('text.assigned', { actor });
+      // An assigned post's due date a day away, or passed (#1359).
+      case 'assignment_due':
+        return t(n.detail.stage === 'overdue' ? 'text.assignment_overdue' : 'text.assignment_due_soon', { due: f.dateTime(n.detail.due ?? null) });
       // A mail only (#1104); never an item of the list.
       case 'weekly_digest':
         return t('digest');

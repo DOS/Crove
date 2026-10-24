@@ -1507,6 +1507,8 @@ export interface SocialPostTable {
   text_variation_next: Generated<number>;
   archived_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   archived_by: string | null;
+  due_soon_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  overdue_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.post_variant */
