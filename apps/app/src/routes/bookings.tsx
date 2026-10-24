@@ -1,7 +1,7 @@
 // The bookings screen (#1320, plan docs/plan/calendar.md step C5): the bookings of the public booking page, upcoming and
-// past. A member sees those of the event types they host; owners and admins may see the whole org's. The host (or an
-// owner or admin) cancels a booking, or moves it to another free slot of its type; the visitor is mailed with a new
-// link. Times show in the viewer's own zone.
+// past. A member sees those of the event types they host or that are on their calendar (a team type's, #1373); owners
+// and admins may see the whole org's. A host (or an owner or admin) cancels a booking, or moves it to another free slot
+// of its type; the visitor is mailed with a new link. Times show in the viewer's own zone; each row names its hosts.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 import { useState } from 'react';
@@ -88,6 +88,10 @@ export function BookingsPage() {
   const manager = org.data?.role === 'owner' || org.data?.role === 'admin';
   const bookings = useQuery({ ...orpc.crm.bookings.list.queryOptions({ input: { scope: manager ? scope : 'mine', period } }), enabled: org.data !== undefined });
   const now = Date.now();
+  const nameOf = (userId: string) => {
+    const m = org.data?.members.find((x) => x.userId === userId);
+    return m ? (m.displayName ?? m.email) : null;
+  };
 
   return (
     <div>
@@ -120,7 +124,15 @@ export function BookingsPage() {
           {bookings.data.map((b) => (
             <TableRow key={b.id} data-testid="booking-row">
               <TableCell className="px-4 text-sm">{whenOf({ start: b.startsAt, end: b.endsAt }, zone, locale)}</TableCell>
-              <TableCell className="px-4 text-sm">{b.eventType.title}</TableCell>
+              <TableCell className="px-4 text-sm">
+                <p>{b.eventType.title}</p>
+                <p className="text-xs text-muted-foreground">
+                  {b.hostUserIds
+                    .map(nameOf)
+                    .filter((n): n is string => n !== null)
+                    .join(', ')}
+                </p>
+              </TableCell>
               <TableCell className="px-4 text-sm">
                 <p className="font-medium text-foreground">{b.visitor.name ?? t('erased')}</p>
                 {b.visitor.email && <p className="text-xs text-muted-foreground">{b.visitor.email}</p>}

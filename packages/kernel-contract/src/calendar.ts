@@ -316,3 +316,22 @@ export function freeSlots(q: SlotQuery): Interval[] {
   }
   return slots;
 }
+
+/**
+ * The free slots of a team of hosts (#1373), from each host's own free slots: for `any` (round-robin), a slot any host
+ * offers; for `all` (collective), a slot every host offers, at the same start and end. Earliest first, no repeats.
+ */
+export function teamSlots(mode: 'any' | 'all', perHost: readonly (readonly Interval[])[]): Interval[] {
+  const key = (s: Interval) => `${s.start}:${s.end}`;
+  const [first, ...rest] = perHost;
+  if (!first) return [];
+  const others = rest.map((list) => new Set(list.map(key)));
+  const seen = new Map<string, Interval>();
+  for (const list of mode === 'all' ? [first] : perHost) {
+    for (const s of list) {
+      if (seen.has(key(s)) || (mode === 'all' && !others.every((set) => set.has(key(s))))) continue;
+      seen.set(key(s), { start: s.start, end: s.end });
+    }
+  }
+  return [...seen.values()].sort((a, b) => a.start - b.start || a.end - b.end);
+}

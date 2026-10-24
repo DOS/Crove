@@ -64,6 +64,8 @@ suite('crm event types on PostgreSQL (#1314)', () => {
     locationKind: 'video',
     locationValue: 'https://meet.example.test/ke-toan',
     hostUserId,
+    assignment: 'single',
+    coHostUserIds: [],
     ...over,
   });
 

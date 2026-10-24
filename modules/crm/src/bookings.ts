@@ -13,6 +13,11 @@
 //
 // Confirmations and moves of one host run one at a time (an advisory lock), so the slot check sees every earlier
 // booking; the exclusion constraint on crove_kernel.calendar_event stays the last line against any other writer.
+//
+// Team types (#1373, step C8): a round-robin booking lands on one free host of the type (the one with the fewest
+// upcoming bookings of it, ties by member id); a collective booking holds an event on every host's calendar, the
+// lead's (or the first host's still able to host) in calendar_event_id and the others in hold_event_ids. Hosts who
+// may no longer host (they left the org, or became viewers) are skipped. A cancel or a move acts on every held event.
 import { z } from 'zod';
 import { sql } from 'kysely';
 import { freeSlots, zBookingCancel, zBookingListQuery, zBookingMove, zId, zonedDate, zoneOffsetMs, type BookingItem, type Interval, type WorkingHours } from '@crove/kernel-contract';
@@ -27,8 +32,12 @@ export const BOOKING_MAIL_TEMPLATE = 'crm.booking';
 
 type Outcome = { bookingId: string; status: 'confirmed' | 'refused' | 'pending' | 'cancelled'; refusal?: 'taken' | 'unavailable' };
 
-const lockHost = (ctx: CommandContext, hostUserId: string) =>
-  sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_crm.booking:${ctx.orgId}:${hostUserId}`}, 0))`.execute(ctx.trx);
+// Takes every host's lock, in one order, so two bookings of overlapping teams cannot wait on each other.
+async function lockHosts(ctx: CommandContext, hostUserIds: readonly string[]): Promise<void> {
+  for (const id of [...new Set(hostUserIds)].sort()) {
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_crm.booking:${ctx.orgId}:${id}`}, 0))`.execute(ctx.trx);
+  }
+}
 
 // "09:30 ngày 02/11/2026" on the host's wall clock, for the party's timeline.
 function wallTime(timeZone: string, at: number): string {
@@ -65,22 +74,44 @@ type EventType = Awaited<ReturnType<typeof eventTypeOf>>;
 const eventTypeOf = (ctx: CommandContext, id: string) =>
   ctx.trx.selectFrom('crove_crm.event_type').selectAll().where('org_id', '=', ctx.orgId).where('id', '=', id).executeTakeFirstOrThrow();
 
-// Whether the host may still be booked: the type is active and the host still a member who keeps a calendar.
-async function hostable(ctx: CommandContext, type: EventType): Promise<boolean> {
-  const host = await ctx.trx
+// The type's hosts who may still be booked (members who keep a calendar), lead first: the lead alone for a single
+// type. None when the type is archived.
+async function hostsOf(ctx: CommandContext, type: EventType): Promise<string[]> {
+  if (!type.active) return [];
+  const ids = type.assignment === 'single' ? [type.host_user_id] : [type.host_user_id, ...type.co_host_user_ids];
+  const members = await ctx.trx
     .selectFrom('crove_kernel.tenant_member')
-    .select('role')
+    .select(['user_id', 'role'])
     .where('org_id', '=', ctx.orgId)
-    .where('user_id', '=', type.host_user_id)
-    .executeTakeFirst();
-  return type.active && !!host && HOST_ROLES.has(host.role);
+    .where('user_id', 'in', ids)
+    .execute();
+  const able = new Set(members.filter((m) => HOST_ROLES.has(m.role)).map((m) => m.user_id));
+  return ids.filter((id) => able.has(id));
 }
 
-// Whether [start, end) is one of the type's free slots now: 'free', or why not. A booking being moved passes its own
+// Of the round-robin hosts free at a time, the one with the fewest upcoming bookings of the type (ties by member id).
+async function leastBooked(ctx: CommandContext, type: EventType, free: readonly string[]): Promise<string> {
+  const counts = await ctx.trx
+    .selectFrom('crove_crm.booking as b')
+    .innerJoin('crove_kernel.calendar_event as ev', (j) => j.onRef('ev.org_id', '=', 'b.org_id').onRef('ev.id', '=', 'b.calendar_event_id'))
+    .select(['ev.user_id', (eb) => eb.fn.countAll<string>().as('n')])
+    .where('b.org_id', '=', ctx.orgId)
+    .where('b.event_type_id', '=', type.id)
+    .where('b.status', '=', 'confirmed')
+    .where('b.starts_at', '>=', ctx.now)
+    .where('ev.user_id', 'in', free)
+    .groupBy('ev.user_id')
+    .execute();
+  const load = new Map(counts.map((c) => [c.user_id, Number(c.n)]));
+  return [...free].sort((a, b) => (load.get(a) ?? 0) - (load.get(b) ?? 0) || (a < b ? -1 : a > b ? 1 : 0))[0] as string;
+}
+
+// Whether [start, end) is one of the type's free slots of this host now: 'free', or why not. A booking being moved passes its own
 // calendar event and its own row, so it does not stand in its own way.
 async function slotCheck(
   ctx: CommandContext,
   type: EventType,
+  hostUserId: string,
   hours: WorkingHours,
   start: number,
   end: number,
@@ -88,7 +119,7 @@ async function slotCheck(
 ): Promise<'free' | 'taken' | 'unavailable'> {
   const from = new Date(start - DAY_MS);
   const to = new Date(end + DAY_MS);
-  const busy = await busyOf(ctx, type.host_user_id, from, to, own?.eventId);
+  const busy = await busyOf(ctx, hostUserId, from, to, own?.eventId);
   const booked = await ctx.trx
     .selectFrom('crove_crm.booking')
     .select('starts_at')
@@ -146,23 +177,35 @@ const SUBJECTS: Record<BookingMailKind, { visitor: (title: string) => string; ho
   reminder: { visitor: (t) => `Nhắc lịch hẹn: ${t}`, host: (t) => `Nhắc lịch hẹn: ${t}` },
 };
 
-// Queues the booking's mails of one kind (template crm.booking): to the visitor, and to the host. The merge data holds
-// no secret and no detail of the visitor; the template reads those, and mints the visitor's manage link, at send time.
+// A host the booking holds: whose calendar, which event there, and their working hours (whose zone their mails use).
+interface Held {
+  userId: string;
+  eventId: string;
+  hours: WorkingHours;
+}
+
+// Queues the booking's mails of one kind (template crm.booking): to the visitor, and to each host it holds. The merge
+// data holds no secret and no detail of the visitor; the template reads those, and mints the visitor's manage link, at
+// send time.
 async function queueBookingMails(
   ctx: CommandContext,
   kind: BookingMailKind,
   booking: BookingForMail,
   type: EventType,
-  hostZone: string,
+  hosts: readonly Pick<Held, 'userId' | 'hours'>[],
   toHost = true,
 ): Promise<void> {
   if (!booking.email || !booking.visitor_name) return;
   const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select(['slug', 'name']).where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
-  // The host's address while they are a member (the worker's member_emails: no name, no other account column). Only
-  // the worker mails the host: a change the host made in the app mails the visitor alone.
-  const host = toHost
-    ? (await sql<{ email: string | null }>`SELECT email FROM crove_kernel.member_emails(${[type.host_user_id]}::uuid[])`.execute(ctx.trx)).rows[0]
-    : undefined;
+  // The hosts' addresses while they are members (the worker's member_emails: no name, no other account column). Only
+  // the worker mails the hosts: a change a host made in the app mails the visitor alone.
+  const emails = toHost
+    ? new Map(
+        (
+          await sql<{ user_id: string; email: string | null }>`SELECT user_id, email FROM crove_kernel.member_emails(${hosts.map((h) => h.userId)}::uuid[])`.execute(ctx.trx)
+        ).rows.map((r) => [r.user_id, r.email]),
+      )
+    : new Map<string, string | null>();
   const common = {
     kind,
     bookingId: booking.id,
@@ -189,19 +232,24 @@ async function queueBookingMails(
     status: 'queued',
   });
   const sent: Record<string, string> = { visitor: visitor.status };
-  if (host?.email) {
+  const hostStatus: string[] = [];
+  for (const host of hosts) {
+    const email = emails.get(host.userId);
+    if (!email) continue;
     const mail = await createMailMessage(ctx, {
       stream: 'transactional',
       source,
       sourceId: booking.id,
       templateKey: BOOKING_MAIL_TEMPLATE,
-      to: host.email,
+      to: email,
       subject: subject.host(type.title).slice(0, 300),
-      payload: { ...common, recipient: 'host', timeZone: hostZone },
+      payload: { ...common, recipient: 'host', timeZone: host.hours.timeZone },
       status: 'queued',
     });
-    sent.host = mail.status;
+    hostStatus.push(mail.status);
   }
+  if (hostStatus.length === 1) sent.host = hostStatus[0] as string;
+  else if (hostStatus.length > 1) sent.hosts = hostStatus.join(',');
   ctx.audit({ bookingId: booking.id, mails: kind, ...sent });
 }
 
@@ -226,7 +274,8 @@ export const bookingConfirm = defineCommand({
       return { bookingId: input.bookingId, status: booking?.status ?? 'refused', ...(booking ? {} : { refusal: 'unavailable' as const }) };
     }
     const type = await eventTypeOf(ctx, booking.event_type_id);
-    await lockHost(ctx, type.host_user_id);
+    const hosts = await hostsOf(ctx, type);
+    await lockHosts(ctx, hosts);
 
     const refuse = async (refusal: 'taken' | 'unavailable'): Promise<Outcome> => {
       await ctx.trx
@@ -239,38 +288,63 @@ export const bookingConfirm = defineCommand({
       return { bookingId: booking.id, status: 'refused', refusal };
     };
 
-    if (!(await hostable(ctx, type)) || !booking.visitor_name || !booking.email) return refuse('unavailable');
+    if (hosts.length === 0 || !booking.visitor_name || !booking.email) return refuse('unavailable');
     const start = new Date(booking.starts_at).getTime();
     const end = new Date(booking.ends_at).getTime();
-    const { hours } = await workingHoursOf(ctx, type.host_user_id);
-    const check = await slotCheck(ctx, type, hours, start, end);
-    if (check !== 'free') return refuse(check);
+    const checked: { userId: string; hours: WorkingHours; check: 'free' | 'taken' | 'unavailable' }[] = [];
+    for (const userId of hosts) {
+      const { hours } = await workingHoursOf(ctx, userId);
+      checked.push({ userId, hours, check: await slotCheck(ctx, type, userId, hours, start, end) });
+    }
+    const free = checked.filter((c) => c.check === 'free');
+    // A collective booking needs every host; any other needs one.
+    if (type.assignment === 'collective' ? free.length !== checked.length : free.length === 0) {
+      return refuse(checked.some((c) => c.check === 'taken') ? 'taken' : 'unavailable');
+    }
+    let holding = free;
+    if (type.assignment === 'round_robin' && free.length > 1) {
+      const pick = await leastBooked(ctx, type, free.map((c) => c.userId));
+      holding = free.filter((c) => c.userId === pick);
+    }
 
-    const event = await ctx.trx
-      .insertInto('crove_kernel.calendar_event')
-      .values({
-        org_id: ctx.orgId,
-        user_id: type.host_user_id,
-        starts_at: booking.starts_at,
-        ends_at: booking.ends_at,
-        time_zone: hours.timeZone,
-        title: `${type.title}: ${booking.visitor_name}`.slice(0, 200),
-        kind: 'booking',
-        created_by: type.host_user_id,
-        created_at: ctx.now,
-      })
-      .returning('id')
-      .executeTakeFirstOrThrow();
+    const held: Held[] = [];
+    for (const host of holding) {
+      const event = await ctx.trx
+        .insertInto('crove_kernel.calendar_event')
+        .values({
+          org_id: ctx.orgId,
+          user_id: host.userId,
+          starts_at: booking.starts_at,
+          ends_at: booking.ends_at,
+          time_zone: host.hours.timeZone,
+          title: `${type.title}: ${booking.visitor_name}`.slice(0, 200),
+          kind: 'booking',
+          created_by: host.userId,
+          created_at: ctx.now,
+        })
+        .returning('id')
+        .executeTakeFirstOrThrow();
+      held.push({ userId: host.userId, eventId: event.id, hours: host.hours });
+    }
+    const [primary, ...more] = held as [Held, ...Held[]];
     const partyId = await partyFor(ctx, booking.visitor_name, booking.email, booking.phone);
-    await ctx.activity('kernel.party', partyId, 'crm.booking.confirmed', `Đặt lịch hẹn ${type.title} lúc ${wallTime(hours.timeZone, start)}`);
+    await ctx.activity('kernel.party', partyId, 'crm.booking.confirmed', `Đặt lịch hẹn ${type.title} lúc ${wallTime(primary.hours.timeZone, start)}`);
     await ctx.trx
       .updateTable('crove_crm.booking')
-      .set({ status: 'confirmed', calendar_event_id: event.id, party_id: partyId, decided_at: ctx.now })
+      .set({ status: 'confirmed', calendar_event_id: primary.eventId, hold_event_ids: more.map((h) => h.eventId), party_id: partyId, decided_at: ctx.now })
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', booking.id)
       .execute();
-    ctx.audit({ bookingId: booking.id, eventTypeId: type.id, status: 'confirmed', calendarEventId: event.id, partyId });
-    await queueBookingMails(ctx, 'confirmed', booking, type, hours.timeZone);
+    ctx.audit({
+      bookingId: booking.id,
+      eventTypeId: type.id,
+      status: 'confirmed',
+      calendarEventId: primary.eventId,
+      ...(more.length > 0 ? { holdEventIds: more.map((h) => h.eventId) } : {}),
+      hostUserIds: held.map((h) => h.userId),
+      partyId,
+    });
+    await queueBookingMails(ctx, 'confirmed', booking, type, held);
     await scheduled(ctx, booking.id, booking.starts_at);
     return { bookingId: booking.id, status: 'confirmed' };
   },
@@ -321,14 +395,37 @@ const BY_TEXT: Record<ChangedBy, string> = { visitor: 'Khách', host: 'Người 
 const changeable = (ctx: CommandContext, b: NonNullable<Awaited<ReturnType<typeof lockBooking>>>): b is HeldBooking =>
   b.status === 'confirmed' && b.calendar_event_id !== null && new Date(b.starts_at).getTime() > ctx.now.getTime();
 
-// Cancels a held booking: its calendar event is cancelled (the slot is free again), the revision rises (earlier links
-// stop working), the party's timeline says so, and the visitor is mailed (the host too when the visitor cancelled).
-async function cancelHeld(ctx: CommandContext, booking: HeldBooking, type: EventType, hours: WorkingHours, by: ChangedBy): Promise<void> {
+// The calendar events a booking holds and whose calendars they are on: its own event first, then a collective
+// booking's holds. None before the worker confirmed it.
+async function eventsOf(ctx: CommandContext, booking: { calendar_event_id: string | null; hold_event_ids: string[] }): Promise<Omit<Held, 'hours'>[]> {
+  if (booking.calendar_event_id === null) return [];
+  const ids = [booking.calendar_event_id, ...booking.hold_event_ids];
+  const events = await ctx.trx.selectFrom('crove_kernel.calendar_event').select(['id', 'user_id']).where('org_id', '=', ctx.orgId).where('id', 'in', ids).execute();
+  const owner = new Map(events.map((e) => [e.id, e.user_id]));
+  return ids.flatMap((eventId) => {
+    const userId = owner.get(eventId);
+    return userId ? [{ userId, eventId }] : [];
+  });
+}
+
+// Locks the hosts of these events and reads their working hours: what a cancel or a move of the booking needs.
+async function holdHosts(ctx: CommandContext, events: readonly Omit<Held, 'hours'>[]): Promise<Held[]> {
+  await lockHosts(ctx, events.map((e) => e.userId));
+  const held: Held[] = [];
+  for (const e of events) held.push({ ...e, hours: (await workingHoursOf(ctx, e.userId)).hours });
+  return held;
+}
+
+// Cancels a held booking: its calendar events are cancelled (the slots are free again), the revision rises (earlier
+// links stop working), the party's timeline says so, and the visitor is mailed (the hosts too when the visitor
+// cancelled).
+async function cancelHeld(ctx: CommandContext, booking: HeldBooking, type: EventType, held: readonly Held[], by: ChangedBy): Promise<void> {
+  const hours = (held[0] as Held).hours;
   await ctx.trx
     .updateTable('crove_kernel.calendar_event')
     .set({ status: 'cancelled', cancelled_at: ctx.now })
     .where('org_id', '=', ctx.orgId)
-    .where('id', '=', booking.calendar_event_id)
+    .where('id', 'in', held.map((h) => h.eventId))
     .where('status', '=', 'active')
     .execute();
   await ctx.trx
@@ -340,32 +437,38 @@ async function cancelHeld(ctx: CommandContext, booking: HeldBooking, type: Event
   if (booking.party_id) {
     await ctx.activity('kernel.party', booking.party_id, 'crm.booking.cancelled', `${BY_TEXT[by]} hủy lịch hẹn ${type.title} lúc ${wallTime(hours.timeZone, new Date(booking.starts_at).getTime())}`);
   }
-  await queueBookingMails(ctx, 'cancelled', { ...booking, revision: booking.revision + 1 }, type, hours.timeZone, by === 'visitor');
+  await queueBookingMails(ctx, 'cancelled', { ...booking, revision: booking.revision + 1 }, type, held, by === 'visitor');
 }
 
-// Moves a held booking to [start, start + duration) when that is still a free slot of the type (the booking's own event
-// and row set aside): the event and the booking move, the revision rises, the reminders follow, and the visitor is
-// mailed (the host too when the visitor moved it). Otherwise nothing changes and the answer says why.
+// Moves a held booking to [start, start + duration) when that is still a free slot of the type for every host it holds
+// (the booking's own events and row set aside): the events and the booking move, the revision rises, the reminders
+// follow, and the visitor is mailed (the hosts too when the visitor moved it). It stays with the same hosts: a
+// round-robin booking is not handed to another host. Otherwise nothing changes and the answer says why.
 async function moveHeld(
   ctx: CommandContext,
   booking: HeldBooking,
   type: EventType,
-  hours: WorkingHours,
+  held: readonly Held[],
   start: number,
   by: ChangedBy,
 ): Promise<'moved' | 'taken' | 'unavailable'> {
   const end = start + type.duration_min * 60_000;
-  if (!(await hostable(ctx, type))) return 'unavailable';
-  const check = await slotCheck(ctx, type, hours, start, end, { eventId: booking.calendar_event_id, bookingId: booking.id });
-  if (check !== 'free') return check;
+  const hosts = new Set(await hostsOf(ctx, type));
+  if (held.length === 0 || held.some((h) => !hosts.has(h.userId))) return 'unavailable';
+  const checks: ('free' | 'taken' | 'unavailable')[] = [];
+  for (const h of held) checks.push(await slotCheck(ctx, type, h.userId, h.hours, start, end, { eventId: h.eventId, bookingId: booking.id }));
+  if (checks.some((c) => c !== 'free')) return checks.includes('taken') ? 'taken' : 'unavailable';
+  const hours = (held[0] as Held).hours;
   const startsAt = new Date(start);
   const endsAt = new Date(end);
-  await ctx.trx
-    .updateTable('crove_kernel.calendar_event')
-    .set({ starts_at: startsAt, ends_at: endsAt, time_zone: hours.timeZone })
-    .where('org_id', '=', ctx.orgId)
-    .where('id', '=', booking.calendar_event_id)
-    .execute();
+  for (const h of held) {
+    await ctx.trx
+      .updateTable('crove_kernel.calendar_event')
+      .set({ starts_at: startsAt, ends_at: endsAt, time_zone: h.hours.timeZone })
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', h.eventId)
+      .execute();
+  }
   await ctx.trx
     .updateTable('crove_crm.booking')
     .set({ starts_at: startsAt, ends_at: endsAt, revision: booking.revision + 1 })
@@ -375,7 +478,7 @@ async function moveHeld(
   if (booking.party_id) {
     await ctx.activity('kernel.party', booking.party_id, 'crm.booking.moved', `${BY_TEXT[by]} đổi lịch hẹn ${type.title} sang ${wallTime(hours.timeZone, start)}`);
   }
-  await queueBookingMails(ctx, 'moved', { ...booking, starts_at: startsAt, ends_at: endsAt, revision: booking.revision + 1 }, type, hours.timeZone, by === 'visitor');
+  await queueBookingMails(ctx, 'moved', { ...booking, starts_at: startsAt, ends_at: endsAt, revision: booking.revision + 1 }, type, held, by === 'visitor');
   await scheduled(ctx, booking.id, startsAt);
   return 'moved';
 }
@@ -394,7 +497,6 @@ export const bookingManage = defineCommand({
       return { bookingId: input.bookingId, outcome: 'none' };
     }
     const type = await eventTypeOf(ctx, booking.event_type_id);
-    await lockHost(ctx, type.host_user_id);
     const answer = async (outcome: Exclude<ManageOutcome, 'none'>) => {
       await ctx.trx.updateTable('crove_crm.booking').set({ manage_outcome: outcome }).where('org_id', '=', ctx.orgId).where('id', '=', booking.id).execute();
       ctx.audit({ bookingId: booking.id, action: booking.manage_action, outcome });
@@ -402,31 +504,32 @@ export const bookingManage = defineCommand({
     };
     // Cancelled meanwhile (by the host, or an earlier ask), or reached after the booking started: too late.
     if (!changeable(ctx, booking)) return answer('unavailable');
-    const { hours } = await workingHoursOf(ctx, type.host_user_id);
+    const held = await holdHosts(ctx, await eventsOf(ctx, booking));
+    if (held.length === 0) return answer('unavailable');
     if (booking.manage_action === 'cancel') {
-      await cancelHeld(ctx, booking, type, hours, 'visitor');
+      await cancelHeld(ctx, booking, type, held, 'visitor');
       return answer('cancelled');
     }
-    return answer(await moveHeld(ctx, booking, type, hours, new Date(booking.manage_starts_at as Date).getTime(), 'visitor'));
+    return answer(await moveHeld(ctx, booking, type, held, new Date(booking.manage_starts_at as Date).getTime(), 'visitor'));
   },
 });
 
-// The host's side (#1320): the member who hosts the booking's type, or an owner or admin, cancels or moves it in the
-// app. The visitor is mailed with a new link; a manage link from before stops working.
+// The host's side (#1320): the member who leads the booking's type, a host the booking holds (#1373), or an owner or
+// admin cancels or moves it in the app. The visitor is mailed with a new link; a manage link from before stops working.
 const STAFF: readonly MemberRole[] = ['owner', 'admin', 'member'];
 
-async function hostBooking(ctx: CommandContext, bookingId: string): Promise<{ booking: HeldBooking; type: EventType; hours: WorkingHours }> {
+async function hostBooking(ctx: CommandContext, bookingId: string): Promise<{ booking: HeldBooking; type: EventType; held: Held[] }> {
   if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+  const userId = ctx.actor.userId;
   const booking = await lockBooking(ctx, bookingId);
   if (!booking) throw new DomainError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy lịch hẹn này');
   const type = await eventTypeOf(ctx, booking.event_type_id);
-  if (ctx.role !== 'owner' && ctx.role !== 'admin' && type.host_user_id !== ctx.actor.userId) {
+  const events = await eventsOf(ctx, booking);
+  if (ctx.role !== 'owner' && ctx.role !== 'admin' && type.host_user_id !== userId && !events.some((e) => e.userId === userId)) {
     throw new DomainError('BOOKING_HOST_FORBIDDEN', 403, 'Bạn chỉ đổi được lịch hẹn do chính mình chủ trì');
   }
-  if (!changeable(ctx, booking)) throw new DomainError('BOOKING_NOT_CHANGEABLE', 409, 'Lịch hẹn này đã hủy hoặc đã bắt đầu');
-  await lockHost(ctx, type.host_user_id);
-  const { hours } = await workingHoursOf(ctx, type.host_user_id);
-  return { booking, type, hours };
+  if (!changeable(ctx, booking) || events.length === 0) throw new DomainError('BOOKING_NOT_CHANGEABLE', 409, 'Lịch hẹn này đã hủy hoặc đã bắt đầu');
+  return { booking, type, held: await holdHosts(ctx, events) };
 }
 
 export const bookingCancel = defineCommand({
@@ -435,8 +538,8 @@ export const bookingCancel = defineCommand({
   risk: 'R1',
   access: STAFF,
   handler: async (ctx, input): Promise<{ bookingId: string; status: 'cancelled' }> => {
-    const { booking, type, hours } = await hostBooking(ctx, input.bookingId);
-    await cancelHeld(ctx, booking, type, hours, 'host');
+    const { booking, type, held } = await hostBooking(ctx, input.bookingId);
+    await cancelHeld(ctx, booking, type, held, 'host');
     ctx.audit({ bookingId: booking.id, eventTypeId: type.id, status: 'cancelled' });
     return { bookingId: booking.id, status: 'cancelled' };
   },
@@ -448,8 +551,8 @@ export const bookingMove = defineCommand({
   risk: 'R1',
   access: STAFF,
   handler: async (ctx, input): Promise<{ bookingId: string; startsAt: string }> => {
-    const { booking, type, hours } = await hostBooking(ctx, input.bookingId);
-    const outcome = await moveHeld(ctx, booking, type, hours, Date.parse(input.startsAt), 'host');
+    const { booking, type, held } = await hostBooking(ctx, input.bookingId);
+    const outcome = await moveHeld(ctx, booking, type, held, Date.parse(input.startsAt), 'host');
     if (outcome === 'taken') throw new DomainError('BOOKING_TIME_TAKEN', 409, 'Giờ này đã có lịch khác');
     if (outcome === 'unavailable') throw new DomainError('BOOKING_TIME_UNAVAILABLE', 409, 'Khung giờ này không còn nhận đặt lịch');
     ctx.audit({ bookingId: booking.id, eventTypeId: type.id, moved: true });
@@ -517,7 +620,8 @@ export const bookingRemind = defineCommand({
 });
 
 // The bookings of the screen (#1320): confirmed and cancelled ones (requests the worker refused are not bookings), of the
-// types the member hosts, or of the whole org for owners and admins. At most 200 a page.
+// types the member leads or held on their calendar (#1373), or of the whole org for owners and admins. At most 200 a
+// page.
 export const bookingList = defineQuery({
   name: 'crm.booking.list',
   input: zBookingListQuery,
@@ -532,6 +636,8 @@ export const bookingList = defineQuery({
     const rows = await ctx.trx
       .selectFrom('crove_crm.booking as b')
       .innerJoin('crove_crm.event_type as e', (j) => j.onRef('e.org_id', '=', 'b.org_id').onRef('e.id', '=', 'b.event_type_id'))
+      // Confirmed and cancelled bookings always hold their event (booking_confirmed_event).
+      .innerJoin('crove_kernel.calendar_event as ev', (j) => j.onRef('ev.org_id', '=', 'b.org_id').onRef('ev.id', '=', 'b.calendar_event_id'))
       .select([
         'b.id',
         'b.status',
@@ -547,11 +653,21 @@ export const bookingList = defineQuery({
         'e.slug',
         'e.title',
         'e.active',
-        'e.host_user_id',
+        'ev.user_id as host_user_id',
+        sql<string[]>`coalesce((SELECT array_agg(h.user_id ORDER BY array_position(b.hold_event_ids, h.id)) FROM crove_kernel.calendar_event h
+          WHERE h.org_id = b.org_id AND h.id = ANY (b.hold_event_ids)), '{}')`.as('hold_user_ids'),
       ])
       .where('b.org_id', '=', ctx.orgId)
       .where('b.status', 'in', ['confirmed', 'cancelled'])
-      .$if(input.scope === 'mine', (q) => q.where('e.host_user_id', '=', userId))
+      .$if(input.scope === 'mine', (q) =>
+        q.where((eb) =>
+          eb.or([
+            eb('e.host_user_id', '=', userId),
+            eb('ev.user_id', '=', userId),
+            sql<boolean>`EXISTS (SELECT 1 FROM crove_kernel.calendar_event h WHERE h.org_id = b.org_id AND h.id = ANY (b.hold_event_ids) AND h.user_id = ${userId})`,
+          ]),
+        ),
+      )
       .where('b.ends_at', upcoming ? '>' : '<=', new Date())
       .orderBy('b.starts_at', upcoming ? 'asc' : 'desc')
       .orderBy('b.id')
@@ -561,6 +677,7 @@ export const bookingList = defineQuery({
       id: r.id,
       eventType: { id: r.type_id, slug: r.slug, title: r.title, active: r.active },
       hostUserId: r.host_user_id,
+      hostUserIds: [r.host_user_id, ...r.hold_user_ids],
       status: r.status,
       startsAt: new Date(r.starts_at).toISOString(),
       endsAt: new Date(r.ends_at).toISOString(),
