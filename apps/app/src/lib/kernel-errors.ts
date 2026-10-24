@@ -156,6 +156,10 @@ export const KERNEL_ERROR_CODES = [
   // Non-cash payment marks on input invoices (#917).
   'NOT_FLAGGED',
   'VOUCHER_NOT_BANK',
+  // An amount with more decimals than the book currency uses (#1282).
+  'AMOUNT_SCALE',
+  // A VND invoice with an amount below one dong; the rounding policy is the accountant's decision (#1308).
+  'AMOUNT_BELOW_DONG',
   // Period lock (#329).
   'PERIOD_LOCKED',
   'PERIOD_ALREADY_LOCKED',

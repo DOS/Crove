@@ -700,7 +700,11 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
       {pending && blocked && (
         <div className="mb-4">
           <ErrorText>
-            {payload?.extractionMethod === 'einvoice_xml' ? t('blockedXml') : t('blockedAi')}
+            {payload?.checks.some((c) => c.status === 'fail' && c.id === 'amount_scale')
+              ? t('blockedBelowDong')
+              : payload?.extractionMethod === 'einvoice_xml'
+                ? t('blockedXml')
+                : t('blockedAi')}
           </ErrorText>
         </div>
       )}

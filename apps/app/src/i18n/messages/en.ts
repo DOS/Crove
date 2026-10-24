@@ -1404,6 +1404,8 @@ export const en = {
       'The amounts on the invoice do not add up (or it is a foreign currency invoice), so it cannot be posted. Reject it and ask the seller for an adjusted invoice.',
     blockedAi:
       'The amounts AI read do not add up, possibly because one digit was misread. Reject it and upload the XML file of this e-invoice to post it exactly.',
+    blockedBelowDong:
+      'The invoice has amounts below one dong, and VND books hold no fractions, so it cannot be posted yet. An accountant must decide how to round them; meanwhile you can reject it and ask the seller for an adjusted invoice.',
     failedChecks:
       '{count, plural, one {# check failed. Compare with the original document before approving.} other {# checks failed. Compare with the original document before approving.}}',
     acceptFailed: 'I compared it with the original document and still want to post it',
@@ -4403,6 +4405,8 @@ export const en = {
     },
     lines_sum: { ok: 'The lines add up to the amount before VAT', mismatch: 'The lines add up to {lines}, not to the amount before VAT ({subtotal})' },
     total: { ok: 'Amount before VAT plus VAT matches the total', mismatch: 'Amount before VAT plus VAT does not match the total' },
+    // A VND invoice with an amount below one dong (#1282); the rounding policy is the accountant's decision (#1308).
+    amount_scale: { fraction: 'The invoice has an amount below one dong ({amount}); an accountant must decide how to round it before it is posted' },
     vat_breakdown: { ok: 'The VAT table matches the VAT total', mismatch: 'The VAT table does not match the VAT total' },
     seller_tax_code: {
       unreadable: "Could not read the seller's tax code",
@@ -4570,6 +4574,8 @@ export const en = {
       OPENING_REVERSAL_DATE: 'An opening entry can only be reversed on its own date.',
       BEFORE_OPENING_BALANCE: 'This entry is dated on or before the opening balances, so it cannot be posted. Choose a date after the opening balance date.',
       OPENING_BALANCE_INVALID: 'Some rows of the trial balance are invalid. Check them before posting.',
+      AMOUNT_SCALE: 'An amount posted to an account has more decimals than the book currency uses (VND books have none). The books never round it for you: change the amount on that line to a rounded one, then post again.',
+      AMOUNT_BELOW_DONG: 'The invoice has amounts below one dong, and VND books hold no fractions, so it cannot be posted yet. An accountant must decide how to round them; meanwhile you can reject the proposal and ask the seller for an adjusted invoice.',
       PERIOD_LOCKED: "The books are locked through this entry's month, so it cannot be posted. An owner can unlock that month to make a correction.",
       POSTING_DATE_NOT_ALLOWED: 'This posting date cannot be used: only a purchase invoice whose own month is locked is posted later, on a date from its invoice date on.',
       POSTING_DATE_IN_FUTURE: 'The posting date has not come yet. Choose today or an earlier day.',
