@@ -8,20 +8,19 @@
 // (GET /v1/photos/:id), so its credit and its image address come from Pexels, never from the browser. The image is
 // fetched through the egress guard from Pexels' image host only (the host is checked before the fetch, no redirect is
 // followed, and the answer is refused past the upload limit), its type read from the bytes (JPEG, PNG or WebP), then
-// stored and recorded like an uploaded image (social.media.save_stock: kernel.file.ingest with source 'social', and
-// the credit in crove_social.media_attribution).
+// stored and recorded like an uploaded image (image-ingest.ts, shared with the CSV import's image URLs, #1258;
+// social.media.save_stock: kernel.file.ingest with source 'social', and the credit in crove_social.media_attribution).
 //
 // Pexels allows 200 requests an hour per key (https://www.pexels.com/api/documentation/), and every org of the
 // deployment shares the key. So a member gets a few searches and saves a minute, an org at most a third of the
 // deployment's hour, and the deployment stays under Pexels' hour, in this process's memory like the AI drafting
 // budget (ai-draft-limit.ts): one busy org never leaves the others without stock photos. Pexels' own refusal (429)
 // is passed on as "busy", never worked around.
-import { MAX_UPLOAD_BYTES, SOCIAL_PHOTO_TYPES, STOCK_PHOTO_SIZES } from '@crove/kernel-contract';
-import { DomainError, EgressError, fileKey, guardedFetch, guardedRequest, putFile, sha256Hex, type BlobStore, type Runtime, type UserActor } from '@crove/kernel-runtime';
+import { MAX_UPLOAD_BYTES, STOCK_PHOTO_SIZES } from '@crove/kernel-contract';
+import { DomainError, EgressError, guardedFetch, guardedRequest, type BlobStore, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { PEXELS_IMAGE_HOST, STOCK_ALT_MAX, STOCK_NAME_MAX, pexelsImageUrl, pexelsPageUrl, stockText, type StockCredit } from '@crove/mod-social';
-import { imageSize } from './media-probe.ts';
+import { photoType, storePhoto } from './image-ingest.ts';
 import { RateLimiter } from './rate-limit.ts';
-import { safeFilename, sniffType } from './sniff.ts';
 
 export const PEXELS_API = 'https://api.pexels.com/v1';
 const API_TIMEOUT_MS = 8000;
@@ -82,8 +81,9 @@ export interface StockSaved {
 
 export type StockTicket = { allowed: true } | { allowed: false; retryAfterSeconds: number };
 
-// A RateLimiter over an hour: its minute is an hour of real time, so its wait is 60 times longer.
-class HourLimiter {
+// A RateLimiter over an hour: its minute is an hour of real time, so its wait is 60 times longer. The CSV import's
+// image URLs (#1258, media-urls.ts) use it too.
+export class HourLimiter {
   private readonly limiter: RateLimiter;
 
   constructor(perHour: number, now: () => number) {
@@ -182,8 +182,6 @@ export function parsePexelsPhoto(raw: unknown): PexelsPhoto | null {
   return { id, width, height, pageUrl, photographer: stockText(r.photographer, STOCK_NAME_MAX) ?? 'Pexels', photographerUrl, alt: stockText(r.alt, STOCK_ALT_MAX), avgColor: avg, src };
 }
 
-const mimeOf = (contentType: string | null) => (contentType ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
-
 export function createPexels(options: StockPhotosOptions): StockPhotos {
   const request = options.request ?? guardedRequest;
   const fetchImage = options.fetch ?? guardedFetch;
@@ -241,11 +239,8 @@ export function createPexels(options: StockPhotosOptions): StockPhotos {
       console.warn(`[pexels] the image host answered ${answer.status}`);
       throw unavailable();
     }
-    const declared = mimeOf(answer.contentType);
-    const type = sniffType(answer.body);
-    if (!type || !SOCIAL_PHOTO_TYPES.includes(type) || (declared !== '' && declared !== type)) {
-      throw new DomainError('UNSUPPORTED_TYPE', 415, 'Pexels không trả về ảnh JPG, PNG hoặc WEBP cho ảnh này');
-    }
+    const type = photoType(answer.body, answer.contentType, true);
+    if (!type) throw new DomainError('UNSUPPORTED_TYPE', 415, 'Pexels không trả về ảnh JPG, PNG hoặc WEBP cho ảnh này');
     return { bytes: answer.body, type };
   }
 
@@ -301,21 +296,10 @@ export function createPexels(options: StockPhotosOptions): StockPhotos {
       const src = photo.src[size];
       if (!src) throw refused();
       const { bytes, type } = await image(src, MAX_UPLOAD_BYTES, IMAGE_TIMEOUT_MS);
-      const shown = imageSize(bytes, type);
-      const sha256 = sha256Hex(bytes);
-      const storageKey = fileKey(orgId, sha256);
-      const generation = await putFile(options.store, storageKey, bytes, type, sha256);
-      const filename = safeFilename(`pexels-${photo.id}`, type);
+      const file = await storePhoto(options.store, orgId, bytes, type, `pexels-${photo.id}`);
       const credit: StockCredit = { provider: 'pexels', externalId: String(photo.id), photographer: photo.photographer, photographerUrl: photo.photographerUrl, sourceUrl: photo.pageUrl, altText: photo.alt };
-      const saved = await runtime.execute<{ fileId: string; duplicate: boolean; credited: boolean }>(
-        'social.media.save_stock',
-        {
-          file: { filename, contentType: type, sizeBytes: bytes.byteLength, sha256, storageKey, generation, ...(shown ? { imageWidth: shown.width, imageHeight: shown.height } : {}) },
-          credit,
-        },
-        { actor, orgId },
-      );
-      return { ...saved, filename, mime: type, sizeBytes: bytes.byteLength, width: shown?.width ?? null, height: shown?.height ?? null, altText: photo.alt };
+      const saved = await runtime.execute<{ fileId: string; duplicate: boolean; credited: boolean }>('social.media.save_stock', { file, credit }, { actor, orgId });
+      return { ...saved, filename: file.filename, mime: type, sizeBytes: bytes.byteLength, width: file.imageWidth ?? null, height: file.imageHeight ?? null, altText: photo.alt };
     },
   };
 }

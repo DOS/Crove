@@ -50,6 +50,11 @@ import {
   zSocialMetricsRow,
   zSocialExternalPost,
   zSocialPlanRow,
+  zSocialMediaResolve,
+  zSocialMediaInput,
+  zSocialMediaResolved,
+  zSocialMediaFetchUrls,
+  zSocialMediaFetched,
   zSocialTeamReport,
   zSocialWindowTotals,
   zSocialChannelInsights,
@@ -399,6 +404,10 @@ export const contract = {
                   scheduledAt: zSocialPostCreate.shape.scheduledAt,
                   timeZone: zSocialPostCreate.shape.timeZone,
                   connectionIds: z.array(zId).min(1).max(20),
+                  // Library files with their alt texts, labels by name and a first comment (#1258).
+                  media: zSocialMediaInput.max(10).optional(),
+                  labels: z.array(z.string().trim().min(1).max(50)).max(10).optional(),
+                  firstComment: z.string().trim().max(10_000).optional(),
                 }),
               )
               .min(1)
@@ -454,6 +463,8 @@ export const contract = {
       // for its occurrence and sent to review. Setting it makes the post a series; clearing it ends the series.
       setRecurrence: oc.input(z.strictObject({ postId: zId, recurrence: zSocialRecurrence })).output(z.object({ postId: zId, recurrence: zSocialRecurrence })),
       clearRecurrence: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
+      // Whether this server writes AI drafts from photos (#1191, #1196): an AI model that takes images (AI_VISION).
+      aiPhotos: oc.input(z.object({})).output(z.object({ enabled: z.boolean() })),
       // AI drafting (Social plan §3.7): the server asks the deployment's model for a draft from the brief and saves it as
       // a new post with origin 'ai' (tainted), one variant per channel. Each call drafts anew: a draft whose answer was
       // lost is only an extra draft, which publishes nothing until a person approves it. fileIds (#1191): photos of the
@@ -827,9 +838,15 @@ export const contract = {
             tag: z.string().max(200).optional(),
             before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(),
             limit: z.number().int().min(1).max(100).optional(),
+            // Only files the caller may use (#1196): a member limited to some channels gets no other channel's own media.
+            usable: z.boolean().optional(),
           }),
         )
         .output(z.object({ items: z.array(zSocialLibraryItem), more: z.boolean() })),
+      // The CSV import's media (#1258): files by name or id, and image URLs fetched into the library by the API (members
+      // and above; the URLs within a per-member and per-org budget, never from the browser).
+      resolve: oc.input(zSocialMediaResolve).output(zSocialMediaResolved),
+      fetchUrls: oc.input(zSocialMediaFetchUrls).output(zSocialMediaFetched),
       usage: oc.input(z.object({ fileId: zId })).output(z.array(zSocialLibraryUse)),
       tags: oc.input(z.object({})).output(z.array(zSocialMediaTagCount)),
       tag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),

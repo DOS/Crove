@@ -15,7 +15,8 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId }
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
+import { COMMENT_RULES, firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
+import { IMPORT_MEDIA_MAX } from './domain/plan-csv.ts';
 import { isValidTimeZone, nextFreeSlot, openSlots, placeQueued, retime, slotRefusal, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
@@ -38,7 +39,7 @@ import { coverProblem } from './cover-check.ts';
 import { bulkDraftCommands } from './bulk-drafts.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
-import { campaignsOfPosts, labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
+import { MAX_LABELS_PER_POST, campaignsOfPosts, labelCommands, labelQueries, labelsOfPosts, zLabelName } from './labels.ts';
 import { campaignFindings, type CampaignFinding } from './domain/campaign.ts';
 import { openCommentsOf } from './activity.ts';
 import { ideaCommands, ideaOfPost, ideaQueries, linkIdeaToPost } from './ideas.ts';
@@ -57,7 +58,7 @@ import { CONTENT_MANAGER_TEMPLATE, preReviewTask, type PreReview } from './agent
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { reviewInboxQueries } from './review-inbox.ts';
 import { attentionInboxQueries } from './attention-inbox.ts';
-import { libraryQueries, likeTerm } from './library.ts';
+import { libraryQueries, likeTerm, refuseHiddenMedia } from './library.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { stockPhotoCommands } from './stock-photos.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
@@ -106,8 +107,9 @@ const zVariantIds = z.array(zId).min(1).max(MAX_CHANNELS_PER_POST);
 // A post's images, in order: files of the org uploaded for Social (JPEG, PNG or WEBP). The channel rules decide how
 // many each channel takes; 20 is the most any supported channel shows in one post.
 export const MAX_MEDIA_PER_POST = 20;
+const zMediaItem = z.strictObject({ fileId: zId, altText: z.string().trim().max(1000).nullable().optional() });
 const zMedia = z
-  .array(z.strictObject({ fileId: zId, altText: z.string().trim().max(1000).nullable().optional() }))
+  .array(zMediaItem)
   .max(MAX_MEDIA_PER_POST)
   .refine((list) => new Set(list.map((m) => m.fileId)).size === list.length, 'each image once');
 const MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
@@ -317,9 +319,42 @@ export const postCreate = defineCommand({
   },
 });
 
-// Many drafts at once from a sheet (#586): each row a post for its channels, text only (images are added on the post
-// afterwards). With submit, the channels that fit their rules go to review; nothing is published without one.
+// Many drafts at once from a sheet (#586): each row a post for its channels. With submit, the channels that fit their
+// rules go to review; nothing is published without one.
+// A row may carry (#1258) up to IMPORT_MEDIA_MAX library files with their alt texts (the app finds files by name with
+// social.media.resolve and fetches image URLs into the library first, through the API's egress guard), its labels by
+// name and a first comment. Every file must be one the member may use (#1081: another channel's own media is refused
+// with 403 MEDIA_NOT_ALLOWED, before anything is written). A label is found by its name whatever the case; one the org
+// does not have is created through social.label.create, whose rules apply (members and above, the org's label limit).
+// The first comment goes on each channel that takes one (COMMENT_RULES), as the composer offers it.
 export const MAX_IMPORT_ROWS = 200;
+const zImportLabels = z
+  .array(zLabelName)
+  .max(MAX_LABELS_PER_POST)
+  .refine((names) => new Set(names.map((n) => n.toLowerCase())).size === names.length, 'labels repeat');
+
+// The ids of labels named, found whatever the case, the missing ones created (in the order first named).
+async function importLabels(ctx: CommandContext, names: readonly string[]): Promise<{ ids: Map<string, string>; created: number }> {
+  const wanted = new Map<string, string>();
+  for (const name of names) if (!wanted.has(name.toLowerCase())) wanted.set(name.toLowerCase(), name);
+  const ids = new Map<string, string>();
+  if (wanted.size === 0) return { ids, created: 0 };
+  const found = await ctx.trx
+    .selectFrom('crove_social.label')
+    .select(['id', 'name'])
+    .where('org_id', '=', ctx.orgId)
+    .where(sql<boolean>`lower(name) = ANY(${[...wanted.values()].map((n) => n.toLowerCase())}::text[])`)
+    .execute();
+  for (const l of found) ids.set(l.name.toLowerCase(), l.id);
+  let created = 0;
+  for (const [key, name] of wanted) {
+    if (ids.has(key)) continue;
+    const { labelId } = await ctx.run<{ labelId: string }>('social.label.create', { name });
+    ids.set(key, labelId);
+    created++;
+  }
+  return { ids, created };
+}
 export const postImport = defineCommand({
   name: 'social.post.import',
   input: z.strictObject({
@@ -332,6 +367,13 @@ export const postImport = defineCommand({
           scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
           timeZone: zTimeZone.optional(),
           connectionIds: z.array(zId).min(1).max(MAX_CHANNELS_PER_POST),
+          media: z
+            .array(zMediaItem)
+            .max(IMPORT_MEDIA_MAX)
+            .refine((list) => new Set(list.map((m) => m.fileId)).size === list.length, 'each image once')
+            .optional(),
+          labels: zImportLabels.optional(),
+          firstComment: z.string().trim().max(10_000).optional(),
         }),
       )
       .min(1)
@@ -342,6 +384,18 @@ export const postImport = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     requireUser(ctx);
+    await refuseHiddenMedia(
+      ctx,
+      input.posts.flatMap((row) => (row.media ?? []).map((m) => m.fileId)),
+    );
+    const connectionIds = [...new Set(input.posts.flatMap((row) => row.connectionIds))];
+    const providers = new Map(
+      (await ctx.trx.selectFrom('crove_kernel.channel_connection').select(['id', 'provider']).where('org_id', '=', ctx.orgId).where('id', 'in', connectionIds).execute()).map((c) => [c.id, c.provider]),
+    );
+    const labels = await importLabels(
+      ctx,
+      input.posts.flatMap((row) => row.labels ?? []),
+    );
     const created: { postId: string; submitted: number }[] = [];
     // A channel whose text holds a blocked word (#1055) stays a draft, like one that breaks its channel's rules.
     // One checker and one budget for the whole import, so the rows do not multiply it; past it a row's channels stay
@@ -354,8 +408,15 @@ export const postImport = defineCommand({
         linkUrl: row.linkUrl ?? null,
         ...(row.scheduledAt ? { scheduledAt: row.scheduledAt } : {}),
         ...(row.timeZone ? { timeZone: row.timeZone } : {}),
-        channels: row.connectionIds.map((connectionId) => ({ connectionId })),
+        ...(row.media ? { media: row.media } : {}),
+        channels: row.connectionIds.map((connectionId) => {
+          const provider = providers.get(connectionId);
+          return row.firstComment && provider && isProvider(provider) && COMMENT_RULES[provider] ? { connectionId, settings: { firstComment: row.firstComment } } : { connectionId };
+        }),
       });
+      if (row.labels && row.labels.length > 0) {
+        await ctx.run('social.post.set_labels', { postId: post.id, labelIds: row.labels.map((name) => labels.ids.get(name.toLowerCase()) as string) });
+      }
       let submitted = 0;
       if (banned) {
         const ready = (await lockVariants(ctx.trx, ctx.orgId, post.id)).filter(
@@ -370,7 +431,12 @@ export const postImport = defineCommand({
       }
       created.push({ postId: post.id, submitted });
     }
-    ctx.audit({ posts: created.length, submitted: created.reduce((n, c) => n + c.submitted, 0) });
+    ctx.audit({
+      posts: created.length,
+      submitted: created.reduce((n, c) => n + c.submitted, 0),
+      media: input.posts.reduce((n, row) => n + (row.media?.length ?? 0), 0),
+      labels_created: labels.created,
+    });
     return { posts: created };
   },
 });
