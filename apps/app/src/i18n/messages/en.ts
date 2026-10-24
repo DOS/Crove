@@ -443,6 +443,7 @@ export const en = {
     unavailable: 'Sorry, this time is no longer offered.',
     pickAnother: 'Pick another time',
     requestNotFound: 'This booking request was not found; reload the page and book again.',
+    checkFailed: 'The anti-bot check did not load; reload the page.',
     manage: {
       title: 'Your booking',
       when: 'Time: {when}',
@@ -4733,6 +4734,7 @@ export const en = {
       BOOKING_PAGE_NOT_FOUND: 'This booking page was not found.',
       BOOKING_REQUEST_NOT_FOUND: 'This booking request was not found.',
       BOOKING_LINK_NOT_FOUND: 'This link no longer works.',
+      BOOKING_CHECK_FAILED: 'The anti-bot check did not pass; try again.',
       BOOKING_NOT_FOUND: 'This booking was not found.',
       BOOKING_HOST_FORBIDDEN: 'You can only change bookings you host.',
       BOOKING_NOT_CHANGEABLE: 'This booking was cancelled or has started.',

@@ -441,6 +441,7 @@ export const vi = {
     unavailable: 'Rất tiếc, giờ này không còn nhận đặt lịch.',
     pickAnother: 'Chọn giờ khác',
     requestNotFound: 'Không tìm thấy yêu cầu đặt lịch này; hãy tải lại trang và đặt lại.',
+    checkFailed: 'Không tải được bước xác minh chống máy tự động; hãy tải lại trang.',
     manage: {
       title: 'Lịch hẹn của bạn',
       when: 'Thời gian: {when}',
@@ -4733,6 +4734,7 @@ export const vi = {
       BOOKING_PAGE_NOT_FOUND: 'Không tìm thấy trang đặt lịch này',
       BOOKING_REQUEST_NOT_FOUND: 'Không tìm thấy yêu cầu đặt lịch này',
       BOOKING_LINK_NOT_FOUND: 'Liên kết này không còn dùng được',
+      BOOKING_CHECK_FAILED: 'Chưa xác minh được bạn không phải máy, hãy thử lại',
       BOOKING_NOT_FOUND: 'Không tìm thấy lịch hẹn này',
       BOOKING_HOST_FORBIDDEN: 'Bạn chỉ đổi được lịch hẹn do chính mình chủ trì',
       BOOKING_NOT_CHANGEABLE: 'Lịch hẹn này đã hủy hoặc đã bắt đầu',

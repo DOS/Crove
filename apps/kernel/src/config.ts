@@ -415,6 +415,10 @@ const schema = z.object({
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,
   INBOUND_SECRET: optional,
+  // Cloudflare Turnstile on the public booking form (#1353, CAL-2, plan docs/plan/calendar.md §3.4): both or neither.
+  // With them, the page shows the widget and the kernel checks its token with Cloudflare before recording a request.
+  TURNSTILE_SITE_KEY: optional.pipe(z.string().regex(/^[0-9A-Za-z_-]{1,100}$/, 'TURNSTILE_SITE_KEY is a Turnstile site key').optional()),
+  TURNSTILE_SECRET: optional,
   // Role passwords applied by `migrate` (self-host).
   CROVE_APP_DB_PASSWORD: optional,
   CROVE_WORKER_DB_PASSWORD: optional,
@@ -455,6 +459,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.INBOUND_SECRET && config.INBOUND_SECRET.length < 32) {
     throw new Error('INBOUND_SECRET must be at least 32 characters');
+  }
+  // A widget without the secret could not be checked, and a secret without the widget would refuse every booking.
+  if (Boolean(config.TURNSTILE_SITE_KEY) !== Boolean(config.TURNSTILE_SECRET)) {
+    throw new Error('set both TURNSTILE_SITE_KEY and TURNSTILE_SECRET, or neither');
   }
   // A sign-up policy the deployment cannot enforce, or one set only halfway, stops the boot instead of leaving
   // sign-up more open than the operator meant (#350).

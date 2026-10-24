@@ -6,7 +6,7 @@
 // the browser never sends: the page reads the booking with it and lets the visitor cancel it or move it to another
 // free slot, then follows the ask until the worker answers. A cancel or a move ends the link.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { zonedDate, type BookingManage, type BookingPage as Page, type BookingStatus } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
@@ -17,9 +17,11 @@ import { Textarea } from '@crove/ui/components/textarea';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useLocaleSetting } from '../i18n/provider.tsx';
 import type { Locale } from '../i18n/locale.ts';
+import { getConfig } from '../lib/auth.ts';
 import { errorMessage } from '../lib/api.ts';
 import { dayLabel, manageTokenOf, slotsByDay, timeIn, visitorTimeZone, weekRange, type Slot } from '../lib/booking.ts';
 import { apiErrorFromResponse } from '../lib/errors.ts';
+import { loadTurnstile } from '../lib/turnstile.ts';
 
 // How long the page follows a request before it says the answer is late.
 const POLL_MS = 1000;
@@ -266,6 +268,41 @@ export function BookingPage({ org, type }: { org: string; type: string }) {
   return <Book path={path} zone={zone} />;
 }
 
+// Cloudflare Turnstile's widget (#1353), when the deployment sets a site key: it hands its token to onToken, and null
+// when the token expires or the check fails. A new `round` renders a fresh widget (a token is good for one request).
+function TurnstileWidget({ siteKey, round, onToken }: { siteKey: string; round: number; onToken: (token: string | null) => void }) {
+  const t = useTranslations('booking');
+  const box = useRef<HTMLDivElement>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let widget: string | null = null;
+    let gone = false;
+    onToken(null);
+    loadTurnstile()
+      .then((api) => {
+        if (gone || !box.current) return;
+        widget = api.render(box.current, {
+          sitekey: siteKey,
+          callback: (token) => onToken(token),
+          'expired-callback': () => onToken(null),
+          'error-callback': () => onToken(null),
+        });
+      })
+      .catch(() => setFailed(true));
+    return () => {
+      gone = true;
+      const api = (window as { turnstile?: { remove(id: string): void } }).turnstile;
+      if (widget && api) api.remove(widget);
+    };
+  }, [siteKey, round, onToken]);
+  return (
+    <div>
+      <div ref={box} />
+      {failed && <ErrorText>{t('checkFailed')}</ErrorText>}
+    </div>
+  );
+}
+
 function Book({ path, zone }: { path: string; zone: string }) {
   const t = useTranslations('booking');
   const { locale } = useLocaleSetting();
@@ -273,6 +310,9 @@ function Book({ path, zone }: { path: string; zone: string }) {
   const [slot, setSlot] = useState<Slot | null>(null);
   const [form, setForm] = useState({ name: '', email: '', phone: '', note: '' });
   const [token, setToken] = useState<string | null>(null);
+  const siteKey = getConfig().turnstileSiteKey ?? null;
+  const [check, setCheck] = useState<string | null>(null);
+  const [round, setRound] = useState(0);
   const range = weekRange(now, 0, zone);
   const page = useQuery({
     queryKey: ['booking-page', path, range.from],
@@ -281,6 +321,8 @@ function Book({ path, zone }: { path: string; zone: string }) {
   const request = useMutation({
     mutationFn: (body: unknown) => post<{ token: string }>(path, body),
     onSuccess: (r) => setToken(r?.token ?? null),
+    // The widget's token was spent on this request: a fresh one for the next try.
+    onError: () => setRound((n) => n + 1),
   });
   useEffect(() => {
     document.title = page.data ? `${page.data.eventType.title} · ${page.data.orgName}` : t('title');
@@ -288,8 +330,16 @@ function Book({ path, zone }: { path: string; zone: string }) {
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (!slot || request.isPending) return;
-    request.mutate({ startsAt: slot.start, name: form.name.trim(), email: form.email.trim(), phone: form.phone.trim() || null, note: form.note.trim() || null, timeZone: zone });
+    if (!slot || request.isPending || (siteKey && !check)) return;
+    request.mutate({
+      startsAt: slot.start,
+      name: form.name.trim(),
+      email: form.email.trim(),
+      phone: form.phone.trim() || null,
+      note: form.note.trim() || null,
+      timeZone: zone,
+      ...(siteKey && check ? { turnstile: check } : {}),
+    });
   };
   const again = () => {
     setToken(null);
@@ -341,8 +391,9 @@ function Book({ path, zone }: { path: string; zone: string }) {
               <Label htmlFor="booking-note">{t('note')}</Label>
               <Textarea id="booking-note" rows={3} maxLength={1000} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
             </div>
+            {siteKey && <TurnstileWidget siteKey={siteKey} round={round} onToken={setCheck} />}
             <div className="flex gap-2">
-              <Button type="submit" disabled={request.isPending || !form.name.trim() || !form.email.trim()}>
+              <Button type="submit" disabled={request.isPending || !form.name.trim() || !form.email.trim() || Boolean(siteKey && !check)}>
                 {request.isPending ? <Spinner className="text-current" /> : null}
                 {t('book')}
               </Button>
