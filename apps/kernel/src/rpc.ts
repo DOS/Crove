@@ -874,6 +874,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         update: os.social.feeds.update.handler(socialCommand('social.feed.update')),
         remove: os.social.feeds.remove.handler(socialCommand('social.feed.remove')),
       },
+      savedViews: {
+        list: os.social.savedViews.list.handler(socialQuery('social.saved_view.list')),
+        save: os.social.savedViews.save.handler(socialCommand('social.saved_view.save')),
+        remove: os.social.savedViews.remove.handler(socialCommand('social.saved_view.delete')),
+      },
       snippets: {
         list: os.social.snippets.list.handler(socialQuery('social.snippet.list')),
         create: os.social.snippets.create.handler(socialCommand('social.snippet.create')),
