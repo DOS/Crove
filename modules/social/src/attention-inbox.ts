@@ -10,6 +10,8 @@ const EXCERPT = 200;
 // The most posts the inbox lists; the Social home's "needs attention" list holds the rest.
 export const ATTENTION_INBOX_MAX = 50;
 const ATTENTION_SCAN_MAX = 500;
+// Channels whose sign-in expired or broke: a person reconnects them. The multi-client home counts the same (#1261).
+export const ATTENTION_CHANNEL_STATUSES = ['expired', 'error'] as const;
 
 export interface AttentionChannel {
   connectionId: string;
@@ -40,7 +42,7 @@ export const attentionInbox = defineQuery({
       .selectFrom('crove_kernel.channel_connection')
       .select(['id', 'provider', 'display_name', 'status'])
       .where('org_id', '=', ctx.orgId)
-      .where('status', 'in', ['expired', 'error'])
+      .where('status', 'in', ATTENTION_CHANNEL_STATUSES)
       .orderBy('updated_at', 'asc')
       .limit(ATTENTION_INBOX_MAX)
       .execute();
