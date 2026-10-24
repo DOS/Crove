@@ -49,6 +49,47 @@ describe('the crove-sw Trusted Types policy', () => {
   });
 });
 
+describe('forgetting this device on sign-out', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  async function withSubscription(endpoint: string | null) {
+    let unsubscribed = 0;
+    const sub = endpoint ? { endpoint, unsubscribe: async () => (unsubscribed++, true) } : null;
+    vi.stubGlobal('Notification', { permission: 'granted' });
+    vi.stubGlobal('PushManager', class {});
+    vi.stubGlobal('window', { isSecureContext: true, PushManager: class {}, Notification: {} });
+    vi.stubGlobal('navigator', { serviceWorker: { getRegistration: async () => ({ pushManager: { getSubscription: async () => sub } }) } });
+    const push = await import('../src/lib/push.ts');
+    return { push, unsubscribed: () => unsubscribed };
+  }
+
+  it("removes this device's row, then ends the browser's subscription, even when the row cannot be removed", async () => {
+    const ok = await withSubscription('https://push.example/1');
+    const removed: string[] = [];
+    await ok.push.forgetPushDevice(async (e) => removed.push(e));
+    expect(removed).toEqual(['https://push.example/1']);
+    expect(ok.unsubscribed()).toBe(1);
+    vi.resetModules();
+    const failing = await withSubscription('https://push.example/2');
+    await failing.push.forgetPushDevice(() => Promise.reject(new Error('offline')));
+    expect(failing.unsubscribed()).toBe(1);
+    vi.resetModules();
+    const slow = await withSubscription('https://push.example/3');
+    await slow.push.forgetPushDevice(() => new Promise(() => undefined), 10);
+    expect(slow.unsubscribed()).toBe(1);
+  });
+
+  it('does nothing without a subscription', async () => {
+    const none = await withSubscription(null);
+    const removed: string[] = [];
+    await none.push.forgetPushDevice(async (e) => removed.push(e));
+    expect(removed).toEqual([]);
+  });
+});
+
 describe('push helpers', () => {
   it('names the browser and the system of a user agent', () => {
     expect(deviceOf('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36')).toEqual({ browser: 'Chrome', os: 'Windows' });

@@ -205,6 +205,8 @@ suite('social browser push on PostgreSQL (#1238)', () => {
       { endpoint: 'http://push.example.com/x', ...keys },
       { endpoint: 'https://user:pw@push.example.com/x', ...keys },
       { endpoint: endpoint(), p256dh: randomBytes(65).toString('base64url'), auth: keys.auth },
+      // The right length and prefix, but not a point on the curve.
+      { endpoint: endpoint(), p256dh: Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 1)]).toString('base64url'), auth: keys.auth },
       { endpoint: endpoint(), p256dh: keys.p256dh, auth: randomBytes(8).toString('base64url') },
     ]) {
       await expect(exec(o, o.member, 'social.push.subscribe', bad)).rejects.toMatchObject({ code: 'VALIDATION' });

@@ -10,6 +10,7 @@
 // and a subscription that failed PUSH_FAILURE_LIMIT times in a row is deleted too. The push carries no post text: a
 // short line naming the kind and the app path that opens it. A deployment without VAPID keys offers no push and the
 // worker queues nothing (the API and the worker check the keys; these commands do not).
+import { createPublicKey } from 'node:crypto';
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
@@ -36,8 +37,18 @@ const keyOf = (bytes: number, check?: (raw: Buffer) => boolean) =>
     .max(128)
     .transform(toBase64Url)
     .refine((v) => B64URL.test(v) && Buffer.from(v, 'base64url').length === bytes && (check?.(Buffer.from(v, 'base64url')) ?? true), 'invalid key');
+// Whether 65 bytes are an uncompressed point on P-256: the key import checks the point is on the curve.
+function onP256(raw: Buffer): boolean {
+  if (raw[0] !== 0x04) return false;
+  try {
+    createPublicKey({ key: { kty: 'EC', crv: 'P-256', x: raw.subarray(1, 33).toString('base64url'), y: raw.subarray(33).toString('base64url') }, format: 'jwk' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 // An uncompressed P-256 point (0x04 || x || y) and the 16-byte auth secret (RFC 8291 section 3).
-export const zPushP256dh = keyOf(65, (raw) => raw[0] === 0x04);
+export const zPushP256dh = keyOf(65, onP256);
 export const zPushAuth = keyOf(16);
 // A push service URL: https, no credentials or fragment. Where it may go (public addresses only) is the egress guard's.
 export const zPushEndpoint = z

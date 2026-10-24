@@ -136,6 +136,13 @@ export function createPushSender(keys: VapidKeys, deps: { request?: PushRequest;
         return { outcome: 'gone', status: null };
       }
       if (url.protocol !== 'https:') return { outcome: 'gone', status: null };
+      // Keys that are not a P-256 point and a 16-byte secret never work: the subscription goes.
+      let encrypted: Buffer;
+      try {
+        encrypted = encryptPush(body, subscription);
+      } catch {
+        return { outcome: 'gone', status: null };
+      }
       const headers: Record<string, string> = {
         authorization: `vapid t=${tokenFor(url.origin)}, k=${keys.publicKey}`,
         'content-encoding': 'aes128gcm',
@@ -146,7 +153,7 @@ export function createPushSender(keys: VapidKeys, deps: { request?: PushRequest;
       try {
         const answer = await request(
           subscription.endpoint,
-          { method: 'POST', headers, body: encryptPush(body, subscription) },
+          { method: 'POST', headers, body: encrypted },
           { timeoutMs: deps.timeoutMs ?? SEND_TIMEOUT_MS, maxBytes: 4096, overLimit: 'truncate', ...deps.egress },
         );
         return { outcome: outcomeOf(answer.status), status: answer.status };

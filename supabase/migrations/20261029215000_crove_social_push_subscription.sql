@@ -1,5 +1,5 @@
--- Crove Social: browser push for the notifications someone must act on (issue #1238), and the worker's mail skipping
--- disabled accounts (#1115). Idempotent; applied files stay untouched.
+-- Crove Social: browser push for the notifications someone must act on (issue #1238). Idempotent; applied files stay
+-- untouched. Disabled accounts leave member_emails in 20261029214000_crove_kernel_member_emails_disabled.sql (#1115).
 --
 -- crove_social.push_subscription  a member's Web Push subscription on one browser or device: the push service's
 --                                 endpoint and the browser's keys (RFC 8291), with a short device label for the
@@ -9,7 +9,6 @@
 --                                 row the push service answers 404 or 410 for, or one that kept failing. A member's rows
 --                                 go with the membership (the foreign key cascades).
 -- social-push                     the worker's queue for the push job (one job per notification).
--- crove_kernel.member_emails      leaves out disabled accounts (#1115): a disabled user gets no worker mail and no push.
 SET LOCAL lock_timeout = '2s';
 
 CREATE TABLE IF NOT EXISTS crove_social.push_subscription (
@@ -46,26 +45,10 @@ CREATE POLICY own_push_subscription ON crove_social.push_subscription AS RESTRIC
 -- One job per notification (singleton key: the notification's id). create_queue skips a queue that exists.
 SELECT crove_jobs.create_queue('social-push', '{"policy":"standard"}'::jsonb);
 
--- member_emails (20261022065000) without disabled accounts (#1115): the Social notification mail and push, the weekly
--- digest, the proposal reminders and the usage-limit mail all reach a member through it. Otherwise unchanged.
-CREATE OR REPLACE FUNCTION crove_kernel.member_emails(p_user_ids uuid[])
-RETURNS TABLE (user_id uuid, email text)
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
-  SELECT u.id, u.email
-  FROM crove_kernel.tenant_member m
-  JOIN crove_kernel.user_account u ON u.id = m.user_id
-  WHERE m.org_id = (SELECT crove_kernel.ctx_org_id())
-    AND m.user_id = ANY (p_user_ids)
-    AND u.disabled_at IS NULL
-$$;
-
--- EXECUTE matrix: only the worker login role.
-REVOKE ALL ON FUNCTION crove_kernel.member_emails(uuid[]) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
-GRANT EXECUTE ON FUNCTION crove_kernel.member_emails(uuid[]) TO crove_worker;
-
 -- The org purge (#1024) deletes crove_social.push_subscription with the org's other Social rows (#1238). The function
 -- is copied verbatim from 20261029090000_crove_social_media_attribution.sql, with only this table added to v_social;
 -- the runbook's deletion map already says every crove_social table but post_approval is deleted.
+-- migration-lint: cross-module the org purge re-created with crove_social.push_subscription added to v_social, per the owner's standing approval to add each new Social table to crove_kernel.org_purge in its feature migration (#1213).
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
 RETURNS TABLE (outcome text, counts jsonb, blob_keys text[])
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -291,5 +274,7 @@ BEGIN
   RETURN NEXT;
 END $$;
 
+-- migration-lint: cross-module the re-created org purge's EXECUTE matrix restated: no login role but the worker.
 REVOKE ALL ON FUNCTION crove_kernel.org_purge(integer) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+-- migration-lint: cross-module the re-created org purge's EXECUTE matrix restated: the worker login only.
 GRANT EXECUTE ON FUNCTION crove_kernel.org_purge(integer) TO crove_worker;

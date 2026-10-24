@@ -137,5 +137,8 @@ describe('the push sender', () => {
     expect(await refusing(new EgressError('timeout', 'slow')).send(sub, '{}')).toEqual({ outcome: 'failed', status: null });
     expect(await createPushSender(keys, { request: async () => Promise.reject(new Error('unused')) }).send({ ...sub, endpoint: 'http://push.test/x' }, '{}')).toEqual({ outcome: 'gone', status: null });
     await expect(createPushSender(keys).send(sub, 'x'.repeat(4000))).rejects.toThrow('too large');
+    // Keys that are not a point on P-256 never work: gone, without a request.
+    const offCurve = { ...sub, p256dh: Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 1)]).toString('base64url') };
+    expect(await createPushSender(keys, { request: async () => Promise.reject(new Error('unused')) }).send(offCurve, '{}')).toEqual({ outcome: 'gone', status: null });
   });
 });

@@ -108,6 +108,26 @@ export async function disablePush(): Promise<void> {
   await sub?.unsubscribe();
 }
 
+// On sign-out (#1238): a shared browser must not carry one person's notices into the next person's session. Removes
+// this device's row in the org of the page while the session still works (removeRow, best effort, within the time
+// budget), then ends the browser's subscription, so the push service answers 410 for it and the worker deletes the
+// rows of the other orgs at their next push. Never throws.
+export async function forgetPushDevice(removeRow?: (endpoint: string) => Promise<unknown>, timeoutMs = 2000): Promise<void> {
+  try {
+    const endpoint = await currentEndpoint();
+    if (!endpoint) return;
+    if (removeRow) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const removed = removeRow(endpoint).catch(() => undefined);
+      await Promise.race([removed, new Promise<void>((resolve) => (timer = setTimeout(resolve, timeoutMs)))]);
+      clearTimeout(timer);
+    }
+    await disablePush();
+  } catch {
+    // Best effort: signing out goes on.
+  }
+}
+
 // The browser and system a user agent names, for the device list ("Chrome", "Windows"); null when unknown.
 export function deviceOf(userAgent: string): { browser: string | null; os: string | null } {
   const browser = /Edg\//.test(userAgent)
