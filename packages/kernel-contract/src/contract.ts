@@ -99,6 +99,8 @@ import {
   zSocialLabelCreate,
   zSocialLabelUpdate,
   zSocialReviewLinks,
+  zSocialReviewReply,
+  zSocialReviewReplyInput,
   zSocialReviewPlanCreate,
   zSocialReviewPlanLink,
   zSocialActivityItem,
@@ -837,6 +839,8 @@ export const contract = {
       plans: oc.input(z.object({})).output(z.array(zSocialReviewPlanLink)),
       // postId is null for a plan link.
       revoke: oc.input(z.strictObject({ linkId: zId })).output(z.object({ linkId: zId, postId: zId.nullable() })),
+      // The team's reply under a client's answer (#1301), members and above; null or empty text clears it.
+      reply: oc.input(zSocialReviewReplyInput).output(z.object({ feedbackId: zId, postId: zId, reply: zSocialReviewReply.nullable() })),
     },
     // The media library (S9): the org's post images, newest first, and the posts that show one. Members tag files and
     // the list filters by one tag, whatever its case (#904); tags lists the org's tags for the filter.

@@ -10,10 +10,12 @@ import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
-import { channelScope, postsInScope } from './channel-access.ts';
+import { channelScope, postsInScope, refusePostOutside } from './channel-access.ts';
+import { plainNote } from './report-links.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
+const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const REVIEW_LINK_MAX_DAYS = 30;
 const DAY_MS = 86_400_000;
 
@@ -37,6 +39,8 @@ export const reviewLinkCreate = defineCommand({
     const userId = requireUser(ctx);
     const post = await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.postId).executeTakeFirst();
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
+    // Two links made at once count each other (#930), so the cap below holds.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_social.review_link:${ctx.orgId}:${post.id}`}, 0))`.execute(ctx.trx);
     const live = await ctx.trx
       .selectFrom('crove_social.review_link')
       .select((eb) => eb.fn.countAll<string>().as('n'))
@@ -119,6 +123,8 @@ export const reviewPlanCreate = defineCommand({
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
     if ((input.postIds === undefined) === (input.range === undefined)) throw new DomainError('REVIEW_PLAN_INVALID', 422, 'Hãy chọn các bài hoặc một khoảng ngày cho kế hoạch');
+    // Two plans made at once count each other (#930), so the cap below holds.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_social.review_link.plan:${ctx.orgId}`}, 0))`.execute(ctx.trx);
     const live = await ctx.trx
       .selectFrom('crove_social.review_link')
       .select((eb) => eb.fn.countAll<string>().as('n'))
@@ -172,9 +178,6 @@ export const reviewPlanCreate = defineCommand({
       postIds = rows.map((p) => p.id);
       range = { from, to };
     }
-    const { rows: keys } = await sql<{ id: string; key: string }>`
-      SELECT x.id, crove_social.review_content_key(${ctx.orgId}::uuid, x.id) AS key FROM pg_catalog.unnest(${postIds}::uuid[]) AS x(id)`.execute(ctx.trx);
-    const keyOf = new Map(keys.map((k) => [k.id, k.key]));
     const token = newReviewToken();
     const expiresAt = new Date(ctx.now.getTime() + (input.days ?? 7) * DAY_MS);
     const link = await ctx.trx
@@ -192,10 +195,9 @@ export const reviewPlanCreate = defineCommand({
       })
       .returning('id')
       .executeTakeFirstOrThrow();
-    await ctx.trx
-      .insertInto('crove_social.review_link_post')
-      .values(postIds.map((postId, position) => ({ org_id: ctx.orgId, link_id: link.id, post_id: postId, position, content_key: keyOf.get(postId) ?? '' })))
-      .execute();
+    // The tenant role may not add a plan's posts (#930): the definer fills this new link once, in this order, with each
+    // post's content key now, and refuses a link that has its posts already.
+    await sql`SELECT crove_social.review_plan_posts_add(${link.id}::uuid, ${postIds}::uuid[])`.execute(ctx.trx);
     ctx.audit({ link_id: link.id, posts: postIds });
     // The token leaves only in this answer: the audit keeps the input and the posts, never the output.
     return { linkId: link.id, token, expiresAt: expiresAt.toISOString(), posts: postIds.length };
@@ -281,6 +283,14 @@ export interface ReviewFeedbackView {
   body: string | null;
   changed: boolean;
   createdAt: string;
+  // The team's reply (#1301), which the client sees under their answer, or null.
+  reply: ReviewReplyView | null;
+}
+export interface ReviewReplyView {
+  body: string;
+  // The member who wrote it last; the client's page never shows who.
+  by: string;
+  at: string;
 }
 
 export const reviewLinkList = defineQuery({
@@ -318,7 +328,7 @@ export const reviewLinkList = defineQuery({
         .execute(),
       ctx.trx
         .selectFrom('crove_social.review_feedback')
-        .select(['id', 'link_id', 'reviewer_name', 'verdict', 'body', 'changed', 'created_at'])
+        .select(['id', 'link_id', 'reviewer_name', 'verdict', 'body', 'changed', 'created_at', 'reply_body', 'replied_by', 'replied_at'])
         .where('org_id', '=', ctx.orgId)
         .where('post_id', '=', input.postId)
         .orderBy('created_at', 'desc')
@@ -357,6 +367,7 @@ export const reviewLinkList = defineQuery({
         body: f.body,
         changed: f.changed,
         createdAt: f.created_at.toISOString(),
+        reply: f.reply_body !== null && f.replied_by !== null && f.replied_at !== null ? { body: f.reply_body, by: f.replied_by, at: f.replied_at.toISOString() } : null,
       })),
     };
   },
@@ -423,5 +434,55 @@ export const reviewPlanList = defineQuery({
   },
 });
 
-export const reviewLinkCommands = [reviewLinkCreate, reviewPlanCreate, reviewLinkRevoke, linksRevokeForMember];
+// The team's reply to a client's answer (#1301): plain text, as long as the client's own comment may be.
+export const REVIEW_REPLY_MAX = 2000;
+const zReply = z
+  .string()
+  .max(REVIEW_REPLY_MAX * 2)
+  .transform(plainNote)
+  .pipe(z.string().max(REVIEW_REPLY_MAX));
+
+// One editable team reply under a client's answer on a review link (#1301), which the client sees on the link's page
+// signed with the org's name. Members and above write, edit and clear it (an empty text clears it). It is a column of
+// the answer, never a new answer, so the link's answer caps and the client's verdict are unchanged. A member limited
+// to some channels replies only on posts with a channel of theirs (#1081).
+export const reviewReply = defineCommand({
+  name: 'social.review.reply',
+  input: z.strictObject({ feedbackId: zId, body: zReply.nullable() }),
+  risk: 'R1',
+  access: MEMBERS,
+  target: (input) => ({ type: 'social.review_feedback', id: input.feedbackId }),
+  handler: async (ctx, input): Promise<{ feedbackId: string; postId: string; reply: ReviewReplyView | null }> => {
+    const userId = requireUser(ctx);
+    const answer = await ctx.trx
+      .selectFrom('crove_social.review_feedback')
+      .select(['id', 'post_id', 'link_id', 'reply_body', 'replied_by', 'replied_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.feedbackId)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!answer) throw new DomainError('REVIEW_FEEDBACK_NOT_FOUND', 404, 'Không tìm thấy ý kiến này của khách');
+    await refusePostOutside(ctx, answer.post_id);
+    const body = input.body ? input.body : null;
+    const unchanged = body === answer.reply_body;
+    if (!unchanged) {
+      await ctx.trx
+        .updateTable('crove_social.review_feedback')
+        .set({ reply_body: body, replied_by: body === null ? null : userId, replied_at: body === null ? null : ctx.now })
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', answer.id)
+        .execute();
+    }
+    ctx.audit({ post_id: answer.post_id, link_id: answer.link_id, cleared: body === null });
+    const reply =
+      body === null
+        ? null
+        : unchanged && answer.replied_by !== null && answer.replied_at !== null
+          ? { body, by: answer.replied_by, at: answer.replied_at.toISOString() }
+          : { body, by: userId, at: ctx.now.toISOString() };
+    return { feedbackId: answer.id, postId: answer.post_id, reply };
+  },
+});
+
+export const reviewLinkCommands = [reviewLinkCreate, reviewPlanCreate, reviewLinkRevoke, linksRevokeForMember, reviewReply];
 export const reviewLinkQueries = [reviewLinkList, reviewPlanList];

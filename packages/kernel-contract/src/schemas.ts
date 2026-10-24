@@ -1748,6 +1748,7 @@ export const zSocialPostDuplicateResult = z.object({
 });
 // Client review links (#589): the team's view of a post's links and what clients said through them.
 // A plan link (#902) the post is in is listed too, with the posts it covers and its own cap of answers per post.
+export const zSocialReviewReply = z.object({ body: z.string(), by: zId, at: z.string() });
 export const zSocialReviewLinks = z.object({
   links: z.array(
     z.object({
@@ -1764,9 +1765,21 @@ export const zSocialReviewLinks = z.object({
     }),
   ),
   feedback: z.array(
-    z.object({ id: zId, linkId: zId, name: z.string(), verdict: z.enum(['approved', 'changes_requested', 'comment']), body: z.string().nullable(), changed: z.boolean(), createdAt: z.string() }),
+    z.object({
+      id: zId,
+      linkId: zId,
+      name: z.string(),
+      verdict: z.enum(['approved', 'changes_requested', 'comment']),
+      body: z.string().nullable(),
+      changed: z.boolean(),
+      createdAt: z.string(),
+      // The team's reply the client sees under their answer (#1301), or null; by is the member who wrote it last.
+      reply: zSocialReviewReply.nullable(),
+    }),
   ),
 });
+// social.review.reply (#1301): one editable team reply under a client's answer; null or empty text clears it.
+export const zSocialReviewReplyInput = z.strictObject({ feedbackId: zId, body: z.string().max(4000).nullable() });
 // One client review link for a content plan (#902): the posts picked in the posts list, or those going out in a
 // date range [from, to) on the chosen channels (none: all).
 export const zSocialReviewPlanCreate = z.strictObject({

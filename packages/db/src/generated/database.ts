@@ -1587,16 +1587,19 @@ export interface SocialReviewFeedbackTable {
   body: ColumnType<string | null, NotGranted, NotGranted>;
   changed: ColumnType<boolean, NotGranted, NotGranted>;
   created_at: ColumnType<Date, NotGranted, NotGranted>;
+  reply_body: ColumnType<string | null, NotGranted, string | null>;
+  replied_by: ColumnType<string | null, NotGranted, string | null>;
+  replied_at: ColumnType<Date | null, NotGranted, Date | string | null>;
 }
 
 /** crove_social.review_link_post */
 export interface SocialReviewLinkPostTable {
-  org_id: ColumnType<string, string, NotGranted>;
-  id: ColumnType<string, string | undefined, NotGranted>;
-  link_id: ColumnType<string, string, NotGranted>;
-  post_id: ColumnType<string, string, NotGranted>;
-  position: ColumnType<number, number, NotGranted>;
-  content_key: ColumnType<string, string | undefined, NotGranted>;
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  link_id: ColumnType<string, NotGranted, NotGranted>;
+  post_id: ColumnType<string, NotGranted, NotGranted>;
+  position: ColumnType<number, NotGranted, NotGranted>;
+  content_key: ColumnType<string, NotGranted, NotGranted>;
 }
 
 /** crove_social.review_link */

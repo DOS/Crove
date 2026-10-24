@@ -4018,7 +4018,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
           {canWrite && p.evergreenDays === null && p.recurrenceSourceId === null && (
             <RecurrencePanel key={`${JSON.stringify(p.recurrence)}:${p.recurrenceCount}`} post={p} published={published} onDone={refresh} />
           )}
-            <ReviewLinks postId={p.id} canDecide={canDecide} />
+            <ReviewLinks postId={p.id} canDecide={canDecide} canReply={canWrite} />
             <AssignCard post={p} canEdit={canDecide || (canWrite && p.authorUserId !== null && p.authorUserId === userId)} />
           <PostVersions
             postId={p.id}
