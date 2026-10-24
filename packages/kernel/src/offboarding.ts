@@ -62,6 +62,8 @@ export const EXPORT_TABLES = {
   // The tax portal's purchase lists and their rows (#465), kept like the ledger; the files are in kernel.file.
   'finance.portal_invoice_list': { from: 'crove_finance.portal_invoice_list', omit: [] },
   'finance.portal_invoice_row': { from: 'crove_finance.portal_invoice_row', omit: [] },
+  // The crm module's event types (#1314).
+  'crm.event_type': { from: 'crove_crm.event_type', omit: [] },
   'social.post': { from: 'crove_social.post', omit: [] },
   'social.post_variant': { from: 'crove_social.post_variant', omit: [] },
   'social.post_approval': { from: 'crove_social.post_approval', omit: [] },

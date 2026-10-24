@@ -3,14 +3,18 @@
 
 import type { ColumnType, Generated } from 'kysely';
 
-/** Every table of crove_kernel, crove_finance, crove_social that crove_tenant may read. */
-export type Database = CroveFinanceSchema & CroveKernelSchema & CroveSocialSchema;
+/** Every table of crove_kernel, crove_finance, crove_social, crove_crm that crove_tenant may read. */
+export type Database = CroveFinanceSchema & CroveKernelSchema & CroveSocialSchema & CroveCrmSchema;
 
 /**
  * The insert or update type of a column crove_tenant may not insert or update: no value but undefined, which
  * Kysely leaves out of the statement, so a write of the column fails typecheck.
  */
 export type NotGranted = undefined;
+
+export interface CroveCrmSchema {
+  'crove_crm.event_type': CrmEventTypeTable;
+}
 
 export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
@@ -126,6 +130,29 @@ export interface CroveSocialSchema {
   'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
   'crove_social.watermark': SocialWatermarkTable;
+}
+
+/** crove_crm.event_type */
+export interface CrmEventTypeTable {
+  org_id: string;
+  id: Generated<string>;
+  slug: string;
+  title: string;
+  description: string | null;
+  duration_min: number;
+  buffer_before_min: Generated<number>;
+  buffer_after_min: Generated<number>;
+  min_notice_min: Generated<number>;
+  horizon_days: Generated<number>;
+  daily_limit: number | null;
+  location_kind: Generated<string>;
+  location_value: string | null;
+  host_user_id: string;
+  active: Generated<boolean>;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_by: string | null;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_finance.account */

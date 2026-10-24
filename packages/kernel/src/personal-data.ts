@@ -125,13 +125,13 @@ export const PERSONAL_DATA_COLUMNS = {
 
 export type PersonalDataColumnKey = keyof typeof PERSONAL_DATA_COLUMNS;
 
-// The column names the invariant test treats as personal data. A column of crove_kernel, crove_finance or
-// crove_social whose name matches must be in PERSONAL_DATA_COLUMNS. Control-plane tables (the user's own sign-in
+// The column names the invariant test treats as personal data. A column of crove_kernel, crove_finance, crove_social
+// or crove_crm whose name matches must be in PERSONAL_DATA_COLUMNS. Control-plane tables (the user's own sign-in
 // account and the deployment's own records) are not tenant data and are left out: the identity provider handles a
 // user's own account, and no tenant code reads them (control-plane-reads.test.ts).
 export const PERSONAL_DATA_NAME_PATTERN =
   '(^|_)(email|emails|phone|phones|address|addresses|tax_code|recipient|recipients|person_name|reviewer_name|display_name|from_address|to_address|national_id|id_number|birth_date|full_name)($|_)';
-export const PERSONAL_DATA_SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social'] as const;
+export const PERSONAL_DATA_SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social', 'crove_crm'] as const;
 
 // The finder (#923): an owner or admin looks up one person by email address, phone number, or tax code or national ID
 // (digits), across the columns above that hold such a value, and gets every matching row as JSON (the search column
