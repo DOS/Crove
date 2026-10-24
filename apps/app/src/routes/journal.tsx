@@ -201,32 +201,41 @@ export function JournalPage() {
                 {ob('open')}
               </Link>
             )}
-            <Button size="lg" variant="outline" onClick={() => exportMisa.mutate()} disabled={exportMisa.isPending || nothingToExport}>
-              {exportMisa.isPending ? <Spinner className="text-current" /> : null}
-              {t('exportMisa')}
-            </Button>
-            <Button size="lg" variant="outline" onClick={() => exportMisaSales.mutate()} disabled={exportMisaSales.isPending || nothingToExport}>
-              {exportMisaSales.isPending ? <Spinner className="text-current" /> : null}
-              {t('exportMisaSales')}
-            </Button>
-            <Button size="lg" onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending || nothingToExport}>
-              {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
-              {t('export')}
-            </Button>
           </div>
         }
       />
       {entering && <JournalVoucherFormCard slug={slug} onClose={() => setEntering(false)} />}
       {closing && <YearClosingFormCard slug={slug} onClose={() => setClosing(false)} />}
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <label className="text-xs">
-          <span className="text-subtle-foreground">{t('from')}</span>
-          <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="mt-1 w-44" />
-        </label>
-        <label className="text-xs">
-          <span className="text-subtle-foreground">{t('to')}</span>
-          <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 w-44" />
-        </label>
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="text-xs">
+            <span className="text-subtle-foreground">{t('from')}</span>
+            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="mt-1 w-44" />
+          </label>
+          <label className="text-xs">
+            <span className="text-subtle-foreground">{t('to')}</span>
+            <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 w-44" />
+          </label>
+        </div>
+        {/* The exports in their own row beside the range (#1264), hidden only once the journal is known to be empty: the
+            empty journal says what fills it instead of offering three disabled buttons, and a range being read again
+            keeps the row in place. */}
+        {!(journal.isSuccess && nothingToExport) && (
+          <div role="group" aria-label={t('exportGroup')} className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={() => exportMisa.mutate()} disabled={exportMisa.isPending}>
+              {exportMisa.isPending ? <Spinner className="text-current" /> : null}
+              {t('exportMisa')}
+            </Button>
+            <Button variant="outline" onClick={() => exportMisaSales.mutate()} disabled={exportMisaSales.isPending}>
+              {exportMisaSales.isPending ? <Spinner className="text-current" /> : null}
+              {t('exportMisaSales')}
+            </Button>
+            <Button onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending}>
+              {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
+              {t('export')}
+            </Button>
+          </div>
+        )}
       </div>
       {(exportXlsx.error || exportMisa.error || exportMisaSales.error) && (
         <div className="mb-4">

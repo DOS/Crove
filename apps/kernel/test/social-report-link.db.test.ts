@@ -20,7 +20,8 @@ const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.
 const suite = ADMIN ? describe : describe.skip;
 
 // The rate sums (#1164) a report carries next to its totals, its previous period's and each channel's, left out: the
-// tests below that compare exact totals, and those that compare with the definitions before them, predate them.
+// tests below that compare exact totals, and those that compare with the definitions before them, predate them. The
+// comparisons with older definitions leave out the 'sections' key (#1259) too.
 const withoutRates = <T,>(channels: readonly T[]): T[] =>
   channels.map((c) => {
     const { rateBases: _r, previous, ...rest } = c as T & { rateBases?: unknown; previous?: { rateBases?: unknown } };
@@ -307,7 +308,7 @@ suite('social report links on PostgreSQL (#643)', () => {
       const read = async () => (await c.query<{ page: string }>('SELECT crove_social.report_link_view($1)::text AS page', [token])).rows[0]?.page;
       // The audience list (#1146) and the Reels (#1151) came after: left out of today's answer, which has the audience
       // empty here.
-      const current = (await c.query<{ page: string; audience: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
+      const current = (await c.query<{ page: string; audience: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels', 'sections'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
       expect(current?.audience).toEqual([]);
       await c.query('BEGIN');
       try {
@@ -379,7 +380,7 @@ suite('social report links on PostgreSQL (#643)', () => {
     const previous = readFileSync(join(MIGRATIONS, '20261028240000_crove_social_story_report.sql'), 'utf8');
     const [now, audience, before] = await admin(async (c) => {
       // The Reels (#1151) came after.
-      const current = (await c.query<{ page: string; audience: unknown }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
+      const current = (await c.query<{ page: string; audience: unknown }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels', 'sections'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
       await c.query('BEGIN');
       try {
         await c.query(previous);
@@ -582,7 +583,7 @@ suite('social report links on PostgreSQL (#643)', () => {
     const pages = await admin(async (c) => {
       const read = async (token: string, without: string) => (await c.query<{ page: string }>(`SELECT (crove_social.report_link_view($1) - ${without})::text AS page`, [token])).rows[0]?.page;
       // The rate sums (#1164) came after: left out of today's answer.
-      const readNow = async (token: string) => (await c.query<{ page: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - 'reels')::text AS page`, [token])).rows[0]?.page;
+      const readNow = async (token: string) => (await c.query<{ page: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['reels', 'sections'])::text AS page`, [token])).rows[0]?.page;
       const now = [await readNow(plain.token), await readNow(outside.token)];
       const reels = (await c.query<{ reels: unknown }>("SELECT crove_social.report_link_view($1) -> 'reels' AS reels", [plain.token])).rows[0]?.reels;
       await c.query('BEGIN');
@@ -597,6 +598,134 @@ suite('social report links on PostgreSQL (#643)', () => {
     expect(pages.now[0]).toBeTruthy();
     expect(JSON.parse(pages.now[0] as string)).toMatchObject({ posts: 2, audience: [{ channel: 'Trang Facebook' }], goals: { month: '2026-10' } });
     expect(JSON.parse(pages.now[1] as string)).toMatchObject({ posts: 2, includesExternal: true });
+    expect(pages.now).toEqual(pages.before);
+  });
+
+  // #1259: a link chooses its sections; one it leaves out is never worked out nor returned.
+  it('returns only the sections a link chooses: no best posts, audience, period before, Story counts or clicks when left out (#1259)', async () => {
+    const o = await org();
+    const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
+    const first = await published(o, fb, 'Bài bí mật nổi bật', '2026-10-05T03:00:00Z', { reach: 900, reactions: 40, replies: 3, tapsForward: 20 });
+    await published(o, fb, 'Bài tháng trước', '2026-09-20T03:00:00Z', { reach: 30 });
+    await shortLink(o, first, 1, { '2026-10-08': 5 });
+    await snapshot(o.orgId, fb, '2026-10-22', AUDIENCE);
+    const { token, linkId } = await exec<{ token: string; linkId: string }>(o, o.owner, 'social.report_link.create', { ...OCT, note: 'Nhận xét', sections: ['totals', 'note'] });
+    const page = (await view(token)) as unknown as Record<string, unknown>;
+    expect(page).toMatchObject({ posts: 1, sections: ['totals', 'note'], note: 'Nhận xét', totals: { reach: 900, reactions: 40 } });
+    for (const key of ['top', 'audience', 'previous', 'channels', 'reels', 'goals']) expect(page[key]).toBeNull();
+    // Without stories and clicks, their counts are nowhere.
+    expect(page.totals).toEqual({ reach: 900, reactions: 40 });
+    const text = JSON.stringify(page);
+    for (const absent of ['Bài bí mật', 'Hanoi', 'replies', 'tapsForward', 'linkClicks', 'Trang Facebook']) expect(text).not.toContain(absent);
+    // Without the audience section, the link does not show it; the list says what it chose.
+    const listed = (await rt.query<ReportLinkView[]>('social.report_link.list', {}, { actor: asUser(o.owner), orgId: o.orgId })).find((l) => l.id === linkId);
+    expect(listed).toMatchObject({ sections: ['totals', 'note'], topCount: null, includeAudience: false });
+
+    // The best posts only, 3 of them, and the period before with the channels; the note left out.
+    for (let i = 0; i < 4; i++) await published(o, fb, `Bài ${i}`, `2026-10-1${i}T03:00:00Z`, { reach: 10 * (i + 1), reactions: i + 1 });
+    const top = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, note: 'Bí mật', sections: ['top', 'channels', 'comparison', 'stories'], topCount: 3 });
+    const p2 = (await view(top.token)) as unknown as { top: { metrics: Record<string, number> }[]; channels: { previous: unknown; totals: Record<string, number> }[]; previous: { posts: number }; note: unknown; totals: unknown };
+    expect(p2.top).toHaveLength(3);
+    expect(p2.top[0]?.metrics).toMatchObject({ replies: 3, tapsForward: 20 });
+    expect(p2.top[0]?.metrics.linkClicks).toBeUndefined();
+    expect(p2.previous).toMatchObject({ posts: 1 });
+    expect(p2.channels[0]?.previous).toMatchObject({ posts: 1 });
+    expect(p2.note).toBeNull();
+    expect(p2.totals).toBeNull();
+    // Without the comparison, no channel and no number of the period before.
+    const now = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, sections: ['channels'] });
+    const p3 = (await view(now.token)) as unknown as { channels: { posts: number; previous: unknown }[]; previous: unknown };
+    expect(p3.previous).toBeNull();
+    expect(p3.channels.map((c) => [c.posts, c.previous])).toEqual([[5, null]]);
+    // Without the reels section, the Reels watch time is counted nowhere: not in the totals, the channels, the period
+    // before or the best posts.
+    await published(o, fb, 'Reel có thời gian xem', '2026-10-20T03:00:00Z', { reach: 5, reactions: 1, totalWatchTimeMs: 123_456, avgWatchTimeMs: 4_000 });
+    await published(o, fb, 'Reel tháng trước', '2026-09-21T03:00:00Z', { reach: 5, totalWatchTimeMs: 654_321 });
+    const noReels = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, sections: ['top', 'totals'], topCount: 20 });
+    const p4 = (await view(noReels.token)) as unknown as Record<string, unknown> & { top: { excerpt: string }[] };
+    expect(p4.top.map((p) => p.excerpt)).toContain('Reel có thời gian xem');
+    expect(p4.reels).toBeNull();
+    expect(JSON.stringify(p4)).not.toContain('totalWatchTimeMs');
+    expect(JSON.stringify(p4)).not.toContain('123456');
+    const withEverything = (await view((await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, sections: ['top', 'totals', 'channels', 'comparison', 'reels'] })).token)) as unknown as {
+      totals: Record<string, number>;
+      channels: { previous: { totals: Record<string, number> } }[];
+    };
+    expect(withEverything.totals.totalWatchTimeMs).toBe(123_456);
+    expect(withEverything.channels[0]?.previous.totals.totalWatchTimeMs).toBe(654_321);
+  });
+
+  it('keeps the sections to the allowed values, each once, the best posts to 3 to 20, and the audience to its section (#1259)', async () => {
+    const o = await org();
+    for (const sections of [[], ['top', 'top'], ['secret'], ['comparison'], ['stories', 'clicks']]) await expect(exec(o, o.owner, 'social.report_link.create', { ...OCT, sections })).rejects.toMatchObject({ status: 422 });
+    for (const topCount of [2, 21]) await expect(exec(o, o.owner, 'social.report_link.create', { ...OCT, topCount })).rejects.toMatchObject({ status: 422 });
+    await expect(exec(o, o.owner, 'social.report_link.create', { ...OCT, sections: ['top'], includeAudience: true })).rejects.toMatchObject({ code: 'VALIDATION' });
+    const ok = await exec<{ linkId: string }>(o, o.owner, 'social.report_link.create', { ...OCT, sections: ['audience', 'top'], includeAudience: true, topCount: 20 });
+    // The table's CHECKs hold whatever writes the rows.
+    const insert = (column: string, value: unknown) =>
+      admin((c) =>
+        c.query(`INSERT INTO crove_social.report_link (org_id, token_sha256, period_start, period_end, created_by, expires_at, ${column}) VALUES ($1, $2, now(), now() + interval '1 day', $3, now() + interval '1 day', $4)`, [
+          o.orgId,
+          randomUUID().replace(/-/g, '').padEnd(64, '0'),
+          o.owner,
+          value,
+        ]),
+      );
+    for (const bad of [[], ['top', 'top'], ['secret'], ['note', null]]) await expect(insert('sections', bad)).rejects.toMatchObject({ code: '23514' });
+    for (const bad of [2, 21]) await expect(insert('top_count', bad)).rejects.toMatchObject({ code: '23514' });
+    await insert('sections', ['clicks', 'note', 'goals', 'totals', 'comparison', 'channels', 'top', 'reels', 'stories', 'audience']);
+    // A tenant transaction cannot change a link's sections after the fact: its UPDATE stays revoked_at and revoked_by.
+    const columns = await admin(async (c) =>
+      (
+        await c.query<{ column_name: string }>(
+          "SELECT column_name FROM information_schema.column_privileges WHERE grantee = 'crove_tenant' AND table_schema = 'crove_social' AND table_name = 'report_link' AND privilege_type = 'UPDATE' ORDER BY 1",
+        )
+      ).rows.map((r) => r.column_name),
+    );
+    expect(columns).toEqual(['revoked_at', 'revoked_by']);
+    expect(ok.linkId).toBeTruthy();
+  });
+
+  // #1259 re-created report_link_view with the sections: a link without them gives byte for byte what the previous
+  // definition (migration 20261029190000) gives, but for the new 'sections' key.
+  it('gives exactly the previous output, but for the sections, for a link without them (#1259)', async () => {
+    const o = await org();
+    const fb = await connection(o.orgId, o.owner, 'Trang Facebook');
+    const zalo = await connection(o.orgId, o.owner, 'Zalo OA');
+    const all = { impressions: 900, reach: 700, reactions: 40, comments: 8, shares: 6, saves: 4, clicks: 3, views: 1200, replies: 2, tapsForward: 9, totalWatchTimeMs: 50_000, avgWatchTimeMs: 4_000 };
+    const first = await published(o, fb, 'Khai trương', '2026-10-05T03:00:00Z', { ...all, secret_internal: 99 });
+    for (let i = 0; i < 12; i++) await published(o, zalo, `Tin Zalo ${i}`, `2026-10-${String(6 + i).padStart(2, '0')}T03:00:00Z`, { reach: 50 + i, views: 80 });
+    await published(o, fb, 'Tháng trước', '2026-09-20T03:00:00Z', { reach: 30, reactions: 2 });
+    const sale = await label(o, 'Khai trương');
+    await tag(o, first, [sale]);
+    await shortLink(o, first, 1, { '2026-10-08': 5 });
+    await snapshot(o.orgId, fb, '2026-10-22', AUDIENCE);
+    await exec(o, o.owner, 'social.goal.set', { connectionId: null, targets: { posts: 3, reach: 1000 }, timeZone: 'Asia/Ho_Chi_Minh' });
+    const links = [
+      await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, title: 'Tháng 10', note: 'Nhận xét' }),
+      await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, includeAudience: false, connectionIds: [fb] }),
+      await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, labelId: sale }),
+    ];
+    const previous = readFileSync(join(MIGRATIONS, '20261029190000_crove_social_report_rate_goals.sql'), 'utf8');
+    const pages = await admin(async (c) => {
+      const read = async (token: string, without: string) => (await c.query<{ page: string }>(`SELECT (crove_social.report_link_view($1) - ${without})::text AS page`, [token])).rows[0]?.page;
+      const now: (string | undefined)[] = [];
+      for (const l of links) now.push(await read(l.token, "'sections'"));
+      const sections = (await c.query<{ s: unknown }>("SELECT crove_social.report_link_view($1) -> 'sections' AS s", [links[0]?.token])).rows[0]?.s;
+      await c.query('BEGIN');
+      try {
+        await c.query(previous);
+        const before: (string | undefined)[] = [];
+        for (const l of links) before.push(await read(l.token, "'none'"));
+        return { now, before, sections };
+      } finally {
+        await c.query('ROLLBACK');
+      }
+    });
+    expect(pages.sections).toBeNull();
+    const first0 = JSON.parse(pages.now[0] as string) as { top: unknown[]; note: string; goals: unknown; audience: unknown[]; totals: Record<string, number> };
+    expect(first0.top).toHaveLength(10);
+    expect(first0).toMatchObject({ note: 'Nhận xét', goals: { month: '2026-10' }, audience: [{ channel: 'Trang Facebook' }], totals: { linkClicks: 5, replies: 2 } });
     expect(pages.now).toEqual(pages.before);
   });
 

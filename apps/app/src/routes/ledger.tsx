@@ -407,8 +407,6 @@ export function LedgerPage() {
         </label>
         {data && <p className="pb-1.5 text-sm text-muted-foreground">{t('range', { from: f.date(data.period.from), to: f.date(data.period.to) })}</p>}
       </div>
-      <PeriodLockPanel />
-      <YearArchivePanel />
       {exportXlsx.error && (
         <div className="mb-4">
           <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>
@@ -528,6 +526,15 @@ export function LedgerPage() {
           <Statements period={period} />
         </TabsContent>
       </Tabs>
+      {/* Locking a month and archiving a year come after the reports they close (#1264): the reports are what this
+          screen is opened for, the lock once a month and the archive once a year. */}
+      <section className="mt-10 border-t pt-6" aria-labelledby="ledger-closing">
+        <h2 id="ledger-closing" className="mb-3 text-sm font-semibold">
+          {t('closingTitle')}
+        </h2>
+        <PeriodLockPanel />
+        <YearArchivePanel />
+      </section>
     </>
   );
 }

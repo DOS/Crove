@@ -152,3 +152,23 @@ describe('report mail goals line (#1056)', () => {
     }
   });
 });
+
+// #1259: a schedule that chooses its report's sections sends only theirs.
+describe('report mail sections (#1259)', () => {
+  it('sends the posts alone without the totals, and refuses a payload with only some of them', async () => {
+    const out = await mail(null, { reach: undefined, impressions: undefined, engagement: undefined });
+    expect(out?.text).toContain('Bài đã đăng: 3');
+    expect(`${out?.text}${out?.html}`).not.toContain('Lượt tiếp cận');
+    expect(`${out?.text}${out?.html}`).not.toContain('Lượt tương tác');
+    expect(await mail(null, { reach: undefined })).toBeNull();
+  });
+
+  it("carries the agency's note as text, escaped in the HTML, under the sender's name", async () => {
+    const out = await mail(null, { note: 'Tháng này <b>tốt</b>\nCảm ơn anh chị' });
+    expect(out?.text).toContain('Nhận xét của Công ty Sao Mai:\nTháng này <b>tốt</b>\nCảm ơn anh chị');
+    expect(out?.html).toContain('Tháng này &lt;b&gt;tốt&lt;/b&gt;\nCảm ơn anh chị');
+    expect(out?.html).not.toContain('<b>tốt');
+    // A mail queued before notes, or with an empty one, has no note.
+    for (const note of [undefined, '', '   ', 42]) expect((await mail(null, { note }))?.text).not.toContain('Nhận xét');
+  });
+});

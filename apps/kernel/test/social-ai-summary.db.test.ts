@@ -285,7 +285,10 @@ suite('AI summary of a period, and the rate and goals it repeats (#1237, #1164, 
       }
     });
     expect(pages.now).toMatchObject({ posts: 2, goals: { month: '2026-09' }, rateBases: { reach: { engagement: 61, denominator: 700 } } });
-    expect(strip(pages.now)).toEqual(pages.before);
+    // The sections key came after (#1259): null for a link without sections, left out here.
+    const { sections, ...now } = pages.now as Record<string, unknown>;
+    expect(sections).toBeNull();
+    expect(strip(now)).toEqual(pages.before);
   });
 
   it("writes the summary from the tab's own figures and saves nothing", async () => {
