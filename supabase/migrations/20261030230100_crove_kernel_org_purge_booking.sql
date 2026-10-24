@@ -49,7 +49,7 @@ DECLARE
     'crove_social.post_comment', 'crove_social.post_media', 'crove_social.post_version', 'crove_social.publish_hold', 'crove_social.report_link',
     'crove_social.report_schedule_run', 'crove_social.report_schedule', 'crove_social.review_feedback',
     'crove_social.review_link_post', 'crove_social.review_link', 'crove_social.short_link_click',
-    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.goal', 'crove_social.banned_word', 'crove_social.external_import', 'crove_social.external_post', 'crove_social.channel_access', 'crove_social.review_check', 'crove_social.digest_week', 'crove_social.channel_option', 'crove_social.media_attribution', 'crove_social.push_subscription'];
+    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.goal', 'crove_social.banned_word', 'crove_social.external_import', 'crove_social.external_post', 'crove_social.channel_access', 'crove_social.review_check', 'crove_social.digest_week', 'crove_social.channel_option', 'crove_social.media_attribution', 'crove_social.push_subscription', 'crove_social.saved_view'];
 BEGIN
   -- Also refuses a definer owner or another role reached through a mistaken grant: only the worker login, in the
   -- sealed system context of the org it purges (execute() of kernel.org.purge).
