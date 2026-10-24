@@ -1355,6 +1355,17 @@ export const zSocialRecurrence = z.strictObject({
 });
 export type SocialRecurrence = z.infer<typeof zSocialRecurrence>;
 
+// Text variations (#1260): up to 5 other texts of an evergreen or series post, in order; each evergreen repost or
+// recurring copy takes the next one in turn as its text. ai marks one AI wrote (#583). crove_social.text_variations_valid
+// holds the same shape.
+export const SOCIAL_TEXT_VARIATIONS_MAX = 5;
+export const SOCIAL_TEXT_VARIATION_CHARS_MAX = 100_000;
+export const zSocialTextVariation = z.strictObject({ text: z.string().trim().min(1).max(SOCIAL_TEXT_VARIATION_CHARS_MAX), ai: z.boolean() });
+export const zSocialTextVariations = z
+  .array(zSocialTextVariation)
+  .max(SOCIAL_TEXT_VARIATIONS_MAX)
+  .refine((list) => new Set(list.map((v) => v.text)).size === list.length, 'each text once');
+
 export const zSocialPost = z.object({
   id: zId,
   body: z.string(),
@@ -1367,6 +1378,9 @@ export const zSocialPost = z.object({
   recurrence: z.object({ everyWeeks: z.number().int(), weekdays: z.array(z.number().int()), time: z.string(), until: z.string().nullable(), times: z.number().int().nullable() }).nullable(),
   recurrenceCount: z.number().int(),
   recurrenceSourceId: zId.nullable(),
+  // Its text variations and the position of the one the next copy takes (#1260).
+  textVariations: z.array(z.object({ text: z.string(), ai: z.boolean() })),
+  textVariationNext: z.number().int(),
   timeZone: z.string(),
   scheduledAt: z.string().nullable(),
   revision: z.number().int(),

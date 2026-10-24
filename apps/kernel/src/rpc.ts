@@ -521,6 +521,7 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         setEvergreen: os.social.posts.setEvergreen.handler(socialCommand('social.post.set_evergreen')),
         setRecurrence: os.social.posts.setRecurrence.handler(socialCommand('social.post.recurrence_set')),
         clearRecurrence: os.social.posts.clearRecurrence.handler(socialCommand('social.post.recurrence_clear')),
+        setTextVariations: os.social.posts.setTextVariations.handler(socialCommand('social.post.set_text_variations')),
         aiPhotos: os.social.posts.aiPhotos.handler(({ context }) => inSocial(context, async () => ({ enabled: Boolean(socialWriter?.draftStored) }))),
         draftWithAi: os.social.posts.draftWithAi.handler(({ context, input }) =>
           inSocial(context, async (orgId, actor) => {

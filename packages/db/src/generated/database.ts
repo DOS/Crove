@@ -1367,6 +1367,8 @@ export interface SocialPostTable {
   recurrence_last_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   recurrence_next_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   recurrence_source_id: string | null;
+  text_variations: ColumnType<unknown, string | undefined, string>;
+  text_variation_next: Generated<number>;
 }
 
 /** crove_social.post_variant */

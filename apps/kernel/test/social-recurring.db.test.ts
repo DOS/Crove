@@ -80,7 +80,7 @@ suite('social recurring posts on PostgreSQL (#979)', () => {
     exec<{ postId: string; recurrence: Recurrence }>(o, 'social.post.recurrence_set', { postId, recurrence: { everyWeeks: 1, weekdays: [1], time: '09:00', until: null, times: null, ...recurrence } }, user);
   const next = (o: Org, postId: string) => worker.execute<RecurringResult>('social.recurring.next', { postId }, { actor: { type: 'system', component: 'social-recurring-test' }, orgId: o.orgId });
   const sweep = () => sweepRecurring({ runtime: worker, workerDb });
-  const due = () => admin(async (c) => (await c.query<{ post_id: string }>('SELECT post_id FROM crove_social.recurring_due(500)')).rows.map((r) => r.post_id));
+  const due = () => admin(async (c) => (await c.query<{ post_id: string }>('SELECT post_id FROM crove_social.recurring_due(500, ARRAY[]::uuid[])')).rows.map((r) => r.post_id));
   const copies = (seriesId: string) =>
     admin(async (c) => (await c.query<{ id: string; status: string; scheduled_at: Date | null; repost_of: string | null }>('SELECT id, status, scheduled_at, repost_of FROM crove_social.post WHERE recurrence_source_id = $1 ORDER BY created_at, id', [seriesId])).rows);
   const series = (postId: string) =>
@@ -296,11 +296,11 @@ suite('social recurring posts on PostgreSQL (#979)', () => {
 
     // The next copy is the worker's alone, and so is the scan.
     await expect(exec(o, 'social.recurring.next', { postId })).rejects.toBeDefined();
-    await expect(appPool.query('SELECT * FROM crove_social.recurring_due(10)')).rejects.toMatchObject({ code: '42501' });
+    await expect(appPool.query('SELECT * FROM crove_social.recurring_due(10, ARRAY[]::uuid[])')).rejects.toMatchObject({ code: '42501' });
     const can = await admin(async (c) =>
       (
         await c.query<{ role: string }>(
-          `SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r WHERE has_function_privilege(r, 'crove_social.recurring_due(int)', 'EXECUTE') ORDER BY 1`,
+          `SELECT r AS role FROM unnest(ARRAY['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant']) r WHERE has_function_privilege(r, 'crove_social.recurring_due(int, uuid[])', 'EXECUTE') ORDER BY 1`,
         )
       ).rows.map((r) => r.role),
     );

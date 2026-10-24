@@ -27,6 +27,7 @@ export * from './domain/team-report.ts';
 export * from './team-report.ts';
 export * from './evergreen.ts';
 export * from './domain/recurrence.ts';
+export * from './domain/text-variations.ts';
 export * from './recurring.ts';
 export * from './library.ts';
 export * from './domain/media-tags.ts';

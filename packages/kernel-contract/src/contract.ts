@@ -39,6 +39,7 @@ import {
   zSocialDecide,
   zSocialPost,
   zSocialRecurrence,
+  zSocialTextVariations,
   zSocialReviewDiff,
   zSocialPreReview,
   zSocialPostVersions,
@@ -463,6 +464,11 @@ export const contract = {
       // for its occurrence and sent to review. Setting it makes the post a series; clearing it ends the series.
       setRecurrence: oc.input(z.strictObject({ postId: zId, recurrence: zSocialRecurrence })).output(z.object({ postId: zId, recurrence: zSocialRecurrence })),
       clearRecurrence: oc.input(z.strictObject({ postId: zId })).output(z.object({ postId: zId })),
+      // The text variations of an evergreen or series post (#1260), replacing the list; the next copy's stays on the same
+      // text when it is kept.
+      setTextVariations: oc
+        .input(z.strictObject({ postId: zId, variations: zSocialTextVariations }))
+        .output(z.object({ postId: zId, variations: z.array(z.object({ text: z.string(), ai: z.boolean() })), next: z.number().int() })),
       // Whether this server writes AI drafts from photos (#1191, #1196): an AI model that takes images (AI_VISION).
       aiPhotos: oc.input(z.object({})).output(z.object({ enabled: z.boolean() })),
       // AI drafting (Social plan §3.7): the server asks the deployment's model for a draft from the brief and saves it as
@@ -496,13 +502,14 @@ export const contract = {
       // A rewrite of one text, as a proposal the member accepts or discards (#583); nothing is saved. With a channel,
       // the rewrite is told its limits. proofread (#1167): spelling, diacritics, spacing and punctuation only; the
       // text comes back unchanged when there is nothing to fix, and an answer that changed a link, hashtag, mention,
-      // number or price, or emoji is refused with AI_PROOFREAD_CHANGED.
+      // number or price, or emoji is refused with AI_PROOFREAD_CHANGED. variation (#1260): another wording of the text, for
+      // the post's text variations; it only fills the form until a person saves it.
       rewriteWithAi: oc
         .input(
           z.strictObject({
             text: z.string().trim().min(1).max(20_000),
             title: z.string().trim().max(500).nullable().optional(),
-            action: z.enum(['shorten', 'formal', 'casual', 'translate_en', 'translate_vi', 'proofread']),
+            action: z.enum(['shorten', 'formal', 'casual', 'translate_en', 'translate_vi', 'proofread', 'variation']),
             connectionId: zId.optional(),
           }),
         )

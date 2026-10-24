@@ -14,6 +14,7 @@ export { localTime, zonedToEpoch, type LocalTime } from './domain/queue.ts';
 export { placeQueued, retime, type QueuedPost, type QueueSpec } from './domain/queue.ts';
 // Recurring posts (#979): the rule's next occurrence, for the post page's preview.
 export * from './domain/recurrence.ts';
+export * from './domain/text-variations.ts';
 // Banned and sensitive words (#1055): the composer marks matches with the rules the commands apply.
 export * from './domain/banned-words.ts';
 // Monthly goals (#1056): the report page judges progress with the rules the Metrics tab uses.
