@@ -307,7 +307,7 @@ suite('social archived posts on PostgreSQL (#1299)', () => {
     const series = await post(o, o.member, 'Bài lặp hằng tuần');
     await publish(o, series, new Date(Date.now() - DAY));
     await exec(o, o.member, 'social.post.recurrence_set', { postId: series, recurrence: { everyWeeks: 1, weekdays: [1, 3], time: '09:00', until: null, times: null } });
-    const due = (fn: string) => admin(async (c) => (await c.query<{ post_id: string }>(`SELECT post_id FROM crove_social.${fn}(1000)`)).rows.map((r) => r.post_id));
+    const due = (fn: string) => admin(async (c) => (await c.query<{ post_id: string }>(`SELECT post_id FROM crove_social.${fn}(500, ARRAY[]::uuid[])`)).rows.map((r) => r.post_id));
     expect(await due('evergreen_due')).toContain(evergreen);
     expect(await due('recurring_due')).toContain(series);
 
@@ -378,6 +378,7 @@ suite('social archived posts on PostgreSQL (#1299)', () => {
     await expect(exec(o, o.member, 'social.post.add_channels', { postId, channels: [{ connectionId: second }] })).rejects.toMatchObject(refused);
     await expect(exec(o, o.owner, 'social.variant.decide', { postId, decision: 'approved', variants: [{ variantId: variant.id, revision: variant.revision, contentHash: variant.contentHash }] })).rejects.toMatchObject(refused);
     await expect(exec(o, o.owner, 'social.variant.schedule', { postId, at: new Date(Date.now() + DAY).toISOString() })).rejects.toMatchObject(refused);
+    await expect(exec(o, o.member, 'social.post.set_text_variations', { postId, variations: [{ text: 'Một cách viết khác', ai: false }] })).rejects.toMatchObject(refused);
     await setStatus(o, postId, 'changes_requested');
     await expect(exec(o, o.member, 'social.post.submit', { postId })).rejects.toMatchObject(refused);
     await setStatus(o, postId, 'failed');
