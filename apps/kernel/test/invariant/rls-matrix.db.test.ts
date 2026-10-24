@@ -43,10 +43,10 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
-  'crove_crm.event_type',
-  'crove_kernel.availability_rule',
-  'crove_kernel.calendar_event',
+  'crove_crm.booking',
   'crove_kernel.role_assignment',
+  'crove_social.media_archive',
+  'crove_social.saved_view',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -177,7 +177,7 @@ const socialShortLinkRows = (o: { id: string; owner: string }) => {
 let portalListYear = 2000;
 // A tax obligation is marked done once per period (#921): each row its own year.
 let taxObligationYear = 2000;
-// Calendar events of one member never overlap while busy (#1313): each row its own hour.
+// Active bookings of one member never overlap (#1313): each calendar event row its own hour.
 let calendarHour = 0;
 // An org's weekly digest is marked sent once per ISO week (#1104): each row its own year.
 let digestWeekYear = 2000;
@@ -212,6 +212,35 @@ const journalEntry = (org: string, id: string): Row => ({
 // refused), so a denial cannot come from a malformed row. Kept in table-name order (plain string sort; the catalog
 // test checks it), so a new factory goes at its own place instead of at the end, where parallel PRs would conflict.
 const ROW_FACTORIES: Record<string, RowFactory> = {
+  // #1318: a visitor's booking of an event type, holding an event on the host's calendar.
+  'crove_crm.booking': {
+    make: (o) => {
+      const eventType = randomUUID();
+      const event = randomUUID();
+      const start = new Date(Date.UTC(2031, 0, 1) + 3_600_000 * calendarHour++);
+      return {
+        setup: [
+          { table: 'crove_crm.event_type', values: { org_id: o.id, id: eventType, slug: `rls-${tag()}`, title: 'RLS matrix event type', duration_min: 30, host_user_id: o.owner, created_by: o.owner } },
+          {
+            table: 'crove_kernel.calendar_event',
+            values: { org_id: o.id, id: event, user_id: o.owner, starts_at: start.toISOString(), ends_at: new Date(start.getTime() + 1_800_000).toISOString(), time_zone: 'Asia/Ho_Chi_Minh', kind: 'booking', created_by: o.owner },
+          },
+        ],
+        row: {
+          org_id: o.id,
+          id: randomUUID(),
+          event_type_id: eventType,
+          calendar_event_id: event,
+          starts_at: start.toISOString(),
+          ends_at: new Date(start.getTime() + 1_800_000).toISOString(),
+          status: 'confirmed',
+          visitor_name: 'RLS matrix visitor',
+          email: 'visitor@rls.example',
+          time_zone: 'Asia/Ho_Chi_Minh',
+        },
+      };
+    },
+  },
   // #1314: a booking page's event type, hosted by a member; slugs are unique per org.
   'crove_crm.event_type': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), slug: `rls-${tag()}`, title: 'RLS matrix event type', duration_min: 30, host_user_id: o.owner, created_by: o.owner } }),
@@ -792,6 +821,15 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_social.link_preview': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), url: `https://example.com/rls-${tag()}`, url_sha256: hex64(), status: 'pending', requested_at: new Date().toISOString() } }),
   },
+  // A library file taken out of the Social pickers (#1302): at most one archive row per file (a unique key), so every
+  // row gets a file of its own.
+  'crove_social.media_archive': {
+    make: (o) => {
+      const sha256 = hex64();
+      const file = { org_id: o.id, id: randomUUID(), sha256, storage_key: `org/${o.id}/${sha256}`, filename: 'archived.jpg', content_type: 'image/jpeg', size_bytes: 1, source: 'social' };
+      return { setup: [{ table: 'crove_kernel.file', values: file }], row: { org_id: o.id, id: randomUUID(), file_id: file.id, archived_by: o.owner } };
+    },
+  },
   // The credit of a library file saved from a stock photo site (#1106): the photographer, the photo's page and its
   // description, one per file. Each row gets a file of its own, since a file has at most one.
   'crove_social.media_attribution': {
@@ -1019,6 +1057,12 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         row: { org_id: o.id, id: randomUUID(), link_id: link.id, post_id: post.id, position: 0 },
       };
     },
+  },
+  // A member's saved view of the posts (#1300): a name and the filters it applies, private or shared with the org,
+  // under a restrictive policy that shows a private view to its owner alone; the factory's rows belong to the owner,
+  // the user every member-context actor enters as. One name per member, so every row gets its own.
+  'crove_social.saved_view': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, name: `rls-${tag()}`, filters: '{"assignee":"me"}' } }),
   },
   // A saved snippet of text (#584): hashtags, a signature or a whole post to start from.
   // A post's link as Crove shortened it when the variant went out (#706); the worker writes it.

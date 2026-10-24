@@ -23,3 +23,4 @@ export { PARTY_NAME_MAX_LENGTH, duplicateHints, nameCore, nameSimilarity, phoneK
 export { isArchiveType } from './files.ts';
 export * from './proposal-resubmit.ts';
 export { normalizeEntityName } from './legal-entities.ts';
+export { busyOf, workingHoursOf } from './calendar.ts';

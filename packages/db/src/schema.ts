@@ -99,6 +99,18 @@ export type TaxProfileTable = Refine<
 >;
 export type TaxObligationDoneTable = Refine<G.KernelTaxObligationDoneTable, { obligation: (typeof TAX_OBLIGATION_CODES)[number] }>;
 
+// The calendar core (issue #1313): a member's weekly working hours and the events on their calendar. Holidays and the
+// slot rules are in @crove/kernel-contract (calendar.ts).
+export const CALENDAR_EVENT_KINDS = ['manual', 'time_off', 'booking'] as const;
+export const CALENDAR_EVENT_STATUSES = ['active', 'cancelled'] as const;
+export type CalendarEventTable = Refine<
+  G.KernelCalendarEventTable,
+  {
+    kind: Generated<(typeof CALENDAR_EVENT_KINDS)[number]>;
+    status: Generated<(typeof CALENDAR_EVENT_STATUSES)[number]>;
+  }
+>;
+
 // The legal entities of an org (issue #1278): a company or other organization, a branch or other dependent unit, or a
 // household or individual business. One default per org, created with the org.
 export const LEGAL_ENTITY_KINDS = ['company', 'branch', 'household'] as const;
@@ -568,7 +580,13 @@ export type SocialPostApprovalTable = Refine<
   }
 >;
 
+// The crm module (issue #1314): event types of booking pages.
+export const EVENT_TYPE_LOCATION_KINDS = ['in_person', 'phone', 'video'] as const;
+export type CrmEventTypeTable = Refine<G.CrmEventTypeTable, { location_kind: Generated<(typeof EVENT_TYPE_LOCATION_KINDS)[number]> }>;
+
 type Refined = Tables<{
+  'crove_crm.event_type': CrmEventTypeTable;
+  'crove_kernel.calendar_event': CalendarEventTable;
   'crove_kernel.legal_entity': LegalEntityTable;
   'crove_kernel.tax_obligation_done': TaxObligationDoneTable;
   'crove_kernel.tax_profile': TaxProfileTable;

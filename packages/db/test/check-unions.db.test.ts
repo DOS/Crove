@@ -15,9 +15,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migrate } from '../src/migrate.ts';
 import {
   ACTOR_TYPES,
+  EVENT_TYPE_LOCATION_KINDS,
   AGENT_RISKS,
   AGENT_RUNTIMES,
   AGENT_SCOPES,
+  CALENDAR_EVENT_KINDS,
+  CALENDAR_EVENT_STATUSES,
   AGENT_STATUSES,
   AGENT_WAKEUP_STATUSES,
   AI_RUN_STATUSES,
@@ -92,7 +95,7 @@ import {
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social'];
+const SCHEMAS = ['crove_kernel', 'crove_finance', 'crove_social', 'crove_crm'];
 const suite = ADMIN ? describe : describe.skip;
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
@@ -116,6 +119,7 @@ const unions = <const M extends Unions<M> & Readonly<Record<string, readonly str
 
 // schema.table.column -> the const array of schema.ts the column is refined to.
 const UNIONS = unions({
+  'crove_crm.event_type.location_kind': EVENT_TYPE_LOCATION_KINDS,
   'crove_kernel.agent.max_risk': AGENT_RISKS,
   'crove_kernel.agent.runtime': AGENT_RUNTIMES,
   'crove_kernel.agent.status': AGENT_STATUSES,
@@ -125,6 +129,8 @@ const UNIONS = unions({
   'crove_kernel.audit_event.actor_type': ACTOR_TYPES,
   'crove_kernel.audit_event.outcome': AUDIT_OUTCOMES,
   'crove_kernel.budget_policy.scope': AGENT_SCOPES,
+  'crove_kernel.calendar_event.kind': CALENDAR_EVENT_KINDS,
+  'crove_kernel.calendar_event.status': CALENDAR_EVENT_STATUSES,
   'crove_kernel.channel_connection.status': CHANNEL_CONNECTION_STATUSES,
   'crove_kernel.external_call.state': EXTERNAL_CALL_STATES,
   'crove_kernel.external_call.retry_safety': EXTERNAL_CALL_RETRY_SAFETIES,

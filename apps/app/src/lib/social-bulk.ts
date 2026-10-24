@@ -8,13 +8,15 @@ import { localTime, zonedToEpoch } from '@crove/mod-social/contract';
 import { CANCELLABLE } from './social.ts';
 import { MAX_LABELS_PER_POST } from './social-labels.ts';
 
-export type BulkAction = 'approve' | 'submit' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign' | 'replace' | 'addChannel' | 'duplicate';
+export type BulkAction = 'approve' | 'submit' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign' | 'replace' | 'addChannel' | 'duplicate' | ArchiveAction;
 // The edits the server makes for many posts in one command: labels and the assignee (#1057), find and replace (#1144),
 // a channel added (#1178).
 export type EditAction = 'labels' | 'assign' | 'replace' | 'addChannel';
+// Archiving and restoring (#1299), up to 100 posts per command as the edits, with no form to fill in.
+export type ArchiveAction = 'archive' | 'restore';
 // The actions that send one command per post; a move sends one per channel (runMove), and copies (#1192) one per post
 // with its planned time (runDuplicate).
-export type PostAction = Exclude<BulkAction, 'move' | 'duplicate' | EditAction>;
+export type PostAction = Exclude<BulkAction, 'move' | 'duplicate' | EditAction | ArchiveAction>;
 
 export interface BulkVariant {
   id: string;
