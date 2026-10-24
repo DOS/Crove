@@ -233,6 +233,8 @@ export interface WorkerDeps {
   channels?: { broker: CredentialBroker; publishers: Readonly<Record<string, Publisher>>; refreshers?: Readonly<Record<string, Refresher>> };
   // PUBLIC_URL, where Social short links (#706) point.
   publicUrl?: string;
+  // The product name users see (BRAND_NAME, #1045), for the chat alert test line.
+  brand?: string;
   // Queued mail (#548): the mailer, the templates queued mail is rendered from, and the bounce domain. Unset: queued
   // mail waits.
   mail?: Omit<MailQueueDeps, 'runtime' | 'publicUrl'>;
@@ -460,7 +462,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     if (!job) return;
     const { orgId, year, requestCommandId } = job.data;
     try {
-      const done = await runYearArchive({ runtime: deps.runtime, store: deps.store }, orgId, year, { requestCommandId });
+      const done = await runYearArchive({ runtime: deps.runtime, store: deps.store, ...(deps.brand ? { brand: deps.brand } : {}) }, orgId, year, { requestCommandId });
       console.log(`[year-archive] org ${orgId} year ${year}: ${done.recorded ? 'built' : 'already built'}`);
     } catch (error) {
       if (job.retryCount < YEAR_ARCHIVE_RETRY_LIMIT) throw error;
@@ -689,7 +691,7 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
 
   // Team chat alerts (#863): one short line in the org's Telegram or Discord chat, sent apart from the notices and
   // their mail; the sender logs a failure and never throws, so the job is never retried.
-  const chatAlerts = social && deps.channels ? new ChatAlertSender({ runtime: deps.runtime, broker: deps.channels.broker, publicUrl: deps.publicUrl ?? '' }) : null;
+  const chatAlerts = social && deps.channels ? new ChatAlertSender({ runtime: deps.runtime, broker: deps.channels.broker, publicUrl: deps.publicUrl ?? '', ...(deps.brand ? { brand: deps.brand } : {}) }) : null;
   if (chatAlerts) {
     await boss.work<AgentDispatchJob & { test?: true }>(QUEUES.socialChatAlert, { batchSize: 1 }, async ([job]) => {
       if (!job) return;

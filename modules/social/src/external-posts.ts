@@ -161,7 +161,7 @@ export const externalPostRecord = defineCommand({
       .where('id', '=', input.externalId)
       .returning('id')
       .executeTakeFirst();
-    if (!row) throw new DomainError('EXTERNAL_POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng ngoài Crove này');
+    if (!row) throw new DomainError('EXTERNAL_POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng bên ngoài này');
     return { recorded: Boolean(counted) };
   },
 });
@@ -178,7 +178,7 @@ export const externalPostTarget = defineQuery({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.externalId)
       .executeTakeFirst();
-    if (!row || row.gone) throw new DomainError('EXTERNAL_POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng ngoài Crove này');
+    if (!row || row.gone) throw new DomainError('EXTERNAL_POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng bên ngoài này');
     return { connectionId: row.channel_connection_id, externalPostId: row.external_post_id };
   },
 });

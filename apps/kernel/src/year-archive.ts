@@ -85,12 +85,14 @@ export function vatPeriods(year: number, filing: ArchiveSource['vatFilingPeriod'
 }
 
 export async function runYearArchive(
-  deps: { runtime: Runtime; store: BlobStore },
+  // brand: BRAND_NAME (#1045), the creator the workbooks name; "Crove" when not given.
+  deps: { runtime: Runtime; store: BlobStore; brand?: string },
   orgId: string,
   year: number,
   options: { requestCommandId?: string | null; now?: () => Date } = {},
 ): Promise<{ manifestKey: string; recorded: boolean }> {
   const { runtime, store } = deps;
+  const brand = deps.brand ?? 'Crove';
   const scope = { actor: YEAR_ARCHIVE_ACTOR, orgId };
   const source = await runtime.query<ArchiveSource>('finance.archive.source', { year }, scope);
   // A job retried after its record (the worker stopped before finishing the job) builds nothing: a second manifest
@@ -114,15 +116,15 @@ export async function runYearArchive(
   if (entries.length >= JOURNAL_EXPORT_LIMIT) {
     throw new DomainError('EXPORT_TOO_LARGE', 422, `Năm ${year} có quá nhiều bút toán để đóng gói một lần`);
   }
-  await store1(`so-nhat-ky-${year}.xlsx`, 'journal', await buildJournalWorkbook([...entries].reverse(), source.orgSlug), XLSX);
+  await store1(`so-nhat-ky-${year}.xlsx`, 'journal', await buildJournalWorkbook([...entries].reverse(), source.orgSlug, brand), XLSX);
   const book = await runtime.query<LedgerBook>('finance.ledger.book', { period: String(year) }, scope);
-  await store1(`so-sach-${year}.xlsx`, 'ledger', await buildLedgerWorkbook(book, source.orgSlug), XLSX);
+  await store1(`so-sach-${year}.xlsx`, 'ledger', await buildLedgerWorkbook(book, source.orgSlug, brand), XLSX);
   const statements = await runtime.query<FinancialStatements>('finance.statements.period', { period: String(year) }, scope);
-  await store1(`bao-cao-tai-chinh-${year}.xlsx`, 'statements', await buildStatementsWorkbook(statements, source.orgSlug), XLSX);
+  await store1(`bao-cao-tai-chinh-${year}.xlsx`, 'statements', await buildStatementsWorkbook(statements, source.orgSlug, brand), XLSX);
 
   for (const period of vatPeriods(year, source.vatFilingPeriod)) {
     const report = await runtime.query<VatReport>('finance.vat.period', { period }, scope);
-    await store1(`gtgt-${period}.xlsx`, 'vat_working', await buildVatWorkbook(report, source.orgSlug), XLSX);
+    await store1(`gtgt-${period}.xlsx`, 'vat_working', await buildVatWorkbook(report, source.orgSlug, brand), XLSX);
     if (!source.hasTaxCode) continue;
     const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period }, scope);
     // The filing date is the day in Vietnam, not in UTC.

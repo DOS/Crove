@@ -29,6 +29,19 @@ describe('invoice check wording', () => {
     });
   }
 
+  for (const locale of ['vi', 'en'] as const) {
+    it(`gives each code its own sentence in ${locale}`, () => {
+      const t = translatorFor(locale);
+      const seen = new Map<string, string>();
+      for (const code of INVOICE_CHECK_CODES) {
+        const text = invoiceCheckMessage(check(code), t, money);
+        // A total that does not add up once read "Chữ ký số hợp lệ, đã xác minh" through a fallthrough in the switch.
+        expect(seen.get(text), `${code} reads like ${seen.get(text)}`).toBeUndefined();
+        seen.set(text, code);
+      }
+    });
+  }
+
   it('fills the parameters, amounts through the money formatter', () => {
     const vi = translatorFor('vi');
     const en = translatorFor('en');

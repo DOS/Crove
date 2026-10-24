@@ -2,6 +2,7 @@
 // unit that reads best, and the name of the file saved.
 import { TEAM_REPORT_DST_SLACK_MS, TEAM_REPORT_MAX_DAYS } from '@crove/mod-social/contract';
 import { reportPeriod } from './social-report.ts';
+import { brandFileName } from '../i18n/brand.ts';
 
 const DAY_MS = 86_400_000;
 
@@ -24,5 +25,5 @@ export function durationOf(seconds: number): { unit: DurationUnit; value: number
   return { unit: 'days', value: Math.round(s / 8640) / 10 };
 }
 
-// The file's name, with the days picked.
-export const teamFilename = (from: string, to: string) => `crove-nhom-${from}-den-${to}.csv`;
+// The file's name, with the days picked, prefixed by the product name (BRAND_NAME, #1045).
+export const teamFilename = (from: string, to: string) => brandFileName(`crove-nhom-${from}-den-${to}.csv`);
