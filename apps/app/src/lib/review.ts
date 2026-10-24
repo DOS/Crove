@@ -36,9 +36,10 @@ export function showMatched(
   return item.failedChecks === 0 && item.warnChecks === 0 && !item.duplicateOf;
 }
 
-// The roles that may approve proposals (kernel.proposal.approve and approve_many); the kernel checks again.
-export function canApproveProposals(role: string | null | undefined): boolean {
-  return role === 'owner' || role === 'admin';
+// Who may approve proposals (kernel.proposal.approve and approve_many): owners and admins, and a member holding the
+// approval permission through an org-wide role assignment (a chief accountant, #1279). The kernel checks again.
+export function canApproveProposals(role: string | null | undefined, permissions: readonly string[] = []): boolean {
+  return role === 'owner' || role === 'admin' || (role != null && permissions.includes('finance.proposal.approve'));
 }
 
 export interface BulkItem {

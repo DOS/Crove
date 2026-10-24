@@ -70,13 +70,15 @@ function policyFor(command: string): CommandPolicy {
   return POLICIES[command] ?? NOBODY;
 }
 
-// The members of the org, among `userIds` when given, who hold `permission` through an org-wide role assignment.
-// lock: FOR SHARE on those assignment rows, so a revoke that commits first is seen and one that starts later waits.
+// The members of the org, among `userIds` when given, who hold `permission` through an org-wide role assignment. No row
+// lock of its own (tenant roles may not lock the table): a grant or revoke locks the member's tenant_member row FOR UPDATE
+// first (role_assignment_grant, role_assignment_revoke), so an approval that holds the snapshot members' rows FOR SHARE
+// and reads this afterwards sees a revoke that committed first and holds back one that starts later.
 async function permissionHolders(
   trx: Transaction<Database>,
   orgId: string,
   permission: string,
-  options: { userIds?: readonly string[]; lock?: boolean } = {},
+  options: { userIds?: readonly string[] } = {},
 ): Promise<Set<string>> {
   if (options.userIds && options.userIds.length === 0) return new Set();
   let query = trx
@@ -89,7 +91,6 @@ async function permissionHolders(
     .orderBy('a.user_id')
     .orderBy('a.id');
   if (options.userIds) query = query.where('a.user_id', 'in', options.userIds);
-  if (options.lock) query = query.forShare('a');
   const rows = await query.execute();
   return new Set(rows.map((r) => r.user_id));
 }
@@ -164,13 +165,12 @@ export async function decideApproval(
     .orderBy('user_id');
   if (options.lock) query = query.forShare();
   const live = await query.execute();
-  // The snapshot members who still hold the approval permission org-wide, read after (and, with lock, locked after)
-  // their membership rows: a revoke locks the member's row first too (kernel.member.role.revoke), so the two meet on
-  // the member row in the same order.
+  // The snapshot members who still hold the approval permission org-wide, read after their membership rows are locked:
+  // a grant or revoke locks the member's row first, so the two meet on that row.
   const holders =
     policy.permission === null
       ? new Set<string>()
-      : await permissionHolders(trx, orgId, policy.permission, { userIds: live.map((m) => m.user_id), lock: options.lock });
+      : await permissionHolders(trx, orgId, policy.permission, { userIds: live.map((m) => m.user_id) });
   // Eligible now: in the snapshot taken at creation AND still holding an approving role or the approval permission
   // (re-checked live). The snapshot is never rewritten; this filter is what keeps it current. A removed approver has no
   // row, and a demoted one or one whose assignment was revoked no longer approves, so neither is eligible nor counts

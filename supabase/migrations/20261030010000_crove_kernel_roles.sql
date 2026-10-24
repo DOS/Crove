@@ -129,7 +129,8 @@ BEGIN
     RAISE EXCEPTION 'NO_CONTEXT' USING ERRCODE = '42501';
   END IF;
   PERFORM crove_kernel.assert_role_manager();
-  SELECT m.role INTO v_member_role FROM crove_kernel.tenant_member m WHERE m.org_id = v_org AND m.user_id = p_user_id;
+  -- The member's row, locked as every membership change locks it: an approval reading their roles holds it FOR SHARE.
+  SELECT m.role INTO v_member_role FROM crove_kernel.tenant_member m WHERE m.org_id = v_org AND m.user_id = p_user_id FOR UPDATE;
   IF v_member_role IS NULL THEN
     RAISE EXCEPTION 'ROLE_MEMBER_NOT_FOUND';
   END IF;
@@ -183,11 +184,17 @@ BEGIN
     RAISE EXCEPTION 'NO_CONTEXT' USING ERRCODE = '42501';
   END IF;
   PERFORM crove_kernel.assert_role_manager();
+  SELECT a.* INTO v_row FROM crove_kernel.role_assignment a WHERE a.org_id = v_org AND a.id = p_assignment_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ROLE_ASSIGNMENT_NOT_FOUND';
+  END IF;
+  -- The member's row first, as every membership change locks it (an approval reading their roles holds it FOR SHARE),
+  -- then the assignment, read again under the lock.
+  SELECT m.role INTO v_member_role FROM crove_kernel.tenant_member m WHERE m.org_id = v_org AND m.user_id = v_row.user_id FOR UPDATE;
   SELECT a.* INTO v_row FROM crove_kernel.role_assignment a WHERE a.org_id = v_org AND a.id = p_assignment_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'ROLE_ASSIGNMENT_NOT_FOUND';
   END IF;
-  SELECT m.role INTO v_member_role FROM crove_kernel.tenant_member m WHERE m.org_id = v_org AND m.user_id = v_row.user_id;
   IF v_row.legal_entity_id IS NOT NULL AND v_member_role NOT IN ('owner', 'admin') AND NOT EXISTS (
     SELECT 1 FROM crove_kernel.role_assignment a
     WHERE a.org_id = v_org AND a.user_id = v_row.user_id AND a.id <> v_row.id

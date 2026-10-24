@@ -1,6 +1,6 @@
 // Period lock (#329) on the ledger screen: what is locked and who changed it last; owners and admins lock the next
-// month once it has ended (the first lock may name any month that has); owners unlock the last locked month with a
-// reason and a fresh second factor (R3).
+// month once it has ended (the first lock may name any month that has); owners and chief accountants (#1279) unlock
+// the last locked month with a reason and a fresh second factor (R3).
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
@@ -49,7 +49,7 @@ export function PeriodLockPanel() {
   if (state.error) return <ErrorText>{errorMessage(state.error)}</ErrorText>;
   if (!data) return null;
   const canLock = canLockPeriods(org.data?.role);
-  const canUnlock = canUnlockPeriods(org.data?.role);
+  const canUnlock = canUnlockPeriods(org.data?.role, org.data?.permissions);
   // The month a lock names: the one after the last locked month, or the one picked while nothing is locked.
   const next = data.nextMonth ?? picked;
   const ended = /^\d{4}-\d{2}$/.test(next) && next < vietnamMonth();
