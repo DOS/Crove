@@ -392,7 +392,8 @@ export class SocialWriter {
 // Rewrites (#583): one text, rewritten one way, for one channel or for every channel. A proposal the member accepts
 // or discards; accepted, it marks the post as AI-assisted (tainted), and it is reviewed like any text.
 // proofread (#1167): spelling, diacritics, spacing and punctuation only, checked by proofreadChanges afterwards.
-export const REWRITE_ACTIONS = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi', 'proofread'] as const;
+// variation (#1260): another wording of an evergreen or series post, which a person saves as one of its text variations.
+export const REWRITE_ACTIONS = ['shorten', 'formal', 'casual', 'translate_en', 'translate_vi', 'proofread', 'variation'] as const;
 export type RewriteAction = (typeof REWRITE_ACTIONS)[number];
 
 export interface RewriteRequest {
@@ -422,6 +423,8 @@ const ASK: Record<RewriteAction, string> = {
   translate_en: 'Translate the text (and the title) into natural English, keeping every fact.',
   translate_vi: 'Translate the text (and the title) into natural Vietnamese, keeping every fact.',
   proofread: 'Fix only spelling, missing or misplaced diacritics (Vietnamese tone marks), spacing and punctuation.',
+  variation:
+    'Write a new version of the post for when it is posted again: the same message in different words, with a different opening, so followers who saw it before do not read a repeat. Keep every fact, the length and the language.',
 };
 
 export type RewriteGenerator = (args: { system: string; prompt: string }) => Promise<z.infer<typeof zRewrite> | null>;

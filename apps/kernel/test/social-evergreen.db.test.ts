@@ -232,7 +232,7 @@ suite('social reposts and evergreen posts on PostgreSQL (S9)', () => {
     expect((await get(o, postId)).evergreenDays).toBe(30);
     await expect(exec(o, 'social.post.set_evergreen', { postId, days: 3 })).rejects.toBeDefined();
     await expect(exec(o, 'social.post.repost_evergreen', { postId })).rejects.toBeDefined();
-    await expect(appPool.query('SELECT * FROM crove_social.evergreen_due(10)')).rejects.toMatchObject({ code: '42501' });
+    await expect(appPool.query('SELECT * FROM crove_social.evergreen_due(10, ARRAY[]::uuid[])')).rejects.toMatchObject({ code: '42501' });
     expect(await exec(o, 'social.post.set_evergreen', { postId, days: null })).toEqual({ postId, evergreenDays: null });
   });
 
