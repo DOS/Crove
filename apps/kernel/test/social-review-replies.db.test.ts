@@ -301,7 +301,9 @@ suite('social review replies on PostgreSQL (#1301, #930)', () => {
       expect.objectContaining({ ok: false, code: '42501', message: 'REVIEW_REPLY_AUTHOR' }),
     );
     expect(await raw(o, o.member, 'UPDATE crove_social.review_feedback SET reply_body = $2 WHERE id = $1', [id, 'Thiếu người viết'])).toEqual(expect.objectContaining({ ok: false, message: 'REVIEW_REPLY_AUTHOR' }));
-    expect(await raw(o, o.member, 'UPDATE crove_social.review_feedback SET reply_body = $2, replied_by = $3 WHERE id = $1', [id, 'Thiếu giờ', o.member])).toEqual(expect.objectContaining({ ok: false, code: '23514' }));
+    // A reply without a time takes the database's; a reply cleared but for its author breaks all-or-none.
+    expect(await raw(o, o.member, 'UPDATE crove_social.review_feedback SET reply_body = $2, replied_by = $3 WHERE id = $1', [id, 'Thiếu giờ', o.member])).toEqual({ ok: true, rows: 1 });
+    expect(await raw(o, o.member, 'UPDATE crove_social.review_feedback SET reply_body = NULL, replied_at = NULL WHERE id = $1', [id])).toEqual(expect.objectContaining({ ok: false, code: '23514' }));
     expect(await raw(o, o.member, 'UPDATE crove_social.review_feedback SET reply_body = $2, replied_by = $3, replied_at = now() WHERE id = $1', [id, 'x'.repeat(2001), o.member])).toEqual(
       expect.objectContaining({ ok: false, code: '23514' }),
     );
