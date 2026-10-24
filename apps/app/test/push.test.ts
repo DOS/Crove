@@ -147,9 +147,16 @@ describe('the service worker', () => {
     expect(w.opened).toEqual([`https://crove.example${POST}`]);
   });
 
+  it('opens the posts assigned to the reader (#1359)', async () => {
+    const w = loadWorker();
+    await w.fire('push', { data: { json: () => ({ title: 'Crove', body: 'Bạn được giao 3 bài mới', url: '/o/acme/social?assignee=me', tag: 'assigned:x' }) } });
+    await w.fire('notificationclick', { notification: { data: w.shown[0]?.options.data, close: () => undefined } });
+    expect(w.opened).toEqual(['https://crove.example/o/acme/social?assignee=me']);
+  });
+
   it('opens nothing for a link that is not a Crove notification path', async () => {
     const w = loadWorker();
-    for (const url of ['https://evil.example/o/acme/social/channels', '//evil.example/o/acme/social/channels', 'javascript:alert(1)', '/o/acme/settings', '/o/acme/social/channels?x=1', `${POST}#x`, '/o/acme/social/new?channel=x']) {
+    for (const url of ['https://evil.example/o/acme/social/channels', '//evil.example/o/acme/social/channels', 'javascript:alert(1)', '/o/acme/settings', '/o/acme/social/channels?x=1', `${POST}#x`, '/o/acme/social/new?channel=x', '/o/acme/social?assignee=other', '/o/acme/social?assignee=me&x=1', '/o/acme/social']) {
       await w.fire('push', { data: { json: () => ({ title: 'Crove', body: 'x', url }) } });
       await w.fire('notificationclick', { notification: { data: w.shown.at(-1)?.options.data, close: () => undefined } });
     }

@@ -61,3 +61,41 @@ describe('notification mail for a low queue (#1079)', () => {
     expect(await render({ kind: 'channel_expired', org: 'Cửa hàng A', post: null, channel: 'Trang thử', path: '/o/cua-hang-a/social/channels' })).not.toBeNull();
   });
 });
+
+describe('notification mail for an assignment and its due date (#1359)', () => {
+  const POST = '0190a3c4-0000-7000-8000-000000000003';
+  it('tells the assignee a post is due soon or overdue, with the due date, and links to the post', async () => {
+    const soon = await render({ kind: 'assignment_due', org: 'Cửa hàng A', post: 'Khai trương', stage: 'soon', due: '14:30 26/10/2026', path: `/o/cua-hang-a/social/${POST}` });
+    expect(soon?.text).toContain('sẽ đến hạn trong vòng 24 giờ tới');
+    expect(soon?.text).toContain('Hạn: 14:30 26/10/2026');
+    expect(soon?.text).toContain(`Mở bài viết: https://crove.example/o/cua-hang-a/social/${POST}`);
+    expect(soon?.html).toContain('Hạn: 14:30 26/10/2026');
+    const overdue = await render({ kind: 'assignment_due', org: 'Cửa hàng A', post: 'Khai trương', stage: 'overdue', due: '14:30 26/10/2026', path: `/o/cua-hang-a/social/${POST}` });
+    expect(overdue?.text).toContain('đã quá hạn mà vẫn chưa đăng');
+    // A due date it did not write is left out; a stage it does not know renders nothing.
+    const odd = await render({ kind: 'assignment_due', org: 'Cửa hàng A', stage: 'soon', due: '<b>mai</b>', path: `/o/cua-hang-a/social/${POST}` });
+    expect(odd?.text).not.toContain('Hạn:');
+    expect(await render({ kind: 'assignment_due', org: 'Cửa hàng A', stage: 'later', path: `/o/cua-hang-a/social/${POST}` })).toBeNull();
+  });
+
+  it('tells of an assignment, and of a bulk one with a link to the posts assigned to the reader', async () => {
+    const one = await render({ kind: 'assigned', org: 'Cửa hàng A', post: 'Khai trương', path: `/o/cua-hang-a/social/${POST}` });
+    expect(one?.text).toContain('Bạn vừa được giao một bài');
+    expect(one?.text).toContain(`Mở bài viết: https://crove.example/o/cua-hang-a/social/${POST}`);
+    const many = await render({ kind: 'assigned', org: 'Cửa hàng A', count: '3', path: '/o/cua-hang-a/social?assignee=me' });
+    expect(many?.text).toContain('Bạn vừa được giao 3 bài');
+    expect(many?.text).toContain('Xem các bài được giao cho bạn: https://crove.example/o/cua-hang-a/social?assignee=me');
+    expect(many?.html).toContain('href="https://crove.example/o/cua-hang-a/social?assignee=me"');
+    // A count it did not write is not shown.
+    expect((await render({ kind: 'assigned', org: 'Cửa hàng A', count: '<i>9</i>', path: '/o/cua-hang-a/social?assignee=me' }))?.text).toContain('Bạn vừa được giao một bài');
+  });
+
+  it('links to the assigned posts only for an assignment, and accepts no other list path', async () => {
+    for (const kind of ['review_requested', 'assignment_due', 'queue_low']) {
+      expect(await render({ kind, org: 'Cửa hàng A', stage: 'soon', path: '/o/cua-hang-a/social?assignee=me' }), kind).toBeNull();
+    }
+    for (const path of ['/o/cua-hang-a/social?assignee=other', '/o/cua-hang-a/social?assignee=me&next=//evil.example', '/o/cua-hang-a/social', '/o/cua-hang-a/socialxassignee=me']) {
+      expect(await render({ kind: 'assigned', org: 'Cửa hàng A', path }), path).toBeNull();
+    }
+  });
+});
