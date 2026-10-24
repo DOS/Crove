@@ -260,6 +260,17 @@ suite('archived media library files and the attach checks (#1302, #1273)', () =>
     expect(copy.postId).not.toBe(postId);
   });
 
+  it("refuses a duplicate whose channel's cover is archived, and keeps the cover on the post itself", async () => {
+    const o = await org();
+    const cover = await file(o, 'bia.jpg');
+    const { postId, variants } = await create(o, o.member, { body: 'Video mới', channels: [{ connectionId: o.mine, settings: { cover: { fileId: cover } } }] });
+    const variantId = (variants[0] as { variantId: string }).variantId;
+    await archive(o, [cover]);
+    await expect(exec(o, o.member, 'social.post.duplicate', { postId })).rejects.toMatchObject(archivedRefusal(cover));
+    // The channel's cover already: an edit that keeps it goes through.
+    await exec(o, o.member, 'social.variant.update', { variantId, revision: await revisionOf(o, 'post_variant', variantId), body: 'Video mới, chú thích riêng', settings: { cover: { fileId: cover } } });
+  });
+
   it('refuses archived files in drafts from media, the CSV import, the AI draft photos and the file names it resolves', async () => {
     const o = await org();
     const ok = await file(o, 'duoc.jpg');

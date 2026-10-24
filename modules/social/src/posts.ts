@@ -238,7 +238,9 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
   for (const [i, c] of channels.entries()) {
     // A channel's own media may repeat the post's, which the post already holds.
     const own = c.media ? await resolveMedia(ctx, c.media, fileIdsOf(post.media)) : null;
-    await checkCover(ctx, providers.get(c.connectionId) as string, c.settings);
+    // A copy's cover is its source's, which a repost or an evergreen copy keeps whatever its state (a duplicate checks
+    // it before).
+    await checkCover(ctx, providers.get(c.connectionId) as string, c.settings, options.copy ? c.settings : {});
     const row = {
       channel_connection_id: c.connectionId,
       provider: providers.get(c.connectionId) as string,
