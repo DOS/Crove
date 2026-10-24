@@ -59,7 +59,6 @@ const PK_EXCEPTIONS: Record<string, { pk: string; reason: string }> = {
   'crove_kernel.tenant': { pk: 'org_id', reason: 'The org itself: its id is org_id.' },
   'crove_kernel.tenant_member': { pk: 'org_id,user_id', reason: 'Membership is a pairing of org and user.' },
   'crove_social.chat_alert_target': { pk: 'org_id,alert_id', reason: 'The sealed target of one team chat alert (#863): the alert is the key.' },
-  'crove_social.media_archive': { pk: 'org_id,file_id', reason: 'At most one archive mark per library file (#1302): the file is the key.' },
   'crove_social.notification_mute': { pk: 'org_id,user_id,kind', reason: 'A mute is a set membership of (user, notification kind).' },
 };
 // Tenant foreign keys (<table>.<constraint>) that have no supporting index, with their columns. None today: #1212
@@ -76,7 +75,6 @@ const COLUMN_EXCEPTIONS: Record<string, { rule: 'timestamp' | 'money'; type: str
 // PR is merged. One key per line, sorted, with a trailing comma.
 const PENDING_EXCEPTIONS = new Set<string>([
   // 'crove_schema.table_name',
-  'crove_social.media_archive',
 ]);
 
 type Rule = 'pk' | 'fk-shape' | 'fk-index' | 'timestamp' | 'money' | 'cross-module' | 'trigger';

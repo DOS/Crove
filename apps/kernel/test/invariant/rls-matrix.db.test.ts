@@ -793,13 +793,13 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_social.link_preview': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), url: `https://example.com/rls-${tag()}`, url_sha256: hex64(), status: 'pending', requested_at: new Date().toISOString() } }),
   },
-  // A library file taken out of the Social pickers (#1302), keyed by the file: at most one archive row per file, so
-  // every row gets a file of its own.
+  // A library file taken out of the Social pickers (#1302): at most one archive row per file (a unique key), so every
+  // row gets a file of its own.
   'crove_social.media_archive': {
     make: (o) => {
       const sha256 = hex64();
       const file = { org_id: o.id, id: randomUUID(), sha256, storage_key: `org/${o.id}/${sha256}`, filename: 'archived.jpg', content_type: 'image/jpeg', size_bytes: 1, source: 'social' };
-      return { setup: [{ table: 'crove_kernel.file', values: file }], row: { org_id: o.id, file_id: file.id, archived_by: o.owner } };
+      return { setup: [{ table: 'crove_kernel.file', values: file }], row: { org_id: o.id, id: randomUUID(), file_id: file.id, archived_by: o.owner } };
     },
   },
   // The credit of a library file saved from a stock photo site (#1106): the photographer, the photo's page and its
