@@ -247,7 +247,20 @@ export function JournalPage() {
       ) : journal.error ? (
         <ErrorText>{errorMessage(journal.error)}</ErrorText>
       ) : (journal.data?.length ?? 0) === 0 ? (
-        <Empty title={t('empty')} />
+        // A date range that matches nothing says so; an empty journal says what fills it (#1256).
+        from || to ? (
+          <Empty title={t('emptyFiltered')} hint={t('emptyFilteredHint')} />
+        ) : (
+          <Empty
+            title={t('empty')}
+            hint={t('emptyHint')}
+            action={
+              <Link to="/o/$slug/inbox" params={{ slug }} className={buttonVariants({ variant: 'outline' })}>
+                {t('openInbox')}
+              </Link>
+            }
+          />
+        )
       ) : (
         <div className="space-y-3">
           {journal.data?.map((entry) => (

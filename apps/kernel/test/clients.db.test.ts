@@ -275,6 +275,18 @@ suite('multi-client home screen (#318)', () => {
     expect(overview?.failedFiles).toBe((files.body as Array<{ status: string }>).filter((f) => f.status === 'failed').length);
   });
 
+  it("gives one org's overview with the same figures as the home screen, to its members only (#1249)", async () => {
+    const token = await tokenFor(accountant);
+    const home = await clients(accountant);
+    for (const org of [firm, clientOrg, quiet]) {
+      const answer = await rpc('org/overview', token, undefined, org.slug);
+      expect(answer.status, org.slug).toBe(200);
+      expect(answer.body).toEqual(row(home, org)?.overview);
+    }
+    // Another org's figures stay its own: the accountant is not a member of the stranger's company.
+    expect((await rpc('org/overview', token, undefined, strangerOrg.slug)).status).toBe(403);
+  });
+
   it('lets owners and admins choose the VAT filing period, audited, and shows the next deadline', async () => {
     // A member of the client's company may not choose it; a value that is not a period is refused.
     expect(await setPeriod(accountant, clientOrg, 'quarter')).toMatchObject({ status: 403 });

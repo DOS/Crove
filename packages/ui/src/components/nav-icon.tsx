@@ -9,6 +9,7 @@ import {
   FileCheck2Icon,
   FileSpreadsheetIcon,
   FileTextIcon,
+  HouseIcon,
   InboxIcon,
   LandmarkIcon,
   ListChecksIcon,
@@ -25,6 +26,7 @@ import {
 // The app shell's icons (DESIGN.md §3.7): 16px, stroke 1.5, currentColor, decorative (the label beside it is the text).
 // One name per menu item or shell control, so the app never imports lucide-react itself.
 const ICONS = {
+  overview: HouseIcon,
   inbox: InboxIcon,
   alerts: BellIcon,
   tasks: ListChecksIcon,

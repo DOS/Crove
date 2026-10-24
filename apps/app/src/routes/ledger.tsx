@@ -8,7 +8,7 @@ import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Alert } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
-import { Button } from '@crove/ui/components/button';
+import { Button, buttonVariants } from '@crove/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
@@ -49,12 +49,29 @@ function Balance({ value }: { value: string }) {
   return <>{side === 'debit' ? t('balanceDebit', { amount: f.money(amount) }) : t('balanceCredit', { amount: f.money(amount) })}</>;
 }
 
+// No entry up to the end of the period (#1256): the books fill from approved proposals and the opening balances.
+function LedgerEmpty() {
+  const t = useTranslations('ledger');
+  const { slug } = useParams({ strict: false }) as { slug: string };
+  return (
+    <Empty
+      title={t('trialBalanceEmpty')}
+      hint={t('trialBalanceEmptyHint')}
+      action={
+        <Link to="/o/$slug/journal/opening-balances" params={{ slug }} className={buttonVariants({ variant: 'outline' })}>
+          {t('openOpeningBalances')}
+        </Link>
+      }
+    />
+  );
+}
+
 // customers: each party's name opens it on the customers screen (#670).
 function PartyTable({ ledger, partyLabel, customers = false }: { ledger: PartyLedger; partyLabel: string; customers?: boolean }) {
   const t = useTranslations('ledger');
   const f = useFormat();
   const { slug } = useParams({ strict: false }) as { slug: string };
-  if (ledger.rows.length === 0) return <Empty title={t('partiesEmpty')} />;
+  if (ledger.rows.length === 0) return <Empty title={t('partiesEmpty')} hint={t('partiesEmptyHint')} />;
   return (
     <DataTable numeric={[2, 3, 4, 5]} head={[t('columns.taxCode'), partyLabel, t('columns.opening'), t('columns.increase'), t('columns.decrease'), t('columns.closing')]}>
       {ledger.rows.map((row) => (
@@ -416,7 +433,7 @@ export function LedgerPage() {
                 </div>
               )}
               {rows.length === 0 ? (
-                <Empty title={t('trialBalanceEmpty')} />
+                <LedgerEmpty />
               ) : (
                 <DataTable
                   numeric={[2, 3, 4, 5, 6, 7]}
@@ -465,7 +482,7 @@ export function LedgerPage() {
           {data ? (
             <>
               {account === null ? (
-                <Empty title={t('trialBalanceEmpty')} />
+                <LedgerEmpty />
               ) : (
                 <div className="space-y-4">
                   <label className="block text-xs">
