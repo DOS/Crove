@@ -14,6 +14,8 @@ import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
 import { ChartOfAccountsCard } from './accounts.tsx';
 import { LegalEntitiesCard } from './legal-entities.tsx';
 import { MemberRolesRow } from './member-roles.tsx';
+import { WorkingHoursCard } from './working-hours.tsx';
+import { EventTypesCard } from './event-types.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -1042,6 +1044,12 @@ export function SettingsPage() {
             </>
           )}
         </Card>
+        {/* The member's own working hours and days off (#1313). */}
+        {org.data && <WorkingHoursCard key={org.data.slug} canEdit={org.data.role !== 'viewer'} />}
+        {/* The booking pages' event types (#1314), with the crm module. */}
+        {getConfig().modules.includes('crm') && org.data && me.data && (
+          <EventTypesCard key={org.data.slug} members={org.data.members} me={me.data.userId} role={org.data.role} />
+        )}
         {/* The legal entities the books are kept for (#1278), with the finance module; owners and admins only. */}
         {getConfig().modules.includes('finance') && canManage && <LegalEntitiesCard key={org.data?.slug} />}
         {/* The chart of accounts belongs to the finance module (#319). */}

@@ -36,7 +36,8 @@ export function DateInput({
   const locked = props.disabled || props.readOnly;
 
   return (
-    <span className={cn('relative inline-flex', className)}>
+    // A block, as the native input was: a label's text sits above it, never beside it.
+    <span className={cn('relative flex', className)}>
       <Input
         {...props}
         ref={field}

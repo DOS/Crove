@@ -47,6 +47,7 @@ import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 import { legalEntityCommands } from './legal-entities.ts';
 import { roleCommands } from './roles.ts';
+import { calendarCommands } from './calendar.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
 import { PROPOSAL_PREPARERS, REQUESTABLE, resubmitProposal, zPreparedProposal } from './proposal-resubmit.ts';
 import { usageCommands } from './usage-limits.ts';
@@ -911,6 +912,7 @@ const otherKernelCommands = [
   setVatFilingPeriod,
   ...legalEntityCommands,
   ...roleCommands,
+  ...calendarCommands,
   setAddress,
   setContactEmail,
   queueContactMail,

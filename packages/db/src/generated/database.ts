@@ -3,14 +3,18 @@
 
 import type { ColumnType, Generated } from 'kysely';
 
-/** Every table of crove_kernel, crove_finance, crove_social that crove_tenant may read. */
-export type Database = CroveFinanceSchema & CroveKernelSchema & CroveSocialSchema;
+/** Every table of crove_kernel, crove_finance, crove_social, crove_crm that crove_tenant may read. */
+export type Database = CroveFinanceSchema & CroveKernelSchema & CroveSocialSchema & CroveCrmSchema;
 
 /**
  * The insert or update type of a column crove_tenant may not insert or update: no value but undefined, which
  * Kysely leaves out of the statement, so a write of the column fails typecheck.
  */
 export type NotGranted = undefined;
+
+export interface CroveCrmSchema {
+  'crove_crm.event_type': CrmEventTypeTable;
+}
 
 export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
@@ -40,7 +44,9 @@ export interface CroveKernelSchema {
   'crove_kernel.agent_wakeup': KernelAgentWakeupTable;
   'crove_kernel.ai_run': KernelAiRunTable;
   'crove_kernel.audit_event': KernelAuditEventTable;
+  'crove_kernel.availability_rule': KernelAvailabilityRuleTable;
   'crove_kernel.budget_policy': KernelBudgetPolicyTable;
+  'crove_kernel.calendar_event': KernelCalendarEventTable;
   'crove_kernel.channel_connection': KernelChannelConnectionTable;
   'crove_kernel.currency': KernelCurrencyTable;
   'crove_kernel.external_call': KernelExternalCallTable;
@@ -127,6 +133,29 @@ export interface CroveSocialSchema {
   'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
   'crove_social.watermark': SocialWatermarkTable;
+}
+
+/** crove_crm.event_type */
+export interface CrmEventTypeTable {
+  org_id: string;
+  id: Generated<string>;
+  slug: string;
+  title: string;
+  description: string | null;
+  duration_min: number;
+  buffer_before_min: Generated<number>;
+  buffer_after_min: Generated<number>;
+  min_notice_min: Generated<number>;
+  horizon_days: Generated<number>;
+  daily_limit: number | null;
+  location_kind: Generated<string>;
+  location_value: string | null;
+  host_user_id: string;
+  active: Generated<boolean>;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  updated_by: string | null;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_finance.account */
@@ -494,6 +523,19 @@ export interface KernelAuditEventTable {
   detail: ColumnType<unknown, string | null | undefined, NotGranted>;
 }
 
+/** crove_kernel.availability_rule */
+export interface KernelAvailabilityRuleTable {
+  org_id: string;
+  id: Generated<string>;
+  user_id: string;
+  weekday: number;
+  start_minute: number;
+  end_minute: number;
+  time_zone: string;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
 /** crove_kernel.budget_policy */
 export interface KernelBudgetPolicyTable {
   org_id: string;
@@ -505,6 +547,23 @@ export interface KernelBudgetPolicyTable {
   hard_stop: Generated<boolean>;
   updated_by: string;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+}
+
+/** crove_kernel.calendar_event */
+export interface KernelCalendarEventTable {
+  org_id: string;
+  id: Generated<string>;
+  user_id: string;
+  starts_at: ColumnType<Date, Date | string, Date | string>;
+  ends_at: ColumnType<Date, Date | string, Date | string>;
+  time_zone: string;
+  title: string | null;
+  kind: Generated<string>;
+  status: Generated<string>;
+  created_by: string;
+  created_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  cancelled_by: string | null;
+  cancelled_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_kernel.channel_connection */
@@ -1421,6 +1480,8 @@ export interface SocialPostTable {
   recurrence_source_id: string | null;
   text_variations: ColumnType<unknown, string | undefined, string>;
   text_variation_next: Generated<number>;
+  archived_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  archived_by: string | null;
 }
 
 /** crove_social.post_variant */

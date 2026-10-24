@@ -123,7 +123,7 @@ describe('the content hash with a signature', () => {
 
   it('hashes a variant the same once it is history: its own text is kept, the signature stays in its settings', () => {
     const row = { ...variant({ signature: SIGNATURE }), id: 'v', post_id: 'p', position: 0, revision: 1, content_hash: '', status: 'published' } as unknown as VariantRow;
-    const postRow = { id: 'p', body: post.body, title: null, link_url: null, time_zone: 'Asia/Ho_Chi_Minh', scheduled_at: null, revision: 1, media: [] } as PostRow;
+    const postRow = { id: 'p', body: post.body, title: null, link_url: null, time_zone: 'Asia/Ho_Chi_Minh', scheduled_at: null, revision: 1, archived_at: null, media: [] } as PostRow;
     const frozen = { ...row, ...freezeValues(postRow, row), media: [] } as VariantRow;
     expect(frozen.body).toBe(post.body);
     expect(hashOf(post, frozen)).toBe(hashOf(post, row));

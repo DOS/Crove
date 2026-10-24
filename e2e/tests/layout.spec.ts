@@ -49,7 +49,7 @@ test.describe('at phone width', () => {
     const slug = await createOrg(page, 'Công ty Màn hình hẹp');
     await page.goto(`/o/${slug}/social`);
     const tabs = page.getByRole('tab');
-    await expect(tabs).toHaveCount(9);
+    await expect(tabs).toHaveCount(10);
     await expect(page.getByRole('tab', { name: 'Thư viện ảnh' })).toBeVisible();
     // Every tab lies inside the screen, without scrolling the page or the tab row.
     for (const box of await tabs.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON() as { left: number; right: number }))) {
