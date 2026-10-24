@@ -653,7 +653,8 @@ export function SocialPage() {
   const myId = me.data?.userId;
   // A whose-posts filter: anyone, the viewer, or a member; a link naming someone not in the list still shows it.
   const memberFilter = (key: 'assignee' | 'author') => {
-    const value = search[key];
+    // The viewer's own id (a link someone else sent) is "me", never a former member.
+    const value = search[key] !== undefined && search[key] === myId ? 'me' : search[key];
     const others = members.filter((m) => m.userId !== myId);
     return (
       <label className="text-xs">

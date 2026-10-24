@@ -4,7 +4,7 @@
 // shared one) updates it in place, saves the filters as a new view, or deletes it. At most 20 per member (the server
 // counts them).
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Checkbox } from '@crove/ui/components/checkbox';
@@ -32,6 +32,7 @@ export function SavedViews({
   onApply: (next: SocialSearch) => void;
 }) {
   const t = useTranslations('social.views');
+  const limitId = useId();
   const views = useQuery(orpc.social.savedViews.list.queryOptions({ input: {} }));
   const list = views.data ?? [];
   const current = viewFiltersOf(search);
@@ -68,11 +69,13 @@ export function SavedViews({
     setNotice(null);
     const view = list.find((v) => v.id === id);
     setPickedId(view?.id ?? null);
-    if (view) onApply(searchOfView(view.filters));
+    // The placeholder leaves the view: the home without its filters.
+    onApply(view ? searchOfView(view.filters) : {});
   };
   const mine = list.filter((v) => v.mine);
   const others = list.filter((v) => !v.mine);
-  const ownCount = mine.length;
+  // At the limit no new view can be saved (the server refuses it too); an existing one can still be updated.
+  const full = mine.length >= SAVED_VIEW_LIMIT;
   const error = save.error ?? remove.error ?? views.error;
   return (
     <div className="space-y-2">
@@ -111,6 +114,8 @@ export function SavedViews({
         {!naming && (
           <Button
             variant="ghost"
+            disabled={full}
+            aria-describedby={full ? limitId : undefined}
             onClick={() => {
               setNotice(null);
               setShared(false);
@@ -126,6 +131,11 @@ export function SavedViews({
           </Button>
         )}
       </div>
+      {full && (
+        <p id={limitId} className="text-xs text-warning">
+          {t('limit', { limit: String(SAVED_VIEW_LIMIT) })}
+        </p>
+      )}
       {naming && (
         <form
           aria-label={t('save')}
@@ -149,12 +159,18 @@ export function SavedViews({
             <Button type="submit" disabled={save.isPending || !name.trim()}>
               {t('create')}
             </Button>
-            <Button type="button" variant="ghost" onClick={() => setNaming(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setNaming(false);
+                save.reset();
+              }}
+            >
               {t('cancel')}
             </Button>
           </div>
           {canShare && shared && <p className="w-full text-xs text-subtle-foreground">{t('shareHint')}</p>}
-          {ownCount >= SAVED_VIEW_LIMIT && <p className="w-full text-xs text-warning">{t('limit', { limit: String(SAVED_VIEW_LIMIT) })}</p>}
         </form>
       )}
       {error && <ErrorText>{errorMessage(error)}</ErrorText>}
