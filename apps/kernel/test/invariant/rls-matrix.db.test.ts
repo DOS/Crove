@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_crm.event_type',
   'crove_kernel.availability_rule',
   'crove_kernel.calendar_event',
   'crove_kernel.role_assignment',
@@ -211,6 +212,10 @@ const journalEntry = (org: string, id: string): Row => ({
 // refused), so a denial cannot come from a malformed row. Kept in table-name order (plain string sort; the catalog
 // test checks it), so a new factory goes at its own place instead of at the end, where parallel PRs would conflict.
 const ROW_FACTORIES: Record<string, RowFactory> = {
+  // #1314: a booking page's event type, hosted by a member; slugs are unique per org.
+  'crove_crm.event_type': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), slug: `rls-${tag()}`, title: 'RLS matrix event type', duration_min: 30, host_user_id: o.owner, created_by: o.owner } }),
+  },
   // Bank statement lines (#326): append-only, one row per line of an import, on a bank account (112 or an org
   // sub-account under it). Tenant roles read and insert; nothing updates or deletes a line.
   'crove_finance.bank_line': {
