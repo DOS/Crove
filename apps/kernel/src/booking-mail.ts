@@ -107,7 +107,7 @@ export function bookingIcs(p: Booking, brand: string, now: Date): string {
 export async function renderBookingMail(input: MailTemplateInput, now: () => Date = () => new Date()) {
   const parsed = zPayload.safeParse(input.payload);
   if (!parsed.success) return null;
-  const data = await input.execute<BookingMailData>('crm.booking.mail_data', { bookingId: parsed.data.bookingId });
+  const data = await input.execute<BookingMailData>('crm.booking.mail_data', { bookingId: parsed.data.bookingId, revision: parsed.data.revision });
   const visitor = data.visitor;
   const name = [...oneLine(visitor?.name ?? '')].slice(0, 100).join('');
   const p: Booking = { ...parsed.data, visitorName: name || 'Khách' };

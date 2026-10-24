@@ -283,19 +283,20 @@ export interface BookingMailData {
 // visitor's manage token and the visitor's details, read at send time.
 export const bookingMailData = defineCommand({
   name: 'crm.booking.mail_data',
-  input: z.strictObject({ bookingId: zId }),
+  input: z.strictObject({ bookingId: zId, revision: z.number().int().min(0) }),
   risk: 'R1',
   access: 'system',
   handler: async (ctx, input): Promise<BookingMailData> => {
     const booking = await ctx.trx
       .selectFrom('crove_crm.booking')
-      .select(['visitor_name', 'email', 'phone', 'note'])
+      .select(['revision', 'visitor_name', 'email', 'phone', 'note'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.bookingId)
       .executeTakeFirst();
     const { rows } = await sql<{ token: string | null }>`SELECT crove_crm.booking_manage_token(${input.bookingId}::uuid) AS token`.execute(ctx.trx);
     return {
-      token: rows[0]?.token ?? null,
+      // A mail of an earlier revision (sent after a move) carries no link: links of earlier revisions are dead.
+      token: booking?.revision === input.revision ? (rows[0]?.token ?? null) : null,
       visitor: booking ? { name: booking.visitor_name, email: booking.email, phone: booking.phone, note: booking.note } : null,
     };
   },
@@ -331,7 +332,10 @@ export const bookingManage = defineCommand({
       return { bookingId: booking.id, outcome };
     };
     // A booking cancelled meanwhile (by the host, or an earlier ask): nothing left to do.
-    if (booking.status !== 'confirmed' || !booking.calendar_event_id) return answer('unavailable');
+    // An ask the worker reaches after the booking started is too late.
+    if (booking.status !== 'confirmed' || !booking.calendar_event_id || new Date(booking.starts_at).getTime() <= ctx.now.getTime()) {
+      return answer('unavailable');
+    }
     const { hours } = await workingHoursOf(ctx, type.host_user_id);
 
     if (booking.manage_action === 'cancel') {

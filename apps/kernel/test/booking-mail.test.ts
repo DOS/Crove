@@ -49,7 +49,7 @@ describe('booking mails (#1319)', () => {
   it("gives the visitor a manage link minted at send time and the booking's .ics event", async () => {
     const i = input(base);
     const mail = await renderBookingMail(i, () => NOW);
-    expect(i.asked).toEqual([['crm.booking.mail_data', { bookingId: base.bookingId }]]);
+    expect(i.asked).toEqual([['crm.booking.mail_data', { bookingId: base.bookingId, revision: 2 }]]);
     expect(mail?.subject).toBe('Đã xác nhận lịch hẹn: Tư vấn thuế');
     expect(mail?.text).toContain('Chào Nguyễn Văn Khách,');
     expect(mail?.text).toContain('Thời gian: Thứ Hai, 02/11/2026, 09:00 - 09:30 (Asia/Ho_Chi_Minh)');

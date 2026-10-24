@@ -109,14 +109,14 @@ END $$;
 REVOKE ALL ON FUNCTION crove_crm.booking_manage_find(text, text, text) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 
 -- What the manage page shows: the booking's time and status, whether the token still works (its revision is the
--- booking's and the booking is confirmed), and the answer to the last ask. NULL when the token names nothing here.
+-- booking's, the booking is confirmed and it has not started), and the answer to the last ask. NULL when the token names nothing here.
 CREATE OR REPLACE FUNCTION crove_crm.booking_manage_view(p_org text, p_type text, p_token text)
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
   SELECT pg_catalog.jsonb_build_object(
     'orgName', t.name,
     'eventType', pg_catalog.jsonb_build_object('slug', e.slug, 'title', e.title, 'durationMin', e.duration_min, 'locationKind', e.location_kind, 'active', e.active),
     'status', bk.status, 'startsAt', bk.starts_at, 'endsAt', bk.ends_at, 'timeZone', bk.time_zone,
-    'usable', f.token_revision = bk.revision AND bk.status = 'confirmed',
+    'usable', f.token_revision = bk.revision AND bk.status = 'confirmed' AND bk.starts_at > now(),
     'requestId', bk.manage_request_id, 'outcome', bk.manage_outcome)
   FROM crove_crm.booking_manage_find(p_org, p_type, p_token) f
   JOIN crove_crm.booking bk ON bk.org_id = f.org_id AND bk.id = f.booking_id
@@ -147,7 +147,8 @@ BEGIN
     RETURN NULL;
   END IF;
   SELECT bk.* INTO v_booking FROM crove_crm.booking bk WHERE bk.org_id = v_org AND bk.id = v_id FOR UPDATE;
-  IF v_booking.status <> 'confirmed' OR v_booking.revision <> v_token_revision THEN
+  -- A booking that has started is no longer cancelled or moved from a link.
+  IF v_booking.status <> 'confirmed' OR v_booking.revision <> v_token_revision OR v_booking.starts_at <= now() THEN
     RETURN NULL;
   END IF;
   IF p_action = 'move' THEN

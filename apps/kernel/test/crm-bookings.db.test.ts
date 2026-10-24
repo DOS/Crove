@@ -242,13 +242,15 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     expect(confirmed[1]?.to_address).toMatch(/^host-.*@book\.test$/);
     // No mail's merge data or subject holds a token or a detail of the visitor: the template reads them at send time.
     expect(JSON.stringify(confirmed)).not.toMatch(/[0-9a-f]{32}\.[0-9]+\.[0-9a-f]{32}|Nguyễn|0901234567|Hỏi về/);
-    const data = await worker.execute<{ token: string | null; visitor: unknown }>('crm.booking.mail_data', { bookingId: id }, { actor: SYSTEM, orgId: o.orgId });
+    const data = await worker.execute<{ token: string | null; visitor: unknown }>('crm.booking.mail_data', { bookingId: id, revision: 0 }, { actor: SYSTEM, orgId: o.orgId });
     expect(data.visitor).toEqual({ name: 'Nguyễn Văn Khách', email: 'khach@example.test', phone: '0901234567', note: 'Hỏi về thuế' });
     const scheduled = await admin((c) => c.query("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'crm.booking.scheduled'", [o.orgId]));
     expect(scheduled.rows.map((r) => r.payload)).toEqual([{ booking_id: id, starts_at: at(day, 540) }]);
 
-    const link = async () => (await worker.execute<{ token: string | null }>('crm.booking.mail_data', { bookingId: id }, { actor: SYSTEM, orgId: o.orgId })).token as string;
-    const first = await link();
+    // The link a mail of this revision carries.
+    const link = async (revision: number) =>
+      (await worker.execute<{ token: string | null }>('crm.booking.mail_data', { bookingId: id, revision }, { actor: SYSTEM, orgId: o.orgId })).token as string;
+    const first = await link(0);
     expect(first).toMatch(/^[0-9a-f]{32}\.0\.[0-9a-f]{32}$/);
     expect(await bookingManageView(app, o.slug, 'tu-van', { manage: first })).toMatchObject({ status: 'confirmed', usable: true, startsAt: at(day, 540), outcome: null });
     // A forged MAC, another revision or another page's slugs read nothing.
@@ -289,7 +291,9 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     expect(await remind(at(day, 720), '1h')).toEqual({ sent: true });
 
     // A cancel with the new link frees the slot, ends the link, and no reminder goes out after it.
-    const second = await link();
+    // A mail of the first revision sent only now carries no link; one of the new revision does.
+    expect(await link(0)).toBeNull();
+    const second = await link(1);
     expect(second).toMatch(/\.1\./);
     const cancel = await bookingManageAsk(app, o.slug, 'tu-van', { manage: second, action: 'cancel' });
     expect(await manage(cancel?.requestId as string)).toEqual({ bookingId: id, outcome: 'cancelled' });
@@ -297,7 +301,7 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     expect(await bookingManageAsk(app, o.slug, 'tu-van', { manage: second, action: 'cancel' })).toBeNull();
     expect((await admin((c) => c.query('SELECT status FROM crove_kernel.calendar_event WHERE org_id = $1 AND id = $2', [o.orgId, booking?.calendar_event_id]))).rows[0]).toMatchObject({ status: 'cancelled' });
     expect(await slots()).toContain(at(day, 720));
-    expect(await link()).toBeNull();
+    expect(await link(2)).toBeNull();
     const before = (await mails()).length;
     await admin((c) => c.query("DELETE FROM crove_kernel.mail_message WHERE org_id = $1 AND source = 'crm.booking.remind_1h'", [o.orgId]));
     expect(await remind(at(day, 720), '1h')).toEqual({ sent: false });
@@ -309,6 +313,23 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     // Bad asks are turned away before anything is recorded.
     await expect(bookingManageAsk(app, o.slug, 'tu-van', { manage: second, action: 'drop' })).rejects.toMatchObject({ code: 'VALIDATION' });
     await expect(bookingManageAsk(app, o.slug, 'tu-van', { manage: second, action: 'move' })).rejects.toMatchObject({ code: 'VALIDATION' });
+  });
+
+  it('takes no cancel or move once the booking has started (#1319)', async () => {
+    const o = await org();
+    const day = bookableDay();
+    await bookingRequest(app, o.slug, 'tu-van', visitor(at(day, 540)));
+    const id = (await o.bookings())[0]?.id as string;
+    await o.confirm(id);
+    const { token } = await worker.execute<{ token: string }>('crm.booking.mail_data', { bookingId: id, revision: 0 }, { actor: SYSTEM, orgId: o.orgId });
+    // An ask recorded before the start, which the worker reaches after it.
+    const late = await bookingManageAsk(app, o.slug, 'tu-van', { manage: token, action: 'cancel' });
+    await admin((c) =>
+      c.query("UPDATE crove_crm.booking SET starts_at = now() - interval '10 minutes', ends_at = now() + interval '20 minutes' WHERE org_id = $1 AND id = $2", [o.orgId, id]),
+    );
+    expect(await worker.execute('crm.booking.manage', { bookingId: id, requestId: late?.requestId }, { actor: SYSTEM, orgId: o.orgId })).toEqual({ bookingId: id, outcome: 'unavailable' });
+    expect(await bookingManageView(app, o.slug, 'tu-van', { manage: token })).toMatchObject({ status: 'confirmed', usable: false, outcome: 'unavailable' });
+    expect(await bookingManageAsk(app, o.slug, 'tu-van', { manage: token, action: 'cancel' })).toBeNull();
   });
 
   it('caps requests per event type at 30 an hour', async () => {
