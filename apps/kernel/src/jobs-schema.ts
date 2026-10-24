@@ -37,7 +37,7 @@ export const QUEUES = {
   socialRemove: 'social-remove',
   // Created by the Social edit published migration (20261029175000).
   socialEdit: 'social-edit',
-  // Created by the Social push subscription migration (20261029210000).
+  // Created by the Social push subscription migration (20261029215000).
   socialPush: 'social-push',
   // Created by the team chat alert migration (20261023143000).
   socialChatAlert: 'social-chat-alert',
