@@ -14,7 +14,9 @@ const OPEN: readonly SocialVariantStatus[] = ['draft', 'in_review', 'changes_req
 
 export interface DuplicateSubject {
   id: string;
-  postId: string;
+  // The post the channel belongs to, left out of the comparison; null for a text not saved yet (the next variation of
+  // an evergreen or recurring copy, #1260), compared with every post.
+  postId: string | null;
   connectionId: string;
   status: SocialVariantStatus;
   // The text the channel sends (its own, else the post's, with its signature: effectiveContent).
@@ -35,7 +37,7 @@ export async function duplicatesOf(trx: Trx, orgId: string, subjects: readonly D
       .where('v.status', 'in', ['published', 'scheduled'])
       .where((eb) => eb.or([eb('v.status', '=', 'scheduled'), eb('v.published_at', '>=', since)]))
       // Another post: the post's own channel is the one being checked.
-      .where('v.post_id', '<>', s.postId)
+      .$if(s.postId !== null, (qb) => qb.where('v.post_id', '<>', s.postId as string))
       // Newest first, as the post page shows each time (effectiveAt): a scheduled one is ahead, a published one behind.
       .orderBy(sql`coalesce(v.published_at, v.error_retry_at, v.queue_slot_at, v.scheduled_at, p.scheduled_at)`, (ob) => ob.desc().nullsLast())
       .limit(DUPLICATE_SCAN_MAX)

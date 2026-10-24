@@ -16,19 +16,25 @@ import { agentTaskOf } from './agent.ts';
 import { publishingHeld } from './publish-hold.ts';
 import { bannedCheckerOf, isBlocked } from './banned-words.ts';
 import { inScope, refusePostOutside, refusePostWholly } from './channel-access.ts';
+import { advanceTextVariation, nextTextVariation, type ChosenVariation } from './text-variations.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 export const EVERGREEN_SWEEP_MS = 60 * 60_000;
 const ACTOR: SystemActor = { type: 'system', component: 'social.evergreen' };
 // A repost in one of these is no longer on its way; any other status holds the next evergreen repost back.
 const REPOST_DONE = ['published', 'partially_published', 'failed', 'cancelled'] as const;
+// The sweeps' page (the scan's limit) and the pages one pass asks for at most (#1001), shared with recurring.ts.
+export const SWEEP_PAGE = 50;
+export const SWEEP_PAGES = 10;
 
 // What a copy made by the repost path carries besides its content: whether it goes to review at once, the time it is
-// planned for (a recurring copy's occurrence, #979), and the series it belongs to.
+// planned for (a recurring copy's occurrence, #979), the series it belongs to, and whether it takes the post's next
+// text variation (#1260: the worker's evergreen and recurring copies; a person's Repost repeats what went out).
 export interface RepostOptions {
   submit: boolean;
   scheduledAt?: Date;
   recurrenceSourceId?: string;
+  rotate?: boolean;
 }
 
 // gone: every channel it went out on is disconnected for good; waiting: some are only expired or failing for now.
@@ -52,7 +58,12 @@ export async function repostCopy(ctx: CommandContext, sourceId: string, options:
   const liveIds = new Set(live.filter((c) => c.status === 'active').map((c) => c.id));
   const targets = published.filter((v) => liveIds.has(v.channel_connection_id));
   if (targets.length === 0) return live.some((c) => c.status !== 'revoked') ? 'waiting' : 'gone';
-  return copyPost(ctx, source, targets, { ...options, repostOf: source.id });
+  // The next variation, chosen and passed on in the same transaction, under the source's lock: two runs never take the
+  // same one, and a copy that fails leaves the cursor where it was.
+  const variation = options.rotate ? await nextTextVariation(ctx, source.id, targets) : null;
+  const done = await copyPost(ctx, source, targets, { ...options, repostOf: source.id, variation });
+  if (variation) await advanceTextVariation(ctx, source.id, variation);
+  return done;
 }
 
 const withoutRemoveAt = (settings: Record<string, unknown>): Record<string, unknown> => {
@@ -62,8 +73,16 @@ const withoutRemoveAt = (settings: Record<string, unknown>): Record<string, unkn
 
 // A new post with the content of `source`'s channels `targets` (#393, #575). A repost's base is what the channels
 // went out with; a duplicate's is the source's own base. Either way a channel whose content or images differ from the
-// copy's base keeps them as its own, with its settings.
-async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRow[], options: RepostOptions & { repostOf: string | null }): Promise<{ postId: string; submitted: number }> {
+// copy's base keeps them as its own, with its settings. With a text variation (#1260), the variation is the copy's text
+// on every channel (a channel's own text gives way to it; its signature stays in its settings), and a variation AI
+// wrote makes the copy tainted.
+async function copyPost(
+  ctx: CommandContext,
+  source: PostRow,
+  targets: VariantRow[],
+  options: RepostOptions & { repostOf: string | null; variation?: ChosenVariation | null },
+): Promise<{ postId: string; submitted: number }> {
+  const variation = options.variation ?? null;
   const { submit } = options;
   const meta = await ctx.trx.selectFrom('crove_social.post').select(['tainted', 'author_user_id', 'origin']).where('org_id', '=', ctx.orgId).where('id', '=', source.id).executeTakeFirstOrThrow();
   const author = ctx.actor.type === 'user' ? ctx.actor.userId : meta.author_user_id;
@@ -81,7 +100,7 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
   // not take one away; the others then carry theirs as the channel's own.
   const shared = options.repostOf
     ? {
-        body: first ? first.kept.body : b.body,
+        body: variation ? variation.text : first ? first.kept.body : b.body,
         title: !first || outs.some((o) => o.kept.title === null) ? null : first.kept.title,
         linkUrl: !first || outs.some((o) => o.kept.linkUrl === null) ? null : first.kept.linkUrl,
       }
@@ -95,8 +114,9 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
       link_url: shared.linkUrl,
       time_zone: source.time_zone,
       origin: meta.origin,
-      // A repost of something AI wrote or that came from outside is as tainted as its source.
-      tainted: meta.tainted,
+      // A repost of something AI wrote or that came from outside is as tainted as its source, and so is one whose text
+      // variation AI wrote.
+      tainted: meta.tainted || (variation?.ai ?? false),
       actor_origin: ctx.actor.type === 'user' ? 'ui' : 'system',
       author_user_id: author,
       repost_of: options.repostOf,
@@ -121,7 +141,7 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
     const own = ownMedia ? ownMedia.filter((m) => present.has(m.fileId)) : null;
     return {
       connectionId: v.channel_connection_id,
-      ...(kept.body !== shared.body ? { body: kept.body } : {}),
+      ...(!variation && kept.body !== shared.body ? { body: kept.body } : {}),
       ...(kept.title !== shared.title && kept.title !== null ? { title: kept.title } : {}),
       ...(kept.linkUrl !== shared.linkUrl && kept.linkUrl !== null ? { linkUrl: kept.linkUrl } : {}),
       // A copy never takes the source's planned takedown (#861): its time belonged to that post.
@@ -161,7 +181,7 @@ async function copyPost(ctx: CommandContext, source: PostRow, targets: VariantRo
     }
   }
   await refreshPostStatus(ctx, post.id);
-  ctx.audit({ post_id: post.id, ...(options.repostOf ? { repost_of: source.id } : { copy_of: source.id }), variants: created.length });
+  ctx.audit({ post_id: post.id, ...(options.repostOf ? { repost_of: source.id } : { copy_of: source.id }), variants: created.length, ...(variation ? { text_variation: variation.index } : {}) });
   await ctx.emit('social.post.created', { post_id: post.id, ...(options.repostOf ? { repost_of: source.id } : { copy_of: source.id }) });
   if (submitted.length > 0) await ctx.emit('social.post.submitted', { post_id: post.id, variant_ids: submitted, agent_task: await agentTaskOf(ctx, post.id, submitted.length) });
   return { postId: post.id, submitted: submitted.length };
@@ -213,7 +233,7 @@ export const postRepostEvergreen = defineCommand({
       )
       .executeTakeFirst();
     if (!still) return { postId: null };
-    const done = await repostCopy(ctx, input.postId, { submit: true });
+    const done = await repostCopy(ctx, input.postId, { submit: true, rotate: true });
     // A channel that is only expired may be reconnected: try again on a later sweep.
     if (done === 'waiting') return { postId: null };
     // No channel left for good: the post stops being evergreen rather than being tried every hour.
@@ -337,17 +357,25 @@ async function repeatsOf(ctx: CommandContext, postId: string): Promise<Duplicate
 
 export const evergreenCommands = [postRepost, postRepostEvergreen, postSetEvergreen, postDuplicate];
 
-// One pass: every evergreen post due gets its repost, sent to review.
-export async function sweepEvergreen(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
-  const { rows } = await sql<{ org_id: string; post_id: string }>`SELECT org_id, post_id FROM crove_social.evergreen_due(50::int)`.execute(deps.workerDb);
+// One pass: every evergreen post due gets its repost, sent to review. The scan is asked again, without the posts already
+// tried, until it lists no more (#1001): a post that only waits (its channels expired) comes back every pass and can no
+// longer fill the page and keep another org's post out. At most SWEEP_PAGES pages a pass.
+export async function sweepEvergreen(deps: { runtime: Runtime; workerDb: Db; pageSize?: number }): Promise<number> {
+  const pageSize = deps.pageSize ?? SWEEP_PAGE;
+  const tried: string[] = [];
   let made = 0;
-  for (const row of rows) {
-    try {
-      const done = await deps.runtime.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId: row.post_id }, { actor: ACTOR, orgId: row.org_id });
-      if (done.postId) made += 1;
-    } catch (error) {
-      console.warn(`[social-evergreen] post ${row.post_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.message : error);
+  for (let page = 0; page < SWEEP_PAGES; page += 1) {
+    const { rows } = await sql<{ org_id: string; post_id: string }>`SELECT org_id, post_id FROM crove_social.evergreen_due(${pageSize}::int, ${tried}::uuid[])`.execute(deps.workerDb);
+    for (const row of rows) {
+      tried.push(row.post_id);
+      try {
+        const done = await deps.runtime.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId: row.post_id }, { actor: ACTOR, orgId: row.org_id });
+        if (done.postId) made += 1;
+      } catch (error) {
+        console.warn(`[social-evergreen] post ${row.post_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.message : error);
+      }
     }
+    if (rows.length < pageSize) break;
   }
   return made;
 }
