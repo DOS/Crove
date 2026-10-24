@@ -898,3 +898,64 @@ test('draws a post on six channels as one chip, and "+9" opens every post of the
   expect(planned('Bài số 2')).toBe(`${day} 09:00`);
   await expect(page.locator(`[data-day="${tomorrow}"]`).getByTestId('calendar-chip').filter({ hasText: 'Bài sáu kênh' })).toHaveAttribute('data-channels', '6');
 });
+
+test('makes a client report link without the best posts and the audience, which the server never sends (#1259)', async ({ page, browser }) => {
+  await signInNewUser(page, newEmail('social-sections'));
+  await createOrg(page, 'Công ty Phần Báo Cáo');
+  const channel = 'Trang Phần Báo Cáo';
+  const body = 'Bài không được lộ trong báo cáo';
+  const postId = await publishOnSandbox(page, channel, body);
+  exec(
+    `INSERT INTO crove_social.metric_snapshot (org_id, variant_id, capture_key, metrics)
+     SELECT v.org_id, v.id, 'e2e-sections', '{"reach": 4321, "reactions": 21}'::jsonb FROM crove_social.post_variant v WHERE v.post_id = :'post'`,
+    { post: postId },
+  );
+  exec(
+    `INSERT INTO crove_social.account_snapshot (org_id, channel_connection_id, captured_on, followers, audience)
+     SELECT c.org_id, c.id, (now() AT TIME ZONE 'UTC')::date, 100, '{"age": [{"key": "18-24", "count": 60}], "gender": [], "cities": [{"key": "Hanoi, Hanoi", "count": 40}], "countries": []}'::jsonb
+       FROM crove_kernel.channel_connection c WHERE c.display_name = :'channel'
+     ON CONFLICT DO NOTHING`,
+    { channel },
+  );
+  await page.getByRole('link', { name: 'Quay lại' }).click();
+  await page.getByRole('tab', { name: 'Số liệu' }).click();
+  const panel = page.getByRole('tabpanel');
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date());
+  await panel.getByLabel('Từ ngày', { exact: true }).fill(today);
+  await panel.getByLabel('Đến ngày', { exact: true }).fill(today);
+  await panel.getByLabel('Tên báo cáo').fill('Báo cáo rút gọn');
+  // Untick the best posts and the audience; move the channels above the totals.
+  const sections = panel.getByRole('group', { name: 'Các phần của báo cáo' });
+  await sections.getByRole('checkbox', { name: 'Bài nổi bật', exact: true }).click();
+  await sections.getByRole('checkbox', { name: 'Người theo dõi kênh', exact: true }).click();
+  await expect(sections.getByLabel('Số bài nổi bật')).toHaveCount(0);
+  await sections.getByRole('button', { name: 'Đưa phần Số liệu từng kênh lên' }).click();
+  await sections.getByRole('button', { name: 'Đưa phần Số liệu từng kênh lên' }).click();
+  await panel.getByRole('button', { name: 'Tạo liên kết báo cáo' }).click();
+  const link = await panel.getByLabel('Liên kết báo cáo').inputValue();
+  await expect(panel.getByText('chọn 8 phần')).toBeVisible();
+  const guest = await browser.newContext({ timezoneId: TIME_ZONE });
+  try {
+    const client = await guest.newPage();
+    const answer = client.waitForResponse((r) => r.url().endsWith('/api/report/view'));
+    await client.goto(link);
+    const json = (await (await answer).json()) as Record<string, unknown>;
+    // Not sent at all, not merely hidden.
+    expect(json.top).toBeNull();
+    expect(json.audience).toBeNull();
+    expect(JSON.stringify(json)).not.toContain(body);
+    expect(JSON.stringify(json)).not.toContain('Hanoi');
+    await expect(client.getByRole('heading', { name: 'Báo cáo rút gọn' })).toBeVisible();
+    await expect(client.getByRole('row').filter({ hasText: channel })).toContainText('4.321');
+    const totals = client.locator('[data-slot="card"]').filter({ hasText: 'Người tiếp cận', hasNot: client.locator('table') }).first();
+    await expect(totals).toContainText('4.321');
+    await expect(client.getByRole('heading', { name: 'Bài nổi bật' })).toHaveCount(0);
+    await expect(client.getByText(body)).toHaveCount(0);
+    // The channels come before the totals, as the link orders them.
+    const table = await client.getByRole('heading', { name: 'Theo kênh' }).boundingBox();
+    const cards = await totals.boundingBox();
+    expect((table?.y ?? 0) < (cards?.y ?? 0)).toBe(true);
+  } finally {
+    await guest.close();
+  }
+});
