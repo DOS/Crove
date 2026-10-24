@@ -15,9 +15,10 @@
 // booking; the exclusion constraint on crove_kernel.calendar_event stays the last line against any other writer.
 import { z } from 'zod';
 import { sql } from 'kysely';
-import { freeSlots, zId, zonedDate, zoneOffsetMs, type Interval, type WorkingHours } from '@crove/kernel-contract';
+import { freeSlots, zBookingCancel, zBookingListQuery, zBookingMove, zId, zonedDate, zoneOffsetMs, type BookingItem, type Interval, type WorkingHours } from '@crove/kernel-contract';
+import type { MemberRole } from '@crove/db';
 import { busyOf, createMailMessage, workingHoursOf } from '@crove/kernel';
-import { defineCommand, type CommandContext } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 
 const DAY_MS = 86_400_000;
 // Who may still host a booking: anyone who can change their own calendar.
@@ -153,12 +154,15 @@ async function queueBookingMails(
   booking: BookingForMail,
   type: EventType,
   hostZone: string,
+  toHost = true,
 ): Promise<void> {
   if (!booking.email || !booking.visitor_name) return;
   const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select(['slug', 'name']).where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
-  // The host's address while they are a member (the worker's member_emails: no name, no other account column).
-  const { rows: hosts } = await sql<{ email: string | null }>`SELECT email FROM crove_kernel.member_emails(${[type.host_user_id]}::uuid[])`.execute(ctx.trx);
-  const host = hosts[0];
+  // The host's address while they are a member (the worker's member_emails: no name, no other account column). Only
+  // the worker mails the host: a change the host made in the app mails the visitor alone.
+  const host = toHost
+    ? (await sql<{ email: string | null }>`SELECT email FROM crove_kernel.member_emails(${[type.host_user_id]}::uuid[])`.execute(ctx.trx)).rows[0]
+    : undefined;
   const common = {
     kind,
     bookingId: booking.id,
@@ -306,23 +310,86 @@ export const bookingMailData = defineCommand({
 
 export type ManageOutcome = 'cancelled' | 'moved' | 'taken' | 'unavailable' | 'none';
 
+const lockBooking = (ctx: CommandContext, bookingId: string) =>
+  ctx.trx.selectFrom('crove_crm.booking').selectAll().where('org_id', '=', ctx.orgId).where('id', '=', bookingId).forUpdate().executeTakeFirst();
+type HeldBooking = NonNullable<Awaited<ReturnType<typeof lockBooking>>> & { calendar_event_id: string };
+// Who cancels or moves a booking: the visitor from a manage link, or the host (or an owner or admin) in the app.
+type ChangedBy = 'visitor' | 'host';
+const BY_TEXT: Record<ChangedBy, string> = { visitor: 'Khách', host: 'Người chủ trì' };
+
+// Whether a booking may still be cancelled or moved: confirmed, holding its event, and not started.
+const changeable = (ctx: CommandContext, b: NonNullable<Awaited<ReturnType<typeof lockBooking>>>): b is HeldBooking =>
+  b.status === 'confirmed' && b.calendar_event_id !== null && new Date(b.starts_at).getTime() > ctx.now.getTime();
+
+// Cancels a held booking: its calendar event is cancelled (the slot is free again), the revision rises (earlier links
+// stop working), the party's timeline says so, and the visitor is mailed (the host too when the visitor cancelled).
+async function cancelHeld(ctx: CommandContext, booking: HeldBooking, type: EventType, hours: WorkingHours, by: ChangedBy): Promise<void> {
+  await ctx.trx
+    .updateTable('crove_kernel.calendar_event')
+    .set({ status: 'cancelled', cancelled_at: ctx.now })
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', booking.calendar_event_id)
+    .where('status', '=', 'active')
+    .execute();
+  await ctx.trx
+    .updateTable('crove_crm.booking')
+    .set({ status: 'cancelled', cancelled_at: ctx.now, revision: booking.revision + 1 })
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', booking.id)
+    .execute();
+  if (booking.party_id) {
+    await ctx.activity('kernel.party', booking.party_id, 'crm.booking.cancelled', `${BY_TEXT[by]} hủy lịch hẹn ${type.title} lúc ${wallTime(hours.timeZone, new Date(booking.starts_at).getTime())}`);
+  }
+  await queueBookingMails(ctx, 'cancelled', { ...booking, revision: booking.revision + 1 }, type, hours.timeZone, by === 'visitor');
+}
+
+// Moves a held booking to [start, start + duration) when that is still a free slot of the type (the booking's own event
+// and row set aside): the event and the booking move, the revision rises, the reminders follow, and the visitor is
+// mailed (the host too when the visitor moved it). Otherwise nothing changes and the answer says why.
+async function moveHeld(
+  ctx: CommandContext,
+  booking: HeldBooking,
+  type: EventType,
+  hours: WorkingHours,
+  start: number,
+  by: ChangedBy,
+): Promise<'moved' | 'taken' | 'unavailable'> {
+  const end = start + type.duration_min * 60_000;
+  if (!(await hostable(ctx, type))) return 'unavailable';
+  const check = await slotCheck(ctx, type, hours, start, end, { eventId: booking.calendar_event_id, bookingId: booking.id });
+  if (check !== 'free') return check;
+  const startsAt = new Date(start);
+  const endsAt = new Date(end);
+  await ctx.trx
+    .updateTable('crove_kernel.calendar_event')
+    .set({ starts_at: startsAt, ends_at: endsAt, time_zone: hours.timeZone })
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', booking.calendar_event_id)
+    .execute();
+  await ctx.trx
+    .updateTable('crove_crm.booking')
+    .set({ starts_at: startsAt, ends_at: endsAt, revision: booking.revision + 1 })
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', booking.id)
+    .execute();
+  if (booking.party_id) {
+    await ctx.activity('kernel.party', booking.party_id, 'crm.booking.moved', `${BY_TEXT[by]} đổi lịch hẹn ${type.title} sang ${wallTime(hours.timeZone, start)}`);
+  }
+  await queueBookingMails(ctx, 'moved', { ...booking, starts_at: startsAt, ends_at: endsAt, revision: booking.revision + 1 }, type, hours.timeZone, by === 'visitor');
+  await scheduled(ctx, booking.id, startsAt);
+  return 'moved';
+}
+
 // Carries out a visitor's ask from a manage link (recorded by crove_crm.booking_manage_request): the ask `requestId`
-// names, while it is still the booking's last and unanswered. A cancel frees the slot (the calendar event is cancelled);
-// a move holds the new time if it is still a free slot of the type, else the answer says why and the link keeps
-// working. Both raise the revision, so links minted before stop working, and mail the visitor and the host.
+// names, while it is still the booking's last and unanswered. A cancel frees the slot; a move holds the new time if it
+// is still a free slot of the type, else the answer says why and the link keeps working.
 export const bookingManage = defineCommand({
   name: 'crm.booking.manage',
   input: z.strictObject({ bookingId: zId, requestId: zId }),
   risk: 'R1',
   access: 'system',
   handler: async (ctx, input): Promise<{ bookingId: string; outcome: ManageOutcome }> => {
-    const booking = await ctx.trx
-      .selectFrom('crove_crm.booking')
-      .selectAll()
-      .where('org_id', '=', ctx.orgId)
-      .where('id', '=', input.bookingId)
-      .forUpdate()
-      .executeTakeFirst();
+    const booking = await lockBooking(ctx, input.bookingId);
     if (!booking || booking.manage_request_id !== input.requestId || booking.manage_outcome !== null || !booking.manage_action) {
       return { bookingId: input.bookingId, outcome: 'none' };
     }
@@ -333,59 +400,60 @@ export const bookingManage = defineCommand({
       ctx.audit({ bookingId: booking.id, action: booking.manage_action, outcome });
       return { bookingId: booking.id, outcome };
     };
-    // A booking cancelled meanwhile (by the host, or an earlier ask): nothing left to do.
-    // An ask the worker reaches after the booking started is too late.
-    if (booking.status !== 'confirmed' || !booking.calendar_event_id || new Date(booking.starts_at).getTime() <= ctx.now.getTime()) {
-      return answer('unavailable');
-    }
+    // Cancelled meanwhile (by the host, or an earlier ask), or reached after the booking started: too late.
+    if (!changeable(ctx, booking)) return answer('unavailable');
     const { hours } = await workingHoursOf(ctx, type.host_user_id);
-
     if (booking.manage_action === 'cancel') {
-      await ctx.trx
-        .updateTable('crove_kernel.calendar_event')
-        .set({ status: 'cancelled', cancelled_at: ctx.now })
-        .where('org_id', '=', ctx.orgId)
-        .where('id', '=', booking.calendar_event_id)
-        .where('status', '=', 'active')
-        .execute();
-      await ctx.trx
-        .updateTable('crove_crm.booking')
-        .set({ status: 'cancelled', cancelled_at: ctx.now, revision: booking.revision + 1 })
-        .where('org_id', '=', ctx.orgId)
-        .where('id', '=', booking.id)
-        .execute();
-      if (booking.party_id) {
-        await ctx.activity('kernel.party', booking.party_id, 'crm.booking.cancelled', `Khách hủy lịch hẹn ${type.title} lúc ${wallTime(hours.timeZone, new Date(booking.starts_at).getTime())}`);
-      }
-      await queueBookingMails(ctx, 'cancelled', { ...booking, revision: booking.revision + 1 }, type, hours.timeZone);
+      await cancelHeld(ctx, booking, type, hours, 'visitor');
       return answer('cancelled');
     }
+    return answer(await moveHeld(ctx, booking, type, hours, new Date(booking.manage_starts_at as Date).getTime(), 'visitor'));
+  },
+});
 
-    const start = new Date(booking.manage_starts_at as Date).getTime();
-    const end = start + type.duration_min * 60_000;
-    if (!(await hostable(ctx, type))) return answer('unavailable');
-    const check = await slotCheck(ctx, type, hours, start, end, { eventId: booking.calendar_event_id, bookingId: booking.id });
-    if (check !== 'free') return answer(check);
-    const startsAt = new Date(start);
-    const endsAt = new Date(end);
-    await ctx.trx
-      .updateTable('crove_kernel.calendar_event')
-      .set({ starts_at: startsAt, ends_at: endsAt, time_zone: hours.timeZone })
-      .where('org_id', '=', ctx.orgId)
-      .where('id', '=', booking.calendar_event_id)
-      .execute();
-    await ctx.trx
-      .updateTable('crove_crm.booking')
-      .set({ starts_at: startsAt, ends_at: endsAt, revision: booking.revision + 1 })
-      .where('org_id', '=', ctx.orgId)
-      .where('id', '=', booking.id)
-      .execute();
-    if (booking.party_id) {
-      await ctx.activity('kernel.party', booking.party_id, 'crm.booking.moved', `Khách đổi lịch hẹn ${type.title} sang ${wallTime(hours.timeZone, start)}`);
-    }
-    await queueBookingMails(ctx, 'moved', { ...booking, starts_at: startsAt, ends_at: endsAt, revision: booking.revision + 1 }, type, hours.timeZone);
-    await scheduled(ctx, booking.id, startsAt);
-    return answer('moved');
+// The host's side (#1320): the member who hosts the booking's type, or an owner or admin, cancels or moves it in the
+// app. The visitor is mailed with a new link; a manage link from before stops working.
+const STAFF: readonly MemberRole[] = ['owner', 'admin', 'member'];
+
+async function hostBooking(ctx: CommandContext, bookingId: string): Promise<{ booking: HeldBooking; type: EventType; hours: WorkingHours }> {
+  if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+  const booking = await lockBooking(ctx, bookingId);
+  if (!booking) throw new DomainError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy lịch hẹn này');
+  const type = await eventTypeOf(ctx, booking.event_type_id);
+  if (ctx.role !== 'owner' && ctx.role !== 'admin' && type.host_user_id !== ctx.actor.userId) {
+    throw new DomainError('BOOKING_HOST_FORBIDDEN', 403, 'Bạn chỉ đổi được lịch hẹn do chính mình chủ trì');
+  }
+  if (!changeable(ctx, booking)) throw new DomainError('BOOKING_NOT_CHANGEABLE', 409, 'Lịch hẹn này đã hủy hoặc đã bắt đầu');
+  await lockHost(ctx, type.host_user_id);
+  const { hours } = await workingHoursOf(ctx, type.host_user_id);
+  return { booking, type, hours };
+}
+
+export const bookingCancel = defineCommand({
+  name: 'crm.booking.cancel',
+  input: zBookingCancel,
+  risk: 'R1',
+  access: STAFF,
+  handler: async (ctx, input): Promise<{ bookingId: string; status: 'cancelled' }> => {
+    const { booking, type, hours } = await hostBooking(ctx, input.bookingId);
+    await cancelHeld(ctx, booking, type, hours, 'host');
+    ctx.audit({ bookingId: booking.id, eventTypeId: type.id, status: 'cancelled' });
+    return { bookingId: booking.id, status: 'cancelled' };
+  },
+});
+
+export const bookingMove = defineCommand({
+  name: 'crm.booking.move',
+  input: zBookingMove,
+  risk: 'R1',
+  access: STAFF,
+  handler: async (ctx, input): Promise<{ bookingId: string; startsAt: string }> => {
+    const { booking, type, hours } = await hostBooking(ctx, input.bookingId);
+    const outcome = await moveHeld(ctx, booking, type, hours, Date.parse(input.startsAt), 'host');
+    if (outcome === 'taken') throw new DomainError('BOOKING_TIME_TAKEN', 409, 'Giờ này đã có lịch khác');
+    if (outcome === 'unavailable') throw new DomainError('BOOKING_TIME_UNAVAILABLE', 409, 'Khung giờ này không còn nhận đặt lịch');
+    ctx.audit({ bookingId: booking.id, eventTypeId: type.id, moved: true });
+    return { bookingId: booking.id, startsAt: new Date(input.startsAt).toISOString() };
   },
 });
 
@@ -448,4 +516,61 @@ export const bookingRemind = defineCommand({
   },
 });
 
-export const bookingCommands = [bookingConfirm, bookingMailData, bookingManage, bookingRemind];
+// The bookings of the screen (#1320): confirmed and cancelled ones (requests the worker refused are not bookings), of the
+// types the member hosts, or of the whole org for owners and admins. At most 200 a page.
+export const bookingList = defineQuery({
+  name: 'crm.booking.list',
+  input: zBookingListQuery,
+  access: STAFF,
+  handler: async (ctx, input): Promise<BookingItem[]> => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const userId = ctx.actor.userId;
+    if (input.scope === 'org' && ctx.role !== 'owner' && ctx.role !== 'admin') {
+      throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới xem được lịch hẹn của cả tổ chức');
+    }
+    const upcoming = input.period === 'upcoming';
+    const rows = await ctx.trx
+      .selectFrom('crove_crm.booking as b')
+      .innerJoin('crove_crm.event_type as e', (j) => j.onRef('e.org_id', '=', 'b.org_id').onRef('e.id', '=', 'b.event_type_id'))
+      .select([
+        'b.id',
+        'b.status',
+        'b.starts_at',
+        'b.ends_at',
+        'b.time_zone',
+        'b.visitor_name',
+        'b.email',
+        'b.phone',
+        'b.note',
+        'b.party_id',
+        'e.id as type_id',
+        'e.slug',
+        'e.title',
+        'e.active',
+        'e.host_user_id',
+      ])
+      .where('b.org_id', '=', ctx.orgId)
+      .where('b.status', 'in', ['confirmed', 'cancelled'])
+      .$if(input.scope === 'mine', (q) => q.where('e.host_user_id', '=', userId))
+      .where('b.ends_at', upcoming ? '>' : '<=', new Date())
+      .orderBy('b.starts_at', upcoming ? 'asc' : 'desc')
+      .orderBy('b.id')
+      .limit(200)
+      .execute();
+    return rows.map((r) => ({
+      id: r.id,
+      eventType: { id: r.type_id, slug: r.slug, title: r.title, active: r.active },
+      hostUserId: r.host_user_id,
+      status: r.status,
+      startsAt: new Date(r.starts_at).toISOString(),
+      endsAt: new Date(r.ends_at).toISOString(),
+      timeZone: r.time_zone,
+      visitor: { name: r.visitor_name, email: r.email, phone: r.phone, note: r.note },
+      partyId: r.party_id,
+    }));
+  },
+});
+
+export const bookingQueries = [bookingList];
+
+export const bookingCommands = [bookingConfirm, bookingMailData, bookingManage, bookingRemind, bookingCancel, bookingMove];

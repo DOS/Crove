@@ -34,11 +34,12 @@ async function call<T>(path: string, init?: RequestInit): Promise<T | null> {
 const post = <T,>(path: string, body: unknown) => call<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
 // "Thứ Hai, 02/11/2026, 09:00 - 09:30 (Asia/Ho_Chi_Minh)" in the visitor's zone.
-const whenOf = (s: Slot, zone: string, locale: Locale) =>
+export const whenOf = (s: Slot, zone: string, locale: Locale) =>
   `${dayLabel(zonedDate(zone, Date.parse(s.start)), locale)}, ${timeIn(s.start, zone, locale)} - ${timeIn(s.end, zone, locale)} (${zone})`;
 
-// A week of the type's free slots, with the weeks before and after; picking one calls onPick.
-function SlotPicker({ path, zone, onPick }: { path: string; zone: string; onPick: (slot: Slot) => void }) {
+// A week of the type's free slots, with the weeks before and after; picking one calls onPick. The bookings screen
+// (#1320) uses it for a host's move too.
+export function SlotPicker({ path, zone, onPick }: { path: string; zone: string; onPick: (slot: Slot) => void }) {
   const t = useTranslations('booking');
   const { locale } = useLocaleSetting();
   const [week, setWeek] = useState(0);

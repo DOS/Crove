@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { isVietnamHoliday, zonedDate, zonedInstant, type EventType, type PersonalDataErasure, type PersonalDataResult } from '@crove/kernel-contract';
+import { isVietnamHoliday, zonedDate, zonedInstant, type BookingItem, type EventType, type PersonalDataErasure, type PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { crmCommands, crmQueries } from '@crove/mod-crm';
 import { bookingManageAsk, bookingManageView, bookingRequest, bookingStatus, bookingView } from '../src/booking-page.ts';
@@ -330,6 +330,60 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     expect(await worker.execute('crm.booking.manage', { bookingId: id, requestId: late?.requestId }, { actor: SYSTEM, orgId: o.orgId })).toEqual({ bookingId: id, outcome: 'unavailable' });
     expect(await bookingManageView(app, o.slug, 'tu-van', { manage: token })).toMatchObject({ status: 'confirmed', usable: false, outcome: 'unavailable' });
     expect(await bookingManageAsk(app, o.slug, 'tu-van', { manage: token, action: 'cancel' })).toBeNull();
+  });
+
+  it('lists bookings for their host and for owners, and the host cancels or moves one (#1320)', async () => {
+    const o = await org();
+    const day = bookableDay();
+    await bookingRequest(app, o.slug, 'tu-van', visitor(at(day, 540)));
+    await bookingRequest(app, o.slug, 'tu-van', visitor(at(day, 600), { email: 'hai@example.test', name: 'Trần Thị Hai' }));
+    for (const b of await o.bookings()) await o.confirm(b.id);
+    const [first, second] = await o.bookings();
+    const list = (actor: string, scope: 'mine' | 'org', period: 'upcoming' | 'past' = 'upcoming') =>
+      app.query<BookingItem[]>('crm.booking.list', { scope, period }, { actor: asUser(actor), orgId: o.orgId });
+
+    const mine = await list(o.host, 'mine');
+    expect(mine.map((b) => [b.startsAt, b.status, b.visitor.name])).toEqual([
+      [at(day, 540), 'confirmed', 'Nguyễn Văn Khách'],
+      [at(day, 600), 'confirmed', 'Trần Thị Hai'],
+    ]);
+    expect(mine[0]).toMatchObject({ eventType: { slug: 'tu-van', title: 'Tư vấn thuế' }, hostUserId: o.host, partyId: first?.party_id });
+    // The owner hosts nothing but sees the org's; the host may not ask for the org's.
+    expect(await list(o.owner, 'mine')).toEqual([]);
+    expect(await list(o.owner, 'org')).toHaveLength(2);
+    await expect(list(o.host, 'org')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await list(o.host, 'mine', 'past')).toEqual([]);
+
+    // Another member may not touch the host's bookings; the owner may.
+    const other = await upsertIdentity(createDb(appPool), { issuer: 'test', subject: randomUUID(), email: `other-${randomUUID().slice(0, 8)}@book.test`, name: null });
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, other]));
+    await expect(app.execute('crm.booking.cancel', { bookingId: first?.id }, { actor: asUser(other), orgId: o.orgId })).rejects.toMatchObject({ code: 'BOOKING_HOST_FORBIDDEN' });
+
+    // The host moves the first to a free time; a taken one is refused and nothing changes.
+    await expect(app.execute('crm.booking.move', { bookingId: first?.id, startsAt: at(day, 600) }, { actor: asUser(o.host), orgId: o.orgId })).rejects.toMatchObject({ code: 'BOOKING_TIME_TAKEN' });
+    expect(await app.execute('crm.booking.move', { bookingId: first?.id, startsAt: at(day, 720) }, { actor: asUser(o.host), orgId: o.orgId })).toEqual({ bookingId: first?.id, startsAt: at(day, 720) });
+    // The owner cancels the second: its slot is free again.
+    await app.execute('crm.booking.cancel', { bookingId: second?.id }, { actor: asUser(o.owner), orgId: o.orgId });
+    await expect(app.execute('crm.booking.cancel', { bookingId: second?.id }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ code: 'BOOKING_NOT_CHANGEABLE' });
+    const slots = (await bookingView(app, o.slug, 'tu-van', dayRange(day)))?.slots.map((x) => x.start) ?? [];
+    expect(slots).toContain(at(day, 540));
+    expect(slots).toContain(at(day, 600));
+    expect(slots).not.toContain(at(day, 720));
+    expect((await list(o.host, 'mine')).map((b) => [b.startsAt, b.status])).toEqual([
+      [at(day, 600), 'cancelled'],
+      [at(day, 720), 'confirmed'],
+    ]);
+
+    // The visitor is mailed and the host is not (they acted); the party's timeline says the host did it.
+    const mails = await admin((c) =>
+      c.query<{ source: string; recipient: string }>("SELECT source, payload->>'recipient' AS recipient FROM crove_kernel.mail_message WHERE org_id = $1 AND source IN ('crm.booking.moved', 'crm.booking.cancelled') ORDER BY created_at, id", [o.orgId]),
+    );
+    expect(mails.rows).toEqual([
+      { source: 'crm.booking.moved', recipient: 'visitor' },
+      { source: 'crm.booking.cancelled', recipient: 'visitor' },
+    ]);
+    const activity = await admin((c) => c.query<{ summary: string }>("SELECT summary FROM crove_kernel.activity WHERE org_id = $1 AND kind IN ('crm.booking.moved', 'crm.booking.cancelled') ORDER BY occurred_at, id", [o.orgId]));
+    expect(activity.rows.map((a) => a.summary.split(' ').slice(0, 5).join(' '))).toEqual(['Người chủ trì đổi lịch', 'Người chủ trì hủy lịch']);
   });
 
   it('caps requests per event type at 30 an hour', async () => {
