@@ -9,6 +9,7 @@ import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
@@ -118,11 +119,11 @@ export function AuditPage() {
         </label>
         <label className="text-xs">
           <span className="text-subtle-foreground">{t('from')}</span>
-          <Input type="date" value={form.from} onChange={set('from')} className="mt-1 w-44" />
+          <DateInput value={form.from} onChange={(value) => set('from')({ target: { value } })} className="mt-1 w-44" />
         </label>
         <label className="text-xs">
           <span className="text-subtle-foreground">{t('to')}</span>
-          <Input type="date" value={form.to} onChange={set('to')} className="mt-1 w-44" />
+          <DateInput value={form.to} onChange={(value) => set('to')({ target: { value } })} className="mt-1 w-44" />
         </label>
         {Object.values(form).some((v) => v !== '') && (
           <Button variant="ghost" size="sm" onClick={() => setForm(EMPTY)}>

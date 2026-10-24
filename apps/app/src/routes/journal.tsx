@@ -8,6 +8,7 @@ import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Table, TableBody, TableCell, TableRow } from '@crove/ui/components/table';
+import { DateInput } from '../components/date-input.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -86,13 +87,12 @@ function ReversalForm({ entry, slug, onClose }: { entry: Entry; slug: string; on
       {opening && <p className="text-sm text-muted-foreground">{t('openingNote', { date: f.date(entry.entryDate) })}</p>}
       <label className="block text-xs">
         <span className="text-subtle-foreground">{t('date')}</span>
-        <Input
-          type="date"
+        <DateInput
           required
           min={entry.entryDate}
           {...(opening ? { max: entry.entryDate, readOnly: true } : {})}
           value={entryDate}
-          onChange={(e) => setEntryDate(e.target.value)}
+          onChange={setEntryDate}
           className="mt-1 w-44"
         />
       </label>
@@ -210,11 +210,11 @@ export function JournalPage() {
         <div className="flex flex-wrap items-end gap-3">
           <label className="text-xs">
             <span className="text-subtle-foreground">{t('from')}</span>
-            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="mt-1 w-44" />
+            <DateInput value={from} onChange={setFrom} className="mt-1 w-44" />
           </label>
           <label className="text-xs">
             <span className="text-subtle-foreground">{t('to')}</span>
-            <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 w-44" />
+            <DateInput value={to} onChange={setTo} className="mt-1 w-44" />
           </label>
         </div>
         {/* The exports in their own row beside the range (#1264), hidden only once the journal is known to be empty: the

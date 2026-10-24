@@ -60,7 +60,7 @@ test('import a bank statement, then an overlapping one, and find each line once'
     // The type, date, bank account and amount follow the line.
     await expect(page.getByLabel('Loại chứng từ').first()).toHaveValue('bank_debit');
     await expect(page.getByLabel('Loại chứng từ').first()).toBeDisabled();
-    await expect(page.getByLabel('Ngày chứng từ')).toHaveValue('2026-09-03');
+    await expect(page.getByLabel('Ngày chứng từ')).toHaveValue('03/09/2026');
     await expect(page.getByLabel('Số tiền dòng 1')).toHaveValue('11000');
     await expect(page.getByLabel('Lý do chi')).toHaveValue('Phí SMS');
     // A bank fee settles no vendor: as an expense line it needs no party.
@@ -81,7 +81,7 @@ test('import a bank statement, then an overlapping one, and find each line once'
     // rather than the URL).
     await expect(page).toHaveURL(new RegExp(`/o/${slug}/bank\\?`));
     await expect(page.getByLabel('Tài khoản ngân hàng')).toHaveValue('1121');
-    await expect(page.getByLabel('Tháng')).toHaveValue('2026-09');
+    await expect(page.getByLabel('Tháng')).toHaveValue('09/2026');
     await expect(page.getByRole('row').filter({ hasText: 'FT002' }).getByRole('link', { name: 'Chờ duyệt' })).toBeVisible();
   });
 

@@ -9,6 +9,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { DateInput } from '../components/date-input.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -115,13 +116,12 @@ export function OpeningBalancePage() {
           <div className="mt-3 flex flex-wrap items-end gap-3">
             <label className="text-xs">
               <span className="text-subtle-foreground">{t('asOf')}</span>
-              <Input
-                type="date"
+              <DateInput
                 value={asOf}
-                onChange={(e) => {
+                onChange={(next) => {
                   post.reset();
                   setIdempotencyKey(crypto.randomUUID());
-                  setAsOf(e.target.value);
+                  setAsOf(next);
                 }}
                 className="mt-1 w-44"
               />

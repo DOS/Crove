@@ -11,6 +11,7 @@ import { Input } from '@crove/ui/components/input';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { canLockPeriods, canUnlockPeriods, monthLabel, previousMonth } from '../lib/period-lock.ts';
+import { DateInput } from './date-input.tsx';
 import { StepUpPrompt } from './two-factor.tsx';
 import { ErrorText } from './ui.tsx';
 
@@ -72,14 +73,14 @@ export function PeriodLockPanel() {
           {canLock && !data.nextMonth && (
             <label className="text-xs">
               <span className="text-subtle-foreground">{t('month')}</span>
-              <Input
-                type="month"
+              <DateInput
+                kind="month"
                 aria-label={t('month')}
                 className="mt-1 w-44"
                 value={picked}
                 max={previousMonth(vietnamMonth())}
-                onChange={(e) => {
-                  setPicked(e.target.value);
+                onChange={(next) => {
+                  setPicked(next);
                   lock.reset();
                 }}
               />
