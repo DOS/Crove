@@ -2849,7 +2849,7 @@ export const vi = {
       client: 'Khách hàng trả lời qua liên kết duyệt: {answers, number} lần ({approved, number} đồng ý, {changes, number} cần sửa), thời gian trả lời trung vị {time}.',
       clientNone: 'Chưa có khách hàng nào trả lời qua liên kết duyệt trong khoảng ngày này.',
       clientRow: 'Khách hàng (liên kết duyệt)',
-      notes: 'Bài đã tạo, được duyệt và đã đăng tính cho người viết bài. Được giao là các bài có hạn chót trong khoảng ngày; trễ hạn khi đã qua hạn mà chưa kênh nào đăng. Thời gian duyệt là trung vị, tính từ lúc gửi duyệt đến khi người duyệt quyết định.',
+      notes: 'Bài đã tạo, được duyệt và đã đăng tính cho người viết bài. Được giao là các bài có hạn chót trong khoảng ngày; trễ hạn khi đã qua hạn mà chưa kênh nào đăng. Thời gian duyệt là trung vị, tính từ lúc gửi duyệt đến khi người duyệt quyết định. Cột Gửi duyệt chỉ đếm những lần thành viên tự gửi bài đi duyệt: bài nhập từ tệp hay tạo xong gửi duyệt luôn, và bài được hệ thống tự gửi duyệt lại, không được tính.',
     },
     clientReview: {
       title: 'Duyệt bài cho {org}',

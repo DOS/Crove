@@ -5,7 +5,8 @@
 // graphic, so 3:1 is enough; the link keeps its colour, which text needs at 4.5:1), and with hide Crove no "Crove" in
 // the footer. The logo stays on the report page: the mailer sends no inline images (CID attachments), and mail
 // clients block data URLs. A report of exactly one month carries a line of the org's monthly goals (#1056), as the
-// run worked them out.
+// run worked them out. A schedule that chooses its report's sections (#1259) sends only theirs: without the totals, the
+// posts alone; with the note, the agency's note as plain text.
 import type { MailTemplate, MailTemplateInput } from './mail-queue.ts';
 
 interface ReportMailData {
@@ -17,9 +18,10 @@ interface ReportMailData {
   timeZone: string;
   test: boolean;
   posts: number;
-  reach: number;
-  impressions: number;
-  engagement: number;
+  // null when the schedule's report leaves out the totals (#1259).
+  totals: { reach: number; impressions: number; engagement: number } | null;
+  // The agency's note (#1259), plain text; absent from mails without one.
+  note: string | null;
   // Absent from mails queued before goals, and when the period is not one month or there are no goals.
   goals: { month: string; items: GoalLine[] } | null;
 }
@@ -77,13 +79,28 @@ export function goalLine(goals: NonNullable<ReportMailData['goals']>): string {
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 const oneLine = (text: string) => text.replace(/[\r\n\t]+/g, ' ').trim();
 
+const amount = (n: unknown): n is number => count(n) && n >= 0;
+
 function dataOf(payload: Readonly<Record<string, unknown>>): ReportMailData | null {
-  const { name, orgName, periodStart, periodEnd, timeZone, test, posts, reach, impressions, engagement } = payload;
-  const numbers = [posts, reach, impressions, engagement];
+  const { name, orgName, periodStart, periodEnd, timeZone, test, posts, reach, impressions, engagement, note } = payload;
   if (typeof name !== 'string' || typeof periodStart !== 'string' || typeof periodEnd !== 'string' || typeof timeZone !== 'string') return null;
-  if (!numbers.every((n) => typeof n === 'number' && Number.isFinite(n) && n >= 0)) return null;
+  if (!amount(posts)) return null;
+  // The totals all three or none (#1259: a report without its totals section).
+  const totals = [reach, impressions, engagement];
+  if (!totals.every(amount) && !totals.every((n) => n === undefined)) return null;
   if (Number.isNaN(Date.parse(periodStart)) || Number.isNaN(Date.parse(periodEnd))) return null;
-  return { goals: goalsOf(payload.goals), name: oneLine(name), orgName: typeof orgName === 'string' && orgName.trim() ? oneLine(orgName).slice(0, 200) : null, periodStart, periodEnd, timeZone, test: test === true, posts: posts as number, reach: reach as number, impressions: impressions as number, engagement: engagement as number };
+  return {
+    goals: goalsOf(payload.goals),
+    name: oneLine(name),
+    orgName: typeof orgName === 'string' && orgName.trim() ? oneLine(orgName).slice(0, 200) : null,
+    periodStart,
+    periodEnd,
+    timeZone,
+    test: test === true,
+    posts,
+    totals: amount(reach) && amount(impressions) && amount(engagement) ? { reach, impressions, engagement } : null,
+    note: typeof note === 'string' && note.trim() ? note.trim().slice(0, 2000) : null,
+  };
 }
 
 // The branding mint_link returns, as this template uses it: the name on one line, an accent only as #rrggbb (it goes
@@ -132,10 +149,15 @@ export async function renderReportMail(input: MailTemplateInput): Promise<{ subj
   const n = new Intl.NumberFormat('vi-VN');
   const rows: [string, number][] = [
     ['Bài đã đăng', data.posts],
-    ['Lượt tiếp cận', data.reach],
-    ['Lượt hiển thị', data.impressions],
-    ['Lượt tương tác', data.engagement],
+    ...(data.totals
+      ? ([
+          ['Lượt tiếp cận', data.totals.reach],
+          ['Lượt hiển thị', data.totals.impressions],
+          ['Lượt tương tác', data.totals.engagement],
+        ] as [string, number][])
+      : []),
   ];
+  const noteHeading = sender ? `Nhận xét của ${sender}` : 'Nhận xét';
   const until = day(link.expiresAt, data.timeZone);
   const subject = oneLine(`${data.test ? '[Thử] ' : ''}${input.subject ?? `Báo cáo mạng xã hội: ${data.name}`}`).slice(0, 200);
   const text = [
@@ -145,6 +167,7 @@ export async function renderReportMail(input: MailTemplateInput): Promise<{ subj
     `Kỳ báo cáo: ${from} - ${to}`,
     '',
     ...rows.map(([label, value]) => `${label}: ${n.format(value)}`),
+    ...(data.note ? ['', `${noteHeading}:`, data.note] : []),
     ...(data.goals ? ['', goalLine(data.goals)] : []),
     '',
     `Xem báo cáo đầy đủ: ${url}`,
@@ -161,6 +184,7 @@ ${brand && sender ? `<p style="margin:0 0 16px;padding:0 0 8px;font-size:15px;fo
 <table style="border-collapse:collapse;margin:0 0 16px">
 ${rows.map(([label, value]) => `<tr><td style="padding:4px 16px 4px 0">${escapeHtml(label)}</td><td style="padding:4px 0;font-weight:600;text-align:right">${escapeHtml(n.format(value))}</td></tr>`).join('\n')}
 </table>
+${data.note ? `<p style="margin:0 0 4px;font-weight:600">${escapeHtml(noteHeading)}</p>\n<p style="margin:0 0 16px;white-space:pre-line">${escapeHtml(data.note)}</p>` : ''}
 ${data.goals ? `<p style="margin:0 0 16px">${escapeHtml(goalLine(data.goals))}</p>` : ''}
 <p style="margin:0 0 8px"><a href="${escapeHtml(url)}" style="color:#b91c1c">Xem báo cáo đầy đủ</a></p>
 <p style="margin:0 0 16px;font-size:13px;color:#52525b">Liên kết dùng được đến ngày ${escapeHtml(until)}.</p>

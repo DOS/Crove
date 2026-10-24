@@ -2850,7 +2850,7 @@ export const en = {
       client: 'Clients answered through review links {answers, number} times ({approved, number} approved, {changes, number} needs changes), with a median answer time of {time}.',
       clientNone: 'No client answered through a review link in this range.',
       clientRow: 'Clients (review links)',
-      notes: "Created, approved and published count for the post's author. Assigned counts the posts due in the range; a post is overdue once its due date has passed with no channel published by then. Review time is the median from sending to review to the reviewer's decision.",
+      notes: "Created, approved and published count for the post's author. Assigned counts the posts due in the range; a post is overdue once its due date has passed with no channel published by then. Review time is the median from sending to review to the reviewer's decision. Sent to review counts only the times a member sent a post to review: posts imported or sent to review as they were created, and posts the system sent back to review, are not counted.",
     },
     clientReview: {
       title: 'Review a post for {org}',

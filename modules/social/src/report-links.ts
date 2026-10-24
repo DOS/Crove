@@ -5,9 +5,10 @@
 // calls with the token. The design is the client review link's (#589). A link may carry the agency's note (#1056), and a
 // report of exactly one month shows the org's monthly goals (goals.ts). A link may report on one label's posts only
 // (#1159, a campaign recap; the page never shows the label's name), and may leave out who follows the channels (#1155).
+// A link may choose its sections and their order (#1259): report_link_view returns only those, the rest as null.
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { zId } from '@crove/kernel-contract';
+import { zId, zSocialReportSections, zSocialReportTopCount, type SocialReportSection } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 
@@ -96,6 +97,9 @@ export const reportLinkCreate = defineCommand({
     labelId: zId.optional(),
     // Show who follows the channels (#1155); on unless false.
     includeAudience: z.boolean().optional(),
+    // The sections the report shows, in order (#1259); every one when left out. How many best posts (10 when left out).
+    sections: zSocialReportSections.optional(),
+    topCount: zSocialReportTopCount.optional(),
   }),
   risk: 'R2',
   access: ADMINS,
@@ -115,6 +119,7 @@ export const reportLinkCreate = defineCommand({
       const label = await ctx.trx.selectFrom('crove_social.label').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.labelId).forShare().executeTakeFirst();
       if (!label) throw new DomainError('LABEL_NOT_FOUND', 404, 'Không tìm thấy nhãn này');
     }
+    const includeAudience = audienceOf(input.sections, input.includeAudience);
     const live = await ctx.trx
       .selectFrom('crove_social.report_link')
       .select((eb) => eb.fn.countAll<string>().as('n'))
@@ -139,7 +144,9 @@ export const reportLinkCreate = defineCommand({
         connection_ids: ids,
         include_external: input.includeExternal === true,
         label_id: input.labelId ?? null,
-        include_audience: input.includeAudience !== false,
+        include_audience: includeAudience,
+        sections: input.sections ?? null,
+        top_count: input.topCount ?? null,
         created_by: userId,
         created_at: ctx.now,
         expires_at: expiresAt,
@@ -150,6 +157,17 @@ export const reportLinkCreate = defineCommand({
     return { linkId: row.id, token, expiresAt: expiresAt.toISOString() };
   },
 });
+
+/**
+ * Whether a report shows who follows the channels: the audience section when the sections are chosen (#1259), else the
+ * option (#1155), on unless false. Both given and at odds is refused, so one link never says two things.
+ */
+export function audienceOf(sections: readonly SocialReportSection[] | null | undefined, includeAudience: boolean | undefined): boolean {
+  if (!sections) return includeAudience !== false;
+  const on = sections.includes('audience');
+  if (includeAudience !== undefined && includeAudience !== on) throw new DomainError('VALIDATION', 422, 'Lựa chọn người theo dõi không khớp với các phần của báo cáo');
+  return on;
+}
 
 export const reportLinkRevoke = defineCommand({
   name: 'social.report_link.revoke',
@@ -182,6 +200,9 @@ export interface ReportLinkView {
   // The label the link reports on (#1159), or null for every post.
   labelId: string | null;
   includeAudience: boolean;
+  // The sections the report shows, in order (#1259), or null for every one; how many best posts, null for 10.
+  sections: SocialReportSection[] | null;
+  topCount: number | null;
 }
 
 // The org's report links, newest first (never their tokens); the ones a schedule made per mail are not listed.
@@ -192,7 +213,7 @@ export const reportLinkList = defineQuery({
   handler: async (ctx): Promise<ReportLinkView[]> => {
     const rows = await ctx.trx
       .selectFrom('crove_social.report_link')
-      .select(['id', 'title', 'note', 'period_start', 'period_end', 'connection_ids', 'created_by', 'created_at', 'expires_at', 'revoked_at', 'include_external', 'label_id', 'include_audience'])
+      .select(['id', 'title', 'note', 'period_start', 'period_end', 'connection_ids', 'created_by', 'created_at', 'expires_at', 'revoked_at', 'include_external', 'label_id', 'include_audience', 'sections', 'top_count'])
       .where('org_id', '=', ctx.orgId)
       .where('schedule_id', 'is', null)
       .orderBy('created_at', 'desc')
@@ -212,6 +233,8 @@ export const reportLinkList = defineQuery({
       includeExternal: r.include_external,
       labelId: r.label_id,
       includeAudience: r.include_audience,
+      sections: r.sections,
+      topCount: r.top_count,
     }));
   },
 });
