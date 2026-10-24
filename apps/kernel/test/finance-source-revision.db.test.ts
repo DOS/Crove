@@ -37,6 +37,8 @@ interface Posting {
   lines: Line[];
   reverses?: string | null;
   revision?: number | null;
+  // The session's DateStyle, when not the server default.
+  dateStyle?: string;
 }
 
 const suite = ADMIN ? describe : describe.skip;
@@ -64,6 +66,7 @@ suite('journal entry source revisions (#1283)', () => {
   // revision is undefined) and commits; the error, if any, with nothing left behind.
   async function post(orgId: string, p: Posting): Promise<{ id: string } | { error: PgError }> {
     return withClient(appUrl, async (app) => {
+      if (p.dateStyle) await app.query(`SELECT set_config('DateStyle', $1, false)`, [p.dateStyle]);
       await app.query('BEGIN');
       try {
         await app.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]);
@@ -178,6 +181,20 @@ suite('journal entry source revisions (#1283)', () => {
     expect(await entriesOf(orgs.a, sourceId)).toHaveLength(1);
   });
 
+  it('hashes the entry date alike whatever the session DateStyle', async () => {
+    const sourceId = randomUUID();
+    const id = await posted(orgs.a, { sourceId, lines: SALE, date: '2026-03-04' });
+    for (const dateStyle of ['SQL, DMY', 'SQL, MDY', 'German', 'Postgres, YMD']) {
+      expect(await post(orgs.a, { sourceId, lines: SALE, date: '2026-03-04', dateStyle })).toEqual({ id });
+    }
+    // And the other way round: posted under a non-ISO DateStyle, replayed under the default.
+    const other = randomUUID();
+    const otherId = await posted(orgs.a, { sourceId: other, lines: SALE, date: '2026-03-04', dateStyle: 'SQL, DMY' });
+    expect(await post(orgs.a, { sourceId: other, lines: SALE, date: '2026-03-04' })).toEqual({ id: otherId });
+    expect(await entriesOf(orgs.a, sourceId)).toHaveLength(1);
+    expect(await entriesOf(orgs.a, other)).toHaveLength(1);
+  });
+
   it('refuses the same revision with another payload (IDEMPOTENCY_CONFLICT)', async () => {
     const sourceId = randomUUID();
     const id = await posted(orgs.a, { sourceId, lines: SALE });
@@ -259,8 +276,10 @@ suite('journal entry source revisions (#1283)', () => {
     const target = await posted(orgs.a, { sourceId: randomUUID(), lines: SALE });
     const sourceId = randomUUID();
     expect(await post(orgs.a, { sourceType: 'test.reversal', sourceId, lines: mirror(SALE), reverses: target, revision: 2, date: '2026-10-15' })).toMatchObject({
-      error: { code: '23514', message: 'a reversal is revision 1 of its source' },
+      error: { code: '23514', message: 'REVERSAL_REVISION' },
     });
+    const refused = await post(orgs.a, { sourceType: 'test.reversal', sourceId, lines: mirror(SALE), reverses: target, revision: 2, date: '2026-10-15' });
+    if ('error' in refused) expect(sourceRevisionError(refused.error)).toMatchObject({ code: 'REVERSAL_REVISION', status: 409, details: { revision: 2, entryId: target } });
     // Replaying the reversal returns it, so a retried reversal cannot double the correction.
     const reversal = await posted(orgs.a, { sourceType: 'test.reversal', sourceId, lines: mirror(SALE), reverses: target, revision: 1, date: '2026-10-15' });
     expect(await post(orgs.a, { sourceType: 'test.reversal', sourceId, lines: mirror(SALE), reverses: target, date: '2026-10-15' })).toEqual({ id: reversal });

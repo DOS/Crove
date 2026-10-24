@@ -22,7 +22,7 @@
 --   - same source and revision, another payload: IDEMPOTENCY_CONFLICT (SQLSTATE 23505);
 --   - a new revision: only the previous one + 1 (the first is 1), REVISION_OUT_OF_ORDER (23514) otherwise, and only
 --     once the previous revision has been reversed, SOURCE_STILL_POSTED (23514) otherwise;
---   - a reversal (p_reverses_entry_id set) is always revision 1 of its source (23514 otherwise).
+--   - a reversal (p_reverses_entry_id set) is always revision 1 of its source, REVERSAL_REVISION (23514) otherwise.
 --   Each refusal carries JSON detail; none reports an amount. Org and author still come from the context.
 --   The older signatures (6 and 5 arguments) post revision 1 through it, so every existing caller keeps working.
 --
@@ -94,17 +94,18 @@ END $$;
 -- ---------------------------------------------------------------------------
 -- One definition for both sides of the comparison: the request's lines as given, and a stored entry's lines read back
 -- (for entries posted before this migration). Amounts at 4 decimals, so '100500' and '100500.0000' hash alike; lines
--- ordered by number. Pure; callable only by the posting definer.
+-- ordered by number. The date is written with an explicit ISO pattern, never the session's DateStyle, so a replay from
+-- a session with another DateStyle hashes alike. STABLE, as to_char() is; callable only by the posting definer.
 CREATE OR REPLACE FUNCTION crove_finance.journal_payload_sha256(
   p_entry_date date,
   p_currency text,
   p_reverses_entry_id uuid,
   p_lines jsonb
 ) RETURNS bytea
-LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $$
+LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
   SELECT pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.jsonb_build_object(
     'v', 1,
-    'entry_date', p_entry_date::text,
+    'entry_date', pg_catalog.to_char(p_entry_date::timestamp, 'YYYY-MM-DD'),
     'currency', p_currency,
     'reverses_entry_id', p_reverses_entry_id,
     'lines', coalesce((
@@ -156,7 +157,9 @@ BEGIN
       DETAIL = pg_catalog.json_build_object('revision', p_source_revision)::text;
   END IF;
   IF p_reverses_entry_id IS NOT NULL AND p_source_revision <> 1 THEN
-    RAISE EXCEPTION 'a reversal is revision 1 of its source' USING ERRCODE = '23514';
+    RAISE EXCEPTION 'REVERSAL_REVISION' USING ERRCODE = '23514',
+      DETAIL = pg_catalog.json_build_object(
+        'sourceType', p_source_type, 'sourceId', p_source_id, 'revision', p_source_revision, 'entryId', p_reverses_entry_id)::text;
   END IF;
   SELECT t.base_currency, c.minor_units INTO v_currency, v_minor
   FROM crove_kernel.tenant t

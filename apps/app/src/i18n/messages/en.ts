@@ -4697,6 +4697,7 @@ export const en = {
       IDEMPOTENCY_CONFLICT: 'This document was already posted with different content (lines, amounts, date or the entry it reverses). The books keep the posted entry; to change it, reverse that entry and post again.',
       REVISION_OUT_OF_ORDER: 'This document can only be posted again as its next revision, without skipping or going back.',
       SOURCE_STILL_POSTED: "This document's previous entry is still on the books. Reverse it first, then post again.",
+      REVERSAL_REVISION: 'A reversal is posted once, as the first revision of its source; it cannot be posted again as a new revision.',
       AMOUNT_BELOW_DONG: 'The invoice has amounts below one dong, and VND books hold no fractions, so it cannot be posted yet. An accountant must decide how to round them; meanwhile you can reject the proposal and ask the seller for an adjusted invoice.',
       PERIOD_LOCKED: "The books are locked through this entry's month, so it cannot be posted. An owner can unlock that month to make a correction.",
       POSTING_DATE_NOT_ALLOWED: 'This posting date cannot be used: only a purchase invoice whose own month is locked is posted later, on a date from its invoice date on.',

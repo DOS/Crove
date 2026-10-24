@@ -171,6 +171,7 @@ export const KERNEL_ERROR_CODES = [
   'IDEMPOTENCY_CONFLICT',
   'REVISION_OUT_OF_ORDER',
   'SOURCE_STILL_POSTED',
+  'REVERSAL_REVISION',
   // A VND invoice with an amount below one dong; the rounding policy is the accountant's decision (#1308).
   'AMOUNT_BELOW_DONG',
   // Period lock (#329).

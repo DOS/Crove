@@ -1,5 +1,5 @@
 // The answers to the posting definer's source revision refusals (issue #1283, ADR-0021 decision 5): IDEMPOTENCY_CONFLICT,
-// REVISION_OUT_OF_ORDER and SOURCE_STILL_POSTED, each a 409 naming the source and revisions, never an amount. The
+// REVISION_OUT_OF_ORDER, SOURCE_STILL_POSTED and REVERSAL_REVISION, each a 409 naming the source and revisions, never an amount. The
 // definer itself is tested on PostgreSQL in apps/kernel/test/finance-source-revision.db.test.ts.
 import { describe, expect, it } from 'vitest';
 import { DomainError } from '@crove/kernel-runtime';
@@ -48,6 +48,16 @@ describe('source revision refusals', () => {
     });
     expect(error).toMatchObject({ code: 'SOURCE_STILL_POSTED', status: 409, details: { ...SOURCE, revision: 1, entryId: ENTRY } });
     expect(error?.message).toContain('hãy đảo bút toán đó trước');
+  });
+
+  it('answers REVERSAL_REVISION for a reversal posted as a later revision', () => {
+    const error = sourceRevisionError({
+      code: '23514',
+      message: 'REVERSAL_REVISION',
+      detail: JSON.stringify({ ...SOURCE, revision: 2, entryId: ENTRY }),
+    });
+    expect(error).toMatchObject({ code: 'REVERSAL_REVISION', status: 409, details: { ...SOURCE, revision: 2, entryId: ENTRY } });
+    expect(error?.message).toContain('Bút toán đảo chỉ ghi sổ một lần');
   });
 
   it('still answers when the detail is missing or malformed', () => {

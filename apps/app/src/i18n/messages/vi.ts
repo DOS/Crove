@@ -4697,6 +4697,7 @@ export const vi = {
       IDEMPOTENCY_CONFLICT: 'Chứng từ này đã được ghi sổ với nội dung khác (dòng, số tiền, ngày hoặc bút toán được đảo). Sổ giữ nguyên bút toán đã ghi; muốn sửa thì đảo bút toán đó rồi ghi sổ lại',
       REVISION_OUT_OF_ORDER: 'Chứng từ này chỉ ghi sổ lại được bằng lần ghi kế tiếp, không bỏ qua hay ghi lùi lần nào',
       SOURCE_STILL_POSTED: 'Bút toán trước của chứng từ này vẫn còn trên sổ; hãy đảo bút toán đó trước rồi mới ghi sổ lại',
+      REVERSAL_REVISION: 'Bút toán đảo chỉ ghi sổ một lần, như lần ghi đầu tiên của nó; không ghi lại bút toán đảo được',
       AMOUNT_BELOW_DONG: 'Hóa đơn có số tiền lẻ dưới một đồng, mà sổ VND không ghi số lẻ, nên chưa ghi sổ được. Kế toán cần quyết định cách làm tròn; trong lúc chờ, có thể từ chối đề xuất và xin người bán hóa đơn điều chỉnh',
       PERIOD_LOCKED: 'Sổ đã khóa đến tháng của bút toán này nên không ghi được; chủ sở hữu có thể mở khóa tháng đó nếu cần sửa',
       POSTING_DATE_NOT_ALLOWED: 'Không dùng được ngày ghi sổ này: chỉ hóa đơn mua vào thuộc tháng đã khóa sổ mới được ghi sổ muộn, vào một ngày từ ngày hóa đơn trở đi',

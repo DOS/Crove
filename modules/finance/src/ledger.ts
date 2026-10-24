@@ -100,12 +100,13 @@ export function amountScaleError(error: unknown): DomainError | null {
 //                                   source lock (REPEATABLE READ) meets instead of a replay.
 //   REVISION_OUT_OF_ORDER (23514)   not the revision right after the latest one posted.
 //   SOURCE_STILL_POSTED (23514)     the previous revision has not been reversed yet.
+//   REVERSAL_REVISION (23514)       a reversal posted as a revision other than 1 (no caller does today).
 export function sourceRevisionError(error: unknown): DomainError | null {
   const pg = error as { code?: string; message?: string; detail?: string; constraint?: string } | null;
   const message = pg?.message;
   const known =
     (pg?.code === '23505' && (message === 'IDEMPOTENCY_CONFLICT' || pg.constraint === 'journal_entry_source_revision_key')) ||
-    (pg?.code === '23514' && (message === 'REVISION_OUT_OF_ORDER' || message === 'SOURCE_STILL_POSTED'));
+    (pg?.code === '23514' && (message === 'REVISION_OUT_OF_ORDER' || message === 'SOURCE_STILL_POSTED' || message === 'REVERSAL_REVISION'));
   if (!known) return null;
   let detail: { sourceType?: unknown; sourceId?: unknown; revision?: unknown; expected?: unknown; entryId?: unknown } = {};
   try {
@@ -137,6 +138,12 @@ export function sourceRevisionError(error: unknown): DomainError | null {
       `Bút toán trước của chứng từ này${which} vẫn còn trên sổ; hãy đảo bút toán đó trước rồi mới ghi sổ lại.`,
       { ...source, entryId },
     );
+  }
+  if (message === 'REVERSAL_REVISION') {
+    return new DomainError('REVERSAL_REVISION', 409, 'Bút toán đảo chỉ ghi sổ một lần, như lần ghi đầu tiên của nó; không ghi lại bút toán đảo được.', {
+      ...source,
+      entryId,
+    });
   }
   return new DomainError(
     'IDEMPOTENCY_CONFLICT',
