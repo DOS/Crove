@@ -1,6 +1,6 @@
 # 0021. Kernel support for Finance: money domains, gapless numbering, period close, hash chain, source revisions and bank line keys
 
-- Status: proposed (2026-10-15). The owner accepts it, or changes it, before the Phase 2a kernel additions (numbering, periods, hash chain) are built.
+- Status: accepted (owner, 2026-10-24). Proposed 2026-10-15; numbering (#977), the period lock (#329) and the hash chain (#891) were built on it before the acceptance was recorded.
 - Date: 2026-10-15
 - Deciders: owner (JOY); evidence from the Phase 0b spike
 - Builds on: plan §4.10 (audit, immutability, WORM fact stream), §5.2 (manifest `numbering`), §6 (`number_series`, `number_allocation`), §13 Phase 0b and Phase 2a exit criteria, red-team rows S26 and S32; the ledger posting definer and `created_xact_id` from #71 (`supabase/migrations/20261014090100_crove_finance_ledger_posting.sql`)
