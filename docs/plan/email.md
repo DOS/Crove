@@ -1,6 +1,6 @@
 # Crove Email: module plan
 
-> Plan for the Email module (`email`, product name "Crove Email"), 2026-10-19. Owner decision of 2026-10-19: add an Email module covering transactional email and email marketing (kernel plan, Decision 18). It replaces the earlier line "bulk email marketing: only on real customer demand" (kernel plan §13 "After the core modules", §15). It keeps the milestone order of the [backlog review](backlog-review-2026-10-17.md): steps E1 and E2 go to M2 at P2 and E3 to E9 wait until M3 is done (review decision D11, decision E-1 in §6). Architecture decision: [ADR-0034](../adr/0034-outbound-email.md) (proposed). The kernel plan's Email section in §13 stays the summary; this file is the detailed plan. Vietnamese page for the owner: [email.vi.html](email.vi.html).
+> Plan for the Email module (`email`, product name "Crove Email"), 2026-10-19. Owner decision of 2026-10-19: add an Email module covering transactional email and email marketing (kernel plan, Decision 18). It replaces the earlier line "bulk email marketing: only on real customer demand" (kernel plan §13 "After the core modules", §15). It keeps the milestone order of the [backlog review](backlog-review-2026-10-17.md): steps E1 and E2 go to M2 at P2 and E3 to E9 wait until M3 is done (review decision D11, decision E-1 in §6). Architecture decision: [ADR-0034](../adr/0034-outbound-email.md) (accepted 2026-10-24). The kernel plan's Email section in §13 stays the summary; this file is the detailed plan. Vietnamese page for the owner: [email.vi.html](email.vi.html).
 >
 > Design references (studied for behavior, no code copied, as for Social): listmonk, Mautic, Mailchimp and Brevo for campaigns and consent; Postmark, Amazon SES and Resend for sending, message streams, bounces and webhooks. Rules: RFC 8058 (one-click unsubscribe), the Gmail, Yahoo and Outlook.com sender requirements, Decree 91/2020/ND-CP (anti-spam) and the Personal Data Protection Law 91/2025/QH15 (§3.12).
 
@@ -188,7 +188,7 @@ Epic: #537. E1 and E2 are in M2 at P2; E3 to E9 are in Icebox at P3 until M3 is 
 
 | # | Step | Depends on | Touches protected paths |
 |---|---|---|---|
-| E0 (#535) | This plan, Decision 18, ADR-0034 (proposed) | - | No |
+| E0 (#535) | This plan, Decision 18, ADR-0034 (accepted 2026-10-24) | - | No |
 | E1 (#538) | Kernel mail pipeline: `mail_message`, `mail_suppression`, the send and bulk queues with `external_call`, the suppression check, the invite's log row; RLS matrix factories first. In two parts: E1a, the tables, the keyed address hash, the suppression commands and the invite's row (the invite is still sent by the request, §3.2); E1b, the queues and `external_call`, with the first queued sender (Finance's reminders to client companies) | - | Yes (migrations, kernel) |
 | E2 (#539) | Delivery events: `mail_event`, `@crove/mail` with the provider interface, the first HTTP adapter, the signed webhook route, DSNs through the inbound route (VERP); hard bounces and complaints suppress; invite delivery status on the members screen | E1 | Yes (migrations, `http.ts`) |
 | E3 (#540) | `modules/email` and the `crove_email` schema, registered under `CROVE_MODULES` with its menu; sender domains with the DNS check job and the From rules | E1 | Yes (migrations) |

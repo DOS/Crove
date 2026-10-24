@@ -35,7 +35,7 @@ import { personalDataQueries } from './personal-data.ts';
 import { notificationQueries } from './notifications.ts';
 import { offboardingQueries } from './offboarding.ts';
 import { memberProfiles } from './profiles.ts';
-import { orgOverview, RECENT_FILES } from './overview.ts';
+import { orgOverviewQuery, RECENT_FILES, type OverviewContribution } from './overview.ts';
 import { proposalReminderQueries } from './proposal-reminders.ts';
 import { mayResubmit, resubmitSource } from './proposal-resubmit.ts';
 import { taxCalendarQueries } from './tax-calendar.ts';
@@ -430,6 +430,7 @@ export const streamCheck = defineQuery({
   handler: async (ctx) => ({ role: ctx.role }),
 });
 
-export function kernelQueries(options: OrgDetailOptions) {
-  return [orgDetailQuery(options), orgOverview, streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...taxCalendarQueries, ...timelineQueries, ...auditLogQueries, ...personalDataQueries, ...partyQueries, ...notificationQueries, ...usageQueries];
+// overview: the home screen's figures of the modules this deployment enables (#1261), from the composition root.
+export function kernelQueries(options: OrgDetailOptions & { overview?: readonly OverviewContribution[] }) {
+  return [orgDetailQuery(options), orgOverviewQuery({ contributions: options.overview ?? [] }), streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...taxCalendarQueries, ...timelineQueries, ...auditLogQueries, ...personalDataQueries, ...partyQueries, ...notificationQueries, ...usageQueries];
 }

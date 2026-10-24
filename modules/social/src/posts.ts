@@ -59,7 +59,9 @@ import { CONTENT_MANAGER_TEMPLATE, preReviewTask, type PreReview } from './agent
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { reviewInboxQueries } from './review-inbox.ts';
 import { attentionInboxQueries } from './attention-inbox.ts';
-import { libraryQueries, likeTerm, refuseHiddenMedia } from './library.ts';
+import { clientOverviewQueries } from './client-overview.ts';
+import { libraryQueries, refuseHiddenMedia } from './library.ts';
+import { postFilterQuery } from './post-filter.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { stockPhotoCommands } from './stock-photos.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
@@ -89,7 +91,7 @@ import { teamReportQueries } from './team-report.ts';
 import { duplicatesOf } from './duplicates.ts';
 import { refusesDuplicates, type DuplicateOf } from './domain/duplicate.ts';
 import { checklistFor, checklistForApproval, reviewChecklistCommands, reviewChecklistQueries, reviewChecksOf, tickedChecklist, type ReviewCheck } from './review-checklist.ts';
-import { channelAccessCommands, channelAccessQueries, channelNotAllowed, channelScope, connectionInScope, inScope, mayUse, postInScope, refuseChannels, refuseOutside, refusePostOutside } from './channel-access.ts';
+import { channelAccessCommands, channelAccessQueries, channelNotAllowed, channelScope, connectionInScope, inScope, mayUse, refuseChannels, refuseOutside, refusePostOutside } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -1787,69 +1789,12 @@ export const postList = defineQuery({
     // looks at those variants only; a channel they may not use lists nothing.
     const scope = await channelScope(ctx);
     if (input.connectionId && scope !== null && !scope.has(input.connectionId)) return [];
-    const mine = connectionInScope(scope, 'v.channel_connection_id');
-    let q = ctx.trx.selectFrom('crove_social.post as p').select('p.id').where('p.org_id', '=', ctx.orgId).where(postInScope(scope));
-    if (input.status) q = q.where('p.status', '=', input.status);
-    if (input.assignee === 'me') q = q.where('p.assignee_user_id', '=', ctx.actor.type === 'user' ? ctx.actor.userId : '00000000-0000-0000-0000-000000000000');
-    const variantWhere = (status: 'in_review' | null) =>
-      sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status ${status ? sql`= ${status}` : sql`<> 'cancelled'`}${
-        input.connectionId && !status ? sql` AND v.channel_connection_id = ${input.connectionId}::uuid` : sql``
-      })`;
-    // In review on the chosen channel when one is chosen: the same variant, not any of the post's.
-    if (input.stage === 'review') q = q.where(input.connectionId ? sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status = 'in_review' AND v.channel_connection_id = ${input.connectionId}::uuid)` : variantWhere('in_review'));
-    if (input.stage === 'drafts') q = q.where('p.status', '=', 'draft').where(sql<boolean>`NOT ${variantWhere('in_review')}`);
-    if (input.stage === 'done') q = q.where('p.status', 'in', ['published', 'partially_published', 'failed', 'publishing', 'cancelled']);
-    if (input.stage === 'attention') {
-      q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status IN ('failed', 'needs_attention', 'paused'))`);
-    }
-    if (input.connectionId) q = q.where(variantWhere(null));
-    // Every channel the member may use is cancelled, rejected or a draft with no time of its own, at least one is a
-    // draft, and the post has no planned time: what the calendar cannot place yet.
-    if (input.undated) {
-      q = q
-        .where('p.scheduled_at', 'is', null)
-        .where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status IN ('draft', 'in_review', 'changes_requested', 'approved'))`)
-        .where(
-          sql<boolean>`NOT EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status NOT IN ('cancelled', 'rejected') AND (v.status NOT IN ('draft', 'in_review', 'changes_requested', 'approved') OR v.scheduled_at IS NOT NULL OR v.queue_slot_at IS NOT NULL))`,
-        );
-      // A limited member may plan a post only when no open channel of it is another's (editPost refuses the time
-      // otherwise), so the list offers them only those.
-      if (scope !== null) {
-        q = q.where(sql<boolean>`NOT EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND NOT ${mine} AND v.status NOT IN ('published', 'cancelled', 'removed'))`);
-      }
-    }
-    if (input.labelId) q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = p.org_id AND pl.post_id = p.id AND pl.label_id = ${input.labelId}::uuid)`);
-    if (input.search) {
-      const term = likeTerm(input.search);
-      q = q.where(
-        sql<boolean>`(p.body ILIKE ${term} OR p.title ILIKE ${term} OR EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND (v.body ILIKE ${term} OR v.title ILIKE ${term})))`,
-      );
-    }
+    let q = postFilterQuery(ctx, scope, input);
     // Ordered and paged by the change time as the answer carries it (milliseconds), so a page boundary inside one
     // millisecond neither repeats nor skips a post.
     const changed = sql`date_trunc('milliseconds', p.updated_at)`;
     const before = input.before;
     if (before) q = q.where(sql<boolean>`(${changed}, p.id) < (${new Date(Date.parse(before.updatedAt))}::timestamptz, ${before.postId}::uuid)`);
-    if (input.from || input.to) {
-      q = q.where((eb) =>
-        eb.exists(
-          eb
-            .selectFrom('crove_social.post_variant as v')
-            .select(sql`1`.as('one'))
-            .whereRef('v.org_id', '=', 'p.org_id')
-            .whereRef('v.post_id', '=', 'p.id')
-            .where('v.status', '<>', 'cancelled')
-            .where(mine)
-            .where((w) => {
-              const at = sql`CASE WHEN v.status IN ('published', 'removed') THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END`;
-              const parts = [];
-              if (input.from) parts.push(w(at, '>=', new Date(Date.parse(input.from))));
-              if (input.to) parts.push(w(at, '<', new Date(Date.parse(input.to))));
-              return w.and(parts);
-            }),
-        ),
-      );
-    }
     const rows = await q.orderBy(changed, 'desc').orderBy('p.id', 'desc').limit(input.limit ?? 50).execute();
     return viewPosts(
       ctx,
@@ -2065,4 +2010,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, queueOpenSlots, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...pushQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...periodSummaryQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, queueOpenSlots, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...clientOverviewQueries, ...reportLinkQueries, ...notificationQueries, ...pushQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...periodSummaryQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];
