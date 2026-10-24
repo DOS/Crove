@@ -528,7 +528,7 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
     const { owner } = await signInAll('owner');
     const { orgId } = await orgWith(owner, []);
     await expect(admin((c) => c.query('DELETE FROM crove_kernel.tenant WHERE org_id = $1', [orgId]))).rejects.toThrow(
-      /append-only|violates foreign key constraint "[a-z_]+" on table "[a-z_]+"/,
+      /append-only|violates foreign key constraint "[^"]+" on table "[^"]+"/,
     );
     expect(await admin((c) => c.query('SELECT 1 FROM crove_kernel.tenant WHERE org_id = $1', [orgId]))).toMatchObject({ rowCount: 1 });
     expect(await roles(orgId)).toEqual({ [owner.userId]: 'owner' });
