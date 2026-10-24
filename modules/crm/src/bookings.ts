@@ -292,6 +292,8 @@ export const bookingMailData = defineCommand({
       .select(['revision', 'visitor_name', 'email', 'phone', 'note'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.bookingId)
+      // Held until the token is read, so a move cannot commit between the revision check and the token.
+      .forShare()
       .executeTakeFirst();
     const { rows } = await sql<{ token: string | null }>`SELECT crove_crm.booking_manage_token(${input.bookingId}::uuid) AS token`.execute(ctx.trx);
     return {
