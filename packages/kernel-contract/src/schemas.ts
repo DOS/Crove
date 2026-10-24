@@ -1467,6 +1467,19 @@ export const zSocialPostVersions = z.object({
 // A stock photo's credit (#1106): the photographer and the photo's page on Pexels, and its description as alt text.
 export const zSocialMediaCredit = z.object({ provider: z.literal('pexels'), photographer: z.string(), photographerUrl: z.string(), sourceUrl: z.string(), altText: z.string().nullable() });
 export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()), credit: zSocialMediaCredit.nullable() });
+// The CSV import's media (#1258): library files by name or id (social.media.resolve, up to 200 a call), and image URLs
+// the API fetches into the library through the egress guard (social.media.fetchUrls, up to SOCIAL_MEDIA_URLS_MAX a call,
+// https only, JPEG, PNG or WEBP up to MAX_UPLOAD_BYTES), each with the reason it was refused.
+export const SOCIAL_MEDIA_URLS_MAX = 10;
+export const SOCIAL_MEDIA_REF_PROBLEMS = ['UNKNOWN_FILE', 'AMBIGUOUS_FILE', 'FILE_NOT_ALLOWED'] as const;
+export const SOCIAL_MEDIA_URL_PROBLEMS = ['MEDIA_URL_INVALID', 'MEDIA_URL_BLOCKED', 'MEDIA_URL_TOO_LARGE', 'MEDIA_URL_NOT_IMAGE', 'MEDIA_URL_UNREACHABLE', 'MEDIA_URL_DOCUMENT', 'MEDIA_URL_BUSY'] as const;
+export const zSocialResolvedMedia = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable() });
+export const zSocialMediaResolve = z.strictObject({ refs: z.array(z.string().trim().min(1).max(255)).min(1).max(200) });
+export const zSocialMediaResolved = z.array(z.object({ ref: z.string(), file: zSocialResolvedMedia.nullable(), problem: z.enum(SOCIAL_MEDIA_REF_PROBLEMS).nullable() }));
+export const zSocialMediaFetchUrls = z.strictObject({ urls: z.array(z.string().max(2000)).min(1).max(SOCIAL_MEDIA_URLS_MAX) });
+export const zSocialMediaFetched = z.object({
+  results: z.array(z.object({ url: z.string(), file: zSocialResolvedMedia.nullable(), problem: z.enum(SOCIAL_MEDIA_URL_PROBLEMS).nullable(), retryAfterSeconds: z.number().int().optional() })),
+});
 // Stock photos from Pexels (#1106): a search (a page of up to 40 photos in the language of the page), its results, and
 // the photo to save at one of Pexels' sizes (large2x by default: up to 1880 by 1300 pixels, enough for every channel).
 export const STOCK_PHOTO_SIZES = ['large2x', 'large', 'original'] as const;
