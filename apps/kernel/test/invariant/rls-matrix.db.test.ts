@@ -47,6 +47,7 @@ const PENDING_TABLES = new Set<string>([
   'crove_kernel.availability_rule',
   'crove_kernel.calendar_event',
   'crove_kernel.role_assignment',
+  'crove_social.media_archive',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -791,6 +792,15 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // A link's preview card (#641), cached per org and URL: asked for by a member, filled in by the worker.
   'crove_social.link_preview': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), url: `https://example.com/rls-${tag()}`, url_sha256: hex64(), status: 'pending', requested_at: new Date().toISOString() } }),
+  },
+  // A library file taken out of the Social pickers (#1302): at most one archive row per file (a unique key), so every
+  // row gets a file of its own.
+  'crove_social.media_archive': {
+    make: (o) => {
+      const sha256 = hex64();
+      const file = { org_id: o.id, id: randomUUID(), sha256, storage_key: `org/${o.id}/${sha256}`, filename: 'archived.jpg', content_type: 'image/jpeg', size_bytes: 1, source: 'social' };
+      return { setup: [{ table: 'crove_kernel.file', values: file }], row: { org_id: o.id, id: randomUUID(), file_id: file.id, archived_by: o.owner } };
+    },
   },
   // The credit of a library file saved from a stock photo site (#1106): the photographer, the photo's page and its
   // description, one per file. Each row gets a file of its own, since a file has at most one.
