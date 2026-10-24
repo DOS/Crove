@@ -274,18 +274,21 @@ function TurnstileWidget({ siteKey, round, onToken }: { siteKey: string; round: 
   const t = useTranslations('booking');
   const box = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
+  // The latest callback, so a parent's new function never re-renders the widget.
+  const handToken = useRef(onToken);
+  handToken.current = onToken;
   useEffect(() => {
     let widget: string | null = null;
     let gone = false;
-    onToken(null);
+    handToken.current(null);
     loadTurnstile()
       .then((api) => {
         if (gone || !box.current) return;
         widget = api.render(box.current, {
           sitekey: siteKey,
-          callback: (token) => onToken(token),
-          'expired-callback': () => onToken(null),
-          'error-callback': () => onToken(null),
+          callback: (token) => handToken.current(token),
+          'expired-callback': () => handToken.current(null),
+          'error-callback': () => handToken.current(null),
         });
       })
       .catch(() => setFailed(true));
@@ -294,7 +297,7 @@ function TurnstileWidget({ siteKey, round, onToken }: { siteKey: string; round: 
       const api = (window as { turnstile?: { remove(id: string): void } }).turnstile;
       if (widget && api) api.remove(widget);
     };
-  }, [siteKey, round, onToken]);
+  }, [siteKey, round]);
   return (
     <div>
       <div ref={box} />

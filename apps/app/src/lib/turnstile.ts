@@ -39,8 +39,12 @@ export function loadTurnstile(): Promise<TurnstileApi> {
     script.async = true;
     script.onload = () => {
       const api = (window as { turnstile?: TurnstileApi }).turnstile;
-      if (api) resolve(api);
-      else reject(new Error('turnstile missing'));
+      if (api) {
+        resolve(api);
+      } else {
+        loading = null;
+        reject(new Error('turnstile missing'));
+      }
     };
     script.onerror = () => {
       loading = null;
