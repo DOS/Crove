@@ -315,12 +315,14 @@ function Usage({ fileId, slug }: { fileId: string; slug: string }) {
 }
 
 // The media library (S9): the org's post images, searchable by name and filtered by tag (#904), each with the posts
-// that show it and its tags.
+// that show it and its tags. Members archive files picked or opened, and restore them from the archived view (#1302).
 function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   const t = useTranslations('social');
   const f = useFormat();
   const [search, setSearch] = useState('');
   const [tag, setTag] = useState<string | null>(null);
+  const [archived, setArchived] = useState(false);
+  const [archiveDone, setArchiveDone] = useState<string | null>(null);
   const [chosen, setOpen] = useState<LibraryItem | null>(null);
   // Files picked for drafts (#1080), in the order picked; the panel keeps the files it was opened with.
   const [picked, setPicked] = useState<LibraryItem[]>([]);
@@ -331,8 +333,26 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
   // *Soạn bài từ ảnh này* (#1191) where the server's model reads images (#1196).
   const aiPhotos = useAiPhotos(canWrite && getConfig().aiEnabled === true);
   const [stock, setStock] = useState(false);
-  const library = useLibrary(search, tag);
+  const library = useLibrary(search, tag, true, false, archived);
   const upload = useMutation({ mutationFn: (files: File[]) => uploadFiles(files, 'social'), onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['social-library'] }) });
+  // Archive the files picked or opened, or restore them in the archived view (#1302).
+  const archiveFiles = useMutation({
+    mutationFn: async (fileIds: string[]) => (archived ? (await client.social.media.restore({ fileIds })).restored.length : (await client.social.media.archive({ fileIds })).archived.length),
+    onSuccess: (count) => {
+      setArchiveDone(t(archived ? 'libraryRestored' : 'libraryArchived', { count }));
+      setPicked([]);
+      setOpen(null);
+      void queryClient.invalidateQueries({ queryKey: ['social-library'] });
+    },
+  });
+  const showView = (next: boolean) => {
+    setArchived(next);
+    setPicked([]);
+    setOpen(null);
+    setDrafting(null);
+    setArchiveDone(null);
+    archiveFiles.reset();
+  };
   const items = library.data?.pages.flatMap((p) => p.items) ?? [];
   // The chosen file as the list has it now (its tags may have changed), or as it was when it left the list.
   const open = chosen ? (items.find((i) => i.fileId === chosen.fileId) ?? chosen) : null;
@@ -340,7 +360,11 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
         <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('librarySearch')} aria-label={t('librarySearch')} className="max-w-xs" />
-        {canWrite && (
+        <NativeSelect aria-label={t('libraryView.label')} className="w-44" value={archived ? 'archived' : 'active'} onChange={(e) => showView(e.target.value === 'archived')}>
+          <NativeSelectOption value="active">{t('libraryView.active')}</NativeSelectOption>
+          <NativeSelectOption value="archived">{t('libraryView.archived')}</NativeSelectOption>
+        </NativeSelect>
+        {canWrite && !archived && (
           <>
             <input
               ref={picker}
@@ -366,21 +390,33 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
           </>
         )}
       </div>
-      {canWrite && stockEnabled && stock && <StockPhotoSearch />}
+      {canWrite && !archived && stockEnabled && stock && <StockPhotoSearch />}
       <TagFilter value={tag} onChange={setTag} />
-      <p className="text-xs text-subtle-foreground">{t('libraryHint')}</p>
+      <p className="text-xs text-subtle-foreground">{t(archived ? 'libraryArchivedHint' : 'libraryHint')}</p>
       {canWrite && picked.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card px-3 py-2 text-sm" role="region" aria-label={t('bulkDrafts.picked', { count: picked.length })}>
           <span className="text-foreground tabular-nums">{t('bulkDrafts.picked', { count: picked.length })}</span>
-          {picked.length >= DRAFTS_FROM_MEDIA_MAX && <span className="text-xs text-warning">{t('bulkDrafts.max', { max: DRAFTS_FROM_MEDIA_MAX })}</span>}
-          <Button size="sm" className="ml-auto" onClick={() => setDrafting({ key: Date.now(), files: picked })}>
-            {t('bulkDrafts.open')}
+          {!archived && picked.length >= DRAFTS_FROM_MEDIA_MAX && <span className="text-xs text-warning">{t('bulkDrafts.max', { max: DRAFTS_FROM_MEDIA_MAX })}</span>}
+          {!archived && (
+            <Button size="sm" className="ml-auto" onClick={() => setDrafting({ key: Date.now(), files: picked })}>
+              {t('bulkDrafts.open')}
+            </Button>
+          )}
+          <Button size="sm" variant={archived ? 'default' : 'outline'} className={cn(archived && 'ml-auto')} disabled={archiveFiles.isPending} onClick={() => archiveFiles.mutate(picked.map((p) => p.fileId))}>
+            {archiveFiles.isPending ? <Spinner className="text-current" /> : null}
+            {t(archived ? 'libraryRestorePicked' : 'libraryArchivePicked', { count: picked.length })}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setPicked([])}>
             {t('bulkDrafts.clear')}
           </Button>
         </div>
       )}
+      {archiveDone && (
+        <p className="text-sm text-muted-foreground" role="status">
+          {archiveDone}
+        </p>
+      )}
+      {archiveFiles.error && <ErrorText>{errorMessage(archiveFiles.error)}</ErrorText>}
       {drafting && <DraftsFromMediaPanel key={drafting.key} slug={slug} files={drafting.files} onClose={() => setDrafting(null)} onCreated={() => setPicked([])} />}
       {upload.error && <ErrorText>{errorMessage(upload.error)}</ErrorText>}
       {library.isLoading ? (
@@ -388,7 +424,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
       ) : library.error ? (
         <ErrorText>{errorMessage(library.error)}</ErrorText>
       ) : items.length === 0 ? (
-        <Empty title={tag ? t('libraryNoTagMatch') : search.trim() ? t('libraryNoMatch') : t('libraryEmpty')} />
+        <Empty title={tag ? t('libraryNoTagMatch') : search.trim() ? t('libraryNoMatch') : archived ? t('libraryArchivedEmpty') : t('libraryEmpty')} />
       ) : (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
           <ul className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-5">
@@ -446,6 +482,7 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
               <Thumb fileId={open.fileId} alt={open.filename} mime={open.mime} durationMs={open.durationMs} className="aspect-[4/3]" />
               <p className="text-sm font-medium [overflow-wrap:anywhere] text-foreground">{open.filename}</p>
               <p className="text-xs text-subtle-foreground">{f.dateTime(open.createdAt)}</p>
+              {open.archivedAt && <p className="text-xs text-subtle-foreground">{t('libraryArchivedAt', { when: f.dateTime(open.archivedAt) })}</p>}
               {open.credit && (
                 <div className="space-y-1">
                   <StockCredit photographer={open.credit.photographer} photographerUrl={open.credit.photographerUrl} className="text-sm text-muted-foreground" />
@@ -454,7 +491,15 @@ function Library({ slug, canWrite }: { slug: string; canWrite: boolean }) {
                   </a>
                 </div>
               )}
-              {canWrite && aiPhotos && <DraftFromPhotoLink slug={slug} item={open} />}
+              {canWrite && aiPhotos && !open.archivedAt && <DraftFromPhotoLink slug={slug} item={open} />}
+              {canWrite && (
+                <div className="space-y-1">
+                  <Button size="sm" variant="outline" disabled={archiveFiles.isPending} onClick={() => archiveFiles.mutate([open.fileId])}>
+                    {t(open.archivedAt ? 'libraryRestore' : 'libraryArchive')}
+                  </Button>
+                  {!open.archivedAt && <p className="text-xs text-subtle-foreground">{t('libraryArchiveHint')}</p>}
+                </div>
+              )}
               <MediaTagEditor key={`${open.fileId}:${open.tags.join('\n')}`} fileId={open.fileId} tags={open.tags} canWrite={canWrite} />
               <p className="text-sm font-medium text-muted-foreground">{t('libraryUsageTitle')}</p>
               <Usage fileId={open.fileId} slug={slug} />

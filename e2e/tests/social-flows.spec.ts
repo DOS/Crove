@@ -249,6 +249,19 @@ test('keeps uploaded images in the library with the posts that use them', async 
   await expect(page.getByText('Bài đang dùng ảnh này')).toBeVisible();
   await expect(page.getByRole('link', { name: /Bài đầu tiên có ảnh/ })).toBeVisible();
   await expect(page.getByRole('link', { name: /Bài thứ hai dùng lại ảnh/ })).toBeVisible();
+
+  // Archived (#1302): the file leaves the library, shows in the archived view, and comes back on restore.
+  await page.getByRole('button', { name: 'Lưu trữ', exact: true }).click();
+  await expect(page.getByText('Đã lưu trữ 1 tệp')).toBeVisible();
+  await expect(item).toHaveCount(0);
+  await page.getByLabel('Hiện', { exact: true }).selectOption('archived');
+  await expect(item).toHaveCount(1);
+  await item.click();
+  await page.getByRole('button', { name: 'Khôi phục', exact: true }).click();
+  await expect(page.getByText('Đã khôi phục 1 tệp')).toBeVisible();
+  await expect(item).toHaveCount(0);
+  await page.getByLabel('Hiện', { exact: true }).selectOption('active');
+  await expect(item).toHaveCount(1);
 });
 
 test('imports a sheet with images, alt texts, labels and a first comment as drafts with their media (#1258)', async ({ page }) => {
