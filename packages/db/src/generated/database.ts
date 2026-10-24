@@ -153,6 +153,13 @@ export interface CrmBookingTable {
   request_token_sha256: Buffer | null;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   decided_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  revision: Generated<number>;
+  manage_request_id: string | null;
+  manage_action: string | null;
+  manage_starts_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  manage_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  manage_outcome: string | null;
+  cancelled_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_crm.event_type */

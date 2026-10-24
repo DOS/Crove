@@ -109,6 +109,7 @@ export const KERNEL_ERROR_CODES = [
   // The public booking page (#1318).
   'BOOKING_PAGE_NOT_FOUND',
   'BOOKING_REQUEST_NOT_FOUND',
+  'BOOKING_LINK_NOT_FOUND',
   'BOOKING_TIME_UNAVAILABLE',
   // Legal entities (#1278).
   'INVALID_LEGAL_ENTITY_NAME',

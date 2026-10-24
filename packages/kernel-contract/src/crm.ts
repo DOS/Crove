@@ -85,3 +85,33 @@ export const zBookingStatus = z.strictObject({
   timeZone: z.string(),
 });
 export type BookingStatus = z.infer<typeof zBookingStatus>;
+
+// A booking seen from its manage link (#1319): the visitor cancels it or moves it while `usable`; each cancel or move
+// ends the link. `outcome` answers the ask `requestId` names (null while the worker has not decided).
+export const BOOKING_MANAGE_OUTCOMES = ['cancelled', 'moved', 'taken', 'unavailable'] as const;
+export const zBookingManage = z.strictObject({
+  orgName: z.string(),
+  eventType: z.strictObject({
+    slug: z.string(),
+    title: z.string(),
+    durationMin: z.number().int(),
+    locationKind: z.enum(EVENT_TYPE_LOCATION_KINDS),
+    active: z.boolean(),
+  }),
+  status: z.enum(BOOKING_STATUSES),
+  startsAt: z.string(),
+  endsAt: z.string(),
+  timeZone: z.string(),
+  usable: z.boolean(),
+  requestId: z.string().nullable(),
+  outcome: z.enum(BOOKING_MANAGE_OUTCOMES).nullable(),
+});
+export type BookingManage = z.infer<typeof zBookingManage>;
+
+// What the manage page posts: the token alone reads the booking; with an action it asks for a cancel or a move.
+export const BOOKING_MANAGE_TOKEN = /^[0-9a-f]{32}\.[0-9]{1,9}\.[0-9a-f]{32}$/;
+export const zBookingManageAsk = z.discriminatedUnion('action', [
+  z.strictObject({ manage: z.string().regex(BOOKING_MANAGE_TOKEN), action: z.literal('cancel') }),
+  z.strictObject({ manage: z.string().regex(BOOKING_MANAGE_TOKEN), action: z.literal('move'), startsAt: z.iso.datetime({ offset: true }) }),
+]);
+export type BookingManageAsk = z.infer<typeof zBookingManageAsk>;

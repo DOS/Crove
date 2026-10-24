@@ -99,7 +99,16 @@ import { reviewAnswer, reviewFile, reviewMedia, reviewView, REVIEW_ANSWERS_PER_M
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
 import { CALENDAR_FEED_HITS_PER_MINUTE, calendarFeed, renderIcs } from './calendar-feed.ts';
 import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
-import { BOOKING_POLLS_PER_MINUTE, BOOKING_REQUESTS_PER_MINUTE, BOOKING_VIEWS_PER_MINUTE, bookingRequest, bookingStatus, bookingView } from './booking-page.ts';
+import {
+  BOOKING_POLLS_PER_MINUTE,
+  BOOKING_REQUESTS_PER_MINUTE,
+  BOOKING_VIEWS_PER_MINUTE,
+  bookingManageAsk,
+  bookingManageView,
+  bookingRequest,
+  bookingStatus,
+  bookingView,
+} from './booking-page.ts';
 import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
 import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
@@ -591,8 +600,9 @@ export function createHttpApp(deps: HttpDeps) {
   }
 
   // The public booking page (#1318), with the crm module: no account. GET reads an event type's free slots; POST either
-  // asks for a slot (a body with the visitor's details, answered 202 with a request token) or follows a request (a body
-  // with only that token, which stays out of the URL and so out of access logs). Each address has budgets, and each
+  // asks for a slot (a body with the visitor's details, answered 202 with a request token), follows a request (a body
+  // with only that token, which stays out of the URL and so out of access logs), or reads, cancels or moves a booking
+  // with the manage token of its mails (#1319). Each address has budgets, and each
   // event type one for requests whatever the address; the request definer caps requests per type per hour too.
   if (runtime.installed('crm')) {
     const limits = deps.bookingLimits ?? {
@@ -628,6 +638,19 @@ export function createHttpApp(deps: HttpDeps) {
       const org = c.req.param('org');
       const type = c.req.param('type');
       try {
+        // A manage link (#1319): its token alone reads the booking; with an action it asks for a cancel or a move.
+        if (body && typeof body === 'object' && 'manage' in body) {
+          if (Object.keys(body).length === 1) {
+            const limited = budget(c, limits.polls);
+            if (limited) return limited;
+            const view = await bookingManageView(runtime, org, type, body);
+            return view ? c.json(view) : c.json({ code: 'BOOKING_LINK_NOT_FOUND', message: 'Liên kết này không còn dùng được' }, 404);
+          }
+          const limited = budget(c, limits.requests);
+          if (limited) return limited;
+          const ask = await bookingManageAsk(runtime, org, type, body);
+          return ask ? c.json(ask, 202) : c.json({ code: 'BOOKING_LINK_NOT_FOUND', message: 'Liên kết này không còn dùng được' }, 404);
+        }
         // Following a request: the token alone.
         if (body && typeof body === 'object' && Object.keys(body).length === 1 && 'token' in body) {
           const limited = budget(c, limits.polls);

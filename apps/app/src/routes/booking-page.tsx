@@ -1,10 +1,14 @@
 // The public booking page (#1318): /-/b/<org>/<event type>, no account. A visitor sees the type's free slots for a week
 // in their own time zone, picks one, leaves a name and an email, and the page follows the request until the worker
 // confirms it or says the time was just taken. The request token stays in memory and goes to the API in a POST body.
+//
+// The links in the booking's mails (#1319) open the same page with a manage token in the fragment (#m=<token>), which
+// the browser never sends: the page reads the booking with it and lets the visitor cancel it or move it to another
+// free slot, then follows the ask until the worker answers. A cancel or a move ends the link.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
-import { zonedDate, type BookingPage as Page, type BookingStatus } from '@crove/kernel-contract';
+import { zonedDate, type BookingManage, type BookingPage as Page, type BookingStatus } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
@@ -12,8 +16,9 @@ import { Label } from '@crove/ui/components/label';
 import { Textarea } from '@crove/ui/components/textarea';
 import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
 import { useLocaleSetting } from '../i18n/provider.tsx';
+import type { Locale } from '../i18n/locale.ts';
 import { errorMessage } from '../lib/api.ts';
-import { dayLabel, slotsByDay, timeIn, visitorTimeZone, weekRange, type Slot } from '../lib/booking.ts';
+import { dayLabel, manageTokenOf, slotsByDay, timeIn, visitorTimeZone, weekRange, type Slot } from '../lib/booking.ts';
 import { apiErrorFromResponse } from '../lib/errors.ts';
 
 // How long the page follows a request before it says the answer is late.
@@ -27,6 +32,59 @@ async function call<T>(path: string, init?: RequestInit): Promise<T | null> {
   return (await res.json()) as T;
 }
 const post = <T,>(path: string, body: unknown) => call<T>(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+// "Thứ Hai, 02/11/2026, 09:00 - 09:30 (Asia/Ho_Chi_Minh)" in the visitor's zone.
+const whenOf = (s: Slot, zone: string, locale: Locale) =>
+  `${dayLabel(zonedDate(zone, Date.parse(s.start)), locale)}, ${timeIn(s.start, zone, locale)} - ${timeIn(s.end, zone, locale)} (${zone})`;
+
+// A week of the type's free slots, with the weeks before and after; picking one calls onPick.
+function SlotPicker({ path, zone, onPick }: { path: string; zone: string; onPick: (slot: Slot) => void }) {
+  const t = useTranslations('booking');
+  const { locale } = useLocaleSetting();
+  const [week, setWeek] = useState(0);
+  const [now] = useState(() => Date.now());
+  const range = weekRange(now, week, zone);
+  const page = useQuery({
+    queryKey: ['booking-page', path, range.from],
+    queryFn: () => call<Page>(`${path}?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`),
+  });
+  if (page.isLoading) return <Spinner />;
+  if (page.error) return <ErrorText>{errorMessage(page.error)}</ErrorText>;
+  const days = slotsByDay(page.data?.slots ?? [], zone);
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">{t('zone', { zone })}</p>
+        <div className="flex gap-1">
+          <Button type="button" variant="ghost" size="sm" disabled={week === 0} onClick={() => setWeek((w) => w - 1)}>
+            {t('previousWeek')}
+          </Button>
+          <Button type="button" variant="ghost" size="sm" disabled={week >= 8} onClick={() => setWeek((w) => w + 1)}>
+            {t('nextWeek')}
+          </Button>
+        </div>
+      </div>
+      {days.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{t('noSlots')}</p>
+      ) : (
+        <ul className="space-y-3">
+          {days.map((d) => (
+            <li key={d.date}>
+              <p className="text-sm font-medium text-foreground">{dayLabel(d.date, locale)}</p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {d.slots.map((s) => (
+                  <Button key={s.start} type="button" variant="outline" size="sm" onClick={() => onPick(s)}>
+                    {timeIn(s.start, zone, locale)}
+                  </Button>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function Followed({ path, token, when, onAgain }: { path: string; token: string; when: string; onAgain: () => void }) {
   const t = useTranslations('booking');
@@ -66,17 +124,155 @@ function Followed({ path, token, when, onAgain }: { path: string; token: string;
   );
 }
 
-export function BookingPage({ org, type }: { org: string; type: string }) {
+// A booking opened from a link in its mails: cancel it, or move it to another free slot of the type.
+function Manage({ path, token, zone }: { path: string; token: string; zone: string }) {
   const t = useTranslations('booking');
   const { locale } = useLocaleSetting();
+  const [mode, setMode] = useState<'view' | 'cancel' | 'move'>('view');
+  const [asked, setAsked] = useState<string | null>(null);
+  const [since, setSince] = useState(0);
+  const view = useQuery({
+    queryKey: ['booking-manage', path, token],
+    queryFn: () => post<BookingManage>(path, { manage: token }),
+    refetchInterval: (q) => (asked && q.state.data?.requestId === asked && q.state.data.outcome === null && Date.now() - since < POLL_FOR_MS ? POLL_MS : false),
+  });
+  const ask = useMutation({
+    mutationFn: (body: Record<string, unknown>) => post<{ requestId: string }>(path, { manage: token, ...body }),
+    onSuccess: (r) => {
+      setAsked(r?.requestId ?? null);
+      setSince(Date.now());
+      setMode('view');
+      void view.refetch();
+    },
+  });
+  useEffect(() => {
+    document.title = view.data ? `${view.data.eventType.title} · ${view.data.orgName}` : t('title');
+  }, [view.data, t]);
+
+  if (view.isLoading) return <Spinner />;
+  if (view.error) return <ErrorText>{errorMessage(view.error)}</ErrorText>;
+  const b = view.data;
+  if (!b) {
+    return (
+      <main className="mx-auto max-w-xl p-6">
+        <Logo />
+        <p className="mt-6 text-sm text-muted-foreground">{t('manage.notFound')}</p>
+      </main>
+    );
+  }
+  const when = whenOf({ start: b.startsAt, end: b.endsAt }, zone, locale);
+  const waiting = asked !== null && b.requestId === asked && b.outcome === null;
+  const answered = asked !== null && b.requestId === asked ? b.outcome : null;
+  let body;
+  if (waiting) {
+    body = (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Spinner />
+        {Date.now() - since < POLL_FOR_MS ? t('manage.working') : t('late')}
+      </p>
+    );
+  } else if (answered === 'cancelled') {
+    body = (
+      <p className="text-sm text-foreground" role="status">
+        {t('manage.cancelled')}
+      </p>
+    );
+  } else if (answered === 'moved') {
+    body = (
+      <p className="text-sm text-foreground" role="status">
+        {t('manage.moved', { when })}
+      </p>
+    );
+  } else if (b.status === 'cancelled') {
+    body = <p className="text-sm text-muted-foreground">{t('manage.isCancelled')}</p>;
+  } else if (!b.usable) {
+    body = <p className="text-sm text-muted-foreground">{t('manage.used')}</p>;
+  } else if (mode === 'cancel') {
+    body = (
+      <div className="space-y-2">
+        <p className="text-sm text-foreground">{t('manage.cancelConfirm')}</p>
+        <div className="flex gap-2">
+          <Button type="button" variant="destructive" disabled={ask.isPending} onClick={() => ask.mutate({ action: 'cancel' })}>
+            {ask.isPending ? <Spinner className="text-current" /> : null}
+            {t('manage.cancelYes')}
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => setMode('view')}>
+            {t('manage.keep')}
+          </Button>
+        </div>
+      </div>
+    );
+  } else if (mode === 'move') {
+    body = (
+      <div className="space-y-3">
+        <p className="text-sm text-foreground">{t('manage.movePick')}</p>
+        <SlotPicker path={path} zone={zone} onPick={(s) => !ask.isPending && ask.mutate({ action: 'move', startsAt: s.start })} />
+        <Button type="button" variant="ghost" onClick={() => setMode('view')}>
+          {t('manage.keep')}
+        </Button>
+      </div>
+    );
+  } else {
+    body = (
+      <div className="space-y-2">
+        {answered === 'taken' || answered === 'unavailable' ? (
+          <p className="text-sm text-foreground" role="alert">
+            {answered === 'taken' ? t('taken') : t('unavailable')}
+          </p>
+        ) : null}
+        <div className="flex flex-wrap gap-2">
+          {b.eventType.active ? (
+            <Button type="button" variant="outline" onClick={() => setMode('move')}>
+              {t('manage.move')}
+            </Button>
+          ) : null}
+          <Button type="button" variant="outline" onClick={() => setMode('cancel')}>
+            {t('manage.cancel')}
+          </Button>
+        </div>
+        {!b.eventType.active ? <p className="text-sm text-muted-foreground">{t('manage.noMove')}</p> : null}
+      </div>
+    );
+  }
+  return (
+    <main className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
+      <header>
+        <p className="text-sm text-muted-foreground">{b.orgName}</p>
+        <h1 className="text-xl font-semibold text-foreground">{b.eventType.title}</h1>
+        <p className="text-sm text-muted-foreground">
+          {t('minutes', { count: String(b.eventType.durationMin) })} · {t(`locations.${b.eventType.locationKind}`)}
+        </p>
+      </header>
+      <Card className="block space-y-3 p-4">
+        <p className="text-sm font-medium text-foreground">{t('manage.title')}</p>
+        <p className="text-sm text-foreground">{t('manage.when', { when })}</p>
+        {body}
+        {ask.error && <ErrorText>{errorMessage(ask.error)}</ErrorText>}
+      </Card>
+    </main>
+  );
+}
+
+export function BookingPage({ org, type }: { org: string; type: string }) {
+  const path = `/api/booking/${encodeURIComponent(org)}/${encodeURIComponent(type)}`;
   const [zone] = useState(visitorTimeZone);
-  const [week, setWeek] = useState(0);
+  // The manage token is read once and kept in memory; the address bar loses it, so it is not left on screen.
+  const [manage] = useState(() => manageTokenOf(window.location.hash));
+  useEffect(() => {
+    if (manage) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search);
+  }, [manage]);
+  if (manage) return <Manage path={path} token={manage} zone={zone} />;
+  return <Book path={path} zone={zone} />;
+}
+
+function Book({ path, zone }: { path: string; zone: string }) {
+  const t = useTranslations('booking');
+  const { locale } = useLocaleSetting();
   const [now] = useState(() => Date.now());
   const [slot, setSlot] = useState<Slot | null>(null);
   const [form, setForm] = useState({ name: '', email: '', phone: '', note: '' });
   const [token, setToken] = useState<string | null>(null);
-  const path = `/api/booking/${encodeURIComponent(org)}/${encodeURIComponent(type)}`;
-  const range = weekRange(now, week, zone);
+  const range = weekRange(now, 0, zone);
   const page = useQuery({
     queryKey: ['booking-page', path, range.from],
     queryFn: () => call<Page>(`${path}?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`),
@@ -112,9 +308,6 @@ export function BookingPage({ org, type }: { org: string; type: string }) {
     );
   }
   const { eventType, orgName } = page.data;
-  const days = slotsByDay(page.data.slots, zone);
-  // "Thứ Hai, 02/11/2026, 09:00 - 09:30 (Asia/Ho_Chi_Minh)" in the visitor's zone.
-  const chosen = (s: Slot) => `${dayLabel(zonedDate(zone, Date.parse(s.start)), locale)}, ${timeIn(s.start, zone, locale)} - ${timeIn(s.end, zone, locale)} (${zone})`;
   return (
     <main className="mx-auto max-w-2xl space-y-4 p-4 sm:p-6">
       <header>
@@ -127,12 +320,10 @@ export function BookingPage({ org, type }: { org: string; type: string }) {
       </header>
       <Card className="block p-4">
         {token && slot ? (
-          <Followed path={path} token={token} when={chosen(slot)} onAgain={again} />
+          <Followed path={path} token={token} when={whenOf(slot, zone, locale)} onAgain={again} />
         ) : slot ? (
           <form className="space-y-3" onSubmit={submit} aria-label={t('formTitle')}>
-            <p className="text-sm text-foreground">
-              {t('chosen', { when: chosen(slot) })}
-            </p>
+            <p className="text-sm text-foreground">{t('chosen', { when: whenOf(slot, zone, locale) })}</p>
             <div className="space-y-1">
               <Label htmlFor="booking-name">{t('name')}</Label>
               <Input id="booking-name" required maxLength={100} autoComplete="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
@@ -161,37 +352,7 @@ export function BookingPage({ org, type }: { org: string; type: string }) {
             {request.error && <ErrorText>{errorMessage(request.error)}</ErrorText>}
           </form>
         ) : (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-sm text-muted-foreground">{t('zone', { zone })}</p>
-              <div className="flex gap-1">
-                <Button type="button" variant="ghost" size="sm" disabled={week === 0} onClick={() => setWeek((w) => w - 1)}>
-                  {t('previousWeek')}
-                </Button>
-                <Button type="button" variant="ghost" size="sm" disabled={week >= 8} onClick={() => setWeek((w) => w + 1)}>
-                  {t('nextWeek')}
-                </Button>
-              </div>
-            </div>
-            {days.length === 0 ? (
-              <p className="text-sm text-muted-foreground">{t('noSlots')}</p>
-            ) : (
-              <ul className="space-y-3">
-                {days.map((d) => (
-                  <li key={d.date}>
-                    <p className="text-sm font-medium text-foreground">{dayLabel(d.date, locale)}</p>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {d.slots.map((s) => (
-                        <Button key={s.start} type="button" variant="outline" size="sm" onClick={() => setSlot(s)}>
-                          {timeIn(s.start, zone, locale)}
-                        </Button>
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+          <SlotPicker path={path} zone={zone} onPick={setSlot} />
         )}
       </Card>
     </main>
