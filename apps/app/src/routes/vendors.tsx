@@ -1,9 +1,9 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useDeferredValue, useEffect, useState } from 'react';
-import { useSearch } from '@tanstack/react-router';
+import { Link, useParams, useSearch } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import type { Party } from '@crove/kernel-contract';
-import { Button } from '@crove/ui/components/button';
+import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
@@ -138,6 +138,7 @@ export function VendorsPage() {
   useEffect(() => {
     setQ(search.q ?? '');
   }, [search.q]);
+  const { slug } = useParams({ strict: false }) as { slug: string };
   const term = useDeferredValue(q.trim());
   const vendors = useQuery(orpc.parties.list.queryOptions({ input: term ? { q: term } : {} }));
   const accounts = useQuery(orpc.accounts.list.queryOptions());
@@ -156,7 +157,19 @@ export function VendorsPage() {
       ) : vendors.error ? (
         <ErrorText>{errorMessage(vendors.error)}</ErrorText>
       ) : (vendors.data?.length ?? 0) === 0 ? (
-        <Empty title={t('empty')} />
+        term ? (
+          <Empty title={t('noMatch')} />
+        ) : (
+          <Empty
+            title={t('empty')}
+            hint={t('emptyHint')}
+            action={
+              <Link to="/o/$slug/inbox" params={{ slug }} className={buttonVariants({ variant: 'outline' })}>
+                {t('openInbox')}
+              </Link>
+            }
+          />
+        )
       ) : (
         <DataTable
           head={[t('columns.name'), t('columns.taxCode'), t('columns.address'), t('columns.documents'), t('columns.defaultAccount'), ...(canEdit ? [''] : [])]}

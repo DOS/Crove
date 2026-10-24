@@ -9,7 +9,7 @@ import { useTranslations } from 'use-intl';
 import type { BankImportResult, BankLine, BankLineStatus, BankLineVoucher, BankRowError } from '@crove/kernel-contract';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
-import { Button } from '@crove/ui/components/button';
+import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
@@ -338,6 +338,8 @@ export function BankPage() {
     if (search.month) setMonth(search.month);
   }, [search.month]);
   const canImport = org.data?.role === 'owner' || org.data?.role === 'admin' || org.data?.role === 'member';
+  // Bank accounts are sub-accounts of 112 in the chart of accounts, which owners and admins keep (#319).
+  const canManageAccounts = org.data?.role === 'owner' || org.data?.role === 'admin';
   const lines = useQuery({ ...orpc.bank.lines.queryOptions({ input: { bankAccount: account ?? '1121', period: month } }), enabled: account !== null && /^\d{4}-\d{2}$/.test(month) });
   // The line whose voucher is being entered.
   const [entering, setEntering] = useState<BankLine | null>(null);
@@ -350,7 +352,17 @@ export function BankPage() {
       ) : accounts.error ? (
         <ErrorText>{errorMessage(accounts.error)}</ErrorText>
       ) : account === null ? (
-        <Empty title={t('noAccounts')} />
+        <Empty
+          title={t('noAccounts')}
+          hint={t('noAccountsHint')}
+          action={
+            canManageAccounts ? (
+              <Link to="/o/$slug/settings" params={{ slug }} className={buttonVariants({ variant: 'outline' })}>
+                {t('openSettings')}
+              </Link>
+            ) : undefined
+          }
+        />
       ) : (
         <>
           <div className="mb-4 flex flex-wrap items-end gap-3">
@@ -379,7 +391,7 @@ export function BankPage() {
           ) : lines.error ? (
             <ErrorText>{errorMessage(lines.error)}</ErrorText>
           ) : lines.data && lines.data.lines.length === 0 ? (
-            <Empty title={t('empty')} />
+            <Empty title={t('empty')} hint={canImport ? t('emptyHint') : undefined} />
           ) : lines.data ? (
             <DataTable
               head={[t('columns.date'), t('columns.reference'), t('columns.description'), t('columns.moneyIn'), t('columns.moneyOut'), t('columns.balance'), t('voucherColumn')]}
