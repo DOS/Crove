@@ -8,6 +8,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { DateInput } from '../components/date-input.tsx';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
@@ -108,7 +109,7 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
         <div className="grid gap-4 sm:grid-cols-[12rem_minmax(0,1fr)]">
           <label className="block text-xs">
             <span className="text-subtle-foreground">{t('date')}</span>
-            <Input type="date" required value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 w-full" />
+            <DateInput required value={date} onChange={setDate} className="mt-1 w-full" />
           </label>
           <label className="block text-xs">
             <span className="text-subtle-foreground">{t('description')}</span>

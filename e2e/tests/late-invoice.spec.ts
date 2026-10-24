@@ -56,7 +56,8 @@ test('post an invoice of a locked month in the first open month, keeping its inv
     // Nothing is chosen until the approver ticks the box.
     await expect(page.getByLabel('Ngày ghi sổ')).toHaveCount(0);
     await late.getByText('Ghi sổ vào tháng đang mở, chứng từ vẫn giữ ngày hóa đơn').click();
-    await expect(page.getByLabel('Ngày ghi sổ')).toHaveValue(FIRST_OPEN_DAY);
+    // Date fields read dd/mm/yyyy (#1304).
+    await expect(page.getByLabel('Ngày ghi sổ')).toHaveValue(dmy(FIRST_OPEN_DAY));
     // A day inside the locked months is not taken; the first open day is.
     await page.getByLabel('Ngày ghi sổ').fill(LAST_LOCKED_DAY);
     await expect(late.getByText(`Hãy chọn một ngày từ ${dmy(FIRST_OPEN_DAY)} đến hôm nay.`)).toBeVisible();

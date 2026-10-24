@@ -10,6 +10,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { DateInput } from '../components/date-input.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
@@ -753,15 +754,14 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           {item.canApprove && postLate && (
             <div className="space-y-1">
               <Label htmlFor="posting-date">{t('lateDate')}</Label>
-              <Input
+              <DateInput
                 id="posting-date"
-                type="date"
                 className="w-44"
                 min={firstOpenDay}
                 max={vietnamToday()}
                 disabled={busy}
                 value={chosenPostingDate ?? ''}
-                onChange={(e) => setPostingDate(e.target.value)}
+                onChange={setPostingDate}
               />
               <p className="text-xs text-subtle-foreground">{t('lateHint', { date: f.date(payload.invoice.issueDate) })}</p>
               {!latePostingValid && <p className="text-sm text-destructive">{t('lateDateInvalid', { from: f.date(firstOpenDay) })}</p>}
