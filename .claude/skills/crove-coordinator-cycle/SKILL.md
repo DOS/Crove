@@ -21,6 +21,10 @@ All agents share one GitHub account, so comments on the coordinator log, https:/
 - Open PRs: `gh pr list --repo DOS/Crove --state open`.
 - Board items with Status `In progress`, in project 8 (`gh project item-list 8 --owner DOS`), and the last comment on each.
 - Your linked worker sessions: `list_sessions` with `linked: true`.
+- Every other agent session the owner runs on Crove: `list_sessions` without `linked`, plus their last turns with `list_events`. The app tells the coordinator only when a session it started ends a turn, so an owner-made session ("Agent 1", "Agent 2", ...) can sit idle unnoticed. A session that finished its issue and is idle gets the next one at once, through SendMessage with a full brief. If the only blocker is an open PR, the brief has the session cut a new branch and worktree from that PR's branch, for its own issue and its own PR, and merge `origin/main` in once the blocker lands. It never commits to the blocker's branch, so one task stays one PR. This replaces telling the session to wait. Ask each such session to message the coordinator:
+  - a protected-path PR sends `READY FOR COORDINATOR REVIEW: <PR url> head <sha>` and waits for `approved, merge head <sha>`;
+  - any other PR merges itself when green, then reports `MERGED <PR url> <merge commit>`;
+  - a session that is blocked says so, with the reason.
 - Issues missing from the board: open issues, and issues closed in the last day, that are not items of project 8. Add each one with its right Status. Use Backlog for an unclaimed follow-up, In progress for a claimed one, and Done for a closed one. The board is the shared view of who works on what, so an issue missing from it is invisible to every agent. On 2026-10-24, six such issues were found: four worker follow-ups and two Social issues.
 - Any worker notes that arrived since the last cycle.
 
@@ -97,7 +101,7 @@ Fill in the issue, paths and checks. Keep every rule below; each one comes from 
 ```
 Build issue https://github.com/DOS/Crove/issues/<n> end to end. Read the issue for the acceptance criteria and the plan lines it cites.
 
-1. Your worktree branch may be behind: `git fetch origin` then `git merge --ff-only origin/main`.
+1. Your worktree branch may be behind: `git fetch origin` then `git merge --ff-only origin/main`. (Stacked on an open blocker PR instead: cut the branch from `origin/<blocker branch>`, skip this sync, and merge `origin/main` in once the blocker has merged.)
 2. Read `AGENTS.md` and follow it. Comment on #<n>: `Worker <name> started, branch <branch>` (the coordinator already claimed it).
 3. <Where the change goes, which paths to stay out of (other workers' files), local setup: own docker postgres:17 for DB tests, own compose project for stacks, invariant files with --no-file-parallelism.>
 4. Before every push: <the checks from AGENTS.md "Commands" that apply>. Windows-only unit failures (`C:\` paths, bash scripts) are noted, not fixed.
