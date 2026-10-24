@@ -230,6 +230,10 @@ export const zOrgDetail = z.object({
   // Messages to the org's addresses retired in the last 30 days that were dropped (#139); null when inboundAddress is.
   inboundDroppedCount: z.number().int().nonnegative().nullable(),
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
+  // The permissions the signed-in member holds through org-wide role assignments (issue #1279), such as
+  // finance.proposal.approve for a chief accountant, sorted. The screens use it to show what the server would allow;
+  // the server checks again on every command.
+  permissions: z.array(z.string()),
 });
 
 // An org's Social figures on the multi-client home (#1261), read as the member in that org, each as the Social screen it

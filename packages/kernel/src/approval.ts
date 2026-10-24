@@ -33,48 +33,81 @@ export function addAuthor(authors: readonly ActorRef[], author: ActorRef): Actor
 }
 
 interface CommandPolicy {
-  // Roles whose holders may approve the command (P12).
+  // Base roles whose holders may approve the command (P12).
   roles: readonly MemberRole[];
+  // The permission whose holders may approve it too, through an org-wide role assignment (plan §4.6, #1279), or null.
+  permission: string | null;
   // Four-eyes (P10) applies to R3 commands.
   fourEyes: boolean;
 }
 
-// Approval policy per proposal command. Every proposal command today is R3 and posts to the ledger, so only
-// the roles that may post approve (#71). Seam: once role_assignment exists (§4.6), eligibility becomes "holds
-// the command's approval permission and the proposal's legal-entity scope", read here instead of the role.
+// The permission that approves a proposal that posts to the ledger (finance.chief_accountant holds it). Only an
+// org-wide assignment grants it: no proposal names a legal entity yet, so an entity-scoped assignment could not be
+// checked against the proposal's entity, and it grants nothing here (fail closed). When proposals carry
+// legal_entity_id, eligibility becomes "holds the permission for the proposal's entity".
+export const LEDGER_APPROVE_PERMISSION = 'finance.proposal.approve';
+
+// Approval policy per proposal command. Every proposal command today is R3 and posts to the ledger, so the roles that
+// may post approve (#71), and so does a member an owner made chief accountant (the permission above).
+const LEDGER: CommandPolicy = { roles: ['owner', 'admin'], permission: LEDGER_APPROVE_PERMISSION, fourEyes: true };
 const POLICIES: Record<string, CommandPolicy> = {
-  'finance.purchase.record': { roles: ['owner', 'admin'], fourEyes: true },
+  'finance.purchase.record': LEDGER,
   // A reversal is itself a posting (#138): the same roles approve it, with four-eyes.
-  'finance.journal.reverse': { roles: ['owner', 'admin'], fourEyes: true },
+  'finance.journal.reverse': LEDGER,
   // A cash or bank voucher (phiếu thu, phiếu chi, báo Có, báo Nợ, #327) posts to the ledger: the same rule.
-  'finance.voucher.record': { roles: ['owner', 'admin'], fourEyes: true },
+  'finance.voucher.record': LEDGER,
   // A general journal voucher (NVK, #888) posts to the ledger: the same rule.
-  'finance.journal_voucher.record': { roles: ['owner', 'admin'], fourEyes: true },
+  'finance.journal_voucher.record': LEDGER,
   // A year-end closing (#889) is a general journal voucher built from the ledger: the same rule.
-  'finance.closing.record': { roles: ['owner', 'admin'], fourEyes: true },
+  'finance.closing.record': LEDGER,
   // A month's depreciation and allocation (#919) is a general journal voucher built from the register: the same rule.
-  'finance.depreciation.record': { roles: ['owner', 'admin'], fourEyes: true },
+  'finance.depreciation.record': LEDGER,
 };
 
-const NOBODY: CommandPolicy = { roles: [], fourEyes: true };
+const NOBODY: CommandPolicy = { roles: [], permission: null, fourEyes: true };
 
 function policyFor(command: string): CommandPolicy {
   return POLICIES[command] ?? NOBODY;
 }
 
-// The humans who may approve `command` in the org in context right now (the P12 snapshot taken at creation).
-// tenant_member rows are humans; agents will never be in this list.
+// The members of the org, among `userIds` when given, who hold `permission` through an org-wide role assignment.
+// lock: FOR SHARE on those assignment rows, so a revoke that commits first is seen and one that starts later waits.
+async function permissionHolders(
+  trx: Transaction<Database>,
+  orgId: string,
+  permission: string,
+  options: { userIds?: readonly string[]; lock?: boolean } = {},
+): Promise<Set<string>> {
+  if (options.userIds && options.userIds.length === 0) return new Set();
+  let query = trx
+    .selectFrom('crove_kernel.role_assignment as a')
+    .innerJoin('crove_kernel.role_permission as p', 'p.role_key', 'a.role_key')
+    .select('a.user_id')
+    .where('a.org_id', '=', orgId)
+    .where('a.legal_entity_id', 'is', null)
+    .where('p.permission', '=', permission)
+    .orderBy('a.user_id')
+    .orderBy('a.id');
+  if (options.userIds) query = query.where('a.user_id', 'in', options.userIds);
+  if (options.lock) query = query.forShare('a');
+  const rows = await query.execute();
+  return new Set(rows.map((r) => r.user_id));
+}
+
+// The humans who may approve `command` in the org in context right now (the P12 snapshot taken at creation): members
+// with an approving base role, and members holding the command's approval permission org-wide. tenant_member rows are
+// humans; agents will never be in this list.
 export async function eligibleApprovers(trx: Transaction<Database>, orgId: string, command: string): Promise<string[]> {
-  const { roles } = policyFor(command);
-  if (roles.length === 0) return [];
+  const { roles, permission } = policyFor(command);
+  if (roles.length === 0 && permission === null) return [];
   const rows = await trx
     .selectFrom('crove_kernel.tenant_member')
-    .select('user_id')
+    .select(['user_id', 'role'])
     .where('org_id', '=', orgId)
-    .where('role', 'in', roles)
     .orderBy('user_id')
     .execute();
-  return rows.map((r) => r.user_id);
+  const holders = permission === null ? new Set<string>() : await permissionHolders(trx, orgId, permission);
+  return rows.filter((r) => roles.includes(r.role) || holders.has(r.user_id)).map((r) => r.user_id);
 }
 
 export type ApproveReason = 'ok' | 'not_pending' | 'not_eligible' | 'four_eyes';
@@ -121,7 +154,7 @@ export async function decideApproval(
   if (snapshot.length === 0 || authors === null) return deny('not_eligible');
 
   const policy = policyFor(proposal.command);
-  if (policy.roles.length === 0) return deny('not_eligible');
+  if (policy.roles.length === 0 && policy.permission === null) return deny('not_eligible');
   let query = trx
     .selectFrom('crove_kernel.tenant_member')
     .select(['user_id', 'role'])
@@ -131,10 +164,18 @@ export async function decideApproval(
     .orderBy('user_id');
   if (options.lock) query = query.forShare();
   const live = await query.execute();
-  // Eligible now: in the snapshot taken at creation AND still holding an approving role (re-checked live). The
-  // snapshot is never rewritten; this filter is what keeps it current. A removed approver has no row and a demoted
-  // one no approving role, so neither is eligible nor counts toward the two that four-eyes (P10) needs.
-  const eligible = new Set(live.filter((m) => policy.roles.includes(m.role)).map((m) => m.user_id));
+  // The snapshot members who still hold the approval permission org-wide, read after (and, with lock, locked after)
+  // their membership rows: a revoke locks the member's row first too (kernel.member.role.revoke), so the two meet on
+  // the member row in the same order.
+  const holders =
+    policy.permission === null
+      ? new Set<string>()
+      : await permissionHolders(trx, orgId, policy.permission, { userIds: live.map((m) => m.user_id), lock: options.lock });
+  // Eligible now: in the snapshot taken at creation AND still holding an approving role or the approval permission
+  // (re-checked live). The snapshot is never rewritten; this filter is what keeps it current. A removed approver has no
+  // row, and a demoted one or one whose assignment was revoked no longer approves, so neither is eligible nor counts
+  // toward the two that four-eyes (P10) needs.
+  const eligible = new Set(live.filter((m) => policy.roles.includes(m.role) || holders.has(m.user_id)).map((m) => m.user_id));
   if (!eligible.has(actor.userId)) return deny('not_eligible', eligible.size);
 
   const userAuthors = new Set(authors.flatMap((a) => (a.type === 'user' ? [a.id] : [])));

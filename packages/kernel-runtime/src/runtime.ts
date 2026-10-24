@@ -105,6 +105,12 @@ export interface CommandDef<I = unknown, O = unknown> {
   input: z.ZodType<I>;
   risk: Risk;
   access: Access;
+  // A permission a user may hold through an org-wide role assignment (plan §4.6, issue #1279): a member whose role is
+  // not in `access` still passes the role check when they hold it. Only with a role list as access, and only for user
+  // actors; the runtime reads it in the command's own transaction (crove_kernel.ctx_has_permission), so a revoke
+  // applies from the next command, and a user without it is refused FORBIDDEN before any step-up. The handler still
+  // decides per record (the approval policy for approvals).
+  permission?: string;
   target?: (input: I) => { type: string; id: string } | null;
   // Org-less commands (creating an org) start without an org. `bootstrap` calls a definer that creates the
   // org with the actor as a member, or returns the org an earlier request with the same idempotency key
@@ -603,6 +609,9 @@ export class Runtime {
   register(defs: { commands?: CommandDef<any, any>[]; queries?: QueryDef<any, any>[] }): this {
     for (const c of defs.commands ?? []) {
       if (this.commands.has(c.name)) throw new Error(`duplicate command ${c.name}`);
+      if (c.permission !== undefined && (typeof c.access === 'string' || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(c.permission))) {
+        throw new Error(`command ${c.name}: a permission is declared only beside a role list, as <module>.<name>`);
+      }
       if ((c.access === 'proposal_revision') !== (typeof c.revises === 'string' && c.revises.length > 0)) {
         throw new Error(`command ${c.name}: a reviser (access 'proposal_revision') names the command it revises, and only a reviser does`);
       }
@@ -818,7 +827,23 @@ export class Runtime {
     if (grant.tainted && RISK_RANK[def.risk] >= 1 && access.taint !== 'propagate') refuse('P03');
   }
 
-  private authorize(def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered, viaProposal: boolean): void {
+  private async authorize(trx: Transaction<Database>, def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered, viaProposal: boolean): Promise<void> {
+    try {
+      this.authorizeRole(def, actor, entered, viaProposal);
+    } catch (error) {
+      // A member whose role is not in access may still hold the command's permission through an org-wide role
+      // assignment (issue #1279). Read only after the role check failed, in this transaction, never cached.
+      if (!(await this.holdsPermission(trx, def, actor, entered))) throw error;
+    }
+  }
+
+  private async holdsPermission(trx: Transaction<Database>, def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered): Promise<boolean> {
+    if (def.permission === undefined || actor.type !== 'user' || entered.role === null || typeof def.access === 'string') return false;
+    const { rows } = await sql<{ held: boolean }>`SELECT crove_kernel.ctx_has_permission(${def.permission}::text) AS held`.execute(trx);
+    return rows[0]?.held === true;
+  }
+
+  private authorizeRole(def: CommandDef<unknown, unknown>, actor: Actor, entered: Entered, viaProposal: boolean): void {
     if (actor.type === 'agent') {
       this.authorizeAgent(def, entered.agent);
       return;
@@ -1115,7 +1140,7 @@ export class Runtime {
     };
     const runNested = async <R>(nested: NestedRun): Promise<R> => {
       const { proposalId } = nested;
-      this.authorize(nested.def, base.actor, base.entered, proposalId !== null);
+      await this.authorize(trx, nested.def, base.actor, base.entered, proposalId !== null);
       if (proposalId !== null && (nested.def.access === 'proposal' || nested.def.access === 'proposal_revision')) {
         await this.requireProposalState(trx, base.orgId, nested.def, proposalId, { def, commandId });
       }
@@ -1219,7 +1244,7 @@ export class Runtime {
             FROM crove_kernel.tenant t WHERE t.org_id = ${orgId}::uuid`.execute(trx);
           orgIsNew = rows[0]?.fresh === true;
         }
-        this.authorize(def, actor, context, false);
+        await this.authorize(trx, def, actor, context, false);
         this.requireStepUp(def, actor);
         await this.requireLiveSession(def, actor);
 
