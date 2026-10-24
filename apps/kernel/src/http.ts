@@ -1236,7 +1236,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'but-toan', ORG_SLUG], 'xlsx'),
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'but-toan', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -1266,7 +1266,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'misa-mua-dich-vu', ORG_SLUG], 'xlsx'),
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'misa-mua-dich-vu', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -1295,7 +1295,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'misa-ban-hang', ORG_SLUG], 'xlsx'),
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'misa-ban-hang', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -1330,7 +1330,7 @@ export function createHttpApp(deps: HttpDeps) {
           return new Response(body(bytes), {
             headers: {
               'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-              'content-disposition': attachmentDisposition(orgSlug, ['crove', cash.name, ORG_SLUG], 'xlsx'),
+              'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), cash.name, ORG_SLUG], 'xlsx'),
               'cache-control': 'private, no-store',
             },
           });
@@ -1356,7 +1356,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'gtgt', report.period.period, ORG_SLUG], 'xlsx'),
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'gtgt', report.period.period, ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -1396,7 +1396,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(new TextEncoder().encode(xml)), {
           headers: {
             'content-type': 'application/xml; charset=utf-8',
-            'content-disposition': attachmentDisposition(orgSlug, ['crove', '01gtgt', declaration.report.period.period, ORG_SLUG], 'xml'),
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), '01gtgt', declaration.report.period.period, ORG_SLUG], 'xml'),
             'cache-control': 'private, no-store',
           },
         });
@@ -1420,7 +1420,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'so-sach', book.period.period, ORG_SLUG], 'xlsx'),
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'so-sach', book.period.period, ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -1466,7 +1466,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'so-tai-san', ORG_SLUG], 'xlsx'),
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'so-tai-san', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -1495,7 +1495,7 @@ export function createHttpApp(deps: HttpDeps) {
         return new Response(body(new TextEncoder().encode(xml)), {
           headers: {
             'content-type': 'application/xml; charset=utf-8',
-            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'bctc', String(filing.input.year), ORG_SLUG], 'xml'),
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'bctc', String(filing.input.year), ORG_SLUG], 'xml'),
             'cache-control': 'private, no-store',
           },
         });
@@ -1533,7 +1533,7 @@ export function createHttpApp(deps: HttpDeps) {
         const part = c.req.param('part');
         if (part === 'manifest') {
           return c.json(manifest, 200, {
-            'content-disposition': attachmentDisposition(orgSlug, ['crove', 'luu-tru', String(archive.year), ORG_SLUG, 'manifest'], 'json'),
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'luu-tru', String(archive.year), ORG_SLUG, 'manifest'], 'json'),
             'cache-control': 'private, no-store',
           });
         }
@@ -1579,7 +1579,7 @@ export function createHttpApp(deps: HttpDeps) {
       const headers = (type: string, extension: string, length: number) => ({
         'content-type': type,
         'content-length': String(length),
-        'content-disposition': attachmentDisposition(orgSlug, ['crove', ORG_SLUG, part], extension),
+        'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), ORG_SLUG, part], extension),
         'x-content-type-options': 'nosniff',
         'cache-control': 'private, no-store',
       });
