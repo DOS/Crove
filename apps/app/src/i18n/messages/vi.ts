@@ -504,6 +504,7 @@ export const vi = {
     },
   },
   journal: {
+    exportGroup: 'Xuất sổ nhật ký',
     title: 'Bút toán',
     newJournalVoucher: 'Lập phiếu kế toán',
     yearClosing: 'Kết chuyển cuối năm',
@@ -930,6 +931,7 @@ export const vi = {
     makeVoucherFor: 'Lập chứng từ cho dòng ngày {date}, {amount}',
   },
   ledger: {
+    closingTitle: 'Khóa sổ và lưu trữ',
     title: 'Sổ sách kế toán',
     subtitle:
       'Bảng cân đối số phát sinh, sổ cái từng tài khoản và công nợ phải thu, phải trả theo đối tượng của một tháng, quý hoặc năm, lập từ các bút toán đã ghi sổ.',

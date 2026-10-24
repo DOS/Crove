@@ -506,6 +506,7 @@ export const en = {
     },
   },
   journal: {
+    exportGroup: 'Export the journal',
     title: 'Journal',
     newJournalVoucher: 'New journal voucher',
     yearClosing: 'Year-end closing',
@@ -932,6 +933,7 @@ export const en = {
     makeVoucherFor: 'Enter the voucher of the line of {date}, {amount}',
   },
   ledger: {
+    closingTitle: 'Closing and archiving',
     title: 'Ledgers',
     subtitle:
       'The trial balance, the general ledger of each account and receivables and payables per party for a month, a quarter or a year, from posted entries.',
