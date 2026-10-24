@@ -30,7 +30,7 @@
 --   not filtered by their row security, so it compares every line whatever a tenant role could see (as
 --   require_entry_balanced does, #76). It returns references only, no amounts.
 --
--- The entries posted before this migration get their deltas from the next one (20261031030100), in its own
+-- The entries posted before this migration get their deltas from the next one (20261031230100), in its own
 -- transaction, once this body is the one every new posting runs.
 SET LOCAL lock_timeout = '2s';
 
