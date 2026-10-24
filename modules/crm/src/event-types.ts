@@ -222,5 +222,5 @@ export const eventTypeSetActive = defineCommand({
   },
 });
 
-export const crmCommands = [eventTypeCreate, eventTypeUpdate, eventTypeSetActive];
-export const crmQueries = [eventTypeList];
+export const eventTypeCommands = [eventTypeCreate, eventTypeUpdate, eventTypeSetActive];
+export const eventTypeQueries = [eventTypeList];
