@@ -36,6 +36,7 @@ export * from './domain/stock-photos.ts';
 export * from './stock-photos.ts';
 export * from './policy.ts';
 export * from './assign.ts';
+export * from './assign-reminders.ts';
 export * from './bulk-edit.ts';
 export * from './archive.ts';
 export * from './domain/bulk-drafts.ts';

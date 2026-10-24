@@ -35,6 +35,7 @@ import { digestCommands } from './digest.ts';
 import { pushCommands, pushQueries } from './push.ts';
 import { outperformingCommands } from './outperforming.ts';
 import { assignCommands } from './assign.ts';
+import { assignReminderCommands } from './assign-reminders.ts';
 import { bulkEditCommands, bulkEditQueries } from './bulk-edit.ts';
 import { archiveCommands } from './archive.ts';
 import { coverProblem } from './cover-check.ts';
@@ -1963,6 +1964,7 @@ export const socialCommands = [
   ...policyCommands,
   ...clientReviewCommands,
   ...assignCommands,
+  ...assignReminderCommands,
   ...snippetCommands,
   ...savedViewCommands,
   ...labelCommands,

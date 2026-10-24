@@ -7,15 +7,15 @@
 // waiting for review (#703) tells the owners and admins who have not approved its current content yet; a publishing
 // hold put on or taken off (#946) tells the whole team; a
 // channel's queue running low (#1079) tells the owners, admins and members, who can fill it; a post doing much better
-// than usual (#1132) tells its author and its assignee, who can boost or reuse it. Never the person who acted, never a
+// than usual (#1132) tells its author and its assignee, who can boost or reuse it; a post's due date a day away, then
+// passed (#1359), tells its assignee. Never the person who acted, never a
 // kind the person turned off, and only people who are members when it is written. Each member reads and marks only
 // their own (a restrictive policy).
 //
 // Email (#579): the kinds someone must act on (a post to review, a decision, a failed or stuck post, an expired channel,
-// a queue running low, a post doing much better than usual) also go out by email, one per notification, through the
-// kernel's queued mail (the suppression
-// list, the mail log), unless the member turned Social emails off. The mail names the post and links to it; nothing
-// secret is in it. A deployment without mail records the mail as not sent and nothing fails.
+// a queue running low, a post doing much better than usual, an assignment and its due date, #1359) also go out by
+// email, one per notification, through the kernel's queued mail (the suppression list, the mail log), unless the
+// member turned Social emails off. The mail names the post and links to it; nothing secret is in it. A deployment without mail records the mail as not sent and nothing fails.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
@@ -26,6 +26,7 @@ import { approvalsInRound } from './domain/approval.ts';
 import { decisionsOf } from './policy.ts';
 import { channelScope, connectionInScope, postInScope, postsVisibleTo, usersInScope } from './channel-access.ts';
 import { RATIO_LABEL } from './domain/outperform.ts';
+import { REMINDED_POST_STATUSES } from './assign-reminders.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // The newest notifications a read returns, and the unread count it reports at most.
@@ -59,6 +60,8 @@ export const NOTIFYING_EVENTS = [
   'social.queue.low',
   // A post doing much better than usual (#1132).
   'social.variant.outperforming',
+  // An assigned post's due date a day away, or passed (#1359).
+  'social.post.due_reminder',
   // Not a notice: a member's links stop working when they lose the right to make them (#625).
   'kernel.member.removed',
   'kernel.member.role_changed',
@@ -283,6 +286,20 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
         detail: { provider: v.provider, ratio: e.data.ratio, ...(e.data.reach_ratio ? { reach: e.data.reach_ratio } : {}) },
       };
     }
+    // A due date reminder (#1359): still the post's assignee and due date, and the post still to be moved along.
+    case 'social.post.due_reminder': {
+      const e = z.object({ post_id: zId, assignee_user_id: zId, stage: z.enum(['soon', 'overdue']), due_at: z.iso.datetime() }).safeParse(payload);
+      if (!e.success) return null;
+      const p = await ctx.trx
+        .selectFrom('crove_social.post')
+        .select(['assignee_user_id', 'due_at', 'status', 'archived_at'])
+        .where('org_id', '=', ctx.orgId)
+        .where('id', '=', e.data.post_id)
+        .executeTakeFirst();
+      if (!p || p.assignee_user_id !== e.data.assignee_user_id || p.due_at?.toISOString() !== e.data.due_at || p.archived_at !== null) return null;
+      if (!(REMINDED_POST_STATUSES as readonly string[]).includes(p.status)) return null;
+      return { ...base, kind: 'assignment_due', users: [e.data.assignee_user_id], postId: e.data.post_id, detail: { stage: e.data.stage, due: e.data.due_at } };
+    }
     case 'social.review.reminder': {
       const e = z.object({ post_id: zId, stage: z.enum(['waiting', 'due']), variant_ids: z.array(zId).min(1).max(100) }).safeParse(payload);
       if (!e.success) return null;
@@ -312,10 +329,37 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
 }
 
 // The kinds that also go out by email, and the template they use.
-export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'mention', 'queue_low', 'post_outperforming']);
+export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set([
+  'review_requested',
+  'decided',
+  'failed',
+  'needs_attention',
+  'channel_expired',
+  'mention',
+  'queue_low',
+  'post_outperforming',
+  // An assignment and its due date (#1359): the assignee must act on both.
+  'assigned',
+  'assignment_due',
+]);
 export const NOTIFICATION_MAIL_TEMPLATE = 'social.notification';
 // The kinds that also go out as browser push (#1238): the mailed ones.
 export const PUSHED_KINDS: ReadonlySet<SocialNotificationKind> = MAILED_KINDS;
+
+// A due date as the mail shows it (#1359): "14:30 26/10/2026" in the post's time zone (Vietnam's when it has none or
+// one the runtime does not know).
+export function dueLabel(at: Date, zone: string | null): string {
+  const format = (timeZone: string) =>
+    new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric', hourCycle: 'h23' }).formatToParts(at);
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = format(zone ?? 'Asia/Ho_Chi_Minh');
+  } catch {
+    parts = format('Asia/Ho_Chi_Minh');
+  }
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${part('hour')}:${part('minute')} ${part('day')}/${part('month')}/${part('year')}`;
+}
 
 const oneLine = (text: string, max: number) => {
   const s = text.replace(/\s+/g, ' ').trim();
@@ -340,16 +384,22 @@ function subjectOf(kind: SocialNotificationKind, detail: Record<string, string>,
       return `Hàng đợi của kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} sắp hết bài`;
     case 'post_outperforming':
       return `Bài trên ${channel ? oneLine(channel, 60) : 'mạng xã hội'} đang được tương tác gấp ${(detail.ratio ?? '2').replace('.', ',')} lần mức thường lệ${about}`;
+    case 'assigned':
+      return detail.count ? `Bạn được giao ${detail.count} bài` : `Bạn được giao một bài${about}`;
+    case 'assignment_due':
+      return `${detail.stage === 'overdue' ? 'Bài được giao cho bạn đã quá hạn' : 'Bài được giao cho bạn sắp đến hạn'}${about}`;
     default:
       return `Kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} cần kết nối lại`;
   }
 }
 
 // The app path a mailed or pushed notification opens: its post, a new post for the channel of a queue running low (to
-// fill it), else the channels page.
+// fill it), the posts assigned to the reader for a bulk assignment (#1359, as the app's item opens), else the channels
+// page.
 export function notificationPath(slug: string, kind: SocialNotificationKind, postId: string | null, connectionId: string | null): string {
   if (postId) return `/o/${slug}/social/${postId}`;
   if (kind === 'queue_low' && connectionId) return `/o/${slug}/social/new?channel=${connectionId}`;
+  if (kind === 'assigned') return `/o/${slug}/social?assignee=me`;
   return `/o/${slug}/social/channels`;
 }
 
@@ -375,7 +425,7 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
   const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['slug', 'name']).where('org_id', '=', ctx.orgId).executeTakeFirst();
   if (!org) return 0;
   const post = plan.postId
-    ? await ctx.trx.selectFrom('crove_social.post').select(['title', 'body']).where('org_id', '=', ctx.orgId).where('id', '=', plan.postId).executeTakeFirst()
+    ? await ctx.trx.selectFrom('crove_social.post').select(['title', 'body', 'time_zone']).where('org_id', '=', ctx.orgId).where('id', '=', plan.postId).executeTakeFirst()
     : undefined;
   const postText = post ? oneLine([...(post.title?.trim() || post.body || '')].slice(0, 400).join(''), 200) || null : null;
   const channel = plan.connectionId
@@ -403,6 +453,9 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
         ...(plan.detail.removal ? { removal: plan.detail.removal } : {}),
         ...(plan.kind === 'queue_low' ? { days: plan.detail.days ?? null } : {}),
         ...(plan.kind === 'post_outperforming' ? { ratio: plan.detail.ratio ?? null, reach: plan.detail.reach ?? null } : {}),
+        ...(plan.kind === 'assigned' && plan.detail.count ? { count: plan.detail.count } : {}),
+        // The due date in the post's own time zone (#1359).
+        ...(plan.kind === 'assignment_due' ? { stage: plan.detail.stage ?? null, due: plan.detail.due ? dueLabel(new Date(plan.detail.due), post?.time_zone ?? null) : null } : {}),
         path,
       },
       status: 'queued',
@@ -464,11 +517,11 @@ export const notificationDispatch = defineCommand({
       .execute();
     // Only the notifications this run wrote: a replayed event mails nobody twice.
     const mailed = await mailNotifications(ctx, plan, inserted);
-    // A post's newest reminder replaces the ones before it.
-    if (plan.kind === 'review_reminder' && plan.postId) {
+    // A post's newest reminder replaces the ones before it (of a review, or of its due date, #1359).
+    if ((plan.kind === 'review_reminder' || plan.kind === 'assignment_due') && plan.postId) {
       await sql`
         DELETE FROM crove_social.notification
-        WHERE org_id = ${ctx.orgId} AND user_id = ANY(${users}::uuid[]) AND kind = 'review_reminder' AND post_id = ${plan.postId} AND event_id <> ${event.id}`.execute(ctx.trx);
+        WHERE org_id = ${ctx.orgId} AND user_id = ANY(${users}::uuid[]) AND kind = ${plan.kind} AND post_id = ${plan.postId} AND event_id <> ${event.id}`.execute(ctx.trx);
     }
     // The recipients' old ones go.
     await sql`
@@ -497,14 +550,20 @@ export interface NotificationItem {
   read: boolean;
 }
 
+// The due date a reminder was about, as the dispatch wrote it (toISOString), checked before it is cast.
+const DUE_ISO = String.raw`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`;
 // The viewer's newest notifications, how many are unread (up to NOTIFICATION_UNREAD_CAP + 1) and the kinds they
 // turned off. A review reminder shows only while its post still has a channel in the round of review it was about; a
-// low queue (#1079) only while its queue is still in the dip it was about.
+// low queue (#1079) only while its queue is still in the dip it was about; a due date reminder (#1359) only while the
+// post is still the viewer's, with the due date it was about, and still to be moved along.
 const STILL_WAITING = sql`(n.kind <> 'review_reminder' OR EXISTS (
   SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = n.org_id AND v.post_id = n.post_id AND v.status = 'in_review'
     AND v.review_since <= n.created_at)) AND (n.kind <> 'queue_low' OR EXISTS (
   SELECT 1 FROM crove_social.queue q WHERE q.org_id = n.org_id AND q.channel_connection_id = n.connection_id
-    AND q.low_alerted_at <= n.created_at))`;
+    AND q.low_alerted_at <= n.created_at)) AND (n.kind <> 'assignment_due' OR EXISTS (
+  SELECT 1 FROM crove_social.post d WHERE d.org_id = n.org_id AND d.id = n.post_id AND d.assignee_user_id = n.user_id
+    AND d.archived_at IS NULL AND d.status IN ('draft', 'scheduled', 'failed')
+    AND d.due_at = CASE WHEN n.detail->>'due' ~ ${DUE_ISO} THEN (n.detail->>'due')::timestamptz END))`;
 export const notificationList = defineQuery({
   name: 'social.notification.list',
   input: z.object({}),
