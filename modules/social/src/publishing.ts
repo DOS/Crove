@@ -33,6 +33,7 @@ import {
   overrides,
   pick,
   refreshPostStatus,
+  refuseArchived,
   refuseRemoveAtMisfit,
   regateValues,
   setVariant,
@@ -610,13 +611,15 @@ export const variantRetry = defineCommand({
   handler: async (ctx, input) => {
     requireUser(ctx);
     const postId = await variantPost(ctx.trx, ctx.orgId, input.variantIds);
-    await lockPost(ctx.trx, ctx.orgId, postId);
+    const post = await lockPost(ctx.trx, ctx.orgId, postId);
     const chosen = pick(await lockVariants(ctx.trx, ctx.orgId, postId), input.variantIds);
     // Only on channels the caller may use (#1081).
     await refuseChannels(
       ctx,
       chosen.map((v) => v.channel_connection_id),
     );
+    // Not from the archive (#1299): a failed channel of an archived post goes out again only once it is restored.
+    refuseArchived(post);
     for (const v of chosen) {
       // Refused first for a variant that is not failed or waiting on a person.
       step(v, { type: 'retry' });

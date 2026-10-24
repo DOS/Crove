@@ -50,7 +50,7 @@ export const clientSettle = defineCommand({
       const given = checkedApprovers(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }, checklistFor(checks, v.channel_connection_id));
       if (given.length < (required.get(v.channel_connection_id) ?? 1)) continue;
       if (banned && isBlocked(banned, base(post), v)) continue;
-      const values = approvedValues(v, ctx.now);
+      const values = approvedValues(v, ctx.now, post);
       await setVariant(ctx, v.id, values);
       settled.push(v.id);
       if (values.status === 'scheduled') scheduled.push(v.id);
