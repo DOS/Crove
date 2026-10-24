@@ -1301,6 +1301,12 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         }),
       ),
     },
+    // The org's legal entities (#1278): owners and admins.
+    legalEntities: {
+      list: os.legalEntities.list.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.legal_entity.list', {}, { actor, orgId }))),
+      create: os.legalEntities.create.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.legal_entity.create', input, { actor, orgId }))),
+      update: os.legalEntities.update.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.legal_entity.update', input, { actor, orgId }))),
+    },
     // Org-less: any signed-in user may look up a tax code before the org exists. Nothing is written, so no command.
     taxRegistry: {
       lookup: os.taxRegistry.lookup.handler(({ context, input }) =>

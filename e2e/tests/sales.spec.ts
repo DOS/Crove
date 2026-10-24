@@ -33,7 +33,8 @@ test('set the tax code, upload a sales e-invoice, approve it, then find it in th
     await expect(page.getByText('Mã số thuế không hợp lệ', { exact: false })).toBeVisible();
     await form.getByLabel('Mã số thuế').fill(SELLER_TAX_CODE);
     await form.getByRole('button', { name: 'Lưu' }).click();
-    await expect(page.getByText(SELLER_TAX_CODE, { exact: true })).toBeVisible();
+    // The org's own field (a <dd>): the legal entities card shows the default entity's code too (#1278).
+    await expect(page.getByRole('definition').getByText(SELLER_TAX_CODE, { exact: true })).toBeVisible();
   });
 
   await test.step('upload the e-invoice the org issued and open the sale proposal', async () => {
