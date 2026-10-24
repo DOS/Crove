@@ -8,6 +8,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import type pg from 'pg';
 import { schemaMissing } from '@crove/db/migrate';
 import {
+  brandSlug,
   ACCEPTED_ARCHIVE_TYPES,
   ACCEPTED_UPLOAD_TYPES,
   DIRECT_UPLOAD_MAX_BYTES,
@@ -442,7 +443,7 @@ export function createHttpApp(deps: HttpDeps) {
     app.get('/status', async (c) => {
       const now = Date.now();
       if (!cached || now - cached.readAt > STATUS_CACHE_MS) cached = { readAt: now, status: await readStatusFile(statusFile) };
-      const page = renderStatusPage(statusView(cached.status, new Date(now)));
+      const page = renderStatusPage(statusView(cached.status, new Date(now)), config.BRAND_NAME);
       return c.html(page, 200, { 'content-security-policy': STATUS_PAGE_CSP, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
     });
   }
@@ -635,7 +636,7 @@ export function createHttpApp(deps: HttpDeps) {
         const file = c.req.param('file');
         const feed = file.endsWith('.ics') ? await calendarFeed(runtime, file.slice(0, -4)) : null;
         if (!feed) return c.text('Không tìm thấy lịch này', 404, headers);
-        return c.body(renderIcs(feed, config.PUBLIC_URL, new Date()), 200, { ...headers, 'content-type': 'text/calendar; charset=utf-8' });
+        return c.body(renderIcs(feed, config.PUBLIC_URL, new Date(), config.BRAND_NAME), 200, { ...headers, 'content-type': 'text/calendar; charset=utf-8' });
       } catch (error) {
         return problem(c, error);
       }
@@ -666,7 +667,7 @@ export function createHttpApp(deps: HttpDeps) {
         const slug = c.req.param('slug');
         const view = await bioView(runtime, slug);
         if (!view) return notFound(c);
-        return c.html(renderBioPage(slug, view), 200, { 'content-security-policy': BIO_PAGE_CSP, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
+        return c.html(renderBioPage(slug, view, config.BRAND_NAME), 200, { 'content-security-policy': BIO_PAGE_CSP, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' });
       } catch (error) {
         return problem(c, error);
       }
@@ -1229,7 +1230,7 @@ export function createHttpApp(deps: HttpDeps) {
         if (entries.length >= JOURNAL_EXPORT_LIMIT) {
           throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều bút toán để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
         }
-        const bytes = await buildJournalWorkbook([...entries].reverse(), orgSlug ?? '');
+        const bytes = await buildJournalWorkbook([...entries].reverse(), orgSlug ?? '', config.BRAND_NAME);
         // The export's audit row (counts only), for the weekly usage report (issue #311). No row, no download.
         await runtime.execute('finance.journal.export', { from: range.from, to: range.to, entries: entries.length }, { actor: actorOf(user), orgId });
         return new Response(body(bytes), {
@@ -1256,7 +1257,7 @@ export function createHttpApp(deps: HttpDeps) {
         if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
           throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
         }
-        const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_SERVICE, vouchers.flatMap(purchaseRows));
+        const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_SERVICE, vouchers.flatMap(purchaseRows), config.BRAND_NAME);
         await runtime.execute(
           'finance.journal.export',
           { from: range.from, to: range.to, entries: vouchers.length, format: 'misa_sme_purchases' },
@@ -1285,7 +1286,7 @@ export function createHttpApp(deps: HttpDeps) {
         if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
           throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
         }
-        const bytes = await buildMisaWorkbook(MISA_SME_SALES, vouchers.flatMap(salesRows));
+        const bytes = await buildMisaWorkbook(MISA_SME_SALES, vouchers.flatMap(salesRows), config.BRAND_NAME);
         await runtime.execute(
           'finance.journal.export',
           { from: range.from, to: range.to, entries: vouchers.length, format: 'misa_sme_sales' },
@@ -1320,7 +1321,7 @@ export function createHttpApp(deps: HttpDeps) {
           if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
             throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
           }
-          const bytes = await buildMisaWorkbook(cash.template, vouchers.flatMap(cashRows));
+          const bytes = await buildMisaWorkbook(cash.template, vouchers.flatMap(cashRows), config.BRAND_NAME);
           await runtime.execute(
             'finance.journal.export',
             { from: range.from, to: range.to, entries: vouchers.length, format: cash.format },
@@ -1348,7 +1349,7 @@ export function createHttpApp(deps: HttpDeps) {
         const orgId = await resolveOrg(runtime, user, orgSlug);
         const period = c.req.query('period') ?? '';
         const report = await runtime.query<VatReport>('finance.vat.period', { period }, { actor: actorOf(user), orgId });
-        const bytes = await buildVatWorkbook(report, orgSlug ?? '');
+        const bytes = await buildVatWorkbook(report, orgSlug ?? '', config.BRAND_NAME);
         // The export's audit row (period and invoice count only). No row, no download.
         const documents = report.input.documents.length + report.output.documents.length;
         await runtime.execute('finance.vat.export', { period: report.period.period, documents }, { actor: actorOf(user), orgId });
@@ -1413,7 +1414,7 @@ export function createHttpApp(deps: HttpDeps) {
         const orgId = await resolveOrg(runtime, user, orgSlug);
         const period = c.req.query('period') ?? '';
         const book = await runtime.query<LedgerBook>('finance.ledger.book', { period }, { actor: actorOf(user), orgId });
-        const bytes = await buildLedgerWorkbook(book, orgSlug ?? '');
+        const bytes = await buildLedgerWorkbook(book, orgSlug ?? '', config.BRAND_NAME);
         // The export's audit row (period and journal line count only). No row, no download.
         await runtime.execute('finance.ledger.export', { period: book.period.period, lines: book.lines }, { actor: actorOf(user), orgId });
         return new Response(body(bytes), {
@@ -1437,13 +1438,13 @@ export function createHttpApp(deps: HttpDeps) {
         const orgId = await resolveOrg(runtime, user, orgSlug);
         const period = c.req.query('period') ?? '';
         const statements = await runtime.query<FinancialStatements>('finance.statements.period', { period }, { actor: actorOf(user), orgId });
-        const bytes = await buildStatementsWorkbook(statements, orgSlug ?? '');
+        const bytes = await buildStatementsWorkbook(statements, orgSlug ?? '', config.BRAND_NAME);
         // The export's audit row (the period). No row, no download.
         await runtime.execute('finance.statements.export', { period: statements.period.period }, { actor: actorOf(user), orgId });
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'content-disposition': `attachment; filename="crove-bao-cao-tai-chinh-${statements.period.period}-${orgSlug}.xlsx"`,
+            'content-disposition': `attachment; filename="${brandSlug(config.BRAND_NAME)}-bao-cao-tai-chinh-${statements.period.period}-${orgSlug}.xlsx"`,
             'cache-control': 'private, no-store',
           },
         });
@@ -1459,7 +1460,7 @@ export function createHttpApp(deps: HttpDeps) {
         const orgSlug = c.req.header(ORG_HEADER) ?? null;
         const orgId = await resolveOrg(runtime, user, orgSlug);
         const assets = await runtime.query<FixedAsset[]>('finance.fixed_assets.list', {}, { actor: actorOf(user), orgId });
-        const bytes = await buildFixedAssetsWorkbook(assets, orgSlug ?? '');
+        const bytes = await buildFixedAssetsWorkbook(assets, orgSlug ?? '', config.BRAND_NAME);
         // The export's audit row (the number of entries). No row, no download.
         await runtime.execute('finance.fixed_asset.export', { assets: assets.length }, { actor: actorOf(user), orgId });
         return new Response(body(bytes), {

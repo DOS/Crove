@@ -85,7 +85,7 @@ function portalError(kind: PortalCallError): DomainError {
     case 'TOO_SLOW':
       return new DomainError('PORTAL_STEP_TIMEOUT', 503, 'Cổng thuế trả lời chậm nên lượt lấy dữ liệu đã tạm dừng; hãy bấm lấy lại để tiếp tục');
     case 'BAD_ANSWER':
-      return new DomainError('PORTAL_BAD_ANSWER', 503, 'Cổng thuế trả lời theo cách Crove chưa đọc được; hãy xuất danh sách Excel từ cổng thuế rồi tải lên');
+      return new DomainError('PORTAL_BAD_ANSWER', 503, 'Cổng thuế trả lời theo cách hệ thống chưa đọc được; hãy xuất danh sách Excel từ cổng thuế rồi tải lên');
   }
 }
 

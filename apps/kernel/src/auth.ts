@@ -88,7 +88,7 @@ const invalid = () => new DomainError('UNAUTHENTICATED', 401, 'Phiên đăng nh�
 const OAUTH_CLIENT_AMR_PREFIX = 'oauth_provider/';
 
 export const oauthClientRefused = () =>
-  new DomainError('OAUTH_CLIENT_TOKEN_REFUSED', 401, 'Mã truy cập này được cấp cho một ứng dụng bên thứ ba, không dùng để đăng nhập Crove');
+  new DomainError('OAUTH_CLIENT_TOKEN_REFUSED', 401, 'Mã truy cập này được cấp cho một ứng dụng bên thứ ba, không dùng để đăng nhập');
 
 // True when the token was issued to an OAuth client: any `client_id` claim (whatever its value), or an `amr` entry
 // (an object's `method`, or a bare string) from the OAuth server's authorization code grant.

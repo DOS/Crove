@@ -10,6 +10,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { ErrorText } from './ui.tsx';
+import { brandFileName } from '../i18n/brand.ts';
 import { client, errorMessage, orpc } from '../lib/api.ts';
 import { monthOf, PLAN_EXPORT_MAX_DAYS, PLAN_EXPORT_MAX_ROWS, planPrintPath, planRange, saveCsv } from '../lib/social-plan-export.ts';
 import { providerName } from '../lib/social.ts';
@@ -37,7 +38,7 @@ export function PlanExportPanel({ slug, month, onClose }: { slug: string; month:
       return client.social.plan.export({ ...range, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, ...filter, format: 'csv' });
     },
     onSuccess: (file) => {
-      if (file.csv !== null) saveCsv(file.filename, file.csv);
+      if (file.csv !== null) saveCsv(brandFileName(file.filename), file.csv);
     },
   });
   const print = () => {
