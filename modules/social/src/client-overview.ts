@@ -91,6 +91,7 @@ async function upcomingCount(ctx: Parameters<typeof channelScope>[0], scope: Cha
     .selectFrom('crove_social.post as p')
     .select('p.id')
     .where('p.org_id', '=', ctx.orgId)
+    .where('p.archived_at', 'is', null)
     .where(postInScope(scope))
     .where(
       sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status IN (${sql.join([...AGENDA_STATUSES])}) AND coalesce(v.error_retry_at, v.queue_slot_at, v.scheduled_at, p.scheduled_at) >= ${from} AND coalesce(v.error_retry_at, v.queue_slot_at, v.scheduled_at, p.scheduled_at) < ${to})`,

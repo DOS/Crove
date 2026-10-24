@@ -37,8 +37,10 @@ export const reviewLinkCreate = defineCommand({
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
-    const post = await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.postId).executeTakeFirst();
+    const post = await ctx.trx.selectFrom('crove_social.post').select(['id', 'archived_at']).where('org_id', '=', ctx.orgId).where('id', '=', input.postId).executeTakeFirst();
     if (!post) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
+    // Archiving revokes a post's links (#1299); an archived post gets none until it is restored.
+    if (post.archived_at !== null) throw new DomainError('POST_ARCHIVED', 409, 'Bài này đã được lưu trữ; hãy khôi phục bài trước khi gửi khách duyệt');
     // Two links made at once count each other (#930), so the cap below holds.
     await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_social.review_link:${ctx.orgId}:${post.id}`}, 0))`.execute(ctx.trx);
     const live = await ctx.trx
@@ -138,14 +140,15 @@ export const reviewPlanCreate = defineCommand({
     let range: { from: Date; to: Date } | null = null;
     if (input.postIds) {
       const ids = [...new Set(input.postIds)];
-      const { rows } = await sql<{ id: string; status: string; at: Date | null }>`
-        SELECT p.id, p.status,
+      const { rows } = await sql<{ id: string; status: string; archived: boolean; at: Date | null }>`
+        SELECT p.id, p.status, p.archived_at IS NOT NULL AS archived,
           coalesce((SELECT pg_catalog.min(coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at)) FROM crove_social.post_variant v
                     WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status <> 'cancelled'), p.scheduled_at) AS at
         FROM crove_social.post p
         WHERE p.org_id = ${ctx.orgId}::uuid AND p.id = ANY(${ids}::uuid[])`.execute(ctx.trx);
       if (rows.length !== ids.length) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
       if (rows.some((r) => r.status === 'cancelled')) throw new DomainError('REVIEW_PLAN_POST_CANCELLED', 409, 'Có bài đã hủy trong các bài đã chọn; bài đã hủy không gửi khách duyệt được');
+      if (rows.some((r) => r.archived)) throw new DomainError('POST_ARCHIVED', 409, 'Có bài đã lưu trữ trong các bài đã chọn; hãy khôi phục bài trước khi gửi khách duyệt');
       const byId = new Map(rows.map((r) => [r.id, r.at]));
       postIds = planOrder(ids.map((id) => ({ id, at: byId.get(id) ?? null })));
     } else {
@@ -164,7 +167,7 @@ export const reviewPlanCreate = defineCommand({
       const { rows } = await sql<{ id: string }>`
         SELECT p.id FROM crove_social.post p
         JOIN crove_social.post_variant v ON v.org_id = p.org_id AND v.post_id = p.id
-        WHERE p.org_id = ${ctx.orgId}::uuid AND p.status <> 'cancelled'
+        WHERE p.org_id = ${ctx.orgId}::uuid AND p.status <> 'cancelled' AND p.archived_at IS NULL
           AND v.status = ANY(${[...PLAN_STATUSES]}::text[])
           ${connections.length > 0 ? sql`AND v.channel_connection_id = ANY(${connections}::uuid[])` : sql``}
           AND ${at} >= ${from} AND ${at} < ${to}
