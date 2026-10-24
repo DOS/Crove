@@ -44,7 +44,7 @@ const QUICK_GUIDE: readonly GuideStep[] = [
     items: [
       `Mở ${q(vi.nav.journal)} ở thanh bên trái.`,
       `Chọn ${q(vi.journal.from)} và ${q(vi.journal.to)} nếu chỉ cần một khoảng thời gian; để trống để xuất tất cả.`,
-      `Bấm ${q(vi.journal.export)}. Tệp crove-but-toan-<mã tổ chức>.xlsx ghi từng dòng Nợ/Có, gửi thẳng cho kế toán.`,
+      `Bấm ${q(vi.journal.export)}. Tệp {brandSlug}-but-toan-<mã tổ chức>.xlsx ghi từng dòng Nợ/Có, gửi thẳng cho kế toán.`,
     ],
   },
 ];

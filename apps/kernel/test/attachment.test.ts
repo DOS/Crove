@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { brandSlug } from '@crove/kernel-contract';
 import { ORG_SLUG, attachmentDisposition } from '../src/attachment.ts';
 
 describe('attachmentDisposition', () => {
@@ -9,6 +10,14 @@ describe('attachmentDisposition', () => {
     expect(attachmentDisposition('acme-vn', ['crove', 'gtgt', '2026-Q3', ORG_SLUG], 'xlsx')).toContain('filename="crove-gtgt-2026-Q3-acme-vn.xlsx"');
     expect(attachmentDisposition('acme-vn', ['crove', ORG_SLUG, 'manifest'], 'json')).toContain('filename="crove-acme-vn-manifest.json"');
     expect(attachmentDisposition('acme-vn', ['crove', ORG_SLUG, 'kernel.party'], 'ndjson')).toContain('filename="crove-acme-vn-kernel.party.ndjson"');
+  });
+
+  // #1045: the routes prefix files with brandSlug(BRAND_NAME), which always passes as a segment.
+  it('takes the product name as the prefix', () => {
+    expect(attachmentDisposition('acme-vn', [brandSlug('Tên Mới'), 'but-toan', ORG_SLUG], 'xlsx')).toContain('filename="ten-moi-but-toan-acme-vn.xlsx"');
+    for (const name of ['Crove', "Sổ Xanh & Co's (VN)", 'Đ'.repeat(40), '新品牌']) {
+      expect(() => attachmentDisposition('acme-vn', [brandSlug(name), ORG_SLUG], 'xlsx'), name).not.toThrow();
+    }
   });
 
   it.each([null, '', 'a', 'A-Upper', '-lead', 'trail-', 'a b', 'a"b', 'a\r\nSet-Cookie: x=1', 'a;b', 'tên-việt', 'x'.repeat(49), 'a/b', 'a\b'])(

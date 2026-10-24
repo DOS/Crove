@@ -8,15 +8,17 @@
 // The series keeps its own state on the post: recurrence_last_at, the occurrence of the last copy (its phase: every
 // second week stays every second week), recurrence_count, the copies of this run, and recurrence_next_at, the next
 // occurrence as last computed, for the scan. An occurrence that went by while a copy waited is skipped, never made
-// late; a series whose end came, or whose channels are all disconnected for good, ends (its rule is cleared, its
-// count kept). A copy repeats what the series post went out with; to change the text, start a new series.
+// late; a series whose end came, whose channels are all disconnected for good, or whose original was taken down on
+// every channel (#1001), ends (its rule is cleared, its count kept). A copy repeats what the series post went out with,
+// or takes the post's next text variation (#1260). The first copy keeps RECURRING_FIRST_GAP_MS from the original's
+// first publish (#1001), so it never lands minutes after it.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId, zSocialRecurrence } from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { localDate, nextOccurrence, parseRecurrence, type Recurrence } from './domain/recurrence.ts';
-import { repostCopy } from './evergreen.ts';
+import { SWEEP_PAGE, SWEEP_PAGES, repostCopy } from './evergreen.ts';
 import { publishingHeld } from './publish-hold.ts';
 import { lockPost } from './variants.ts';
 import { refusePostWholly } from './channel-access.ts';
@@ -26,6 +28,9 @@ export const RECURRING_SWEEP_MS = 60 * 60_000;
 // How far ahead a copy is made: the week before its occurrence, so reviewers have the week. crove_social.recurring_due
 // uses the same 7 days.
 export const RECURRING_HORIZON_MS = 7 * 86_400_000;
+// An occurrence this close after the original's first publish is skipped for the first copy (#1001): a post that went
+// out just before the rule's time on a matching weekday is not repeated minutes later.
+export const RECURRING_FIRST_GAP_MS = 6 * 3_600_000;
 const ACTOR: SystemActor = { type: 'system', component: 'social.recurring' };
 // A copy's channel in one of these is done; any other status holds the next copy back.
 export const COPY_DONE = ['published', 'failed', 'cancelled', 'removed'] as const;
@@ -147,6 +152,16 @@ export const recurringNext = defineCommand({
       .where('v.status', 'not in', [...COPY_DONE])
       .executeTakeFirst();
     if (open) return { postId: null, reason: 'open_copy' };
+    // Taken down on every channel it went out on (#860), none still published: there is nothing to repeat, so the series
+    // ends with that reason rather than staying set and silent (#1001).
+    const standing = await ctx.trx
+      .selectFrom('crove_social.post_variant')
+      .select('status')
+      .where('org_id', '=', ctx.orgId)
+      .where('post_id', '=', input.postId)
+      .where('status', 'in', ['published', 'removed'])
+      .execute();
+    if (standing.length > 0 && standing.every((v) => v.status === 'removed')) return endSeries(ctx, input.postId, 'taken_down');
     // Before the first copy, the series counts from the post's first publish.
     const first = await ctx.trx
       .selectFrom('crove_social.post_variant')
@@ -159,14 +174,16 @@ export const recurringNext = defineCommand({
     if (!firstAt) return { postId: null, reason: 'not_published' };
     const after = (row.recurrence_last_at ?? firstAt).getTime();
     const now = ctx.now.getTime();
-    const next = nextOccurrence(rule, row.time_zone, after, now);
+    // The first copy comes no sooner than the gap after the first publish; the phase still counts from the publish.
+    const floor = row.recurrence_last_at === null ? Math.max(now, firstAt.getTime() + RECURRING_FIRST_GAP_MS) : now;
+    const next = nextOccurrence(rule, row.time_zone, after, floor);
     if (next === null) return endSeries(ctx, input.postId, 'until');
     if (next > now + RECURRING_HORIZON_MS) {
       // Not due yet: the scan leaves it alone until a week before.
       await ctx.trx.updateTable('crove_social.post').set({ recurrence_next_at: new Date(next) }).where('org_id', '=', ctx.orgId).where('id', '=', input.postId).execute();
       return { postId: null, reason: 'not_due' };
     }
-    const done = await repostCopy(ctx, input.postId, { submit: true, scheduledAt: new Date(next), recurrenceSourceId: input.postId });
+    const done = await repostCopy(ctx, input.postId, { submit: true, scheduledAt: new Date(next), recurrenceSourceId: input.postId, rotate: true });
     // A channel that is only expired may be reconnected: a later sweep tries again (an occurrence gone by meanwhile is
     // skipped).
     if (done === 'waiting') return { postId: null, reason: 'waiting' };
@@ -193,17 +210,26 @@ export const recurringNext = defineCommand({
 
 export const recurringCommands = [postRecurrenceSet, postRecurrenceClear, recurringNext];
 
-// One pass: the next copy of every series that is due, sent to review. Logs ids and codes only.
-export async function sweepRecurring(deps: { runtime: Runtime; workerDb: Db }): Promise<number> {
-  const { rows } = await sql<{ org_id: string; post_id: string }>`SELECT org_id, post_id FROM crove_social.recurring_due(50::int)`.execute(deps.workerDb);
+// One pass: the next copy of every series that is due, sent to review. Logs ids and codes only. The scan is asked again,
+// without the series already tried, until it lists no more (#1001): a series that only waits (its channels expired)
+// comes back every pass, and can no longer fill the page and let another org's occurrence go by. At most SWEEP_PAGES
+// pages a pass.
+export async function sweepRecurring(deps: { runtime: Runtime; workerDb: Db; pageSize?: number }): Promise<number> {
+  const pageSize = deps.pageSize ?? SWEEP_PAGE;
+  const tried: string[] = [];
   let made = 0;
-  for (const row of rows) {
-    try {
-      const done = await deps.runtime.execute<RecurringResult>('social.recurring.next', { postId: row.post_id }, { actor: ACTOR, orgId: row.org_id });
-      if (done.postId) made += 1;
-    } catch (error) {
-      console.warn(`[social-recurring] post ${row.post_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error');
+  for (let page = 0; page < SWEEP_PAGES; page += 1) {
+    const { rows } = await sql<{ org_id: string; post_id: string }>`SELECT org_id, post_id FROM crove_social.recurring_due(${pageSize}::int, ${tried}::uuid[])`.execute(deps.workerDb);
+    for (const row of rows) {
+      tried.push(row.post_id);
+      try {
+        const done = await deps.runtime.execute<RecurringResult>('social.recurring.next', { postId: row.post_id }, { actor: ACTOR, orgId: row.org_id });
+        if (done.postId) made += 1;
+      } catch (error) {
+        console.warn(`[social-recurring] post ${row.post_id.slice(0, 8)}`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error');
+      }
     }
+    if (rows.length < pageSize) break;
   }
   return made;
 }

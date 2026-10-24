@@ -29,7 +29,9 @@ export const VAT_WARNING_LABELS: Readonly<Record<VatWarning, string>> = {
   check_payment: 'Đạt ngưỡng phải thanh toán không dùng tiền mặt mà chưa rõ đã thanh toán qua ngân hàng: kiểm tra chứng từ trước khi khấu trừ',
 };
 
-function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, partyHeader: string, taxCodeHeader: string): void {
+const noTaxCode = (brand: string) => `Chưa nhập mã số thuế của tổ chức nên ${brand} chưa nhận ra hóa đơn bán ra`;
+
+function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, partyHeader: string, taxCodeHeader: string, brand: string): void {
   const sheet = workbook.addWorksheet(name);
   sheet.columns = [
     { header: 'STT', key: 'no', width: 6 },
@@ -47,7 +49,7 @@ function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, p
   sheet.views = [{ state: 'frozen', ySplit: 1 }];
   if (!side.available) {
     const row = sheet.addRow([]);
-    setText(row.getCell('partyName'), 'Chưa nhập mã số thuế của tổ chức nên Crove chưa nhận ra hóa đơn bán ra');
+    setText(row.getCell('partyName'), noTaxCode(brand));
     return;
   }
   side.documents.forEach((doc: VatInvoiceView, index) => {
@@ -73,9 +75,10 @@ function invoiceSheet(workbook: ExcelJS.Workbook, name: string, side: VatSide, p
   total.font = { bold: true };
 }
 
-export async function buildVatWorkbook(report: VatReport, orgName: string): Promise<Uint8Array> {
+// brand: the product name users see (BRAND_NAME, #1045), as the file's creator and in its notes.
+export async function buildVatWorkbook(report: VatReport, orgName: string, brand = 'Crove'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Crove';
+  workbook.creator = brand;
   workbook.title = `Tờ khai GTGT ${report.period.period} ${orgName}`;
 
   const summary = workbook.addWorksheet('Tổng hợp');
@@ -128,13 +131,13 @@ export async function buildVatWorkbook(report: VatReport, orgName: string): Prom
       setMoney(row.getCell('vat'), rate.vat);
     }
     const total = summary.addRow([]);
-    setText(total.getCell('label'), side.available ? `Tổng cộng (${side.totals.documents} hóa đơn)` : 'Chưa nhập mã số thuế của tổ chức nên Crove chưa nhận ra hóa đơn bán ra');
+    setText(total.getCell('label'), side.available ? `Tổng cộng (${side.totals.documents} hóa đơn)` : noTaxCode(brand));
     setMoney(total.getCell('taxable'), side.totals.taxable);
     setMoney(total.getCell('vat'), side.totals.vat);
     total.font = { bold: true };
   }
 
-  invoiceSheet(workbook, 'Bán ra', report.output, 'Tên người mua', 'MST người mua');
-  invoiceSheet(workbook, 'Mua vào', report.input, 'Tên người bán', 'MST người bán');
+  invoiceSheet(workbook, 'Bán ra', report.output, 'Tên người mua', 'MST người mua', brand);
+  invoiceSheet(workbook, 'Mua vào', report.input, 'Tên người bán', 'MST người bán', brand);
   return new Uint8Array(await workbook.xlsx.writeBuffer());
 }

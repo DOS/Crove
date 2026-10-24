@@ -512,9 +512,10 @@ function excelDate(value: string): Date {
 }
 
 /** One sheet named as MISA's template, its header row, then one row per voucher line. */
-export async function buildMisaWorkbook<Row>(template: MisaTemplate<Row>, rows: readonly Row[]): Promise<Uint8Array> {
+// brand: the product name users see (BRAND_NAME, #1045), as the file's creator.
+export async function buildMisaWorkbook<Row>(template: MisaTemplate<Row>, rows: readonly Row[], brand = 'Crove'): Promise<Uint8Array> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'Crove';
+  workbook.creator = brand;
   const sheet = workbook.addWorksheet(template.sheetName);
   sheet.addRow(template.columns.map((c) => c.header));
   sheet.getRow(1).font = { bold: true };

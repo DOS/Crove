@@ -111,6 +111,16 @@ describe('ZaloOaPublisher', () => {
     expect(calls[1]?.json).toEqual({ token: 'tok-1' });
   });
 
+  // #1045: an article with no author set is signed with the product name users see (BRAND_NAME).
+  it('signs an article with no author set by the configured default author', async () => {
+    const { fetchImpl, calls } = zalo({
+      'POST openapi.zalo.me/v2.0/article/create': [{ body: { error: 0, data: { token: 'tok-9' } } }],
+      'POST openapi.zalo.me/v2.0/article/verify': [{ body: { error: 0, data: { id: 'art-9' } } }],
+    });
+    await new ZaloOaPublisher({ ...APP, defaultAuthor: 'Tên Mới' }, fetchImpl).publish(input());
+    expect(calls[0]?.json).toMatchObject({ author: 'Tên Mới' });
+  });
+
   it('sends every image in order: the first as the cover, the others after the text, captioned with their alt text (#943)', async () => {
     const { fetchImpl, calls } = zalo({
       'POST openapi.zalo.me/v2.0/article/create': [{ body: { error: 0, data: { token: 'tok-4' } } }],
