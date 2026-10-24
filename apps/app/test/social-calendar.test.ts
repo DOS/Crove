@@ -249,7 +249,7 @@ describe('one calendar chip per post (#1220)', () => {
       { variantId: 's2', at: at(24, 9), expectedAt: at(22, 9) },
     ]);
     // The draft at the post's planned time moves with the post; a channel with a time of its own in review does not.
-    expect(move.plan).toEqual({ request: { postId: 'p', revision: 4, scheduledAt: at(24, 9) }, items: [g.items[3]] });
+    expect(move.plan).toEqual({ request: { postId: 'p', revision: 4, scheduledAt: at(24, 9) }, items: [g.items[3]], outside: [] });
     expect(move.stayed.map((s) => `${s.item.v.id}:${s.reason}`)).toEqual(['held:queuePaused', 'out:out', 'own:notScheduled']);
     // A member moves the draft; the scheduled channels stay, said to be for owners and admins.
     const byMember = groupDrop(g, new Date(2026, 9, 24), now, member, 16);
@@ -294,5 +294,36 @@ describe('one calendar chip per post (#1220)', () => {
     // A refused plan names each of its drafts.
     const refusedPlan = await runGroupMove(move, { reschedule: async () => undefined, plan: async () => Promise.reject(stale) });
     expect(refusedPlan.refused.map((x) => x.item.v.id)).toEqual(['d']);
+  });
+
+  it('under a channel filter, moves the other channels’ drafts with the post’s planned time and names them, but no other scheduled channel (#1233)', async () => {
+    const post = full(
+      'p',
+      [
+        ch('a', 'draft', 'A', { effectiveAt: at(22, 9) }),
+        ch('b', 'draft', 'B', { effectiveAt: at(22, 9) }),
+        ch('c', 'scheduled', 'C', { effectiveAt: at(22, 9) }),
+        // Sent back to review with a time of its own: not the post's planned time.
+        ch('own', 'in_review', 'D', { effectiveAt: at(22, 11) }),
+      ],
+      { scheduledAt: at(22, 9) },
+    );
+    const [group] = calendarGroups(calendarItems([post], 'A'));
+    const g = group as CalendarGroup;
+    expect(g.items.map((i) => i.v.id)).toEqual(['a']);
+    const move = groupDrop(g, new Date(2026, 9, 24), now, member);
+    if (move === null || move === 'past') throw new Error('expected a move');
+    expect(move.reschedules).toEqual([]);
+    expect(move.plan?.items.map((i) => i.v.id)).toEqual(['a']);
+    expect(move.plan?.outside.map((i) => i.v.id)).toEqual(['b']);
+    const result = await runGroupMove(move, { reschedule: async () => undefined, plan: async () => undefined });
+    // The count is the whole move, and the drafts outside the filter are named.
+    expect(result.moved.map((i) => i.v.id)).toEqual(['a', 'b']);
+    expect(result.alongside.map((i) => i.v.id)).toEqual(['b']);
+    // A scheduled chip under the filter moves its own channel only.
+    const [scheduled] = calendarGroups(calendarItems([post], 'C'));
+    const alone = groupDrop(scheduled as CalendarGroup, new Date(2026, 9, 24), now, owner);
+    if (alone === null || alone === 'past') throw new Error('expected a move');
+    expect([alone.reschedules.map((r) => r.request.variantId), alone.plan]).toEqual([['c'], null]);
   });
 });

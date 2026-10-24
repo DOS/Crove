@@ -126,6 +126,7 @@ export interface CroveSocialSchema {
   'crove_social.review_feedback': SocialReviewFeedbackTable;
   'crove_social.review_link': SocialReviewLinkTable;
   'crove_social.review_link_post': SocialReviewLinkPostTable;
+  'crove_social.saved_view': SocialSavedViewTable;
   'crove_social.short_link': SocialShortLinkTable;
   'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
@@ -1703,6 +1704,18 @@ export interface SocialReviewLinkTable {
   kind: ColumnType<string, string | undefined, NotGranted>;
   plan_from: ColumnType<Date | null, Date | string | null, NotGranted>;
   plan_to: ColumnType<Date | null, Date | string | null, NotGranted>;
+}
+
+/** crove_social.saved_view */
+export interface SocialSavedViewTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  name: string;
+  filters: ColumnType<unknown, string, string>;
+  shared: Generated<boolean>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_social.short_link_click */

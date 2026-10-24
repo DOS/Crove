@@ -11,7 +11,7 @@
 // - Scheduling needs the variant's latest decision to be an approval of its current revision and hash.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { SOCIAL_IMAGE_TYPES, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId } from '@crove/kernel-contract';
+import { SOCIAL_IMAGE_TYPES, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId, zSocialMemberFilter } from '@crove/kernel-contract';
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
@@ -41,6 +41,7 @@ import { coverProblem } from './cover-check.ts';
 import { bulkDraftCommands } from './bulk-drafts.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
+import { savedViewCommands, savedViewQueries } from './saved-views.ts';
 import { MAX_LABELS_PER_POST, campaignsOfPosts, labelCommands, labelQueries, labelsOfPosts, zLabelName } from './labels.ts';
 import { campaignFindings, type CampaignFinding } from './domain/campaign.ts';
 import { openCommentsOf } from './activity.ts';
@@ -62,7 +63,7 @@ import { reviewInboxQueries } from './review-inbox.ts';
 import { attentionInboxQueries } from './attention-inbox.ts';
 import { clientOverviewQueries } from './client-overview.ts';
 import { libraryQueries, refuseHiddenMedia } from './library.ts';
-import { postFilterQuery } from './post-filter.ts';
+import { membersOutside, postFilterQuery } from './post-filter.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { stockPhotoCommands } from './stock-photos.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
@@ -1795,8 +1796,9 @@ export const postList = defineQuery({
     connectionId: zId.optional(),
     // Posts with this label (#639).
     labelId: zId.optional(),
-    // Posts assigned to the viewer (#640).
-    assignee: z.literal('me').optional(),
+    // Posts assigned to the viewer (#640) or to a member (#1300); posts written by the viewer or a member (#1300).
+    assignee: zSocialMemberFilter.optional(),
+    author: zSocialMemberFilter.optional(),
     // Drafts with no planned time and no channel time (#1145), the calendar's side list.
     undated: z.literal(true).optional(),
     // Archived posts only (#1299); without it, the lists leave them out.
@@ -1813,6 +1815,8 @@ export const postList = defineQuery({
     // looks at those variants only; a channel they may not use lists nothing.
     const scope = await channelScope(ctx);
     if (input.connectionId && scope !== null && !scope.has(input.connectionId)) return [];
+    // Whose posts (#1300): only a member of the org, so an id from elsewhere is said, not answered with an empty list.
+    if ((await membersOutside(ctx, input)).length > 0) throw new DomainError('MEMBER_NOT_FOUND', 404, 'Không tìm thấy thành viên này trong tổ chức');
     let q = postFilterQuery(ctx, scope, input);
     // Ordered and paged by the change time as the answer carries it (milliseconds), so a page boundary inside one
     // millisecond neither repeats nor skips a post.
@@ -1960,6 +1964,7 @@ export const socialCommands = [
   ...clientReviewCommands,
   ...assignCommands,
   ...snippetCommands,
+  ...savedViewCommands,
   ...labelCommands,
   ...bulkEditCommands,
   ...archiveCommands,
@@ -2036,4 +2041,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, queueOpenSlots, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...clientOverviewQueries, ...reportLinkQueries, ...notificationQueries, ...pushQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...periodSummaryQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, queueOpenSlots, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...savedViewQueries,...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...clientOverviewQueries, ...reportLinkQueries, ...notificationQueries, ...pushQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...periodSummaryQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];
