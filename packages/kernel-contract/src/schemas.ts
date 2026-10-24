@@ -1679,6 +1679,10 @@ export const SOCIAL_BULK_SKIP_REASONS = [
   'too_many_channels',
   'scheduled',
   'removing',
+  // Find and replace and adding a channel leave out an archived post (#1299): it is restored first. Archiving leaves out
+  // an open copy of an evergreen or recurring post, which holds its source's next repeat back.
+  'archived',
+  'repeat_copy',
 ] as const;
 export type SocialBulkSkipReason = (typeof SOCIAL_BULK_SKIP_REASONS)[number];
 const unique = (ids: readonly string[]) => new Set(ids).size === ids.length;

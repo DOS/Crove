@@ -322,12 +322,13 @@ export function regateValues(v: VariantRow): Record<string, unknown> {
 }
 
 // What the approval that completes the count sets: approved, or scheduled again for a variant a raised policy took out
-// of the schedule, when its kept time (or queue slot) is still ahead; past it, a person schedules it again.
-export function approvedValues(v: VariantRow, now: Date): Record<string, unknown> {
+// of the schedule, when its kept time (or queue slot) is still ahead; past it, a person schedules it again. Never
+// scheduled on an archived post (#1299): it stays approved, for a person to schedule once it is restored.
+export function approvedValues(v: VariantRow, now: Date, post: Pick<PostRow, 'archived_at'>): Record<string, unknown> {
   const status = step(v, { type: 'approve' });
   if (v.error_code !== POLICY_RAISED) return { status };
   const at = v.scheduled_at ?? v.queue_slot_at;
-  const back = v.error_action === 'reschedule' && at !== null && at.getTime() > now.getTime();
+  const back = post.archived_at === null && v.error_action === 'reschedule' && at !== null && at.getTime() > now.getTime();
   return { ...CLEAR_ERROR, status: back ? step({ id: v.id, status }, { type: 'schedule' }) : status };
 }
 

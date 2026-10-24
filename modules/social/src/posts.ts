@@ -863,7 +863,7 @@ export const variantDecide = defineCommand({
       // The approval that completes the count may put a variant a raised policy took out of the schedule back on it;
       // a request for changes or a rejection ends that.
       const values =
-        input.decision !== 'approved' ? { status, ...(v.error_code === POLICY_RAISED ? CLEAR_ERROR : {}) } : waiting.includes(v.id) ? { status } : approvedValues(v, ctx.now);
+        input.decision !== 'approved' ? { status, ...(v.error_code === POLICY_RAISED ? CLEAR_ERROR : {}) } : waiting.includes(v.id) ? { status } : approvedValues(v, ctx.now, post);
       await setVariant(ctx, v.id, values);
       if (values.status === 'scheduled') rescheduled.push(v.id);
     }

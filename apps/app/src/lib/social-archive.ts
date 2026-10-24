@@ -12,13 +12,23 @@ const IN_FLIGHT = ['publishing', 'processing', 'ambiguous', 'needs_attention'];
 // Waiting for its time: unscheduled first.
 const WAITING = ['scheduled', 'paused'];
 
-export type ArchiveBlock = 'in_flight' | 'scheduled' | 'removing';
+export type ArchiveBlock = 'in_flight' | 'scheduled' | 'editing' | 'removing';
+
+interface ArchiveVariant {
+  status: string;
+  // A raised approval count took it off its schedule, keeping its time to go back on it (#408).
+  error?: { code: string | null; action: string | null } | null;
+  liveEdit?: { state: string } | null;
+  removal?: { state: string } | null;
+}
 
 // Why the post cannot be archived now, as the server refuses it; null when it can. A takedown on its way (#860) is the
-// one the post page knows of (a person's ask not answered yet); a planned one is left for the server to say.
-export function archiveBlock(variants: readonly { status: string; removal?: { state: string } | null }[]): ArchiveBlock | null {
+// one the post page knows of (a person's ask not answered yet); a planned one, and an open copy of an evergreen or
+// recurring post, are left for the server to say.
+export function archiveBlock(variants: readonly ArchiveVariant[]): ArchiveBlock | null {
   if (variants.some((v) => IN_FLIGHT.includes(v.status))) return 'in_flight';
-  if (variants.some((v) => WAITING.includes(v.status))) return 'scheduled';
+  if (variants.some((v) => WAITING.includes(v.status) || (v.error?.code === 'POLICY_RAISED' && v.error.action === 'reschedule'))) return 'scheduled';
+  if (variants.some((v) => v.status === 'published' && v.liveEdit?.state === 'pending')) return 'editing';
   if (variants.some((v) => v.status === 'published' && v.removal?.state === 'pending')) return 'removing';
   return null;
 }

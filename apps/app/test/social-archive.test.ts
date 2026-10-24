@@ -32,6 +32,12 @@ describe('archiveBlock', () => {
     // Going out counts before a schedule elsewhere on the post.
     expect(archiveBlock([{ status: 'scheduled' }, { status: 'publishing' }])).toBe('in_flight');
     expect(archiveBlock([{ status: 'published', removal: { state: 'pending' } }])).toBe('removing');
+    // In review, keeping its time to go back on the schedule once a raised approval count is met.
+    expect(archiveBlock([{ status: 'in_review', error: { code: 'POLICY_RAISED', action: 'reschedule' } }])).toBe('scheduled');
+    expect(archiveBlock([{ status: 'in_review', error: { code: 'POLICY_RAISED', action: null } }])).toBeNull();
+    // A corrected text on its way to the platform (#1223).
+    expect(archiveBlock([{ status: 'published', liveEdit: { state: 'pending' } }])).toBe('editing');
+    expect(archiveBlock([{ status: 'published', liveEdit: { state: 'failed' } }])).toBeNull();
   });
 
   it('lets drafts, reviews, approvals, failures and history be archived', () => {
@@ -42,7 +48,7 @@ describe('archiveBlock', () => {
   });
 
   it('says why in both languages', () => {
-    for (const block of ['in_flight', 'scheduled', 'removing'] as const) {
+    for (const block of ['in_flight', 'scheduled', 'editing', 'removing'] as const) {
       expect(vi.social.archive.blocked[block]).toBeTruthy();
       expect(en.social.archive.blocked[block]).toBeTruthy();
     }

@@ -432,5 +432,119 @@ suite('social archived posts on PostgreSQL (#1299)', () => {
     expect(await remindersDue()).not.toContain(reviewing);
     const told = await admin(async (c) => (await c.query<{ n: string }>("SELECT count(*) AS n FROM crove_kernel.outbox_event WHERE org_id = $1 AND type LIKE 'social.review.remind%'", [o.orgId])).rows[0]?.n);
     expect(Number(told)).toBe(0);
+    const marked = (await audits(o, 'social.review.remind')).at(-1)?.detail;
+    expect(marked).toMatchObject({ post_id: reviewing, archived: true });
+    expect(marked?.variants).toHaveLength(1);
+  });
+
+  it('never puts an archived post back on the schedule when a raised approval count is met again', async () => {
+    const o = await org();
+    const variantOf = async (postId: string) => (await get(o, o.owner, postId)).variants[0] as PostView['variants'][number];
+    const statusOf = async (postId: string) => (await variantOf(postId)).status;
+    // Approved and scheduled, then taken back to review by a raised count, keeping its time (#408).
+    const kept = async (body: string) => {
+      const postId = await post(o, o.member, body);
+      await exec(o, o.member, 'social.post.submit', { postId });
+      const v = await variantOf(postId);
+      await exec(o, o.owner, 'social.variant.decide', { postId, decision: 'approved', variants: [{ variantId: v.id, revision: v.revision, contentHash: v.contentHash }] });
+      await exec(o, o.owner, 'social.variant.schedule', { postId, at: new Date(Date.now() + 2 * DAY).toISOString() });
+      return postId;
+    };
+    const byPolicy = await kept('Theo số người duyệt');
+    const byToggle = await kept('Theo bước khách duyệt');
+    const byClient = await kept('Theo câu trả lời của khách');
+    await exec(o, o.owner, 'social.channel.set_policy', { connectionId: o.conn, approvalsRequired: 2 });
+    for (const postId of [byPolicy, byToggle, byClient]) expect(await variantOf(postId)).toMatchObject({ status: 'in_review', error: { code: 'POLICY_RAISED', action: 'reschedule' } });
+    // Still meant to go out at its time: archiving is refused as for a scheduled post.
+    await expect(archive(o, o.member, byPolicy)).rejects.toMatchObject({ code: 'POST_ARCHIVE_SCHEDULED' });
+    expect((await exec<BulkArchiveResult>(o, o.owner, 'social.post.bulk_archive', { postIds: [byPolicy] })).skipped).toEqual([{ postId: byPolicy, reason: 'scheduled' }]);
+
+    // The client step on, and the second approval given: the two still wait for the client.
+    await exec(o, o.owner, 'social.channel.set_client_approval', { connectionId: o.conn, clientApproval: true });
+    for (const postId of [byToggle, byClient]) {
+      const v = await variantOf(postId);
+      await exec(o, o.admin, 'social.variant.decide', { postId, decision: 'approved', variants: [{ variantId: v.id, revision: v.revision, contentHash: v.contentHash }] });
+      expect(await statusOf(postId)).toBe('in_review');
+    }
+    // The client answers yes before the post is archived.
+    const { token } = await exec<{ token: string }>(o, o.owner, 'social.review_link.create', { postId: byClient });
+    await admin((c) => c.query('SELECT crove_social.review_feedback_add($1, $2, $3, $4)', [token, 'Chị Lan (khách)', 'approved', null]));
+    // Archived some other way than the command (it refuses these): the second guard holds on its own.
+    await admin((c) => c.query('UPDATE crove_social.post SET archived_at = now(), archived_by = $2 WHERE org_id = $1 AND id = ANY($3::uuid[])', [o.orgId, o.owner, [byPolicy, byToggle, byClient]]));
+
+    const event = await admin(
+      async (c) => (await c.query<{ id: string }>("SELECT id FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.review.answered' ORDER BY created_at DESC, id DESC LIMIT 1", [o.orgId])).rows[0]?.id,
+    );
+    const settled = await worker.execute<{ settled: string[] }>('social.review.client_settle', { eventId: event as string }, { actor: system, orgId: o.orgId });
+    expect(settled.settled).toHaveLength(1);
+    expect(await statusOf(byClient)).toBe('approved');
+    await exec(o, o.owner, 'social.channel.set_client_approval', { connectionId: o.conn, clientApproval: false });
+    expect(await statusOf(byToggle)).toBe('approved');
+    await exec(o, o.owner, 'social.channel.set_policy', { connectionId: o.conn, approvalsRequired: 1 });
+    expect(await statusOf(byPolicy)).toBe('approved');
+    // Nothing went back on the schedule, so nothing is due for the publisher.
+    const scheduled = await admin(
+      async (c) => (await c.query<{ n: string }>("SELECT count(*) AS n FROM crove_social.post_variant WHERE org_id = $1 AND post_id = ANY($2::uuid[]) AND status = 'scheduled'", [o.orgId, [byPolicy, byToggle, byClient]])).rows[0]?.n,
+    );
+    expect(Number(scheduled)).toBe(0);
+  });
+
+  it('refuses archiving while a corrected text is on its way, and the correction of an archived post', async () => {
+    const o = await org();
+    const out = await post(o, o.member, 'Đã đăng, đang sửa');
+    await publish(o, out);
+    await admin((c) =>
+      c.query(
+        "UPDATE crove_social.post_variant SET edit_state = 'pending', edit_body = 'Nội dung đã sửa', edit_content_hash = 'sha256:' || repeat('a', 64), edit_requested_at = now(), edit_requested_by = $3 WHERE org_id = $1 AND post_id = $2",
+        [o.orgId, out, o.owner],
+      ),
+    );
+    await expect(archive(o, o.owner, out)).rejects.toMatchObject({ code: 'POST_ARCHIVE_EDITING' });
+    expect((await exec<BulkArchiveResult>(o, o.owner, 'social.post.bulk_archive', { postIds: [out] })).skipped).toEqual([{ postId: out, reason: 'in_flight' }]);
+    // Once the platform's answer is in (here: refused), the post may be archived, and is not corrected from the archive.
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET edit_state = 'failed', edit_error_code = 'X' WHERE org_id = $1 AND post_id = $2", [o.orgId, out]));
+    await archive(o, o.owner, out);
+    const v = (await get(o, o.owner, out)).variants[0] as PostView['variants'][number];
+    await expect(exec(o, o.owner, 'social.variant.edit_published', { variantId: v.id, revision: v.revision, body: 'Sửa lại lần nữa' })).rejects.toMatchObject({ code: 'POST_ARCHIVED' });
+  });
+
+  it('leaves archived posts out of find and replace and of a channel added to many posts', async () => {
+    const o = await org();
+    const second = await channel(o.orgId, o.owner, 'Kênh thứ hai');
+    const live = await post(o, o.member, 'Mã KM2026 cho mọi người');
+    const archived = await post(o, o.member, 'Mã KM2026 đã cất');
+    await archive(o, o.member, archived);
+    const replaced = await exec<BulkArchiveResult>(o, o.member, 'social.post.bulk_replace', { postIds: [live, archived], find: 'KM2026', replace: 'HE2026' });
+    expect(replaced).toEqual({ done: [live], skipped: [{ postId: archived, reason: 'archived' }] });
+    const preview = await query<{ posts: { postId: string; skip: string | null }[] }>(o, o.member, 'social.post.bulk_replace_preview', { postIds: [archived], find: 'KM2026', replace: 'HE2026' });
+    expect(preview.posts).toEqual([expect.objectContaining({ postId: archived, skip: 'archived' })]);
+    const added = await exec<BulkArchiveResult>(o, o.member, 'social.post.bulk_add_channel', { postIds: [live, archived], connectionId: second });
+    expect(added.done).toEqual([live]);
+    expect(added.skipped).toEqual([{ postId: archived, reason: 'archived' }]);
+    expect((await get(o, o.owner, archived)).variants).toHaveLength(1);
+  });
+
+  it('refuses archiving an open repost of an evergreen post or an open copy of a series, which would stall its source', async () => {
+    const o = await org();
+    const evergreen = await post(o, o.member, 'Bài đăng lại mãi');
+    await publish(o, evergreen, new Date(Date.now() - 40 * DAY));
+    await exec(o, o.member, 'social.post.set_evergreen', { postId: evergreen, days: 30 });
+    const repost = (await worker.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId: evergreen }, { actor: system, orgId: o.orgId })).postId as string;
+    expect(repost).toBeTruthy();
+    await expect(archive(o, o.member, repost)).rejects.toMatchObject({ code: 'POST_ARCHIVE_REPEAT_COPY' });
+    expect((await exec<BulkArchiveResult>(o, o.owner, 'social.post.bulk_archive', { postIds: [repost] })).skipped).toEqual([{ postId: repost, reason: 'repeat_copy' }]);
+
+    const series = await post(o, o.member, 'Bài lặp mỗi ngày');
+    await publish(o, series, new Date(Date.now() - DAY));
+    await exec(o, o.member, 'social.post.recurrence_set', { postId: series, recurrence: { everyWeeks: 1, weekdays: [0, 1, 2, 3, 4, 5, 6], time: '09:00', until: null, times: null } });
+    const copy = (await worker.execute<{ postId: string | null }>('social.recurring.next', { postId: series }, { actor: system, orgId: o.orgId })).postId as string;
+    expect(copy).toBeTruthy();
+    await expect(archive(o, o.member, copy)).rejects.toMatchObject({ code: 'POST_ARCHIVE_REPEAT_COPY' });
+
+    // Once the source no longer repeats, the copy holds nothing back and may be archived.
+    await exec(o, o.member, 'social.post.set_evergreen', { postId: evergreen, days: null });
+    await exec(o, o.member, 'social.post.recurrence_clear', { postId: series });
+    expect((await archive(o, o.member, repost)).changed).toBe(true);
+    expect((await archive(o, o.member, copy)).changed).toBe(true);
   });
 });

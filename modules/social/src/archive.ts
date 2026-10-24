@@ -10,10 +10,13 @@
 // Who: members archive and restore their own posts (the author), owners and admins any post. A member limited to some
 // channels (#1081) only a post wholly on theirs: archiving hides the post's every channel from everyone.
 //
-// Refused, so nothing in motion disappears: a channel scheduled or paused waiting to go out (unschedule it first), one
-// going out or waiting for a person (publishing, processing, ambiguous, needs_attention), and a published channel whose
-// takedown from its platform is on its way (a person's ask the platform has not answered yet, or a planned takedown,
-// #861, that will still be asked for).
+// Refused, so nothing in motion disappears: a channel scheduled or paused waiting to go out (unschedule it first), or in
+// review keeping its time to go back on the schedule once a raised approval count is met (#408); one going out or
+// waiting for a person (publishing, processing, ambiguous, needs_attention); a published channel whose corrected text
+// is on its way to the platform (#1223); and one whose takedown from its platform is on its way (a person's ask the
+// platform has not answered yet, or a planned takedown, #861, that will still be asked for). Also an open copy of a repeat:
+// a repost of an evergreen post, or a copy of a series still running, whose open state holds the next repost or copy
+// back (the worker's scans, evergreen_due and recurring_due, wait for it); such a copy is cancelled instead.
 //
 // Archiving also stops what would bring the post back on its own: its evergreen reposts and its repeat on weekdays are
 // turned off (a restore leaves them off), and its open review links, of the post alone and of plans that include it,
@@ -28,8 +31,9 @@ import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-r
 import { REMOVE_READY, isProvider, removeAtFit, removeAtOf } from './domain/channels.ts';
 import { IN_FLIGHT } from './domain/state.ts';
 import { channelScope, postsInScope, refusePostWholly } from './channel-access.ts';
+import { editCallsOf, editState } from './edit-published.ts';
 import { removeCallsOf, removeState } from './remove.ts';
-import { lockPost, lockVariants, settingsOf, type VariantRow } from './variants.ts';
+import { POLICY_RAISED, lockPost, lockVariants, settingsOf, type VariantRow } from './variants.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 
@@ -88,6 +92,45 @@ async function removing(ctx: CommandContext, variants: readonly VariantRow[]): P
     .map((v) => v.id);
 }
 
+// A published channel whose correction (#1223) the platform has not answered yet.
+async function editing(ctx: CommandContext, variants: readonly VariantRow[]): Promise<string[]> {
+  const published = variants.filter((v) => v.status === 'published');
+  if (published.length === 0) return [];
+  const rows = await ctx.trx
+    .selectFrom('crove_social.post_variant')
+    .select(['id', 'edit_state', 'edit_requested_at', 'edit_error_code'])
+    .where('org_id', '=', ctx.orgId)
+    .where(
+      'id',
+      'in',
+      published.map((v) => v.id),
+    )
+    .execute();
+  const asked = rows.filter((r) => r.edit_state !== null && r.edit_requested_at !== null);
+  if (asked.length === 0) return [];
+  const calls = await editCallsOf(ctx.trx, ctx.orgId, published);
+  return asked.filter((r) => editState(calls.get(r.id) ?? [], r, ctx.now)?.state === 'pending').map((r) => r.id);
+}
+
+// A copy whose open state holds its source's next repeat back, as the worker's scans read it: a repost of a post still
+// evergreen that has not ended (published, partly, failed or cancelled), or a copy of a series still running with a
+// channel not done (published, failed, cancelled or removed).
+async function openRepeatCopy(ctx: CommandContext, postId: string): Promise<boolean> {
+  const { rows } = await sql<{ open: boolean }>`
+    SELECT EXISTS (
+      SELECT 1 FROM crove_social.post c
+      JOIN crove_social.post s ON s.org_id = c.org_id AND s.id = c.repost_of
+      WHERE c.org_id = ${ctx.orgId}::uuid AND c.id = ${postId}::uuid AND s.evergreen_days IS NOT NULL
+        AND c.status NOT IN ('published', 'partially_published', 'failed', 'cancelled')
+    ) OR EXISTS (
+      SELECT 1 FROM crove_social.post c
+      JOIN crove_social.post s ON s.org_id = c.org_id AND s.id = c.recurrence_source_id
+      WHERE c.org_id = ${ctx.orgId}::uuid AND c.id = ${postId}::uuid AND s.recurrence IS NOT NULL
+        AND EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = c.org_id AND v.post_id = c.id AND v.status NOT IN ('published', 'failed', 'cancelled', 'removed'))
+    ) AS open`.execute(ctx.trx);
+  return rows[0]?.open === true;
+}
+
 export const postArchive = defineCommand({
   name: 'social.post.archive',
   input: zSocialPostArchive,
@@ -101,8 +144,13 @@ export const postArchive = defineCommand({
     const variants = await lockVariants(ctx.trx, ctx.orgId, post.id);
     const moving = variants.filter((v) => IN_FLIGHT.has(v.status)).map((v) => v.id);
     if (moving.length > 0) throw new DomainError('POST_ARCHIVE_IN_FLIGHT', 409, 'Bài có kênh đang đăng hoặc đang chờ người xử lý; hãy xử lý xong rồi lưu trữ', { variantIds: moving });
-    const waiting = variants.filter((v) => WAITING.has(v.status)).map((v) => v.id);
+    // Also one in review that a raised approval count took off its schedule, keeping its time to go back on it once the
+    // approvals are in (#408): it is still meant to go out at that time.
+    const waiting = variants.filter((v) => WAITING.has(v.status) || (v.error_code === POLICY_RAISED && v.error_action === 'reschedule')).map((v) => v.id);
     if (waiting.length > 0) throw new DomainError('POST_ARCHIVE_SCHEDULED', 409, 'Bài có kênh đã lên lịch đăng; hãy bỏ lịch đăng rồi lưu trữ', { variantIds: waiting });
+    const correcting = await editing(ctx, variants);
+    if (correcting.length > 0) throw new DomainError('POST_ARCHIVE_EDITING', 409, 'Bài có kênh đang chờ nền tảng nhận nội dung đã sửa; hãy đợi xong rồi lưu trữ', { variantIds: correcting });
+    if (await openRepeatCopy(ctx, post.id)) throw new DomainError('POST_ARCHIVE_REPEAT_COPY', 409, 'Bài này là một lần đăng lại hoặc một lần lặp đang chờ; lưu trữ sẽ làm bài gốc dừng lặp, hãy hủy bài thay vì lưu trữ');
     const takedown = await removing(ctx, variants);
     if (takedown.length > 0) throw new DomainError('POST_ARCHIVE_REMOVING', 409, 'Bài có kênh đang chờ gỡ khỏi nền tảng; hãy đợi gỡ xong rồi lưu trữ', { variantIds: takedown });
     const before = await ctx.trx.selectFrom('crove_social.post').select(['evergreen_days', 'recurrence']).where('org_id', '=', ctx.orgId).where('id', '=', post.id).executeTakeFirstOrThrow();
@@ -149,6 +197,8 @@ const LEFT_OUT: Readonly<Partial<Record<string, SocialBulkSkipReason>>> = {
   CHANNEL_NOT_ALLOWED: 'not_allowed',
   POST_NOT_FOUND: 'not_found',
   POST_ARCHIVE_IN_FLIGHT: 'in_flight',
+  POST_ARCHIVE_EDITING: 'in_flight',
+  POST_ARCHIVE_REPEAT_COPY: 'repeat_copy',
   POST_ARCHIVE_SCHEDULED: 'scheduled',
   POST_ARCHIVE_REMOVING: 'removing',
 };

@@ -182,7 +182,7 @@ export const policySet = defineCommand({
         if (v.status === 'in_review' && given.length >= input.approvalsRequired) {
           if (isBlocked(banned, base(post), v)) continue;
           if (checkedApprovers(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }, checklist).length < input.approvalsRequired) continue;
-          const values = approvedValues(v, ctx.now);
+          const values = approvedValues(v, ctx.now, post);
           await setVariant(ctx, v.id, values);
           up.push(v.id);
           if (values.status === 'scheduled') rescheduled.push(v.id);
@@ -418,7 +418,7 @@ export const clientApprovalSet = defineCommand({
         for (const v of variants) {
           if (checkedApprovers(decisions.get(v.id) ?? [], { revision: v.revision, contentHash: v.content_hash }, checklist).length < required) continue;
           if (isBlocked(banned, base(post), v)) continue;
-          const values = approvedValues(v, ctx.now);
+          const values = approvedValues(v, ctx.now, post);
           await setVariant(ctx, v.id, values);
           up.push(v.id);
           if (values.status === 'scheduled') scheduled.push(v.id);
