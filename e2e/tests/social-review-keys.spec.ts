@@ -68,11 +68,17 @@ test('approves three posts with a checklist in a row from the keyboard and lands
   await expect(panel.getByTestId('review-shortcuts')).toContainText('J hoặc N sang bài tiếp');
   await expect(panel.getByRole('button', { name: 'Duyệt và sang bài tiếp' })).toBeDisabled();
 
-  // J and K move along the list, in its order, and back.
-  await page.locator('body').press('j');
-  await expect(page).toHaveURL(new RegExp(`/social/${order[1]}$`));
-  await page.locator('body').press('k');
-  await expect(page).toHaveURL(new RegExp(`/social/${order[0]}$`));
+  // J and K move along the list, in its order, and back. A key pressed before the opened post has read the review
+  // list does nothing (there is no next or previous yet), so it is pressed again until the page moves (#1252); only
+  // while the page is still on the post it leaves, so a slow move is never taken twice.
+  const move = async (key: string, from: string, to: string) => {
+    await expect(async () => {
+      if (new URL(page.url()).pathname.endsWith(`/social/${from}`)) await page.locator('body').press(key);
+      await expect(page).toHaveURL(new RegExp(`/social/${to}$`), { timeout: 1_500 });
+    }).toPass({ timeout: 15_000 });
+  };
+  await move('j', order[0] as string, order[1] as string);
+  await move('k', order[1] as string, order[0] as string);
 
   // Typed in a field, the shortcuts are text: R puts the focus in the reason, where "a", "j" and "r" are typed.
   await expect(panel.getByRole('checkbox').first()).toBeVisible();
