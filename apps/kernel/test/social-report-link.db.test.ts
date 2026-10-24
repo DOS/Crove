@@ -637,11 +637,27 @@ suite('social report links on PostgreSQL (#643)', () => {
     const p3 = (await view(now.token)) as unknown as { channels: { posts: number; previous: unknown }[]; previous: unknown };
     expect(p3.previous).toBeNull();
     expect(p3.channels.map((c) => [c.posts, c.previous])).toEqual([[5, null]]);
+    // Without the reels section, the Reels watch time is counted nowhere: not in the totals, the channels, the period
+    // before or the best posts.
+    await published(o, fb, 'Reel có thời gian xem', '2026-10-20T03:00:00Z', { reach: 5, reactions: 1, totalWatchTimeMs: 123_456, avgWatchTimeMs: 4_000 });
+    await published(o, fb, 'Reel tháng trước', '2026-09-21T03:00:00Z', { reach: 5, totalWatchTimeMs: 654_321 });
+    const noReels = await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, sections: ['top', 'totals'], topCount: 20 });
+    const p4 = (await view(noReels.token)) as unknown as Record<string, unknown> & { top: { excerpt: string }[] };
+    expect(p4.top.map((p) => p.excerpt)).toContain('Reel có thời gian xem');
+    expect(p4.reels).toBeNull();
+    expect(JSON.stringify(p4)).not.toContain('totalWatchTimeMs');
+    expect(JSON.stringify(p4)).not.toContain('123456');
+    const withEverything = (await view((await exec<{ token: string }>(o, o.owner, 'social.report_link.create', { ...OCT, sections: ['top', 'totals', 'channels', 'comparison', 'reels'] })).token)) as unknown as {
+      totals: Record<string, number>;
+      channels: { previous: { totals: Record<string, number> } }[];
+    };
+    expect(withEverything.totals.totalWatchTimeMs).toBe(123_456);
+    expect(withEverything.channels[0]?.previous.totals.totalWatchTimeMs).toBe(654_321);
   });
 
   it('keeps the sections to the allowed values, each once, the best posts to 3 to 20, and the audience to its section (#1259)', async () => {
     const o = await org();
-    for (const sections of [[], ['top', 'top'], ['secret']]) await expect(exec(o, o.owner, 'social.report_link.create', { ...OCT, sections })).rejects.toMatchObject({ status: 422 });
+    for (const sections of [[], ['top', 'top'], ['secret'], ['comparison'], ['stories', 'clicks']]) await expect(exec(o, o.owner, 'social.report_link.create', { ...OCT, sections })).rejects.toMatchObject({ status: 422 });
     for (const topCount of [2, 21]) await expect(exec(o, o.owner, 'social.report_link.create', { ...OCT, topCount })).rejects.toMatchObject({ status: 422 });
     await expect(exec(o, o.owner, 'social.report_link.create', { ...OCT, sections: ['top'], includeAudience: true })).rejects.toMatchObject({ code: 'VALIDATION' });
     const ok = await exec<{ linkId: string }>(o, o.owner, 'social.report_link.create', { ...OCT, sections: ['audience', 'top'], includeAudience: true, topCount: 20 });

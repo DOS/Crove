@@ -18,7 +18,7 @@ import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName } from '../lib/social.ts';
-import { defaultSections, parseRecipients, sectionsOf, topCountOf } from '../lib/social-report.ts';
+import { defaultSections, hasBlock, parseRecipients, sectionsOf, topCountOf } from '../lib/social-report.ts';
 import { useLabels } from './social-labels.tsx';
 import { ReportSectionsPicker } from './social-report-sections.tsx';
 
@@ -88,7 +88,7 @@ export function ScheduleForm({ channels, onDone }: { channels: readonly { id: st
     else next.add(id);
     setPicked(next);
   };
-  const ok = name.trim().length > 0 && parsed.valid.length > 0 && parsed.valid.length <= 10 && parsed.invalid.length === 0 && chosen?.length !== 0;
+  const ok = name.trim().length > 0 && parsed.valid.length > 0 && parsed.valid.length <= 10 && parsed.invalid.length === 0 && hasBlock(sections);
   return (
     <div className="space-y-3 rounded-lg border p-3">
       <div className="grid gap-3 sm:grid-cols-2">

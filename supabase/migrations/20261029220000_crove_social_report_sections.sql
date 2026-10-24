@@ -27,8 +27,8 @@
 --                                the link does not choose is not worked out and comes back as null ('note', 'goals',
 --                                'totals' with 'rateBases', 'previous' and each channel's 'previous', 'channels', 'top',
 --                                'reels', 'audience'); without the period before, no channel is listed for it alone;
---                                without stories no Story count, and without clicks no 'linkClicks', is counted
---                                anywhere; the best posts are top_count long; and a 'sections' key returns the link's
+--                                without stories no Story count, without reels no 'totalWatchTimeMs', and without
+--                                clicks no 'linkClicks', is counted anywhere; the best posts are top_count long; and a 'sections' key returns the link's
 --                                list (null for every section). A link without sections gives exactly the previous
 --                                output but for 'sections'.
 SET LOCAL lock_timeout = '2s';
@@ -178,6 +178,8 @@ BEGIN
                       'totalWatchTimeMs')
         -- The Story counts (STORY_METRIC_NAMES) only with the stories section (#1259).
         AND ('stories' = ANY (v_sections) OR e.key NOT IN ('replies', 'tapsForward', 'tapsBack', 'exits', 'nextStory', 'follows', 'profileVisits'))
+        -- The Reels watch time only with the reels section (#1259).
+        AND ('reels' = ANY (v_sections) OR e.key <> 'totalWatchTimeMs')
       UNION ALL
       -- The clicks on Crove's short links (#706) of what went out, every revision of it, on the days (UTC) whose midday is
       -- in its period (clicks are kept by UTC day; a period is in the org's own zone). Not part of a post's score: a

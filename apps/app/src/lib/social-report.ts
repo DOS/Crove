@@ -91,6 +91,9 @@ export function sectionsOf(draft: SectionsDraft): ReportSection[] | null {
   return all ? null : [...blocks, ...extras];
 }
 
+// Whether the draft shows anything: at least one block, since the extras alone make an empty report.
+export const hasBlock = (draft: SectionsDraft): boolean => draft.order.some((b) => draft.on.has(b));
+
 // The best posts' count to save: null for the default, so an untouched form saves the report as before.
 export const topCountOf = (draft: SectionsDraft): number | null => (draft.topCount === REPORT_TOP_DEFAULT || !draft.on.has('top') ? null : draft.topCount);
 

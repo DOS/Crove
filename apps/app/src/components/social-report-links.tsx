@@ -20,7 +20,7 @@ import { ErrorText } from './ui.tsx';
 import { useLabels } from './social-labels.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
-import { defaultSections, lastMonth, reportPeriod, reportUrl, sectionsOf, topCountOf } from '../lib/social-report.ts';
+import { defaultSections, hasBlock, lastMonth, reportPeriod, reportUrl, sectionsOf, topCountOf } from '../lib/social-report.ts';
 import { ReportSectionsPicker } from './social-report-sections.tsx';
 import { labelPeriod } from '../lib/social-labels.ts';
 import { providerName } from '../lib/social.ts';
@@ -230,7 +230,7 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
       </div>
       <ReportSectionsPicker id="report-sections" value={sections} onChange={setSections} />
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={!range || chosen?.length === 0 || create.isPending} onClick={() => create.mutate()}>
+        <Button size="sm" disabled={!range || !hasBlock(sections) || create.isPending} onClick={() => create.mutate()}>
           {t('create')}
         </Button>
         {!range && <span className="text-xs text-warning">{t('periodInvalid')}</span>}

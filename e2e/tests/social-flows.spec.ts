@@ -933,7 +933,7 @@ test('makes a client report link without the best posts and the audience, which 
   await sections.getByRole('button', { name: 'Đưa phần Số liệu từng kênh lên' }).click();
   await panel.getByRole('button', { name: 'Tạo liên kết báo cáo' }).click();
   const link = await panel.getByLabel('Liên kết báo cáo').inputValue();
-  await expect(panel.getByText('chọn 8 phần')).toBeVisible();
+  await expect(panel.getByText('8 phần đã chọn')).toBeVisible();
   const guest = await browser.newContext({ timezoneId: TIME_ZONE });
   try {
     const client = await guest.newPage();

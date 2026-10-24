@@ -1947,7 +1947,9 @@ export const zSocialReportSections = z
   .array(z.enum(SOCIAL_REPORT_SECTIONS))
   .min(1)
   .max(SOCIAL_REPORT_SECTIONS.length)
-  .refine((list) => new Set(list).size === list.length, 'each section at most once');
+  .refine((list) => new Set(list).size === list.length, 'each section at most once')
+  // An extra alone (the period before, the Story counts, the short link clicks) would make an empty report.
+  .refine((list) => list.some((s) => s !== 'comparison' && s !== 'stories' && s !== 'clicks'), 'at least one section of the page');
 export const zSocialReportTopCount = z.number().int().min(3).max(20);
 
 // A client report link of a period (#643); its token is in the create answer only.

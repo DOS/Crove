@@ -6,7 +6,7 @@ import { Button } from '@crove/ui/components/button';
 import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
-import { REPORT_EXTRAS, moveBlock, type ReportSection, type SectionsDraft } from '../lib/social-report.ts';
+import { REPORT_EXTRAS, hasBlock, moveBlock, type ReportSection, type SectionsDraft } from '../lib/social-report.ts';
 
 export function ReportSectionsPicker({ id, value, onChange }: { id: string; value: SectionsDraft; onChange: (next: SectionsDraft) => void }) {
   const t = useTranslations('social.reportSections');
@@ -16,7 +16,8 @@ export function ReportSectionsPicker({ id, value, onChange }: { id: string; valu
     else next.delete(section);
     onChange({ ...value, on: next });
   };
-  const none = !value.order.some((b) => value.on.has(b)) && !REPORT_EXTRAS.some((e) => value.on.has(e));
+  // The extras alone show nothing: at least one block.
+  const none = !hasBlock(value);
   return (
     <fieldset className="space-y-2">
       <legend className="text-sm font-medium text-foreground">{t('title')}</legend>

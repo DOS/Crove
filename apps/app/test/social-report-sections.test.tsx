@@ -111,6 +111,9 @@ describe('client report sections (#1259)', () => {
       expect(html).toContain('value="5"');
       const off = render(locale, <ReportSectionsPicker id="x" value={draftOf(['note'], null)} onChange={() => undefined} />, () => undefined);
       expect(off).not.toContain('id="x-top"');
+      expect(off).not.toContain(escaped(t.reportSections.none));
+      // The extras alone would make an empty report: the picker says to choose a section.
+      expect(render(locale, <ReportSectionsPicker id="x" value={draftOf(['comparison', 'stories'], null)} onChange={() => undefined} />, () => undefined)).toContain(escaped(t.reportSections.none));
     });
 
     it(`gives a schedule a note, a label and the sections, and lists what a schedule carries (${locale})`, () => {

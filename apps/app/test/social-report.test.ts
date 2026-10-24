@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { REPORT_BLOCKS, defaultSections, draftOf, lastMonth, moveBlock, pageBlocks, parseRecipients, reportPeriod, reportUrl, sectionsOf, topCountOf } from '../src/lib/social-report.ts';
+import { REPORT_BLOCKS, defaultSections, draftOf, hasBlock, lastMonth, moveBlock, pageBlocks, parseRecipients, reportPeriod, reportUrl, sectionsOf, topCountOf } from '../src/lib/social-report.ts';
 
 describe('client report links (#643)', () => {
   it('suggests the previous calendar month, across a year end', () => {
@@ -59,6 +59,9 @@ describe('client report sections (#1259)', () => {
     // Without the best posts, no count.
     expect(topCountOf({ ...fewer, on: new Set(['note'] as const) })).toBeNull();
     expect(sectionsOf({ ...d, on: new Set() })).toEqual([]);
+    // The extras alone make an empty report: the form needs a block.
+    expect(hasBlock({ ...d, on: new Set(['comparison', 'stories', 'clicks'] as const) })).toBe(false);
+    expect(hasBlock(fewer)).toBe(true);
   });
 
   it('reads a saved list back into the form, and moves a block within bounds', () => {

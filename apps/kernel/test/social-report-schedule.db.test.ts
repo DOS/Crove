@@ -335,7 +335,7 @@ suite('scheduled client report mail on PostgreSQL (#704)', () => {
   it('keeps a schedule to the allowed sections and best posts, and lets the tenant role write its new columns (#1259)', async () => {
     const o = await org();
     const recipients = ['k@example.vn'];
-    for (const bad of [{ sections: [] }, { sections: ['note', 'note'] }, { topCount: 21 }, { note: 'x'.repeat(2001) }]) {
+    for (const bad of [{ sections: [] }, { sections: ['note', 'note'] }, { sections: ['comparison'] }, { topCount: 21 }, { note: 'x'.repeat(2001) }]) {
       await expect(exec(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients, ...bad })).rejects.toMatchObject({ status: 422 });
     }
     const { scheduleId } = await exec<{ scheduleId: string }>(o, o.owner, 'social.report_schedule.save', { ...weekly, recipients });
