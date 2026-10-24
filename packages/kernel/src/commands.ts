@@ -28,7 +28,7 @@ import {
 } from '@crove/kernel-runtime';
 import { agentCommands } from './agents.ts';
 import { channelCommands } from './channels.ts';
-import { actorRef, addAuthor, decideApproval, eligibleApprovers, parseAuthors } from './approval.ts';
+import { actorRef, addAuthor, decideApproval, eligibleApprovers, LEDGER_APPROVE_PERMISSION, parseAuthors } from './approval.ts';
 import { archiveCommands } from './archives.ts';
 import { imageSizeCommands } from './image-sizes.ts';
 import { fileHoldCommands } from './evidence-holds.ts';
@@ -46,6 +46,7 @@ import { setAddress, setContactEmail } from './org-address.ts';
 import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 import { legalEntityCommands } from './legal-entities.ts';
+import { roleCommands } from './roles.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
 import { PROPOSAL_PREPARERS, REQUESTABLE, resubmitProposal, zPreparedProposal } from './proposal-resubmit.ts';
 import { usageCommands } from './usage-limits.ts';
@@ -67,9 +68,10 @@ const PROPOSAL_COMMANDS = new Set([
 ]);
 // The proposals a user may ask for and their preparers: PROPOSAL_PREPARERS in proposal-resubmit.ts.
 const ADMINS = ['owner', 'admin'] as const;
-// Approving executes an R3 command that posts to the ledger, so only roles that may post approve.
-// The role model has no finance roles yet; owner and admin are the roles that may post today. This is the
-// coarse gate; the approval policy in approval.ts (snapshot, live role, four-eyes) decides per proposal.
+// Approving executes an R3 command that posts to the ledger, so only roles that may post approve: owner and admin,
+// and a member holding the approval permission through an org-wide role assignment (the commands' `permission`,
+// #1279). This is the coarse gate; the approval policy in approval.ts (snapshot, live role or permission, four-eyes)
+// decides per proposal.
 const APPROVERS = ADMINS;
 
 const zLineAccounts = z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).max(1000);
@@ -548,6 +550,8 @@ export const approveProposal = defineCommand({
   }),
   risk: 'R3',
   access: APPROVERS,
+  // A chief accountant (an org-wide role assignment holding it, #1279) passes this gate too; P12 still decides.
+  permission: LEDGER_APPROVE_PERMISSION,
   target: (input) => ({ type: 'kernel.proposal', id: input.id }),
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
@@ -719,6 +723,8 @@ export const approveProposals = defineCommand({
   input: z.object({ items: zBulkApproveItems }),
   risk: 'R3',
   access: APPROVERS,
+  // A chief accountant (an org-wide role assignment holding it, #1279) passes this gate too; P12 still decides.
+  permission: LEDGER_APPROVE_PERMISSION,
   handler: async (ctx, input): Promise<{ results: BulkApproveResult[] }> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới duyệt được');
     // The voucher type of each voucher item, read without a lock: a pending voucher is never edited, so its type stays.
@@ -904,6 +910,7 @@ const otherKernelCommands = [
   setTaxCode,
   setVatFilingPeriod,
   ...legalEntityCommands,
+  ...roleCommands,
   setAddress,
   setContactEmail,
   queueContactMail,

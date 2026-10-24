@@ -46,7 +46,6 @@ const PENDING_TABLES = new Set<string>([
   'crove_crm.event_type',
   'crove_kernel.availability_rule',
   'crove_kernel.calendar_event',
-  'crove_kernel.role_assignment',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;

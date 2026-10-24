@@ -177,6 +177,7 @@ import { zFixedAsset, zFixedAssetCreate, zFixedAssetEnd } from './fixed-asset.ts
 import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts';
 import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
+import { zMemberRoles, zRoleAssignInput } from './roles.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
@@ -260,6 +261,11 @@ export const contract = {
       .input(z.object({ userId: zId, role: zRole, idempotencyKey: zId }))
       .output(z.object({ userId: zId, role: zRole, previousRole: zRole })),
     removeMember: oc.input(z.object({ userId: zId, idempotencyKey: zId })).output(z.object({ userId: zId, previousRole: zRole })),
+    // Role assignments (issue #1279): owners and admins read the roles the deployment offers and who holds which; owners
+    // grant and revoke (R3: fresh MFA). A retry with the same idempotencyKey returns the first result.
+    memberRoles: oc.output(zMemberRoles),
+    assignRole: oc.input(zRoleAssignInput.extend({ idempotencyKey: zId })).output(z.object({ assignmentId: zId, created: z.boolean() })),
+    revokeRole: oc.input(z.object({ assignmentId: zId, idempotencyKey: zId })).output(z.object({ assignmentId: zId })),
     // Owner only (R3, issue #38): the owner types the org's slug to confirm. The org moves to 'offboarding', where only
     // owners can enter it, and the worker exports its data. Run again while offboarding, it asks for a new export.
     offboard: oc
