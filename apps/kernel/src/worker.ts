@@ -29,6 +29,7 @@ import { MISSING_INVOICE_SWEEP_MS, sweepMissingInvoiceReminders } from './missin
 import { ExportSealer } from './export-seal.ts';
 import { JOB_SCHEMA, QUEUES, SOCIAL_PUBLISH_QUEUES, socialPublishQueue } from './jobs-schema.ts';
 import { runLinkPreviewJob } from './link-preview.ts';
+import { runPushJob, type PushSender } from './web-push.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { archiveOutbox } from './outbox-retention.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
@@ -115,6 +116,13 @@ interface LinkPreviewJob {
   previewId: string;
 }
 const LINK_PREVIEW_RETRY_LIMIT = 2;
+
+interface PushJob {
+  orgId: string;
+  notificationId: string;
+}
+// A push job may run this long (pg-boss expires it after): each post has its own 10-second deadline.
+const PUSH_JOB_EXPIRE_SECONDS = 120;
 
 interface ChannelOptionJob {
   orgId: string;
@@ -228,6 +236,9 @@ export interface WorkerDeps {
   // Queued mail (#548): the mailer, the templates queued mail is rendered from, and the bounce domain. Unset: queued
   // mail waits.
   mail?: Omit<MailQueueDeps, 'runtime' | 'publicUrl'>;
+  // Browser push for Social notifications (#1238): the sender with the deployment's VAPID keys and the product name
+  // the push shows as its title. Unset: no push is queued or sent.
+  push?: { sender: PushSender; brand: string };
   // The WORM fact stream (worm.ts, #891): the store batches go to and how long after a row is written it is archived.
   // Unset: nothing is archived.
   archive?: { store: ArchiveStore; lagSeconds: number };
@@ -653,7 +664,26 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (job.data.type === 'social.review.answered') {
         await deps.runtime.execute('social.review.client_settle', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.review' }, orgId: job.data.orgId });
       }
-      await deps.runtime.execute('social.notification.dispatch', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.notify' }, orgId: job.data.orgId });
+      const done = await deps.runtime.execute<{ push?: string[] }>('social.notification.dispatch', { eventId: job.data.eventId }, { actor: { type: 'system', component: 'social.notify' }, orgId: job.data.orgId });
+      // Browser push (#1238): one job per new notification of a pushed kind, after the dispatch committed. A replayed
+      // event wrote none, so nobody is pushed twice; a job lost here leaves the notification and its mail.
+      if (deps.push) {
+        for (const notificationId of done.push ?? []) {
+          await boss
+            .send(QUEUES.socialPush, { orgId: job.data.orgId, notificationId } satisfies PushJob, { singletonKey: notificationId, retryLimit: 0, expireInSeconds: PUSH_JOB_EXPIRE_SECONDS })
+            .catch((error: unknown) => console.warn(`[social-push] ${notificationId.slice(0, 8)} not queued`, error instanceof Error ? error.name : 'error'));
+        }
+      }
+    });
+  }
+
+  // Browser push (#1238): read what to send, post it to each of the member's devices, record the answers.
+  const push = deps.push;
+  if (social && push) {
+    await boss.work<PushJob>(QUEUES.socialPush, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      const done = await runPushJob({ runtime: deps.runtime, sender: push.sender, brand: push.brand }, job.data);
+      if (done.sent + done.gone + done.failed > 0) console.log(`[social-push] ${job.data.notificationId.slice(0, 8)}: sent ${done.sent}, gone ${done.gone}, failed ${done.failed}`);
     });
   }
 

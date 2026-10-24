@@ -288,24 +288,37 @@ export const digestSend = defineCommand({
     const subject = `Bản tin tuần ${dayMonth(week.days[0] ?? '')} - ${dayMonth(week.days[6] ?? '')} của ${[...org.name.replace(/\s+/g, ' ').trim()].slice(0, 80).join('')}`;
     let mails = 0;
     let suppressed = 0;
+    let skipped = 0;
     for (const r of recipients) {
       const email = emails.get(r.user_id);
       if (!email) continue;
       const content = digestFor(data, r.role === 'member' ? (lists.get(r.user_id) ?? null) : null, reviews.get(r.user_id) ?? null);
       if (!content) continue;
-      const mail = await createMailMessage(ctx, {
-        stream: 'transactional',
-        source: DIGEST_MAIL_SOURCE,
-        sourceId: marker.id,
-        templateKey: DIGEST_MAIL_TEMPLATE,
-        to: email,
-        subject,
-        payload: payloadOf(content, org, week),
-        status: 'queued',
-      });
-      if (mail.status === 'queued') mails += 1;
-      else suppressed += 1;
+      // One recipient whose mail cannot be written (#1115) is skipped, rolled back to the savepoint, rather than
+      // rolling back the org's whole digest to be tried again every hour.
+      await sql`SAVEPOINT digest_mail`.execute(ctx.trx);
+      try {
+        const mail = await createMailMessage(ctx, {
+          stream: 'transactional',
+          source: DIGEST_MAIL_SOURCE,
+          sourceId: marker.id,
+          templateKey: DIGEST_MAIL_TEMPLATE,
+          to: email,
+          subject,
+          payload: payloadOf(content, org, week),
+          status: 'queued',
+        });
+        await sql`RELEASE SAVEPOINT digest_mail`.execute(ctx.trx);
+        if (mail.status === 'queued') mails += 1;
+        else suppressed += 1;
+      } catch (error) {
+        await sql`ROLLBACK TO SAVEPOINT digest_mail`.execute(ctx.trx);
+        await sql`RELEASE SAVEPOINT digest_mail`.execute(ctx.trx);
+        skipped += 1;
+        console.warn(`[social-digest] org ${ctx.orgId.slice(0, 8)}: a recipient's mail was skipped`, error instanceof DomainError ? error.code : error instanceof Error ? error.name : 'error');
+      }
     }
+    if (skipped > 0) ctx.audit({ skipped });
     return { state: 'sent', ...none, mails, suppressed };
   },
 });

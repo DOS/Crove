@@ -1,6 +1,7 @@
 // In-app notifications (#637): the viewer's own, newest first. Opening one marks it read and goes to its post (or to
 // the channels page for an expired channel, or a new post for a channel whose queue runs low); the settings turn kinds
-// off for this member only.
+// off for this member only, and browser push (#1238) goes on or off for this device.
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate, useParams, Link } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
@@ -13,6 +14,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { providerName } from '../lib/social.ts';
 import { DIGEST_KIND, NOTIFICATION_KINDS, notificationTarget, type NotificationKind } from '../lib/social-notifications.ts';
+import { PushDenied, currentEndpoint, deviceOf, disablePush, enablePush, pushPermission, pushSupported } from '../lib/push.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 export type NotificationItem = Awaited<ReturnType<typeof client.social.notifications.list>>['items'][number];
@@ -77,6 +79,87 @@ function useLine() {
   };
 }
 
+// Browser push on this device (#1238): hidden when the deployment has no VAPID keys. Turning it on asks the browser for
+// permission, subscribes it and saves the subscription as the viewer's; off removes both. The viewer's other devices
+// are listed with a way to remove each.
+function PushSetting() {
+  const t = useTranslations('social.notifications');
+  const f = useFormat();
+  const supported = pushSupported();
+  // undefined while the browser is asked for its subscription.
+  const [endpoint, setEndpoint] = useState<string | null | undefined>(supported ? undefined : null);
+  const [denied, setDenied] = useState(() => pushPermission() === 'denied');
+  useEffect(() => {
+    if (!supported) return;
+    let gone = false;
+    currentEndpoint()
+      .then((e) => !gone && setEndpoint(e))
+      .catch(() => !gone && setEndpoint(null));
+    return () => {
+      gone = true;
+    };
+  }, [supported]);
+  const status = useQuery({ ...orpc.social.notifications.push.status.queryOptions({ input: { endpoint: endpoint ?? null } }), enabled: endpoint !== undefined });
+  const reload = () => void queryClient.invalidateQueries({ queryKey: orpc.social.notifications.push.status.key() });
+  const toggle = useMutation({
+    mutationFn: async (on: boolean) => {
+      if (on) {
+        const publicKey = status.data?.publicKey;
+        if (!publicKey) return;
+        const sub = await enablePush(publicKey);
+        const device = deviceOf(navigator.userAgent);
+        const label = device.browser && device.os ? t('pushDevice', { browser: device.browser, os: device.os }) : (device.browser ?? device.os ?? undefined);
+        await client.social.notifications.push.subscribe({ ...sub, ...(label ? { label } : {}) });
+        setEndpoint(sub.endpoint);
+      } else {
+        if (endpoint) await client.social.notifications.push.unsubscribe({ endpoint });
+        await disablePush();
+        setEndpoint(null);
+      }
+    },
+    onError: (error) => {
+      if (error instanceof PushDenied) setDenied(true);
+    },
+    onSettled: reload,
+  });
+  const remove = useMutation({ mutationFn: (id: string) => client.social.notifications.push.unsubscribe({ id }), onSettled: reload });
+  if (!status.data?.enabled) return null;
+  const on = toggle.isPending && toggle.variables !== undefined ? toggle.variables : status.data.subscribed;
+  const devices = status.data.devices;
+  return (
+    <div className="space-y-2 border-t pt-3">
+      <label className="flex items-start gap-2 text-sm text-muted-foreground">
+        <Checkbox checked={supported && on} disabled={!supported || toggle.isPending || (denied && !on)} onCheckedChange={(checked) => toggle.mutate(checked === true)} />
+        <span>
+          <span className="block text-foreground">{t('push')}</span>
+          <span className="block text-xs text-subtle-foreground">{!supported ? t('pushUnsupported') : denied && !on ? t('pushDenied') : t('pushHint')}</span>
+        </span>
+      </label>
+      {devices.length > 0 && (
+        <div className="space-y-1 pl-6">
+          <p className="text-xs font-medium text-muted-foreground">{t('pushDevices')}</p>
+          <ul className="space-y-1">
+            {devices.map((d) => (
+              <li key={d.id} className="flex items-center justify-between gap-2 text-xs text-subtle-foreground">
+                <span className="min-w-0 truncate">
+                  {d.label ?? t('pushUnknownDevice')}
+                  {d.current ? ` (${t('pushThisDevice')})` : ''} · {t('pushSince', { date: f.date(d.createdAt) })}
+                </span>
+                {!d.current && (
+                  <Button variant="ghost" size="sm" disabled={remove.isPending} onClick={() => remove.mutate(d.id)}>
+                    {t('pushRemove')}
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {(toggle.error && !(toggle.error instanceof PushDenied)) || remove.error ? <ErrorText>{errorMessage(toggle.error ?? remove.error)}</ErrorText> : null}
+    </div>
+  );
+}
+
 function Settings({ muted, mailOff }: { muted: readonly NotificationKind[]; mailOff: boolean }) {
   const t = useTranslations('social.notifications');
   const mute = useMutation({
@@ -119,6 +202,7 @@ function Settings({ muted, mailOff }: { muted: readonly NotificationKind[]; mail
         </span>
       </label>
       {(mute.error ?? mail.error) && <ErrorText>{errorMessage(mute.error ?? mail.error)}</ErrorText>}
+      <PushSetting />
     </Card>
   );
 }

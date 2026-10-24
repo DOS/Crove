@@ -1,7 +1,8 @@
 // Binds the sign-out helper to the app's API and auth clients. Every "Đăng xuất" control goes through signOut().
-import { orglessClient, orpc, queryClient } from './api.ts';
+import { client, orglessClient, orpc, queryClient } from './api.ts';
 import { auth } from './auth.ts';
 import { forgetInvite } from './invite.ts';
+import { forgetPushDevice } from './push.ts';
 import { forgetShare } from './social-share.ts';
 import { sessionIdFromToken } from './sessions.ts';
 import { signOutWithRevoke } from './sign-out.ts';
@@ -10,10 +11,11 @@ import { signOutWithRevoke } from './sign-out.ts';
 // main.tsx sends every tab to /login). Scope is local: signing out everywhere is the sessions screen's job.
 // A pending invite token is dropped too, so a shared browser does not keep it for the next person (#134); only the
 // invite page's "use another email" keeps it (keepInvite), to come back to the invite after signing in again. So is
-// a page shared into a draft and not yet opened (#1235).
-export function signOut(options: { keepInvite?: boolean } = {}): Promise<void> {
+// a page shared into a draft and not yet opened (#1235), and this browser's push subscription (#1238).
+export async function signOut(options: { keepInvite?: boolean } = {}): Promise<void> {
   if (!options.keepInvite) forgetInvite();
   forgetShare();
+  await forgetPushDevice((endpoint) => client.social.notifications.push.unsubscribe({ endpoint }));
   return signOutWithRevoke({
     // The kernel's user id (me.get), not Supabase Auth's: a revoke names the Crove user (issue #184).
     currentSession: async () => {

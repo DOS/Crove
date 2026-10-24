@@ -314,6 +314,8 @@ async function planFor(ctx: CommandContext, type: string, payload: unknown): Pro
 // The kinds that also go out by email, and the template they use.
 export const MAILED_KINDS: ReadonlySet<SocialNotificationKind> = new Set(['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'mention', 'queue_low', 'post_outperforming']);
 export const NOTIFICATION_MAIL_TEMPLATE = 'social.notification';
+// The kinds that also go out as browser push (#1238): the mailed ones.
+export const PUSHED_KINDS: ReadonlySet<SocialNotificationKind> = MAILED_KINDS;
 
 const oneLine = (text: string, max: number) => {
   const s = text.replace(/\s+/g, ' ').trim();
@@ -341,6 +343,14 @@ function subjectOf(kind: SocialNotificationKind, detail: Record<string, string>,
     default:
       return `Kênh ${channel ? oneLine(channel, 60) : 'mạng xã hội'} cần kết nối lại`;
   }
+}
+
+// The app path a mailed or pushed notification opens: its post, a new post for the channel of a queue running low (to
+// fill it), else the channels page.
+export function notificationPath(slug: string, kind: SocialNotificationKind, postId: string | null, connectionId: string | null): string {
+  if (postId) return `/o/${slug}/social/${postId}`;
+  if (kind === 'queue_low' && connectionId) return `/o/${slug}/social/new?channel=${connectionId}`;
+  return `/o/${slug}/social/channels`;
 }
 
 // One mail per new notification of a mailed kind, to members who did not turn Social emails off.
@@ -371,12 +381,7 @@ async function mailNotifications(ctx: CommandContext, plan: Plan, created: reado
   const channel = plan.connectionId
     ? ((await ctx.trx.selectFrom('crove_kernel.channel_connection').select('display_name').where('org_id', '=', ctx.orgId).where('id', '=', plan.connectionId).executeTakeFirst())?.display_name ?? null)
     : null;
-  // A queue running low links to a new post for its channel, to fill it.
-  const path = plan.postId
-    ? `/o/${org.slug}/social/${plan.postId}`
-    : plan.kind === 'queue_low' && plan.connectionId
-      ? `/o/${org.slug}/social/new?channel=${plan.connectionId}`
-      : `/o/${org.slug}/social/channels`;
+  const path = notificationPath(org.slug, plan.kind, plan.postId, plan.connectionId);
   const subject = subjectOf(plan.kind, plan.detail, postText, channel);
   let queued = 0;
   for (const c of to) {
@@ -412,25 +417,25 @@ export const notificationDispatch = defineCommand({
   input: z.object({ eventId: zId }),
   risk: 'R1',
   access: 'system',
-  handler: async (ctx, input) => {
+  handler: async (ctx, input): Promise<{ sent: number; mailed: number; push: string[] }> => {
     const event = await ctx.trx
       .selectFrom('crove_kernel.outbox_event')
       .select(['id', 'type', 'payload', 'actor_type', 'actor_id'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.eventId)
       .executeTakeFirst();
-    if (!event) return { sent: 0, mailed: 0 };
+    if (!event) return { sent: 0, mailed: 0, push: [] };
     const plan = await planFor(ctx, event.type, event.payload);
-    if (!plan) return { sent: 0, mailed: 0 };
+    if (!plan) return { sent: 0, mailed: 0, push: [] };
     const actor = event.actor_type === 'user' || event.actor_type === null ? event.actor_id : null;
     const wanted = [...new Set(plan.users)].filter((u) => u !== actor);
-    if (wanted.length === 0) return { sent: 0, mailed: 0 };
+    if (wanted.length === 0) return { sent: 0, mailed: 0, push: [] };
     // Members now, who have not turned this kind off.
     const { rows } = await sql<{ user_id: string }>`
       SELECT m.user_id FROM crove_kernel.tenant_member m
       WHERE m.org_id = ${ctx.orgId} AND m.user_id = ANY(${wanted}::uuid[])
         AND NOT EXISTS (SELECT 1 FROM crove_social.notification_mute x WHERE x.org_id = m.org_id AND x.user_id = m.user_id AND x.kind = ${plan.kind})`.execute(ctx.trx);
-    if (rows.length === 0) return { sent: 0, mailed: 0 };
+    if (rows.length === 0) return { sent: 0, mailed: 0, push: [] };
     // A member limited to some channels (#1081) hears only of those and of the posts on them.
     const users = await usersInScope(
       ctx.trx,
@@ -438,7 +443,7 @@ export const notificationDispatch = defineCommand({
       rows.map((r) => r.user_id),
       { postId: plan.postId, connectionId: plan.connectionId },
     );
-    if (users.length === 0) return { sent: 0, mailed: 0 };
+    if (users.length === 0) return { sent: 0, mailed: 0, push: [] };
     const inserted = await ctx.trx
       .insertInto('crove_social.notification')
       .values(
@@ -471,7 +476,9 @@ export const notificationDispatch = defineCommand({
       WHERE org_id = ${ctx.orgId} AND user_id = ANY(${users}::uuid[])
         AND (read_at < ${ctx.now}::timestamptz - make_interval(days => ${NOTIFICATION_READ_KEEP_DAYS}::int)
              OR created_at < ${ctx.now}::timestamptz - make_interval(days => ${NOTIFICATION_KEEP_DAYS}::int))`.execute(ctx.trx);
-    return { sent: inserted.length, mailed };
+    // The notifications this run wrote that also go out as browser push (#1238): the worker queues one push job each,
+    // after this commits, when the deployment has VAPID keys.
+    return { sent: inserted.length, mailed, push: PUSHED_KINDS.has(plan.kind) ? inserted.map((n) => n.id) : [] };
   },
 });
 

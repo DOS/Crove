@@ -139,6 +139,10 @@ services:
       TAX_CODE_LOOKUP_URL: ${TAX_CODE_LOOKUP_URL:-}
       # Stock photos from Pexels in the Social media library (#1106); empty turns them off.
       MEDIA_PEXELS_API_KEY: ${MEDIA_PEXELS_API_KEY:-}
+      # Browser push for Social notifications (#1238): all three or none; empty turns push off.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
       # The assisted purchase-invoice sync from the tax portal (#325); off unless true.
       TAX_PORTAL_SYNC: ${TAX_PORTAL_SYNC:-false}
       TAX_PORTAL_STEP_SECONDS: ${TAX_PORTAL_STEP_SECONDS:-90}
