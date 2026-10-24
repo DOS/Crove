@@ -36,6 +36,13 @@ describe('Turnstile on the booking form (#1353)', () => {
     expect(() => loadConfig({ ...base, TURNSTILE_SITE_KEY: KEYS.TURNSTILE_SITE_KEY })).toThrow(/both TURNSTILE_SITE_KEY and TURNSTILE_SECRET/);
     expect(() => loadConfig({ ...base, TURNSTILE_SECRET: KEYS.TURNSTILE_SECRET })).toThrow(/both TURNSTILE_SITE_KEY and TURNSTILE_SECRET/);
     expect(() => loadConfig({ ...base, ...KEYS, TURNSTILE_SITE_KEY: 'not a key<' })).toThrow(/TURNSTILE_SITE_KEY/);
+    // Cloudflare's test keys pass any token: fine locally, refused on a public URL.
+    const TEST = { TURNSTILE_SITE_KEY: '1x00000000000000000000AA', TURNSTILE_SECRET: '1x0000000000000000000000000000000AA' };
+    expect(loadConfig({ ...base, ...TEST }).TURNSTILE_SECRET).toBe(TEST.TURNSTILE_SECRET);
+    const pub = { ...base, PUBLIC_URL: 'https://crove.example.com' };
+    expect(() => loadConfig({ ...pub, ...TEST })).toThrow(/Cloudflare's test keys/);
+    expect(() => loadConfig({ ...pub, ...KEYS, TURNSTILE_SECRET: '2x0000000000000000000000000000000AA' })).toThrow(/Cloudflare's test keys/);
+    expect(() => loadConfig({ ...pub, ...KEYS, TURNSTILE_SITE_KEY: '3x00000000000000000000FF' })).toThrow(/Cloudflare's test keys/);
   });
 
   it('hands the site key to the app, or null', async () => {
