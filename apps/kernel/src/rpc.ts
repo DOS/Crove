@@ -284,6 +284,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
     <I, O>({ context, input }: { context: RpcContext; input: I }): Promise<O> =>
       inSocial(context, (orgId, actor) => runtime.query<O>(name, input, { actor, orgId }));
 
+  // The crm module (#1314): its procedures answer 404 when the deployment leaves it out, as Social's do.
+  const crm = runtime.installed('crm');
+  const inCrm = async <T>(context: RpcContext, fn: (orgId: string, actor: UserActor) => Promise<T>) => {
+    if (!crm) throw new ORPCError('NOT_FOUND', { status: 404, message: 'Mô-đun CRM chưa được bật' });
+    return inOrg(context, fn);
+  };
+  const crmCommand =
+    (name: string) =>
+    <I, O>({ context, input }: { context: RpcContext; input: I }): Promise<O> =>
+      inCrm(context, (orgId, actor) => runtime.execute<O>(name, input, { actor, orgId }));
+
   // The connector of an OAuth provider this deployment configured, for an owner or admin of the org in the header.
   // The commands check the role again; checking first keeps a member from learning how the deployment is set up.
   const oauthConnector = async (context: RpcContext, provider: string) => {
@@ -473,6 +484,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         }),
       ),
       export: os.org.export.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.org.export.get', {}, { actor, orgId }))),
+    },
+    crm: {
+      eventTypes: {
+        list: os.crm.eventTypes.list.handler(({ context }) => inCrm(context, (orgId, actor) => runtime.query('crm.event_type.list', {}, { actor, orgId }))),
+        create: os.crm.eventTypes.create.handler(crmCommand('crm.event_type.create')),
+        update: os.crm.eventTypes.update.handler(crmCommand('crm.event_type.update')),
+        setActive: os.crm.eventTypes.setActive.handler(crmCommand('crm.event_type.set_active')),
+      },
     },
     social: {
       posts: {
@@ -1306,6 +1325,14 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       list: os.legalEntities.list.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.legal_entity.list', {}, { actor, orgId }))),
       create: os.legalEntities.create.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.legal_entity.create', input, { actor, orgId }))),
       update: os.legalEntities.update.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.legal_entity.update', input, { actor, orgId }))),
+    },
+    // The member's own calendar (#1313).
+    calendar: {
+      get: os.calendar.get.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.calendar.get', input, { actor, orgId }))),
+      slots: os.calendar.slots.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.query('kernel.calendar.slots', input, { actor, orgId }))),
+      saveHours: os.calendar.saveHours.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.hours.save', input, { actor, orgId }))),
+      addEvent: os.calendar.addEvent.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.event.add', input, { actor, orgId }))),
+      cancelEvent: os.calendar.cancelEvent.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.calendar.event.cancel', input, { actor, orgId }))),
     },
     // Org-less: any signed-in user may look up a tax code before the org exists. Nothing is written, so no command.
     taxRegistry: {

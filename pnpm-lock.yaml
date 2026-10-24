@@ -485,6 +485,9 @@ importers:
       '@crove/mail':
         specifier: workspace:*
         version: link:../../packages/mail
+      '@crove/mod-crm':
+        specifier: workspace:*
+        version: link:../../modules/crm
       '@crove/mod-finance':
         specifier: workspace:*
         version: link:../../modules/finance
@@ -583,6 +586,21 @@ importers:
       exceljs:
         specifier: 'catalog:'
         version: 4.4.0
+
+  modules/crm:
+    dependencies:
+      '@crove/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@crove/kernel-contract':
+        specifier: workspace:*
+        version: link:../../packages/kernel-contract
+      '@crove/kernel-runtime':
+        specifier: workspace:*
+        version: link:../../packages/kernel-runtime
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
 
   modules/finance:
     dependencies:
