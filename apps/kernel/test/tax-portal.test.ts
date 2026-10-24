@@ -3,7 +3,7 @@
 // client must stop at (rate limit, block page, outage, oversized or malformed answers), without the portal's words,
 // the password or the token in any error.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { EgressOptions, EgressResponse, GuardedRequest } from '@crove/kernel-runtime';
+import { EgressError, type EgressOptions, type EgressResponse, type GuardedRequest } from '@crove/kernel-runtime';
 import { FAKE_CAPTCHA_ANSWER, FAKE_PORTAL_PASSWORD, startFakeTaxPortal, type FakePortal } from '../../../e2e/fake-tax-portal/server.ts';
 import { TAX_PORTAL_DEFAULT_URL, TaxPortalError, createTaxPortalClient, isOfficialPortal, monthRanges, parsePortalJson, portalBase, testPortalAllowed } from '../src/tax-portal.ts';
 
@@ -171,6 +171,20 @@ describe('tax portal client', () => {
     await kindOf(createTaxPortalClient({ baseUrl: portal.url, request: spy, sleep: noWait }).purchaseInvoices(token, '2026-09-01', '2026-09-30', { deadline: Date.now() + 3000 }));
     expect(given).toBeGreaterThan(0);
     expect(given).toBeLessThanOrEqual(3000);
+  });
+
+  it('reports a request cut short by the step deadline as TOO_SLOW, even when its timer fires a little early (#1117)', async () => {
+    // A frozen clock one millisecond before the deadline: the request's own timer (capped at the time left) has fired,
+    // as Node timers may do a millisecond before Date.now() catches up. The step ran out of time; the portal is not down.
+    const at = 1_000_000;
+    const timedOut = (): Promise<EgressResponse> => Promise.reject(new EgressError('timeout', 'took too long'));
+    const frozen = createTaxPortalClient({ baseUrl: portal.url, request: timedOut, sleep: noWait, now: () => at });
+    expect(await kindOf(frozen.purchaseInvoices('t', '2026-09-01', '2026-09-30', { deadline: at + 1 }))).toBe('TOO_SLOW');
+    expect(await kindOf(frozen.invoiceXml('t', { sellerTaxCode: '0101234564', template: '1', series: 'C26TAB', number: '9101' }, { deadline: at + 500 }))).toBe('TOO_SLOW');
+    // A request whose own limit is shorter than the time the step has left timed out on its own: the portal is unreachable.
+    const short = createTaxPortalClient({ baseUrl: portal.url, request: timedOut, sleep: noWait, now: () => at, timeoutMs: 100 });
+    expect(await kindOf(short.purchaseInvoices('t', '2026-09-01', '2026-09-30', { deadline: at + 60_000 }))).toBe('UNAVAILABLE');
+    expect(await kindOf(short.captcha())).toBe('UNAVAILABLE');
   });
 
   it('parses JSON with numbers as text and refuses what is not JSON', () => {
