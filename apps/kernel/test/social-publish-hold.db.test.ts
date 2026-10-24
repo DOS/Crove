@@ -276,7 +276,7 @@ suite('social publishing hold on PostgreSQL (#946)', () => {
     await admin((c) => c.query("UPDATE crove_social.post_variant SET published_at = now() - interval '2 hours' WHERE id = $1", [reposted.id]));
     await admin((c) => c.query("UPDATE crove_social.post SET evergreen_days = 7 WHERE id = $1", [commented.postId]));
     await admin((c) => c.query("UPDATE crove_social.post_variant SET published_at = now() - interval '8 days' WHERE id = $1", [commented.id]));
-    const evergreenDue = () => admin(async (c) => (await c.query<{ post_id: string }>('SELECT post_id FROM crove_social.evergreen_due(500)')).rows.map((r) => r.post_id));
+    const evergreenDue = () => admin(async (c) => (await c.query<{ post_id: string }>('SELECT post_id FROM crove_social.evergreen_due(500, ARRAY[]::uuid[])')).rows.map((r) => r.post_id));
     expect(await evergreenDue()).toContain(commented.postId);
 
     await exec(o, 'social.publishing.hold', { reason: 'Sự cố' });
