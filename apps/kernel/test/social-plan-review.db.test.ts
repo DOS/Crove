@@ -76,7 +76,7 @@ suite('social plan review links on PostgreSQL (#902)', () => {
   const plan = (o: Org, user: string, input: unknown) => exec<{ linkId: string; token: string; expiresAt: string; posts: number }>(o, user, 'social.review_link.create_plan', input);
   const refusal = (p: Promise<unknown>) => p.then(() => 'resolved', (e: unknown) => (e as { code?: string }).code ?? String(e));
 
-  type PlanPost = { id: string; gone: boolean; at?: string | null; changed?: boolean; channels?: { channel: string; body: string; media: { id: string }[] }[]; answers?: number; feedback?: { name: string; verdict: string }[] };
+  type PlanPost = { id: string; gone: boolean; at?: string | null; changed?: boolean; body?: string | null; channels?: { channel: string; body: string | null; media: { id: string }[] }[]; answers?: number; feedback?: { name: string; verdict: string }[] };
   type Page = { kind?: 'plan'; org: string; posts?: PlanPost[]; channels?: unknown[] } | null;
   // The public side runs as the API login role, with no org context, as the HTTP edge does.
   const view = async (token: string) => (await pool.query<{ page: Page }>('SELECT crove_social.review_link_view($1) AS page', [token])).rows[0]?.page ?? null;
@@ -155,7 +155,8 @@ suite('social plan review links on PostgreSQL (#902)', () => {
     const page = await view(made.token);
     expect(page?.kind).toBe('plan');
     expect(page?.posts?.map((p) => p.id)).toEqual([early, late, untimed]);
-    expect(page?.posts?.[0]).toMatchObject({ gone: false, changed: false, answers: 0, feedback: [], channels: [{ channel: 'Kênh thử', body: 'Bài đầu tháng', media: [] }] });
+    // The post's body comes once (#930): a channel that shows it says null.
+    expect(page?.posts?.[0]).toMatchObject({ gone: false, changed: false, answers: 0, feedback: [], body: 'Bài đầu tháng', channels: [{ channel: 'Kênh thử', body: null, media: [] }] });
     // A post made after the link does not join it.
     await draft(o, conn, 'Bài thêm sau', new Date(now + 3 * DAY));
     expect((await view(made.token))?.posts).toHaveLength(3);
@@ -296,7 +297,8 @@ suite('social plan review links on PostgreSQL (#902)', () => {
         )
       ).rows.map((r) => r.p),
     );
-    expect(grants).toEqual(['INSERT', 'SELECT']);
+    // The tenant role reads a plan's posts; only review_plan_posts_add adds them, once (#930).
+    expect(grants).toEqual(['SELECT']);
     const fns = ['crove_social.review_plan_feedback_add(text,uuid,text,text,text)', 'crove_social.review_plan_page(crove_social.review_link)', 'crove_social.review_feedback_in_link()'];
     const roles = ['crove_app', 'crove_worker', 'crove_tenant', 'crove_definer_tenant', 'public'];
     const matrix = await admin(async (c) => {
