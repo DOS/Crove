@@ -159,10 +159,10 @@ suite('social content plan export on PostgreSQL (#978)', () => {
     expect(file.csv?.startsWith('\uFEFF')).toBe(true);
     const day = (offset: number) => new Date(base.getTime() + offset * DAY).toISOString().slice(0, 10);
     expect(lines(file.csv)).toEqual([
-      'text,title,link,channels,time,status,labels,assignee,post_id',
-      `"Khai trương chi nhánh Quận 3, giảm 20% tuần đầu",Khai trương,https://example.test/q3,Quán A,${day(0)} 09:00,draft,Khai trương,${a.memberEmail},${posts.opening?.postId}`,
-      `"Khai trương chi nhánh Quận 3, giảm 20% tuần đầu",Khai trương,https://example.test/q3,Quán B,${day(0)} 09:00,draft,Khai trương,${a.memberEmail},${posts.opening?.postId}`,
-      `"'- Lì xì đầu năm\n- Quà cho khách quen",,,Quán A,${day(1)} 10:00,in_review,Tết,,${posts.review?.postId}`,
+      'text,title,link,channels,time,media,alt,first_comment,labels,status,assignee,post_id',
+      `"Khai trương chi nhánh Quận 3, giảm 20% tuần đầu",Khai trương,https://example.test/q3,Quán A,${day(0)} 09:00,,,,Khai trương,draft,${a.memberEmail},${posts.opening?.postId}`,
+      `"Khai trương chi nhánh Quận 3, giảm 20% tuần đầu",Khai trương,https://example.test/q3,Quán B,${day(0)} 09:00,,,,Khai trương,draft,${a.memberEmail},${posts.opening?.postId}`,
+      `"'- Lì xì đầu năm\n- Quà cho khách quen",,,Quán A,${day(1)} 10:00,,,,Tết,in_review,,${posts.review?.postId}`,
     ]);
     // The same instants in New York: the evening before there.
     const ny = await exportPlan(a, a.owner, { ...range, timeZone: 'America/New_York' });

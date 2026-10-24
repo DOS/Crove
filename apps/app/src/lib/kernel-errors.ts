@@ -31,6 +31,7 @@ export const KERNEL_ERROR_CODES = [
   'INTERNAL',
   'RETRY',
   'OVERLOADED',
+  'OVERVIEW_UNAVAILABLE',
   'RATE_LIMITED',
   'IDEMPOTENCY_MISMATCH',
   // oRPC's own answers (input validation, an unexpected failure), worded in English by the library.
@@ -370,6 +371,8 @@ export const KERNEL_ERROR_CODES = [
   'AI_DRAFT_VISION_FAILED',
   'AI_DRAFT_PHOTOS_EMPTY',
   'MEDIA_NOT_ALLOWED',
+  'MEDIA_URLS_BUSY',
+  'MEDIA_URLS_DISABLED',
   'AI_IDEAS_FAILED',
   'AI_IDEAS_EMPTY',
   'AI_SUMMARY_NO_DATA',

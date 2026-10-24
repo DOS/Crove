@@ -16,7 +16,7 @@ import { cn } from '@crove/ui/lib/utils';
 import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature, editRefusal } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
-import { AiPhotoPicker, aiDraftInput } from '../components/social-ai-photos.tsx';
+import { AiPhotoPicker, aiDraftInput, useAiPhotos } from '../components/social-ai-photos.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
@@ -2515,7 +2515,10 @@ export function SocialComposePage() {
   // Writing from photos (#1191): the photos picked, in order; a library item's *Soạn bài từ ảnh này* opens with its photo.
   const [fromPhotos, setFromPhotos] = useState(() => Boolean(search.photo));
   const [photos, setPhotos] = useState<string[]>(() => (search.photo ? [search.photo] : []));
-  const sentPhotos = fromPhotos ? photos : [];
+  // Only on a server whose model reads images (#1196); elsewhere the toggle is not offered and no photo is sent.
+  const aiPhotos = useAiPhotos(aiEnabled);
+  const photoMode = fromPhotos && aiPhotos;
+  const sentPhotos = photoMode ? photos : [];
   const aiDraft = useMutation({
     // from: the shared page's link, for *Viết bằng AI từ liên kết này* (#1235), which drafts before the field updates.
     mutationFn: (from?: string) => client.social.posts.draftWithAi(aiDraftInput({ brief, connectionIds: chosen, locale, source: from ?? source, photos: from ? [] : sentPhotos })),
@@ -2702,19 +2705,21 @@ export function SocialComposePage() {
             <Label htmlFor="social-ai-brief">{t('aiDraftTitle')}</Label>
             {aiEnabled ? (
               <>
-                <Button
-                  variant={fromPhotos ? 'default' : 'outline'}
-                  size="sm"
-                  aria-pressed={fromPhotos}
-                  disabled={aiDraft.isPending}
-                  onClick={() => {
-                    setFromPhotos(!fromPhotos);
-                    if (aiDraft.error) aiDraft.reset();
-                  }}
-                >
-                  {t('aiPhotos.toggle')}
-                </Button>
-                {fromPhotos && (
+                {aiPhotos && (
+                  <Button
+                    variant={fromPhotos ? 'default' : 'outline'}
+                    size="sm"
+                    aria-pressed={fromPhotos}
+                    disabled={aiDraft.isPending}
+                    onClick={() => {
+                      setFromPhotos(!fromPhotos);
+                      if (aiDraft.error) aiDraft.reset();
+                    }}
+                  >
+                    {t('aiPhotos.toggle')}
+                  </Button>
+                )}
+                {photoMode && (
                   <AiPhotoPicker
                     postMedia={base.media}
                     picked={photos}
@@ -2726,7 +2731,7 @@ export function SocialComposePage() {
                     }}
                   />
                 )}
-                <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t(fromPhotos ? 'aiPhotos.briefPlaceholder' : 'aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => {
+                <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t(photoMode ? 'aiPhotos.briefPlaceholder' : 'aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => {
                   setBrief(e.target.value);
                   if (aiDraft.error) aiDraft.reset();
                 }} />
@@ -2741,11 +2746,11 @@ export function SocialComposePage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={(!brief.trim() && !source && sentPhotos.length === 0) || (sourceUrl.trim() !== '' && !source) || (fromPhotos && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
+                  disabled={(!brief.trim() && !source && sentPhotos.length === 0) || (sourceUrl.trim() !== '' && !source) || (photoMode && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
                   onClick={() => aiDraft.mutate(undefined)}
                 >
                   {aiDraft.isPending ? <Spinner className="text-current" /> : null}
-                  {t(fromPhotos ? 'aiPhotos.draft' : 'aiDraft')}
+                  {t(photoMode ? 'aiPhotos.draft' : 'aiDraft')}
                 </Button>
                 {aiDraft.error && <ErrorText>{errorMessage(aiDraft.error)}</ErrorText>}
               </>

@@ -14,7 +14,7 @@ describe('Social import from a sheet (#586)', () => {
   it('reads Vietnamese headers, quoted text with commas and line breaks, and a byte order mark', () => {
     const csv = '﻿Nội dung;Kênh;Giờ đăng\r\n"Khai trương, giảm 20%\nTuần đầu";Quán A Zalo;01/11/2026 09:30\r\n';
     const rows = importRows(parseCsv(csv), channels, NOW);
-    expect(rows).toEqual([{ row: 2, body: 'Khai trương, giảm 20%\nTuần đầu', title: '', link: '', connectionIds: ['zl1'], plannedAt: new Date(2026, 10, 1, 9, 30).toISOString(), problems: [] }]);
+    expect(rows).toEqual([{ row: 2, body: 'Khai trương, giảm 20%\nTuần đầu', title: '', link: '', connectionIds: ['zl1'], plannedAt: new Date(2026, 10, 1, 9, 30).toISOString(), media: [], labels: [], firstComment: '', problems: [] }]);
   });
 
   it('names a channel, a provider with one channel, or all; and says what it cannot match', () => {

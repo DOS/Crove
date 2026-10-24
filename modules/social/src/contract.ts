@@ -12,6 +12,8 @@ export { localTime, zonedToEpoch, type LocalTime } from './domain/queue.ts';
 // The placement `social.queue.set` runs, so a copy of a queue to other channels (#1166) says beforehand how many queued
 // posts each one places again.
 export { placeQueued, retime, type QueuedPost, type QueueSpec } from './domain/queue.ts';
+// The variants the Upcoming agenda lists, which the multi-client home's "next 7 days" counts too (#1261).
+export { AGENDA_STATUSES } from './domain/state.ts';
 // Recurring posts (#979): the rule's next occurrence, for the post page's preview.
 export * from './domain/recurrence.ts';
 // Banned and sensitive words (#1055): the composer marks matches with the rules the commands apply.
@@ -38,3 +40,6 @@ export * from './domain/campaign.ts';
 export * from './domain/signature.ts';
 // A long text split into a thread (#1222): the composer splits with the channel's own count and the thread rules.
 export * from './domain/thread-split.ts';
+// The content plan's CSV file (#978) and the import's cells that hold several values (#1258): the app reads a sheet
+// with the rules the export writes it with.
+export * from './domain/plan-csv.ts';

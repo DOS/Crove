@@ -232,10 +232,24 @@ export const zOrgDetail = z.object({
   members: z.array(z.object({ userId: zId, email: z.string(), displayName: z.string().nullable(), role: zRole })),
 });
 
+// An org's Social figures on the multi-client home (#1261), read as the member in that org, each as the Social screen it
+// links to counts it (at most 200 for the post lists): posts in review (the Review tab), of those the ones waiting only
+// for the client's approval, posts needing attention (the Attention tab), channels to reconnect (expired or broken),
+// posts going out in the next 7 days, and when a post last went out.
+export const zSocialClientFigures = z.object({
+  review: z.number().int().nonnegative(),
+  waitingClient: z.number().int().nonnegative(),
+  attention: z.number().int().nonnegative(),
+  reconnect: z.number().int().nonnegative(),
+  upcoming: z.number().int().nonnegative(),
+  lastPostAt: z.string().nullable(),
+});
+
 // An org's figures (issue #318), read in its own context: on the multi-client home screen for each org, and on the
 // org's overview (#1249). pendingProposals: proposals waiting in the Inbox. failedFiles: files that could not be read
 // among the ones the Inbox lists. lastActivityAt: the newest entry of the org's activity feed. vatDeadline: the next
-// VAT return due, from the org's filing period (null while none is chosen).
+// VAT return due, from the org's filing period (null while none is chosen). modules: the figures of the modules this
+// deployment enables (#1261), with no key for a module it leaves out.
 export const zOrgOverview = z.object({
   pendingProposals: z.number().int().nonnegative(),
   failedFiles: z.number().int().nonnegative(),
@@ -250,9 +264,13 @@ export const zOrgOverview = z.object({
     .nullable(),
   // The tax calendar (#921): what is due in the next 30 days, or overdue and not marked done, by due date.
   taxDues: z.array(zTaxDueView),
+  // Social's figures are checked; another module's contribution passes as it is, so a new one needs no contract change
+  // to reach the app.
+  modules: z.object({ social: zSocialClientFigures.optional() }).catchall(z.unknown()),
 });
-// One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures.
-export const zClientOverview = zOrgSummary.extend({ overview: zOrgOverview });
+// One org on the multi-client home screen (issue #318): the org as me.get lists it, and its figures; or, for an org
+// whose figures could not be read, overview null and the error's code (#495), so the other orgs still show.
+export const zClientOverview = zOrgSummary.extend({ overview: zOrgOverview.nullable(), error: z.string().nullable() });
 // The home screen's answer (#495): at most 200 orgs, and how many the user has, so a cut list says so.
 export const zClientOverviews = z.object({ clients: z.array(zClientOverview), total: z.number().int().nonnegative() });
 // What the public tax registry says about a tax code (issue #324), to prefill a new org: the normalized tax code, the
@@ -1449,6 +1467,19 @@ export const zSocialPostVersions = z.object({
 // A stock photo's credit (#1106): the photographer and the photo's page on Pexels, and its description as alt text.
 export const zSocialMediaCredit = z.object({ provider: z.literal('pexels'), photographer: z.string(), photographerUrl: z.string(), sourceUrl: z.string(), altText: z.string().nullable() });
 export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()), credit: zSocialMediaCredit.nullable() });
+// The CSV import's media (#1258): library files by name or id (social.media.resolve, up to 200 a call), and image URLs
+// the API fetches into the library through the egress guard (social.media.fetchUrls, up to SOCIAL_MEDIA_URLS_MAX a call,
+// https only, JPEG, PNG or WEBP up to MAX_UPLOAD_BYTES), each with the reason it was refused.
+export const SOCIAL_MEDIA_URLS_MAX = 10;
+export const SOCIAL_MEDIA_REF_PROBLEMS = ['UNKNOWN_FILE', 'AMBIGUOUS_FILE', 'FILE_NOT_ALLOWED'] as const;
+export const SOCIAL_MEDIA_URL_PROBLEMS = ['MEDIA_URL_INVALID', 'MEDIA_URL_BLOCKED', 'MEDIA_URL_TOO_LARGE', 'MEDIA_URL_NOT_IMAGE', 'MEDIA_URL_UNREACHABLE', 'MEDIA_URL_DOCUMENT', 'MEDIA_URL_BUSY'] as const;
+export const zSocialResolvedMedia = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable() });
+export const zSocialMediaResolve = z.strictObject({ refs: z.array(z.string().trim().min(1).max(255)).min(1).max(200) });
+export const zSocialMediaResolved = z.array(z.object({ ref: z.string(), file: zSocialResolvedMedia.nullable(), problem: z.enum(SOCIAL_MEDIA_REF_PROBLEMS).nullable() }));
+export const zSocialMediaFetchUrls = z.strictObject({ urls: z.array(z.string().max(2000)).min(1).max(SOCIAL_MEDIA_URLS_MAX) });
+export const zSocialMediaFetched = z.object({
+  results: z.array(z.object({ url: z.string(), file: zSocialResolvedMedia.nullable(), problem: z.enum(SOCIAL_MEDIA_URL_PROBLEMS).nullable(), retryAfterSeconds: z.number().int().optional() })),
+});
 // Stock photos from Pexels (#1106): a search (a page of up to 40 photos in the language of the page), its results, and
 // the photo to save at one of Pexels' sizes (large2x by default: up to 1880 by 1300 pixels, enough for every channel).
 export const STOCK_PHOTO_SIZES = ['large2x', 'large', 'original'] as const;

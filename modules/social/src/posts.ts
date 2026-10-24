@@ -15,7 +15,8 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId }
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
+import { COMMENT_RULES, firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
+import { IMPORT_MEDIA_MAX } from './domain/plan-csv.ts';
 import { isValidTimeZone, nextFreeSlot, openSlots, placeQueued, retime, slotRefusal, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
 import type { Issue } from './domain/validate.ts';
@@ -38,7 +39,7 @@ import { coverProblem } from './cover-check.ts';
 import { bulkDraftCommands } from './bulk-drafts.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
-import { campaignsOfPosts, labelCommands, labelQueries, labelsOfPosts } from './labels.ts';
+import { MAX_LABELS_PER_POST, campaignsOfPosts, labelCommands, labelQueries, labelsOfPosts, zLabelName } from './labels.ts';
 import { campaignFindings, type CampaignFinding } from './domain/campaign.ts';
 import { openCommentsOf } from './activity.ts';
 import { ideaCommands, ideaOfPost, ideaQueries, linkIdeaToPost } from './ideas.ts';
@@ -57,7 +58,9 @@ import { CONTENT_MANAGER_TEMPLATE, preReviewTask, type PreReview } from './agent
 import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { reviewInboxQueries } from './review-inbox.ts';
 import { attentionInboxQueries } from './attention-inbox.ts';
-import { libraryQueries, likeTerm } from './library.ts';
+import { clientOverviewQueries } from './client-overview.ts';
+import { libraryQueries, refuseHiddenMedia } from './library.ts';
+import { postFilterQuery } from './post-filter.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { stockPhotoCommands } from './stock-photos.ts';
 import { metricsCommands, metricsQueries } from './metrics.ts';
@@ -87,7 +90,7 @@ import { teamReportQueries } from './team-report.ts';
 import { duplicatesOf } from './duplicates.ts';
 import { refusesDuplicates, type DuplicateOf } from './domain/duplicate.ts';
 import { checklistFor, checklistForApproval, reviewChecklistCommands, reviewChecklistQueries, reviewChecksOf, tickedChecklist, type ReviewCheck } from './review-checklist.ts';
-import { channelAccessCommands, channelAccessQueries, channelNotAllowed, channelScope, connectionInScope, inScope, mayUse, postInScope, refuseChannels, refuseOutside, refusePostOutside } from './channel-access.ts';
+import { channelAccessCommands, channelAccessQueries, channelNotAllowed, channelScope, connectionInScope, inScope, mayUse, refuseChannels, refuseOutside, refusePostOutside } from './channel-access.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -106,8 +109,9 @@ const zVariantIds = z.array(zId).min(1).max(MAX_CHANNELS_PER_POST);
 // A post's images, in order: files of the org uploaded for Social (JPEG, PNG or WEBP). The channel rules decide how
 // many each channel takes; 20 is the most any supported channel shows in one post.
 export const MAX_MEDIA_PER_POST = 20;
+const zMediaItem = z.strictObject({ fileId: zId, altText: z.string().trim().max(1000).nullable().optional() });
 const zMedia = z
-  .array(z.strictObject({ fileId: zId, altText: z.string().trim().max(1000).nullable().optional() }))
+  .array(zMediaItem)
   .max(MAX_MEDIA_PER_POST)
   .refine((list) => new Set(list.map((m) => m.fileId)).size === list.length, 'each image once');
 const MEDIA_TYPES: readonly string[] = [...SOCIAL_IMAGE_TYPES, ...SOCIAL_VIDEO_TYPES];
@@ -317,9 +321,42 @@ export const postCreate = defineCommand({
   },
 });
 
-// Many drafts at once from a sheet (#586): each row a post for its channels, text only (images are added on the post
-// afterwards). With submit, the channels that fit their rules go to review; nothing is published without one.
+// Many drafts at once from a sheet (#586): each row a post for its channels. With submit, the channels that fit their
+// rules go to review; nothing is published without one.
+// A row may carry (#1258) up to IMPORT_MEDIA_MAX library files with their alt texts (the app finds files by name with
+// social.media.resolve and fetches image URLs into the library first, through the API's egress guard), its labels by
+// name and a first comment. Every file must be one the member may use (#1081: another channel's own media is refused
+// with 403 MEDIA_NOT_ALLOWED, before anything is written). A label is found by its name whatever the case; one the org
+// does not have is created through social.label.create, whose rules apply (members and above, the org's label limit).
+// The first comment goes on each channel that takes one (COMMENT_RULES), as the composer offers it.
 export const MAX_IMPORT_ROWS = 200;
+const zImportLabels = z
+  .array(zLabelName)
+  .max(MAX_LABELS_PER_POST)
+  .refine((names) => new Set(names.map((n) => n.toLowerCase())).size === names.length, 'labels repeat');
+
+// The ids of labels named, found whatever the case, the missing ones created (in the order first named).
+async function importLabels(ctx: CommandContext, names: readonly string[]): Promise<{ ids: Map<string, string>; created: number }> {
+  const wanted = new Map<string, string>();
+  for (const name of names) if (!wanted.has(name.toLowerCase())) wanted.set(name.toLowerCase(), name);
+  const ids = new Map<string, string>();
+  if (wanted.size === 0) return { ids, created: 0 };
+  const found = await ctx.trx
+    .selectFrom('crove_social.label')
+    .select(['id', 'name'])
+    .where('org_id', '=', ctx.orgId)
+    .where(sql<boolean>`lower(name) = ANY(${[...wanted.values()].map((n) => n.toLowerCase())}::text[])`)
+    .execute();
+  for (const l of found) ids.set(l.name.toLowerCase(), l.id);
+  let created = 0;
+  for (const [key, name] of wanted) {
+    if (ids.has(key)) continue;
+    const { labelId } = await ctx.run<{ labelId: string }>('social.label.create', { name });
+    ids.set(key, labelId);
+    created++;
+  }
+  return { ids, created };
+}
 export const postImport = defineCommand({
   name: 'social.post.import',
   input: z.strictObject({
@@ -332,6 +369,13 @@ export const postImport = defineCommand({
           scheduledAt: z.iso.datetime({ offset: true }).nullable().optional(),
           timeZone: zTimeZone.optional(),
           connectionIds: z.array(zId).min(1).max(MAX_CHANNELS_PER_POST),
+          media: z
+            .array(zMediaItem)
+            .max(IMPORT_MEDIA_MAX)
+            .refine((list) => new Set(list.map((m) => m.fileId)).size === list.length, 'each image once')
+            .optional(),
+          labels: zImportLabels.optional(),
+          firstComment: z.string().trim().max(10_000).optional(),
         }),
       )
       .min(1)
@@ -342,6 +386,18 @@ export const postImport = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     requireUser(ctx);
+    await refuseHiddenMedia(
+      ctx,
+      input.posts.flatMap((row) => (row.media ?? []).map((m) => m.fileId)),
+    );
+    const connectionIds = [...new Set(input.posts.flatMap((row) => row.connectionIds))];
+    const providers = new Map(
+      (await ctx.trx.selectFrom('crove_kernel.channel_connection').select(['id', 'provider']).where('org_id', '=', ctx.orgId).where('id', 'in', connectionIds).execute()).map((c) => [c.id, c.provider]),
+    );
+    const labels = await importLabels(
+      ctx,
+      input.posts.flatMap((row) => row.labels ?? []),
+    );
     const created: { postId: string; submitted: number }[] = [];
     // A channel whose text holds a blocked word (#1055) stays a draft, like one that breaks its channel's rules.
     // One checker and one budget for the whole import, so the rows do not multiply it; past it a row's channels stay
@@ -354,8 +410,15 @@ export const postImport = defineCommand({
         linkUrl: row.linkUrl ?? null,
         ...(row.scheduledAt ? { scheduledAt: row.scheduledAt } : {}),
         ...(row.timeZone ? { timeZone: row.timeZone } : {}),
-        channels: row.connectionIds.map((connectionId) => ({ connectionId })),
+        ...(row.media ? { media: row.media } : {}),
+        channels: row.connectionIds.map((connectionId) => {
+          const provider = providers.get(connectionId);
+          return row.firstComment && provider && isProvider(provider) && COMMENT_RULES[provider] ? { connectionId, settings: { firstComment: row.firstComment } } : { connectionId };
+        }),
       });
+      if (row.labels && row.labels.length > 0) {
+        await ctx.run('social.post.set_labels', { postId: post.id, labelIds: row.labels.map((name) => labels.ids.get(name.toLowerCase()) as string) });
+      }
       let submitted = 0;
       if (banned) {
         const ready = (await lockVariants(ctx.trx, ctx.orgId, post.id)).filter(
@@ -370,7 +433,12 @@ export const postImport = defineCommand({
       }
       created.push({ postId: post.id, submitted });
     }
-    ctx.audit({ posts: created.length, submitted: created.reduce((n, c) => n + c.submitted, 0) });
+    ctx.audit({
+      posts: created.length,
+      submitted: created.reduce((n, c) => n + c.submitted, 0),
+      media: input.posts.reduce((n, row) => n + (row.media?.length ?? 0), 0),
+      labels_created: labels.created,
+    });
     return { posts: created };
   },
 });
@@ -1720,69 +1788,12 @@ export const postList = defineQuery({
     // looks at those variants only; a channel they may not use lists nothing.
     const scope = await channelScope(ctx);
     if (input.connectionId && scope !== null && !scope.has(input.connectionId)) return [];
-    const mine = connectionInScope(scope, 'v.channel_connection_id');
-    let q = ctx.trx.selectFrom('crove_social.post as p').select('p.id').where('p.org_id', '=', ctx.orgId).where(postInScope(scope));
-    if (input.status) q = q.where('p.status', '=', input.status);
-    if (input.assignee === 'me') q = q.where('p.assignee_user_id', '=', ctx.actor.type === 'user' ? ctx.actor.userId : '00000000-0000-0000-0000-000000000000');
-    const variantWhere = (status: 'in_review' | null) =>
-      sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status ${status ? sql`= ${status}` : sql`<> 'cancelled'`}${
-        input.connectionId && !status ? sql` AND v.channel_connection_id = ${input.connectionId}::uuid` : sql``
-      })`;
-    // In review on the chosen channel when one is chosen: the same variant, not any of the post's.
-    if (input.stage === 'review') q = q.where(input.connectionId ? sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status = 'in_review' AND v.channel_connection_id = ${input.connectionId}::uuid)` : variantWhere('in_review'));
-    if (input.stage === 'drafts') q = q.where('p.status', '=', 'draft').where(sql<boolean>`NOT ${variantWhere('in_review')}`);
-    if (input.stage === 'done') q = q.where('p.status', 'in', ['published', 'partially_published', 'failed', 'publishing', 'cancelled']);
-    if (input.stage === 'attention') {
-      q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status IN ('failed', 'needs_attention', 'paused'))`);
-    }
-    if (input.connectionId) q = q.where(variantWhere(null));
-    // Every channel the member may use is cancelled, rejected or a draft with no time of its own, at least one is a
-    // draft, and the post has no planned time: what the calendar cannot place yet.
-    if (input.undated) {
-      q = q
-        .where('p.scheduled_at', 'is', null)
-        .where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status IN ('draft', 'in_review', 'changes_requested', 'approved'))`)
-        .where(
-          sql<boolean>`NOT EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND v.status NOT IN ('cancelled', 'rejected') AND (v.status NOT IN ('draft', 'in_review', 'changes_requested', 'approved') OR v.scheduled_at IS NOT NULL OR v.queue_slot_at IS NOT NULL))`,
-        );
-      // A limited member may plan a post only when no open channel of it is another's (editPost refuses the time
-      // otherwise), so the list offers them only those.
-      if (scope !== null) {
-        q = q.where(sql<boolean>`NOT EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND NOT ${mine} AND v.status NOT IN ('published', 'cancelled', 'removed'))`);
-      }
-    }
-    if (input.labelId) q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = p.org_id AND pl.post_id = p.id AND pl.label_id = ${input.labelId}::uuid)`);
-    if (input.search) {
-      const term = likeTerm(input.search);
-      q = q.where(
-        sql<boolean>`(p.body ILIKE ${term} OR p.title ILIKE ${term} OR EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND (v.body ILIKE ${term} OR v.title ILIKE ${term})))`,
-      );
-    }
+    let q = postFilterQuery(ctx, scope, input);
     // Ordered and paged by the change time as the answer carries it (milliseconds), so a page boundary inside one
     // millisecond neither repeats nor skips a post.
     const changed = sql`date_trunc('milliseconds', p.updated_at)`;
     const before = input.before;
     if (before) q = q.where(sql<boolean>`(${changed}, p.id) < (${new Date(Date.parse(before.updatedAt))}::timestamptz, ${before.postId}::uuid)`);
-    if (input.from || input.to) {
-      q = q.where((eb) =>
-        eb.exists(
-          eb
-            .selectFrom('crove_social.post_variant as v')
-            .select(sql`1`.as('one'))
-            .whereRef('v.org_id', '=', 'p.org_id')
-            .whereRef('v.post_id', '=', 'p.id')
-            .where('v.status', '<>', 'cancelled')
-            .where(mine)
-            .where((w) => {
-              const at = sql`CASE WHEN v.status IN ('published', 'removed') THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END`;
-              const parts = [];
-              if (input.from) parts.push(w(at, '>=', new Date(Date.parse(input.from))));
-              if (input.to) parts.push(w(at, '<', new Date(Date.parse(input.to))));
-              return w.and(parts);
-            }),
-        ),
-      );
-    }
     const rows = await q.orderBy(changed, 'desc').orderBy('p.id', 'desc').limit(input.limit ?? 50).execute();
     return viewPosts(
       ctx,
@@ -1997,4 +2008,4 @@ export const mediaFile = defineQuery({
   },
 });
 
-export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, queueOpenSlots, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...periodSummaryQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];
+export const socialQueries = [postGet, postReviewDiff, postPreReview, postList, queueGet, queueOpenSlots, mediaFile, ...metricsQueries, ...externalPostQueries, ...libraryQueries, ...mediaTagQueries, ...policyQueries, ...snippetQueries, ...labelQueries, ...ideaQueries, ...feedQueries, ...reportScheduleQueries, ...brandVoiceQueries, ...watermarkQueries, ...reportBrandingQueries, ...chatAlertQueries, ...channelSetQueries, ...calendarNoteQueries, ...calendarFeedQueries, ...bioQueries, ...activityQueries, ...reviewLinkQueries, ...reviewInboxQueries, ...attentionInboxQueries, ...clientOverviewQueries, ...reportLinkQueries, ...notificationQueries, ...linkPreviewQueries, ...channelOptionQueries, ...accountQueries, ...publishHoldQueries, ...versionQueries, ...teamReportQueries, ...goalQueries, ...periodSummaryQueries, ...bannedWordQueries, ...channelAccessQueries, ...reviewChecklistQueries, ...bulkEditQueries];
