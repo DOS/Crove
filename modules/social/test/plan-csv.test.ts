@@ -109,4 +109,8 @@ describe('cells with several values (#1258)', () => {
     expect(plainMediaName('banh-mi.jpg')).toBe(true);
     for (const name of ['a;b.jpg', 'a\nb.jpg', ' a.jpg', '0b9f6c1e-4a1d-4c9e-9a51-2a3b4c5d6e7f', 'https://x.example/a.jpg', '']) expect(plainMediaName(name), name).toBe(false);
   });
+  it('splits URLs after letters whose lower case is longer (#1271)', () => {
+    expect(mediaRefsOf('İİ https://a/x.jpg,https://b/y.jpg')).toEqual(['İİ', 'https://a/x.jpg', 'https://b/y.jpg']);
+    expect(mediaRefsOf('HTTPS://A/X.JPG https://b/y.jpg')).toEqual(['HTTPS://A/X.JPG', 'https://b/y.jpg']);
+  });
 });

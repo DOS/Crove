@@ -73,11 +73,14 @@ const isSeparator = (ch: string | undefined) => ch === ',' || (ch !== undefined 
 // separators before it dropped. A linear scan, not a regular expression: a cell is the sheet's, and a pattern with a
 // repeated separator before a lookahead backtracks on a long run of spaces or tabs (CodeQL js/polynomial-redos).
 function splitUrls(part: string): string[] {
-  const lower = part.toLowerCase();
+  // Positions are read on the cell itself: lower-casing the whole cell can change its length (İ), so only the few
+  // characters at a position are lower-cased.
+  const at8 = (at: number) => part.slice(at, at + 8).toLowerCase();
   const out: string[] = [];
   let start = 0;
-  for (let at = lower.indexOf('http', 1); at !== -1; at = lower.indexOf('http', at + 1)) {
-    const url = lower.startsWith('https://', at) || lower.startsWith('http://', at);
+  for (let at = 1; at < part.length; at += 1) {
+    const head = at8(at);
+    const url = head.startsWith('https://') || head.startsWith('http://');
     if (!url || !isSeparator(part[at - 1])) continue;
     let end = at;
     while (end > start && isSeparator(part[end - 1])) end--;
