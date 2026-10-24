@@ -175,11 +175,12 @@ suite('finding a person in the org (#923)', () => {
     for (const [key, entry] of Object.entries(PERSONAL_DATA_COLUMNS) as Array<[string, PersonalDataColumn]>) {
       if (!entry.override) continue;
       const [schema, table] = key.split('.');
+      const { when } = entry.override;
       const { rows } = await admin((c) =>
         c.query<{ type: string }>(`SELECT data_type AS type FROM information_schema.columns WHERE table_schema = $1 AND table_name = $2 AND column_name = $3`, [
           schema,
           table,
-          entry.override?.when,
+          when,
         ]),
       );
       expect(rows, key).toEqual([{ type: 'boolean' }]);
