@@ -146,7 +146,7 @@ WHERE p.amount <> pg_catalog.round(p.amount, 0) OR p.vat_amount <> pg_catalog.ro
 ROLLBACK;
 ```
 
-After the migration has run, the journal part can use each org's book currency instead: `JOIN crove_kernel.tenant t ON t.org_id = l.org_id LEFT JOIN crove_kernel.currency c ON c.code = t.base_currency WHERE c.code IS NULL OR l.debit <> pg_catalog.round(l.debit, c.minor_units) OR l.credit <> pg_catalog.round(l.credit, c.minor_units)`. That post-migration form is the one `apps/kernel/test/finance-currency-scale.db.test.ts` runs.
+After the migration has run, the journal part can use each org's book currency instead: select `t.base_currency AS currency` in place of `'VND' AS currency`, and use `JOIN crove_kernel.tenant t ON t.org_id = l.org_id LEFT JOIN crove_kernel.currency c ON c.code = t.base_currency WHERE c.code IS NULL OR l.debit <> pg_catalog.round(l.debit, c.minor_units) OR l.credit <> pg_catalog.round(l.credit, c.minor_units)`. That post-migration form is the one `apps/kernel/test/finance-currency-scale.db.test.ts` runs.
 
 ## Deploy a release
 
