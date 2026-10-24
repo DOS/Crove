@@ -14,7 +14,7 @@ import { effectiveContent } from './domain/approval.ts';
 import { refusesDuplicates } from './domain/duplicate.ts';
 import { cursorAfterEdit, cursorOf, keepAiMarks, parseTextVariations, variationOrder, type TextVariation } from './domain/text-variations.ts';
 import { duplicatesOf } from './duplicates.ts';
-import { lockPost, settingsOf, type VariantRow } from './variants.ts';
+import { lockPost, refuseArchived, settingsOf, type VariantRow } from './variants.ts';
 import { refusePostWholly } from './channel-access.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -87,8 +87,10 @@ export const postSetTextVariations = defineCommand({
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<TextVariationsResult> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
-    await lockPost(ctx.trx, ctx.orgId, input.postId);
+    const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     await refusePostWholly(ctx, input.postId);
+    // Not on an archived post (#1299): restore it first, as for any other edit.
+    refuseArchived(post);
     const row = await ctx.trx
       .selectFrom('crove_social.post')
       .select(['evergreen_days', 'recurrence', 'recurrence_source_id'])

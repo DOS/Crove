@@ -100,7 +100,8 @@ export const planExport = defineCommand({
     // A member limited to some channels (#1081) exports those only: a channel named outside them is refused, and
     // without a choice the others are left out.
     const scope = await refuseChannels(ctx, connections);
-    // Every channel not cancelled with a time in the range, at the time the calendar shows it (social.post.list).
+    // Every channel not cancelled with a time in the range, at the time the calendar shows it (social.post.list), of the
+    // posts not archived (#1299).
     const { rows } = await sql<{
       variant_id: string;
       post_id: string;
@@ -125,7 +126,7 @@ export const planExport = defineCommand({
                CASE WHEN v.status IN ('published', 'removed') THEN v.published_at ELSE coalesce(v.queue_slot_at, v.scheduled_at, p.scheduled_at) END AS at
         FROM crove_social.post_variant v
         JOIN crove_social.post p ON p.org_id = v.org_id AND p.id = v.post_id
-        WHERE v.org_id = ${ctx.orgId}::uuid AND v.status <> 'cancelled'
+        WHERE v.org_id = ${ctx.orgId}::uuid AND v.status <> 'cancelled' AND p.archived_at IS NULL
           ${connections.length > 0 ? sql`AND v.channel_connection_id = ANY(${connections}::uuid[])` : sql``}
           AND ${connectionInScope(scope, 'v.channel_connection_id')}
           ${labels.length > 0 ? sql`AND EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = v.org_id AND pl.post_id = v.post_id AND pl.label_id = ANY(${labels}::uuid[]))` : sql``}

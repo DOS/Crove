@@ -20,7 +20,7 @@ import { DomainError, defineCommand, type CommandContext, type Runtime, type Sys
 import { localDate, nextOccurrence, parseRecurrence, type Recurrence } from './domain/recurrence.ts';
 import { SWEEP_PAGE, SWEEP_PAGES, repostCopy } from './evergreen.ts';
 import { publishingHeld } from './publish-hold.ts';
-import { lockPost } from './variants.ts';
+import { lockPost, refuseArchived } from './variants.ts';
 import { refusePostWholly } from './channel-access.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -65,9 +65,11 @@ export const postRecurrenceSet = defineCommand({
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
     requireUser(ctx);
-    await lockPost(ctx.trx, ctx.orgId, input.postId);
+    const post = await lockPost(ctx.trx, ctx.orgId, input.postId);
     // A member limited to some channels (#1081) repeats only a post wholly on those: every copy goes to all its channels.
     await refusePostWholly(ctx, input.postId);
+    // Not on an archived post (#1299): its copies would go out from where nobody sees it.
+    refuseArchived(post);
     const row = await seriesOf(ctx, input.postId);
     if (row.recurrence_source_id !== null) throw new DomainError('RECURRENCE_ON_COPY', 409, 'Bài này là một lần lặp của chuỗi khác; hãy đổi lịch lặp ở bài gốc của chuỗi');
     if (row.evergreen_days !== null) throw new DomainError('RECURRENCE_WITH_EVERGREEN', 409, 'Bài này đang tự đăng lại; hãy tắt tự đăng lại trước khi đặt lịch lặp');
