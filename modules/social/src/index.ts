@@ -41,6 +41,7 @@ export * from './archive.ts';
 export * from './domain/bulk-drafts.ts';
 export * from './bulk-drafts.ts';
 export * from './snippets.ts';
+export * from './saved-views.ts';
 export * from './labels.ts';
 export * from './domain/campaign.ts';
 export * from './calendar-notes.ts';

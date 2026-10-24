@@ -1,6 +1,7 @@
 // Shared pieces of the Social screens: status tones, provider names, the effective text of a variant as the composer
 // shows it, and grouping by day for the agenda.
 import { CAPABILITIES, SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, countText, isDiscordForum, isProvider, mediaKindOf, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { SOCIAL_VIEW_TABS } from '@crove/kernel-contract';
 import { getConfig } from './auth.ts';
 
 export type VariantStatus =
@@ -196,12 +197,25 @@ export interface SocialSearch {
   // Local calendar days, YYYY-MM-DD, both included.
   from?: string;
   to?: string;
-  // Only posts assigned to the viewer (#640).
-  mine?: true;
+  // Whose posts (#640, #1300): assigned to or written by the viewer ("me") or a member (their id).
+  assignee?: string;
+  author?: string;
+  // The calendar's month or week and the day it shows (#1300), so a reload or a link opens the same period.
+  view?: 'month' | 'week';
+  date?: string;
 }
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// "me" or a member's id; anything else is dropped.
+const memberParam = (value: unknown): string | undefined => (value === 'me' || (typeof value === 'string' && UUID_RE.test(value)) ? (value as string).toLowerCase() : undefined);
+// A real calendar day, so a typed link like 2026-02-31 is dropped rather than rolled over.
+function isDay(value: unknown): value is string {
+  if (typeof value !== 'string' || !DAY_RE.test(value)) return false;
+  const [y, m, d] = value.split('-').map(Number) as [number, number, number];
+  const at = new Date(y, m - 1, d);
+  return y > 0 && at.getFullYear() === y && at.getMonth() === m - 1 && at.getDate() === d;
+}
 
 export function parseSocialSearch(search: Record<string, unknown>): SocialSearch {
   const out: SocialSearch = {};
@@ -209,10 +223,39 @@ export function parseSocialSearch(search: Record<string, unknown>): SocialSearch
   if (typeof search.channel === 'string' && UUID_RE.test(search.channel)) out.channel = search.channel;
   if (typeof search.label === 'string' && UUID_RE.test(search.label)) out.label = search.label;
   if (typeof search.q === 'string' && search.q.trim()) out.q = search.q.trim().slice(0, 200);
-  if (typeof search.from === 'string' && DAY_RE.test(search.from)) out.from = search.from;
-  if (typeof search.to === 'string' && DAY_RE.test(search.to)) out.to = search.to;
-  if (search.mine === true || search.mine === '1' || search.mine === 'true') out.mine = true;
+  if (isDay(search.from)) out.from = search.from;
+  if (isDay(search.to)) out.to = search.to;
+  const assignee = memberParam(search.assignee);
+  if (assignee) out.assignee = assignee;
+  // The links before #1300 said mine=1 for the viewer's own posts.
+  else if (search.mine === true || search.mine === '1' || search.mine === 'true') out.assignee = 'me';
+  const author = memberParam(search.author);
+  if (author) out.author = author;
+  if (search.view === 'month' || search.view === 'week') out.view = search.view;
+  if (isDay(search.date)) out.date = search.date;
   return out;
+}
+
+// The Social home's tabs and filters a saved view keeps (#1300): every filter but the calendar's day, so a view opens on
+// today; the metrics and library tabs are no view of the posts.
+export type ViewFilters = Omit<SocialSearch, 'date' | 'tab'> & { tab?: (typeof SOCIAL_VIEW_TABS)[number] };
+export function viewFiltersOf(search: SocialSearch): ViewFilters {
+  const out = Object.fromEntries(Object.entries(search).filter(([k, v]) => k !== 'date' && k !== 'tab' && v !== undefined && v !== '')) as ViewFilters;
+  if (search.tab && (SOCIAL_VIEW_TABS as readonly string[]).includes(search.tab)) out.tab = search.tab as NonNullable<ViewFilters['tab']>;
+  return out;
+}
+
+// Whether two sets of view filters are the same, whatever their key order.
+export function sameViewFilters(a: ViewFilters, b: ViewFilters): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof ViewFilters>;
+  return [...keys].every((k) => (a[k] ?? undefined) === (b[k] ?? undefined));
+}
+
+// The address of a saved view: its filters through the same checks as a typed link, the tab defaulting to the agenda.
+export function searchOfView(filters: Record<string, unknown>): SocialSearch {
+  const search = parseSocialSearch(filters);
+  delete search.date;
+  return search;
 }
 
 // The list query's range for local days: from the start of `from` to the end of `to`.

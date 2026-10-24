@@ -18,6 +18,7 @@ import { SocialBoard } from '../components/social-board.tsx';
 import { OpenComments } from '../components/social-activity.tsx';
 import { useChannelScope } from '../components/social-channel-access.tsx';
 import { SocialCalendar } from '../components/social-calendar.tsx';
+import { SavedViews } from '../components/social-saved-views.tsx';
 import { CalendarFeedCard } from '../components/social-calendar-feed.tsx';
 import { InstagramGrid } from '../components/social-instagram-grid.tsx';
 import { PostLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
@@ -625,7 +626,7 @@ export function SocialPage() {
     const timer = setTimeout(() => setSearch({ q }), 300);
     return () => clearTimeout(timer);
   }, [text, search.q, setSearch]);
-  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.label ? { labelId: search.label } : {}), ...(search.q ? { search: search.q } : {}), ...(search.mine ? { assignee: 'me' as const } : {}) };
+  const filters = { ...(search.channel ? { connectionId: search.channel } : {}), ...(search.label ? { labelId: search.label } : {}), ...(search.q ? { search: search.q } : {}), ...(search.assignee ? { assignee: search.assignee } : {}), ...(search.author ? { author: search.author } : {}) };
   // The agenda window starts now; a new day does not need a reload to move it, a refetch does.
   const range = useMemo(() => {
     const from = new Date(Date.now() - DAY);
@@ -672,14 +673,14 @@ export function SocialPage() {
   const rows = list.data?.pages.flat() ?? [];
   const reviewCount = review.data?.length ?? 0;
   const attentionCount = attention.data?.length ?? 0;
-  const filtered = Boolean(search.channel || search.label || search.q || search.from || search.to || search.mine);
+  const filtered = Boolean(search.channel || search.label || search.q || search.from || search.to || search.assignee || search.author);
   // The post filters (label, channel, search, mine) are the same in the lists, the board and the calendar (#1022): one
   // state, in the address. The metrics take the label only; the calendar's own month or week is its date range.
   const postFilters = tab === 'upcoming' || listTab !== null || tab === 'board' || tab === 'calendar';
   const labelFilter = (postFilters || tab === 'metrics') && (labelList.length > 0 || Boolean(search.label));
   // Posts picked for a bulk action (#635), in the list on screen; a new tab or filter starts afresh.
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.mine]);
+  useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.assignee, search.author]);
   const canDecide = role === 'owner' || role === 'admin';
   // Moving by days or hours (#945) is for owners and admins, like a single reschedule; the agenda offers only that.
   // Members and above send drafts to review in bulk on the Drafts and Attention lists (#1178).
@@ -711,8 +712,31 @@ export function SocialPage() {
           : [];
   const boardActions: readonly BulkAction[] = editActions.length > 0 ? [...editActions, 'archive'] : [];
   const agendaActions: readonly BulkAction[] = [...(canDecide ? (['move'] as const) : []), ...editActions];
-  const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: canWrite });
+  // The members, for the bulk bar's assignee and the whose-posts filters (#1300), which every role may use.
+  const org = useQuery({ ...orpc.org.get.queryOptions(), enabled: role !== undefined });
   const members = (org.data?.members ?? []).map((m) => ({ userId: m.userId, name: m.displayName ?? m.email }));
+  const myId = me.data?.userId;
+  // A whose-posts filter: anyone, the viewer, or a member; a link naming someone not in the list still shows it.
+  const memberFilter = (key: 'assignee' | 'author') => {
+    // The viewer's own id (a link someone else sent) is "me", never a former member.
+    const value = search[key] !== undefined && search[key] === myId ? 'me' : search[key];
+    const others = members.filter((m) => m.userId !== myId);
+    return (
+      <label className="text-xs">
+        <span className="text-subtle-foreground">{t(`filters.${key}`)}</span>
+        <NativeSelect className="mt-1 w-48" value={value ?? ''} onChange={(e) => setSearch({ [key]: e.target.value || undefined })}>
+          <NativeSelectOption value="">{t('filters.anyone')}</NativeSelectOption>
+          <NativeSelectOption value="me">{t('filters.me')}</NativeSelectOption>
+          {others.map((m) => (
+            <NativeSelectOption key={m.userId} value={m.userId}>
+              {m.name}
+            </NativeSelectOption>
+          ))}
+          {value && value !== 'me' && !others.some((m) => m.userId === value) && <NativeSelectOption value={value}>{t('filters.formerMember')}</NativeSelectOption>}
+        </NativeSelect>
+      </label>
+    );
+  };
   const toggle = (id: string) => setPicked((now) => { const next = new Set(now); if (next.has(id)) next.delete(id); else next.add(id); return next; });
   const excerptOf = (postId: string) => excerpt((rows.find((p) => p.id === postId) ?? upcoming.data?.find((p) => p.id === postId))?.body ?? '', 60) || t('emptyText');
   const channelName = (connectionId: string) => names.get(connectionId) ?? t('bulk.move.channelGone');
@@ -782,6 +806,15 @@ export function SocialPage() {
             </TabsTrigger>
           ))}
         </TabsList>
+        {/* Named filters, private or shared with the team (#1300): applied in one click, the address takes them. */}
+        {postFilters && (
+          <SavedViews
+            search={search}
+            members={members}
+            canShare={canWrite}
+            onApply={(next) => void navigate({ to: '/o/$slug/social', params: { slug }, search: next, replace: true })}
+          />
+        )}
         {(postFilters || labelFilter) && (
           <div className="flex flex-wrap items-end gap-3">
             {labelFilter && (
@@ -829,13 +862,13 @@ export function SocialPage() {
               </>
             )}
             {postFilters && (
-              <label className="flex items-center gap-2 pb-2 text-xs text-muted-foreground">
-                <Checkbox checked={search.mine === true} onCheckedChange={(on) => setSearch({ mine: on === true ? true : undefined })} />
-                {t('assign.mine')}
-              </label>
+              <>
+                {memberFilter('assignee')}
+                {memberFilter('author')}
+              </>
             )}
             {(postFilters ? filtered : Boolean(search.label)) && (
-              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, label: undefined, q: undefined, from: undefined, to: undefined, mine: undefined })}>
+              <Button variant="ghost" onClick={() => setSearch({ channel: undefined, label: undefined, q: undefined, from: undefined, to: undefined, assignee: undefined, author: undefined })}>
                 {t('filters.clear')}
               </Button>
             )}
@@ -875,6 +908,8 @@ export function SocialPage() {
                 canDecide={role === 'owner' || role === 'admin'}
                 canWrite={canWrite}
                 filters={filters}
+                period={{ view: search.view, date: search.date }}
+                onPeriod={(next) => setSearch(next)}
                 bulk={
                   editActions.length > 0
                     ? (selected, clear) => (

@@ -24,7 +24,7 @@ SELECT crove_kernel.apply_tenant_rls('crove_social.media_archive');
 REVOKE UPDATE ON crove_social.media_archive FROM crove_tenant;
 
 -- The org purge (#1024) deletes crove_social.media_archive with the org's other Social rows (#1302). The function is
--- copied verbatim from 20261030130100_crove_kernel_org_purge_crm.sql, with only this table added to v_social.
+-- copied verbatim from 20261030210000_crove_social_saved_view.sql, with only this table added to v_social.
 -- migration-lint: cross-module the org purge re-created with crove_social.media_archive added to v_social, per the owner's standing approval to add each new Social table to crove_kernel.org_purge in its feature migration (#1213).
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
 RETURNS TABLE (outcome text, counts jsonb, blob_keys text[])
@@ -71,7 +71,7 @@ DECLARE
     'crove_social.post_comment', 'crove_social.post_media', 'crove_social.post_version', 'crove_social.publish_hold', 'crove_social.report_link',
     'crove_social.report_schedule_run', 'crove_social.report_schedule', 'crove_social.review_feedback',
     'crove_social.review_link_post', 'crove_social.review_link', 'crove_social.short_link_click',
-    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.goal', 'crove_social.banned_word', 'crove_social.external_import', 'crove_social.external_post', 'crove_social.channel_access', 'crove_social.review_check', 'crove_social.digest_week', 'crove_social.channel_option', 'crove_social.media_attribution', 'crove_social.push_subscription', 'crove_social.media_archive'];
+    'crove_social.short_link', 'crove_social.snippet', 'crove_social.watermark', 'crove_social.report_branding', 'crove_social.goal', 'crove_social.banned_word', 'crove_social.external_import', 'crove_social.external_post', 'crove_social.channel_access', 'crove_social.review_check', 'crove_social.digest_week', 'crove_social.channel_option', 'crove_social.media_attribution', 'crove_social.push_subscription', 'crove_social.saved_view', 'crove_social.media_archive'];
 BEGIN
   -- Also refuses a definer owner or another role reached through a mistaken grant: only the worker login, in the
   -- sealed system context of the org it purges (execute() of kernel.org.purge).
