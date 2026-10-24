@@ -1555,6 +1555,43 @@ export const zSocialSnippet = z.object({
 const zSnippetFields = { name: z.string().trim().min(1).max(100), body: z.string().trim().min(1).max(10_000), provider: z.string().min(1).max(32).nullable(), isTemplate: z.boolean() };
 export const zSocialSnippetCreate = z.strictObject({ ...zSnippetFields, provider: zSnippetFields.provider.optional(), isTemplate: z.boolean().optional() });
 export const zSocialSnippetUpdate = z.strictObject({ snippetId: zId, ...zSnippetFields });
+// Whose posts (#1300): the viewer ("me") or a member by id; the list refuses an id that is not a member of the org.
+export const zSocialMemberFilter = z.union([z.literal('me'), zId]);
+// The Social home's tabs a saved view may open (#1300): the post lists, the calendar and the board.
+export const SOCIAL_VIEW_TABS = ['upcoming', 'calendar', 'board', 'review', 'attention', 'drafts', 'done', 'archived'] as const;
+// A saved view's filters (#1300), as the Social home's link carries them: the tab, the channel, the label, the text,
+// the list's days, whose posts (assignee, author) and the calendar's month or week. Never the calendar's date: a view
+// opens on today.
+export const zSocialViewFilters = z.strictObject({
+  tab: z.enum(SOCIAL_VIEW_TABS).optional(),
+  channel: zId.optional(),
+  label: zId.optional(),
+  q: z.string().trim().min(1).max(200).optional(),
+  from: zLocalDate.optional(),
+  to: zLocalDate.optional(),
+  assignee: zSocialMemberFilter.optional(),
+  author: zSocialMemberFilter.optional(),
+  view: z.enum(['month', 'week']).optional(),
+});
+// A saved view of the posts (#1300): the viewer's own (mine) or one shared with the org by another member (ownerId);
+// canChange: the viewer may rename, change or delete it (their own, or a shared one for an owner or admin).
+export const zSocialSavedView = z.object({
+  id: zId,
+  name: z.string(),
+  filters: zSocialViewFilters,
+  shared: z.boolean(),
+  ownerId: zId,
+  mine: z.boolean(),
+  canChange: z.boolean(),
+  updatedAt: z.string(),
+});
+// A new view (no viewId) or a change of one: its name (unique per owner), filters and whether the org sees it.
+export const zSocialSavedViewSave = z.strictObject({
+  viewId: zId.optional(),
+  name: z.string().trim().min(1).max(60),
+  filters: zSocialViewFilters,
+  shared: z.boolean(),
+});
 // What works (#705): a group of a channel's posts and its median engagement against the channel's; a format group also
 // the median average watch time in milliseconds of its posts that report one (#1147, Reels). A group and a channel carry
 // their engagement rate (#1157) when their posts report reach or impressions.
