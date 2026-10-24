@@ -9,8 +9,10 @@ export function isInvoiceCheckCode(code: string | undefined): code is InvoiceChe
   return code !== undefined && (INVOICE_CHECK_CODES as readonly string[]).includes(code);
 }
 
-// money formats an amount parameter (a decimal string) for the reader's locale.
-export function invoiceCheckMessage(check: Check, t: Translate, money: (amount: string) => string): string {
+// format.money formats an amount parameter (a decimal string) for the reader's locale, and format.date a date parameter
+// (ISO) as dd/mm/yyyy (DESIGN.md §5.5, #1332).
+export function invoiceCheckMessage(check: Check, t: Translate, format: { money: (amount: string) => string; date: (date: string) => string }): string {
+  const { money, date } = format;
   const code = check.code;
   if (!isInvoiceCheckCode(code)) return check.message;
   const p = check.params ?? {};
@@ -35,7 +37,7 @@ export function invoiceCheckMessage(check: Check, t: Translate, money: (amount: 
     case 'related.adjusts_missing':
       return has('invoice') ? t(`invoiceChecks.${code}`, { invoice: p.invoice ?? '' }) : check.message;
     case 'issue_date.ok':
-      return has('date') ? t('invoiceChecks.issue_date.ok', { date: p.date ?? '' }) : check.message;
+      return has('date') ? t('invoiceChecks.issue_date.ok', { date: date(p.date ?? '') }) : check.message;
     case 'lines_sum.ok':
     case 'total.ok':
     case 'total.mismatch':
