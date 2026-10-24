@@ -36,7 +36,8 @@ test('export the VAT return of a month as the HTKK XML of form 01/GTGT', async (
     const form = page.getByRole('form', { name: 'Mã số thuế' });
     await form.getByLabel('Mã số thuế').fill(SELLER_TAX_CODE);
     await form.getByRole('button', { name: 'Lưu' }).click();
-    await expect(page.getByText(SELLER_TAX_CODE, { exact: true })).toBeVisible();
+    // The org's own field (a <dd>): the legal entities card shows the default entity's code too (#1278).
+    await expect(page.getByRole('definition').getByText(SELLER_TAX_CODE, { exact: true })).toBeVisible();
   });
 
   await test.step('upload the e-invoice the org issued and approve the sale with a second factor', async () => {

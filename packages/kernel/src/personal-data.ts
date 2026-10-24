@@ -74,6 +74,11 @@ export const PERSONAL_DATA_COLUMNS = {
   'crove_kernel.tenant.tax_code': { kind: 'tax_code', handling: 'keep_org', reason: "The business's own tax code" },
   'crove_kernel.tenant.address': { kind: 'address', handling: 'keep_org', reason: "The business's registered address, printed on its returns" },
   'crove_kernel.tenant.contact_email': { kind: 'email', handling: 'erase', reason: 'A contact person of the business' },
+  'crove_kernel.legal_entity.tax_code': {
+    kind: 'tax_code',
+    handling: 'keep_org',
+    reason: "The tax code of a company, branch or household business the org keeps books for (#1278); the default entity's is the org's own",
+  },
   // Agents and connected accounts.
   'crove_kernel.agent.display_name': { kind: 'other', handling: 'not_personal', reason: 'The name of an AI agent' },
   'crove_kernel.channel_connection.display_name': {

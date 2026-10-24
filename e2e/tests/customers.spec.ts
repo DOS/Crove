@@ -25,7 +25,8 @@ test('lists the customer of an approved sale with its receivable, edits it, and 
   const taxForm = page.getByRole('form', { name: 'Mã số thuế' });
   await taxForm.getByLabel('Mã số thuế').fill(SELLER_TAX_CODE);
   await taxForm.getByRole('button', { name: 'Lưu' }).click();
-  await expect(page.getByText(SELLER_TAX_CODE, { exact: true })).toBeVisible();
+  // The org's own field (a <dd>): the legal entities card shows the default entity's code too (#1278).
+  await expect(page.getByRole('definition').getByText(SELLER_TAX_CODE, { exact: true })).toBeVisible();
 
   await test.step('no customers yet', async () => {
     await nav.getByRole('link', { name: 'Khách hàng' }).click();
