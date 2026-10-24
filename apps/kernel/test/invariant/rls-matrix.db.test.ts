@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.legal_entity',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -513,6 +514,9 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.inbound_message': { make: (o) => ({ row: { org_id: o.id, message_id: `<${randomUUID()}@rls.test>` } }) },
   // One active switch per (org, scope, target), so every row stops its own agent id.
   'crove_kernel.kill_switch': { make: (o) => ({ row: { org_id: o.id, scope: 'agent', target: randomUUID(), engaged_by: o.owner } }) },
+  // A legal entity of the org (#1278): a branch beside the default entity every org gets with it (one default per org),
+  // without a tax code (one per org).
+  'crove_kernel.legal_entity': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), name: 'RLS matrix branch', kind: 'branch', created_by: o.owner } }) },
   // Delivery events from the mail provider (Email plan §3.3, #539), append-only: one row per provider event, joined to
   // its mail in the same org. Only the system context adds rows (the worker recording a verified webhook or bounce
   // report; a trigger refuses member contexts), so the own-org control, which also runs in member contexts, is skipped.

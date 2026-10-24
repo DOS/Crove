@@ -1,6 +1,6 @@
 # Runbook: rotate passwords and secrets
 
-How to replace the database login passwords, `INBOUND_SECRET` and the secrets in the alert and heartbeat URLs of a deployment that runs the `docker compose` stack (plan §7.10, "credential rotation", issue #1203). The other keys have their own runbooks: the context key in [context-key-rotation.md](context-key-rotation.md), the credential key in [credential-key.md](credential-key.md), and `AUTH_JWT_SECRET` in [incidents.md](incidents.md), section 5.
+How to replace the database login passwords, `INBOUND_SECRET`, the secrets in the alert and heartbeat URLs and the VAPID keys of browser push of a deployment that runs the `docker compose` stack (plan §7.10, "credential rotation", issue #1203). The other keys have their own runbooks: the context key in [context-key-rotation.md](context-key-rotation.md), the credential key in [credential-key.md](credential-key.md), and `AUTH_JWT_SECRET` in [incidents.md](incidents.md), section 5.
 
 ## When to rotate
 
@@ -184,6 +184,22 @@ Whoever holds the webhook can post into the alert chat (or, for Telegram, act as
 
    For `BACKUP_HEARTBEAT_URL`, run `tools/backup/backup.sh` once, or wait for the night's run, and check that the new check got its ping.
 5. Revoke the old value: delete the old Slack or Discord webhook, and delete (or pause) the old heartbeat check, which pages once its pings stop. Then remove the old value from the secret store.
+
+## 4. VAPID keys (browser push)
+
+`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` turn on browser push for the Social notifications someone must act on (#1238). Set all three or none: a partial or mismatched set stops `crove` (or `api` and `worker`) at start with a message naming the problem, and with none the app offers no push and the worker sends nothing. Whoever holds the private key can send notifications to every subscribed browser of the deployment (the push services still need each browser's endpoint and keys, which only the database holds), so keep it with the other secrets.
+
+1. Make a new pair (it is printed, never stored):
+
+   ```bash
+   docker compose run --rm --no-deps crove vapid-keys
+   ```
+
+   Put both lines in `.env` with an editor (`nano .env`; `rotate` makes a random hex value, not a key pair), set `VAPID_SUBJECT` to a contact the push services may write to (`mailto:ops@example.com` or an https: URL), and copy the three values into the secret store.
+2. Apply it: `docker compose up -d`.
+3. Check: `crove` (or `api` and `worker`) is up (`docker compose ps`; a bad key set stops it with a message in `docker compose logs`), and on **Social, Thông báo** the **Thông báo đẩy trên thiết bị này** switch shows.
+
+A browser subscribes with the public key, so a new pair ends every subscription: the push services refuse the old ones (the worker counts the failures and deletes each subscription after 10 in a row, or at once on 404 or 410), and members turn push on again on each device. There is no overlap period; rotate only when the private key may have leaked, and tell the members.
 
 ## What was verified
 

@@ -13,11 +13,11 @@ export interface TaxDueRow extends TaxDueView {
 
 // Every client's dues in one list: the earliest due date first, then by client name and obligation.
 export function dueAcrossClients(
-  clients: ReadonlyArray<{ orgId: string; slug: string; name: string; role: string; overview: { taxDues?: readonly TaxDueView[] } }>,
+  clients: ReadonlyArray<{ orgId: string; slug: string; name: string; role: string; overview: { taxDues?: readonly TaxDueView[] } | null }>,
   locale: string,
 ): TaxDueRow[] {
   const byName = new Intl.Collator(locale, { sensitivity: 'base', numeric: true });
-  const rows = clients.flatMap((c) => (c.overview.taxDues ?? []).map((d) => ({ ...d, orgId: c.orgId, slug: c.slug, name: c.name, role: c.role })));
+  const rows = clients.flatMap((c) => (c.overview?.taxDues ?? []).map((d) => ({ ...d, orgId: c.orgId, slug: c.slug, name: c.name, role: c.role })));
   return rows.sort((a, b) => (a.dueDate !== b.dueDate ? (a.dueDate < b.dueDate ? -1 : 1) : byName.compare(a.name, b.name) || a.obligation.localeCompare(b.obligation) || a.period.localeCompare(b.period)));
 }
 

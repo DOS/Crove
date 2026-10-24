@@ -46,7 +46,7 @@ import {
 } from '@crove/channel';
 import { createExtractClient } from '@crove/extract-contract';
 import { assertRlsEnforced, assertSystemContextAccess, createDb, createPool, singleCell, type Db } from '@crove/db';
-import { buildKernelCommands, kernelQueries, setMessageIdDomain } from '@crove/kernel';
+import { buildKernelCommands, kernelQueries, setMessageIdDomain, type OverviewContribution } from '@crove/kernel';
 import {
   LocalDiskStore,
   egressFetch,
@@ -59,7 +59,7 @@ import {
   type SessionStatusSource,
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
-import { socialAgentPrograms, socialCommands, socialQueries } from '@crove/mod-social';
+import { socialAgentPrograms, socialCommands, socialOverviewContributions, socialQueries } from '@crove/mod-social';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
@@ -78,10 +78,12 @@ import { createArchiveStore, createBlobStore } from './storage.ts';
 import type { SocialDrafter } from './rpc.ts';
 import { StreamHub, createDbTicketStore, createPgNotificationSource } from './stream.ts';
 import { createPexels } from './stock-photos.ts';
+import { createMediaUrls } from './media-urls.ts';
 import { createTaxCodeLookup } from './tax-lookup.ts';
 import { createPortalSync } from './portal-sync.ts';
 import { createTaxPortalClient, testPortalAllowed } from './tax-portal.ts';
 import { startWorker } from './worker.ts';
+import { createPushSender, loadVapidKeys } from './web-push.ts';
 import { WORKER_LAG_EXIT_MS, WORKER_LAG_SUSTAIN_MS, startLagWatchdog } from './back-pressure.ts';
 
 // Identity (ADR-0027, ADR-0028): who the caller is and whether their session still holds. When
@@ -155,6 +157,14 @@ export interface ModuleDefinitions {
   queries: QueryDef<any, any>[];
 }
 
+// The figures each module adds to the multi-client home (#1261); a module without any is left out.
+const OVERVIEW_CONTRIBUTIONS: Partial<Record<ModuleId, readonly OverviewContribution[]>> = { social: socialOverviewContributions };
+
+// The overview contributions of the modules CROVE_MODULES enables, which kernel.org.overview runs in each org.
+export function overviewContributions(config: Pick<Config, 'CROVE_MODULES'>): OverviewContribution[] {
+  return config.CROVE_MODULES.flatMap((module) => OVERVIEW_CONTRIBUTIONS[module] ?? []);
+}
+
 // The commands and queries of the modules CROVE_MODULES enables (plan Decision 12, ADR-0031). A module left out has
 // none registered, so its commands answer COMMAND_NOT_FOUND, a ctx.query into it answers not_installed (with the
 // absentModules buildRuntime passes), and the
@@ -171,7 +181,7 @@ export function moduleDefinitions(config: Config): ModuleDefinitions {
         inviteLimits: { perRecipientPerDay: config.INVITE_LIMIT_PER_RECIPIENT_PER_DAY },
         messageIdDomain: messageIdDomain(config),
       }),
-      queries: kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null }),
+      queries: kernelQueries({ inboundDomain: config.INBOUND_DOMAIN ?? null, overview: overviewContributions(config) }),
     }),
     finance: () => ({ commands: financeCommands, queries: financeQueries }),
     social: () => ({ commands: socialCommands, queries: socialQueries }),
@@ -326,6 +336,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     const worker = role === 'worker' || role === 'all';
     // Both roles handle org exports (the worker seals them, the API opens them for download).
     assertExportKey(config);
+    // Browser push (#1238): both roles or neither; a partial or mismatched key set stops the start.
+    const vapid = loadVapidKeys(config);
     // The worker alone enters system context, so it never shares the API's login role (External-tenant gate T5).
     const workerUrl = config.WORKER_DATABASE_URL;
     if (worker && !workerUrl) throw new Error('WORKER_DATABASE_URL is required for the worker; connect it as crove_worker');
@@ -383,7 +395,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           ...(config.TAX_CODE_LOOKUP_URL ? { taxLookup: createTaxCodeLookup(config.TAX_CODE_LOOKUP_URL) } : {}),
           ...(config.TAX_PORTAL_SYNC === 'true' ? { portalSync: createPortalSync({ runtime, store, broker: resolved.broker, stepMs: config.TAX_PORTAL_STEP_SECONDS * 1000, client: createTaxPortalClient(config.TAX_PORTAL_URL ? { baseUrl: config.TAX_PORTAL_URL } : {}) }) } : {}),
           mailer: resolved.mail,
-          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL, ...(config.MEDIA_PEXELS_API_KEY ? { stockPhotos: createPexels({ apiKey: config.MEDIA_PEXELS_API_KEY, store }) } : {}) },
+          channels: { broker: resolved.broker, sandbox: config.CHANNEL_SANDBOX === 'true', bluesky: config.CHANNEL_BLUESKY === 'true', telegram: config.CHANNEL_TELEGRAM === 'true', mastodon: config.CHANNEL_MASTODON === 'true', discord: config.CHANNEL_DISCORD === 'true', wordpress: config.CHANNEL_WORDPRESS === 'true', connectors: channelConnectors(config), publicUrl: config.PUBLIC_URL, ...(config.MEDIA_PEXELS_API_KEY ? { stockPhotos: createPexels({ apiKey: config.MEDIA_PEXELS_API_KEY, store }) } : {}), mediaUrls: createMediaUrls({ store }), ...(vapid ? { push: { publicKey: vapid.publicKey } } : {}) },
           ...(stream ? { stream } : {}),
         });
         const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOST });
@@ -431,6 +443,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             securityAlerts: securityAlerts(config),
             aiPrice: { inputPerMTok: config.AI_PRICE_INPUT_PER_MTOK, outputPerMTok: config.AI_PRICE_OUTPUT_PER_MTOK },
             outboxLagPauseSeconds: config.OUTBOX_LAG_PAUSE_SECONDS,
+            ...(vapid ? { push: { sender: createPushSender(vapid), brand: config.BRAND_NAME } } : {}),
           }),
         );
         // The worker watchdog (#894, plan §4.9): a loop blocked over 5 s for 30 s exits the process, which restarts.

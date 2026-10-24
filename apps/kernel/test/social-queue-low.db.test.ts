@@ -262,6 +262,22 @@ suite('social queue running low on PostgreSQL (#1079)', () => {
     expect(await lows(other, other.owner)).toEqual([]);
   });
 
+  it('tells nobody when the org left active between the scan and the check (#1095)', async () => {
+    const o = await org();
+    const conn = await connection(o);
+    const q = await setQueue(o, o.owner, conn, { lowDays: 3 });
+    // Offboarding, as staff (the scan would no longer list it; the check must not rely on that).
+    await admin(async (c) => {
+      await c.query('BEGIN');
+      await c.query('SET LOCAL session_replication_role = replica');
+      await c.query(`UPDATE crove_kernel.tenant SET status = 'offboarding' WHERE org_id = $1`, [o.orgId]);
+      await c.query('COMMIT');
+    });
+    expect(await worker.execute('social.queue.check_low', { queueId: q.queueId }, { actor: system, orgId: o.orgId })).toMatchObject({ state: 'skipped' });
+    expect(await marker(q.queueId)).toBeNull();
+    expect(await lowEvents(o)).toBe(0);
+  });
+
   it('lets owners and admins set the warning, keeps it when left out, and a new value starts a new dip', async () => {
     const o = await org();
     const conn = await connection(o);

@@ -30,6 +30,8 @@ const ratioVi = (value: unknown, min = 0): string | null => (typeof value === 's
 export async function renderNotificationMail(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string } | null> {
   const { kind, org, post, channel, decision, removal, days, ratio, reach, path } = input.payload;
   if (typeof kind !== 'string' || typeof org !== 'string' || typeof path !== 'string' || !PATH.test(path)) return null;
+  // A new post for a channel is a low queue's link only (#1095).
+  if (path.includes('/social/new?') && kind !== 'queue_low') return null;
   const lead = LEAD[kind === 'decided' ? `decided_${typeof decision === 'string' ? decision : ''}` : kind === 'failed' && removal === 'scheduled' ? 'failed_removal' : kind];
   if (!lead) return null;
   const leadText = lead.replaceAll('{brand}', input.brand);

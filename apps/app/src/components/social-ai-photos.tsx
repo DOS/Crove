@@ -2,18 +2,32 @@
 // AI_DRAFT_IMAGES_MAX images among the post's own and the library's, and a library item offers *Soạn bài từ ảnh này*.
 // The server reads them for the model, which writes only what they show and what the brief adds; the new post carries
 // them, in the order picked, and is tainted like any AI draft.
+// The picker (#1196) offers only the library files the member may use (a member limited to some channels gets no other
+// channel's own media), shows every photo picked with a way to un-pick it, also one from ?photo= that no list shows,
+// and appears only on a server whose model reads images (social.posts.aiPhotos).
+import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { AI_DRAFT_IMAGES_MAX, AI_IMAGE_MAX_BYTES, SOCIAL_PHOTO_TYPES } from '@crove/kernel-contract';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { cn } from '@crove/ui/lib/utils';
-import { errorMessage } from '../lib/api.ts';
+import { errorMessage, orpc } from '../lib/api.ts';
 import { Thumb, useLibrary, type LibraryItem, type MediaItem } from './social-media.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
 
 // A file the model is sent: a JPG, PNG or WEBP image of at most 10 MB (the server checks it again).
 export const usablePhoto = (file: { mime: string; sizeBytes: number }): boolean => SOCIAL_PHOTO_TYPES.includes(file.mime) && file.sizeBytes <= AI_IMAGE_MAX_BYTES;
+
+// Whether the server writes drafts from photos: an AI model that reads images (AI_VISION).
+export function useAiPhotos(enabled = true): boolean {
+  const status = useQuery({ ...orpc.social.posts.aiPhotos.queryOptions({ input: {} }), enabled, staleTime: Number.POSITIVE_INFINITY });
+  return status.data?.enabled === true;
+}
+
+// The picked photos that no list on screen shows (one from ?photo= past the library's first page, or not a usable
+// photo), so the picker still shows them to un-pick.
+export const unlisted = (picked: readonly string[], shown: readonly string[]): string[] => picked.filter((id) => !shown.includes(id));
 
 // The picked photos with one more or one fewer, in the order picked, never more than AI_DRAFT_IMAGES_MAX.
 export function togglePhoto(picked: readonly string[], fileId: string): string[] {
@@ -55,12 +69,14 @@ function PhotoButton({ fileId, name, mime, picked, order, full, disabled, onTogg
   );
 }
 
-// The library's usable photos, page by page.
-function LibraryPhotos({ picked, disabled, onChange }: { picked: readonly string[]; disabled: boolean; onChange: (picked: string[]) => void }) {
+// The library's photos the member may use and the model can be sent, page by page.
+function LibraryPhotos({ picked, disabled, onChange, onShown }: { picked: readonly string[]; disabled: boolean; onChange: (picked: string[]) => void; onShown: (ids: string[]) => void }) {
   const t = useTranslations('social.aiPhotos');
   const tSocial = useTranslations('social');
-  const library = useLibrary('');
+  const library = useLibrary('', null, true, true);
   const items: LibraryItem[] = (library.data?.pages.flatMap((p) => p.items) ?? []).filter(usablePhoto);
+  const ids = items.map((i) => i.fileId).join(',');
+  useEffect(() => onShown(ids ? ids.split(',') : []), [ids, onShown]);
   if (library.isLoading) return <Spinner />;
   if (library.error) return <ErrorText>{errorMessage(library.error)}</ErrorText>;
   return (
@@ -97,8 +113,10 @@ function LibraryPhotos({ picked, disabled, onChange }: { picked: readonly string
 export function AiPhotoPicker({ postMedia, picked, disabled, onChange, libraryOpen: initiallyOpen = false }: { postMedia: readonly MediaItem[]; picked: readonly string[]; disabled: boolean; onChange: (picked: string[]) => void; libraryOpen?: boolean }) {
   const t = useTranslations('social.aiPhotos');
   const [libraryOpen, setLibraryOpen] = useState(initiallyOpen);
+  const [libraryShown, setLibraryShown] = useState<string[]>([]);
   const own = postMedia.filter(usablePhoto);
   const full = picked.length >= AI_DRAFT_IMAGES_MAX;
+  const others = unlisted(picked, [...own.map((m) => m.fileId), ...(libraryOpen ? libraryShown : [])]);
   return (
     <div className="space-y-3 rounded-xl border bg-muted/40 p-3">
       <p className="text-xs text-subtle-foreground">{t('hint', { max: AI_DRAFT_IMAGES_MAX })}</p>
@@ -126,7 +144,27 @@ export function AiPhotoPicker({ postMedia, picked, disabled, onChange, libraryOp
       <Button variant="ghost" size="sm" aria-expanded={libraryOpen} onClick={() => setLibraryOpen(!libraryOpen)}>
         {t(libraryOpen ? 'closeLibrary' : 'fromLibrary')}
       </Button>
-      {libraryOpen && <LibraryPhotos picked={picked} disabled={disabled} onChange={onChange} />}
+      {libraryOpen && <LibraryPhotos picked={picked} disabled={disabled} onChange={onChange} onShown={setLibraryShown} />}
+      {others.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">{t('pickedElsewhere')}</p>
+          <ul className="grid grid-cols-4 gap-2 sm:grid-cols-6">
+            {others.map((fileId) => (
+              <PhotoButton
+                key={fileId}
+                fileId={fileId}
+                name={t('pickedPhoto', { n: picked.indexOf(fileId) + 1 })}
+                mime="image/jpeg"
+                picked
+                order={picked.indexOf(fileId)}
+                full={full}
+                disabled={disabled}
+                onToggle={() => onChange(togglePhoto(picked, fileId))}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
       <p className={cn('text-xs tabular-nums', full ? 'text-warning' : 'text-muted-foreground')}>
         {t('picked', { count: picked.length, max: AI_DRAFT_IMAGES_MAX })}
         {full ? ` · ${t('max', { max: AI_DRAFT_IMAGES_MAX })}` : ''}
@@ -136,7 +174,7 @@ export function AiPhotoPicker({ postMedia, picked, disabled, onChange, libraryOp
 }
 
 // *Soạn bài từ ảnh này* on a library item: the composer opens with the photo picked in its AI draft box. Only for a
-// photo the model can be sent.
+// photo the model can be sent; the library shows it only where useAiPhotos says the server drafts from photos.
 export function DraftFromPhotoLink({ slug, item }: { slug: string; item: Pick<LibraryItem, 'fileId' | 'mime' | 'sizeBytes'> }) {
   const t = useTranslations('social.aiPhotos');
   if (!usablePhoto(item)) return null;

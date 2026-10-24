@@ -409,7 +409,7 @@ export function VouchersPage() {
       ) : vouchers.error && rows.length === 0 ? (
         <ErrorText>{errorMessage(vouchers.error)}</ErrorText>
       ) : rows.length === 0 ? (
-        <Empty title={t('empty')} />
+        <Empty title={t('empty')} hint={t('emptyHint')} />
       ) : (
         <>
           <DataTable

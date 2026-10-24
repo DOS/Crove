@@ -53,4 +53,11 @@ describe('notification mail for a low queue (#1079)', () => {
       expect(await render({ kind: 'queue_low', org: 'Cửa hàng A', path })).toBeNull();
     }
   });
+
+  it('links to a new post only for a low queue (#1095)', async () => {
+    for (const kind of ['review_requested', 'failed', 'channel_expired', 'mention', 'post_outperforming']) {
+      expect(await render({ kind, org: 'Cửa hàng A', post: null, channel: 'Trang thử', ratio: '3.0', path: `/o/cua-hang-a/social/new?channel=${CHANNEL}` }), kind).toBeNull();
+    }
+    expect(await render({ kind: 'channel_expired', org: 'Cửa hàng A', post: null, channel: 'Trang thử', path: '/o/cua-hang-a/social/channels' })).not.toBeNull();
+  });
 });

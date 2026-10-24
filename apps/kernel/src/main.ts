@@ -1,5 +1,6 @@
 // Crove kernel entry point. One image, several roles:
-//   migrate      apply SQL migrations (the job schema included) and set role passwords
+//   migrate      apply SQL migrations (the job schema included), set role passwords and install the DDL watch's
+//                event triggers (#1202) where the admin role may
 //   auth-grants  after Supabase Auth has started: let the session check read auth.sessions, auth.users and
 //                auth.mfa_factors (user_id, status)
 //   api          HTTP API + web UI
@@ -17,8 +18,9 @@
 //   org-purge <org slug or id> --reason <text>
 //                 apply the offboarding deletion map to an org in offboarding whose export is old enough, and close
 //                 it (issue #1024); run it in the worker's container
+//   vapid-keys    print a new VAPID key pair for browser push (issue #1238): VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY
 // It wires the open-source default adapters into the composition root (createKernel, ADR-0030).
-import { applyAuthGrants, migrate, setRolePasswords } from '@crove/db/migrate';
+import { applyAuthGrants, installDdlWatch, migrate, setRolePasswords } from '@crove/db/migrate';
 import { liveAuthUrl, loadConfig, type Config } from './config.ts';
 import { createKernel, defaultAdapters, type ServerRole } from './kernel.ts';
 import { describeMailer } from './mail.ts';
@@ -26,9 +28,10 @@ import { runPilotCheck } from './pilot-check.ts';
 import { runProber } from './prober.ts';
 import { describeStorage } from './storage.ts';
 import { runUsageReport } from './usage-report.ts';
+import { generateVapidKeys } from './web-push.ts';
 
-type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | 'org-purge' | ServerRole;
-const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable', 'org-purge'];
+type Role = 'migrate' | 'auth-grants' | 'prober' | 'usage-report' | 'pilot-check' | 'exports-rebind' | 'user-disable' | 'user-enable' | 'org-purge' | 'vapid-keys' | ServerRole;
+const ROLES: readonly Role[] = ['migrate', 'auth-grants', 'api', 'worker', 'all', 'prober', 'usage-report', 'pilot-check', 'exports-rebind', 'user-disable', 'user-enable', 'org-purge', 'vapid-keys'];
 
 async function runMigrate(config: Config) {
   const adminUrl = config.ADMIN_DATABASE_URL;
@@ -41,6 +44,9 @@ async function runMigrate(config: Config) {
     crove_reporter: config.CROVE_REPORTER_DB_PASSWORD,
     supabase_auth_admin: config.AUTH_DB_PASSWORD,
   });
+  // The superuser step of the DDL watch (#1202): skipped, with a log line, where the admin role may not create event
+  // triggers.
+  await installDdlWatch({ adminUrl, log: (m) => console.log(`[migrate] ${m}`) });
   console.log(`[migrate] done, ${applied.length} new migration(s)`);
 }
 
@@ -58,6 +64,13 @@ async function main() {
   if (role === 'usage-report') process.exit(await runUsageReport(process.argv.slice(3)));
   // Reads the raw settings, not loadConfig(), so it can report every problem instead of stopping at the first.
   if (role === 'pilot-check') process.exit(await runPilotCheck(process.argv.slice(3)));
+  // Needs no settings: a fresh key pair to put in the environment, never stored or logged anywhere else.
+  if (role === 'vapid-keys') {
+    const keys = generateVapidKeys();
+    console.log(`VAPID_PUBLIC_KEY=${keys.publicKey}
+VAPID_PRIVATE_KEY=${keys.privateKey}`);
+    return;
+  }
   const config = loadConfig();
   if (role === 'migrate') return runMigrate(config);
   if (role === 'auth-grants') return runAuthGrants(config);
