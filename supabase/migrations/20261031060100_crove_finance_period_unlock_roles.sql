@@ -3,7 +3,7 @@
 --
 -- ADR-0021 restricts reopening to the chief accountant and the owner; until roles existed, unlock_period() let owners
 -- only (20261020070000_crove_finance_period_lock.sql). Now a user who holds the permission finance.period.unlock
--- through an org-wide role assignment (finance.chief_accountant, 20261031020000_crove_kernel_roles.sql) may unlock as
+-- through an org-wide role assignment (finance.chief_accountant, 20261031060000_crove_kernel_roles.sql) may unlock as
 -- well. Nothing else changes: same signature, order rules, refusals and row lock; locking stays with owners and admins.
 -- The finance.period.unlock command checks the same first (its permission, read in the command's transaction), so a
 -- revoked chief accountant is refused from the next command. CREATE OR REPLACE keeps owner and ACL.
