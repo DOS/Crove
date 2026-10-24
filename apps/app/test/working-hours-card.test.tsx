@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MyCalendar } from '@crove/kernel-contract';
 import { en } from '../src/i18n/messages/en.ts';
 import { catalog } from '../src/i18n/runtime.ts';
+import { formatDate } from '../src/lib/format.ts';
 
 const client = vi.hoisted(() => ({ current: null as unknown as import('@tanstack/react-query').QueryClient }));
 
@@ -63,7 +64,7 @@ describe('WorkingHoursCard', () => {
     expect(days[2]).toContain('value="12:00"');
     expect(html).toContain('>Asia/Ho_Chi_Minh<');
     // The two-day day off, not the meeting.
-    expect(html).toContain('11/2/2026 to 11/3/2026');
+    expect(html).toContain(`${formatDate('2026-11-02', 'vi')} to ${formatDate('2026-11-03', 'vi')}`);
     expect(html).not.toContain('Họp');
     expect(html).toContain(`>${en.workingHours.save}<`);
     expect(html).toContain(`aria-label="${en.workingHours.addDayOff}"`);

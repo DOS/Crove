@@ -3,7 +3,7 @@
 // off without being listed. A viewer sees their hours and changes nothing. The server enforces every rule.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
-import { useFormatter, useTranslations } from 'use-intl';
+import { useTranslations } from 'use-intl';
 import { CALENDAR_RANGE_MAX_DAYS, type MyCalendar, type Weekday } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -11,6 +11,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { ErrorText, Spinner } from '../components/ui.tsx';
+import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { WEEKDAY_KEYS, dayOffRange, daysOf, datesOf, hoursOf, timeZones, type DayHours } from '../lib/calendar.ts';
 
@@ -76,7 +77,7 @@ function HoursForm({ calendar, canEdit }: { calendar: MyCalendar; canEdit: boole
 
 function DaysOff({ calendar, canEdit }: { calendar: MyCalendar; canEdit: boolean }) {
   const t = useTranslations('workingHours');
-  const format = useFormatter();
+  const f = useFormat();
   const tz = calendar.hours.timeZone;
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
@@ -91,7 +92,7 @@ function DaysOff({ calendar, canEdit }: { calendar: MyCalendar; canEdit: boolean
   );
   const cancel = useMutation(orpc.calendar.cancelEvent.mutationOptions({ onSuccess: refresh }));
   const off = calendar.events.filter((e) => e.kind === 'time_off');
-  const day = (date: string) => format.dateTime(new Date(`${date}T00:00:00Z`), { timeZone: 'UTC', day: 'numeric', month: 'numeric', year: 'numeric' });
+  const day = (date: string) => f.date(date);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     add.mutate({ ...dayOffRange(tz, from, to || from), timeZone: tz, kind: 'time_off', title: null });
