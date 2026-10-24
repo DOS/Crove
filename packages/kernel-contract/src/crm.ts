@@ -115,3 +115,24 @@ export const zBookingManageAsk = z.discriminatedUnion('action', [
   z.strictObject({ manage: z.string().regex(BOOKING_MANAGE_TOKEN), action: z.literal('move'), startsAt: z.iso.datetime({ offset: true }) }),
 ]);
 export type BookingManageAsk = z.infer<typeof zBookingManageAsk>;
+
+// The bookings screen of the app (#1320): a member's own bookings (those of the types they host), or the org's for
+// owners and admins; upcoming ones first to last, past ones last to first.
+export const zBookingListQuery = z.strictObject({ scope: z.enum(['mine', 'org']), period: z.enum(['upcoming', 'past']) });
+export type BookingListQuery = z.infer<typeof zBookingListQuery>;
+export const zBookingItem = z.strictObject({
+  id: z.string(),
+  eventType: z.strictObject({ id: z.string(), slug: z.string(), title: z.string(), active: z.boolean() }),
+  hostUserId: z.string(),
+  status: z.enum(BOOKING_STATUSES),
+  startsAt: z.string(),
+  endsAt: z.string(),
+  // The visitor's own zone, which their mails use.
+  timeZone: z.string(),
+  // Null once a personal-data erasure cleared them.
+  visitor: z.strictObject({ name: z.string().nullable(), email: z.string().nullable(), phone: z.string().nullable(), note: z.string().nullable() }),
+  partyId: z.string().nullable(),
+});
+export type BookingItem = z.infer<typeof zBookingItem>;
+export const zBookingCancel = z.strictObject({ bookingId: zId });
+export const zBookingMove = z.strictObject({ bookingId: zId, startsAt: z.iso.datetime({ offset: true }) });
