@@ -29,6 +29,12 @@ describe('social notifications (#637)', () => {
     expect(NOTIFICATION_KINDS).toContain('post_outperforming');
   });
 
+  it('opens the post a due date reminder is about (#1359), and lists its switch', () => {
+    const postId = '0190a3c4-0000-7000-8000-000000000005';
+    expect(notificationTarget({ kind: 'assignment_due', postId })).toEqual({ to: 'post', postId });
+    expect(NOTIFICATION_KINDS).toContain('assignment_due');
+  });
+
   it('shows the unread count up to 99, and nothing for none', () => {
     expect(unreadLabel(0)).toBeNull();
     expect(unreadLabel(1)).toBe('1');

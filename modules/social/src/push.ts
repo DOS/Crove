@@ -166,6 +166,11 @@ export function pushLine(kind: SocialNotificationKind, detail: Readonly<Record<s
       return 'Hàng đợi của một kênh sắp hết bài';
     case 'post_outperforming':
       return 'Một bài đang được tương tác nhiều hơn hẳn thường lệ';
+    // An assignment and its due date (#1359).
+    case 'assigned':
+      return typeof detail.count === 'string' && /^\d{1,3}$/.test(detail.count) ? `Bạn được giao ${detail.count} bài mới` : 'Bạn được giao một bài mới';
+    case 'assignment_due':
+      return detail.stage === 'overdue' ? 'Một bài được giao cho bạn đã quá hạn' : 'Một bài được giao cho bạn sắp đến hạn';
     default:
       return 'Bạn có thông báo mới';
   }
