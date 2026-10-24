@@ -46,7 +46,6 @@ const PENDING_TABLES = new Set<string>([
   'crove_crm.booking',
   'crove_kernel.role_assignment',
   'crove_social.media_archive',
-  'crove_social.saved_view',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
