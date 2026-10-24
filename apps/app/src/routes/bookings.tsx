@@ -88,10 +88,8 @@ export function BookingsPage() {
   const manager = org.data?.role === 'owner' || org.data?.role === 'admin';
   const bookings = useQuery({ ...orpc.crm.bookings.list.queryOptions({ input: { scope: manager ? scope : 'mine', period } }), enabled: org.data !== undefined });
   const now = Date.now();
-  const nameOf = (userId: string) => {
-    const m = org.data?.members.find((x) => x.userId === userId);
-    return m ? (m.displayName ?? m.email) : null;
-  };
+  const names = new Map((org.data?.members ?? []).map((m) => [m.userId, m.displayName ?? m.email]));
+  const nameOf = (userId: string) => names.get(userId) ?? null;
 
   return (
     <div>
