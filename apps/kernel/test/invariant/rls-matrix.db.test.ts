@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.role_assignment',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -581,6 +582,11 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
     make: (o) => ({
       row: { org_id: o.id, window_start: '2026-10-01T00:00:00Z', actor_key: `user:${o.owner}`, command: 'rls.matrix', code: `RLS_${tag()}` },
     }),
+  },
+  // Who holds which built-in role (issue #1279): tenant roles only read it; two owner-only definers write it. The seeded
+  // row gives the org's owner the chief accountant role for the whole org (no legal entity).
+  'crove_kernel.role_assignment': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, role_key: 'finance.chief_accountant', granted_by: o.owner } }),
   },
   'crove_kernel.task': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), title: 'RLS matrix task', source: 'human', created_by_type: 'user' } }),
