@@ -1231,6 +1231,8 @@ export const vi = {
     title: 'Hộp thư chứng từ',
     subtitle: 'Gửi hóa đơn vào đây. AI đề xuất bút toán, bạn chỉ việc kiểm tra và duyệt.',
     upload: 'Tải chứng từ lên',
+    dropHereCompact: 'Kéo thả hóa đơn vào đây để tải lên, hoặc dùng nút Tải chứng từ lên',
+    forwardTo: 'Chuyển tiếp tới',
     dropHere: 'Kéo thả hóa đơn vào đây',
     formatsXml: 'XML hóa đơn điện tử · tối đa 25 MB mỗi tệp',
     formatsAll: 'XML hóa đơn điện tử, PDF hoặc ảnh chụp · tối đa 25 MB mỗi tệp',

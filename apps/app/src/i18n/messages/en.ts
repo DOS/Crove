@@ -1233,6 +1233,8 @@ export const en = {
     title: 'Document inbox',
     subtitle: 'Send invoices here. AI proposes the entries, you only check and approve.',
     upload: 'Upload documents',
+    dropHereCompact: 'Drop invoices here to upload them, or use Upload documents',
+    forwardTo: 'Forward to',
     dropHere: 'Drop invoices here',
     formatsXml: 'E-invoice XML · up to 25 MB per file',
     formatsAll: 'E-invoice XML, PDF or photo · up to 25 MB per file',
