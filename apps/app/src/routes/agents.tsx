@@ -27,6 +27,14 @@ type Member = { userId: string; email: string; displayName: string | null };
 
 const RISKS = ['R0', 'R1', 'R2'] as const;
 const AGENT_STATUSES = ['active', 'paused', 'retired'] as const;
+// A module by its name in the reader's language ("finance" reads "Kế toán"); a module this build does not know keeps its
+// id.
+const MODULE_IDS = ['kernel', 'finance', 'social'] as const;
+function useModuleName() {
+  const t = useTranslations('modules');
+  return (id: string) => ((MODULE_IDS as readonly string[]).includes(id) ? t(id as (typeof MODULE_IDS)[number]) : id);
+}
+
 const SCOPES = ['org', 'module', 'agent'] as const;
 
 const refresh = () => void queryClient.invalidateQueries();
@@ -132,6 +140,7 @@ export function StopAi() {
 
 function KillSwitches({ switches, agents, perms }: { switches: KillSwitch[]; agents: Agent[]; perms: AgentPermissions }) {
   const t = useTranslations('agents');
+  const moduleName = useModuleName();
   const f = useFormat();
   const release = useMutation(orpc.agents.release.mutationOptions({ onSuccess: refresh }));
   if (switches.length === 0) return null;
@@ -139,7 +148,7 @@ function KillSwitches({ switches, agents, perms }: { switches: KillSwitch[]; age
     k.scope === 'org'
       ? t('scope.org')
       : k.scope === 'module'
-        ? t('scopeModule', { module: k.target })
+        ? t('scopeModule', { module: moduleName(k.target) })
         : t('scopeAgent', { name: agents.find((a) => a.id === k.target)?.displayName ?? k.target });
   return (
     <Alert variant="destructive" className="mb-6 border-destructive/30 bg-destructive/10" role="status">
@@ -265,6 +274,7 @@ type PositionContext = { members: Member[]; agents: Agent[]; positions: Position
 
 export function PositionNode({ node, ctx }: { node: ChartNode<Position>; ctx: PositionContext }) {
   const t = useTranslations('agents');
+  const moduleName = useModuleName();
   const p = node.position;
   const holder = p.holder;
   return (
@@ -281,7 +291,7 @@ export function PositionNode({ node, ctx }: { node: ChartNode<Position>; ctx: Po
           {p.status === 'paused' && <Badge variant="warning">{t('positionPaused')}</Badge>}
           {p.status === 'archived' && <Badge variant="outline">{t('positionArchived')}</Badge>}
         </div>
-        <p className="text-xs text-subtle-foreground">{t('positionMeta', { module: p.module, roleKey: p.roleKey })}</p>
+        <p className="text-xs text-subtle-foreground">{t('positionMeta', { module: moduleName(p.module), roleKey: p.roleKey })}</p>
         <p className="text-sm text-muted-foreground">
           {holder === null
             ? t('vacant')
@@ -304,6 +314,7 @@ export function PositionNode({ node, ctx }: { node: ChartNode<Position>; ctx: Po
 
 function AddPosition({ positions }: { positions: Position[] }) {
   const t = useTranslations('agents');
+  const moduleName = useModuleName();
   const modules = getConfig().modules;
   const [title, setTitle] = useState('');
   const [module, setModule] = useState(modules[0] ?? 'kernel');
@@ -335,7 +346,7 @@ function AddPosition({ positions }: { positions: Position[] }) {
           <NativeSelect className="mt-1 w-full" value={module} disabled={locked} onChange={(e) => setModule(e.target.value)}>
             {modules.map((m) => (
               <NativeSelectOption key={m} value={m}>
-                {m}
+                {moduleName(m)}
               </NativeSelectOption>
             ))}
           </NativeSelect>
@@ -481,6 +492,7 @@ export function AgentRow({ agent, perms }: { agent: Agent; perms: AgentPermissio
 
 function Templates({ perms }: { perms: AgentPermissions }) {
   const t = useTranslations('agents');
+  const moduleName = useModuleName();
   const templates = useQuery(orpc.chart.templates.queryOptions());
   const install = useMutation(orpc.chart.installTemplate.mutationOptions({ onSuccess: refresh }));
   return (
@@ -501,10 +513,10 @@ function Templates({ perms }: { perms: AgentPermissions }) {
                   <span className="font-medium text-foreground">{tpl.title}</span>
                   <Badge variant="secondary">{t('aiBadge')}</Badge>
                 </div>
-                <p className="text-xs text-subtle-foreground">{t('templateMeta', { module: tpl.module, risk: tpl.maxRisk, cap: String(tpl.dailyRunCap) })}</p>
+                <p className="text-xs text-subtle-foreground">{t('templateMeta', { module: moduleName(tpl.module), risk: tpl.maxRisk, cap: String(tpl.dailyRunCap) })}</p>
                 {!tpl.moduleEnabled && (
                   <Alert className="border-warning/30 bg-warning/10 text-warning" role="note">
-                    <AlertDescription className="text-warning">{t('moduleDisabled', { module: tpl.module })}</AlertDescription>
+                    <AlertDescription className="text-warning">{t('moduleDisabled', { module: moduleName(tpl.module) })}</AlertDescription>
                   </Alert>
                 )}
                 {perms.manage && (
