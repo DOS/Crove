@@ -543,6 +543,7 @@ export interface FinanceVatReturnFiledTable {
   carried_out_amount: ColumnType<string | null, string | null, NotGranted>;
   marked_by: ColumnType<string, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.vendor_account_rule */

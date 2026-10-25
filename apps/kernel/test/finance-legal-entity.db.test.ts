@@ -1,5 +1,5 @@
 // The books per legal entity (issue #1280, part 1) on a real PostgreSQL 17. The database is migrated up to the file
-// before 20261102060000, given a ledger of a few thousand rows and a WORM batch over it, then migrated to the end: every
+// before 20261102100000, given a ledger of a few thousand rows and a WORM batch over it, then migrated to the end: every
 // finance row lands in its org's default entity, the archived batch still verifies, and the rewrite's cost is printed.
 // After it: new rows take their parent's entity or the default one, a mismatch or a change is refused, a member limited
 // to one entity reads and writes only that entity's books, rules are unique per entity, and the nightly comparison
@@ -21,7 +21,7 @@ import { LocalArchiveStore, verifyArchive, writeArchive } from '../src/worm.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const THIS_VERSION = '20261102060000';
+const THIS_VERSION = '20261102100000';
 // Entries posted before the migration, two lines and two deltas each.
 const LEGACY_ENTRIES = 1500;
 const PER_ENTITY = [
@@ -41,6 +41,7 @@ const PER_ENTITY = [
   'crove_finance.portal_invoice_list',
   'crove_finance.portal_invoice_row',
   'crove_finance.categorization_rule',
+  'crove_finance.vat_return_filed',
 ];
 const RLS_DENIED = /new row violates row-level security policy/;
 

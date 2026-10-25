@@ -11,7 +11,7 @@
 --   per legal entity       journal_entry, journal_line, period_balance_delta, cash_voucher, journal_voucher,
 --                          purchase_document, purchase_line, purchase_tax_rate, purchase_document_void,
 --                          input_vat_check, bank_line, fixed_asset, depreciation_line, portal_invoice_list,
---                          portal_invoice_row, categorization_rule
+--                          portal_invoice_row, categorization_rule, vat_return_filed
 --   org-wide (unchanged)   account (the TT133 catalog, no org), org_account (the org's sub-accounts: one chart for
 --                          every entity of the org), vendor_account_rule (keyed by party, which is org-wide; the party's
 --                          record_le link narrows it later, #1280 part 3), period_lock (keyed per entity together with
@@ -150,7 +150,8 @@ DECLARE
     ARRAY['crove_finance.depreciation_line', 'crove_finance.fixed_asset', 'asset_id'],
     ARRAY['crove_finance.portal_invoice_list', '', ''],
     ARRAY['crove_finance.portal_invoice_row', 'crove_finance.portal_invoice_list', 'list_id'],
-    ARRAY['crove_finance.categorization_rule', 'crove_finance.purchase_document', 'source_document_id']
+    ARRAY['crove_finance.categorization_rule', 'crove_finance.purchase_document', 'source_document_id'],
+    ARRAY['crove_finance.vat_return_filed', '', '']
   ];
 BEGIN
   FOREACH v_spec SLICE 1 IN ARRAY v_specs LOOP
@@ -214,11 +215,15 @@ ANALYZE crove_finance.journal_entry, crove_finance.journal_line, crove_finance.p
   crove_finance.journal_voucher, crove_finance.purchase_document, crove_finance.purchase_line, crove_finance.purchase_tax_rate,
   crove_finance.purchase_document_void, crove_finance.input_vat_check, crove_finance.bank_line, crove_finance.fixed_asset,
   crove_finance.depreciation_line, crove_finance.portal_invoice_list, crove_finance.portal_invoice_row,
-  crove_finance.categorization_rule;
+  crove_finance.categorization_rule, crove_finance.vat_return_filed;
 
 -- The balance key: a month's balance of an account in one entity is the sum of these rows.
 CREATE INDEX IF NOT EXISTS period_balance_delta_balance_idx
   ON crove_finance.period_balance_delta (org_id, legal_entity_id, account_code, period_month);
+
+-- Each entity files its own VAT returns: the latest mark of a period is read per entity (finance.vat.period's [22]).
+CREATE INDEX IF NOT EXISTS vat_return_filed_entity_period_idx
+  ON crove_finance.vat_return_filed (legal_entity_id, org_id, period, created_at DESC, id DESC);
 
 -- What a rule matches is unique per entity. The vendor key loses the unique index that backed it, so it gets its own.
 CREATE INDEX IF NOT EXISTS categorization_rule_vendor_idx ON crove_finance.categorization_rule (org_id, vendor_party_id)
