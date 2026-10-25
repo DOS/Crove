@@ -13,7 +13,7 @@
 // wait), and the clients' answers only on the review links that could take an answer in the period, those made at most
 // REVIEW_LINK_MAX_DAYS before it (a link expires within 31 days, so their first answers are all on them). "Sent to
 // review" counts the social.post.submit rows only: a post imported or created with submit, or sent back by a policy,
-// is not in it (the Metrics tab's card says so).
+// is not in it (the Metrics tab's card says so). The assignments leave out archived posts that never went out (#1331).
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { SOCIAL_REVIEW_LINK_KINDS, type MemberRole } from '@crove/db';
@@ -78,6 +78,11 @@ export const teamReport = defineQuery({
                )) AS overdue
         FROM crove_social.post p
         WHERE p.org_id = ${org}::uuid AND p.assignee_user_id IS NOT NULL AND p.due_at >= ${from} AND p.due_at < ${to} AND p.status <> 'cancelled'
+          -- An archived post (#1299) that never went out is set aside, as a cancelled one; one that went out stays, as
+          -- the reports describe what went out (#1331).
+          AND (p.archived_at IS NULL OR EXISTS (
+            SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND v.status IN ('published', 'removed')
+          ))
         GROUP BY p.assignee_user_id`.execute(ctx.trx),
       // One decision per reviewer, post, verdict and moment: a decision on several channels writes a row per channel in
       // one transaction. The submissions are read once, for the decided posts, from the first one's creation on but

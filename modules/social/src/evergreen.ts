@@ -214,7 +214,8 @@ export const postRepostEvergreen = defineCommand({
     // No repost piles up for review while the org's publishing is held (#946); the post stays due for after the release.
     if (await publishingHeld(ctx)) return { postId: null };
     // The scan ran outside this transaction: under the post's lock, check again that it is still evergreen and has no
-    // repost on its way (another worker, or a person turning it off, may have come first).
+    // repost on its way (another worker, or a person turning it off, may have come first). An archived repost (#1299)
+    // waits for nobody, so it is done, as evergreen_due reads it (#1341).
     await lockPost(ctx.trx, ctx.orgId, input.postId);
     const still = await ctx.trx
       .selectFrom('crove_social.post as p')
@@ -229,6 +230,7 @@ export const postRepostEvergreen = defineCommand({
               .select('r.id')
               .whereRef('r.org_id', '=', 'p.org_id')
               .whereRef('r.repost_of', '=', 'p.id')
+              .where('r.archived_at', 'is', null)
               .where('r.status', 'not in', [...REPOST_DONE]),
           ),
         ),
