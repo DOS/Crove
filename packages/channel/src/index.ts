@@ -342,6 +342,10 @@ export interface EditInput {
   // and fetches its images again (Zalo's article/update, #1430); null when the storage cannot hand one out. Absent in
   // callers that have no storage.
   mediaUrl?(fileId: string): Promise<string | null>;
+  // What the platform granted the connection, as stored at connect (#1474): an adapter whose edit needs a permission
+  // connect asks for but does not require (YouTube's force-ssl) refuses before any call when it is missing. Absent in
+  // callers that do not read it.
+  scopes?: readonly string[];
   // The external_call key of this edit.
   callKey: string;
 }
