@@ -4798,6 +4798,7 @@ export const vi = {
       ROLE_REVOKE_WIDENS_SCOPE: 'Đây là pháp nhân cuối cùng mà thành viên này được xem. Thu hồi thì họ sẽ xem được mọi pháp nhân; nếu họ không còn làm việc cho tổ chức, hãy xóa họ khỏi tổ chức',
       UNKNOWN_PRESET: 'Không có quy tắc duyệt này',
       NO_CHIEF_ACCOUNTANT: 'Hãy giao vai trò kế toán trưởng cho một thành viên trước khi chọn quy tắc chỉ kế toán trưởng duyệt bút toán',
+      LAST_CHIEF_ACCOUNTANT: 'Tổ chức đang dùng quy tắc chỉ kế toán trưởng duyệt bút toán nên phải còn ít nhất một kế toán trưởng; hãy giao vai trò cho người khác hoặc đổi quy tắc duyệt trước',
       WORKING_HOURS_EMPTY: 'Hãy chọn ít nhất một khung giờ làm việc',
       CALENDAR_EVENT_NOT_FOUND: 'Không tìm thấy sự kiện này trên lịch của bạn',
       CALENDAR_EVENT_IS_BOOKING: 'Đây là lịch hẹn của khách; hãy hủy từ mục Lịch hẹn',
