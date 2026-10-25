@@ -33,12 +33,21 @@ export function dismissToast(id: number): void {
   emit();
 }
 
-export function toast(message: string, tone: ToastTone = 'success'): number {
+// holdUntil: the screen change the toast goes with (#1547). A result toast starts its TOAST_MS once it has settled,
+// so it lives its whole time on the screen it is about; one that never settles (a navigation another one superseded)
+// leaves the toast until it is closed or pushed out, never lost.
+export function toast(message: string, tone: ToastTone = 'success', options: { holdUntil?: Promise<unknown> } = {}): number {
   const id = nextId++;
   const kept = toasts.slice(-(MAX_TOASTS - 1));
   for (const dropped of toasts.filter((t) => !kept.includes(t))) dismissToast(dropped.id);
   toasts = [...kept, { id, message, tone }];
-  if (tone === 'success') timers.set(id, setTimeout(() => dismissToast(id), TOAST_MS));
+  if (tone === 'success') {
+    const start = () => {
+      if (toasts.some((t) => t.id === id)) timers.set(id, setTimeout(() => dismissToast(id), TOAST_MS));
+    };
+    if (options.holdUntil) void options.holdUntil.then(start, start);
+    else start();
+  }
   emit();
   return id;
 }

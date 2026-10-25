@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { canMarkTaxDone, dueAcrossClients, taxPeriodParts } from '../src/lib/tax-calendar.ts';
 
-const due = (obligation: 'vat_return' | 'cit_provisional', period: string, dueDate: string) => ({ obligation, period, dueDate, daysLeft: 0, legalBasis: 'x', confirmed: false });
+const due = (obligation: 'vat_return' | 'cit_provisional', period: string, dueDate: string) => ({ obligation, period, dueDate, daysLeft: 0, legalBasis: 'x', confirmed: false, openEntities: [] });
 
 describe('tax calendar on the home screen', () => {
   it('lists every client dues by due date, then by client name', () => {

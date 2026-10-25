@@ -87,7 +87,13 @@ export async function taxDuesOf(ctx: Pick<QueryContext, 'trx' | 'orgId'>, vatFil
   const dues = taxDues(settings, from < today ? from : today, addDays(today, TAX_DUE_WINDOW_DAYS));
   if (dues.length === 0) return [];
   // The entities the reader sees, and the marks they made for these periods.
-  const entities = await ctx.trx.selectFrom('crove_kernel.legal_entity').select(['id', 'is_default', 'created_at']).where('org_id', '=', ctx.orgId).execute();
+  const entities = await ctx.trx
+    .selectFrom('crove_kernel.legal_entity')
+    .select(['id', 'name', 'is_default', 'created_at'])
+    .where('org_id', '=', ctx.orgId)
+    .orderBy('is_default', 'desc')
+    .orderBy('name')
+    .execute();
   if (entities.length === 0) return [];
   const done = await ctx.trx
     .selectFrom('crove_kernel.tax_obligation_done')
@@ -97,28 +103,28 @@ export async function taxDuesOf(ctx: Pick<QueryContext, 'trx' | 'orgId'>, vatFil
     .execute();
   const marks = new Map<string, Set<string>>();
   for (const m of done) marks.set(`${m.obligation}:${m.period}`, (marks.get(`${m.obligation}:${m.period}`) ?? new Set()).add(m.legal_entity_id));
-  // Who must mark an obligation for the org to be done with it:
-  // - the VAT return: the default entity alone, the one finance files for, until it files per entity (#1280 part 2);
-  // - any other: the default entity, which stands for the org however old its row is, and every other entity that
-  //   existed by the end of the period, so an entity added later does not reopen periods before it.
-  // A due no entity the reader sees must mark is not the reader's (a member limited to a branch, for the VAT return).
-  const owing = (d: (typeof dues)[number]) =>
-    entities.filter((e) => e.is_default || (d.obligation !== 'vat_return' && vietnamDay(new Date(e.created_at)) <= d.periodEnd));
+  // Who must mark an obligation for the org to be done with it: the default entity, which stands for the org however old
+  // its row is, and every other entity that existed by the end of the period, so an entity added later does not reopen
+  // periods before it. Each entity files its own VAT return since finance marks it per entity (#1531).
+  const owing = (d: (typeof dues)[number]) => entities.filter((e) => e.is_default || vietnamDay(new Date(e.created_at)) <= d.periodEnd);
   const day = (date: string) => Date.parse(`${date}T00:00:00Z`);
   return dues
-    .filter((d) => {
+    .map((d) => {
       const marked = marks.get(`${d.obligation}:${d.period}`);
-      // Due while an entity that owes it has not marked it; with none owing, not the reader's.
-      return owing(d).some((e) => !marked?.has(e.id));
+      return { due: d, open: owing(d).filter((e) => !marked?.has(e.id)) };
     })
+    // Due while an entity that owes it has not marked it; with none owing, not the reader's.
+    .filter(({ open }) => open.length > 0)
     .slice(0, MAX_DUES)
-    .map((d) => ({
+    .map(({ due: d, open }) => ({
       obligation: d.obligation,
       period: d.period,
       dueDate: d.dueDate,
       daysLeft: Math.round((day(d.dueDate) - day(today)) / DAY_MS),
       legalBasis: d.legalBasis,
       confirmed: d.confirmed,
+      // The entities the reader sees that still owe it (#1553), the default entity first.
+      openEntities: open.map((e) => ({ id: e.id, name: e.name })),
     }));
 }
 
