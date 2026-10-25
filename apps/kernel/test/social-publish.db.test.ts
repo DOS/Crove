@@ -1807,16 +1807,26 @@ suite('social publishing on PostgreSQL (S4)', () => {
       admin(async (c) => {
         const posts: string[] = Array.from({ length: count }, () => randomUUID());
         const ids: string[] = Array.from({ length: count }, () => randomUUID());
+        // Every column but the generated ones (search_text, #1360), which an insert may not name.
+        const columns = async (table: string) =>
+          (
+            await c.query<{ list: string }>(
+              "SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position) AS list FROM information_schema.columns WHERE table_schema = 'crove_social' AND table_name = $1 AND is_generated = 'NEVER'",
+              [table],
+            )
+          ).rows[0]?.list as string;
+        const postColumns = await columns('post');
+        const variantColumns = await columns('post_variant');
         await c.query(
-          `INSERT INTO crove_social.post SELECT (jsonb_populate_record(NULL::crove_social.post, to_jsonb(p) || jsonb_build_object('id', x.pid))).*
-           FROM crove_social.post p, unnest($2::uuid[]) x(pid) WHERE p.id = (SELECT post_id FROM crove_social.post_variant WHERE id = $1)`,
+          `INSERT INTO crove_social.post (${postColumns}) SELECT ${postColumns} FROM (SELECT (jsonb_populate_record(NULL::crove_social.post, to_jsonb(p) || jsonb_build_object('id', x.pid))).*
+           FROM crove_social.post p, unnest($2::uuid[]) x(pid) WHERE p.id = (SELECT post_id FROM crove_social.post_variant WHERE id = $1)) r`,
           [template, posts],
         );
         await c.query(
-          `INSERT INTO crove_social.post_variant SELECT (jsonb_populate_record(NULL::crove_social.post_variant, to_jsonb(v) || jsonb_build_object(
+          `INSERT INTO crove_social.post_variant (${variantColumns}) SELECT ${variantColumns} FROM (SELECT (jsonb_populate_record(NULL::crove_social.post_variant, to_jsonb(v) || jsonb_build_object(
              'id', x.vid, 'post_id', x.pid, 'provider', $3::text, 'external_post_id', 'ext-' || x.vid, 'settings', $4::jsonb,
              'published_at', now() - make_interval(mins => $5::int)))).*
-           FROM crove_social.post_variant v, unnest($2::uuid[], $6::uuid[]) x(vid, pid) WHERE v.id = $1`,
+           FROM crove_social.post_variant v, unnest($2::uuid[], $6::uuid[]) x(vid, pid) WHERE v.id = $1) r`,
           [template, ids, provider, JSON.stringify(settings), Math.round(hours * 60), posts],
         );
         return ids;
