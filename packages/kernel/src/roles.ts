@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { BUILTIN_ROLE_KEYS, zId, zRoleAssignInput, type BuiltinRoleKey, type MemberRoles, type RoleAssignment } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
+import { lastChiefAccountant } from './approval.ts';
 import { memberProfiles } from './profiles.ts';
 
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
@@ -142,6 +143,8 @@ function roleRefusal(error: unknown): never {
           422,
           'Người có vai trò Chỉ xem không được giao vai trò có quyền duyệt hay mở khóa sổ; hãy đổi họ thành Thành viên trước',
         );
+      case 'LAST_CHIEF_ACCOUNTANT':
+        throw lastChiefAccountant();
       case 'ROLE_GRANT_WIDENS_SCOPE':
         throw new DomainError(
           'ROLE_GRANT_WIDENS_SCOPE',
