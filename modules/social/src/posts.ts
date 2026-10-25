@@ -15,7 +15,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId, 
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { COMMENT_RULES, firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
+import { COMMENT_RULES, coverOf, firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
 import { IMPORT_MEDIA_MAX } from './domain/plan-csv.ts';
 import { isValidTimeZone, nextFreeSlot, openSlots, placeQueued, retime, slotRefusal, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
@@ -35,6 +35,7 @@ import { digestCommands } from './digest.ts';
 import { pushCommands, pushQueries } from './push.ts';
 import { outperformingCommands } from './outperforming.ts';
 import { assignCommands } from './assign.ts';
+import { assignReminderCommands } from './assign-reminders.ts';
 import { bulkEditCommands, bulkEditQueries } from './bulk-edit.ts';
 import { archiveCommands } from './archive.ts';
 import { coverProblem } from './cover-check.ts';
@@ -62,7 +63,8 @@ import { reviewLinkCommands, reviewLinkQueries } from './review-links.ts';
 import { reviewInboxQueries } from './review-inbox.ts';
 import { attentionInboxQueries } from './attention-inbox.ts';
 import { clientOverviewQueries } from './client-overview.ts';
-import { libraryQueries, refuseHiddenMedia } from './library.ts';
+import { libraryQueries, refuseUnusableMedia } from './library.ts';
+import { mediaArchiveCommands } from './media-archive.ts';
 import { membersOutside, postFilterQuery } from './post-filter.ts';
 import { mediaTagCommands, mediaTagQueries } from './media-tags.ts';
 import { stockPhotoCommands } from './stock-photos.ts';
@@ -130,8 +132,9 @@ const zChannel = z.strictObject({
   media: zMedia.nullable().optional(),
 });
 // The files a media list names, in its order, as the hash and the channel rules see them. Every file must be an image
-// or a video of the org uploaded for posts.
-async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): Promise<PostMedia[]> {
+// or a video of the org uploaded for posts, and one the caller may attach (#1273): not archived (#1302), not another
+// channel's own media (#1081). kept: the files the post or channel already holds, which stay whatever their state.
+async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>, kept: ReadonlySet<string> = new Set()): Promise<PostMedia[]> {
   if (list.length === 0) return [];
   const files = await ctx.trx
     .selectFrom('crove_kernel.file')
@@ -144,21 +147,34 @@ async function resolveMedia(ctx: CommandContext, list: z.infer<typeof zMedia>): 
     )
     .execute();
   const byId = new Map(files.map((f) => [f.id, f]));
-  return list.map((m) => {
+  const media = list.map((m) => {
     const f = byId.get(m.fileId);
     // Only images uploaded for posts: an accounting document of the org is never published, whatever its type.
     if (!f || f.source !== 'social') throw new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh này');
     if (!MEDIA_TYPES.includes(f.content_type)) throw new DomainError('MEDIA_TYPE_UNSUPPORTED', 422, 'Bài đăng chỉ nhận ảnh JPG, PNG, WEBP, video MP4, MOV và tệp PDF');
     return { fileId: f.id, generation: f.generation, altText: m.altText || null, mime: f.content_type, sizeBytes: Number(f.size_bytes), durationMs: f.duration_ms === null ? null : Number(f.duration_ms), width: f.image_width ?? null, height: f.image_height ?? null };
   });
+  await refuseUnusableMedia(
+    ctx,
+    media.map((m) => m.fileId),
+    kept,
+  );
+  return media;
 }
+
+const fileIdsOf = (media: readonly PostMedia[]): Set<string> => new Set(media.map((m) => m.fileId));
 
 // A video's cover in a variant's settings (#642): a frame (a whole number of milliseconds) or an image of the org
 // uploaded for Social, JPEG or PNG, within the channel's size limit. Which channels take which kind, and whether the
 // variant shows one video, are channel rules (validateVariant), checked when it goes to review.
-async function checkCover(ctx: CommandContext, provider: string, settings: Record<string, unknown> | undefined): Promise<void> {
+// A cover image is attached like the post's media (#1273): an archived file or another channel's own media is refused,
+// unless it is the channel's cover already (kept).
+async function checkCover(ctx: CommandContext, provider: string, settings: Record<string, unknown> | undefined, kept: Record<string, unknown> = {}): Promise<void> {
   const problem = await coverProblem(ctx, provider, settings);
   if (problem) throw problem;
+  const cover = coverOf(settings);
+  const current = coverOf(kept);
+  if (cover && 'fileId' in cover && !(current && 'fileId' in current && current.fileId === cover.fileId)) await refuseUnusableMedia(ctx, [cover.fileId]);
 }
 
 // Replaces a post's media rows with a list, positions from 1.
@@ -223,8 +239,11 @@ export async function insertVariants(ctx: CommandContext, post: PostRow, channel
       );
   const created: Array<{ variantId: string; connectionId: string }> = [];
   for (const [i, c] of channels.entries()) {
-    const own = c.media ? await resolveMedia(ctx, c.media) : null;
-    await checkCover(ctx, providers.get(c.connectionId) as string, c.settings);
+    // A channel's own media may repeat the post's, which the post already holds.
+    const own = c.media ? await resolveMedia(ctx, c.media, fileIdsOf(post.media)) : null;
+    // A copy's cover is its source's, which a repost or an evergreen copy keeps whatever its state (a duplicate checks
+    // it before).
+    await checkCover(ctx, providers.get(c.connectionId) as string, c.settings, options.copy ? c.settings : {});
     const row = {
       channel_connection_id: c.connectionId,
       provider: providers.get(c.connectionId) as string,
@@ -391,7 +410,7 @@ export const postImport = defineCommand({
   access: MEMBERS,
   handler: async (ctx, input) => {
     requireUser(ctx);
-    await refuseHiddenMedia(
+    await refuseUnusableMedia(
       ctx,
       input.posts.flatMap((row) => (row.media ?? []).map((m) => m.fileId)),
     );
@@ -501,7 +520,7 @@ async function editPost(ctx: CommandContext, post: PostRow, input: PostEdit): Pr
     link_url: input.linkUrl === undefined ? post.link_url : input.linkUrl,
     time_zone: input.timeZone ?? post.time_zone,
     scheduled_at: input.scheduledAt === undefined ? post.scheduled_at : input.scheduledAt === null ? null : new Date(Date.parse(input.scheduledAt)),
-    media: input.media === undefined ? post.media : await resolveMedia(ctx, input.media),
+    media: input.media === undefined ? post.media : await resolveMedia(ctx, input.media, fileIdsOf(post.media)),
   };
   const mediaChanged = !sameMedia(post.media, next.media);
   const same =
@@ -571,14 +590,15 @@ interface VariantEdit {
 // The edit of one variant's own content, on the post and variant its caller locked (social.variant.update, and
 // social.post.restore_version). changed: its effective content changed, so it has a new revision and went back to draft.
 async function editVariant(ctx: CommandContext, post: PostRow, v: VariantRow, input: VariantEdit): Promise<{ revision: number; changed: boolean }> {
-  if (input.settings) await checkCover(ctx, v.provider, input.settings);
+  if (input.settings) await checkCover(ctx, v.provider, input.settings, settingsOf(v));
   const next = {
     ...v,
     body: input.body === undefined ? v.body : input.body,
     title: input.title === undefined ? v.title : input.title,
     link_url: input.linkUrl === undefined ? v.link_url : input.linkUrl,
     settings: input.settings ?? settingsOf(v),
-    media: input.media === undefined ? v.media : input.media === null ? null : await resolveMedia(ctx, input.media),
+    // The files the channel shows now (its own, or the post's) stay attached whatever their state.
+    media: input.media === undefined ? v.media : input.media === null ? null : await resolveMedia(ctx, input.media, fileIdsOf(mediaFor(base(post), v))),
   };
   if (v.content_frozen || FROZEN.has(v.status)) step(v, { type: 'edit' });
   const columns = { body: next.body, title: next.title, link_url: next.link_url, settings: JSON.stringify(next.settings), media: next.media === null ? null : JSON.stringify(next.media) };
@@ -1963,6 +1983,7 @@ export const socialCommands = [
   ...policyCommands,
   ...clientReviewCommands,
   ...assignCommands,
+  ...assignReminderCommands,
   ...snippetCommands,
   ...savedViewCommands,
   ...labelCommands,
@@ -1970,6 +1991,7 @@ export const socialCommands = [
   ...archiveCommands,
   ...bulkDraftCommands,
   ...mediaTagCommands,
+  ...mediaArchiveCommands,
   ...stockPhotoCommands,
   ...ideaCommands,
   ...bioCommands,

@@ -70,6 +70,7 @@ import {
   zSocialIdeaUpdate,
   zSocialLibraryItem,
   zSocialLibraryUse,
+  zSocialMediaArchive,
   zSocialMediaTagCount,
   zSocialStockResults,
   zSocialStockSave,
@@ -184,7 +185,7 @@ import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts'
 import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
 import { zCalendarEventAdd, zCalendarEventCancel, zCalendarEventView, zCalendarRange, zCalendarSlot, zCalendarSlotsQuery, zMyCalendar, zWorkingHours } from './calendar.ts';
-import { zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
+import { zBookingCancel, zBookingItem, zBookingListQuery, zBookingMove, zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
@@ -369,6 +370,13 @@ export const contract = {
       create: oc.input(zEventTypeInput).output(zEventType),
       update: oc.input(zEventTypeUpdate).output(zEventType),
       setActive: oc.input(zEventTypeSetActive).output(zEventType),
+    },
+    // Bookings of the public booking page (#1320): a member lists those they host (owners and admins the org's), and
+    // the host cancels or moves one; the visitor is mailed.
+    bookings: {
+      list: oc.input(zBookingListQuery).output(z.array(zBookingItem)),
+      cancel: oc.input(zBookingCancel).output(z.object({ bookingId: z.string(), status: z.literal('cancelled') })),
+      move: oc.input(zBookingMove).output(z.object({ bookingId: z.string(), startsAt: z.string() })),
     },
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
@@ -913,7 +921,10 @@ export const contract = {
             before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(),
             limit: z.number().int().min(1).max(100).optional(),
             // Only files the caller may use (#1196): a member limited to some channels gets no other channel's own media.
+            // Never archived files (#1302).
             usable: z.boolean().optional(),
+            // The archived files alone (#1302); without it the list leaves them out.
+            archived: z.boolean().optional(),
           }),
         )
         .output(z.object({ items: z.array(zSocialLibraryItem), more: z.boolean() })),
@@ -925,6 +936,10 @@ export const contract = {
       tags: oc.input(z.object({})).output(z.array(zSocialMediaTagCount)),
       tag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
       untag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
+      // Take files out of the library and its pickers, or bring them back (#1302), members and above, on files they may
+      // use; posts that already use an archived file keep it. Each lists the files it changed.
+      archive: oc.input(zSocialMediaArchive).output(z.object({ archived: z.array(zId) })),
+      restore: oc.input(zSocialMediaArchive).output(z.object({ restored: z.array(zId) })),
     },
     // Stock photos from Pexels (#1106), when the deployment set MEDIA_PEXELS_API_KEY: status says whether they are
     // offered; search and save are for members and above, and answer STOCK_PHOTOS_DISABLED without the key. The key

@@ -102,6 +102,7 @@ export interface CroveSocialSchema {
   'crove_social.idea_label': SocialIdeaLabelTable;
   'crove_social.label': SocialLabelTable;
   'crove_social.link_preview': SocialLinkPreviewTable;
+  'crove_social.media_archive': SocialMediaArchiveTable;
   'crove_social.media_attribution': SocialMediaAttributionTable;
   'crove_social.media_tag': SocialMediaTagTable;
   'crove_social.metric_snapshot': SocialMetricSnapshotTable;
@@ -153,6 +154,14 @@ export interface CrmBookingTable {
   request_token_sha256: Buffer | null;
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   decided_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  revision: Generated<number>;
+  manage_request_id: string | null;
+  manage_action: string | null;
+  manage_starts_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  manage_requested_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  manage_outcome: string | null;
+  cancelled_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  hold_event_ids: Generated<string[]>;
 }
 
 /** crove_crm.event_type */
@@ -176,6 +185,8 @@ export interface CrmEventTypeTable {
   created_at: ColumnType<Date, Date | string | undefined, Date | string>;
   updated_by: string | null;
   updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  assignment: Generated<string>;
+  co_host_user_ids: Generated<string[]>;
 }
 
 /** crove_finance.account */
@@ -1320,6 +1331,15 @@ export interface SocialLinkPreviewTable {
   text: string | null;
 }
 
+/** crove_social.media_archive */
+export interface SocialMediaArchiveTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  file_id: ColumnType<string, string, NotGranted>;
+  archived_by: ColumnType<string, string, NotGranted>;
+  archived_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
 /** crove_social.media_attribution */
 export interface SocialMediaAttributionTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -1479,6 +1499,8 @@ export interface SocialPostTable {
   text_variation_next: Generated<number>;
   archived_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   archived_by: string | null;
+  due_soon_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  overdue_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_social.post_variant */

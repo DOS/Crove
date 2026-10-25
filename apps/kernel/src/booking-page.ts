@@ -10,11 +10,16 @@ import {
   DEFAULT_WORKING_HOURS,
   freeSlots,
   isTimeZone,
+  teamSlots,
+  zBookingManage,
+  zBookingManageAsk,
   zBookingRequest,
   zBookingStatus,
   zonedDate,
+  type BookingManage,
   type BookingPage,
   type BookingStatus,
+  type EventTypeAssignment,
   type WorkingHours,
 } from '@crove/kernel-contract';
 import { DomainError, type Runtime } from '@crove/kernel-runtime';
@@ -50,10 +55,17 @@ interface PageRow {
     dailyLimit: number | null;
     locationKind: BookingPage['eventType']['locationKind'];
   };
-  hours: { weekday: number; start: number; end: number; timeZone: string }[];
-  busy: [string, string][];
+  assignment: EventTypeAssignment;
+  // Each host who may still host, lead first (#1373): their weekly hours and busy times, never who they are.
+  hosts: { hours: HoursRow[]; busy: [string, string][] }[];
   booked: string[];
 }
+type HoursRow = { weekday: number; start: number; end: number; timeZone: string };
+
+const hoursOf = (rows: HoursRow[]): WorkingHours => {
+  const first = rows[0];
+  return first ? { timeZone: first.timeZone, windows: rows.map((h) => ({ weekday: h.weekday, start: h.start, end: h.end })) } : DEFAULT_WORKING_HOURS;
+};
 
 const invalid = () => new DomainError('VALIDATION', 422, 'Dữ liệu không hợp lệ');
 
@@ -76,31 +88,35 @@ export async function bookingView(runtime: Runtime, org: string, type: string, r
     return rows[0]?.page ?? null;
   });
   if (!row) return null;
-  const first = row.hours[0];
-  const hours: WorkingHours = first ? { timeZone: first.timeZone, windows: row.hours.map((h) => ({ weekday: h.weekday, start: h.start, end: h.end })) } : DEFAULT_WORKING_HOURS;
-  const bookedPerDay = new Map<string, number>();
-  for (const at of row.booked) {
-    const day = zonedDate(hours.timeZone, Date.parse(at));
-    bookedPerDay.set(day, (bookedPerDay.get(day) ?? 0) + 1);
-  }
   const t = row.eventType;
-  const slots = freeSlots({
-    hours,
-    busy: row.busy.map(([start, end]) => ({ start: Date.parse(start), end: Date.parse(end) })),
-    skipVietnamHolidays: true,
-    rules: {
-      durationMin: t.durationMin,
-      bufferBeforeMin: t.bufferBeforeMin,
-      bufferAfterMin: t.bufferAfterMin,
-      minNoticeMin: t.minNoticeMin,
-      horizonDays: t.horizonDays,
-      dailyLimit: t.dailyLimit,
-    },
-    from: from.getTime(),
-    to: to.getTime(),
-    now,
-    bookedPerDay,
+  // Each host's free slots (the type's daily limit counted per local day of that host), then the team's: one host free
+  // for a round-robin type, every host for a collective one.
+  const perHost = row.hosts.map((host) => {
+    const hours = hoursOf(host.hours);
+    const bookedPerDay = new Map<string, number>();
+    for (const at of row.booked) {
+      const day = zonedDate(hours.timeZone, Date.parse(at));
+      bookedPerDay.set(day, (bookedPerDay.get(day) ?? 0) + 1);
+    }
+    return freeSlots({
+      hours,
+      busy: host.busy.map(([start, end]) => ({ start: Date.parse(start), end: Date.parse(end) })),
+      skipVietnamHolidays: true,
+      rules: {
+        durationMin: t.durationMin,
+        bufferBeforeMin: t.bufferBeforeMin,
+        bufferAfterMin: t.bufferAfterMin,
+        minNoticeMin: t.minNoticeMin,
+        horizonDays: t.horizonDays,
+        dailyLimit: t.dailyLimit,
+      },
+      from: from.getTime(),
+      to: to.getTime(),
+      now,
+      bookedPerDay,
+    });
   });
+  const slots = teamSlots(row.assignment === 'collective' ? 'all' : 'any', perHost);
   return {
     orgName: row.orgName,
     eventType: { slug: t.slug, title: t.title, description: t.description, durationMin: t.durationMin, locationKind: t.locationKind },
@@ -152,4 +168,44 @@ export async function bookingStatus(runtime: Runtime, org: string, type: string,
     endsAt: new Date(String((row as { endsAt: string }).endsAt)).toISOString(),
   });
   return status;
+}
+
+const iso = (value: unknown) => new Date(String(value)).toISOString();
+
+/** The booking a manage token names on this page (#1319), or null when it names none. */
+export async function bookingManageView(runtime: Runtime, org: string, type: string, body: unknown): Promise<BookingManage | null> {
+  const s = slugs(org, type);
+  const parsed = z.strictObject({ manage: z.string().max(100) }).safeParse(body);
+  if (!parsed.success) return null;
+  const row = await runtime.orgless(async (db) => {
+    const { rows } = await sql<{ view: Record<string, unknown> | null }>`SELECT crove_crm.booking_manage_view(${s.org}, ${s.type}, ${parsed.data.manage}) AS view`.execute(db);
+    return rows[0]?.view ?? null;
+  });
+  if (!row) return null;
+  return zBookingManage.parse({ ...row, startsAt: iso(row.startsAt), endsAt: iso(row.endsAt) });
+}
+
+/**
+ * A visitor's ask from a manage link: cancel the booking, or move it to another time. Returns the ask's id, which the
+ * page follows with bookingManageView, or null when the link names nothing here or no longer works.
+ */
+export async function bookingManageAsk(runtime: Runtime, org: string, type: string, body: unknown): Promise<{ requestId: string } | null> {
+  const s = slugs(org, type);
+  const parsed = zBookingManageAsk.safeParse(body);
+  if (!parsed.success) throw invalid();
+  const ask = parsed.data;
+  const startsAt = ask.action === 'move' ? new Date(ask.startsAt) : null;
+  const id = await runtime.orgless(async (db) => {
+    try {
+      const { rows } = await sql<{ id: string | null }>`
+        SELECT crove_crm.booking_manage_request(${s.org}, ${s.type}, ${ask.manage}, ${ask.action}, ${startsAt}) AS id`.execute(db);
+      return rows[0]?.id ?? null;
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      if (code === '22023') throw invalid();
+      if (code === '55000') throw new DomainError('BOOKING_TIME_UNAVAILABLE', 409, 'Khung giờ này không còn nhận đặt lịch');
+      throw error;
+    }
+  });
+  return id ? { requestId: id } : null;
 }

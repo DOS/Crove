@@ -82,6 +82,19 @@ describe('Resend send', () => {
   });
 });
 
+describe('Resend attachments', () => {
+  it('sends an attachment base64-encoded with its content type (#1319)', async () => {
+    const { calls, fetchImpl } = fakeFetch(() => Response.json({ id: 'em_7' }));
+    const ics = 'BEGIN:VCALENDAR\r\nSUMMARY:Tư vấn\r\nEND:VCALENDAR\r\n';
+    await createResendProvider({ apiKey: 'k', from: 'a@b.test', fetch: fetchImpl }).send({
+      ...MAIL,
+      attachments: [{ filename: 'lich-hen.ics', contentType: 'text/calendar; method=PUBLISH; charset=UTF-8', content: ics }],
+    });
+    const body = JSON.parse(String(calls[0]?.init.body));
+    expect(body.attachments).toEqual([{ filename: 'lich-hen.ics', content_type: 'text/calendar; method=PUBLISH; charset=UTF-8', content: Buffer.from(ics, 'utf8').toString('base64') }]);
+  });
+});
+
 describe('Resend webhooks', () => {
   it('turns delivered, delayed, complained and bounced into events keyed by the Svix id', () => {
     expect(parseResendWebhook(SECRET, signed(event('email.delivered')), NOW)).toEqual([

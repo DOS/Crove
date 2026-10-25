@@ -99,7 +99,17 @@ import { reviewAnswer, reviewFile, reviewMedia, reviewView, REVIEW_ANSWERS_PER_M
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
 import { CALENDAR_FEED_HITS_PER_MINUTE, calendarFeed, renderIcs } from './calendar-feed.ts';
 import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
-import { BOOKING_POLLS_PER_MINUTE, BOOKING_REQUESTS_PER_MINUTE, BOOKING_VIEWS_PER_MINUTE, bookingRequest, bookingStatus, bookingView } from './booking-page.ts';
+import { createTurnstileVerifier, type TurnstileVerifier } from './turnstile.ts';
+import {
+  BOOKING_POLLS_PER_MINUTE,
+  BOOKING_REQUESTS_PER_MINUTE,
+  BOOKING_VIEWS_PER_MINUTE,
+  bookingManageAsk,
+  bookingManageView,
+  bookingRequest,
+  bookingStatus,
+  bookingView,
+} from './booking-page.ts';
 import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
 import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
@@ -151,6 +161,8 @@ export interface HttpDeps {
   bioLimit?: RateLimiter;
   // The public booking page (#1318): page reads, requests per address, and requests per event type.
   bookingLimits?: { views: RateLimiter; requests: RateLimiter; perType: RateLimiter; polls: RateLimiter };
+  // Checks a booking request's Turnstile token (#1353); unset, built from TURNSTILE_SECRET when the deployment sets it.
+  turnstile?: TurnstileVerifier | null;
   // The per-client budget of short link redirects (#706), replaceable in tests.
   shortLinkLimit?: RateLimiter;
   // Staged upload completions running at once in this process (issue #223). Default: UPLOAD_COMPLETE_CONCURRENCY.
@@ -319,7 +331,9 @@ const MAX_FILES_PER_UPLOAD = 5;
 const UPLOAD_BODY_LIMIT = MAX_SOCIAL_VIDEO_BYTES + 2 * 1024 * 1024;
 // What a completion refused for lack of a slot tells the client to wait; the grant stays unused for 5 minutes.
 export const UPLOAD_BUSY_RETRY_SECONDS = 3;
-export function contentSecurityPolicy(authUrl: string, storageOrigin: string | null): string {
+// Cloudflare Turnstile's origin (#1353): its script and the iframe of its widget, on deployments that set the keys.
+export const TURNSTILE_ORIGIN = 'https://challenges.cloudflare.com';
+export function contentSecurityPolicy(authUrl: string, storageOrigin: string | null, turnstile = false): string {
   // Hosted Supabase Auth lives on another origin; the bundled one is proxied under /auth/v1. With presigned
   // transfers the app also posts uploads to, and fetches downloads from, the bucket's origin.
   const authOrigin = new URL(authUrl, 'http://localhost').origin;
@@ -329,19 +343,22 @@ export function contentSecurityPolicy(authUrl: string, storageOrigin: string | n
   // with a string throws instead of running markup an attacker smuggled into the page. One named policy may be created,
   // once (no 'allow-duplicates'): crove-sw, whose only method gives the service worker's fixed URL to
   // navigator.serviceWorker.register() for browser push (#1238, apps/app/src/lib/push.ts). It has no createHTML or
-  // createScript, so the HTML and script sinks still refuse every string.
+  // createScript, so the HTML and script sinks still refuse every string. With Turnstile keys set (#1353), the booking
+  // page loads Turnstile's script from its origin through a second fixed-URL policy, crove-turnstile, and the widget
+  // runs in an iframe of that origin; without them, nothing of Cloudflare's is allowed.
   return [
     "default-src 'self'",
-    "script-src 'self'",
+    turnstile ? `script-src 'self' ${TURNSTILE_ORIGIN}` : "script-src 'self'",
     "style-src 'self'",
     "img-src 'self' blob: data:",
     `connect-src 'self' ${authOrigin}${storageOrigin ? ` ${storageOrigin}` : ''}`,
+    ...(turnstile ? [`frame-src ${TURNSTILE_ORIGIN}`] : []),
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'self'",
     "frame-ancestors 'none'",
     "require-trusted-types-for 'script'",
-    'trusted-types crove-sw',
+    turnstile ? 'trusted-types crove-sw crove-turnstile' : 'trusted-types crove-sw',
   ].join('; ');
 }
 
@@ -415,6 +432,8 @@ export function createHttpApp(deps: HttpDeps) {
       mailEnabled: deps.mailer?.enabled ?? false,
       // The shell's feedback and support link (SUPPORT_URL, issue #310); null hides it.
       supportUrl: config.SUPPORT_URL ?? null,
+      // The booking page shows Cloudflare Turnstile with this site key (#1353); null shows none.
+      turnstileSiteKey: config.TURNSTILE_SITE_KEY ?? null,
       // The product name users see (BRAND_NAME, #1040); the app fills its messages and the page title with it.
       brandName: config.BRAND_NAME,
       // The terms and privacy notice linked at sign-up and invite acceptance (#688); null hides each link.
@@ -591,8 +610,9 @@ export function createHttpApp(deps: HttpDeps) {
   }
 
   // The public booking page (#1318), with the crm module: no account. GET reads an event type's free slots; POST either
-  // asks for a slot (a body with the visitor's details, answered 202 with a request token) or follows a request (a body
-  // with only that token, which stays out of the URL and so out of access logs). Each address has budgets, and each
+  // asks for a slot (a body with the visitor's details, answered 202 with a request token), follows a request (a body
+  // with only that token, which stays out of the URL and so out of access logs), or reads, cancels or moves a booking
+  // with the manage token of its mails (#1319). Each address has budgets, and each
   // event type one for requests whatever the address; the request definer caps requests per type per hour too.
   if (runtime.installed('crm')) {
     const limits = deps.bookingLimits ?? {
@@ -611,6 +631,7 @@ export function createHttpApp(deps: HttpDeps) {
       return decision.allowed ? null : refused(c, decision.retryAfterSeconds);
     };
     const notFound = (c: Context) => c.json({ code: 'BOOKING_PAGE_NOT_FOUND', message: 'Không tìm thấy trang đặt lịch này' }, 404);
+    const turnstile = deps.turnstile !== undefined ? deps.turnstile : config.TURNSTILE_SECRET ? createTurnstileVerifier(config.TURNSTILE_SECRET) : null;
     app.get('/api/booking/:org/:type', async (c) => {
       const limited = budget(c, limits.views);
       if (limited) return limited;
@@ -628,6 +649,19 @@ export function createHttpApp(deps: HttpDeps) {
       const org = c.req.param('org');
       const type = c.req.param('type');
       try {
+        // A manage link (#1319): its token alone reads the booking; with an action it asks for a cancel or a move.
+        if (body && typeof body === 'object' && 'manage' in body) {
+          if (Object.keys(body).length === 1) {
+            const limited = budget(c, limits.polls);
+            if (limited) return limited;
+            const view = await bookingManageView(runtime, org, type, body);
+            return view ? c.json(view) : c.json({ code: 'BOOKING_LINK_NOT_FOUND', message: 'Liên kết này không còn dùng được' }, 404);
+          }
+          const limited = budget(c, limits.requests);
+          if (limited) return limited;
+          const ask = await bookingManageAsk(runtime, org, type, body);
+          return ask ? c.json(ask, 202) : c.json({ code: 'BOOKING_LINK_NOT_FOUND', message: 'Liên kết này không còn dùng được' }, 404);
+        }
         // Following a request: the token alone.
         if (body && typeof body === 'object' && Object.keys(body).length === 1 && 'token' in body) {
           const limited = budget(c, limits.polls);
@@ -637,7 +671,20 @@ export function createHttpApp(deps: HttpDeps) {
         }
         const limited = budget(c, limits.requests) ?? budget(c, limits.perType, `${org}/${type}`);
         if (limited) return limited;
-        const request = await bookingRequest(runtime, org, type, body);
+        // With Turnstile keys set (#1353), a request carries the widget's token, checked with Cloudflare before
+        // anything is recorded; the token is not part of the request itself.
+        let requestBody = body;
+        if (body && typeof body === 'object' && 'turnstile' in body) {
+          const { turnstile: _token, ...rest } = body as Record<string, unknown>;
+          requestBody = rest;
+        }
+        if (turnstile) {
+          const token = body && typeof body === 'object' ? (body as { turnstile?: unknown }).turnstile : undefined;
+          if (typeof token !== 'string' || !(await turnstile(token, clientIp(c, config.TRUSTED_PROXY_HOPS)))) {
+            return c.json({ code: 'BOOKING_CHECK_FAILED', message: 'Chưa xác minh được bạn không phải máy, hãy thử lại' }, 403);
+          }
+        }
+        const request = await bookingRequest(runtime, org, type, requestBody);
         return request ? c.json(request, 202) : notFound(c);
       } catch (error) {
         return problem(c, error);
@@ -1686,7 +1733,7 @@ export function createHttpApp(deps: HttpDeps) {
     app.use('/assets/*', serveStatic({ root }));
     app.use('/favicon.svg', serveStatic({ root }));
     const indexPath = join(config.WEB_DIST, 'index.html');
-    const csp = contentSecurityPolicy(publicAuthUrl(config), store.direct ? directTransferOrigin(config) : null);
+    const csp = contentSecurityPolicy(publicAuthUrl(config), store.direct ? directTransferOrigin(config) : null, Boolean(config.TURNSTILE_SITE_KEY));
     let indexHtml: string | null = null;
     app.get('*', async (c) => {
       c.header('content-security-policy', csp);

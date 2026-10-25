@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runEditJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runEditJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepAssignmentReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
@@ -106,7 +106,22 @@ interface InboundRow {
 interface BookingJob {
   orgId: string;
   bookingId: string;
+  // A visitor's ask from a manage link (#1319); without it, the job confirms the booking.
+  requestId?: string;
 }
+
+interface BookingRemindJob {
+  orgId: string;
+  bookingId: string;
+  startsAt: string;
+  lead: '24h' | '1h';
+}
+
+// The reminders before a booking (#1319): how long before it each goes out.
+const BOOKING_REMINDERS: ReadonlyArray<{ lead: BookingRemindJob['lead']; ms: number }> = [
+  { lead: '24h', ms: 24 * 3_600_000 },
+  { lead: '1h', ms: 3_600_000 },
+];
 
 interface AgentWakeJob {
   orgId: string;
@@ -656,7 +671,19 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   if (crm) {
     await boss.work<BookingJob>(QUEUES.crmBooking, { batchSize: 1 }, async ([job]) => {
       if (!job) return;
-      await deps.runtime.execute('crm.booking.confirm', { bookingId: job.data.bookingId }, { actor: { type: 'system', component: 'crm.booking' }, orgId: job.data.orgId });
+      const actor = { type: 'system' as const, component: 'crm.booking' };
+      if (job.data.requestId) {
+        await deps.runtime.execute('crm.booking.manage', { bookingId: job.data.bookingId, requestId: job.data.requestId }, { actor, orgId: job.data.orgId });
+      } else {
+        await deps.runtime.execute('crm.booking.confirm', { bookingId: job.data.bookingId }, { actor, orgId: job.data.orgId });
+      }
+    });
+    // Reminders (#1319): a job per booking, time and lead, run when it is due; the command mails only while the booking
+    // is confirmed and still starts then.
+    await boss.work<BookingRemindJob>(QUEUES.crmBookingRemind, { batchSize: 1 }, async ([job]) => {
+      if (!job) return;
+      const { orgId, ...input } = job.data;
+      await deps.runtime.execute('crm.booking.remind', input, { actor: { type: 'system', component: 'crm.booking' }, orgId });
     });
   }
 
@@ -856,7 +883,8 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
   const recurringTimer = deps.runtime.installed('social') ? setInterval(() => void recurringSweep(), RECURRING_SWEEP_MS) : null;
   void recurringSweep();
 
-  // Review reminders (#703): every 15 minutes, the posts whose review has waited a day or whose time is close.
+  // Review reminders (#703): every 15 minutes, the posts whose review has waited a day or whose time is close; then the
+  // due date reminders of assigned posts (#1359), due within a day or overdue.
   let reminding = false;
   const reminderSweep = async () => {
     if (reminding) return;
@@ -866,6 +894,12 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
       if (sent > 0) console.log(`[social-reminders] reminded ${sent}`);
     } catch (error) {
       console.error('[social-reminders] sweep', error);
+    }
+    try {
+      const sent = await sweepAssignmentReminders({ runtime: deps.runtime, workerDb: deps.workerDb });
+      if (sent > 0) console.log(`[social-assign-reminders] reminded ${sent} assignee(s)`);
+    } catch (error) {
+      console.error('[social-assign-reminders] sweep', error instanceof Error ? error.name : 'error');
     } finally {
       reminding = false;
     }
@@ -1262,6 +1296,35 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   retryDelay: 2,
                   retryBackoff: true,
                 });
+              }
+              // A visitor's ask from a manage link (#1319): the same queue, keyed by the ask.
+              if (crm && row.type === 'crm.booking.manage_requested') {
+                const bookingId = String(row.payload.booking_id);
+                const requestId = String(row.payload.request_id);
+                return boss.send(QUEUES.crmBooking, { orgId: row.org_id, bookingId, requestId } satisfies BookingJob, {
+                  singletonKey: `${row.org_id}:${bookingId}:${requestId}`,
+                  retryLimit: BOOKING_RETRY_LIMIT,
+                  retryDelay: 2,
+                  retryBackoff: true,
+                });
+              }
+              // A booking confirmed or moved (#1319): its reminders, each due at its lead before the start (none in the past).
+              if (crm && row.type === 'crm.booking.scheduled') {
+                const bookingId = String(row.payload.booking_id);
+                const startsAt = String(row.payload.starts_at);
+                const start = Date.parse(startsAt);
+                if (Number.isNaN(start)) return null;
+                return Promise.all(
+                  BOOKING_REMINDERS.filter((r) => start - r.ms > Date.now()).map((r) =>
+                    boss.send(QUEUES.crmBookingRemind, { orgId: row.org_id, bookingId, startsAt, lead: r.lead } satisfies BookingRemindJob, {
+                      singletonKey: `${row.org_id}:${bookingId}:${startsAt}:${r.lead}`,
+                      startAfter: new Date(start - r.ms),
+                      retryLimit: BOOKING_RETRY_LIMIT,
+                      retryDelay: 30,
+                      retryBackoff: true,
+                    }),
+                  ),
+                );
               }
               if (social && row.type === 'social.link_preview.requested') {
                 const previewId = String(row.payload.preview_id);

@@ -454,7 +454,7 @@ export const SOCIAL_REVIEW_VERDICTS = ['approved', 'changes_requested', 'comment
 export const SOCIAL_REVIEW_LINK_KINDS = ['post', 'plan'] as const;
 // What an in-app notification is about (#637); a member may turn each kind off. weekly_digest is the weekly email
 // digest (#1104): never a notification row, only a member's switch to turn the digest off.
-export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold', 'queue_low', 'weekly_digest', 'post_outperforming'] as const;
+export const SOCIAL_NOTIFICATION_KINDS = ['review_requested', 'decided', 'failed', 'needs_attention', 'channel_expired', 'comment', 'client_answer', 'assigned', 'review_reminder', 'feed_paused', 'mention', 'publishing_hold', 'queue_low', 'weekly_digest', 'post_outperforming', 'assignment_due'] as const;
 // Why a channel's daily account snapshot has no counts (#645), and why a bring-in of its outside posts found none (#1054).
 export const SOCIAL_ACCOUNT_SNAPSHOT_ERRORS = ['no_answer', 'token_expired', 'permission'] as const;
 export const SOCIAL_ERROR_KINDS = ['token_expired', 'permission', 'bad_request', 'rate_limited', 'transient', 'unknown'] as const;
@@ -582,13 +582,26 @@ export type SocialPostApprovalTable = Refine<
 
 // The crm module (issue #1314): event types of booking pages.
 export const EVENT_TYPE_LOCATION_KINDS = ['in_person', 'phone', 'video'] as const;
-export type CrmEventTypeTable = Refine<G.CrmEventTypeTable, { location_kind: Generated<(typeof EVENT_TYPE_LOCATION_KINDS)[number]> }>;
+// Who hosts a booking of the type (#1373): the lead host alone, one free host of the team, or every host together.
+export const EVENT_TYPE_ASSIGNMENTS = ['single', 'round_robin', 'collective'] as const;
+export type CrmEventTypeTable = Refine<
+  G.CrmEventTypeTable,
+  { location_kind: Generated<(typeof EVENT_TYPE_LOCATION_KINDS)[number]>; assignment: Generated<(typeof EVENT_TYPE_ASSIGNMENTS)[number]> }
+>;
 // Bookings of the public booking page (#1318): requested, then confirmed or refused by the worker.
 export const BOOKING_STATUSES = ['pending', 'confirmed', 'refused', 'cancelled'] as const;
 export const BOOKING_REFUSALS = ['taken', 'unavailable'] as const;
+// A visitor's ask from a manage link (#1319), and the worker's answer to it.
+export const BOOKING_MANAGE_ACTIONS = ['cancel', 'move'] as const;
+export const BOOKING_MANAGE_OUTCOMES = ['cancelled', 'moved', 'taken', 'unavailable'] as const;
 export type CrmBookingTable = Refine<
   G.CrmBookingTable,
-  { status: Generated<(typeof BOOKING_STATUSES)[number]>; refusal: (typeof BOOKING_REFUSALS)[number] | null }
+  {
+    status: Generated<(typeof BOOKING_STATUSES)[number]>;
+    refusal: (typeof BOOKING_REFUSALS)[number] | null;
+    manage_action: (typeof BOOKING_MANAGE_ACTIONS)[number] | null;
+    manage_outcome: (typeof BOOKING_MANAGE_OUTCOMES)[number] | null;
+  }
 >;
 
 type Refined = Tables<{

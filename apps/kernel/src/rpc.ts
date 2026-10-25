@@ -492,6 +492,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         update: os.crm.eventTypes.update.handler(crmCommand('crm.event_type.update')),
         setActive: os.crm.eventTypes.setActive.handler(crmCommand('crm.event_type.set_active')),
       },
+      bookings: {
+        list: os.crm.bookings.list.handler(({ context, input }) => inCrm(context, (orgId, actor) => runtime.query('crm.booking.list', input, { actor, orgId }))),
+        cancel: os.crm.bookings.cancel.handler(crmCommand('crm.booking.cancel')),
+        move: os.crm.bookings.move.handler(crmCommand('crm.booking.move')),
+      },
     },
     social: {
       posts: {
@@ -1032,6 +1037,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         tags: os.social.media.tags.handler(socialQuery('social.media.tags')),
         tag: os.social.media.tag.handler(socialCommand('social.media.tag')),
         untag: os.social.media.untag.handler(socialCommand('social.media.untag')),
+        archive: os.social.media.archive.handler(socialCommand('social.media.archive')),
+        restore: os.social.media.restore.handler(socialCommand('social.media.restore')),
         resolve: os.social.media.resolve.handler(socialQuery('social.media.resolve')),
         fetchUrls: os.social.media.fetchUrls.handler(({ context, input }) => mediaUrlScope(context, (orgId, actor, urls) => urls.fetch(runtime, actor, orgId, input.urls))),
       },
