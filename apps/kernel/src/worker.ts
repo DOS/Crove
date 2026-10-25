@@ -1352,9 +1352,10 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   retryBackoff: true,
                 });
               }
-              // A post sent for review also goes to the content manager agent's triage (#799), besides the notices.
+              // A post sent for review also goes to the content manager agent's triage (#799), besides the notices; a
+              // booking cancelled goes to the scheduler agent's (#1434), which gives a task for a visitor's cancel only.
               const triage =
-                social && row.type === 'social.post.submitted'
+                (social && row.type === 'social.post.submitted') || (crm && row.type === 'crm.booking.cancelled')
                   ? boss.send(QUEUES.agentDispatch, { orgId: row.org_id, eventId: row.event_id } satisfies AgentDispatchJob, {
                       singletonKey: `${row.org_id}:${row.event_id}`,
                       retryLimit: AGENT_RETRY_LIMIT,
