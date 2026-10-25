@@ -10,6 +10,7 @@ export const setApprovalPreset = defineCommand({
   name: 'kernel.org.set_approval_preset',
   input: z.object({ preset: z.string().regex(/^[a-z][a-z0-9_]*$/).max(50) }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: ['owner'],
   handler: async (ctx, input) => {
     // The tenant row first, so two switches meet on it and each version is used once.

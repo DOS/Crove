@@ -9,6 +9,23 @@ import { sha256Hex } from './storage.ts';
 
 export type Risk = 'R0' | 'R1' | 'R2' | 'R3';
 
+// What a command does (plan §4.2, §4.7 "Derived risk", #1563): none (reads or computes only), internal (a reversible
+// write inside Crove), external (an effect outside Crove or visible to customers, including a queued send), financial,
+// legal or irreversible. It covers everything the command's transaction does, the commands it runs included (an
+// approval runs the approved command), but not what a later command does with what it leaves behind. The declared
+// risk is at least the risk it derives.
+export const SIDE_EFFECTS = ['none', 'internal', 'external', 'financial', 'legal', 'irreversible'] as const;
+export type SideEffect = (typeof SIDE_EFFECTS)[number];
+
+const RISK_ORDER: Record<Risk, number> = { R0: 0, R1: 1, R2: 2, R3: 3 };
+
+// The lowest risk a side effect allows: financial, legal or irreversible R3; external R2; internal R1; none R0.
+export function deriveRisk(sideEffect: SideEffect): Risk {
+  if (sideEffect === 'financial' || sideEffect === 'legal' || sideEffect === 'irreversible') return 'R3';
+  if (sideEffect === 'external') return 'R2';
+  return sideEffect === 'internal' ? 'R1' : 'R0';
+}
+
 // Authenticator assurance level of the user's access token: aal2 means the session passed MFA.
 export type Aal = 'aal1' | 'aal2';
 
@@ -104,6 +121,9 @@ export interface CommandDef<I = unknown, O = unknown> {
   name: string;
   input: z.ZodType<I>;
   risk: Risk;
+  // What it does beyond its transaction; register() refuses a declared risk below deriveRisk(sideEffect) (#1563).
+  // Absent only on commands not annotated yet (tools/test lists them, and the list may only shrink).
+  sideEffect?: SideEffect;
   access: Access;
   // A permission a user may hold through an org-wide role assignment (plan §4.6, issue #1279): a member whose role is
   // not in `access` still passes the role check when they hold it. Only with a role list as access, and only for user
@@ -616,6 +636,13 @@ export class Runtime {
   register(defs: { commands?: CommandDef<any, any>[]; queries?: QueryDef<any, any>[] }): this {
     for (const c of defs.commands ?? []) {
       if (this.commands.has(c.name)) throw new Error(`duplicate command ${c.name}`);
+      if (c.sideEffect !== undefined) {
+        if (!(SIDE_EFFECTS as readonly string[]).includes(c.sideEffect)) throw new Error(`command ${c.name}: unknown side effect ${String(c.sideEffect)}`);
+        const derived = deriveRisk(c.sideEffect);
+        if (RISK_ORDER[c.risk] < RISK_ORDER[derived]) {
+          throw new Error(`command ${c.name}: declared risk ${c.risk} is below ${derived}, the risk its side effect '${c.sideEffect}' derives (plan §4.7)`);
+        }
+      }
       if (c.permission !== undefined && (typeof c.access === 'string' || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(c.permission))) {
         throw new Error(`command ${c.name}: a permission is declared only beside a role list, as <module>.<name>`);
       }

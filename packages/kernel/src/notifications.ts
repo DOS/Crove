@@ -116,6 +116,7 @@ export const notificationDispatch = defineCommand({
   name: 'kernel.notification.dispatch',
   input: z.object({ eventId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const event = await outboxEvent(ctx, input.eventId);
@@ -240,6 +241,7 @@ export const notificationRead = defineCommand({
   name: 'kernel.notification.read',
   input: z.union([z.strictObject({ ids: z.array(zId).min(1).max(100) }), z.strictObject({ all: z.literal(true) })]),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input) => {
     const me = requireUser(ctx);
@@ -255,6 +257,7 @@ export const notificationMute = defineCommand({
   name: 'kernel.notification.mute',
   input: z.strictObject({ kind: zNotificationKind, muted: z.boolean() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input) => {
     const me = requireUser(ctx);

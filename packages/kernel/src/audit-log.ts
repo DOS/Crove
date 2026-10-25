@@ -219,6 +219,7 @@ export const auditExport = defineCommand({
   name: 'kernel.audit.export',
   input: zAuditFilter,
   risk: 'R0',
+  sideEffect: 'none',
   access: ADMINS,
   handler: async (ctx, input): Promise<AuditExport> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');

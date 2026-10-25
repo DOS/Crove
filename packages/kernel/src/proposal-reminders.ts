@@ -92,6 +92,7 @@ export const proposalPolicySave = defineCommand({
   name: 'kernel.proposal_policy.save',
   input: zProposalPolicy,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input): Promise<ProposalPolicy> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -221,6 +222,7 @@ export const proposalExpire = defineCommand({
   name: 'kernel.proposal.expire',
   input: z.strictObject({ proposalId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.proposal', id: input.proposalId }),
   handler: async (ctx, input): Promise<ExpireResult> => {

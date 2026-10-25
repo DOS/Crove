@@ -161,6 +161,7 @@ export const reextractFile = defineCommand({
   name: 'kernel.file.reextract',
   input: z.object({ fileId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: REEXTRACT_ROLES,
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input) => {
@@ -238,6 +239,7 @@ export const recordExtraction = defineCommand({
     proposal: zProposalDraft.nullable(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input) => {

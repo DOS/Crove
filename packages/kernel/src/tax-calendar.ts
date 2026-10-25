@@ -139,6 +139,7 @@ export const taxProfileSave = defineCommand({
   name: 'kernel.tax_profile.save',
   input: zTaxProfile,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input): Promise<StoredTaxProfile> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -179,6 +180,7 @@ export const taxObligationDone = defineCommand({
   name: 'kernel.tax_obligation.done',
   input: zTaxObligationMark,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MARKERS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -203,6 +205,7 @@ export const taxObligationUndo = defineCommand({
   name: 'kernel.tax_obligation.undo',
   input: zTaxObligationMark,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MARKERS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');

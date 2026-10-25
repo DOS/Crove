@@ -167,6 +167,7 @@ export const legalEntityCreate = defineCommand({
   name: 'kernel.legal_entity.create',
   input: zLegalEntityInput,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input): Promise<LegalEntity> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -190,6 +191,7 @@ export const legalEntityUpdate = defineCommand({
   name: 'kernel.legal_entity.update',
   input: zLegalEntityInput.extend({ legalEntityId: z.uuid() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input): Promise<LegalEntity> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');

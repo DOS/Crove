@@ -66,6 +66,7 @@ export const resubmitProposal = defineCommand({
   name: 'kernel.proposal.resubmit',
   input: z.object({ id: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   // The roles that may ask for a proposal (kernel.proposal.request) or read a file again.
   access: ['owner', 'admin', 'member'],
   target: (input) => ({ type: 'kernel.proposal', id: input.id }),
