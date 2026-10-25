@@ -1,6 +1,7 @@
 // Shared pieces of the Social screens: status tones, provider names, the effective text of a variant as the composer
 // shows it, and grouping by day for the agenda.
 import { CAPABILITIES, SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, countText, isDiscordForum, isProvider, mediaKindOf, needsPublicUrls, sentText, validateVariant, type Issue, type Provider } from '@crove/mod-social/contract';
+import { videoTitleRule } from '@crove/mod-social/contract';
 import { SOCIAL_VIEW_TABS } from '@crove/kernel-contract';
 import { getConfig } from './auth.ts';
 
@@ -108,9 +109,11 @@ export function hasTitle(provider: string): boolean {
   return isProvider(provider) && CAPABILITIES[provider].title !== null;
 }
 
-// Whether a channel's variant sends a title: its channel has one, or it is a Discord forum post (#1103), named by it.
-export function takesTitle(provider: string, settings: Readonly<Record<string, unknown>> | undefined): boolean {
-  return hasTitle(provider) || isDiscordForum(provider, settings);
+// Whether a channel's variant sends a title: its channel has one, it is a Discord forum post (#1103), named by it, or
+// a Facebook Page video or Reel (#1499), whose text and photo posts take none. media: the variant's files.
+export function takesTitle(provider: string, settings: Readonly<Record<string, unknown>> | undefined, media: readonly { mime: string }[] = []): boolean {
+  if (hasTitle(provider) || isDiscordForum(provider, settings)) return true;
+  return isProvider(provider) && videoTitleRule(provider, settings, media.map((m) => ({ kind: mediaKindOf(m.mime) }))) !== null;
 }
 
 // The issues a draft would have at submit, checked as it is typed (the server checks again).
