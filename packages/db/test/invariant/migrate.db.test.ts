@@ -110,6 +110,138 @@ async function dropStaleRuns(): Promise<void> {
   }
 }
 
+// G3 (plan §10): re-applying the migrations must change nothing. The fingerprint maps every object of the crove_*
+// schemas (plus the event triggers, the Crove roles and their memberships) to its definition, and every table to
+// its row count, so a file that re-runs without error but adds a seed row, widens a grant, toggles a setting or
+// leaves an older function body behind shows up as a named difference. Names, never OIDs: re-created objects get
+// new ones. ACLs are sorted, since a REVOKE and GRANT may reorder them without changing what they allow.
+const acl = (column: string) => `'acl=' || (SELECT string_agg(x::text, ',' ORDER BY x::text) FROM unnest(${column}) x)`;
+const FINGERPRINT_QUERIES: Record<string, string> = {
+  schema: `
+    SELECT n.nspname AS key, concat_ws(' ', pg_get_userbyid(n.nspowner), ${acl('n.nspacl')}) AS def
+    FROM pg_namespace n WHERE n.nspname LIKE 'crove\\_%'`,
+  relation: `
+    SELECT format('%s.%s', n.nspname, c.relname) AS key,
+           concat_ws(' ', c.relkind, c.relpersistence, pg_get_userbyid(c.relowner), ${acl('c.relacl')}, 'rls=' || c.relrowsecurity,
+                     'force=' || c.relforcerowsecurity, 'replica=' || c.relreplident::text, c.reloptions::text) AS def
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname LIKE 'crove\\_%'`,
+  column: `
+    SELECT format('%s.%s.%s', n.nspname, c.relname, a.attname) AS key,
+           concat_ws(' ', format_type(a.atttypid, a.atttypmod), CASE WHEN a.attnotnull THEN 'not null' END,
+                     'default=' || pg_get_expr(d.adbin, d.adrelid), 'identity=' || NULLIF(a.attidentity::text, ''),
+                     'generated=' || NULLIF(a.attgenerated::text, ''), 'collation=' || NULLIF(a.attcollation, 0)::regcollation::text,
+                     ${acl('a.attacl')}) AS def
+    FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+    WHERE n.nspname LIKE 'crove\\_%' AND a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'c')`,
+  constraint: `
+    SELECT format('%s.%s.%s', n.nspname, COALESCE(c.relname, t.typname), k.conname) AS key,
+           concat_ws(' ', pg_get_constraintdef(k.oid), CASE WHEN NOT k.convalidated THEN 'not valid' END) AS def
+    FROM pg_constraint k
+    JOIN pg_namespace n ON n.oid = k.connamespace
+    LEFT JOIN pg_class c ON c.oid = k.conrelid
+    LEFT JOIN pg_type t ON t.oid = k.contypid
+    WHERE n.nspname LIKE 'crove\\_%'`,
+  index: `
+    SELECT format('%s.%s', n.nspname, c.relname) AS key, pg_get_indexdef(c.oid) AS def
+    FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname LIKE 'crove\\_%'`,
+  view: `
+    SELECT format('%s.%s', n.nspname, c.relname) AS key, pg_get_viewdef(c.oid) AS def
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname LIKE 'crove\\_%' AND c.relkind IN ('v', 'm')`,
+  sequence: `
+    SELECT s.seqrelid::regclass::text AS key,
+           concat_ws(' ', format_type(s.seqtypid, NULL), s.seqstart, s.seqincrement, s.seqmin, s.seqmax, s.seqcache, s.seqcycle) AS def
+    FROM pg_sequence s JOIN pg_class c ON c.oid = s.seqrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname LIKE 'crove\\_%'`,
+  policy: `
+    SELECT format('%s.%s.%s', p.schemaname, p.tablename, p.policyname) AS key,
+           concat_ws(' ', p.permissive, p.cmd, (SELECT string_agg(r, ',' ORDER BY r) FROM unnest(p.roles) r),
+                     'using=' || p.qual, 'check=' || p.with_check) AS def
+    FROM pg_policies p WHERE p.schemaname LIKE 'crove\\_%'`,
+  trigger: `
+    SELECT format('%s.%s.%s', n.nspname, c.relname, t.tgname) AS key, concat_ws(' ', pg_get_triggerdef(t.oid), t.tgenabled) AS def
+    FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname LIKE 'crove\\_%' AND NOT t.tgisinternal`,
+  function: `
+    SELECT p.oid::regprocedure::text AS key,
+           concat_ws(' ', p.prokind, pg_get_function_result(p.oid), pg_get_userbyid(p.proowner), ${acl('p.proacl')},
+                     CASE WHEN p.prosecdef THEN 'definer' END, p.provolatile, p.proparallel,
+                     CASE WHEN p.proleakproof THEN 'leakproof' END, CASE WHEN p.proisstrict THEN 'strict' END,
+                     p.proconfig::text, md5(p.prosrc)) AS def
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname LIKE 'crove\\_%'`,
+  type: `
+    SELECT format('%s.%s', n.nspname, t.typname) AS key,
+           concat_ws(' ', t.typtype, pg_get_userbyid(t.typowner), ${acl('t.typacl')}, format_type(NULLIF(t.typbasetype, 0), NULLIF(t.typtypmod, -1)),
+                     CASE WHEN t.typnotnull THEN 'not null' END, 'default=' || t.typdefault,
+                     (SELECT string_agg(e.enumlabel, ',' ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid = t.oid)) AS def
+    FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    LEFT JOIN pg_class c ON c.oid = t.typrelid
+    WHERE n.nspname LIKE 'crove\\_%' AND (t.typtype IN ('e', 'd', 'r', 'm') OR c.relkind = 'c')`,
+  comment: `
+    SELECT format('%s:%s', d.classoid::regclass, pg_describe_object(d.classoid, d.objoid, d.objsubid)) AS key, d.description AS def
+    FROM pg_description d
+    WHERE d.classoid IN ('pg_class'::regclass, 'pg_proc'::regclass, 'pg_namespace'::regclass, 'pg_type'::regclass)
+      AND pg_describe_object(d.classoid, d.objoid, d.objsubid) ~ '(^| )crove_'`,
+  'event trigger': `
+    SELECT e.evtname AS key,
+           concat_ws(' ', e.evtevent, e.evtfoid::regprocedure, e.evtenabled, pg_get_userbyid(e.evtowner),
+                     (SELECT string_agg(x, ',' ORDER BY x) FROM unnest(e.evttags) x)) AS def
+    FROM pg_event_trigger e`,
+  'default privileges': `
+    SELECT concat_ws('.', pg_get_userbyid(d.defaclrole), n.nspname, d.defaclobjtype) AS key, ${acl('d.defaclacl')} AS def
+    FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace`,
+  database: `SELECT 'acl' AS key, ${acl('d.datacl')} AS def FROM pg_database d WHERE d.datname = current_database()`,
+  role: `
+    SELECT r.rolname AS key,
+           concat_ws(' ', 'super=' || r.rolsuper, 'inherit=' || r.rolinherit, 'createrole=' || r.rolcreaterole,
+                     'createdb=' || r.rolcreatedb, 'login=' || r.rolcanlogin, 'bypassrls=' || r.rolbypassrls,
+                     (SELECT s.setconfig::text FROM pg_db_role_setting s
+                      WHERE s.setrole = r.oid AND s.setdatabase IN (0, (SELECT oid FROM pg_database WHERE datname = current_database()))
+                      ORDER BY s.setdatabase LIMIT 1)) AS def
+    FROM pg_roles r WHERE r.rolname LIKE 'crove\\_%' AND r.rolname NOT LIKE 'crove\\_test\\_%'`,
+  membership: `
+    SELECT format('%s in %s', pg_get_userbyid(m.member), pg_get_userbyid(m.roleid)) AS key,
+           concat_ws(' ', 'admin=' || m.admin_option, 'inherit=' || m.inherit_option, 'set=' || m.set_option) AS def
+    FROM pg_auth_members m
+    WHERE pg_get_userbyid(m.roleid) LIKE 'crove\\_%' AND pg_get_userbyid(m.member) LIKE 'crove\\_%'
+      AND pg_get_userbyid(m.member) NOT LIKE 'crove\\_test\\_%' AND pg_get_userbyid(m.roleid) NOT LIKE 'crove\\_test\\_%'`,
+};
+
+// Tables whose rows record the re-application itself rather than what the migrations define.
+const ROWS_EXEMPT = new Set<string>([]);
+
+async function catalogFingerprint(client: pg.Client): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const [kind, sql] of Object.entries(FINGERPRINT_QUERIES)) {
+    const { rows } = await client.query<{ key: string; def: string | null }>(sql);
+    for (const { key, def } of rows) out.set(`${kind} ${key}`, def ?? '');
+  }
+  const { rows: tables } = await client.query<{ name: string }>(
+    `SELECT format('%I.%I', n.nspname, c.relname) AS name FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname LIKE 'crove\\_%' AND c.relkind IN ('r', 'p') ORDER BY 1`,
+  );
+  for (const { name } of tables) {
+    if (ROWS_EXEMPT.has(name)) continue;
+    const { rows } = await client.query<{ n: string }>(`SELECT count(*) AS n FROM ONLY ${name}`);
+    out.set(`rows ${name}`, rows[0]?.n ?? '');
+  }
+  return out;
+}
+
+function fingerprintDiff(before: Map<string, string>, after: Map<string, string>): string[] {
+  const out: string[] = [];
+  for (const [key, def] of before) {
+    if (!after.has(key)) out.push(`removed ${key}: ${def}`);
+    else if (after.get(key) !== def) out.push(`changed ${key}: ${def} -> ${after.get(key) ?? ''}`);
+  }
+  for (const [key, def] of after) if (!before.has(key)) out.push(`added ${key}: ${def}`);
+  return out.sort();
+}
+
 suite('migrations with a runner that is not a superuser', () => {
   const dbName = `crove_test_runner_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   const tag = dbName.replace(/^crove_/, 't100_');
@@ -164,7 +296,7 @@ suite('migrations with a runner that is not a superuser', () => {
     }
   });
 
-  it('applies every migration, runs again cleanly, and every file can be re-applied', async () => {
+  it('applies every migration, runs again cleanly, and every file can be re-applied without changing anything', async () => {
     const files = await readMigrations(MIGRATIONS);
     expect(await migrate({ adminUrl: runnerUrl, dir: MIGRATIONS })).toEqual(files.map((f) => f.name));
     expect(await migrate({ adminUrl: runnerUrl, dir: MIGRATIONS })).toEqual([]);
@@ -172,6 +304,7 @@ suite('migrations with a runner that is not a superuser', () => {
     await withClient(runnerUrl, async (runner) => {
       const { rows } = await runner.query<{ rolsuper: boolean }>('SELECT rolsuper FROM pg_roles WHERE rolname = current_user');
       expect(rows[0]?.rolsuper).toBe(false);
+      const before = await catalogFingerprint(runner);
       for (const file of files) {
         await runner.query('BEGIN');
         try {
@@ -182,6 +315,7 @@ suite('migrations with a runner that is not a superuser', () => {
           throw new Error(`re-applying ${file.name} failed: ${(error as Error).message}`, { cause: error });
         }
       }
+      expect(fingerprintDiff(before, await catalogFingerprint(runner))).toEqual([]);
     });
   });
 
