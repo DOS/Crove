@@ -319,6 +319,36 @@ suite('finance books per legal entity (#1280)', () => {
         ]),
       ),
     ).rejects.toThrow(RLS_DENIED);
+    // Nor can the member attach a row of the branch under a parent of the default entity it cannot see: a learned rule
+    // naming the branch and a default-entity purchase document as its source loses its entity and is refused.
+    const document = await admin(async (a) => {
+      await a.query('BEGIN');
+      const party = (await a.query<{ id: string }>(`INSERT INTO crove_kernel.party (org_id, name) VALUES ($1, 'Nhà cung cấp') RETURNING id`, [orgId])).rows[0]?.id;
+      const doc = (
+        await a.query<{ id: string }>(
+          `INSERT INTO crove_finance.purchase_document (org_id, party_id, invoice_number, invoice_date, subtotal, vat_amount, total)
+           VALUES ($1, $2, '00000042', '2026-09-10', 100, 0, 100) RETURNING id`,
+          [orgId, party],
+        )
+      ).rows[0]?.id as string;
+      const e = (
+        await a.query<{ id: string }>(
+          `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id) VALUES ($1, '2026-09-10', 'mua', 'finance.purchase_document', $2) RETURNING id`,
+          [orgId, doc],
+        )
+      ).rows[0]?.id;
+      await a.query(`INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit) VALUES ($1, $2, 1, '6422', 100, 0), ($1, $2, 2, '331', 0, 100)`, [orgId, e]);
+      await a.query('COMMIT');
+      return doc;
+    });
+    await expect(
+      asUser(member, (c) =>
+        c.query(
+          `INSERT INTO crove_finance.categorization_rule (org_id, legal_entity_id, match_kind, match_text, debit_account, source_document_id) VALUES ($1, $2, 'keyword', 'muc in', '6422', $3)`,
+          [orgId, branch, document],
+        ),
+      ),
+    ).rejects.toThrow(/row-level security|null value in column "legal_entity_id"/);
   });
 
   it('reports a balance delta whose entity is not its entry’s', async () => {
