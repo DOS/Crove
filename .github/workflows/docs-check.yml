@@ -29,6 +29,10 @@ jobs:
       - name: Docs check
         run: node tools/docs-check.mjs
 
+      # G1 scope, the path half (kernel plan §10, #1560): no path that belongs in the private crove-cloud repository.
+      - name: Path boundary (G1)
+        run: node tools/ci/path-boundary.mjs
+
       # AGENTS.md: a new migration's version is greater than every file on main. Compared against the live base
       # branch, so re-running this job after main moves catches a PR that fell behind; migration-recheck.yml does
       # that re-run after every push to main.
