@@ -1697,6 +1697,7 @@ export const vi = {
     viewInJournal: 'Xem trong sổ bút toán',
   },
   guide: {
+    contents: 'Trên trang này',
     title: 'Hướng dẫn nhanh',
     subtitle: 'Ba bước để ghi sổ hóa đơn đầu vào: tải lên, duyệt và xuất Excel.',
     firmTitle: 'Hướng dẫn cho công ty dịch vụ kế toán',
