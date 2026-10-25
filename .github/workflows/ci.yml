@@ -97,10 +97,13 @@ jobs:
         part:
           - name: heavy files
             args: apps/kernel/test/finance-search.db.test.ts apps/kernel/test/archive.db.test.ts
+            exclude: ''
           - name: shard 1 of 2
-            args: --shard=1/2 --exclude apps/kernel/test/finance-search.db.test.ts --exclude apps/kernel/test/archive.db.test.ts
+            args: --shard=1/2
+            exclude: apps/kernel/test/finance-search.db.test.ts,apps/kernel/test/archive.db.test.ts
           - name: shard 2 of 2
-            args: --shard=2/2 --exclude apps/kernel/test/finance-search.db.test.ts --exclude apps/kernel/test/archive.db.test.ts
+            args: --shard=2/2
+            exclude: apps/kernel/test/finance-search.db.test.ts,apps/kernel/test/archive.db.test.ts
     services:
       postgres:
         image: postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
@@ -137,6 +140,8 @@ jobs:
         env:
           CROVE_TEST_S3_URL: http://crove-ci:crove-ci-minio@127.0.0.1:9000/crove-test
           PART_ARGS: ${{ matrix.part.args }}
+          # Read by vitest.config.ts: the files another part runs (vitest's --exclude does not reach a project).
+          CROVE_DB_TEST_EXCLUDE: ${{ matrix.part.exclude }}
         run: |
           # PART_ARGS is this file's own matrix value, split into arguments on purpose.
           # shellcheck disable=SC2086
