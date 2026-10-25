@@ -365,6 +365,7 @@ export const linkPartyEntity = defineCommand({
   name: 'kernel.party.link_entity',
   input: zPartyEntity,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin'],
   target: (input) => ({ type: 'kernel.party', id: input.partyId }),
   handler: async (ctx, input) => {
@@ -385,6 +386,7 @@ export const unlinkPartyEntity = defineCommand({
   name: 'kernel.party.unlink_entity',
   input: zPartyEntity,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin'],
   target: (input) => ({ type: 'kernel.party', id: input.partyId }),
   handler: async (ctx, input) => {
@@ -412,6 +414,7 @@ export const linkPartyForTaxCode = defineCommand({
   name: 'kernel.party.link_for_tax_code',
   input: z.strictObject({ taxCode: z.string().min(1).max(40) }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin', 'member'],
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
