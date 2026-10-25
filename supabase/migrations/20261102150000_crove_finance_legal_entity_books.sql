@@ -508,12 +508,17 @@ BEGIN
   -- The legal entity (#1280): the one named, else the reversed entry's, else the org's default entity, as this caller
   -- sees them (crove_definer_tenant is a member of crove_tenant, so the context's le_scope applies to it). One the
   -- caller cannot see, or that is not the org's, is refused; nothing says whether it exists.
+  -- A reversed entry the caller cannot see (another org's, or none) gives no entity: the default one is used and the
+  -- entry's foreign key, or for a caller limited to some entities the trigger b_legal_entity, refuses the reversal.
   IF p_legal_entity_id IS NOT NULL THEN
     SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = v_org AND e.id = p_legal_entity_id;
-  ELSIF p_reverses_entry_id IS NOT NULL THEN
-    SELECT r.legal_entity_id INTO v_entity FROM crove_finance.journal_entry r WHERE r.org_id = v_org AND r.id = p_reverses_entry_id;
   ELSE
-    SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = v_org AND e.is_default;
+    IF p_reverses_entry_id IS NOT NULL THEN
+      SELECT r.legal_entity_id INTO v_entity FROM crove_finance.journal_entry r WHERE r.org_id = v_org AND r.id = p_reverses_entry_id;
+    END IF;
+    IF v_entity IS NULL THEN
+      SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = v_org AND e.is_default;
+    END IF;
   END IF;
   IF v_entity IS NULL OR NOT crove_kernel.ctx_le_allowed(v_entity) THEN
     RAISE EXCEPTION 'LEGAL_ENTITY_NOT_ALLOWED' USING ERRCODE = '42501',
