@@ -30,6 +30,7 @@ test('an invoice proposal moves to the entity chosen in the sidebar and posts in
   });
 
   await test.step('the proposal goes to the default entity until it is moved', async () => {
+    await nav.getByRole('link', { name: 'Trang chủ', exact: true }).click();
     await nav.getByRole('link', { name: 'Hộp thư chứng từ' }).click();
     await page.locator('input[type=file]').setInputFiles(INVOICE);
     await expect(page.getByRole('link', { name: SELLER })).toBeVisible({ timeout: 60_000 });
@@ -64,6 +65,7 @@ test('an invoice proposal moves to the entity chosen in the sidebar and posts in
       { slug },
     );
     expect(rows).toEqual([{ entity: BRANCH }]);
+    await nav.getByRole('link', { name: 'Kế toán', exact: true }).click();
     await nav.getByRole('link', { name: 'Bút toán' }).click();
     await expect(switcher.locator('option:checked')).toHaveText(BRANCH);
     await expect(page.getByText(SELLER).first()).toBeVisible();
