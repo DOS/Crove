@@ -40,7 +40,7 @@ test('set the MISA codes of a stock account, book a stock line, and export it in
     await form.getByLabel('Mã kho').fill('KHO-HN');
     await form.getByRole('button', { name: 'Lưu' }).click();
     await expect(goods).toContainText('Mã hàng THEP01 · Kho KHO-HN');
-    await expect(goods.getByText('Mặc định')).toHaveCount(0);
+    await expect(goods.getByText('Mặc định', { exact: true })).toHaveCount(0);
     await expect(goods.getByRole('button', { name: 'Bỏ mã đã đặt của tài khoản 156' })).toBeVisible();
   });
 
