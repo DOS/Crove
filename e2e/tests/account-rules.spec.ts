@@ -60,7 +60,9 @@ test('an approver teaches a line rule, Settings lists and removes rules, and the
     await expect(rule.getByText('Cùng mặt hàng')).toBeVisible();
     await expect(rule.getByText(SELLER)).toBeVisible();
     await expect(rule.getByText('Ghi vào TK 242')).toBeVisible();
-    await expect(rule.getByText(new RegExp(`Do ${email.replace(/[.+]/g, '\\$&')} xác nhận ngày .*, khi duyệt hóa đơn C26TAB/4101`))).toBeVisible();
+    const provenance = rule.getByText(`Do ${email} xác nhận ngày`, { exact: false });
+    await expect(provenance).toBeVisible();
+    await expect(provenance).toContainText('khi duyệt hóa đơn C26TAB/4101');
   });
 
   await test.step('an owner adds a keyword rule for every vendor, then removes it', async () => {
