@@ -29,6 +29,7 @@ test('import a bank statement, then an overlapping one, and find each line once'
   };
 
   await test.step('the first export: checked line by line, then imported', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Kế toán', exact: true }).click();
     await page.getByRole('navigation').getByRole('link', { name: 'Ngân hàng' }).click();
     await expect(page.getByRole('heading', { name: 'Sao kê ngân hàng' })).toBeVisible();
     await expect(page.getByLabel('Tài khoản ngân hàng')).toHaveValue('1121');
@@ -74,6 +75,7 @@ test('import a bank statement, then an overlapping one, and find each line once'
   });
 
   await test.step('the Inbox lists the lines still without a voucher and opens their account and month', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Trang chủ', exact: true }).click();
     await page.getByRole('navigation').getByRole('link', { name: 'Hộp thư' }).click();
     await expect(page.getByText('Dòng sao kê ngân hàng chưa lập chứng từ')).toBeVisible();
     // FT002 waits for approval; the three others are open.
