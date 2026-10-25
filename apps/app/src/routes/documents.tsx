@@ -5,6 +5,7 @@ import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Input } from '@crove/ui/components/input';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, TableSkeleton } from '../components/ui.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -14,7 +15,9 @@ import { InvoiceCorrections } from '../components/invoice-corrections.tsx';
 export function DocumentsPage() {
   const t = useTranslations('documents');
   const f = useFormat();
-  const docs = useQuery(orpc.documents.list.queryOptions({ input: {} }));
+  // The documents of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
+  const docs = useQuery({ ...orpc.documents.list.queryOptions({ input: { legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   // A filter over the documents shown, started by ?q= from a link (a document found by the command palette, #673).
   const search: { q?: string } = useSearch({ strict: false });
   const [q, setQ] = useState(search.q ?? '');
@@ -31,7 +34,7 @@ export function DocumentsPage() {
           <Input placeholder={t('search')} aria-label={t('search')} value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
       )}
-      {docs.isLoading ? (
+      {docs.isPending ? (
         <TableSkeleton columns={6} />
       ) : docs.error ? (
         <ErrorText>{errorMessage(docs.error)}</ErrorText>

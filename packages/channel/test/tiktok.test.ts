@@ -86,6 +86,8 @@ describe('TikTokPublisher', () => {
         { body: { data: { videos: [{ id: '7300000000000000001', view_count: 1200, like_count: 80, comment_count: 6, share_count: 3 }] }, error: ok } },
         { status: 401, body: { error: { code: 'access_token_invalid', message: 'expired' } } },
         { status: 403, body: { error: { code: 'scope_not_authorized', message: 'no video.list' } } },
+        // TikTok also answers a missing scope with 401: no counts, never an expired token (#1546).
+        { status: 401, body: { error: { code: 'scope_not_authorized', message: 'no video.list' } } },
       ],
     });
     const publisher = new TikTokPublisher({ ...APP, videoList: true }, fetchImpl);
@@ -94,6 +96,7 @@ describe('TikTokPublisher', () => {
     expect(calls[0]?.body).toEqual({ filters: { video_ids: ['7300000000000000001'] } });
     expect(await publisher.metrics(ask)).toEqual({ refused: 'token_expired' });
     // Without the scope (or for a private post with no id), no counts and no error.
+    expect(await publisher.metrics(ask)).toBeNull();
     expect(await publisher.metrics(ask)).toBeNull();
     expect(await publisher.metrics({ ...ask, externalId: 'v_pub_abc' })).toBeNull();
   });

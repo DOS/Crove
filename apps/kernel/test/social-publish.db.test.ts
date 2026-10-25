@@ -1677,6 +1677,27 @@ suite('social publishing on PostgreSQL (S4)', () => {
     await expect(api.execute('social.auto_reply.begin', { variantId: high.id, likes: 100 }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
   });
 
+  it('marks the channel expired when the metrics sweep finds its token refused, unless it was reconnected meanwhile (#1546)', async () => {
+    const o = await org();
+    const platform = new SandboxPublisher();
+    const { variants, connections } = await duePost(o, 2);
+    for (const id of variants) expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: platform }, callTimeoutMs: 2_000 }, o.orgId, id as string, 'sandbox')).toMatchObject({ status: 'published' });
+    const [refused, reconnected] = connections as [string, string];
+    const accountOf = new Map((await admin(async (c) => (await c.query<{ id: string; external_account_id: string }>('SELECT id, external_account_id FROM crove_kernel.channel_connection WHERE id = ANY($1)', [connections])).rows)).map((r) => [r.external_account_id, r.id]));
+    platform.metrics = async (input) => {
+      // A reconnect lands between the sweep reading the connection and the platform refusing the old token.
+      if (accountOf.get(input.externalAccountId) === reconnected) await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET updated_at = now() + interval '1 second' WHERE id = $1", [reconnected]));
+      return { refused: 'token_expired' };
+    };
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
+    const status = async (id: string) => (await admin(async (c) => (await c.query<{ status: string }>('SELECT status FROM crove_kernel.channel_connection WHERE id = $1', [id])).rows))[0]?.status;
+    expect(await status(refused)).toBe('expired');
+    expect(await status(reconnected)).toBe('active');
+    // The refusal is still kept as the capture's empty snapshot, as before.
+    const errors = await admin(async (c) => (await c.query<{ extra: { error?: string } }>('SELECT extra FROM crove_social.metric_snapshot WHERE variant_id = ANY($1)', [variants])).rows);
+    expect(errors.map((r) => r.extra.error)).toEqual(['token_expired', 'token_expired']);
+  });
+
   it('records a refused auto-reply on the post and never tries it again by itself (#746)', async () => {
     const o = await org();
     const sandbox = new SandboxPublisher();
