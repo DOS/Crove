@@ -14,6 +14,7 @@ export type NotGranted = undefined;
 
 export interface CroveCrmSchema {
   'crove_crm.booking': CrmBookingTable;
+  'crove_crm.booking_feed': CrmBookingFeedTable;
   'crove_crm.event_type': CrmEventTypeTable;
 }
 
@@ -139,6 +140,16 @@ export interface CroveSocialSchema {
   'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
   'crove_social.watermark': SocialWatermarkTable;
+}
+
+/** crove_crm.booking_feed */
+export interface CrmBookingFeedTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  token_sha256: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_crm.booking */
