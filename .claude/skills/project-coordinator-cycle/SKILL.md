@@ -58,7 +58,7 @@ Since 2026-10-25 the owner runs long-lived area team leads, sessions named `Agen
 - Owner decision 2026-10-25: every team lead moves under the coordinator, one at a time. When a lead is quiet (no open PR, no running subagent), and on a turn the owner typed, start `Agent <n>: <area>` with `start_session` and a handoff (its area, open issues, decisions, this skill), then archive the old session. A session started by the coordinator wakes it when a turn ends; a lead the owner started does not, so check those with `list_events` each cycle.
 - Desktop pauses cross-session messages after 10 sends without an owner turn. Send one message per lead carrying everything, skip acknowledgement-only replies, and when paused, post the instruction as a PR or issue comment and tell the owner that any message from them resumes it.
 - Protected-path PRs need an independent review. Prefer an idle team lead as reviewer (never the PR's author); otherwise a background subagent. Give the reviewer the claims to attack, not your verdict.
-- Migration versions: open PRs reserve versions in the cycle comment's table, so no two open PRs share one. A reservation does not survive another PR merging a higher version first, so right before merging a PR renames its migrations above main's newest (a valid UTC time: hour 00-23, minute 00-59), pushes and waits for green. Give out versions in a row, never round jumps, and check the table before answering a request.
+- Migration versions: open PRs reserve versions in the cycle comment's table, so no two open PRs share one. A reservation does not survive another PR merging a higher version first, so right before merging a PR renames its migrations above main's newest (a 14-digit UTC timestamp `YYYYMMDDHHMMSS`: hour 00-23, minutes and seconds 00-59), pushes and waits for green. Give out versions in a row, never round jumps, and check the table before answering a request.
 
 ## 3. Keep the workers busy
 
@@ -136,7 +136,7 @@ A team lead (`Agent <n>: <area>`) owns one area of Crove and works without stopp
 4. **Migrations.**
    - Before writing a migration, ask the coordinator: `RESERVE <version> for #<n>`.
    - Before merging, if main's newest migration is at or above yours, rename above it (ask the coordinator for the version), merge `origin/main`, push and wait for green.
-   - A new tenant table lands in two steps: the RLS-matrix row factory with a `PENDING_TABLES` entry first, then the feature, then a PR dropping the entry.
+   - A new tenant table lands in three PRs: the RLS-matrix row factory with a `PENDING_TABLES` entry first, then the feature, then a PR dropping the entry.
    - If you redefine a shared function (`crove_kernel.org_purge`, report views), copy the newest body on main and add only your change.
 5. **Review and merge.**
    - Protected-path PR: write your security review in the PR body, wait for CI green, then send `READY FOR COORDINATOR REVIEW: <PR url> head <sha>`. Merge only after `approved, merge head <sha>`. An approval covers a later delta of only a main merge or a migration rename; tell the coordinator about anything more.
