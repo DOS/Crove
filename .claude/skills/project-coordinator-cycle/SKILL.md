@@ -50,7 +50,7 @@ For each worker that ended a turn:
 
 ## 2a. Team leads and migration versions
 
-Since 2026-10-25 the owner runs long-lived area team leads, sessions named `Agent <n>: <area>` (today 1 Accounting, 2 Frontend, 3 Social Management, 4 Kernel & Security, 5 CRM & Calendar). Keep that list in each cycle comment on #1210.
+Since 2026-10-25 the owner runs long-lived area team leads, sessions numbered 1 to 5, titled `<n>: #<issue> - <title>` (section 6, item 2) (today 1 Accounting, 2 Frontend, 3 Social Management, 4 Kernel & Security, 5 CRM & Calendar). Keep that list in each cycle comment on #1210.
 
 - A team lead picks its next issue from its own area, may run up to 2 background subagents, and reports to the coordinator: `READY FOR COORDINATOR REVIEW` for protected-path PRs, `MERGED` for the rest, `RESERVE <version> for #<n>` before writing a migration.
 - Each cycle, check every team lead with `list_sessions` and `list_events`. One that is idle with nothing claimed gets a message to take its next issue. One whose area has no work left gets the derive step (section 3, item 2) for its area.
@@ -134,7 +134,7 @@ Done = the PR is merged and #<n> is closed. Last message: 2-3 lines with the PR 
 A team lead (`Agent <n>: <area>`) owns one area of Crove and works without stopping. It follows `AGENTS.md` and this section.
 
 1. **Pick work.** Take the next issue in your area by the `AGENTS.md` order: earliest milestone with work left, P0 before P1 before P2, skipping `owner-action`, Icebox and claimed issues. When nothing is left, derive issues from the plans and designs for your area, citing the plan line, with the milestone and priority the plan gives. If none can be derived, tell the coordinator in one line and stand by; do not build Icebox items.
-2. **Claim.** Set the issue to In progress and comment `Claimed by Agent <n>, branch <branch>`. Read the comments again; never take a live claim.
+2. **Claim.** Set the issue to In progress and comment `Claimed by Agent <n>, branch <branch>`. Read the comments again; never take a live claim. Then rename your own session so the owner's sidebar shows what you work on: `set_session_title` with `self` and `<n>: #<issue> - <short issue title>` (for example `1: #1280 - Legal entities in the books`), or `<n>: chờ việc` when you have nothing. The coordinator is `0: Điều phối`.
 3. **Parallel work.** Run up to 2 background subagents on other issues of your area (`AGENTS.md` WIP limit). Never put two on overlapping files. Each gets a full brief and its own scratchpad subfolder. Before touching a shared file (date components, `org_purge`, the RLS matrix, `AGENTS.md`), tell the lead who owns it.
 4. **Migrations.**
    - Before writing a migration, ask the coordinator: `RESERVE <version> for #<n>`.
