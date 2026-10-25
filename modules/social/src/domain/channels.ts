@@ -1274,12 +1274,47 @@ export function pinterestSectionOf(settings: Readonly<Record<string, unknown>> |
 }
 
 // The channels whose composer lists options to pick from (#1120), and what each lists: a board's sections, a YouTube
-// channel's playlists and a WordPress site's categories and tags (#1131). One list per channel.
-export const CHANNEL_OPTION_KIND_OF: Readonly<Partial<Record<Provider, 'pinterest_section' | 'youtube_playlist' | 'wordpress_term'>>> = {
+// channel's playlists and a WordPress site's categories and tags (#1131), a TikTok account's creator options (#1497).
+// One list per channel.
+export const CHANNEL_OPTION_KIND_OF: Readonly<Partial<Record<Provider, 'pinterest_section' | 'youtube_playlist' | 'wordpress_term' | 'tiktok_creator'>>> = {
   pinterest: 'pinterest_section',
   youtube: 'youtube_playlist',
   wordpress: 'wordpress_term',
+  tiktok: 'tiktok_creator',
 };
+
+// TikTok's privacy levels; which ones an account may use is checked with TikTok when the video goes out.
+export const TIKTOK_PRIVACY_LEVELS = ['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const;
+export type TikTokPrivacyLevel = (typeof TIKTOK_PRIVACY_LEVELS)[number];
+export const TIKTOK_INTERACTIONS = ['comment', 'duet', 'stitch'] as const;
+export type TikTokInteraction = (typeof TIKTOK_INTERACTIONS)[number];
+// What TikTok's creator_info answered for an account (#1497), as the worker lists it in the channel option cache, one
+// { id, name } item each: `nickname` (the creator's display name), `privacy_<level>` for each privacy level the account
+// may post with, `off_<interaction>` for each interaction the creator turned off, `max_video_seconds` (the longest
+// video, in seconds) and `cannot_post` (TikTok's code when the account may not post now: spam_risk_too_many_posts,
+// spam_risk_user_banned_from_posting). The adapter's tiktokCreatorOptions in @crove/channel writes the same ids.
+// The composer shows these; publishing reads creator_info again and never trusts them.
+export const TIKTOK_CANNOT_POST = ['spam_risk_too_many_posts', 'spam_risk_user_banned_from_posting'] as const;
+export interface TikTokCreator {
+  nickname: string | null;
+  privacyLevels: TikTokPrivacyLevel[];
+  off: Readonly<Record<TikTokInteraction, boolean>>;
+  maxVideoSeconds: number | null;
+  cannotPost: (typeof TIKTOK_CANNOT_POST)[number] | null;
+}
+export function tiktokCreatorOf(items: readonly { id: string; name: string }[]): TikTokCreator {
+  const has = (id: string) => items.some((i) => i.id === id);
+  const named = (id: string) => items.find((i) => i.id === id)?.name ?? null;
+  const seconds = Number(named('max_video_seconds'));
+  const cannot = named('cannot_post');
+  return {
+    nickname: named('nickname'),
+    privacyLevels: TIKTOK_PRIVACY_LEVELS.filter((p) => has(`privacy_${p}`)),
+    off: { comment: has('off_comment'), duet: has('off_duet'), stitch: has('off_stitch') },
+    maxVideoSeconds: Number.isSafeInteger(seconds) && seconds > 0 ? seconds : null,
+    cannotPost: (TIKTOK_CANNOT_POST as readonly (string | null)[]).includes(cannot) ? (cannot as TikTokCreator['cannotPost']) : null,
+  };
+}
 
 // Instagram people (#796): up to 3 collaborators (`settings.collaborators`, on feed posts and Reels; each must accept
 // the invitation in Instagram) and up to 20 people tagged on the first image (`settings.userTags`, image posts only).

@@ -1,32 +1,48 @@
-// The desktop sidebar on a short window (#516): the menu scrolls inside the sidebar and its footer (sign out, the account menu)
-// stays in view, and the Social home at phone width (#1043). The sidebar sticks to the top at the window's height, so a footer below the fold could never be
-// scrolled to. The same session walks every screen the sidebar links to under Trusted Types (#681) and expects no CSP
-// violation; it shares this spec's sign-up because every spec draws on one sign-up budget (auth-rate-limits.spec.ts).
+// The desktop sidebar on a short window (#516): its footer (sign out, the account menu) and the app switcher's foot
+// (Settings) stay in view, and the Social home at phone width (#1043). The sidebar sticks to the top at the window's
+// height, so a footer below the fold could never be scrolled to. Each app's menu fits a 1366x768 laptop without
+// scrolling, and a deep link opens with its app selected (#1528). The same session walks every screen of every app
+// under Trusted Types (#681) and expects no CSP violation; it shares this spec's sign-up because every spec draws on
+// one sign-up budget (auth-rate-limits.spec.ts).
 import { expect, test } from '@playwright/test';
 import { collectCspViolations } from '../lib/csp.ts';
 import { createOrg, newEmail, signInNewUser, signUp } from '../lib/session.ts';
 
 test.use({ viewport: { width: 1280, height: 600 } });
 
-test('the sidebar keeps sign-out in view on a short window, and its menu scrolls', async ({ page }) => {
+test('the sidebar keeps sign-out and Settings in view on a short window, and each app has its own short menu', async ({ page }) => {
   const violations = await collectCspViolations(page);
   await signUp(page, newEmail('layout'));
-  await createOrg(page, 'Công ty Màn hình nhỏ');
+  const slug = await createOrg(page, 'Công ty Màn hình nhỏ');
   const sidebar = page.getByRole('complementary');
   const signOut = sidebar.getByRole('button', { name: 'Đăng xuất', exact: true });
   await expect(signOut).toBeInViewport();
+  await expect(sidebar.getByRole('link', { name: 'Cài đặt' })).toBeInViewport();
 
-  // The last menu item is reached by scrolling the menu; the footer stays where it is.
-  const settings = sidebar.getByRole('link', { name: 'Cài đặt' });
-  await settings.scrollIntoViewIfNeeded();
-  await expect(settings).toBeInViewport();
-  await expect(signOut).toBeInViewport();
+  // A deep link opens with its app selected, and only that app's menu shows.
+  const apps = sidebar.getByRole('list', { name: 'Ứng dụng' });
+  await page.goto(`/o/${slug}/journal`);
+  await expect(apps.getByRole('link', { name: 'Kế toán', exact: true })).toHaveAttribute('aria-current', 'true');
+  await expect(sidebar.getByRole('link', { name: 'Sổ sách' })).toBeVisible();
+  await expect(sidebar.getByRole('link', { name: 'Hộp thư chứng từ' })).toHaveCount(0);
 
-  // Every screen the sidebar links to, each opened from a fresh document so the listener sees its first render.
-  const links = await sidebar
-    .getByRole('link')
-    .evaluateAll((anchors) => [...new Set(anchors.map((a) => (a as HTMLAnchorElement).pathname))]);
-  expect(links.length).toBeGreaterThan(5);
+  // On a 1366x768 laptop no app's menu scrolls.
+  await page.setViewportSize({ width: 1366, height: 768 });
+  const menuScrolls = () => sidebar.locator('.overflow-y-auto').evaluate((el) => el.scrollHeight > el.clientHeight);
+  expect(await menuScrolls()).toBe(false);
+
+  // Every screen of every app, each opened from a fresh document so the listener sees its first render.
+  const links = new Set<string>();
+  const appCount = await apps.getByRole('link').count();
+  expect(appCount).toBeGreaterThan(1);
+  for (let i = 0; i < appCount; i++) {
+    await apps.getByRole('link').nth(i).click();
+    await page.waitForLoadState('networkidle');
+    expect(await menuScrolls(), `app ${i}`).toBe(false);
+    for (const path of await sidebar.getByRole('link').evaluateAll((anchors) => anchors.map((a) => (a as HTMLAnchorElement).pathname))) links.add(path);
+  }
+  expect(links.size).toBeGreaterThan(5);
+  await page.setViewportSize({ width: 1280, height: 600 });
   for (const path of links) {
     await page.goto(path);
     await page.waitForLoadState('networkidle');
@@ -61,13 +77,17 @@ test.describe('at phone width', () => {
     expect(widths.tabs).toBeLessThanOrEqual(widths.view);
   });
 
-  // The phone's menu (#1245): a drawer with the grouped menu, which closes after a link, on Esc, and on its backdrop.
-  test('the menu button opens a drawer with the grouped menu, and it closes after navigating or on Esc (#1245)', async ({ page }) => {
+  // The phone's menu (#1245): a drawer with the app switcher (#1528) and the current app's menu, which stays open when
+  // the app changes and closes after a screen's link, on Esc, and on its backdrop.
+  test('the menu button opens a drawer with the app switcher, and it closes after navigating or on Esc (#1245)', async ({ page }) => {
     await signInNewUser(page, newEmail('layout-drawer'));
     await createOrg(page, 'Công ty Menu điện thoại');
     const open = page.getByRole('button', { name: 'Mở menu' });
     await open.click();
     const drawer = page.getByRole('dialog', { name: 'Menu chính' });
+    await expect(drawer.getByRole('region', { name: 'Trang chủ' }).getByRole('link', { name: 'Hộp thư chứng từ' })).toBeVisible();
+    await drawer.getByRole('link', { name: 'Kế toán', exact: true }).click();
+    await expect(page).toHaveURL(/\/documents$/);
     await expect(drawer.getByRole('region', { name: 'Kế toán' }).getByRole('link', { name: 'Sổ sách' })).toBeVisible();
     await expect(drawer.getByRole('button', { name: 'Đăng xuất', exact: true })).toBeVisible();
     await drawer.getByRole('link', { name: 'Sổ sách' }).click();

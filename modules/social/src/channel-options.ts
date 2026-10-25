@@ -1,15 +1,17 @@
 // A channel's options for the composer (#1120): a Pinterest board's sections, for the pin's section picker, and since
-// #1131 a YouTube channel's playlists and a WordPress site's categories and tags (each with its taxonomy). Only
-// the worker may open a channel's token (ADR-0025), so the composer cannot ask the platform itself: as for link
-// previews (#641), a member asks for the list (social.channel_option.request); a fresh answer (under a day old) or a
-// request in progress is returned as it is, else the request is queued for the worker, within a per-org budget a
+// #1131 a YouTube channel's playlists and a WordPress site's categories and tags (each with its taxonomy), and since
+// #1497 a TikTok account's creator options (its privacy levels, the interactions it turned off, its longest video and
+// its nickname). Only the worker may open a channel's token (ADR-0025), so the composer cannot ask the platform itself:
+// as for link previews (#641), a member asks for the list (social.channel_option.request); a fresh answer (under a day
+// old, a few minutes for TikTok) or a request in progress is returned as it is, else the request is queued for the worker, within a per-org budget a
 // minute. The worker reads the connection and kind from the pending row in the org's system context, opens the token
 // through kernel.channel.credential (credential_get), lists the options through the channel's adapter and records
 // them (social.channel_option.record). The token never reaches a command, an event, an error or an answer.
 //
 // The list is shown in Crove only, as names (third-party text, rendered as text). Publishing never trusts it: the
 // Pinterest adapter lists the board's sections again before it pins, and refuses a section the board no longer has;
-// YouTube refuses a playlist that is gone when the video is added to it, and WordPress matches the names as before.
+// YouTube refuses a playlist that is gone when the video is added to it, WordPress matches the names as before, and
+// TikTok's adapter reads creator_info again and refuses a privacy level or a length the account no longer allows.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
@@ -22,10 +24,16 @@ import { refuseChannels } from './channel-access.ts';
 // Who composes posts, and so may ask for a channel's options.
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const ACTOR: SystemActor = { type: 'system', component: 'social.channel_option' };
-// An answer is fresh this long; a request in progress is not repeated for this long; a failed read is the answer this
-// long, so asking again at once neither queues another job nor escapes the budget below (which counts lists, not
-// asks).
-export const CHANNEL_OPTION_FRESH_MS = 24 * 60 * 60_000;
+// An answer is fresh this long, by kind; a request in progress is not repeated for this long; a failed read is the
+// answer this long, so asking again at once neither queues another job nor escapes the budget below (which counts
+// lists, not asks). A TikTok account's options change with what the creator sets in the app, and TikTok asks for them
+// as they are at the time of upload (its content sharing guidelines), so they are fresh for minutes, not a day.
+export const CHANNEL_OPTION_FRESH_MS: Readonly<Record<SocialChannelOptionKind, number>> = {
+  pinterest_section: 24 * 60 * 60_000,
+  youtube_playlist: 24 * 60 * 60_000,
+  wordpress_term: 24 * 60 * 60_000,
+  tiktok_creator: 5 * 60_000,
+};
 export const CHANNEL_OPTION_RETRY_MS = 2 * 60_000;
 export const CHANNEL_OPTION_FAILED_RETRY_MS = 5 * 60_000;
 // Requests an org may send to the worker per minute.
@@ -105,7 +113,7 @@ export const channelOptionRequest = defineCommand({
       ctx.trx.selectFrom('crove_social.channel_option').select(COLUMNS).where('org_id', '=', ctx.orgId).where('channel_connection_id', '=', input.connectionId).where('kind', '=', kind);
     const row = await find().forUpdate().executeTakeFirst();
     if (row) {
-      const fresh = row.status === 'ready' && row.fetched_at !== null && now - row.fetched_at.getTime() < CHANNEL_OPTION_FRESH_MS;
+      const fresh = row.status === 'ready' && row.fetched_at !== null && now - row.fetched_at.getTime() < CHANNEL_OPTION_FRESH_MS[kind];
       const asked = row.status === 'pending' && now - row.requested_at.getTime() < CHANNEL_OPTION_RETRY_MS;
       const resting = (retryAfter(row, ctx.now) ?? 0) > 0;
       if (fresh || asked || resting) return view(input.connectionId, kind, row, ctx.now);
