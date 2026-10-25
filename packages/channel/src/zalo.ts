@@ -528,6 +528,7 @@ export class ZaloOaPublisher implements Publisher {
         const medias = Array.isArray(answer?.medias) ? answer.medias : [];
         let recent = false;
         for (const m of medias) {
+          if (!m) continue;
           // Zalo gives ids and times as strings or numbers.
           const id = typeof m.id === 'string' || typeof m.id === 'number' ? String(m.id) : '';
           const ms = typeof m.create_date === 'number' ? m.create_date : typeof m.create_date === 'string' && /^\d{1,15}$/.test(m.create_date) ? Number(m.create_date) : Number.NaN;

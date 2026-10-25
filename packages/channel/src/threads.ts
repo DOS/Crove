@@ -403,6 +403,7 @@ export class ThreadsPublisher implements Publisher {
       const data = Array.isArray(answer.data) ? answer.data : [];
       let older = false;
       for (const p of data) {
+        if (!p) continue;
         const id = typeof p.id === 'string' || typeof p.id === 'number' ? String(p.id) : '';
         const at = graphTime(p.timestamp);
         if (!NUMERIC_ID.test(id) || !at) continue;

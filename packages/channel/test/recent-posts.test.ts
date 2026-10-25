@@ -305,7 +305,19 @@ describe('YouTubePublisher.listRecentPosts', () => {
             nextPageToken: 'CAUQAA',
           },
         },
-        { body: { items: [item('dddddddddd4', 'Tuần trước', 6 * DAY), item('eeeeeeeeee5', 'Quá cũ', 40 * DAY)], nextPageToken: 'CAoQAA' } },
+        {
+          body: {
+            items: [
+              item('dddddddddd4', 'Tuần trước', 6 * DAY),
+              item('eeeeeeeeee5', 'Quá cũ', 40 * DAY),
+              // Uploaded private 50 days ago and made public 5 days ago: counted from its publish time.
+              item('ffffffffff6', 'Ra mắt muộn', 50 * DAY, { contentDetails: { videoId: 'ffffffffff6', videoPublishedAt: isoZ(5 * DAY) } }),
+              // Past the grace: the listing ends here.
+              item('gggggggggg7', 'Rất cũ', 130 * DAY),
+            ],
+            nextPageToken: 'CAoQAA',
+          },
+        },
       ],
     });
     const result = await new YouTubePublisher(app, fetchImpl).listRecentPosts({ externalAccountId: channel, secret, since: new Date(Date.now() - 90 * DAY) });
@@ -313,10 +325,11 @@ describe('YouTubePublisher.listRecentPosts', () => {
       ['aaaaaaaaaa1', 'Khai trương chi nhánh\n\nMời bạn ghé thăm', 'https://www.youtube.com/watch?v=aaaaaaaaaa1'],
       ['bbbbbbbbbb2', 'Hậu trường #shorts', 'https://www.youtube.com/watch?v=bbbbbbbbbb2'],
       ['dddddddddd4', 'Tuần trước', 'https://www.youtube.com/watch?v=dddddddddd4'],
+      ['ffffffffff6', 'Ra mắt muộn', 'https://www.youtube.com/watch?v=ffffffffff6'],
     ]);
     const first = result && 'posts' in result ? result.posts[0] : undefined;
     expect(Math.abs((first?.publishedAt.getTime() ?? 0) - (Date.now() - DAY))).toBeLessThan(5000);
-    // One unit for the channel, one per page; the upload older than 30 days ended the listing.
+    // One unit for the channel, one per page; an upload older than the window plus its grace ended the listing.
     expect(calls.map((c) => c.route)).toEqual([channels, items, items]);
     expect(calls[0]?.query.get('part')).toBe('contentDetails');
     expect(calls[0]?.query.get('mine')).toBe('true');

@@ -63,6 +63,10 @@ const PAGE_TOKEN_MAX = 200;
 const UPLOADS_ID = /^UU[A-Za-z0-9_-]{22}$/;
 // Items one page of playlistItems.list holds (its maximum).
 const UPLOADS_PAGE = 50;
+// How long before the window an upload may have been added and still count: a video uploaded private or scheduled and
+// made public within the window is counted from its publish time, so the listing reads past `since` by this much
+// before it stops (the page cap bounds it anyway).
+const UPLOAD_GRACE_MS = 90 * 86_400_000;
 // Where a video's page is (#1431); the adapter writes the watch address itself.
 const YOUTUBE_POST_HOSTS = ['youtube.com', 'youtu.be'] as const;
 // Google's refusals for the project's quota or a burst, which come as 403 too.
@@ -604,7 +608,7 @@ export class YouTubePublisher implements Publisher {
     let uploads: string;
     try {
       const answer = await this.client.call<ChannelList>('GET', `${API}/channels?part=contentDetails&mine=true`, s.accessToken);
-      const channel = (answer.body?.items ?? []).find((i) => i.id === input.externalAccountId);
+      const channel = (answer.body?.items ?? []).find((i) => i?.id === input.externalAccountId);
       const id = channel?.contentDetails?.relatedPlaylists?.uploads;
       if (typeof id !== 'string' || !UPLOADS_ID.test(id)) return null;
       uploads = id;
@@ -625,11 +629,14 @@ export class YouTubePublisher implements Publisher {
       }
       let older = false;
       for (const item of answer?.items ?? []) {
+        if (!item) continue;
         const id = item.contentDetails?.videoId ?? item.snippet?.resourceId?.videoId;
         const added = time(item.snippet?.publishedAt);
         const at = time(item.contentDetails?.videoPublishedAt) ?? added;
         if (typeof id !== 'string' || !VIDEO_ID.test(id) || !at) continue;
-        if ((added ?? at) < since) {
+        // The playlist runs by upload time; a video counts by its publish time, which can be later (uploaded private,
+        // made public in the window), so the listing stops only past the grace.
+        if ((added ?? at).getTime() < since.getTime() - UPLOAD_GRACE_MS) {
           older = true;
           continue;
         }
