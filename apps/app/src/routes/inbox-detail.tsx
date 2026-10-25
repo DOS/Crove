@@ -343,9 +343,11 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
 
   const wide = useMediaQuery(SM_UP);
   // The decision is said on the Inbox the reviewer goes back to (#1384), in the verb of its button.
+  // The toast is raised once the lists are fresh, right before the Inbox shows: raised before the refetch, it could run
+  // out its TOAST_MS while a slow refetch still held the page, and the Inbox would open without it (#1547).
   const done = async (said: string) => {
-    toast(said);
     await queryClient.invalidateQueries();
+    toast(said);
     await navigate({ to: '/o/$slug/inbox', params: { slug } });
   };
   const partyName = () => (sale ? payload?.buyer.name : payload?.seller.name) || detail.data?.title || '';
