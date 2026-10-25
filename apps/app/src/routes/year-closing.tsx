@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from '@crove/ui/components/alert';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { localToday } from '../lib/reversal.ts';
@@ -22,6 +23,8 @@ export function YearClosingFormCard({ slug, onClose }: { slug: string; onClose: 
   // One key per form: a retry of the same request returns the same proposal.
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const request = useMutation(orpc.inbox.request.mutationOptions({ onSettled: () => void queryClient.invalidateQueries() }));
+  // Each entity closes its own books (#1280): the one chosen in the shell.
+  const entity = useChosenEntity();
 
   if (request.data) {
     return (
@@ -43,7 +46,7 @@ export function YearClosingFormCard({ slug, onClose }: { slug: string; onClose: 
         aria-label={t('title')}
         onSubmit={(event) => {
           event.preventDefault();
-          request.mutate({ command: 'finance.closing.record', idempotencyKey, input: { year } });
+          request.mutate({ command: 'finance.closing.record', idempotencyKey, input: { year, legalEntityId: entity.legalEntityId } });
         }}
       >
         <div>
@@ -62,7 +65,7 @@ export function YearClosingFormCard({ slug, onClose }: { slug: string; onClose: 
         </label>
         {request.error && <ErrorText>{errorMessage(request.error)}</ErrorText>}
         <div className="flex gap-2">
-          <Button type="submit" disabled={request.isPending}>
+          <Button type="submit" disabled={request.isPending || !entity.ready}>
             {request.isPending ? <Spinner className="text-current" /> : null}
             {t('submit')}
           </Button>
