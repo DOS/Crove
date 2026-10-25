@@ -723,5 +723,12 @@ suite('social archived posts on PostgreSQL (#1299)', () => {
     await expect(worker.execute('social.review.remind', { postId: reviewing }, { actor: system, orgId: o.orgId })).resolves.toEqual({ stage: 'waiting' });
     expect(await told()).toBe(1);
     expect(await remindersDue()).not.toContain(reviewing);
+
+    // Archived and restored again: the reminder already sent stays sent, so the reviewers are not told twice.
+    await archive(o, o.member, reviewing);
+    await expect(worker.execute('social.review.remind', { postId: reviewing }, { actor: system, orgId: o.orgId })).resolves.toEqual({ stage: null });
+    await restore(o, o.member, reviewing);
+    expect(await remindersDue()).not.toContain(reviewing);
+    expect(await told()).toBe(1);
   });
 });
