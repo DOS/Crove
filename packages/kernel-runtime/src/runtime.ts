@@ -245,7 +245,7 @@ export interface CommandContext extends QueryContext {
   numbering: Numbering;
 }
 
-// Thin wrappers over the numbering definers (migration 20261103020000): the database checks the context, the legal
+// Thin wrappers over the numbering definers (migration 20261103030000): the database checks the context, the legal
 // entity's scope and the actor, and refuses with SQL errors the command maps or lets toDomainError map.
 export interface Numbering {
   // crove_kernel.allocate_number: the next number of the series of (legal entity, docType) and the period the

@@ -1,5 +1,5 @@
 -- Crove finance (issue #1401, ADR-0021 section 2): the cash and journal vouchers (PT, PC, BC, BN, NVK) move onto the
--- kernel's gapless number series (20261103020000_crove_kernel_number_series.sql, which describes the design, the
+-- kernel's gapless number series (20261103030000_crove_kernel_number_series.sql, which describes the design, the
 -- backfill decision and the triggers). Idempotent; applied files stay untouched.
 --
 -- Cross-module statements: the backfill writes the kernel's number_series_policy, number_series and number_allocation
