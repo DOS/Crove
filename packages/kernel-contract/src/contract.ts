@@ -186,7 +186,7 @@ import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
 import { zMemberRoles, zRoleAssignInput } from './roles.ts';
 import { zCalendarEventAdd, zCalendarEventCancel, zCalendarEventView, zCalendarRange, zCalendarSlot, zCalendarSlotsQuery, zMyCalendar, zWorkingHours } from './calendar.ts';
-import { zBookingCancel, zBookingItem, zBookingListQuery, zBookingMove, zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
+import { zBookingCancel, zBookingItem, zBookingListQuery, zBookingMove, zBookingSuggestInput, zBookingSuggestion, zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
@@ -383,6 +383,8 @@ export const contract = {
       list: oc.input(zBookingListQuery).output(z.array(zBookingItem)),
       cancel: oc.input(zBookingCancel).output(z.object({ bookingId: z.string(), status: z.literal('cancelled') })),
       move: oc.input(zBookingMove).output(z.object({ bookingId: z.string(), startsAt: z.string() })),
+      // Times to offer a client (#1440): read-only; the model, when the deployment has one, reads the pasted message.
+      suggest: oc.input(zBookingSuggestInput).output(zBookingSuggestion),
     },
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.

@@ -9,10 +9,10 @@
 // (#1320). So a task's comment and an escalation's title and reason carry the type, times and counts only, never the
 // visitor's name or contact; the task points at the booking (its source ref), which its host finds in Lịch hẹn.
 import { z } from 'zod';
-import { CALENDAR_RANGE_MAX_DAYS, DEFAULT_WORKING_HOURS, freeSlots, teamSlots, zId, zonedDate, zoneOffsetMs, type Interval, type WorkingHours } from '@crove/kernel-contract';
+import { CALENDAR_RANGE_MAX_DAYS, freeSlots, teamSlots, zId, zonedDate, zonedInstant, zoneOffsetMs, type Interval, type WorkingHours } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { busyOf, workingHoursOf } from '@crove/kernel';
-import { DomainError, defineQuery, type AgentProgram } from '@crove/kernel-runtime';
+import { DomainError, defineQuery, type AgentProgram, type QueryContext } from '@crove/kernel-runtime';
 
 export const SCHEDULER_TEMPLATE = 'crm.scheduler';
 // Tasks one run handles at most; the rest wait for the next run.
@@ -63,10 +63,65 @@ export function escalationTitle(n: NextSlots): string {
   return `Mời khách đặt lại: ${n.eventType.title}`.slice(0, 300);
 }
 
-// The next free slots the type's booking page offers now, for a booking of that type: each host's free slots (the type's
-// daily limit counted per local day of that host), then the team's (one host for a round-robin type, every host for a
-// collective one), as bookingView() computes them. Members and the crm.scheduler agent read it; it changes nothing and
-// tells nothing about the visitor.
+type Reader = Pick<QueryContext, 'trx' | 'orgId'>;
+const eventTypeRow = (ctx: Reader, id: string) => ctx.trx.selectFrom('crove_crm.event_type').selectAll().where('org_id', '=', ctx.orgId).where('id', '=', id).executeTakeFirst();
+type EventTypeRow = NonNullable<Awaited<ReturnType<typeof eventTypeRow>>>;
+
+// The free slots the type's booking page offers between from and to: each host's free slots (the type's daily limit
+// counted per local day of that host), then the team's (one host for a round-robin type, every host for a collective
+// one), as bookingView() computes them; with the lead host's zone. None for an archived type.
+async function typeSlots(ctx: Reader, type: EventTypeRow, from: number, to: number, now: number): Promise<{ timeZone: string; slots: Interval[] }> {
+  const ids = type.assignment === 'single' ? [type.host_user_id] : [type.host_user_id, ...type.co_host_user_ids];
+  const members = await ctx.trx.selectFrom('crove_kernel.tenant_member').select(['user_id', 'role']).where('org_id', '=', ctx.orgId).where('user_id', 'in', ids).execute();
+  const able = new Set(members.filter((m) => HOST_ROLES.has(m.role)).map((m) => m.user_id));
+  const hosts = type.active ? ids.filter((id) => able.has(id)) : [];
+  const booked = await ctx.trx
+    .selectFrom('crove_crm.booking')
+    .select('starts_at')
+    .where('org_id', '=', ctx.orgId)
+    .where('event_type_id', '=', type.id)
+    .where('status', '=', 'confirmed')
+    .where('starts_at', '>=', new Date(from - DAY_MS))
+    .where('starts_at', '<', new Date(to + DAY_MS))
+    .execute();
+  // The lead host's zone names the times, whether or not the lead may still host.
+  let lead: WorkingHours = (await workingHoursOf(ctx, type.host_user_id)).hours;
+  const perHost: Interval[][] = [];
+  for (const [i, userId] of hosts.entries()) {
+    const { hours } = await workingHoursOf(ctx, userId);
+    if (i === 0) lead = hours;
+    const bookedPerDay = new Map<string, number>();
+    for (const b of booked) {
+      const day = zonedDate(hours.timeZone, new Date(b.starts_at).getTime());
+      bookedPerDay.set(day, (bookedPerDay.get(day) ?? 0) + 1);
+    }
+    perHost.push(
+      freeSlots({
+        hours,
+        busy: await busyOf(ctx, userId, new Date(from - DAY_MS), new Date(to + DAY_MS)),
+        skipVietnamHolidays: true,
+        rules: {
+          durationMin: type.duration_min,
+          bufferBeforeMin: type.buffer_before_min,
+          bufferAfterMin: type.buffer_after_min,
+          minNoticeMin: type.min_notice_min,
+          horizonDays: type.horizon_days,
+          dailyLimit: type.daily_limit,
+        },
+        from,
+        to,
+        now,
+        bookedPerDay,
+      }),
+    );
+  }
+  return { timeZone: lead.timeZone, slots: teamSlots(type.assignment === 'collective' ? 'all' : 'any', perHost) };
+}
+
+const isoSlot = (s: Interval) => ({ start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() });
+
+// The next free slots the type's booking page offers now, for a booking of that type. Members and the crm.scheduler
+// agent read it; it changes nothing and tells nothing about the visitor.
 export const bookingNextSlots = defineQuery({
   name: 'crm.booking.next_slots',
   input: z.strictObject({ bookingId: zId }),
@@ -79,62 +134,60 @@ export const bookingNextSlots = defineQuery({
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.bookingId)
       .executeTakeFirst();
-    if (!booking) throw new DomainError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy lịch hẹn này');
-    const type = await ctx.trx.selectFrom('crove_crm.event_type').selectAll().where('org_id', '=', ctx.orgId).where('id', '=', booking.event_type_id).executeTakeFirstOrThrow();
-    const ids = type.assignment === 'single' ? [type.host_user_id] : [type.host_user_id, ...type.co_host_user_ids];
-    const members = await ctx.trx.selectFrom('crove_kernel.tenant_member').select(['user_id', 'role']).where('org_id', '=', ctx.orgId).where('user_id', 'in', ids).execute();
-    const able = new Set(members.filter((m) => HOST_ROLES.has(m.role)).map((m) => m.user_id));
-    const hosts = type.active ? ids.filter((id) => able.has(id)) : [];
+    const type = booking ? await eventTypeRow(ctx, booking.event_type_id) : undefined;
+    if (!booking || !type) throw new DomainError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy lịch hẹn này');
     const now = Date.now();
-    const from = new Date(now);
-    const to = new Date(now + Math.min(LOOKAHEAD_DAYS, type.horizon_days, CALENDAR_RANGE_MAX_DAYS) * DAY_MS);
-    const booked = await ctx.trx
-      .selectFrom('crove_crm.booking')
-      .select('starts_at')
-      .where('org_id', '=', ctx.orgId)
-      .where('event_type_id', '=', type.id)
-      .where('status', '=', 'confirmed')
-      .where('starts_at', '>=', new Date(now - DAY_MS))
-      .where('starts_at', '<', new Date(to.getTime() + DAY_MS))
-      .execute();
-    let lead: WorkingHours = DEFAULT_WORKING_HOURS;
-    const perHost: Interval[][] = [];
-    for (const [i, userId] of hosts.entries()) {
-      const { hours } = await workingHoursOf(ctx, userId);
-      if (i === 0) lead = hours;
-      const bookedPerDay = new Map<string, number>();
-      for (const b of booked) {
-        const day = zonedDate(hours.timeZone, new Date(b.starts_at).getTime());
-        bookedPerDay.set(day, (bookedPerDay.get(day) ?? 0) + 1);
-      }
-      perHost.push(
-        freeSlots({
-          hours,
-          busy: await busyOf(ctx, userId, new Date(now - DAY_MS), new Date(to.getTime() + DAY_MS)),
-          skipVietnamHolidays: true,
-          rules: {
-            durationMin: type.duration_min,
-            bufferBeforeMin: type.buffer_before_min,
-            bufferAfterMin: type.buffer_after_min,
-            minNoticeMin: type.min_notice_min,
-            horizonDays: type.horizon_days,
-            dailyLimit: type.daily_limit,
-          },
-          from: from.getTime(),
-          to: to.getTime(),
-          now,
-          bookedPerDay,
-        }),
-      );
-    }
-    const slots = teamSlots(type.assignment === 'collective' ? 'all' : 'any', perHost).slice(0, SLOTS_PROPOSED);
+    const to = now + Math.min(LOOKAHEAD_DAYS, type.horizon_days, CALENDAR_RANGE_MAX_DAYS) * DAY_MS;
+    const { timeZone, slots } = await typeSlots(ctx, type, now, to, now);
     return {
       bookingId: booking.id,
       status: booking.status,
       eventType: { title: type.title, active: type.active },
       startsAt: new Date(booking.starts_at).toISOString(),
-      timeZone: lead.timeZone,
-      slots: slots.map((s) => ({ start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() })),
+      timeZone,
+      slots: slots.slice(0, SLOTS_PROPOSED).map(isoSlot),
+    };
+  },
+});
+
+export interface SuggestedSlots {
+  eventType: { id: string; slug: string; title: string; durationMin: number; active: boolean };
+  // The lead host's zone, today in it and the days ahead looked at: what a reader of a client's message is told.
+  timeZone: string;
+  today: string;
+  days: number;
+  // true when the slots lie inside the windows asked for; false when none did and these are the next free slots.
+  inWindows: boolean;
+  slots: { start: string; end: string }[];
+}
+
+export const zSuggestWindow = z
+  .strictObject({ date: z.iso.date(), from: z.number().int().min(0).max(1439), to: z.number().int().min(1).max(1440) })
+  .refine((w) => w.from < w.to, { message: 'from before to' });
+
+// Free slots of an event type for a reply to a client (#1440): the earliest ones inside the windows asked for (days and
+// times of day in the type's zone, read from the client's message), else the next free ones. Owners, admins and
+// members read it; it changes nothing.
+export const bookingSuggestSlots = defineQuery({
+  name: 'crm.booking.suggest_slots',
+  input: z.strictObject({ eventTypeId: zId, windows: z.array(zSuggestWindow).max(5) }),
+  access: STAFF,
+  handler: async (ctx, input): Promise<SuggestedSlots> => {
+    const type = await eventTypeRow(ctx, input.eventTypeId);
+    if (!type) throw new DomainError('EVENT_TYPE_NOT_FOUND', 404, 'Không tìm thấy loại lịch hẹn này');
+    const now = Date.now();
+    const days = Math.min(LOOKAHEAD_DAYS, type.horizon_days, CALENDAR_RANGE_MAX_DAYS);
+    const { timeZone, slots } = await typeSlots(ctx, type, now, now + days * DAY_MS, now);
+    const ranges = input.windows.map((w) => ({ start: zonedInstant(timeZone, w.date, w.from), end: zonedInstant(timeZone, w.date, w.to) }));
+    const inside = slots.filter((s) => ranges.some((r) => s.start >= r.start && s.end <= r.end));
+    const chosen = inside.length > 0 ? inside : slots;
+    return {
+      eventType: { id: type.id, slug: type.slug, title: type.title, durationMin: type.duration_min, active: type.active },
+      timeZone,
+      today: zonedDate(timeZone, now),
+      days,
+      inWindows: inside.length > 0,
+      slots: chosen.slice(0, SLOTS_PROPOSED).map(isoSlot),
     };
   },
 });
@@ -185,4 +238,4 @@ export const schedulerProposeSlots: AgentProgram = async (agent) => {
 };
 
 export const crmAgentPrograms = { [SCHEDULER_TEMPLATE]: schedulerProposeSlots } as const;
-export const crmAgentQueries = [bookingNextSlots];
+export const crmAgentQueries = [bookingNextSlots, bookingSuggestSlots];

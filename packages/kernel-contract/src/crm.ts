@@ -147,3 +147,21 @@ export const zBookingItem = z.strictObject({
 export type BookingItem = z.infer<typeof zBookingItem>;
 export const zBookingCancel = z.strictObject({ bookingId: zId });
 export const zBookingMove = z.strictObject({ bookingId: zId, startsAt: z.iso.datetime({ offset: true }) });
+
+// Booking times for a reply to a client (#1440): the member picks an event type and may paste the client's message,
+// which the deployment's model reads for the days and times asked for (tainted, shown as the AI's reading); the slots
+// are real free slots of the type. Nothing is sent or written.
+export const SUGGEST_MESSAGE_MAX = 4000;
+export const zBookingSuggestInput = z.strictObject({ eventTypeId: zId, message: z.string().trim().max(SUGGEST_MESSAGE_MAX) });
+export const zSuggestedWindow = z.object({ date: z.string(), from: z.number().int(), to: z.number().int() });
+export const zBookingSuggestion = z.object({
+  // Whether the model read the message: false without a message, without an AI endpoint, or when the call failed.
+  ai: z.enum(['used', 'off', 'failed', 'skipped']),
+  asksForMeeting: z.boolean().nullable(),
+  windows: z.array(zSuggestedWindow),
+  eventType: z.object({ id: z.string(), slug: z.string(), title: z.string(), durationMin: z.number().int(), active: z.boolean() }),
+  timeZone: z.string(),
+  inWindows: z.boolean(),
+  slots: z.array(z.object({ start: z.string(), end: z.string() })),
+});
+export type BookingSuggestion = z.infer<typeof zBookingSuggestion>;

@@ -2,7 +2,7 @@
 // and starts the server roles; it builds no adapter itself. main.ts wires the open-source defaults from
 // configuration (defaultAdapters); a Crove Cloud entrypoint wires its own adapters into the same factory.
 import { serve } from '@hono/node-server';
-import { InvoiceExtractor, SocialWriter, type InvoiceReader } from '@crove/agent';
+import { InvoiceExtractor, SchedulingReader, SocialWriter, type InvoiceReader } from '@crove/agent';
 import {
   BlueskyPublisher,
   TelegramPublisher,
@@ -118,6 +118,9 @@ export interface KernelAdapters {
   ai: InvoiceReader | null;
   // Drafts Social posts (Social plan S7) through the same endpoint; null runs without AI drafting.
   writer?: (Pick<SocialWriter, 'draft' | 'rewrite'> & Partial<Pick<SocialWriter, 'hashtags' | 'describeImage' | 'ideas' | 'summary'>>) | null;
+  // Reads the days and times a client's message asks for (#1440) through the same endpoint; null: suggestions give
+  // the next free slots only.
+  scheduler?: Pick<SchedulingReader, 'read'> | null;
   storage: BlobStore;
   // Outbound mail (member invites, issue #129); the default logs that nothing was sent.
   mail?: MailProvider;
@@ -301,6 +304,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     identity: adapters.identity,
     ai: adapters.ai,
     writer: adapters.writer ?? null,
+    scheduler: adapters.scheduler ?? null,
     storage: adapters.storage,
     mail: adapters.mail ?? createLogProvider(),
     broker: adapters.broker ?? noCredentialBroker,
@@ -394,6 +398,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
           pool,
           aiEnabled: resolved.ai !== null,
           ...(resolved.writer ? { socialWriter: socialDrafter(resolved.writer, config.AI_VISION === 'true' ? store : null) } : {}),
+          ...(resolved.scheduler ? { bookingReader: resolved.scheduler } : {}),
           ...(config.TAX_CODE_LOOKUP_URL ? { taxLookup: createTaxCodeLookup(config.TAX_CODE_LOOKUP_URL) } : {}),
           ...(config.TAX_PORTAL_SYNC === 'true' ? { portalSync: createPortalSync({ runtime, store, broker: resolved.broker, stepMs: config.TAX_PORTAL_STEP_SECONDS * 1000, client: createTaxPortalClient(config.TAX_PORTAL_URL ? { baseUrl: config.TAX_PORTAL_URL } : {}) }) } : {}),
           mailer: resolved.mail,
@@ -552,6 +557,7 @@ export function defaultAdapters(config: Config): KernelAdapters {
     },
     ai: aiConfig ? new InvoiceExtractor(aiConfig) : null,
     writer: aiConfig ? new SocialWriter(aiConfig) : null,
+    scheduler: aiConfig ? new SchedulingReader(aiConfig) : null,
     // API and worker build the same store from config; with STORAGE=s3 they share no volume (T7).
     storage: createBlobStore(config),
     // SMTP from SMTP_*; without SMTP_HOST, the log fallback.

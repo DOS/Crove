@@ -3,7 +3,19 @@ import { implement, ORPCError } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 import { OAUTH_MAX_ACCOUNTS_PER_GRANT, contract } from '@crove/kernel-contract';
 import { BlueskyError, ConnectorError, blueskyLogin, connectBluesky, connectDiscord, connectMastodon, connectTelegram, connectWordPress, discordLogin, mastodonLogin, telegramLogin, wordpressLogin, newOAuthAttempt, oauthStateHash, sandbox, type OAuthConnector } from '@crove/channel';
-import { ALT_TEXT_IMAGE_MAX_BYTES, ALT_TEXT_IMAGE_TYPES, ProofreadChangedError, SummaryFigureError, type DraftRequest, type DraftResult, type SocialWriter, type WriterChannel } from '@crove/agent';
+import {
+  ALT_TEXT_IMAGE_MAX_BYTES,
+  ALT_TEXT_IMAGE_TYPES,
+  ProofreadChangedError,
+  SummaryFigureError,
+  type DraftRequest,
+  type DraftResult,
+  type ScheduleReading,
+  type ScheduleWindow,
+  type SchedulingReader,
+  type SocialWriter,
+  type WriterChannel,
+} from '@crove/agent';
 import { CAPABILITIES, isProvider as isSocialProvider, strictestAltTextLimit } from '@crove/mod-social/contract';
 import { channelNotAllowed, periodSummaryInput, voiceNotes, type BrandVoice, type PeriodSummaryData } from '@crove/mod-social';
 import {
@@ -22,6 +34,7 @@ import {
 } from '@crove/kernel';
 import type { z } from 'zod';
 import type { zAgentBudget, zAgentTemplate, zTask } from '@crove/kernel-contract';
+import type { SuggestedSlots } from '@crove/mod-crm';
 import { DomainError, egressFetch, type CredentialBroker, type Runtime, type UserActor } from '@crove/kernel-runtime';
 import { DraftBudget } from './ai-draft-limit.ts';
 import { BlueskyLoginBudget } from './bluesky-login-limit.ts';
@@ -70,6 +83,9 @@ interface CreatedInvite {
   expiresAt: string;
   acceptPath: string;
 }
+
+// Reads the days and times a client's message asks for (SchedulingReader in @crove/agent, #1440).
+export type BookingReader = Pick<SchedulingReader, 'read'>;
 
 // Drafts Social posts with the deployment's model (SocialWriter in @crove/agent); unset: AI drafting is off.
 export type SocialDrafter = Pick<SocialWriter, 'draft' | 'rewrite'> &
@@ -232,7 +248,18 @@ function connectorFailure(error: unknown): DomainError {
 // connected through the API (the list and disconnect still work).
 // taxLookup unset: the public tax registry lookup is off (issue #324, TAX_CODE_LOOKUP_URL).
 // portalSync unset: the assisted sync from the tax portal is off (issue #325, TAX_PORTAL_SYNC).
-export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMail, channels?: RpcChannels, socialWriter?: SocialDrafter, taxLookup?: TaxCodeLookup, drafts: DraftBudget = new DraftBudget(), blueskyLogins: BlueskyLoginBudget = new BlueskyLoginBudget(), portalSync?: PortalSync) {
+// bookingReader unset: booking suggestions do not read the client's message (issue #1440, AI_BASE_URL and AI_MODEL).
+export function createRpcHandler(
+  runtime: Runtime,
+  sendInviteMail?: SendInviteMail,
+  channels?: RpcChannels,
+  socialWriter?: SocialDrafter,
+  taxLookup?: TaxCodeLookup,
+  drafts: DraftBudget = new DraftBudget(),
+  blueskyLogins: BlueskyLoginBudget = new BlueskyLoginBudget(),
+  portalSync?: PortalSync,
+  bookingReader?: BookingReader,
+) {
   const os = implement(contract).$context<RpcContext>();
 
   const guard = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -509,6 +536,39 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         list: os.crm.bookings.list.handler(({ context, input }) => inCrm(context, (orgId, actor) => runtime.query('crm.booking.list', input, { actor, orgId }))),
         cancel: os.crm.bookings.cancel.handler(crmCommand('crm.booking.cancel')),
         move: os.crm.bookings.move.handler(crmCommand('crm.booking.move')),
+        // Times to offer a client (#1440): the type's free slots, inside the days and times the client's message asks
+        // for when the deployment's model can read it (a paid call, on the drafts' budget), else the next free ones.
+        // Read-only: the member sends the reply. A model that fails or is off leaves the next free slots and says so.
+        suggest: os.crm.bookings.suggest.handler(({ context, input }) =>
+          inCrm(context, async (orgId, actor) => {
+            const pick = async (windows: readonly ScheduleWindow[]) => {
+              const s = await runtime.query<SuggestedSlots>('crm.booking.suggest_slots', { eventTypeId: input.eventTypeId, windows }, { actor, orgId });
+              return { eventType: s.eventType, timeZone: s.timeZone, inWindows: s.inWindows, slots: s.slots, today: s.today, days: s.days };
+            };
+            const { today, days, ...next } = await pick([]);
+            if (!input.message) return { ai: 'skipped' as const, asksForMeeting: null, windows: [], ...next };
+            if (!bookingReader) return { ai: 'off' as const, asksForMeeting: null, windows: [], ...next };
+            const ticket = drafts.take(orgId, actor.userId);
+            if (!ticket.allowed) {
+              throw new DomainError('RATE_LIMITED', 429, ticket.reason === 'busy' ? 'Đang chờ AI trả lời, hãy đợi xong rồi thử tiếp' : 'Đã dùng AI nhiều lần trong phút này, hãy thử lại sau ít phút', {
+                retryAfterSeconds: ticket.retryAfterSeconds,
+              });
+            }
+            let reading: ScheduleReading;
+            try {
+              reading = await bookingReader.read({ message: input.message, today, days, timeZone: next.timeZone });
+            } catch (error: unknown) {
+              // Neither the message nor the answer is logged.
+              console.error('[crm-ai] suggest failed', error instanceof Error ? error.name : typeof error);
+              return { ai: 'failed' as const, asksForMeeting: null, windows: [], ...next };
+            } finally {
+              ticket.release();
+            }
+            if (reading.windows.length === 0) return { ai: 'used' as const, asksForMeeting: reading.asksForMeeting, windows: [], ...next };
+            const { today: _t, days: _d, ...picked } = await pick(reading.windows);
+            return { ai: 'used' as const, asksForMeeting: reading.asksForMeeting, windows: reading.windows, ...picked };
+          }),
+        ),
       },
     },
     social: {
