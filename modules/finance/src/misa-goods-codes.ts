@@ -4,7 +4,7 @@
 // - finance.misa_goods_codes.list: every member reads them, as every member may export.
 // - finance.misa_goods_code.set / .remove: owners and admins set and clear one account's codes. R1: they change no
 //   amount and no posted entry, only what the next export writes, and each is undone by the other.
-// The database holds the same formats (20261101234000_crove_finance_misa_goods_codes.sql); the checks here come first
+// The database holds the same formats (20261102050000_crove_finance_misa_goods_codes.sql); the checks here come first
 // so the refusal says what to do.
 import { z } from 'zod';
 import { isStockAccount, zAccountCode, zMisaCode, type MisaGoodsCode } from '@crove/kernel-contract';
