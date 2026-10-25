@@ -83,6 +83,11 @@ jobs:
       - name: Build web app
         run: pnpm --filter @crove/app build
 
+      # Kernel plan §9 (#1518): every browser downloads the SPA, so no kernel secret name used as code and no
+      # secret-shaped value may be in the build.
+      - name: No kernel secret in the web app build
+        run: node tools/ci/spa-secrets.mjs apps/app/dist apps/kernel/src/config.ts
+
   # The database tests run one file at a time (fileParallelism: false) and took 17 minutes in one job (#1041). Two
   # files take 44% of that (finance-search on 50,000 documents, about 260 s; archive, about 150 s), so they run in a
   # job of their own and every other file in two shards, each job on its own PostgreSQL. A renamed heavy file fails the
