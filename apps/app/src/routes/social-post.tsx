@@ -2007,7 +2007,9 @@ function LinkCardField({ id, provider, linkUrl, settings, disabled, onChange }: 
     const { linkCard: _old, ...rest } = settings;
     onChange(next ? { ...rest, linkCard: next } : rest);
   };
-  const fromPage = () => ({ title: (page?.title?.trim() || host).slice(0, LINK_CARD_TITLE_MAX), ...(page?.description?.trim() ? { description: page.description.trim().slice(0, LINK_CARD_DESCRIPTION_MAX) } : {}) });
+  // Cut in code points of the NFC form, as the limits count, never inside a surrogate pair.
+  const cut = (text: string, max: number) => [...text.normalize('NFC')].slice(0, max).join('');
+  const fromPage = () => ({ title: cut(page?.title?.trim() || host, LINK_CARD_TITLE_MAX), ...(page?.description?.trim() ? { description: cut(page.description.trim(), LINK_CARD_DESCRIPTION_MAX) } : {}) });
   const maxThumb = LINK_CARD_THUMB_MAX_BYTES[provider];
   if (!raw) {
     if (!linkUrl) return null;
@@ -2265,7 +2267,7 @@ function ChannelEditor({
         />
       )}
       {isProvider(provider) && LINK_CARD_PROVIDERS.has(provider) && (linkUrl !== '' || own.settings.linkCard !== undefined) && (
-        <LinkCardField id={`social-link-card-${connectionId ?? provider}`} provider={provider} linkUrl={linkUrl} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
+        <LinkCardField key={connectionId ?? provider} id={`social-link-card-${connectionId ?? provider}`} provider={provider} linkUrl={linkUrl} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       )}
       {isProvider(provider) && REPOST_PROVIDERS.has(provider) && postType !== 'story' && <RepostField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {/* A channel Crove cannot take a post down from shows the field only to clear a time set elsewhere (its issue says why). */}

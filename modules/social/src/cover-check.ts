@@ -36,8 +36,8 @@ export async function linkCardProblem(ctx: Pick<CommandContext, 'trx' | 'orgId'>
     return new DomainError('LINK_CARD_INVALID', 422, `Thẻ liên kết cần tiêu đề từ 1 đến ${LINK_CARD_TITLE_MAX} ký tự và mô tả tối đa ${LINK_CARD_DESCRIPTION_MAX} ký tự`);
   }
   if (!card?.thumbFileId) return null;
-  // Stored in lower case, as a cover's id is.
-  (settings.linkCard as { thumbFileId: string }).thumbFileId = card.thumbFileId;
+  // Stored in lower case, as a cover's id is; a new card object, so the caller's nested value is never changed in place.
+  settings.linkCard = { ...(settings.linkCard as Record<string, unknown>), thumbFileId: card.thumbFileId };
   const file = zId.safeParse(card.thumbFileId).success
     ? await ctx.trx.selectFrom('crove_kernel.file').select(['source', 'content_type', 'size_bytes']).where('org_id', '=', ctx.orgId).where('id', '=', card.thumbFileId).executeTakeFirst()
     : undefined;
