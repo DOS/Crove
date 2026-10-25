@@ -188,10 +188,12 @@ suite('WORM fact stream: archive and tamper detection on PostgreSQL (#891)', () 
     for (const key of keys) expect(statSync(join(dir, key)).mode & 0o222).toBe(0);
     await expect(store.put(keys[0] as string, new Uint8Array([1]))).rejects.toBeInstanceOf(ArchiveObjectExistsError);
 
+    // The verifier checks every anchored row: each audit event and journal entry, plus whatever rows a later batch
+    // version anchors for them (the legal entity rows of version 3, #1489).
     const result = await runArchiveVerification(worker, store);
-    expect(result).toMatchObject({ ok: true, batches: written, rows: counts.audit + counts.journal, problems: [] });
+    expect(result).toMatchObject({ ok: true, batches: written, rows: refs.length, problems: [] });
     const recorded = await admin(async (c) => (await c.query(`SELECT ok, batches, rows_checked FROM crove_kernel.archive_verification ORDER BY verified_at DESC LIMIT 1`)).rows[0]);
-    expect(recorded).toEqual({ ok: true, batches: written, rows_checked: String(counts.audit + counts.journal) });
+    expect(recorded).toEqual({ ok: true, batches: written, rows_checked: String(refs.length) });
   });
 
   it('keeps the recorded batches append-only, in order', async () => {
