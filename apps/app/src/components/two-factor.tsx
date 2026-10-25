@@ -104,8 +104,10 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
   const [busy, setBusy] = useState(false);
   // Kept as a code or message key and worded at render, so a language switch rewords them (issue #215).
   const [error, setError] = useState<AuthFailure | null>(null);
-  // While the setup form is open, a refusal is about the code it asks for: the field names it (#1515).
+  // While the setup form is open, a refusal is about the code it asks for: the field names it and takes the focus back
+  // (#1515).
   const codeId = useId();
+  const codeInput = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<'enabled' | 'disabled' | null>(null);
   const verified = factors.data?.totp ?? [];
 
@@ -139,7 +141,11 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
     if (!enrollment) return;
     void run(async () => {
       const { error: e } = await auth().mfa.challengeAndVerify({ factorId: enrollment.factorId, code: code.trim() });
-      if (e) return authFailure(e);
+      if (e) {
+        setCode('');
+        codeInput.current?.focus();
+        return authFailure(e);
+      }
       setEnrollment(null);
       setNotice('enabled');
       onEnabled?.();
@@ -188,6 +194,7 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
             <Label className="flex-col items-stretch gap-1 font-normal">
               <span className="text-muted-foreground">{t('code')}</span>
               <Input
+                ref={codeInput}
                 {...fieldControl(codeId, { error: Boolean(error) })}
                 required
                 inputMode="numeric"
