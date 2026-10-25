@@ -10,6 +10,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -47,7 +48,9 @@ export function OpeningBalancePage() {
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const allowed = canImportOpeningBalance(org.data?.role);
 
-  const input = file.status === 'read' && asOf ? { asOf, rows: file.rows } : null;
+  // Each entity has its own opening entry (#1280): checked and posted for the one chosen in the shell.
+  const entity = useChosenEntity();
+  const input = file.status === 'read' && asOf && entity.ready ? { asOf, rows: file.rows, legalEntityId: entity.legalEntityId } : null;
   const post = useMutation(orpc.openingBalance.post.mutationOptions({ onSuccess: () => void queryClient.invalidateQueries() }));
   // Once posted, the check is not run again (the invalidation after posting may still refresh it once).
   const preview = useQuery({

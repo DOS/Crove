@@ -11,6 +11,7 @@ import { NavIcon, type NavIconName } from '@crove/ui/components/nav-icon';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
 import { DueWhen, TONE_CLASS, usePeriodLabel } from '../components/tax-due.tsx';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -82,7 +83,9 @@ export function OverviewPage() {
   const work = useWorkNotifications();
   const tasks = useQuery({ ...orpc.tasks.list.queryOptions({ input: { mine: true, status: [...OPEN_TASK_STATUSES] } }), refetchInterval: every });
   const reviews = useQuery({ ...orpc.social.reviewInbox.queryOptions({ input: {} }), enabled: socialOn, refetchInterval: every });
-  const bank = useQuery({ ...orpc.bank.openLines.queryOptions(), enabled: financeOn, refetchInterval: every });
+  // Open statement lines of the entity chosen in the shell (#1280), the books the bank screen opens on.
+  const entity = useChosenEntity();
+  const bank = useQuery({ ...orpc.bank.openLines.queryOptions({ input: { legalEntityId: entity.legalEntityId } }), enabled: financeOn && entity.ready, refetchInterval: every });
 
   const counts = {
     proposals: overview.data?.pendingProposals,

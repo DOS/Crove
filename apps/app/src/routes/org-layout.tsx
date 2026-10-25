@@ -5,6 +5,7 @@ import { useTranslations } from 'use-intl';
 import { NavIcon } from '@crove/ui/components/nav-icon';
 import { ALL_NAV, NAV_GROUPS, NavDrawer, ShellNav, type NavItem } from '../components/app-nav.tsx';
 import { CommandPalette, type PaletteEntry } from '../components/command-palette.tsx';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { Toaster } from '../components/toaster.tsx';
 import { Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { LOCALE_NAMES, LOCALES } from '../i18n/locale.ts';
@@ -75,8 +76,14 @@ export function OrgLayout() {
   const [paletteQuery, setPaletteQuery] = useState('');
   const typed = financeOn && paletteOpen ? searchTerm(paletteQuery) : null;
   const term = useSettled(typed, 250);
-  const found = useQuery({ ...orpc.search.query.queryOptions({ input: { q: term ?? '' } }), enabled: term !== null && term === typed, staleTime: 30_000 });
-  const searchState = typed === null ? 'idle' : found.isError ? 'failed' : term !== typed || found.isFetching ? 'searching' : 'idle';
+  // Documents and journal entries of the entity chosen in the shell (#1280), where the results link to.
+  const entity = useChosenEntity();
+  const found = useQuery({
+    ...orpc.search.query.queryOptions({ input: { q: term ?? '', legalEntityId: entity.legalEntityId } }),
+    enabled: entity.ready && term !== null && term === typed,
+    staleTime: 30_000,
+  });
+  const searchState = typed === null ? 'idle' : found.isError ? 'failed' : term !== typed || !entity.ready || found.isFetching ? 'searching' : 'idle';
   const paletteKeys = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘ K' : 'Ctrl K';
 
   // Ctrl K (Cmd K on a Mac) opens or closes the command palette from any screen of the org.

@@ -9,9 +9,10 @@ export interface VisibleEntity {
   isDefault: boolean;
 }
 
-// The screens that work in one entity: the finance books, the Overview (the VAT return filed per entity) and Settings
-// (the learned account rules per entity). The switcher shows on these only.
-const ENTITY_SCREENS: ReadonlySet<string> = new Set(['documents', 'journal', 'vouchers', 'bank', 'fixed-assets', 'ledger', 'vat', 'overview', 'settings']);
+// The screens that work in one entity: the finance books (the tax portal's purchase list among them), the Overview
+// (the VAT return filed per entity) and Settings (the learned account rules per entity). The switcher shows on these
+// only.
+const ENTITY_SCREENS: ReadonlySet<string> = new Set(['documents', 'journal', 'vouchers', 'bank', 'fixed-assets', 'ledger', 'vat', 'portal-invoices', 'overview', 'settings']);
 
 // Whether a path (/o/<slug>/<screen>/...) is one of the screens that work in one entity.
 export function isEntityPath(pathname: string): boolean {
@@ -24,6 +25,14 @@ export function isEntityPath(pathname: string): boolean {
 export function chooseEntity(entities: readonly VisibleEntity[], kept: string | null): string | null {
   if (kept && entities.some((e) => e.id === kept)) return kept;
   return (entities.find((e) => e.isDefault) ?? entities[0])?.id ?? null;
+}
+
+// The query string of an /api/export download: its own parameters, and the chosen entity's legalEntityId when there
+// is one (the server answers for the default entity without it).
+export function exportQuery(params: Record<string, string>, legalEntityId: string | undefined): URLSearchParams {
+  const query = new URLSearchParams(params);
+  if (legalEntityId) query.set('legalEntityId', legalEntityId);
+  return query;
 }
 
 // The kept choice per org. Browser storage may be missing or refuse (a private window): the choice then lasts for the

@@ -11,9 +11,11 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
+import { exportQuery } from '../lib/legal-entity-choice.ts';
 import { defaultAccounts, fixedAssetFormProblem, fixedAssetInput, monthLabel, previousMonth, recentMonths, type FixedAssetForm, type FixedAssetKind } from '../lib/fixed-assets.ts';
 import { localToday } from '../lib/reversal.ts';
 import { canEnterVoucher } from '../lib/vouchers.ts';
@@ -38,6 +40,8 @@ function AssetFormCard({ onClose }: { onClose: () => void }) {
   // One key per form: a retry of the same entry returns the first result.
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const create = useMutation(orpc.fixedAssets.create.mutationOptions({ onSuccess: () => void queryClient.invalidateQueries() }));
+  // Entered in the register of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
   const problem = fixedAssetFormProblem(form);
   const set = (patch: Partial<FixedAssetForm>) => setForm((f) => ({ ...f, ...patch }));
 
@@ -62,8 +66,8 @@ function AssetFormCard({ onClose }: { onClose: () => void }) {
         onSubmit={(event) => {
           event.preventDefault();
           setTouched(true);
-          if (problem) return;
-          create.mutate({ ...fixedAssetInput(form), idempotencyKey });
+          if (problem || !entity.ready) return;
+          create.mutate({ ...fixedAssetInput(form), legalEntityId: entity.legalEntityId, idempotencyKey });
         }}
       >
         <div>
@@ -139,6 +143,8 @@ function DepreciationCard({ slug, onClose }: { slug: string; onClose: () => void
   const [month, setMonth] = useState(months[0] ?? '');
   const [idempotencyKey] = useState(() => crypto.randomUUID());
   const request = useMutation(orpc.inbox.request.mutationOptions({ onSettled: () => void queryClient.invalidateQueries() }));
+  // The register of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
 
   if (request.data) {
     return (
@@ -160,7 +166,7 @@ function DepreciationCard({ slug, onClose }: { slug: string; onClose: () => void
         aria-label={t('depreciationTitle')}
         onSubmit={(event) => {
           event.preventDefault();
-          request.mutate({ command: 'finance.depreciation.record', idempotencyKey, input: { month } });
+          request.mutate({ command: 'finance.depreciation.record', idempotencyKey, input: { month, legalEntityId: entity.legalEntityId } });
         }}
       >
         <div>
@@ -179,7 +185,7 @@ function DepreciationCard({ slug, onClose }: { slug: string; onClose: () => void
         </label>
         {request.error && <ErrorText>{errorMessage(request.error)}</ErrorText>}
         <div className="flex gap-2">
-          <Button type="submit" disabled={request.isPending}>
+          <Button type="submit" disabled={request.isPending || !entity.ready}>
             {request.isPending ? <Spinner className="text-current" /> : null}
             {t('depreciationSubmit')}
           </Button>
@@ -234,7 +240,9 @@ export function FixedAssetsPage() {
   const t = useTranslations('fixedAssets');
   const f = useFormat();
   const { slug } = useParams({ strict: false }) as { slug: string };
-  const assets = useQuery(orpc.fixedAssets.list.queryOptions());
+  // The register of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
+  const assets = useQuery({ ...orpc.fixedAssets.list.queryOptions({ input: { legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const org = useQuery(orpc.org.get.queryOptions());
   const [adding, setAdding] = useState(false);
   const [depreciating, setDepreciating] = useState(false);
@@ -244,7 +252,7 @@ export function FixedAssetsPage() {
 
   const exportXlsx = useMutation({
     mutationFn: async () => {
-      const response = await apiFetch('/api/export/fixed-assets.xlsx');
+      const response = await apiFetch(`/api/export/fixed-assets.xlsx?${exportQuery({}, entity.legalEntityId)}`);
       const url = URL.createObjectURL(await response.blob());
       const a = document.createElement('a');
       a.href = url;
@@ -281,7 +289,7 @@ export function FixedAssetsPage() {
       {exportXlsx.error && <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>}
       {adding && <AssetFormCard onClose={() => setAdding(false)} />}
       {depreciating && <DepreciationCard slug={slug} onClose={() => setDepreciating(false)} />}
-      {assets.isLoading ? (
+      {assets.isPending ? (
         <TableSkeleton columns={5} />
       ) : assets.error ? (
         <ErrorText>{errorMessage(assets.error)}</ErrorText>
