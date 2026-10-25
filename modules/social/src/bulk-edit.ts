@@ -56,7 +56,7 @@ import { bannedChecker, bannedCommandBudget, bannedTooComplex, bannedWordsOf, ty
 import { channelScope, mayUse, postsInScope, refuseOutside, type ChannelScope } from './channel-access.ts';
 import type { Issue } from './domain/validate.ts';
 import { MAX_LABELS_PER_POST } from './labels.ts';
-import { coverProblem } from './cover-check.ts';
+import { settingsFileProblem } from './cover-check.ts';
 import { MAX_CHANNELS_PER_POST, POST_COLUMNS, VARIANT_COLUMNS, base, hashOf, issuesOf, loadPostMedia, lockVariants, providerOf, settingsOf, type PostRow, type Trx, type VariantRow } from './variants.ts';
 
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -391,7 +391,7 @@ async function planReplace(ctx: Pick<QueryContext, 'trx' | 'orgId' | 'actor' | '
     for (const { variantId, edit } of plan.variants) {
       const provider = variants.find((v) => v.id === variantId)?.provider;
       if (edit.settings === undefined || provider === undefined) continue;
-      if (await coverProblem(ctx, provider, { ...edit.settings })) {
+      if (await settingsFileProblem(ctx, provider, { ...edit.settings })) {
         Object.assign(plan, { skip: 'over_limit', post: null, variants: [] });
         break;
       }
