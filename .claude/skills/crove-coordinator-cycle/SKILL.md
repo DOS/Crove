@@ -48,9 +48,18 @@ For each worker that ended a turn:
   - If it is a person's step (accounts, money, legal, real samples, irreversible steps), comment it on the issue with the `owner-action` label, release the claim, and collect it for the owner report.
 - **Silent for 4 hours or more with no push, PR update or comment:** message the worker once. If its session is stopped or gone (check `list_sessions`), release its claim (`Taking over the stale claim of <session>`) and treat the issue as free. This shorter check applies only to worker sessions this coordinator started, whose state it can see; a claim by any other agent stays live for the 48 hours `AGENTS.md` sets.
 
+## 2a. Team leads and migration versions
+
+Since 2026-10-25 the owner runs long-lived area team leads, sessions named `Agent <n>: <area>` (today 1 Accounting, 2 Frontend, 3 Social Management, 4 Kernel & Security, 5 CRM & Calendar). Keep that list in each cycle comment on #1210.
+
+- A team lead picks its next issue from its own area, may run up to 2 background subagents, and reports to the coordinator: `READY FOR COORDINATOR REVIEW` for protected-path PRs, `MERGED` for the rest, `RESERVE <version> for #<n>` before writing a migration.
+- Each cycle, check every team lead with `list_sessions` and `list_events`. One that is idle with nothing claimed gets a message to take its next issue. One whose area has no work left gets the derive step (section 3, item 2) for its area.
+- Use `SendMessage` to a session id: it works on automated turns, while `start_session` does not. Start a new team lead only on the owner's own turn, when the owner asks for one.
+- Migration versions: open PRs reserve versions in the cycle comment's table, so no two open PRs share one. A reservation does not survive another PR merging a higher version first, so right before merging a PR renames its migrations above main's newest (a valid UTC hour), pushes and waits for green. Give out versions in a row, never round jumps.
+
 ## 3. Keep the workers busy
 
-Keep at most 3 issues `In progress` across all agents, at least 2 of them in the current milestone (`AGENTS.md`). For each free slot:
+Team leads keep their own areas busy (section 2a). For work outside every team lead's area, keep at most 3 coordinator workers `In progress`. For each free slot:
 
 1. Pick the next issue by the `AGENTS.md` order: earliest milestone with agent work left, P0 before P1 before P2. Skip `owner-action`, claimed issues, Icebox and paused milestones. On a tie, prefer the area of the worker that just finished.
 2. If nothing is left, derive new issues:
@@ -119,5 +128,6 @@ Done = the PR is merged and #<n> is closed. Last message: 2-3 lines with the PR 
 - GitHub auto-merge is disabled on this repo; someone must run the merge.
 - Auto mode refuses force-pushes and pushes to another session's PR branch. Use `gh pr update-branch`.
 - A hook blocks edits to files in any worktree but the session's own, so the coordinator cannot fix a worker's branch itself. It messages the worker.
-- Parallel sessions share one usage quota. On 2026-10-22, three workers hit the limit at the same moment, which is why there are 3 workers at most.
+- Parallel sessions share one usage quota. On 2026-10-22, three workers hit the limit at the same moment. On 2026-10-24 every agent stopped twice, for 1 and 4 hours. After a limit reset, resume each stopped subagent with `SendMessage` instead of starting a new one.
+- A temporary file under a generic name in the shared scratchpad (`pr-body.md`) was overwritten by another worker and briefly replaced a PR's body. Each worker keeps its files in its own subfolder.
 - Messages to a busy worker queue until its next tool round, so send instructions before the step they change.
