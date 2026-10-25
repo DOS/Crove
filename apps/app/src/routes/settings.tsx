@@ -7,7 +7,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
-import { PROFILE_OBLIGATIONS, type TaxProfile } from '@crove/kernel-contract';
+import { PROFILE_OBLIGATIONS, type LegalEntity, type TaxProfile } from '@crove/kernel-contract';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
@@ -415,16 +415,25 @@ function CreatedInvite({ invite, onDone }: { invite: { email: string; expiresAt:
   );
 }
 
-// `initialEmail`: the contact onboarding asked to invite (?invite=, issue #324).
-function InviteMember({ isOwner, initialEmail }: { isOwner: boolean; initialEmail?: string | undefined }) {
+// `initialEmail`: the contact onboarding asked to invite (?invite=, issue #324). An owner of an org with more than one
+// legal entity may limit the invitee to some of them (#1447, the server's #1281): an outside accountant who keeps one
+// company's books. Such an invite is for a member or a viewer, never an admin.
+function InviteMember({ isOwner, initialEmail, entities }: { isOwner: boolean; initialEmail?: string | undefined; entities: LegalEntity[] }) {
   const root = useTranslations();
   const t = useTranslations('settings');
   const [email, setEmail] = useState(initialEmail ?? '');
   const [role, setRole] = useState<InviteRole>('member');
+  const [scoped, setScoped] = useState(false);
+  const [entityIds, setEntityIds] = useState<string[]>([]);
+  const [noEntity, setNoEntity] = useState(false);
+  const canScope = isOwner && entities.length > 1;
+  const scopeId = useId();
   const invite = useMutation(
     orpc.org.invite.mutationOptions({
       onSuccess: () => {
         setEmail('');
+        setScoped(false);
+        setEntityIds([]);
         void queryClient.invalidateQueries({ queryKey: orpc.org.listInvites.key() });
       },
     }),
@@ -432,8 +441,16 @@ function InviteMember({ isOwner, initialEmail }: { isOwner: boolean; initialEmai
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    invite.mutate({ email, role });
+    if (scoped && entityIds.length === 0) {
+      setNoEntity(true);
+      return;
+    }
+    invite.mutate(scoped ? { email, role, legalEntityIds: entityIds } : { email, role });
   }
+  const toggleEntity = (id: string, checked: boolean) => {
+    setNoEntity(false);
+    setEntityIds((ids) => (checked ? [...ids, id] : ids.filter((x) => x !== id)));
+  };
 
   return (
     <>
@@ -442,7 +459,7 @@ function InviteMember({ isOwner, initialEmail }: { isOwner: boolean; initialEmai
         <div className="flex gap-2">
           <Input type="email" required maxLength={320} placeholder={t('emailPlaceholder')} value={email} onChange={(e) => setEmail(e.target.value)} />
           <NativeSelect className="shrink-0" value={role} onChange={(e) => setRole(e.target.value as InviteRole)} aria-label={t('role')}>
-            {isOwner && <NativeSelectOption value="admin">{root('roles.admin')}</NativeSelectOption>}
+            {isOwner && !scoped && <NativeSelectOption value="admin">{root('roles.admin')}</NativeSelectOption>}
             <NativeSelectOption value="member">{root('roles.member')}</NativeSelectOption>
             <NativeSelectOption value="viewer">{root('roles.viewer')}</NativeSelectOption>
           </NativeSelect>
@@ -450,6 +467,37 @@ function InviteMember({ isOwner, initialEmail }: { isOwner: boolean; initialEmai
             {t('invite')}
           </Button>
         </div>
+        {canScope && (
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-foreground">
+              <Checkbox
+                checked={scoped}
+                onCheckedChange={(checked) => {
+                  setScoped(checked);
+                  setNoEntity(false);
+                  // A scoped invite is never for an admin.
+                  if (checked && role === 'admin') setRole('member');
+                }}
+              />
+              <span>{t('inviteScoped')}</span>
+            </label>
+            {scoped && (
+              <fieldset className="space-y-1.5 rounded-lg border p-3" aria-describedby={`${scopeId}-hint`}>
+                <legend className="px-1 text-xs text-subtle-foreground">{t('inviteEntities')}</legend>
+                <p id={`${scopeId}-hint`} className="text-xs text-subtle-foreground">
+                  {t('inviteScopedHint')}
+                </p>
+                {entities.map((e) => (
+                  <label key={e.id} className="flex items-center gap-2 text-sm text-foreground">
+                    <Checkbox checked={entityIds.includes(e.id)} onCheckedChange={(checked) => toggleEntity(e.id, checked)} />
+                    <span>{e.name}</span>
+                  </label>
+                ))}
+                {noEntity && <p className="text-xs text-destructive">{t('inviteNoEntity')}</p>}
+              </fieldset>
+            )}
+          </div>
+        )}
         {invite.error && !isStepUpRequired(invite.error) && <ErrorText>{errorMessage(invite.error)}</ErrorText>}
       </form>
       {isStepUpRequired(invite.error) && (
@@ -471,9 +519,10 @@ function InviteMember({ isOwner, initialEmail }: { isOwner: boolean; initialEmai
 // Mail outcomes the inviter should act on (#539): the address bounced or is stopped, or the mail did not go out.
 const INVITE_MAIL_PROBLEMS: ReadonlySet<string> = new Set(['bounced', 'complained', 'suppressed', 'failed', 'ambiguous']);
 
-function PendingInvites() {
+function PendingInvites({ entities }: { entities: LegalEntity[] }) {
   const root = useTranslations();
   const t = useTranslations('settings');
+  const entityName = (id: string) => entities.find((e) => e.id === id)?.name ?? t('inviteEntityGone');
   const f = useFormat();
   const invites = useQuery(orpc.org.listInvites.queryOptions());
   const revoke = useMutation(
@@ -496,6 +545,9 @@ function PendingInvites() {
                 {i.status === 'expired' ? t('expired') : t('expiresAt', { at: f.dateTime(i.expiresAt) })}
                 {i.invitedBy ? ` · ${t('invitedBy', { name: i.invitedBy })}` : ''}
               </p>
+              {i.legalEntityIds && (
+                <p className="text-xs text-muted-foreground">{t('inviteScopedTo', { entities: i.legalEntityIds.map(entityName).join(', ') })}</p>
+              )}
               {i.mail && (
                 <p className={`text-xs ${INVITE_MAIL_PROBLEMS.has(i.mail) ? 'text-destructive' : 'text-subtle-foreground'}`}>
                   {t(`inviteMail.${i.mail}`)}
@@ -1056,8 +1108,8 @@ export function SettingsPage() {
           )}
           {canManage && (
             <>
-              <InviteMember isOwner={isOwner} initialEmail={search.invite} />
-              <PendingInvites />
+              <InviteMember isOwner={isOwner} initialEmail={search.invite} entities={entities.data ?? []} />
+              <PendingInvites entities={entities.data ?? []} />
             </>
           )}
         </Card>
