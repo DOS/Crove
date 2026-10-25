@@ -13,7 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/t
 import { cn } from '@crove/ui/lib/utils';
 import { IntakePanel, useIntake } from '../components/intake.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { SM_UP, useMediaQuery } from '../lib/media.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -515,7 +515,7 @@ export function InboxPage() {
           </div>
         )}
         {items.isLoading ? (
-          <Spinner />
+          <TableSkeleton columns={5} />
         ) : (items.data?.length ?? 0) === 0 ? (
           <Empty
             title={tab === 'pending' ? t('emptyPending') : t('emptyOther')}
