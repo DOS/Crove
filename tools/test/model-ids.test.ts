@@ -2,7 +2,7 @@
 // (AI_MODEL, with AI_BASE_URL an OpenAI-compatible endpoint, AGENTS.md), never a literal in the source, so a deployment
 // can switch models without a code change and no code path silently pins a vendor. Tests may name a model in their
 // fixtures; product sources may not. `allowed-imports.test.ts` covers the other half of the row (the packages).
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -21,11 +21,11 @@ const MODEL_ID = new RegExp(`(['"\`])(?:[a-z0-9_.-]+/)?${FAMILY}[^'"\`\\s]*\\1`,
 
 function sources(dir: string): string[] {
   const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    if (SKIPPED_DIRS.has(name)) continue;
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) out.push(...sources(path));
-    else if (/\.(ts|tsx|mts|cts|js|mjs|cjs)$/.test(name) && !/\.test\.[cm]?[jt]sx?$/.test(name)) out.push(path);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (SKIPPED_DIRS.has(entry.name)) continue;
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sources(path));
+    else if (/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(entry.name) && !/\.test\.[cm]?[jt]sx?$/.test(entry.name)) out.push(path);
   }
   return out;
 }
