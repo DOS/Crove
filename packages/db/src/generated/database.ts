@@ -79,6 +79,7 @@ export interface CroveKernelSchema {
   'crove_kernel.position': KernelPositionTable;
   'crove_kernel.proposal': KernelProposalTable;
   'crove_kernel.proposal_policy': KernelProposalPolicyTable;
+  'crove_kernel.record_le': KernelRecordLeTable;
   'crove_kernel.role': KernelRoleTable;
   'crove_kernel.role_assignment': KernelRoleAssignmentTable;
   'crove_kernel.role_permission': KernelRolePermissionTable;
@@ -840,6 +841,7 @@ export interface KernelInboundMessageTable {
   subject: string | null;
   attachment_count: Generated<number>;
   received_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  body_text: string | null;
 }
 
 /** crove_kernel.kill_switch */
@@ -1070,6 +1072,18 @@ export interface KernelProposalTable {
   escalated_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   request_input: ColumnType<unknown, string | null | undefined, string | null>;
   resubmitted_from: string | null;
+  legal_entity_id: string | null;
+}
+
+/** crove_kernel.record_le */
+export interface KernelRecordLeTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  record_type: ColumnType<string, string, NotGranted>;
+  record_id: ColumnType<string, string, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_kernel.role_assignment */

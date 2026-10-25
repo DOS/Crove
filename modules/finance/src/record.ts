@@ -8,6 +8,7 @@
 // date (vat.ts).
 // finance.purchase.revise: computes the payload of a new revision when a user edits a pending proposal
 // (kernel.proposal.edit); it writes nothing.
+import { randomUUID } from 'node:crypto';
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { BLOCKING_CHECK_IDS, isRevenueAccount, zAccountCode, zExchangeRate, zId, zLocalDate, zPurchaseProposal, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
@@ -62,9 +63,19 @@ export async function upsertParty(ctx: CommandContext, ref: PurchaseProposal['se
         .where((eb) => eb(eb.fn('lower', ['name']), '=', name.toLowerCase()))
         .executeTakeFirst();
   if (existing) return existing.id;
-  const created = await ctx.trx
+  // A member limited to some legal entities may not see a company the org already knows under this tax code (#1280):
+  // the kernel links that party to the member's entities and it is used (a person's party needs an owner to link it).
+  if (taxCode && ctx.actor.type === 'user') {
+    const linked = await ctx.run<{ partyId: string | null }>('kernel.party.link_for_tax_code', { taxCode });
+    if (linked.partyId) return linked.partyId;
+  }
+  // The id is given here and the row inserted without RETURNING: the link a member limited to some entities gets for its
+  // new party (party_link_new) is not visible to the same statement's RETURNING check.
+  const created = { id: randomUUID() };
+  await ctx.trx
     .insertInto('crove_kernel.party')
     .values({
+      id: created.id,
       org_id: ctx.orgId,
       name,
       tax_code: taxCode,
@@ -75,8 +86,7 @@ export async function upsertParty(ctx: CommandContext, ref: PurchaseProposal['se
       verified_at: ctx.now,
       verified_by: ctx.actor.type === 'user' ? ctx.actor.userId : null,
     })
-    .returning('id')
-    .executeTakeFirstOrThrow();
+    .execute();
   await ctx.activity('kernel.party', created.id, 'party.created', direction === 'sale' ? `Thêm khách hàng ${name}` : `Thêm nhà cung cấp ${name}`);
   return created.id;
 }

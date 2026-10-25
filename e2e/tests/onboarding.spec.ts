@@ -24,11 +24,22 @@ test('a firm adds a client company by tax code, then opens the form again for th
     await expect(about).toBeHidden();
     await page.getByRole('button', { name: 'Mã số thuế dùng để làm gì' }).click();
     await expect(about).toBeVisible();
-    // A value that is not a tax code is refused before anything is created.
-    await page.getByLabel('Mã số thuế (không bắt buộc)').fill('12345');
+    // A value that is not a tax code is refused on leaving the field, and again before anything is created. The error
+    // sits under the field and is linked to it, so a screen reader reads it with the field (#1515).
+    const taxCode = page.getByLabel('Mã số thuế (không bắt buộc)');
+    const taxCodeError = page.getByText('Mã số thuế không hợp lệ');
+    await taxCode.fill('12345');
+    await taxCode.blur();
+    await expect(taxCodeError).toBeVisible();
+    await expect(taxCode).toHaveAttribute('aria-invalid', 'true');
+    const describedBy = (await taxCode.getAttribute('aria-describedby')) ?? '';
+    expect(describedBy).not.toBe('');
+    await expect(page.locator(`[id="${describedBy}"]`)).toHaveText(/^Mã số thuế không hợp lệ/);
+    await expect(taxCode).toHaveAccessibleDescription(/Mã số thuế không hợp lệ/);
     await page.getByLabel('Tên công ty hoặc hộ kinh doanh').fill('Công ty TNHH Khách hàng Một');
     await page.getByRole('button', { name: 'Tạo tổ chức' }).click();
-    await expect(page.getByText('Mã số thuế không hợp lệ')).toBeVisible();
+    await expect(taxCodeError).toBeVisible();
+    await expect(taxCode).toBeFocused();
     await expect(page).toHaveURL(/\/onboarding$/);
 
     await page.getByLabel('Mã số thuế (không bắt buộc)').fill('0101.234.564');

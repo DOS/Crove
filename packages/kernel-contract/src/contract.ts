@@ -580,8 +580,13 @@ export const contract = {
               .max(AI_DRAFT_IMAGES_MAX)
               .refine((ids) => new Set(ids).size === ids.length, 'each photo once')
               .optional(),
+            // A mail forwarded to the org's inbound address (#779): its subject and text are read as tainted data.
+            inboundMessageId: zId.optional(),
           })
-          .refine((v) => v.brief.length > 0 || v.sourceUrl !== undefined || v.fileIds !== undefined, { message: 'a brief, a source page or photos', path: ['brief'] }),
+          .refine((v) => v.brief.length > 0 || v.sourceUrl !== undefined || v.fileIds !== undefined || v.inboundMessageId !== undefined, {
+            message: 'a brief, a source page, photos or a mail',
+            path: ['brief'],
+          }),
         )
         .output(z.object({ postId: zId })),
       // A rewrite of one text, as a proposal the member accepts or discards (#583); nothing is saved. With a channel,
@@ -1141,6 +1146,13 @@ export const contract = {
         ]),
       )
       .output(z.object({ proposalId: zId })),
+  },
+  // Mails forwarded to the org's inbound address (#779), newest first, for the Inbox's *Soạn bài đăng từ thư này*:
+  // owners, admins and members.
+  inbound: {
+    recent: oc.output(
+      z.array(z.object({ id: zId, from: z.string().nullable(), subject: z.string().nullable(), attachmentCount: z.number().int().min(0), receivedAt: z.string(), hasText: z.boolean() })),
+    ),
   },
   files: {
     recent: oc.output(z.array(zFileStatus)),

@@ -103,6 +103,35 @@ describe('crove-extract HTTP service', () => {
     expect(Buffer.from(result.email.attachments[0]?.content ?? '', 'base64')).toEqual(FIXTURE);
   });
 
+  // #779: a forwarded mail's text, for an AI draft of a Social post.
+  describe("a mail's text", () => {
+    const mail = (contentType: string, body: string): Uint8Array<ArrayBuffer> =>
+      encode(['From: Shop <hello@shop.example>', 'Subject: Khuyen mai', 'Message-ID: <km-1@shop.example>', 'MIME-Version: 1.0', `Content-Type: ${contentType}; charset=utf-8`, 'Content-Transfer-Encoding: 8bit', '', body].join('\r\n'));
+    const textOf = async (bytes: Uint8Array<ArrayBuffer>) => {
+      const result = await answer(await post(createExtractApp(), 'mime', bytes));
+      if (!result.ok || result.kind !== 'mime') throw new Error(`unexpected ${JSON.stringify(result)}`);
+      return result.email.text;
+    };
+
+    it('keeps the text/plain part, with control characters dropped and blank lines collapsed', async () => {
+      expect(await textOf(mail('text/plain', 'Giảm 20%\u0007 cho đơn đầu.\r\n\r\n\r\n\r\nHẹn gặp   bạn!   '))).toBe('Giảm 20% cho đơn đầu.\n\nHẹn gặp bạn!');
+    });
+
+    it('reduces an HTML-only mail to text, without its scripts and styles', async () => {
+      const text = await textOf(mail('text/html', '<html><head><style>p{color:red}</style></head><body><p>Mở bán <b>bánh trung thu</b></p><script>alert(1)</script><p>Từ 1/9</p></body></html>'));
+      expect(text).toContain('Mở bán bánh trung thu');
+      expect(text).toContain('Từ 1/9');
+      expect(text).not.toContain('alert');
+      expect(text).not.toContain('color:red');
+    });
+
+    it('caps a long text at maxMailTextChars and gives none for an empty mail', async () => {
+      const long = await textOf(mail('text/plain', 'a'.repeat(EXTRACT_LIMITS.maxMailTextChars + 500)));
+      expect(long?.length).toBe(EXTRACT_LIMITS.maxMailTextChars);
+      expect(await textOf(mail('text/plain', '   \r\n  '))).toBeNull();
+    });
+  });
+
   it('refuses a declared body over the limit before reading it', async () => {
     let calls = 0;
     const run: Runner = async () => {
