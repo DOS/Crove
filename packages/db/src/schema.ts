@@ -99,6 +99,11 @@ export type TaxProfileTable = Refine<
 >;
 export type TaxObligationDoneTable = Refine<G.KernelTaxObligationDoneTable, { obligation: (typeof TAX_OBLIGATION_CODES)[number] }>;
 
+// Gapless numbering (ADR-0021 section 2, #1401): the reset policy of a document type's series in a legal entity.
+// Tenant roles only read the numbering tables; the kernel's definers write them.
+export const NUMBER_RESETS = ['yearly', 'monthly', 'never'] as const;
+export type NumberSeriesPolicyTable = Refine<G.KernelNumberSeriesPolicyTable, { reset: (typeof NUMBER_RESETS)[number] }>;
+
 // The calendar core (issue #1313): a member's weekly working hours and the events on their calendar. Holidays and the
 // slot rules are in @crove/kernel-contract (calendar.ts).
 export const CALENDAR_EVENT_KINDS = ['manual', 'time_off', 'booking'] as const;
@@ -395,8 +400,12 @@ export type CashVoucherTable = Refine<
     voucher_type: ColumnType<VoucherType, VoucherType, never>;
     number: ColumnType<number, never, never>;
     legal_entity_id: LegalEntityColumn;
+    // Set with number by the insert trigger, from the kernel's number series (#1401); a row written with triggers off
+    // (replica mode) keeps number_period '-' and has no allocation.
+    number_period: ColumnType<string, never, never>;
+    number_allocation_id: ColumnType<string | null, never, never>;
   },
-  'number' | 'legal_entity_id'
+  'number' | 'legal_entity_id' | 'number_period' | 'number_allocation_id'
 >;
 
 // The accountant's marks on input invoices that need proof of non-cash payment (#917). Append-only; the latest mark
@@ -454,8 +463,15 @@ export type FixedAssetTable = Refine<
 // given is replaced), and rows never change.
 export type JournalVoucherTable = Refine<
   G.FinanceJournalVoucherTable,
-  { number: ColumnType<number, never, never>; legal_entity_id: LegalEntityColumn },
-  'number' | 'legal_entity_id'
+  {
+    number: ColumnType<number, never, never>;
+    legal_entity_id: LegalEntityColumn;
+    // Set with number by the insert trigger, from the kernel's number series (#1401); a row written with triggers off
+    // (replica mode) keeps number_period '-' and has no allocation.
+    number_period: ColumnType<string, never, never>;
+    number_allocation_id: ColumnType<string | null, never, never>;
+  },
+  'number' | 'legal_entity_id' | 'number_period' | 'number_allocation_id'
 >;
 
 // The tax portal's purchase-invoice lists (#465). A list starts pending; the insert trigger stamps created_at and the
@@ -670,6 +686,7 @@ type Refined = Tables<{
   'crove_crm.event_type': CrmEventTypeTable;
   'crove_kernel.calendar_event': CalendarEventTable;
   'crove_kernel.legal_entity': LegalEntityTable;
+  'crove_kernel.number_series_policy': NumberSeriesPolicyTable;
   'crove_kernel.role': RoleTable;
   'crove_kernel.role_assignment': RoleAssignmentTable;
   'crove_kernel.tax_obligation_done': TaxObligationDoneTable;

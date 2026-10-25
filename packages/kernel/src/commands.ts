@@ -56,6 +56,7 @@ import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
 import { setApprovalPreset } from './approval-preset.ts';
 import { legalEntityCommands } from './legal-entities.ts';
+import { numberingCommands } from './numbering.ts';
 import { roleCommands } from './roles.ts';
 import { calendarCommands } from './calendar.ts';
 import { proposalReminderCommands } from './proposal-reminders.ts';
@@ -936,6 +937,7 @@ const otherKernelCommands = [
   setVatFilingPeriod,
   setApprovalPreset,
   ...legalEntityCommands,
+  ...numberingCommands,
   ...roleCommands,
   ...calendarCommands,
   setAddress,
