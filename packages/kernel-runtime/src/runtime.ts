@@ -1090,7 +1090,7 @@ export class Runtime {
             FROM crove_kernel.allocate_number(${n.legalEntityId}::uuid, ${n.docType}::text, ${n.documentDate}::date, ${n.targetType}::text, ${n.targetId}::uuid) a`.execute(trx);
           const row = rows[0];
           const number = Number(row?.number);
-          if (!row || !Number.isSafeInteger(number)) throw new Error(`command ${def.name}: allocate_number answered no number`);
+          if (!row || !Number.isSafeInteger(number) || number < 1) throw new Error(`command ${def.name}: allocate_number answered no number`);
           return { periodKey: row.period_key, number, allocationId: row.allocation_id };
         },
         void: async (n) => {
