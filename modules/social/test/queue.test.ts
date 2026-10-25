@@ -303,6 +303,19 @@ describe('queue reordering', () => {
     );
   });
 
+  it('draws again when the kept slots refused every trade of a pass (#1412)', () => {
+    // p1 holds the kept slot; p0 and p2 may not take it, so only p0 and p2 can trade.
+    const list = holders(3, { p1: ['promo'] });
+    const fits = fitsWith({ 7_200_000: 'promo' });
+    // The first pass pairs p2 with p1 and then p1 with p0, both refused; the second pairs p2 with p0.
+    const draws = [0.9, 0.5, 0.1, 0.5];
+    let k = 0;
+    const after = shuffleTimes(list, fits, () => draws[k++ % draws.length] as number);
+    expect(after).toEqual(new Map([['p0', 10_800_000], ['p1', 7_200_000], ['p2', 3_600_000]]));
+    // Nobody may trade at all: the order stays, and the passes stop.
+    expect(shuffleTimes(holders(2, { p1: ['promo'] }), fitsWith({ 7_200_000: 'promo' }), () => 0)).toEqual(new Map([['p0', 3_600_000], ['p1', 7_200_000]]));
+  });
+
   it('keeps a lone post and an empty list as they are', () => {
     expect(shuffleTimes([], () => true)).toEqual(new Map());
     expect(shuffleTimes(holders(1), () => true)).toEqual(new Map([['p0', 3_600_000]]));

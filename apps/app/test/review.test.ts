@@ -1,6 +1,6 @@
 // Bulk approval batches and review shortcuts (issue #315).
 import { describe, expect, it } from 'vitest';
-import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextAfterDecision, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, showMatched, type BulkBatch } from '../src/lib/review.ts';
+import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextAfterDecision, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, checksByConcern, showMatched, type BulkBatch } from '../src/lib/review.ts';
 
 const REVERSAL = 'finance.reversal';
 
@@ -165,5 +165,18 @@ describe('matched badge (#435)', () => {
     expect(showMatched({ ...row, requestedByAgent: agent, extracted: false }, REVERSAL, VOUCHER)).toBe(false);
     // A human-checked extraction of an agent's request would still show it.
     expect(showMatched({ ...row, requestedByAgent: agent, extracted: true }, REVERSAL, VOUCHER)).toBe(true);
+  });
+});
+
+describe('check order (#1409)', () => {
+  it('lists failed checks first, then warnings, then passes, keeping the stored order in each group', () => {
+    const checks = [
+      { id: 'a', status: 'pass' },
+      { id: 'b', status: 'warn' },
+      { id: 'c', status: 'fail' },
+      { id: 'd', status: 'pass' },
+      { id: 'e', status: 'warn' },
+    ];
+    expect(checksByConcern(checks).map((c) => c.id)).toEqual(['c', 'b', 'e', 'a', 'd']);
   });
 });
