@@ -1488,10 +1488,11 @@ export const zSocialPostVersions = z.object({
 });
 
 // The latest metrics of a published variant (S8): counts by normalized name; absent when the platform does not say.
-// A media library item (S9): an image of the org uploaded for posts, how many posts show it and its tags (#904).
+// A media library item (S9): an image of the org uploaded for posts, how many posts show it and its tags (#904), and
+// when it was archived (#1302).
 // A stock photo's credit (#1106): the photographer and the photo's page on Pexels, and its description as alt text.
 export const zSocialMediaCredit = z.object({ provider: z.literal('pexels'), photographer: z.string(), photographerUrl: z.string(), sourceUrl: z.string(), altText: z.string().nullable() });
-export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()), credit: zSocialMediaCredit.nullable() });
+export const zSocialLibraryItem = z.object({ fileId: zId, filename: z.string(), mime: z.string(), sizeBytes: z.number().int(), durationMs: z.number().int().nullable(), width: z.number().int().nullable(), height: z.number().int().nullable(), createdAt: z.string(), usedIn: z.number().int(), tags: z.array(z.string()), credit: zSocialMediaCredit.nullable(), archivedAt: z.string().nullable() });
 // The CSV import's media (#1258): library files by name or id (social.media.resolve, up to 200 a call), and image URLs
 // the API fetches into the library through the egress guard (social.media.fetchUrls, up to SOCIAL_MEDIA_URLS_MAX a call,
 // https only, JPEG, PNG or WEBP up to MAX_UPLOAD_BYTES), each with the reason it was refused.
@@ -1545,6 +1546,15 @@ export const zSocialStockSaved = z.object({
 });
 // A tag of the library and how many files carry it (#904).
 export const zSocialMediaTagCount = z.object({ tag: z.string(), files: z.number().int() });
+// Archive or restore library files (#1302): up to SOCIAL_MEDIA_ARCHIVE_MAX at once, each once.
+export const SOCIAL_MEDIA_ARCHIVE_MAX = 100;
+export const zSocialMediaArchive = z.strictObject({
+  fileIds: z
+    .array(zId)
+    .min(1)
+    .max(SOCIAL_MEDIA_ARCHIVE_MAX)
+    .refine((ids) => new Set(ids).size === ids.length, 'each file once'),
+});
 // A saved snippet (#584): hashtags, a signature, or a whole post to start from (isTemplate).
 export const zSocialSnippet = z.object({
   id: zId,

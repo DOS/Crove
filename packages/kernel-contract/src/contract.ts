@@ -70,6 +70,7 @@ import {
   zSocialIdeaUpdate,
   zSocialLibraryItem,
   zSocialLibraryUse,
+  zSocialMediaArchive,
   zSocialMediaTagCount,
   zSocialStockResults,
   zSocialStockSave,
@@ -926,7 +927,10 @@ export const contract = {
             before: z.strictObject({ createdAt: z.iso.datetime({ offset: true }), fileId: zId }).optional(),
             limit: z.number().int().min(1).max(100).optional(),
             // Only files the caller may use (#1196): a member limited to some channels gets no other channel's own media.
+            // Never archived files (#1302).
             usable: z.boolean().optional(),
+            // The archived files alone (#1302); without it the list leaves them out.
+            archived: z.boolean().optional(),
           }),
         )
         .output(z.object({ items: z.array(zSocialLibraryItem), more: z.boolean() })),
@@ -938,6 +942,10 @@ export const contract = {
       tags: oc.input(z.object({})).output(z.array(zSocialMediaTagCount)),
       tag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
       untag: oc.input(z.strictObject({ fileId: zId, tags: z.array(z.string().max(200)).min(1).max(20) })).output(z.object({ fileId: zId, tags: z.array(z.string()) })),
+      // Take files out of the library and its pickers, or bring them back (#1302), members and above, on files they may
+      // use; posts that already use an archived file keep it. Each lists the files it changed.
+      archive: oc.input(zSocialMediaArchive).output(z.object({ archived: z.array(zId) })),
+      restore: oc.input(zSocialMediaArchive).output(z.object({ restored: z.array(zId) })),
     },
     // Stock photos from Pexels (#1106), when the deployment set MEDIA_PEXELS_API_KEY: status says whether they are
     // offered; search and save are for members and above, and answer STOCK_PHOTOS_DISABLED without the key. The key

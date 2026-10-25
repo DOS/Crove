@@ -1050,6 +1050,8 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         tags: os.social.media.tags.handler(socialQuery('social.media.tags')),
         tag: os.social.media.tag.handler(socialCommand('social.media.tag')),
         untag: os.social.media.untag.handler(socialCommand('social.media.untag')),
+        archive: os.social.media.archive.handler(socialCommand('social.media.archive')),
+        restore: os.social.media.restore.handler(socialCommand('social.media.restore')),
         resolve: os.social.media.resolve.handler(socialQuery('social.media.resolve')),
         fetchUrls: os.social.media.fetchUrls.handler(({ context, input }) => mediaUrlScope(context, (orgId, actor, urls) => urls.fetch(runtime, actor, orgId, input.urls))),
       },
