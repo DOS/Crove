@@ -417,3 +417,65 @@ describe('TikTokPublisher in inbox mode', () => {
     expect(calls[1]?.body).toMatchObject({ post_info: { privacy_level: 'SELF_ONLY', disable_comment: false } });
   });
 });
+
+describe('TikTokPublisher late ids (#1475)', () => {
+  const STATUS = 'POST open.tiktokapis.com/v2/post/publish/status/fetch/';
+  const QUERY = 'POST open.tiktokapis.com/v2/video/query/';
+  const ask = (over: Record<string, unknown> = {}) => ({ externalAccountId: OPEN_ID, secret: SECRET, externalRef: 'v_pub_file~v2-1.123', scopes: ['user.info.basic', 'video.publish'], ...over });
+  const complete = (ids: string) => ({ raw: `{"data":{"status":"PUBLISH_COMPLETE","publicaly_available_post_id":[${ids}]},"error":{"code":"ok"}}` });
+
+  it('reads the public id once moderation gives it, as written, and only the status: no post call', async () => {
+    const { fetchImpl, calls } = tiktok({ [STATUS]: [{ body: { data: { status: 'PUBLISH_COMPLETE' }, error: ok } }, complete('7300000000000000001')] });
+    const publisher = new TikTokPublisher(APP, fetchImpl);
+    expect(await publisher.lateId(ask())).toEqual({ kind: 'posted_without_id' });
+    expect(await publisher.lateId(ask())).toEqual({ kind: 'posted', externalId: '7300000000000000001', url: null });
+    expect(calls.map((c) => c.route)).toEqual([STATUS, STATUS]);
+    expect(calls[1]?.body).toEqual({ publish_id: 'v_pub_file~v2-1.123' });
+  });
+
+  it('takes the first id of a draft the creator made several posts from, and its address with video.list', async () => {
+    const { fetchImpl, calls } = tiktok({
+      [STATUS]: [complete('7300000000000000002, 7300000000000000003'), complete('7300000000000000004'), complete('7300000000000000005')],
+      [QUERY]: [
+        { body: { data: { videos: [{ id: '7300000000000000002', share_url: 'https://www.tiktok.com/@tiembanhb/video/7300000000000000002' }] }, error: ok } },
+        { body: { data: { videos: [{ id: '7300000000000000004', share_url: 'https://www.tiktok.com.evil.example/video/1' }] }, error: ok } },
+        { status: 500, body: {} },
+      ],
+    });
+    const publisher = new TikTokPublisher({ ...APP, videoList: true }, fetchImpl);
+    const listed = ask({ externalRef: 'v_inbox_file~v2.123456789', scopes: ['user.info.basic', 'video.publish', 'video.list'] });
+    expect(await publisher.lateId(listed)).toEqual({ kind: 'posted', externalId: '7300000000000000002', url: 'https://www.tiktok.com/@tiembanhb/video/7300000000000000002' });
+    expect(calls[1]?.body).toEqual({ filters: { video_ids: ['7300000000000000002'] } });
+    // An address off tiktok.com, or none at all: the id is kept without one.
+    expect(await publisher.lateId(listed)).toEqual({ kind: 'posted', externalId: '7300000000000000004', url: null });
+    expect(await publisher.lateId(listed)).toEqual({ kind: 'posted', externalId: '7300000000000000005', url: null });
+  });
+
+  it('waits on a draft still in the inbox, stops on FAILED or a publish_id TikTok refuses, and tells a dead token from an outage', async () => {
+    const { fetchImpl } = tiktok({
+      [STATUS]: [
+        { body: { data: { status: 'SEND_TO_USER_INBOX' }, error: ok } },
+        { body: { data: { status: 'FAILED', fail_reason: 'publish_cancelled' }, error: ok } },
+        { status: 400, body: { error: { code: 'invalid_publish_id', message: 'The publish_id does not exist.' } } },
+        { status: 401, body: { error: { code: 'access_token_invalid', message: 'expired' } } },
+        { status: 429, body: { error: { code: 'rate_limit_exceeded', message: 'Too many requests.' } } },
+        { status: 503, body: {} },
+      ],
+    });
+    const publisher = new TikTokPublisher(APP, fetchImpl);
+    expect(await publisher.lateId(ask())).toEqual({ kind: 'waiting' });
+    expect(await publisher.lateId(ask())).toEqual({ kind: 'failed', code: 'publish_cancelled' });
+    expect(await publisher.lateId(ask())).toEqual({ kind: 'failed', code: 'invalid_publish_id' });
+    expect(await publisher.lateId(ask())).toEqual({ kind: 'refused' });
+    expect(await publisher.lateId(ask())).toBeNull();
+    expect(await publisher.lateId(ask())).toBeNull();
+  });
+
+  it('asks nothing with an unreadable secret or a malformed publish_id', async () => {
+    const { fetchImpl, calls } = tiktok({});
+    const publisher = new TikTokPublisher(APP, fetchImpl);
+    expect(await publisher.lateId(ask({ secret: '{}' }))).toEqual({ kind: 'refused' });
+    expect(await publisher.lateId(ask({ externalRef: 'not a publish id' }))).toEqual({ kind: 'failed', code: 'BAD_PUBLISH_ID' });
+    expect(calls).toHaveLength(0);
+  });
+});
