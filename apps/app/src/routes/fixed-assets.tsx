@@ -11,7 +11,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { defaultAccounts, fixedAssetFormProblem, fixedAssetInput, monthLabel, previousMonth, recentMonths, type FixedAssetForm, type FixedAssetKind } from '../lib/fixed-assets.ts';
@@ -282,7 +282,7 @@ export function FixedAssetsPage() {
       {adding && <AssetFormCard onClose={() => setAdding(false)} />}
       {depreciating && <DepreciationCard slug={slug} onClose={() => setDepreciating(false)} />}
       {assets.isLoading ? (
-        <Spinner />
+        <TableSkeleton columns={5} />
       ) : assets.error ? (
         <ErrorText>{errorMessage(assets.error)}</ErrorText>
       ) : rows.length === 0 ? (

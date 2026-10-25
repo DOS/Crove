@@ -12,7 +12,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { OPEN_TASK_STATUSES, TASK_LIST_LIMIT, TASK_STATUSES, agentPermissions, socialPostOf, type TaskStatus } from '../lib/agents.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -111,7 +111,7 @@ export function TasksPage() {
         </TabsList>
       </Tabs>
       {tasks.isPending ? (
-        <Spinner />
+        <ListSkeleton />
       ) : tasks.error ? (
         <ErrorText>{errorMessage(tasks.error)}</ErrorText>
       ) : tasks.data.length === 0 ? (

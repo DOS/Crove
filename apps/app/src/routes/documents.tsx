@@ -5,7 +5,7 @@ import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Input } from '@crove/ui/components/input';
 import { TableCell, TableRow } from '@crove/ui/components/table';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, TableSkeleton } from '../components/ui.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { documentNumber, matchesDocument } from '../lib/search.ts';
@@ -32,7 +32,7 @@ export function DocumentsPage() {
         </div>
       )}
       {docs.isLoading ? (
-        <Spinner />
+        <TableSkeleton columns={6} />
       ) : docs.error ? (
         <ErrorText>{errorMessage(docs.error)}</ErrorText>
       ) : (docs.data?.length ?? 0) === 0 ? (
