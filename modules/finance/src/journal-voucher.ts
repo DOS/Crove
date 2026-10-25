@@ -4,7 +4,7 @@
 //   it and build the proposal (each party as found, the total). It writes nothing. Owners, admins and members may ask.
 // - finance.journal_voucher.record: runs only through kernel.proposal.approve, on the stored payload. It checks
 //   everything again, inserts the voucher (the database numbers it from the kernel's series per legal
-//   entity and year, NVK00001 ..., 20261103000000) and, in the same transaction,
+//   entity and year, NVK00001 ..., 20261103020000) and, in the same transaction,
 //   posts its journal entry through the posting path, linked by source_type 'finance.journal_voucher'. The database
 //   checks at commit (a deferred constraint trigger, 20261023150000) that the voucher has that entry, on its date.
 // A voucher is corrected by reversing its entry (finance.journal.reverse); it keeps its number.

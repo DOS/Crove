@@ -17,7 +17,7 @@ import { Runtime } from '@crove/kernel-runtime';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const THIS_VERSION = '20261103000000';
+const THIS_VERSION = '20261103020000';
 const suite = ADMIN ? describe : describe.skip;
 const LINES = JSON.stringify([
   { line_no: 1, account_code: '6422', debit: '50000', credit: '0' },

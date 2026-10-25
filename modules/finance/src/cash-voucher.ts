@@ -4,7 +4,7 @@
 //   build the proposal (the party as found, the total). It writes nothing. Owners, admins and members may ask.
 // - finance.voucher.record: runs only through kernel.proposal.approve, on the stored payload. It checks everything
 //   again, inserts the voucher (the database numbers it from the kernel's series per
-//   legal entity, type and year, PT00001, PC00001 ..., 20261103000000) and, in the same
+//   legal entity, type and year, PT00001, PC00001 ..., 20261103020000) and, in the same
 //   transaction, posts its journal entry through the posting path, linked by source_type 'finance.cash_voucher'.
 //   The database checks at commit (a deferred constraint trigger, 20261019270000) that the voucher has such an entry,
 //   dated the voucher's date, that moves its cash account by its amount; it refuses the voucher otherwise. That check
