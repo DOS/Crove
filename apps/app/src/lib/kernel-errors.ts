@@ -52,6 +52,9 @@ export const KERNEL_ERROR_CODES = [
   'INVITE_NOT_PENDING',
   'INVITE_PENDING_BY_OWNER',
   'INVITE_REVOKED',
+  // Invites scoped to legal entities (#1281).
+  'INVITE_SCOPE_OWNER_ONLY',
+  'INVITE_SCOPE_STALE',
   'INVITE_USED',
   'INVITE_RATE_LIMITED',
   'TOO_MANY_INVITES',
@@ -232,6 +235,10 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_TAGGED',
   'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
+  // Learned account rules (#1399).
+  'RULE_TEXT_TOO_SHORT',
+  'RULE_EXISTS',
+  'RULE_NOT_FOUND',
   // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
   'JOURNAL_VOUCHER_INVALID',

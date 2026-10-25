@@ -25,6 +25,7 @@ import {
 } from '@crove/l10n-vn';
 import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
+import { learnFromApproval } from './categorization.ts';
 import { postReversal } from './reversal.ts';
 import { journalMemo } from './memo.ts';
 import { isOwnTaxCode } from './own-tax-code.ts';
@@ -276,7 +277,7 @@ export const revisePurchase = defineCommand({
       const account = overrides.get(l.lineNo);
       if (!account || account === l.debitAccount) return l;
       chosen.push({ lineNo: l.lineNo, debitAccount: account });
-      return { ...l, debitAccount: account, reason: 'Người dùng chọn' };
+      return { ...l, debitAccount: account, reason: 'Người dùng chọn', accountRule: { source: 'user' as const } };
     });
     if (chosen.length === 0 && !exchangeRate) return { changed: false as const, payload };
     // The accounts the user picked now; the others are checked again when the proposal is approved.
@@ -545,8 +546,12 @@ export const recordPurchase = defineCommand({
         });
     }
 
+    // The accounts a user chose on this revision teach the vendor's learned rules (#1399). Sales learn nothing.
+    const learned = sale ? [] : await learnFromApproval(ctx, { partyId, documentId: document.id, lines });
+
     ctx.audit({
       direction,
+      ...(learned.length > 0 ? { learned_rules: learned } : {}),
       ...(replaces ? { replaces_document_id: replaces } : {}),
       ...(related ? { correction_kind: related.kind, corrects_document_id: corrected?.id ?? null, voided_document_id: voidedOriginal } : {}),
       ...(lateDate ? { invoice_date: invoice.issueDate, posting_date: lateDate, late_reason: late } : {}),
