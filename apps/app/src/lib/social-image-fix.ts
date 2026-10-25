@@ -1,0 +1,123 @@
+// Fixing an image a channel refuses (#1500): a photo straight from a phone is too large for Zalo OA or Bluesky, a PNG
+// or a WebP is not JPEG for Instagram. The composer offers to re-encode it in the browser as a JPEG that every channel
+// of the post takes, uploaded as a new library file in place of the original (the original stays), as a crop is.
+// This module decides, from the contract's limits, whether an image needs the fix, what it must become and the encodes
+// to try; the drawing runs in components/social-image-fix.tsx.
+import { CAPABILITIES, IMAGE_RULES, isProvider, mediaKindOf, type Provider } from '@crove/mod-social/contract';
+
+// Every channel takes JPEG (a test checks the contract), so the fix always makes one.
+export const FIX_TYPE = 'image/jpeg';
+// The first encode, then a lower quality before the image is made smaller.
+export const FIX_QUALITY = 0.9;
+export const FIX_LOW_QUALITY = 0.7;
+// Each smaller step keeps this share of the previous one's sides.
+export const FIX_SCALE = 0.8;
+// The long side is never made shorter than this, whatever the channels allow.
+export const FIX_MIN_SIDE = 320;
+
+export type Refusal = 'type' | 'size';
+
+// Why a channel refuses an image, as the contract's check says it (validate.ts: IMAGE_TYPE_NOT_ALLOWED,
+// IMAGE_TOO_LARGE). A channel that takes no images at all refuses it for another reason, which no re-encode fixes.
+export function refusals(provider: string, image: { mime: string; sizeBytes: number }): Refusal[] {
+  if (!isProvider(provider)) return [];
+  const rule = CAPABILITIES[provider].media;
+  if (!rule.kinds.includes('image')) return [];
+  const out: Refusal[] = [];
+  if (rule.imageTypes.length > 0 && !rule.imageTypes.includes(image.mime.toLowerCase())) out.push('type');
+  if (rule.maxImageBytes !== null && image.sizeBytes > rule.maxImageBytes) out.push('size');
+  return out;
+}
+
+export interface FixTarget {
+  type: typeof FIX_TYPE;
+  // The strictest byte limit among the post's channels that take images; null when none has one.
+  maxBytes: number | null;
+  // The widest minimum width among them (IMAGE_RULES); 0 when none has one.
+  minWidth: number;
+  // The channels that refuse the image as it is.
+  refusedBy: Provider[];
+}
+
+// What the composer offers for an image on the given channels: the fix and its target, a note that an animated image
+// cannot be fixed here (a canvas keeps one frame), or nothing when no channel refuses it.
+export type FixOffer = { kind: 'fix'; target: FixTarget } | { kind: 'animated'; refusedBy: Provider[] } | null;
+
+export function imageFix(image: { mime: string; sizeBytes: number; animated?: boolean }, providers: readonly string[]): FixOffer {
+  if (mediaKindOf(image.mime) !== 'image') return null;
+  const known = [...new Set(providers)].filter(isProvider);
+  const refusedBy = known.filter((p) => refusals(p, image).length > 0);
+  if (refusedBy.length === 0) return null;
+  if (image.mime.toLowerCase() === 'image/gif' || image.animated === true) return { kind: 'animated', refusedBy };
+  const takers = known.filter((p) => CAPABILITIES[p].media.kinds.includes('image'));
+  if (takers.some((p) => !takesFixType(p))) return null;
+  const limits = takers.map((p) => CAPABILITIES[p].media.maxImageBytes).filter((n): n is number => n !== null);
+  return {
+    kind: 'fix',
+    target: { type: FIX_TYPE, maxBytes: limits.length > 0 ? Math.min(...limits) : null, minWidth: Math.max(0, ...takers.map((p) => IMAGE_RULES[p]?.minWidth ?? 0)), refusedBy },
+  };
+}
+
+export function takesFixType(provider: Provider): boolean {
+  const types = CAPABILITIES[provider].media.imageTypes;
+  return types.length === 0 || types.includes(FIX_TYPE);
+}
+
+export interface FixStep {
+  quality: number;
+  width: number;
+  height: number;
+}
+
+// The encodes to try, in order, for a width x height image (turned the way its EXIF says): the full size at
+// FIX_QUALITY, then at FIX_LOW_QUALITY, then smaller by FIX_SCALE at a time, down to the narrowest the channels take
+// (and never a long side under FIX_MIN_SIDE), with that floor itself as the last step. Without a byte limit the first
+// encode always fits, so it is the only one. An image already narrower than the floor is never made smaller.
+export function fixSteps(width: number, height: number, target: Pick<FixTarget, 'maxBytes' | 'minWidth'>): FixStep[] {
+  const steps: FixStep[] = [{ quality: FIX_QUALITY, width, height }];
+  if (target.maxBytes === null) return steps;
+  steps.push({ quality: FIX_LOW_QUALITY, width, height });
+  const floor = Math.max(target.minWidth / width, FIX_MIN_SIDE / Math.max(width, height));
+  if (floor >= 1) return steps;
+  let scale = FIX_SCALE;
+  for (; scale > floor; scale *= FIX_SCALE) steps.push({ quality: FIX_LOW_QUALITY, width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) });
+  steps.push({ quality: FIX_LOW_QUALITY, width: Math.max(target.minWidth, Math.round(width * floor)), height: Math.max(1, Math.round(height * floor)) });
+  return steps;
+}
+
+// Runs the encodes in order and returns the first whose bytes fit the limit, or null when none does (the original is
+// kept). encode is the browser's canvas in the app and a fake in the tests.
+export async function firstFit<T extends { size: number }>(steps: readonly FixStep[], maxBytes: number | null, encode: (step: FixStep) => Promise<T>): Promise<{ step: FixStep; result: T } | null> {
+  for (const step of steps) {
+    const result = await encode(step);
+    if (maxBytes === null || result.size <= maxBytes) return { step, result };
+  }
+  return null;
+}
+
+const ascii = (bytes: Uint8Array, at: number, text: string) => [...text].every((c, i) => bytes[at + i] === c.charCodeAt(0));
+
+// Whether an image moves, from its first bytes: a GIF (counted as animated, as most posted GIFs are), a WebP whose
+// VP8X header has the animation flag, or a PNG with an animation control chunk (acTL, APNG) before its first image data.
+export function isAnimated(mime: string, head: Uint8Array): boolean {
+  const type = mime.toLowerCase();
+  if (type === 'image/gif') return true;
+  if (type === 'image/webp') return ascii(head, 0, 'RIFF') && ascii(head, 8, 'WEBP') && ascii(head, 12, 'VP8X') && ((head[20] ?? 0) & 0x02) !== 0;
+  if (type !== 'image/png') return false;
+  const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
+  for (let at = 8; at + 8 <= head.byteLength; ) {
+    if (ascii(head, at + 4, 'acTL')) return true;
+    if (ascii(head, at + 4, 'IDAT')) return false;
+    at += 12 + view.getUint32(at);
+  }
+  return false;
+}
+
+// The fixed file's name: the original's, with -sua (fixed) and .jpg.
+export function fixName(original: string | null | undefined): string {
+  const base = (original ?? '').replace(/\.[A-Za-z0-9]{1,5}$/, '') || 'anh';
+  return `${base}-sua.jpg`;
+}
+
+// The post's images with the fixed file in place of the original, wherever it is; the others as they are.
+export const replaceMedia = <T extends { fileId: string }>(media: readonly T[], fromFileId: string, next: T): T[] => media.map((m) => (m.fileId === fromFileId ? next : m));

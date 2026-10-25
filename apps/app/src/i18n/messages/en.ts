@@ -2505,6 +2505,16 @@ export const en = {
       failed: 'The crop could not be saved',
       cannotRead: 'This browser cannot open the image to crop it',
     },
+    imageFix: {
+      refused: '{channels} cannot take this image',
+      fix: 'Fix for channels',
+      note: 'Saved as a new JPEG and used in the post. Camera and location details are dropped; the original stays in the library.',
+      noteSize: 'Saved as a new JPEG of at most {max} and used in the post. Camera and location details are dropped; the original stays in the library.',
+      animated: 'An animated image would lose its motion if fixed here. Turn it into a video and upload that instead.',
+      noFit: 'The image cannot get under {max} and stay wide enough for the channel. The original is kept.',
+      cannotRead: 'This browser cannot open the image to fix it',
+      failed: 'The fixed image could not be saved',
+    },
     insights: {
       title: 'What works',
       hint: "Each channel's posts in the window against the channel's own median engagement (the middle mark): by format, label, weekday, posting hour (in your time zone) and hashtags used on 3 posts or more. Engagement is reactions, comments, shares and saves.",
