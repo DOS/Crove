@@ -9,9 +9,10 @@
 // facts are confirmed. The form constants are data (HTKK_01GTGT), so a new HTKK release is a change to the data.
 //
 // Crove fills what it computes from invoices ([23], [24], [26] to [35], see form01Indicators) and the form's formulas
-// that follow from them. What needs the accountant's judgement or the previous return is 0: [21], [22], [23a], [24a],
-// [25] (so [36] equals [35] until the accountant enters it), [37], [38], [39a], [40b] and [42]. So are the tax
-// office and the signer, which Crove does not hold. The accountant completes them in HTKK before filing.
+// that follow from them. [22] is the previous return's [43] as marked filed (#1400), when the caller passes it. What
+// needs the accountant's judgement is 0: [21], [23a], [24a], [25] (so [36] equals [35] until the accountant enters
+// it), [37], [38], [39a], [40b] and [42]. So are the tax office and the signer, which Crove does not hold. The
+// accountant completes them in HTKK before filing.
 // Two choices of the accountant's (#692): the taxpayer's address is written when the org has one (#324), and [25]
 // may be filled with [24] (all input VAT deducted) for the accountant to reduce; it stays 0 unless asked.
 import { Decimal, money, type DecimalValue, type Money } from '@crove/l10n-vn';
@@ -74,6 +75,8 @@ export interface Vat01Values {
   // Put this amount in [25] instead: the suggestion of the VAT working, [24] minus the VAT the accountant marked not
   // deductible for want of a non-cash payment (#917). Wins over deductInput.
   deductible?: Money;
+  // [22]: the VAT still deductible carried from the previous return, its [43] (#1400). 0 when not given.
+  carriedForward?: Money;
 }
 
 function wholeDong(value: Money | DecimalValue): DecimalValue {
@@ -84,7 +87,8 @@ function wholeDong(value: Money | DecimalValue): DecimalValue {
  * Every indicator of the form as a whole number of dong (a decimal string; [21] is 0, the box not ticked). The
  * computed indicators are rounded half up to whole dong, then the totals and the payable or carried-forward VAT are
  * worked out from the rounded values with the form's formulas:
- * [25] is 0, options.deductible when given, or [24] when options.deductInput is set. [36] = [35] - [25]; with x = [36] - [22] + [37] - [38] - [39a]: [40a] = x when x >= 0, [41] = -x when x < 0;
+ * [22] is options.carriedForward, or 0. [25] is 0, options.deductible when given, or [24] when options.deductInput is
+ * set. [36] = [35] - [25]; with x = [36] - [22] + [37] - [38] - [39a]: [40a] = x when x >= 0, [41] = -x when x < 0;
  * [40] = [40a] - [40b]; [43] = [41] - [42]. Refuses an amount HTKK cannot hold.
  */
 export function form01XmlValues(indicators: ReadonlyArray<FormIndicator>, options: Vat01Values = {}): Record<Form01Code, string> {
@@ -93,6 +97,12 @@ export function form01XmlValues(indicators: ReadonlyArray<FormIndicator>, option
     if (COMPUTED.has(indicator.code)) v.set(indicator.code as Form01Code, wholeDong(indicator.amount));
   }
   const get = (code: Form01Code) => v.get(code) ?? money(0);
+  if (options.carriedForward !== undefined) {
+    const carried = wholeDong(options.carriedForward);
+    // The schema types [22] xs:nonNegativeInteger.
+    if (carried.isNegative()) throw new Error(`[22] cannot be negative: ${carried.toFixed()}`);
+    v.set('22', carried);
+  }
   if (options.deductible !== undefined) v.set('25', wholeDong(options.deductible));
   else if (options.deductInput) v.set('25', get('24'));
   // Re-derive the sums from the rounded parts, so the file obeys the form's formulas to the dong.

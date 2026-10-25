@@ -259,6 +259,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
       'crove_finance.input_vat_check', 'crove_finance.journal_entry', 'crove_finance.journal_line', 'crove_finance.journal_voucher',
       'crove_finance.misa_goods_code', 'crove_finance.org_account', 'crove_finance.period_balance_delta', 'crove_finance.period_lock', 'crove_finance.portal_invoice_list', 'crove_finance.portal_invoice_row',
       'crove_finance.purchase_document', 'crove_finance.purchase_document_void', 'crove_finance.purchase_line', 'crove_finance.purchase_tax_rate',
+      'crove_finance.vat_return_filed',
     ];
     const purged = (await one<{ src: string }>(`SELECT prosrc AS src FROM pg_proc WHERE oid = 'crove_kernel.org_purge(integer)'::regprocedure`)).src;
     const named = new Set([...purged.matchAll(/'(crove_[a-z]+\.[a-z_]+)'/g), ...purged.matchAll(/DELETE FROM (crove_[a-z]+\.[a-z_]+)/g)].map((m) => m[1]));

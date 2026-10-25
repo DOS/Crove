@@ -9,6 +9,7 @@ import {
   documentVatByRate,
   form01Indicators,
   normalizeVatRate,
+  previousVatPeriods,
   reducedRateApplies,
   sideTotals,
   vatMismatch,
@@ -295,5 +296,16 @@ describe('sideTotals and form01Indicators', () => {
       { rates: [{ rate: '10', taxable: '1', vat: '1' }], allocated: false },
     ];
     expect(indicator(form01Indicators(sideTotals([]), sideTotals(big)), '32')).toBe('9007199254740994');
+  });
+});
+
+describe('previousVatPeriods (#1400)', () => {
+  it('names the month, and the quarter when that month ends one, that end the day before the period starts', () => {
+    expect(previousVatPeriods(vatPeriod('2026-09'))).toEqual(['2026-08']);
+    expect(previousVatPeriods(vatPeriod('2026-07'))).toEqual(['2026-06', '2026-Q2']);
+    expect(previousVatPeriods(vatPeriod('2026-01'))).toEqual(['2025-12', '2025-Q4']);
+    // A quarter looks for the quarter before first.
+    expect(previousVatPeriods(vatPeriod('2026-Q3'))).toEqual(['2026-Q2', '2026-06']);
+    expect(previousVatPeriods(vatPeriod('2026-Q1'))).toEqual(['2025-Q4', '2025-12']);
   });
 });

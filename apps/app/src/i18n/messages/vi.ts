@@ -862,7 +862,7 @@ export const vi = {
     xmlDeductSuggested: 'Ghi số đề xuất: [24] trừ thuế không được khấu trừ ({amount})',
     xmlDeductUnchecked: '{count, plural, other {Còn # hóa đơn chưa kiểm tra chứng từ thanh toán; số đề xuất đang tính chúng là được khấu trừ.}}',
     xmlNote:
-      'File XML cho HTKK (mẫu 01/GTGT theo Thông tư 80/2021, bản XML 2.8.3) có sẵn các chỉ tiêu trên. Các chỉ tiêu [21], [22], [23a], [24a], [25], [37], [38], [39a], [40b] và [42] được ghi là 0, còn cơ quan thuế quản lý và người ký để trống; khi chưa nhập [25], số thuế phải nộp trong file đang tính như chưa được khấu trừ đồng nào. Kế toán bổ sung và kiểm tra trong HTKK hoặc trên eTax trước khi nộp.',
+      'File XML cho HTKK (mẫu 01/GTGT theo Thông tư 80/2021, bản XML 2.8.3) có sẵn các chỉ tiêu trên. Chỉ tiêu [22] lấy theo ô bên trên. Các chỉ tiêu [21], [23a], [24a], [25], [37], [38], [39a], [40b] và [42] được ghi là 0, còn cơ quan thuế quản lý và người ký để trống; khi chưa nhập [25], số thuế phải nộp trong file đang tính như chưa được khấu trừ đồng nào. Kế toán bổ sung và kiểm tra trong HTKK hoặc trên eTax trước khi nộp.',
     exportXmlWrongKind:
       'Tổ chức khai thuế GTGT theo {kind} nên chỉ xuất được tờ khai XML cho HTKK theo {kindOne}. Xuất Excel vẫn dùng được cho mọi kỳ.',
     filingMonthly: 'tháng',
@@ -925,6 +925,39 @@ export const vi = {
       vat_mismatch: 'Thuế GTGT lệch giá trị trước thuế nhân thuế suất',
       declared_late: 'Hóa đơn của kỳ trước, ghi sổ và kê khai vào kỳ này vì tháng của hóa đơn đã khóa sổ',
       check_payment: 'Cần kiểm tra chứng từ thanh toán không dùng tiền mặt',
+    },
+    carry: {
+      title: 'Chỉ tiêu [22]: thuế GTGT còn được khấu trừ kỳ trước chuyển sang',
+      label: 'Số tiền ghi vào [22]',
+      fromPrevious: 'Lấy từ chỉ tiêu [43] của tờ khai {period} ({amount}), đánh dấu đã nộp ngày {date}.',
+      fromComputed:
+        'Số [43] của {period} do {brand} tự tính khi kỳ đó được đánh dấu xong trên lịch thuế, chưa phải số trên tờ khai đã nộp. Hãy đối chiếu với tờ khai đã nộp.',
+      missing:
+        'Chưa có tờ khai {periods} nào được đánh dấu đã nộp, nên [22] đang để 0. Nếu kỳ trước còn thuế được khấu trừ chuyển sang, hãy nhập số ở chỉ tiêu [43] của tờ khai kỳ trước.',
+      or: ' hoặc ',
+      returnMonth: 'tháng {month}/{year}',
+      returnQuarter: 'quý {quarter}/{year}',
+      edited: 'Đã sửa, khác số chuyển sang từ kỳ trước ({amount}).',
+      reset: 'Dùng lại số kỳ trước',
+      invalid: 'Hãy nhập số tiền nguyên, không âm, tối đa 14 chữ số.',
+      note: 'Số này được ghi vào chỉ tiêu [22] của file XML cho HTKK và trừ vào số thuế phải nộp của kỳ.',
+    },
+    filed: {
+      title: 'Tờ khai đã nộp',
+      none: 'Kỳ này chưa được đánh dấu đã nộp tờ khai. Nộp xong trên eTax thì đánh dấu và ghi lại số đã nộp, để kỳ sau tự lấy chỉ tiêu [22].',
+      done: 'Đã đánh dấu nộp ngày {date}: [22] {c22}, [25] {c25}, [43] {c43}.',
+      computedNote: 'Đây là số {brand} tự tính khi kỳ này được đánh dấu xong trên lịch thuế. Hãy sửa lại theo tờ khai đã nộp.',
+      mark: 'Đánh dấu đã nộp tờ khai',
+      edit: 'Sửa số đã nộp',
+      withdraw: 'Bỏ đánh dấu đã nộp',
+      formHint: 'Ghi đúng số trên tờ khai đã nộp. [43] được tính sẵn theo công thức của tờ khai; sửa lại nếu tờ khai đã nộp khác.',
+      c22: '[22] Thuế còn được khấu trừ kỳ trước chuyển sang',
+      c25: '[25] Thuế GTGT được khấu trừ kỳ này',
+      c43: '[43] Thuế còn được khấu trừ chuyển kỳ sau',
+      invalid: 'Mỗi ô là số tiền nguyên, không âm, tối đa 14 chữ số.',
+      save: 'Lưu và đánh dấu đã nộp',
+      cancel: 'Hủy',
+      onlyAdmins: 'Chỉ chủ sở hữu và quản trị viên mới đánh dấu được tờ khai đã nộp.',
     },
     payment: {
       title: '{count, plural, other {Kiểm tra thanh toán không dùng tiền mặt (# hóa đơn)}}',

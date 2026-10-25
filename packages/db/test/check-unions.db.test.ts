@@ -97,6 +97,8 @@ import {
   TENANT_STATUSES,
   VOUCHER_TYPES,
   VAT_FILING_PERIODS,
+  VAT_RETURN_FILED_SOURCES,
+  VAT_RETURN_FILED_STATUSES,
   type Database,
 } from '../src/schema.ts';
 
@@ -182,6 +184,8 @@ const UNIONS = unions({
   'crove_finance.purchase_document.exchange_rate_source': EXCHANGE_RATE_SOURCES,
   'crove_finance.cash_voucher.voucher_type': VOUCHER_TYPES,
   'crove_finance.input_vat_check.outcome': INPUT_VAT_CHECK_OUTCOMES,
+  'crove_finance.vat_return_filed.status': VAT_RETURN_FILED_STATUSES,
+  'crove_finance.vat_return_filed.source': VAT_RETURN_FILED_SOURCES,
   'crove_finance.fixed_asset.kind': FIXED_ASSET_KINDS,
   'crove_finance.categorization_rule.match_kind': CATEGORIZATION_RULE_MATCH_KINDS,
   'crove_finance.portal_invoice_list.status': PORTAL_LIST_STATUSES,

@@ -6,11 +6,28 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { AmountInput } from '../components/amount-input.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, client, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
+import { periodParts } from '../lib/clients.ts';
 import { isZeroAmount } from '../lib/decimal.ts';
-import { DEDUCT_CHOICES, canMarkPayment, deductParams, defaultPeriod, periodKey, switchKind, yearOptions, type DeductChoice, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
+import {
+  DEDUCT_CHOICES,
+  canMarkFiled,
+  canMarkPayment,
+  carriedOutOf,
+  deductAmount,
+  deductParams,
+  defaultPeriod,
+  periodKey,
+  switchKind,
+  wholeDong,
+  yearOptions,
+  type DeductChoice,
+  type PeriodChoice,
+  type PeriodKind,
+} from '../lib/vat.ts';
 
 type Rate = (typeof VAT_RATES)[number];
 type Warning = (typeof VAT_WARNINGS)[number];
@@ -161,6 +178,154 @@ function PaymentChecks({ data, canMark }: { data: VatReport; canMark: boolean })
   );
 }
 
+// A return's period inside a sentence: "tháng 9/2026", "quý 3/2026".
+function useReturnPeriod() {
+  const t = useTranslations('vat.carry');
+  return (period: string) => {
+    const parts = periodParts(period);
+    if (!parts) return period;
+    return parts.kind === 'month' ? t('returnMonth', { month: String(parts.index), year: String(parts.year) }) : t('returnQuarter', { quarter: String(parts.index), year: String(parts.year) });
+  };
+}
+
+// [22] of the return (#1400): the [43] of the return filed for the period before, prefilled and editable, with where it
+// comes from. A missing previous return leaves it at 0, with a warning.
+function CarryForward({ data, text, onChange }: { data: VatReport; text: string; onChange: (text: string | null) => void }) {
+  const t = useTranslations('vat.carry');
+  const f = useFormat();
+  const periodLabel = useReturnPeriod();
+  const { amount, previous, lookedFor } = data.carryForward;
+  const value = wholeDong(text);
+  return (
+    <section aria-labelledby="vat-carry-title">
+      <h2 id="vat-carry-title" className="mb-1 text-base font-semibold text-foreground">
+        {t('title')}
+      </h2>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="text-xs">
+          <span className="text-subtle-foreground">{t('label')}</span>
+          <AmountInput aria-label={t('label')} className="mt-1 w-56 tabular-nums" value={text} onChange={(v) => onChange(v)} aria-invalid={value === null} />
+        </label>
+        {value !== null && value !== amount && (
+          <Button size="sm" variant="ghost" onClick={() => onChange(null)}>
+            {t('reset')}
+          </Button>
+        )}
+      </div>
+      {value === null && <ErrorText>{t('invalid')}</ErrorText>}
+      {previous ? (
+        <p className="mt-2 text-sm text-muted-foreground">
+          {t('fromPrevious', { period: periodLabel(previous.period), amount: f.money(previous.carriedOut), date: f.date(previous.markedAt.slice(0, 10)) })}
+        </p>
+      ) : (
+        <p className="mt-2 text-sm text-warning">{t('missing', { periods: lookedFor.map(periodLabel).join(t('or')) })}</p>
+      )}
+      {previous?.source === 'computed' && <p className="mt-1 text-sm text-warning">{t('fromComputed', { period: periodLabel(previous.period) })}</p>}
+      {value !== null && value !== amount && <p className="mt-1 text-xs text-subtle-foreground">{t('edited', { amount: f.money(amount) })}</p>}
+      <p className="mt-1 text-xs text-subtle-foreground">{t('note')}</p>
+    </section>
+  );
+}
+
+// The period's return as filed (#1400): owners and admins mark it filed with [22], [25] and [43] as on the return, which
+// the next period's [22] starts from, and the tax calendar marks it done; or take both marks back.
+function FiledReturn({ data, carried, deduct25, canFile }: { data: VatReport; carried: string | null; deduct25: string; canFile: boolean }) {
+  const t = useTranslations('vat.filed');
+  const f = useFormat();
+  const period = data.period.period;
+  const filed = data.filed;
+  const v35 = data.indicators.find((i) => i.code === '35')?.amount ?? '0';
+  const [form, setForm] = useState<{ c22: string; c25: string; c43: string; c43Typed: boolean } | null>(null);
+  const done = async () => {
+    setForm(null);
+    await Promise.all([queryClient.invalidateQueries({ queryKey: orpc.vat.period.key() }), queryClient.invalidateQueries({ queryKey: orpc.org.overview.key() })]);
+  };
+  // The period travels with each mutation, so switching period while one is in flight never marks another period.
+  const save = useMutation({
+    mutationFn: (v: { period: string; figures: { carriedIn: string; deductible: string; carriedOut: string } }) =>
+      client.vat.markReturn({ period: v.period, done: true, figures: v.figures }),
+    onSuccess: done,
+  });
+  const withdraw = useMutation({ mutationFn: (target: string) => client.vat.markReturn({ period: target, done: false }), onSuccess: done });
+  const open = () => {
+    const c22 = filed?.carriedIn ?? carried ?? data.carryForward.amount;
+    const c25 = filed?.deductible ?? deduct25;
+    setForm({ c22, c25, c43: filed?.carriedOut ?? carriedOutOf(v35, c25, c22), c43Typed: filed !== null });
+  };
+  // [43] follows [22] and [25] until the accountant types it.
+  const change = (field: 'c22' | 'c25' | 'c43', text: string) => {
+    if (!form) return;
+    const next = { ...form, [field]: text, c43Typed: form.c43Typed || field === 'c43' };
+    const c22 = wholeDong(next.c22);
+    const c25 = wholeDong(next.c25);
+    if (!next.c43Typed && c22 !== null && c25 !== null) next.c43 = carriedOutOf(v35, c25, c22);
+    setForm(next);
+  };
+  const figures = form ? { carriedIn: wholeDong(form.c22), deductible: wholeDong(form.c25), carriedOut: wholeDong(form.c43) } : null;
+  const valid = figures !== null && figures.carriedIn !== null && figures.deductible !== null && figures.carriedOut !== null;
+  const error = save.error ?? withdraw.error;
+  return (
+    <section aria-labelledby="vat-filed-title">
+      <h2 id="vat-filed-title" className="mb-1 text-base font-semibold text-foreground">
+        {t('title')}
+      </h2>
+      {filed ? (
+        <>
+          <p className="text-sm text-foreground">
+            {t('done', { date: f.date(filed.markedAt.slice(0, 10)), c22: f.money(filed.carriedIn), c25: f.money(filed.deductible), c43: f.money(filed.carriedOut) })}
+          </p>
+          {filed.source === 'computed' && <p className="mt-1 text-sm text-warning">{t('computedNote')}</p>}
+        </>
+      ) : (
+        <p className="text-sm text-muted-foreground">{t('none')}</p>
+      )}
+      {!canFile && <p className="mt-1 text-xs text-subtle-foreground">{t('onlyAdmins')}</p>}
+      {canFile && !form && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          <Button size="sm" variant={filed ? 'outline' : 'default'} onClick={open}>
+            {filed ? t('edit') : t('mark')}
+          </Button>
+          {filed && (
+            <Button size="sm" variant="ghost" disabled={withdraw.isPending} onClick={() => withdraw.mutate(period)}>
+              {withdraw.isPending ? <Spinner className="text-current" /> : null}
+              {t('withdraw')}
+            </Button>
+          )}
+        </div>
+      )}
+      {canFile && form && (
+        <form
+          className="mt-2 space-y-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (valid) save.mutate({ period, figures: { carriedIn: figures.carriedIn as string, deductible: figures.deductible as string, carriedOut: figures.carriedOut as string } });
+          }}>
+          <p className="text-xs text-subtle-foreground">{t('formHint')}</p>
+          <div className="flex flex-wrap gap-3">
+            {(['c22', 'c25', 'c43'] as const).map((field) => (
+              <label key={field} className="text-xs">
+                <span className="text-subtle-foreground">{t(field)}</span>
+                <AmountInput aria-label={t(field)} className="mt-1 w-56 tabular-nums" value={form[field]} onChange={(v) => change(field, v)} aria-invalid={wholeDong(form[field]) === null} />
+              </label>
+            ))}
+          </div>
+          {!valid && <ErrorText>{t('invalid')}</ErrorText>}
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" type="submit" disabled={!valid || save.isPending}>
+              {save.isPending ? <Spinner className="text-current" /> : null}
+              {t('save')}
+            </Button>
+            <Button size="sm" type="button" variant="ghost" onClick={() => setForm(null)}>
+              {t('cancel')}
+            </Button>
+          </div>
+        </form>
+      )}
+      {error && <ErrorText>{errorMessage(error)}</ErrorText>}
+    </section>
+  );
+}
+
 export function VatPage() {
   const t = useTranslations('vat');
   const f = useFormat();
@@ -180,6 +345,10 @@ export function VatPage() {
 
   // What [25] holds in the XML (#692, #917): 0 by default, the accountant's choice per download.
   const [deduct, setDeduct] = useState<DeductChoice>('none');
+  // [22] (#1400): the previous return's [43] as the server found it, until the accountant edits it for this period.
+  const [carriedEdit, setCarriedEdit] = useState<{ period: string; text: string } | null>(null);
+  const carriedText = carriedEdit?.period === period ? carriedEdit.text : (data?.carryForward.amount ?? '0');
+  const carried = wholeDong(carriedText);
   const download = async (path: string, filename: string, extra: Record<string, string> = {}) => {
     const response = await apiFetch(`${path}?${new URLSearchParams({ period, ...extra })}`);
     const url = URL.createObjectURL(await response.blob());
@@ -193,7 +362,8 @@ export function VatPage() {
     mutationFn: () => download('/api/export/vat.xlsx', t('exportFile', { period, org: getCurrentOrg() ?? 'org' })),
   });
   const exportXml = useMutation({
-    mutationFn: () => download('/api/export/vat-01gtgt.xml', t('exportXmlFile', { period, org: getCurrentOrg() ?? 'org' }), deductParams(deduct)),
+    mutationFn: () =>
+      download('/api/export/vat-01gtgt.xml', t('exportXmlFile', { period, org: getCurrentOrg() ?? 'org' }), { ...deductParams(deduct), carried: carried ?? '0' }),
   });
   const exportError = exportXlsx.error ?? exportXml.error;
 
@@ -217,7 +387,7 @@ export function VatPage() {
               size="lg"
               variant="outline"
               onClick={() => exportXml.mutate()}
-              disabled={exportXml.isPending || !data || !taxCode || wrongKind}
+              disabled={exportXml.isPending || !data || !taxCode || wrongKind || carried === null}
               title={org.data && !taxCode ? t('exportXmlNeedsTaxCode') : wrongKind ? wrongKindText : undefined}>
               {exportXml.isPending ? <Spinner className="text-current" /> : null}
               {t('exportXml')}
@@ -275,6 +445,7 @@ export function VatPage() {
         <ErrorText>{errorMessage(report.error)}</ErrorText>
       ) : data ? (
         <div className="space-y-8">
+          <CarryForward data={data} text={carriedText} onChange={(text) => setCarriedEdit(text === null ? null : { period, text })} />
           <section>
             <h2 className="mb-2 text-base font-semibold text-foreground">{t('indicatorsTitle')}</h2>
             <DataTable head={[t('columns.indicator'), t('columns.description'), t('columns.amount')]}>
@@ -303,6 +474,14 @@ export function VatPage() {
             )}
             {!isZeroAmount(otherSales) && <p className="mt-2 text-sm text-warning">{t('otherSales', { amount: f.money(otherSales) })}</p>}
           </section>
+
+          <FiledReturn
+            key={data.period.period}
+            data={data}
+            carried={carried}
+            deduct25={deductAmount(deduct, data.indicators.find((i) => i.code === '24')?.amount ?? '0', data.paymentChecks.suggested25)}
+            canFile={canMarkFiled(org.data?.role)}
+          />
 
           <PaymentChecks data={data} canMark={canMarkPayment(org.data?.role)} />
 
