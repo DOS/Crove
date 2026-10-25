@@ -588,6 +588,27 @@ export const en = {
     retry: 'Load again',
     loadFailed: "The members' job roles could not be loaded ({reason}). Load them again; until then, do not read the list as nobody holding a role.",
   },
+  approvalPreset: {
+    title: 'Who approves postings',
+    intro: 'Who may approve the proposals for the books (invoices, vouchers, journal entries) before they are posted.',
+    presets: {
+      founder: {
+        title: 'The business approves',
+        body: 'Owners, admins and the chief accountant can all approve. Suits a small business that keeps its own books.',
+      },
+      accountant: {
+        title: 'Only the chief accountant approves',
+        body: 'Only a member with the chief accountant role can approve; owners and admins no longer do. Suits a business with a chief accountant or an accounting firm.',
+      },
+    },
+    current: 'In force',
+    saveHint: 'Changing the rule needs two-factor authentication. The new rule applies at once, to proposals already waiting too.',
+    save: 'Save the rule',
+    saved: 'Approval rule changed: {rule}',
+    ownerOnly: 'Only an owner can change this rule.',
+    stepUp: 'change the approval rule to "{rule}"',
+    giveRole: 'Give the chief accountant role',
+  },
   workingHours: {
     title: 'Working hours and days off',
     intro: 'The hours you take appointments, in your time zone, and the days you are off. Each member sets their own.',

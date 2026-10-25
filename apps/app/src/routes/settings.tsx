@@ -12,6 +12,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
 import { ChartOfAccountsCard } from './accounts.tsx';
+import { ApprovalPresetCard, MEMBERS_CARD_ID } from './approval-preset.tsx';
 import { LegalEntitiesCard } from './legal-entities.tsx';
 import { MemberRolesRow } from './member-roles.tsx';
 import { WorkingHoursCard } from './working-hours.tsx';
@@ -1010,7 +1011,8 @@ export function SettingsPage() {
           </dl>
           {org.data?.role === 'owner' && org.data.inboundAddress && <RotateInboundAddress />}
         </Card>
-        <Card className="block p-4">
+        {/* Focusable, so the approval rule's refusal can take the reader to the role assignments (#1425). */}
+        <Card id={MEMBERS_CARD_ID} tabIndex={-1} className="block scroll-mt-20 p-4 outline-none">
           <p className="text-sm font-medium text-muted-foreground">{t('members')}</p>
           <ul className="mt-3 divide-y">
             {org.data?.members.map((m) => (
@@ -1061,6 +1063,10 @@ export function SettingsPage() {
             </>
           )}
         </Card>
+        {/* Who approves the ledger's proposals (#1425), with the finance module; every member sees it, owners switch it. */}
+        {getConfig().modules.includes('finance') && org.data && (
+          <ApprovalPresetCard key={`${org.data.slug}:${org.data.approvalPreset}`} preset={org.data.approvalPreset} isOwner={isOwner} />
+        )}
         {/* The member's own working hours and days off (#1313). */}
         {org.data && <WorkingHoursCard key={org.data.slug} canEdit={org.data.role !== 'viewer'} />}
         {/* The booking pages' event types (#1314), with the crm module. */}
