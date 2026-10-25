@@ -3,6 +3,7 @@
 // marks done here; one click opens the org. Each org's figures are read in that org on the server (me.clients), with
 // the Social figures of each client when Social is on (#1261); an org whose figures could not be read is one row that
 // says so, with a retry (#495).
+import type { ReactNode } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
@@ -18,6 +19,7 @@ import { LocaleSwitcher, useFormat, useLocaleSetting } from '../i18n/provider.ts
 import { clientForOrg, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { deadlineTone, periodParts, sortClients, type ClientDeadline } from '../lib/clients.ts';
+import { SM_UP, useMediaQuery } from '../lib/media.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { canMarkTaxDone, dueAcrossClients, type TaxDueRow } from '../lib/tax-calendar.ts';
 
@@ -127,6 +129,7 @@ export function ClientsPage() {
   // Each load reads every org on the server, one screen per user at a time (#495): refetched after a minute, not every
   // ten seconds, and a failed refetch keeps the list already shown.
   const clients = useQuery({ ...orpc.me.clients.queryOptions(), staleTime: 60_000 });
+  const wide = useMediaQuery(SM_UP);
   const finance = getConfig().modules.includes('finance');
   const social = getConfig().modules.includes('social');
   const rows = clients.data ? sortClients(clients.data.clients, locale) : [];
@@ -141,6 +144,53 @@ export function ClientsPage() {
   const dues = clients.data ? dueAcrossClients(clients.data.clients, locale) : [];
   const periodLabel = usePeriodLabel();
   const tt = useTranslations('taxCalendar');
+
+  // A client's figures (#1424), shown in the table's cells from sm up and in a card's lines on a phone.
+  type Row = (typeof rows)[number];
+  type Figures = NonNullable<Row['overview']>;
+  const pendingOf = (c: Row, o: Figures) =>
+    o.pendingProposals > 0 ? (
+      <Link to="/o/$slug/inbox" params={{ slug: c.slug }} className="font-medium text-link hover:underline">
+        {f.number(o.pendingProposals)}
+      </Link>
+    ) : (
+      <span className="text-subtle-foreground">0</span>
+    );
+  const failedOf = (o: Figures) =>
+    o.failedFiles > 0 ? <Badge variant="destructive">{f.number(o.failedFiles)}</Badge> : <span className="text-subtle-foreground">0</span>;
+  const activityOf = (o: Figures) =>
+    o.lastActivityAt ? f.dateTime(o.lastActivityAt) : <span className="text-subtle-foreground">{t('noActivity')}</span>;
+  const vatOf = (c: Row, o: Figures) => <Deadline deadline={o.vatDeadline} slug={c.slug} canChoose={c.role === 'owner' || c.role === 'admin'} />;
+  const nextOf = (o: Figures) =>
+    o.taxDues[0] ? (
+      <span className="block">
+        <span className="block">{tt(`obligations.${o.taxDues[0].obligation}`)}</span>
+        <span className="block text-xs text-subtle-foreground">{periodLabel(o.taxDues[0].period)}</span>
+        <DueWhen due={o.taxDues[0]} />
+      </span>
+    ) : (
+      <span className="text-subtle-foreground">{tt('nothingDue')}</span>
+    );
+  const socialOf = (c: Row, o: Figures) =>
+    o.modules.social ? <ClientSocialFigures slug={c.slug} figures={o.modules.social} /> : <span className="text-subtle-foreground">-</span>;
+  const companyOf = (c: Row) => (
+    <>
+      <Link to="/o/$slug/inbox" params={{ slug: c.slug }} className="font-medium text-foreground hover:text-link hover:underline">
+        {c.name}
+      </Link>
+      <Badge variant={c.role === 'owner' ? 'brand' : 'secondary'} className="ml-2 align-middle">
+        {root(`roles.${c.role}`)}
+      </Badge>
+    </>
+  );
+  const retry = (
+    <>
+      <span className="text-destructive">{t('loadError')}</span>{' '}
+      <Button size="sm" variant="link" className="h-auto p-0" onClick={() => void clients.refetch()} disabled={clients.isFetching}>
+        {t('retry')}
+      </Button>
+    </>
+  );
 
   return (
     <div className="min-h-full bg-background">
@@ -174,83 +224,67 @@ export function ClientsPage() {
           />
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <DataTable head={head}>
-                {rows.map((c) => {
-                  const company = (
-                    <TableCell className="px-4 py-3">
-                      <Link to="/o/$slug/inbox" params={{ slug: c.slug }} className="font-medium text-foreground hover:text-link hover:underline">
-                        {c.name}
-                      </Link>
-                      <Badge variant={c.role === 'owner' ? 'brand' : 'secondary'} className="ml-2 align-middle">
-                        {root(`roles.${c.role}`)}
-                      </Badge>
-                    </TableCell>
-                  );
-                  if (!c.overview) {
+            {wide ? (
+              <div className="overflow-x-auto">
+                <DataTable head={head}>
+                  {rows.map((c) => {
+                    const company = <TableCell className="px-4 py-3">{companyOf(c)}</TableCell>;
+                    if (!c.overview) {
+                      return (
+                        <TableRow key={c.orgId}>
+                          {company}
+                          <TableCell colSpan={head.length - 1} className="px-4 py-3">
+                            {retry}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }
+                    const o = c.overview;
                     return (
                       <TableRow key={c.orgId}>
                         {company}
-                        <TableCell colSpan={head.length - 1} className="px-4 py-3">
-                          <span className="text-destructive">{t('loadError')}</span>{' '}
-                          <Button size="sm" variant="link" className="h-auto p-0" onClick={() => void clients.refetch()} disabled={clients.isFetching}>
-                            {t('retry')}
-                          </Button>
-                        </TableCell>
+                        {social && <TableCell className="px-4 py-3 align-top">{socialOf(c, o)}</TableCell>}
+                        <TableCell className="px-4 py-3 tabular-nums">{pendingOf(c, o)}</TableCell>
+                        <TableCell className="px-4 py-3 tabular-nums">{failedOf(o)}</TableCell>
+                        <TableCell className="px-4 py-3 text-muted-foreground">{activityOf(o)}</TableCell>
+                        {finance && <TableCell className="px-4 py-3">{vatOf(c, o)}</TableCell>}
+                        {finance && <TableCell className="px-4 py-3">{nextOf(o)}</TableCell>}
                       </TableRow>
                     );
-                  }
-                  const socialFigures = c.overview.modules.social;
+                  })}
+                </DataTable>
+              </div>
+            ) : (
+              // A phone reads each client as one card (#1424): the table's figures, labelled, Social last.
+              <ul className="space-y-3">
+                {rows.map((c) => {
+                  const o = c.overview;
+                  const line = (label: string, value: ReactNode) => (
+                    <div className="flex items-start justify-between gap-3 py-1.5">
+                      <dt className="text-xs text-subtle-foreground">{label}</dt>
+                      <dd className="text-right text-sm tabular-nums">{value}</dd>
+                    </div>
+                  );
                   return (
-                    <TableRow key={c.orgId}>
-                      {company}
-                      {social && (
-                        <TableCell className="px-4 py-3 align-top">
-                          {socialFigures ? <ClientSocialFigures slug={c.slug} figures={socialFigures} /> : <span className="text-subtle-foreground">-</span>}
-                        </TableCell>
+                    <li key={c.orgId} className="rounded-xl border bg-card p-4">
+                      <div>{companyOf(c)}</div>
+                      {o ? (
+                        <dl className="mt-2 divide-y">
+                          {line(t('columns.pending'), pendingOf(c, o))}
+                          {line(t('columns.failed'), failedOf(o))}
+                          {finance && line(t('columns.vatDeadline'), vatOf(c, o))}
+                          {finance && line(t('columns.nextObligation'), nextOf(o))}
+                          {line(t('columns.lastActivity'), activityOf(o))}
+                          {social && line(t('columns.social'), socialOf(c, o))}
+                        </dl>
+                      ) : (
+                        <p className="mt-2 text-sm">{retry}</p>
                       )}
-                      <TableCell className="px-4 py-3 tabular-nums">
-                        {c.overview.pendingProposals > 0 ? (
-                          <Link to="/o/$slug/inbox" params={{ slug: c.slug }} className="font-medium text-link hover:underline">
-                            {f.number(c.overview.pendingProposals)}
-                          </Link>
-                        ) : (
-                          <span className="text-subtle-foreground">0</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 tabular-nums">
-                        {c.overview.failedFiles > 0 ? (
-                          <Badge variant="destructive">{f.number(c.overview.failedFiles)}</Badge>
-                        ) : (
-                          <span className="text-subtle-foreground">0</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="px-4 py-3 text-muted-foreground">
-                        {c.overview.lastActivityAt ? f.dateTime(c.overview.lastActivityAt) : <span className="text-subtle-foreground">{t('noActivity')}</span>}
-                      </TableCell>
-                      {finance && (
-                        <TableCell className="px-4 py-3">
-                          <Deadline deadline={c.overview.vatDeadline} slug={c.slug} canChoose={c.role === 'owner' || c.role === 'admin'} />
-                        </TableCell>
-                      )}
-                      {finance && (
-                        <TableCell className="px-4 py-3">
-                          {c.overview.taxDues[0] ? (
-                            <span className="block">
-                              <span className="block">{tt(`obligations.${c.overview.taxDues[0].obligation}`)}</span>
-                              <span className="block text-xs text-subtle-foreground">{periodLabel(c.overview.taxDues[0].period)}</span>
-                              <DueWhen due={c.overview.taxDues[0]} />
-                            </span>
-                          ) : (
-                            <span className="text-subtle-foreground">{tt('nothingDue')}</span>
-                          )}
-                        </TableCell>
-                      )}
-                    </TableRow>
+                    </li>
                   );
                 })}
-              </DataTable>
-            </div>
+              </ul>
+            )}
             {clients.data && clients.data.total > clients.data.clients.length && (
               <p className="mt-3 text-xs text-muted-foreground">{t('truncated', { shown: f.number(clients.data.clients.length), total: f.number(clients.data.total) })}</p>
             )}

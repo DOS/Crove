@@ -438,6 +438,14 @@ async function cancelHeld(ctx: CommandContext, booking: HeldBooking, type: Event
     await ctx.activity('kernel.party', booking.party_id, 'crm.booking.cancelled', `${BY_TEXT[by]} hủy lịch hẹn ${type.title} lúc ${wallTime(hours.timeZone, new Date(booking.starts_at).getTime())}`);
   }
   await queueBookingMails(ctx, 'cancelled', { ...booking, revision: booking.revision + 1 }, type, held, by === 'visitor');
+  // A visitor's cancel also gives the crm.scheduler agent a task (#1434): the next free slots, for a person to invite
+  // the client again. Its title names the type only, never the visitor: every member reads tasks. Tainted, as it comes
+  // from a visitor's action.
+  await ctx.emit('crm.booking.cancelled', {
+    booking_id: booking.id,
+    by,
+    ...(by === 'visitor' ? { agent_task: { title: `Khách hủy lịch hẹn: ${type.title}`.slice(0, 300), ref: { type: 'crm.booking', id: booking.id }, tainted: true } } : {}),
+  });
 }
 
 // Moves a held booking to [start, start + duration) when that is still a free slot of the type for every host it holds
