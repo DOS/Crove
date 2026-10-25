@@ -329,7 +329,7 @@ export const vi = {
     deptLabel: 'Phòng của',
     finance: {
       name: 'Tài chính',
-      body: 'AI Inbox, chứng từ, sổ nhật ký chung, sổ cái, hệ thống tài khoản TT133, nhà cung cấp, tờ khai VAT và số dư đầu kỳ.',
+      body: 'AI Inbox cho hoá đơn mua và bán, sổ nhật ký chung, sổ cái, báo cáo B01 và B02, phiếu thu chi, sao kê ngân hàng, tài sản, tờ khai GTGT xuất XML cho HTKK, xuất sang MISA SME, sổ riêng cho từng pháp nhân và khoá sổ theo tháng.',
       people: [
         { name: 'Chị Lan', initials: 'L', agent: false },
         { name: 'Agent Kế toán', initials: '', agent: true },
@@ -389,7 +389,7 @@ export const vi = {
     },
     social: {
       name: 'Social',
-      body: 'Lên lịch bài cho Facebook, LinkedIn, X, YouTube và TikTok. Mỗi kênh có các bước duyệt riêng, ảnh và video nằm trong thư viện chung.',
+      body: 'Lên lịch bài cho Facebook, Instagram, Threads, TikTok, YouTube, LinkedIn, X, Zalo OA, Google Business và nhiều kênh khác. Mỗi kênh có các bước duyệt riêng, ảnh và video nằm trong thư viện chung.',
       people: [
         { name: 'Anh Minh', initials: 'M', agent: false },
         { name: 'Agent Social', initials: '', agent: true },
@@ -405,6 +405,24 @@ export const vi = {
         { label: 'T4 21/10', today: false, post: null },
         { label: 'T5 22/10', today: false, post: null },
       ],
+    },
+    crm: {
+      name: 'CRM và lịch hẹn',
+      body: 'Trang đặt lịch công khai cho từng loại cuộc hẹn. Khách tự chọn giờ trống, hai bên nhận email xác nhận kèm tệp lịch, lịch nhắc gửi tự động, và khách tự dời hoặc huỷ bằng liên kết dùng một lần.',
+      people: [{ name: 'Chị Hoa', initials: 'H', agent: false }],
+      pageTitle: 'Tư vấn mua gạo sỉ',
+      pageSub: '30 phút, tại kho Long An',
+      slotsLabel: 'Giờ còn trống tuần 19/10',
+      days: [
+        { label: 'T2 19/10', slots: ['09:00', '10:30', '14:00'] },
+        { label: 'T3 20/10', slots: ['08:30', '14:00', '15:30'], picked: '14:00' },
+        { label: 'T4 21/10', slots: ['09:30'] },
+        { label: 'T5 22/10', slots: [] },
+      ],
+      noSlots: 'Kín lịch',
+      pickedLabel: 'Đã chọn',
+      booked: { title: 'Lịch hẹn mới', who: 'Cty TNHH Gạo Sạch Miền Tây', when: '14:00, T3 20/10/2026', state: 'Đã xác nhận' },
+      suggest: 'Khách nhắn "chiều thứ Ba được không?": AI gợi ý 14:00 hoặc 15:30, Chị Hoa xem rồi gửi trả lời.',
     },
   },
   trust: {
