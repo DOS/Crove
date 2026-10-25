@@ -10,7 +10,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
-import type { MetricsInput, MetricsResult, Publisher, PublishResult, RecentPostsInput, RecentPostsResult } from '@crove/channel';
+import { ThreadsPublisher, YouTubePublisher, ZaloOaPublisher, type Fetch, type MetricsInput, type MetricsResult, type Publisher, type PublishResult, type RecentPostsInput, type RecentPostsResult } from '@crove/channel';
 import { socialCommands, socialQueries, sweepExternalPosts, type ExternalPostRow, type MetricsRow } from '@crove/mod-social';
 import { reportView, type ReportPage } from '../src/report-link.ts';
 
@@ -81,11 +81,11 @@ suite('social posts published outside Crove (#1054)', () => {
     return { orgId, owner, viewer };
   }
 
-  async function connect(o: Org, account: string) {
-    const sealed = vault.seal(JSON.stringify({ accessToken: 'sbx_test' }), { orgId: o.orgId, provider: 'sandbox', externalAccountId: account });
+  async function connect(o: Org, account: string, provider = 'sandbox', secret: Record<string, string> = { accessToken: 'sbx_test' }) {
+    const sealed = vault.seal(JSON.stringify(secret), { orgId: o.orgId, provider, externalAccountId: account });
     const { connectionId } = await api.execute<{ connectionId: string }>(
       'kernel.channel.connect',
-      { provider: 'sandbox', externalAccountId: account, displayName: account, scopes: ['publish'], expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } },
+      { provider, externalAccountId: account, displayName: account, scopes: ['publish'], expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } },
       { actor: asUser(o.owner), orgId: o.orgId },
     );
     return connectionId;
@@ -399,5 +399,74 @@ suite('social posts published outside Crove (#1054)', () => {
     // The link list says which links count them.
     const links = await api.query<{ includeExternal: boolean }[]>('social.report_link.list', {}, { actor: asUser(o.owner), orgId: o.orgId });
     expect(links.map((l) => l.includeExternal).sort()).toEqual([false, true, true, true]);
+  });
+
+  it('brings in YouTube, Threads and Zalo OA posts through their adapters, without the ones Crove published (#1431)', async () => {
+    const o = await org();
+    const channel = 'UCabcdefghijklmnopqrstuv';
+    const yt = await connect(o, channel, 'youtube', { accessToken: 'ya29.test', refreshToken: '1//test' });
+    const th = await connect(o, '17841400000000777', 'threads', { accessToken: 'threads-test' });
+    const za = await connect(o, '1234567890', 'zalo_oa', { accessToken: 'zalo-test', refreshToken: 'zalo-refresh-test' });
+    await published(o, yt, 'aaaaaaaaaa1', 2, { views: 100 });
+    await published(o, th, '18100000000000010', 1, { views: 40 });
+    await published(o, za, '39c07ccbe78e0ed0579f', 1, { views: 5 });
+    const before = await totals(o, { days: 30 });
+    expect(before).toMatchObject({ posts: 3, metrics: { views: 145 } });
+
+    // Recorded answers in the platforms' documented shapes; Zalo refuses the token once zaloExpired is set.
+    let zaloExpired = false;
+    const at = (days: number) => new Date(Date.now() - days * DAY);
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    const fetchImpl: Fetch = async (input) => {
+      const url = new URL(input);
+      const where = `${url.host}${url.pathname}`;
+      if (where === 'www.googleapis.com/youtube/v3/channels') return json({ items: [{ id: channel, contentDetails: { relatedPlaylists: { uploads: `UU${channel.slice(2)}` } } }] });
+      if (where === 'www.googleapis.com/youtube/v3/playlistItems') {
+        const item = (videoId: string, days: number) => ({ snippet: { title: `Video ${videoId}`, publishedAt: at(days).toISOString(), resourceId: { videoId } }, contentDetails: { videoId, videoPublishedAt: at(days).toISOString() }, status: { privacyStatus: 'public' } });
+        return json({ items: [item('bbbbbbbbbb2', 1), item('aaaaaaaaaa1', 2)] });
+      }
+      if (where === 'www.googleapis.com/youtube/v3/videos') return json({ items: [{ id: url.searchParams.get('id'), statistics: { viewCount: '70', likeCount: '7' } }] });
+      if (where === 'graph.threads.net/v1.0/17841400000000777/threads') {
+        const post = (id: string, days: number) => ({ id, media_type: 'TEXT_POST', text: `Threads ${id}`, timestamp: at(days).toISOString().replace(/\.\d{3}Z$/, '+0000'), permalink: `https://www.threads.com/@shop/post/${id}`, is_reply: false });
+        return json({ data: [post('18100000000000011', 1), post('18100000000000010', 1)], paging: { cursors: { after: 'end' } } });
+      }
+      if (where === 'graph.threads.net/v1.0/18100000000000011/insights') return json({ data: [{ name: 'views', values: [{ value: 30 }] }, { name: 'likes', values: [{ value: 3 }] }] });
+      if (where === 'openapi.zalo.me/v2.0/article/getslice') {
+        if (zaloExpired) return json({ error: -216, message: 'Access token is invalid' });
+        const media = (id: string, type: string) => ({ id, type, title: `Zalo ${id}`, status: 'show', create_date: at(1).getTime(), link_view: `https://oa.zalo.me/${id}` });
+        const medias = url.searchParams.get('type') === 'video' ? [media('16ec49edd2a83bf662b', 'video')] : [media('39c07ccbe78e0ed0579f', 'normal'), media('39c07ccbe78e0ed05701', 'normal')];
+        return json({ error: 0, message: 'Success', data: { medias, total: medias.length } });
+      }
+      if (where === 'openapi.zalo.me/v2.0/article/getdetail') return json({ error: 0, data: { id: url.searchParams.get('id'), total_view: url.searchParams.get('id') === '16ec49edd2a83bf662b' ? 11 : 9, total_share: 1 } });
+      return json({ error: { message: `no answer for ${where}` } }, 500);
+    };
+    const publishers = {
+      youtube: new YouTubePublisher({ clientId: '123456789012-abcdefgh12345678.apps.googleusercontent.com', clientSecret: 'test-google-secret-not-real' }, fetchImpl),
+      threads: new ThreadsPublisher(fetchImpl),
+      zalo_oa: new ZaloOaPublisher({ appId: '4318000000000000001', appSecret: 'test-zalo-secret-not-real' }, fetchImpl),
+    };
+    const done = await sweepExternalPosts({ runtime: worker, broker: vault, workerDb, publishers });
+    expect(done).toMatchObject({ imported: 3, expired: 0, measured: 4 });
+    const rows = await admin(async (c) => (await c.query<{ external_post_id: string; excerpt: string; permalink: string | null }>('SELECT external_post_id, excerpt, permalink FROM crove_social.external_post WHERE org_id = $1 ORDER BY external_post_id', [o.orgId])).rows);
+    expect(rows).toEqual([
+      { external_post_id: '16ec49edd2a83bf662b', excerpt: 'Zalo 16ec49edd2a83bf662b', permalink: 'https://oa.zalo.me/16ec49edd2a83bf662b' },
+      { external_post_id: '18100000000000011', excerpt: 'Threads 18100000000000011', permalink: 'https://www.threads.com/@shop/post/18100000000000011' },
+      { external_post_id: '39c07ccbe78e0ed05701', excerpt: 'Zalo 39c07ccbe78e0ed05701', permalink: 'https://oa.zalo.me/39c07ccbe78e0ed05701' },
+      { external_post_id: 'bbbbbbbbbb2', excerpt: 'Video bbbbbbbbbb2', permalink: 'https://www.youtube.com/watch?v=bbbbbbbbbb2' },
+    ]);
+
+    // Off, the totals are Crove's alone; on, the four outside posts count once each, on their channels.
+    expect(await totals(o, { days: 30 })).toEqual(before);
+    const on = await totals(o, { days: 30, includeExternal: true });
+    expect(on).toMatchObject({ posts: 7, metrics: { views: 265, reactions: 10 } });
+    expect(new Map(on.channels.map((c) => [c.provider, c.posts]))).toEqual(new Map([['youtube', 2], ['threads', 2], ['zalo_oa', 3]]));
+
+    // A token Zalo refuses marks that channel expired at the next bring-in; what came before stays.
+    zaloExpired = true;
+    await admin((c) => c.query("UPDATE crove_social.external_import SET ran_at = now() - interval '7 hours' WHERE org_id = $1", [o.orgId]));
+    expect((await sweepExternalPosts({ runtime: worker, broker: vault, workerDb, publishers })).expired).toBe(1);
+    const status = await admin(async (c) => (await c.query<{ id: string; status: string }>('SELECT id, status FROM crove_kernel.channel_connection WHERE org_id = $1', [o.orgId])).rows);
+    expect(new Map(status.map((r) => [r.id, r.status]))).toEqual(new Map([[yt, 'active'], [th, 'active'], [za, 'expired']]));
+    expect(await admin(async (c) => (await c.query('SELECT count(*)::int AS n FROM crove_social.external_post WHERE channel_connection_id = $1', [za])).rows[0])).toEqual({ n: 2 });
   });
 });

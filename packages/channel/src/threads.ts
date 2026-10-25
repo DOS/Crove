@@ -12,9 +12,31 @@
 // First comment (#609): a reply to the account's own post, made the same way (a TEXT container with reply_to_id, then
 // threads_publish); replying needs threads_manage_replies.
 import { createHash } from 'node:crypto';
-import type { AccountMetricsInput, AccountMetricsResult, CommentInput, CommentResult, RepostInput, ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+import type {
+  AccountMetricsInput,
+  AccountMetricsResult,
+  CommentInput,
+  CommentResult,
+  RepostInput,
+  ConnectedAccount,
+  MetricName,
+  MetricsInput,
+  MetricsResult,
+  Publisher,
+  PublishInput,
+  PublishResult,
+  ReconcileInput,
+  ReconcileResult,
+  RecentPost,
+  RecentPostsInput,
+  RecentPostsResult,
+  Refresher,
+  RetrySafety,
+  StatusInput,
+} from './index.ts';
 import { AUDIENCE_BREAKDOWNS, AUDIENCE_MIN_FOLLOWERS, audienceOf, audienceSlices, type Audience, type AudienceBreakdown, type AudienceSlice } from './audience.ts';
 import { commentResult } from './comment.ts';
+import { graphTime, pagingCursor, platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 import { QUOTA_RETRY_MS, quotaExhausted } from './instagram.ts';
@@ -39,6 +61,10 @@ const CHECK_AFTER_SECONDS = 30;
 const NUMERIC_ID = /^\d{1,32}$/;
 // Threads takes 2 to 20 items in a carousel.
 const CAROUSEL_MAX = 20;
+// Where a Threads post's page may be (#1431): Meta's answers name threads.com, older ones threads.net.
+const THREADS_POST_HOSTS = ['threads.com', 'threads.net'] as const;
+// Posts one page of GET /{user}/threads holds at most (Meta's maximum).
+const RECENT_PAGE = 100;
 
 export interface ThreadsAppConfig {
   appId: string;
@@ -203,6 +229,12 @@ function threadsResult(error: unknown): PublishResult {
   return { kind: 'rejected', error: 'bad_request', ...base };
 }
 
+// One page of GET /{user}/threads.
+interface ThreadsListAnswer {
+  data?: { id?: unknown; text?: unknown; permalink?: unknown; timestamp?: unknown; media_type?: unknown; is_reply?: unknown }[];
+  paging?: { cursors?: { after?: unknown }; next?: unknown };
+}
+
 const textOf = (content: { body: string; linkUrl: string | null }) => {
   const body = content.body.trim();
   return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
@@ -341,6 +373,52 @@ export class ThreadsPublisher implements Publisher {
     }
     if (shared !== undefined) metrics.shares = shared;
     return { metrics };
+  }
+
+  // The account's own posts since a date (#1431): `GET /{threads-user-id}/threads` under threads_basic, paged by its
+  // after cursor, newest first, at most RECENT_POSTS_MAX_DAYS back. Meta lists the user's posts there and their replies
+  // on an endpoint of their own; a reply all the same (is_reply, a field of every Threads media) is skipped, and so is
+  // a repost (media_type REPOST_FACADE), which is someone else's post. A quote post is the account's own. A page after
+  // the first that fails ends the listing with what came before it.
+  async listRecentPosts(input: RecentPostsInput): Promise<RecentPostsResult> {
+    const token = tokenIn(input.secret);
+    if (!token) return { refused: 'token_expired' };
+    if (!NUMERIC_ID.test(input.externalAccountId)) return null;
+    const since = recentSince(input.since);
+    const posts: RecentPost[] = [];
+    let after: string | null = null;
+    for (let page = 0; page < RECENT_PAGES_MAX && posts.length < RECENT_POSTS_MAX; page++) {
+      let answer: ThreadsListAnswer;
+      try {
+        answer = await this.client.call<ThreadsListAnswer>('GET', `${VERSION}/${input.externalAccountId}/threads`, {
+          token,
+          params: { fields: 'id,text,permalink,timestamp,media_type,is_reply', since: String(Math.floor(since.getTime() / 1000)), limit: String(RECENT_PAGE), ...(after ? { after } : {}) },
+        });
+      } catch (error) {
+        if (page > 0) break;
+        const result = threadsResult(error);
+        if (result.kind === 'rejected' && (result.error === 'token_expired' || result.error === 'permission')) return { refused: result.error };
+        return null;
+      }
+      const data = Array.isArray(answer.data) ? answer.data : [];
+      let older = false;
+      for (const p of data) {
+        const id = typeof p.id === 'string' || typeof p.id === 'number' ? String(p.id) : '';
+        const at = graphTime(p.timestamp);
+        if (!NUMERIC_ID.test(id) || !at) continue;
+        if (at < since) {
+          older = true;
+          continue;
+        }
+        if (p.media_type === 'REPOST_FACADE' || p.is_reply === true) continue;
+        posts.push({ externalId: id, text: typeof p.text === 'string' ? p.text : '', permalink: platformLink(p.permalink, THREADS_POST_HOSTS), publishedAt: at });
+      }
+      // Meta's docs show the after cursor without a next address, so a full page with a cursor is read on as well.
+      const more = typeof answer.paging?.next === 'string' || data.length >= RECENT_PAGE;
+      after = more ? pagingCursor(answer.paging?.cursors?.after) : null;
+      if (older || !after) break;
+    }
+    return { posts: posts.slice(0, RECENT_POSTS_MAX) };
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {

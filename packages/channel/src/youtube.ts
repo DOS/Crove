@@ -16,9 +16,32 @@
 // units), with the force-ssl scope Crove already asks for. playlists() lists the channel's own playlists
 // (playlists.list mine=true, one quota unit a page) for the composer's picker, through options() (#1131).
 import { CHANNEL_OPTIONS_MAX, OptionList, optionCallSignal, optionName, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
-import type { CommentInput, CommentResult, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, PlaylistInput, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import type {
+  CommentInput,
+  CommentResult,
+  ConnectedAccount,
+  MetricName,
+  AccountMetricsInput,
+  AccountMetricsResult,
+  MetricsInput,
+  MetricsResult,
+  PlaylistInput,
+  Publisher,
+  PublishInput,
+  PublishResult,
+  ReconcileInput,
+  ReconcileResult,
+  RecentPost,
+  RecentPostsInput,
+  RecentPostsResult,
+  Refresher,
+  RemoveInput,
+  RemoveResult,
+  RetrySafety,
+} from './index.ts';
 import { coverImageType, videoCoverOf } from './cover.ts';
 import { commentResult, removeResult } from './comment.ts';
+import { platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -36,6 +59,12 @@ export const YOUTUBE_PLAYLIST_ID = /^PL[A-Za-z0-9_-]{16,32}$/;
 // Playlists one page of playlists.list holds (its maximum); the longest page token followed.
 const PLAYLISTS_PAGE = 50;
 const PAGE_TOKEN_MAX = 200;
+// A channel's uploads playlist: UU and the channel id's 22 characters.
+const UPLOADS_ID = /^UU[A-Za-z0-9_-]{22}$/;
+// Items one page of playlistItems.list holds (its maximum).
+const UPLOADS_PAGE = 50;
+// Where a video's page is (#1431); the adapter writes the watch address itself.
+const YOUTUBE_POST_HOSTS = ['youtube.com', 'youtu.be'] as const;
 // Google's refusals for the project's quota or a burst, which come as 403 too.
 const QUOTA_REASONS = ['quotaExceeded', 'rateLimitExceeded', 'userRateLimitExceeded', 'dailyLimitExceeded'];
 const titled = (list: OptionList) => list.options.map((o) => ({ id: o.id, title: o.name }));
@@ -301,7 +330,12 @@ const tagsOf = (settings: Readonly<Record<string, unknown>>): string[] =>
   Array.isArray(settings.tags) ? settings.tags.filter((t): t is string => typeof t === 'string').map((t) => t.replace(/[<>]/g, '').trim()).filter(Boolean) : [];
 
 interface PlaylistItems {
-  items?: { snippet?: { title?: unknown; description?: unknown; publishedAt?: unknown; resourceId?: { videoId?: unknown } } }[];
+  items?: {
+    snippet?: { title?: unknown; description?: unknown; publishedAt?: unknown; resourceId?: { videoId?: unknown } };
+    contentDetails?: { videoId?: unknown; videoPublishedAt?: unknown };
+    status?: { privacyStatus?: unknown };
+  }[];
+  nextPageToken?: unknown;
 }
 
 // YouTube keeps a description as sent, but its line endings and outer spaces may differ.
@@ -547,6 +581,68 @@ export class YouTubePublisher implements Publisher {
       if (error instanceof YouTubeError && error.status === 401) return { refused: 'token_expired' };
       return null;
     }
+  }
+
+  // The channel's own videos since a date (#1431), Shorts among them, under youtube.readonly: channels.list (mine,
+  // contentDetails) names the uploads playlist, then playlistItems.list reads it 50 items a page, following
+  // nextPageToken. Each call costs one quota unit, so a listing costs at most 1 + RECENT_PAGES_MAX units. The uploads
+  // playlist lists the newest upload first, so the listing stops at the first item added before since; a video counts
+  // from when it was published (videoPublishedAt), and a private one (not out yet, or taken back) is left out. A page
+  // after the first that fails ends the listing with what came before it.
+  async listRecentPosts(input: RecentPostsInput): Promise<RecentPostsResult> {
+    const s = youtubeSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!CHANNEL_ID.test(input.externalAccountId)) return null;
+    const since = recentSince(input.since);
+    const refusal = (error: unknown): RecentPostsResult => {
+      if (error instanceof YouTubeError && error.status === 401) return { refused: 'token_expired' };
+      // The project's daily quota or a burst limit is not the channel's refusal: try again later.
+      if (error instanceof YouTubeError && (error.status === 429 || QUOTA_REASONS.includes(error.reason ?? ''))) return null;
+      if (error instanceof YouTubeError && error.status === 403) return { refused: 'permission' };
+      return null;
+    };
+    let uploads: string;
+    try {
+      const answer = await this.client.call<ChannelList>('GET', `${API}/channels?part=contentDetails&mine=true`, s.accessToken);
+      const channel = (answer.body?.items ?? []).find((i) => i.id === input.externalAccountId);
+      const id = channel?.contentDetails?.relatedPlaylists?.uploads;
+      if (typeof id !== 'string' || !UPLOADS_ID.test(id)) return null;
+      uploads = id;
+    } catch (error) {
+      return refusal(error);
+    }
+    const time = (v: unknown) => (typeof v === 'string' && v.length <= 40 && Number.isFinite(Date.parse(v)) ? new Date(Date.parse(v)) : null);
+    const posts: RecentPost[] = [];
+    let pageToken: string | null = null;
+    for (let page = 0; page < RECENT_PAGES_MAX && posts.length < RECENT_POSTS_MAX; page++) {
+      let answer: PlaylistItems | null;
+      try {
+        const query: string = `part=snippet,contentDetails,status&maxResults=${UPLOADS_PAGE}&playlistId=${uploads}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`;
+        answer = (await this.client.call<PlaylistItems>('GET', `${API}/playlistItems?${query}`, s.accessToken)).body;
+      } catch (error) {
+        if (page > 0) break;
+        return refusal(error);
+      }
+      let older = false;
+      for (const item of answer?.items ?? []) {
+        const id = item.contentDetails?.videoId ?? item.snippet?.resourceId?.videoId;
+        const added = time(item.snippet?.publishedAt);
+        const at = time(item.contentDetails?.videoPublishedAt) ?? added;
+        if (typeof id !== 'string' || !VIDEO_ID.test(id) || !at) continue;
+        if ((added ?? at) < since) {
+          older = true;
+          continue;
+        }
+        if (at < since || item.status?.privacyStatus === 'private') continue;
+        const title = typeof item.snippet?.title === 'string' ? item.snippet.title : '';
+        const description = typeof item.snippet?.description === 'string' ? item.snippet.description : '';
+        posts.push({ externalId: id, text: [title, description].filter(Boolean).join('\n\n'), permalink: platformLink(`https://www.youtube.com/watch?v=${id}`, YOUTUBE_POST_HOSTS), publishedAt: at });
+      }
+      const next = answer?.nextPageToken;
+      pageToken = typeof next === 'string' && next && next.length <= PAGE_TOKEN_MAX ? next : null;
+      if (older || !pageToken) break;
+    }
+    return { posts: posts.slice(0, RECENT_POSTS_MAX) };
   }
 
   // The channel's latest uploads with the same title in the window.
