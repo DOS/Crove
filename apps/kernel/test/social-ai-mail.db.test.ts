@@ -57,6 +57,8 @@ suite('AI drafts from a forwarded mail through the API (#779)', () => {
   const member: Account = { subject: randomUUID(), email: 'member@ai-mail.test', session: randomUUID(), userId: '' };
   const viewer: Account = { subject: randomUUID(), email: 'viewer@ai-mail.test', session: randomUUID(), userId: '' };
   const other: Account = { subject: randomUUID(), email: 'other@ai-mail.test', session: randomUUID(), userId: '' };
+  // A member limited to one branch's books (the external accountant of #1540): a mail has no legal entity.
+  const accountant: Account = { subject: randomUUID(), email: 'accountant@ai-mail.test', session: randomUUID(), userId: '' };
   let org = { slug: '', orgId: '' };
   let otherOrg = { slug: '', orgId: '' };
   let channel = '';
@@ -131,7 +133,7 @@ suite('AI drafts from a forwarded mail through the API (#779)', () => {
     const vault = new CredentialVault([parseVaultKey(randomBytes(32).toString('base64'))]);
     app = createHttpApp({ config, runtime, store, authenticate: createAuthenticator(config, db), pool, aiEnabled: true, channels: { broker: vault, sandbox: true }, socialWriter: socialDrafter(writer, store) });
 
-    for (const who of [owner, member, viewer, other]) {
+    for (const who of [owner, member, viewer, other, accountant]) {
       const me = await rpc('me/get', await tokenFor(who), undefined, { slug: null });
       expect(me.status).toBe(200);
       who.userId = String(me.body?.userId);
@@ -140,7 +142,11 @@ suite('AI drafts from a forwarded mail through the API (#779)', () => {
     org = { slug: String(created.body?.slug), orgId: String(created.body?.orgId) };
     const second = await rpc('org/create', await tokenFor(other), { name: 'Tiệm khác', idempotencyKey: randomUUID() }, { slug: null });
     otherOrg = { slug: String(second.body?.slug), orgId: String(second.body?.orgId) };
-    await admin((c) => c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member'), ($1, $3, 'viewer')`, [org.orgId, member.userId, viewer.userId]));
+    await admin((c) => c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member'), ($1, $3, 'viewer'), ($1, $4, 'member')`, [org.orgId, member.userId, viewer.userId, accountant.userId]));
+    await admin(async (c) => {
+      const branch = (await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh', 'branch', $2) RETURNING id`, [org.orgId, owner.userId])).rows[0]?.id;
+      await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4)`, [org.orgId, accountant.userId, branch, owner.userId]);
+    });
     channel = String((await rpc('channels/connectSandbox', await tokenFor(owner), { displayName: 'Trang của tiệm', key: randomUUID() })).body?.connectionId);
   });
 
@@ -204,5 +210,17 @@ suite('AI drafts from a forwarded mail through the API (#779)', () => {
     expect(asked).toHaveLength(count);
     // Neither does the other org's mail show in this org's list.
     expect(JSON.stringify((await rpc('inbound/recent', await tokenFor(owner), undefined)).body)).not.toContain(theirs);
+  });
+
+  it('gives a member limited to some legal entities no mail, no text and no draft from one (#1540)', async () => {
+    const mine = await receive(org.orgId, 'Hợp đồng chi nhánh', 'Nội dung chỉ chủ doanh nghiệp nên đọc');
+    const token = await tokenFor(accountant);
+    // The scope is real: the owner sees the mail, the accountant sees none.
+    expect(JSON.stringify((await rpc('inbound/recent', await tokenFor(owner), undefined)).body)).toContain(mine);
+    expect(await rpc('inbound/recent', token, undefined)).toMatchObject({ status: 200, body: [] });
+    // A draft from the mail's id finds no mail, and the model is never asked.
+    const count = asked.length;
+    expect(await rpc('social/posts/draftWithAi', token, { brief: '', connectionIds: [channel], inboundMessageId: mine })).toMatchObject({ status: 404, body: { code: 'NOT_FOUND' } });
+    expect(asked).toHaveLength(count);
   });
 });
