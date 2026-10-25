@@ -5,7 +5,7 @@
 import { sql } from 'kysely';
 import type { QueryContext } from '@crove/kernel-runtime';
 import { connectionInScope, postInScope, type ChannelScope } from './channel-access.ts';
-import { likeTerm } from './library.ts';
+import { searchMatch } from './library.ts';
 
 export interface PostFilter {
   from?: string | undefined;
@@ -80,10 +80,11 @@ export function postFilterQuery(ctx: Pick<QueryContext, 'trx' | 'orgId' | 'actor
     }
   }
   if (input.labelId) q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.post_label pl WHERE pl.org_id = p.org_id AND pl.post_id = p.id AND pl.label_id = ${input.labelId}::uuid)`);
+  // Without marks too (#1360): "dien thoai" finds "Điện thoại" in the stored folded texts (search_text).
   if (input.search) {
-    const term = likeTerm(input.search);
+    const s = input.search;
     q = q.where(
-      sql<boolean>`(p.body ILIKE ${term} OR p.title ILIKE ${term} OR EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND (v.body ILIKE ${term} OR v.title ILIKE ${term})))`,
+      sql<boolean>`(${searchMatch(s, sql`p.search_text`, [sql`p.body`, sql`p.title`])} OR EXISTS (SELECT 1 FROM crove_social.post_variant v WHERE v.org_id = p.org_id AND v.post_id = p.id AND ${mine} AND ${searchMatch(s, sql`v.search_text`, [sql`v.body`, sql`v.title`])}))`,
     );
   }
   if (input.from || input.to) {
