@@ -485,9 +485,11 @@ function performanceOf(raw: unknown, first: string, last: string): DailyPerforma
         if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) continue;
         const key = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
         if (key < first || key > last) continue;
-        if (v.value !== undefined && (typeof v.value !== 'string' || !COUNT.test(v.value))) return null;
+        // An int64 as a string, as documented; a plain number is taken too when it is a whole count.
+        const count = typeof v.value === 'number' ? (Number.isSafeInteger(v.value) && v.value >= 0 ? v.value : null) : typeof v.value === 'string' && COUNT.test(v.value) ? Number(v.value) : v.value === undefined ? 0 : null;
+        if (count === null) return null;
         const figures = (out[key] ??= { calls: 0, directions: 0, websiteClicks: 0, views: 0 });
-        figures[name] += v.value === undefined ? 0 : Number(v.value);
+        figures[name] += count;
       }
     }
   }

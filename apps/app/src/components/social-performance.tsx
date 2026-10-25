@@ -56,7 +56,7 @@ export function ProfilePerformance({ days, names }: { days: number; names: Map<s
   const t = useTranslations('social.performance');
   const trends = useQuery(orpc.social.accounts.trends.queryOptions({ input: { days } }));
   const list = (trends.data ?? []).flatMap((trend) => {
-    const sum = sumDays(trend.performance ?? []);
+    const sum = sumDays(trend.performance);
     return sum ? [{ connectionId: trend.connectionId, provider: trend.provider, ...sum }] : [];
   });
   if (list.length === 0) return null;
