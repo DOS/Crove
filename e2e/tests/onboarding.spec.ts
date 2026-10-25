@@ -21,7 +21,7 @@ test('a firm adds a client company by tax code, then opens the form again for th
     await expect(page.getByRole('button', { name: 'Tra cứu' })).toHaveCount(0);
     // Why the tax code matters stays behind the info button (#1521).
     const about = page.getByText('Hóa đơn ghi mã số thuế này ở phần người bán sẽ được hạch toán là hóa đơn bán ra.');
-    await expect(about).toHaveCount(0);
+    await expect(about).toBeHidden();
     await page.getByRole('button', { name: 'Mã số thuế dùng để làm gì' }).click();
     await expect(about).toBeVisible();
     // A value that is not a tax code is refused before anything is created.
