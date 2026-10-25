@@ -3,7 +3,7 @@
 // "AI calls only in packages/agent"); `@orpc/server` serves the RPC routes only in apps/kernel (`@orpc/contract`,
 // `@orpc/client` and `@orpc/tanstack-query` stay free); `@base-ui/*` is wrapped only by packages/ui. `@ai-sdk/gateway`
 // (a hosted gateway that a string model id routes to) is used nowhere. A package's own tests are part of its home.
-// String model ids (the other half of the §5.4 row) are not checked here.
+// String model ids (the other half of the §5.4 row) are checked in model-ids.test.ts.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
