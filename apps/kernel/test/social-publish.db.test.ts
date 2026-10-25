@@ -661,6 +661,62 @@ suite('social publishing on PostgreSQL (S4)', () => {
     expect(await runPublishJob(deps, o.orgId, next.id, 'linkedin')).toMatchObject({ status: 'published' });
     expect(sent).toBe(1);
   });
+
+  it("paces a LinkedIn page's posts against its member's shared daily limit, apart from another member's pages (#1096)", async () => {
+    const o = await org();
+    const other = await person('admin');
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'admin')", [o.orgId, other]));
+    const connectAs = async (userId: string, provider: 'linkedin' | 'linkedin_page', account: string) => {
+      const sealed = vault.seal(JSON.stringify({ accessToken: `li-${userId.slice(0, 4)}` }), { orgId: o.orgId, provider, externalAccountId: account });
+      const input = { provider, externalAccountId: account, displayName: account, scopes: ['w_member_social', 'w_organization_social'], expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } };
+      return (await api.execute<{ connectionId: string }>('kernel.channel.connect', input, { actor: asUser(userId), orgId: o.orgId })).connectionId;
+    };
+    const member = await connectAs(o.owner, 'linkedin', `m${randomUUID().slice(0, 8)}`);
+    const page = await connectAs(o.owner, 'linkedin_page', String(70000000 + Math.floor(Math.random() * 1e6)));
+    const otherPage = await connectAs(other, 'linkedin_page', String(80000000 + Math.floor(Math.random() * 1e6)));
+    const due = async (connectionId: string) => {
+      const { postId } = await exec<{ postId: string }>(o, 'social.post.create', { body: `Bài ${randomUUID().slice(0, 6)}`, channels: [{ connectionId }] });
+      await exec(o, 'social.post.submit', { postId });
+      const post = await get(o, postId);
+      await exec(o, 'social.variant.decide', { postId, decision: 'approved', variants: post.variants.map((v) => ({ variantId: v.id, revision: v.revision, contentHash: v.contentHash })) });
+      await exec(o, 'social.variant.schedule', { postId, at: new Date(Date.now() + 3_600_000).toISOString() });
+      await admin((c) => c.query("UPDATE crove_social.post_variant SET scheduled_at = now() - interval '1 second' WHERE post_id = $1", [postId]));
+      return post.variants[0]?.id as string;
+    };
+    let sent = 0;
+    const answer = async () => ({ kind: 'accepted' as const, externalId: `urn:li:share:72000000000000${String(++sent).padStart(5, '0')}`, url: null });
+    const linkedin: Publisher = { provider: 'linkedin', publishSafety: 'never', publish: answer };
+    const linkedinPage: Publisher = { provider: 'linkedin_page', publishSafety: 'never', publish: answer };
+    const deps = { runtime: worker, broker: vault, publishers: { linkedin, linkedin_page: linkedinPage }, callTimeoutMs: 2_000 };
+    // The member's own channel made 100 posts in the last day and their page 50, the oldest 23 hours 50 minutes ago.
+    const memberPost = await due(member);
+    const pagePost = await due(page);
+    const fill = (variantId: string, from: number, count: number) =>
+      admin((c) =>
+        c.query(
+          "INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, state, started_at, finished_at) SELECT $1, 'social.publish:' || $2 || ':1:' || n || ':publish', 'social', 'linkedin', 'publish', 'never', NULL, 'started', now() - interval '23 hours 50 minutes' + make_interval(secs => n), NULL FROM generate_series($3::int, $3::int + $4::int - 1) n",
+          [o.orgId, variantId, from, count],
+        ),
+      );
+    await fill(memberPost, 1, 100);
+    await fill(pagePost, 101, 50);
+    // A page post of the same member waits for the shared limit, with nothing sent.
+    const next = await due(page);
+    expect(await runPublishJob(deps, o.orgId, next, 'linkedin_page')).toMatchObject({ action: 'none' });
+    const row = await admin(async (c) => (await c.query<{ status: string; error_code: string; error_retry_at: Date }>('SELECT status, error_code, error_retry_at FROM crove_social.post_variant WHERE id = $1', [next])).rows[0]);
+    expect(row).toMatchObject({ status: 'scheduled', error_code: 'QUOTA_EXHAUSTED' });
+    const retryIn = (row ? row.error_retry_at.getTime() : 0) - Date.now();
+    expect(retryIn).toBeGreaterThan(9 * 60_000);
+    expect(retryIn).toBeLessThan(11 * 60_000);
+    // So does the member's own channel, whose limit the page used too.
+    const own = await due(member);
+    expect(await runPublishJob(deps, o.orgId, own, 'linkedin')).toMatchObject({ action: 'none' });
+    expect(sent).toBe(0);
+    // Another member's page posts with that member's token: it goes out.
+    const theirs = await due(otherPage);
+    expect(await runPublishJob(deps, o.orgId, theirs, 'linkedin_page')).toMatchObject({ status: 'published' });
+    expect(sent).toBe(1);
+  });
   it('keeps waiting on a used-up publishing quota past the usual attempt limit (#743)', async () => {
     const o = await org();
     const platform = new FakePlatform();
@@ -1686,6 +1742,33 @@ suite('social publishing on PostgreSQL (S4)', () => {
     await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: platform } });
     expect(platform.reposts).toHaveLength(2);
     await expect(api.execute('social.repost.begin', { variantId: liked.id, likes: 100 }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('records an unclear repost answer with no finish, shows it on the post and never reposts again (#992)', async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    let tries = 0;
+    const unclear = Object.assign(Object.create(SandboxPublisher.prototype) as SandboxPublisher, sandbox, {
+      repost: async () => {
+        tries += 1;
+        return { kind: 'unknown' as const, code: 'TIMEOUT' };
+      },
+    });
+    const v = await dueRepost(o, { likes: 3 });
+    expect(await runPublishJob({ runtime: worker, broker: vault, publishers: { sandbox: unclear }, callTimeoutMs: 2_000 }, o.orgId, v.id, 'sandbox')).toMatchObject({ status: 'published' });
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: unclear } });
+    expect(tries).toBe(1);
+    const row = await admin(async (c) => (await c.query<{ state: string; error_kind: string; error_code: string; finished_at: Date | null }>("SELECT state, error_kind, error_code, finished_at FROM crove_kernel.external_call WHERE key = $1", [`social.publish:${v.id}:1:1:repost`])).rows);
+    expect(row).toEqual([{ state: 'ambiguous', error_kind: 'unknown', error_code: 'TIMEOUT', finished_at: null }]);
+    const failed = await admin(async (c) => (await c.query<{ payload: Record<string, unknown> }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.variant.repost_failed'", [o.orgId])).rows);
+    expect(failed.map((r) => r.payload)).toEqual([{ post_id: v.postId, variant_id: v.id, code: 'TIMEOUT' }]);
+    expect(await activityOf(o, v.postId)).toContainEqual(expect.objectContaining({ kind: 'repost_failed', variantId: v.id, code: 'TIMEOUT' }));
+    // A second answer for the same call changes nothing, and a later sweep makes no second repost.
+    const again = await worker.execute<{ recorded: boolean }>('social.repost.record', { variantId: v.id, callKey: `social.publish:${v.id}:1:1:repost`, result: { kind: 'accepted', externalId: 'late' } }, { actor: system, orgId: o.orgId });
+    expect(again).toEqual({ recorded: false });
+    await ageCaptures(v.id);
+    await sweepMetrics({ runtime: worker, broker: vault, workerDb, publishers: { sandbox: unclear } });
+    expect(tries).toBe(1);
   });
 
   it('keeps a failed metrics try as an empty capture, never asks a gone post again, and shows the last real answer', async () => {

@@ -60,7 +60,7 @@ import {
 } from '@crove/kernel-runtime';
 import { financeAgentPrograms, financeCommands, financeQueries } from '@crove/mod-finance';
 import { socialAgentPrograms, socialCommands, socialOverviewContributions, socialQueries } from '@crove/mod-social';
-import { crmCommands, crmQueries } from '@crove/mod-crm';
+import { crmAgentPrograms, crmCommands, crmQueries } from '@crove/mod-crm';
 import { createAuthenticator, type Authenticate } from './auth.ts';
 import { AVAILABLE_MODULES, assertExportKey, usageLimits, type Config, type ModuleId } from './config.ts';
 import { createCredentialBroker, noCredentialBroker } from './credentials.ts';
@@ -432,7 +432,7 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
             inboundDomain: config.INBOUND_DOMAIN ?? null,
             revoker: resolved.identity.revoker,
             refusalTallyRetentionDays: config.REFUSAL_TALLY_RETENTION_DAYS,
-            agentPrograms: { ...financeAgentPrograms, ...socialAgentPrograms },
+            agentPrograms: { ...financeAgentPrograms, ...socialAgentPrograms, ...crmAgentPrograms },
             exportSealer: exportSealer(config),
             exportRetentionDays: config.EXPORT_RETENTION_DAYS,
             evidenceLockDays: config.EVIDENCE_LOCK_DAYS,

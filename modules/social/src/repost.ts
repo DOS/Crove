@@ -107,10 +107,14 @@ export const repostRecord = defineCommand({
     const r = input.result;
     const state = r.kind === 'accepted' ? 'succeeded' : r.kind === 'unknown' ? 'ambiguous' : 'failed';
     const errorCode = r.kind === 'accepted' ? null : r.kind === 'unknown' ? (r.code ?? 'OUTCOME_UNKNOWN') : (r.code ?? null);
+    // An unclear answer has no finish (the call ledger allows finished_at only with an outcome, #992), as publish and
+    // remove record it.
     const values: Record<string, unknown> =
       r.kind === 'accepted'
         ? { state, external_ref: r.externalId, finished_at: ctx.now }
-        : { state, error_kind: r.kind === 'unknown' ? 'unknown' : r.error, error_code: errorCode, finished_at: ctx.now };
+        : r.kind === 'unknown'
+          ? { state, error_kind: 'unknown', error_code: errorCode }
+          : { state, error_kind: r.error, error_code: errorCode, finished_at: ctx.now };
     const updated = await ctx.trx
       .updateTable('crove_kernel.external_call')
       .set({ ...values, updated_at: ctx.now })
