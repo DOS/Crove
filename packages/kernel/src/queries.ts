@@ -59,7 +59,7 @@ export function orgDetailQuery(options: OrgDetailOptions) {
     handler: async (ctx) => {
       const tenant = await ctx.trx
         .selectFrom('crove_kernel.tenant')
-        .select(['org_id', 'slug', 'name', 'inbound_token', 'tax_code', 'vat_filing_period', 'address', 'contact_email'])
+        .select(['org_id', 'slug', 'name', 'inbound_token', 'tax_code', 'vat_filing_period', 'address', 'contact_email', 'approval_preset', 'approval_policy_version'])
         .where('org_id', '=', ctx.orgId)
         .executeTakeFirstOrThrow();
       const memberRows = await ctx.trx
@@ -96,6 +96,8 @@ export function orgDetailQuery(options: OrgDetailOptions) {
         members: members.map((m) => ({ userId: m.user_id, email: m.email, displayName: m.display_name, role: m.role })),
         // What the signed-in member holds through org-wide role assignments (#1279).
         permissions: await myPermissions(ctx),
+        approvalPreset: tenant.approval_preset,
+        approvalPolicyVersion: tenant.approval_policy_version,
       };
     },
   });

@@ -233,6 +233,11 @@ export const contract = {
     setVatFilingPeriod: oc
       .input(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() }))
       .output(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() })),
+    // Owners only, R3 (issue #1402): the org's approval policy preset (founder or accountant). Switching to accountant
+    // is refused while no member holds the chief accountant role.
+    setApprovalPreset: oc
+      .input(z.object({ preset: z.string().regex(/^[a-z][a-z0-9_]*$/).max(50) }))
+      .output(z.object({ preset: z.string(), version: z.number().int().positive() })),
     // Owners and admins (issue #324): the org's address, or null to clear it. Stored on one line, at most 500
     // characters; a value with control characters is refused.
     setAddress: oc.input(z.object({ address: z.string().max(2000).nullable() })).output(z.object({ address: z.string().nullable() })),

@@ -44,6 +44,7 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_crm.booking_feed',
+  'crove_finance.vat_return_filed',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -444,6 +445,23 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         ],
       };
     },
+  },
+  // #1400: the VAT return 01/GTGT marked filed for a period, with [22], [25] and [43] as filed. Append-only: the latest
+  // row of a period is its state (a withdrawn mark adds a row without figures). Tenant roles read and insert.
+  'crove_finance.vat_return_filed': {
+    make: (o) => ({
+      row: {
+        org_id: o.id,
+        id: randomUUID(),
+        period: '2026-09',
+        status: 'filed',
+        source: 'entered',
+        carried_in_amount: '0',
+        deductible_amount: '1000',
+        carried_out_amount: '0',
+        marked_by: o.owner,
+      },
+    }),
   },
   'crove_finance.vendor_account_rule': {
     make: (o) => {
