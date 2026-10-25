@@ -257,7 +257,7 @@ suite('org purge on PostgreSQL (#1024)', () => {
       'crove_kernel.org_usage', 'crove_kernel.outbox_archive', 'crove_kernel.external_call', 'crove_social.post_approval', 'crove_kernel.task_comment',
       'crove_finance.bank_line', 'crove_finance.cash_voucher', 'crove_finance.depreciation_line', 'crove_finance.fixed_asset',
       'crove_finance.input_vat_check', 'crove_finance.journal_entry', 'crove_finance.journal_line', 'crove_finance.journal_voucher',
-      'crove_finance.org_account', 'crove_finance.period_balance_delta', 'crove_finance.period_lock', 'crove_finance.portal_invoice_list', 'crove_finance.portal_invoice_row',
+      'crove_finance.misa_goods_code', 'crove_finance.org_account', 'crove_finance.period_balance_delta', 'crove_finance.period_lock', 'crove_finance.portal_invoice_list', 'crove_finance.portal_invoice_row',
       'crove_finance.purchase_document', 'crove_finance.purchase_document_void', 'crove_finance.purchase_line', 'crove_finance.purchase_tax_rate',
       'crove_finance.vat_return_filed',
     ];

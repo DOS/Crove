@@ -168,10 +168,21 @@ export function JournalPage() {
   const exportMisa = useMutation({
     mutationFn: () => download('/api/export/misa/purchases.xlsx', t('exportMisaFile', { org: getCurrentOrg() ?? 'org' })),
   });
+  // Purchases of stock (152, 153, 156) in MISA's goods purchase template (#1398); the button above exports the rest.
+  const exportMisaGoods = useMutation({
+    mutationFn: () => download('/api/export/misa/goods-purchases.xlsx', t('exportMisaGoodsFile', { org: getCurrentOrg() ?? 'org' })),
+  });
   // Sales vouchers in MISA's sales template (#313).
   const exportMisaSales = useMutation({
     mutationFn: () => download('/api/export/misa/sales.xlsx', t('exportMisaSalesFile', { org: getCurrentOrg() ?? 'org' })),
   });
+  // One error line for the four exports: starting one clears the others' errors, so the line is always about the
+  // export just tried.
+  const exports = [exportXlsx, exportMisa, exportMisaGoods, exportMisaSales];
+  const startExport = (chosen: (typeof exports)[number]) => {
+    for (const other of exports) if (other !== chosen) other.reset();
+    chosen.mutate();
+  };
   const nothingToExport = (journal.data?.length ?? 0) === 0;
   // A link to one entry (#entry-<id>) can arrive before the entries do: scroll once they are shown.
   useEffect(() => {
@@ -222,24 +233,28 @@ export function JournalPage() {
             keeps the row in place. */}
         {!(journal.isSuccess && nothingToExport) && (
           <div role="group" aria-label={t('exportGroup')} className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => exportMisa.mutate()} disabled={exportMisa.isPending}>
+            <Button variant="outline" onClick={() => startExport(exportMisa)} disabled={exportMisa.isPending}>
               {exportMisa.isPending ? <Spinner className="text-current" /> : null}
               {t('exportMisa')}
             </Button>
-            <Button variant="outline" onClick={() => exportMisaSales.mutate()} disabled={exportMisaSales.isPending}>
+            <Button variant="outline" onClick={() => startExport(exportMisaGoods)} disabled={exportMisaGoods.isPending}>
+              {exportMisaGoods.isPending ? <Spinner className="text-current" /> : null}
+              {t('exportMisaGoods')}
+            </Button>
+            <Button variant="outline" onClick={() => startExport(exportMisaSales)} disabled={exportMisaSales.isPending}>
               {exportMisaSales.isPending ? <Spinner className="text-current" /> : null}
               {t('exportMisaSales')}
             </Button>
-            <Button onClick={() => exportXlsx.mutate()} disabled={exportXlsx.isPending}>
+            <Button onClick={() => startExport(exportXlsx)} disabled={exportXlsx.isPending}>
               {exportXlsx.isPending ? <Spinner className="text-current" /> : null}
               {t('export')}
             </Button>
           </div>
         )}
       </div>
-      {(exportXlsx.error || exportMisa.error || exportMisaSales.error) && (
+      {(exportXlsx.error || exportMisa.error || exportMisaGoods.error || exportMisaSales.error) && (
         <div className="mb-4">
-          <ErrorText>{errorMessage(exportXlsx.error ?? exportMisa.error ?? exportMisaSales.error)}</ErrorText>
+          <ErrorText>{errorMessage(exportXlsx.error ?? exportMisa.error ?? exportMisaGoods.error ?? exportMisaSales.error)}</ErrorText>
         </div>
       )}
       {journal.isLoading ? (

@@ -684,7 +684,8 @@ export function SocialPage() {
   useEffect(() => setPicked(new Set()), [tab, search.channel, search.label, search.q, search.from, search.to, search.assignee, search.author]);
   const canDecide = role === 'owner' || role === 'admin';
   // Moving by days or hours (#945) is for owners and admins, like a single reschedule; the agenda offers only that.
-  // Members and above send drafts to review in bulk on the Drafts and Attention lists (#1178).
+  // Members and above send drafts to review in bulk on the Drafts and Attention lists (#1178); owners and admins publish
+  // the failed channels there again (#1456).
   const bulkActions: readonly BulkAction[] = !canWrite
     ? []
     : listTab === 'review'
@@ -692,7 +693,7 @@ export function SocialPage() {
       : listTab === 'drafts'
         ? canDecide ? ['submit', 'queue', 'move', 'cancel', 'archive'] : ['submit', 'cancel', 'archive']
         : listTab === 'attention'
-          ? canDecide ? ['submit', 'move', 'cancel', 'archive'] : ['submit', 'cancel', 'archive']
+          ? canDecide ? ['retry', 'submit', 'move', 'cancel', 'archive'] : ['submit', 'cancel', 'archive']
           : [];
   // Labels and the assignee on many posts at once (#1057), find and replace (#1144) and a channel added (#1178), for
   // members and above, in the lists, the board and the calendar. So are copies moved by days or weeks (#1192), which the

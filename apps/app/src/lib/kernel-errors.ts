@@ -235,6 +235,9 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_TAGGED',
   'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
+  // MISA item and warehouse codes of stock accounts (#1398).
+  'NOT_STOCK_ACCOUNT',
+  'MISA_CODE_CONFLICT',
   // Learned account rules (#1399).
   'RULE_TEXT_TOO_SHORT',
   'RULE_EXISTS',

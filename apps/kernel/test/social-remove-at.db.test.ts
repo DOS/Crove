@@ -8,7 +8,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { BlueskyPublisher, SandboxPublisher, type Fetch, type Publisher } from '@crove/channel';
+import { BlueskyPublisher, SandboxPublisher, ZaloOaPublisher, type Fetch, type Publisher } from '@crove/channel';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
@@ -196,6 +196,31 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     expect(await requested(o, id)).toEqual([{ post_id: postId, variant_id: id, provider: 'bluesky', after: null, scheduled: true }]);
     expect(await runRemoveJob({ runtime: worker, broker: vault, publishers: { bluesky: platform }, callTimeoutMs: 2_000 }, o.orgId, id, 'bluesky', null)).toEqual({ action: 'call', state: 'succeeded' });
     expect(deleted).toEqual([{ repo: DID, collection: 'app.bsky.feed.post', rkey: RKEY }]);
+    expect(await variant(o, postId)).toMatchObject({ status: 'removed', removedBy: null });
+  });
+
+  it('takes a Zalo OA article set for 22:00 down then, against recorded article/remove answers (#1430)', async () => {
+    const o = await org();
+    const ARTICLE = `a${randomUUID().replace(/-/g, '').slice(0, 19)}`;
+    const removed: unknown[] = [];
+    const fetchImpl: Fetch = async (input, init) => {
+      const url = new URL(input);
+      if (`${init?.method ?? 'GET'} ${url.host}${url.pathname}` !== 'POST openapi.zalo.me/v2.0/article/remove') return new Response(JSON.stringify({ error: -1, message: 'unexpected' }), { status: 500 });
+      removed.push(typeof init?.body === 'string' ? JSON.parse(init.body) : null);
+      return new Response(JSON.stringify({ error: 0, message: 'Success' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const zalo = new ZaloOaPublisher({ appId: '4318000000000000001', appSecret: 'test-zalo-secret-not-real' }, fetchImpl);
+    // Publishing is not what this test is about: the article goes out through a stand-in on a sandbox channel (a Zalo
+    // article needs images and a title the sandbox post has not), and the variant becomes the Zalo OA one it stands for.
+    const platform: Publisher = { provider: 'sandbox', publishSafety: zalo.publishSafety, publish: async () => ({ kind: 'accepted', externalId: ARTICLE, url: null }) };
+    const secret = JSON.stringify({ accessToken: 'zalo-access-1', refreshToken: 'zalo-refresh-1' });
+    const { postId, id } = await publishedPost(o, platform, { removeAt: inVietnam(Date.now() - 30_000), publishedAgoMs: 12 * 3_600_000, secret });
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET provider = 'zalo_oa' WHERE id = $1", [id]));
+
+    expect(await sweep(['zalo_oa'])).toBeGreaterThanOrEqual(1);
+    expect(await requested(o, id)).toEqual([{ post_id: postId, variant_id: id, provider: 'zalo_oa', after: null, scheduled: true }]);
+    expect(await runRemoveJob({ runtime: worker, broker: vault, publishers: { zalo_oa: zalo }, callTimeoutMs: 2_000 }, o.orgId, id, 'zalo_oa', null)).toEqual({ action: 'call', state: 'succeeded' });
+    expect(removed).toEqual([{ id: ARTICLE }]);
     expect(await variant(o, postId)).toMatchObject({ status: 'removed', removedBy: null });
   });
 

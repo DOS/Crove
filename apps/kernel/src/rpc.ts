@@ -520,6 +520,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         cancel: os.crm.bookings.cancel.handler(crmCommand('crm.booking.cancel')),
         move: os.crm.bookings.move.handler(crmCommand('crm.booking.move')),
       },
+      bookingFeed: {
+        get: os.crm.bookingFeed.get.handler(({ context }) => inCrm(context, (orgId, actor) => runtime.query('crm.booking_feed.get', {}, { actor, orgId }))),
+        create: os.crm.bookingFeed.create.handler(crmCommand('crm.booking_feed.create')),
+        revoke: os.crm.bookingFeed.revoke.handler(crmCommand('crm.booking_feed.revoke')),
+      },
     },
     social: {
       posts: {
@@ -1550,6 +1555,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       update: os.accounts.update.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.account.update', input, { actor, orgId })),
+      ),
+    },
+    misaGoodsCodes: {
+      list: os.misaGoodsCodes.list.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.misa_goods_codes.list', {}, { actor, orgId })),
+      ),
+      set: os.misaGoodsCodes.set.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.misa_goods_code.set', input, { actor, orgId })),
+      ),
+      remove: os.misaGoodsCodes.remove.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.misa_goods_code.remove', input, { actor, orgId })),
       ),
     },
     accountRules: {

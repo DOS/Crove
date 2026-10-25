@@ -423,4 +423,29 @@ suite('correcting a published post on PostgreSQL (#1223)', () => {
     expect(await runEditJob(deps(sandbox), o.orgId, id, 'sandbox', null)).toEqual({ action: 'call', state: 'succeeded' });
     expect(sandbox.posts(account).map((p) => p.body)).toEqual(['Giá 45.000đ']);
   });
+
+  it("hands the adapter public URLs of the variant's own files only, for a platform whose edit fetches its images again (#1430)", async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const asked: (string | null | Error)[] = [];
+    const checking = (store: boolean): Publisher => ({
+      provider: 'sandbox',
+      publishSafety: sandbox.publishSafety,
+      publish: (i) => sandbox.publish(i),
+      edit: async (i: EditInput) => {
+        // Not a file of this variant (it has none): never signed, whatever the store.
+        asked.push(await (i.mediaUrl?.(randomUUID()) ?? Promise.resolve('absent')).catch((error: Error) => error));
+        return store ? sandbox.edit(i) : { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+      },
+    });
+    const signing = { direct: { presignDownload: async () => 'https://bucket.example/signed' } } as unknown as NonNullable<Parameters<typeof runEditJob>[0]['store']>;
+    const { id } = await publishedPost(o, checking(true));
+    await exec(o, 'social.variant.edit_published', { variantId: id, revision: 1, body: 'Giá 45.000đ' });
+    expect(await runEditJob({ ...deps(checking(true)), store: signing }, o.orgId, id, 'sandbox', null)).toEqual({ action: 'call', state: 'succeeded' });
+    // A store that cannot sign (local disk) answers null before any lookup.
+    const other = await publishedPost(o, checking(false));
+    await exec(o, 'social.variant.edit_published', { variantId: other.id, revision: 1, body: 'Giá 46.000đ' });
+    expect(await runEditJob(deps(checking(false)), o.orgId, other.id, 'sandbox', null)).toEqual({ action: 'call', state: 'failed' });
+    expect(asked).toEqual([expect.objectContaining({ message: 'not an image of this variant' }), null]);
+  });
 });
