@@ -761,7 +761,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         </div>
       )}
       {/* A phone has no keyboard for them (#1409). */}
-      {wide && pending && (item.canApprove || item.canEdit) && <p className="mb-4 text-xs text-subtle-foreground">{t('shortcuts')}</p>}
+      {wide && pending && (item.canApprove || item.canEdit || item.canReject) && <p className="mb-4 text-xs text-subtle-foreground">{t('shortcuts')}</p>}
       {pending && dirty && (
         <p className="mb-4 text-sm text-muted-foreground">{t('dirty')}</p>
       )}
