@@ -9,7 +9,7 @@
 // are made post by post, and the result names each copy, each post left out and why, and each copy whose text X or
 // LinkedIn would refuse as a repeat.
 import { useMutation } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -163,6 +163,7 @@ export function BulkBar({
 }) {
   const t = useTranslations('social.bulk');
   const ts = useTranslations('social');
+  const dueLabel = useId();
   const f = useFormat();
   const [result, setResult] = useState<Outcome | null>(null);
   // The posts' text and the channels' names as they were when the action ran: a refused post may have left the list since.
@@ -424,10 +425,10 @@ export function BulkBar({
               </label>
               {assignEdit.due.mode === 'set' && (
                 <div>
-                  <span id="bulk-due-label" className="text-subtle-foreground">
+                  <span id={dueLabel} className="text-subtle-foreground">
                     {t('assign.dueAt')}
                   </span>
-                  <DateTimeInput aria-labelledby="bulk-due-label" className="mt-1" value={dueValue} onChange={setDueValue} />
+                  <DateTimeInput aria-labelledby={dueLabel} className="mt-1" value={dueValue} onChange={setDueValue} />
                 </div>
               )}
               <Button size="sm" disabled={busy || !assignment} onClick={applyAssign}>
