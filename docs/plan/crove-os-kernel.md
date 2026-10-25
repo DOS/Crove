@@ -1039,7 +1039,7 @@ Existing fork schemas are not in the Crove DB. The `crove_` prefix is kept so se
 | Rule | Mechanism | Fails at |
 |---|---|---|
 | No deep imports; isomorphic contracts; DAG | `exports` + pnpm isolation; dependency-cruiser generated from `dependsOn`; pure `domain/`; the shell does not import kernel/db | Typecheck, G5 |
-| No cross-module SQL | Module role + `$pickTables` + ast-grep (SQL in `infra/` may only mention `crove_<id>.` and `crove_kernel.`) | `permission denied`, lint |
+| No cross-module SQL | Module role + `$pickTables` + ast-grep (SQL in `infra/` may only mention `crove_<id>.` and `crove_kernel.`) | `permission denied`, lint. On `main`: `tools/test/module-schemas.test.ts` (#1464) fails when a file under `modules/<id>/` names a schema other than `crove_<id>` and `crove_kernel` |
 | Tenant conventions | `apply_tenant_conventions()` + pgTAP conformance | G3 |
 | No side-door writes | Not exposed through PostgREST; revoked from anon, authenticated, PUBLIC; module roles cannot INSERT directly into outbox/audit | G3 |
 | Valid registry | Every command has permission, risk (>= derived risk), idempotency, i18n, `implement()`, synthetic examples | G5 |
