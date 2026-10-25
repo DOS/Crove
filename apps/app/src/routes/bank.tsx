@@ -14,6 +14,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -59,7 +60,9 @@ function StatementImport({ bankAccount, onImported }: { bankAccount: string; onI
   const pick = useRef(0);
 
   const statement = file.status === 'read' && mapping ? statementRows(file.rows, mapping) : null;
-  const input = statement && statement.length > 0 ? { bankAccount, filename: file.status === 'read' ? file.name : '', rows: statement } : null;
+  // The lines go to the books of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
+  const input = statement && statement.length > 0 && entity.ready ? { bankAccount, filename: file.status === 'read' ? file.name : '', rows: statement, legalEntityId: entity.legalEntityId } : null;
   const imported = useMutation(
     orpc.bank.import.mutationOptions({
       onSuccess: (result) => {

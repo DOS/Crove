@@ -26,6 +26,9 @@ export const zCashVoucherRequest = z.object({
   // The bank statement line a báo Có or báo Nợ settles (#326), when it is made from one: the voucher then has the
   // line's bank account, date, direction and amount.
   bankLineId: zId.optional(),
+  // The legal entity whose books the voucher goes to (#1280), as in zLegalEntityChoice; a voucher made from a bank line
+  // is in the line's entity.
+  legalEntityId: zId.optional(),
 });
 export type CashVoucherRequest = z.infer<typeof zCashVoucherRequest>;
 

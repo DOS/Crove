@@ -14,11 +14,12 @@
 // worker). The client company is the org itself: Crove keeps one org per company the firm keeps books for.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { zVatPeriod } from '@crove/kernel-contract';
+import { zId, zVatPeriod } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { money } from '@crove/l10n-vn';
 import { reconcilePeriod } from './portal-list.ts';
+import { defaultLegalEntityId, resolveLegalEntity } from './legal-entity.ts';
 import { vatPeriod } from './domain/vat-return.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -60,6 +61,9 @@ export const zMissingInvoiceMail = z.object({
   orgName: z.string().max(200),
   // The period a request is for (none on a reminder).
   requestPeriod: zVatPeriod.optional(),
+  // The legal entity whose purchase list a request is for (#1280); absent on reminders (every entity) and on requests
+  // made before #1280 (the default entity).
+  legalEntityId: zId.optional(),
   periods: z.array(zPeriodItems).max(40),
   count: z.number().int().nonnegative(),
 });
@@ -74,8 +78,8 @@ export function periodLabel(period: string): string {
 }
 
 // The invoices of a period the portal lists and Crove lacks, in the reconciliation's order.
-async function missingIn(ctx: QueryContext, period: string): Promise<Item[]> {
-  const { reconciliation } = await reconcilePeriod(ctx, period);
+async function missingIn(ctx: QueryContext, period: string, legalEntityId: string): Promise<Item[]> {
+  const { reconciliation } = await reconcilePeriod(ctx, period, legalEntityId);
   return reconciliation.items.flatMap((i) =>
     i.outcome === 'missing' && i.portal
       ? [
@@ -100,9 +104,15 @@ const bytesOf = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'ut
 // The mail's merge data: every period with its count, and the invoices in order while there are at most
 // MISSING_INVOICES_PER_MAIL of them and the data stays within MISSING_INVOICE_PAYLOAD_BYTES. count covers them all, so
 // the mail says how many it left out.
-export function mailPayload(kind: 'request' | 'reminder', orgName: string, periods: { period: string; items: Item[] }[], requestPeriod?: string): MissingInvoiceMail {
+export function mailPayload(
+  kind: 'request' | 'reminder',
+  orgName: string,
+  periods: { period: string; items: Item[] }[],
+  requestPeriod?: string,
+  legalEntityId?: string,
+): MissingInvoiceMail {
   const count = periods.reduce((n, p) => n + p.items.length, 0);
-  const base = { kind, orgName: orgName.slice(0, 200), ...(requestPeriod ? { requestPeriod } : {}), count };
+  const base = { kind, orgName: orgName.slice(0, 200), ...(requestPeriod ? { requestPeriod } : {}), ...(legalEntityId ? { legalEntityId } : {}), count };
   const shown = periods.map(({ period, items }) => ({ period, count: items.length, items: [] as Item[] }));
   let bytes = bytesOf({ ...base, periods: shown });
   let room = MISSING_INVOICES_PER_MAIL;
@@ -168,13 +178,17 @@ interface Queued {
 
 export const missingInvoicesRequest = defineCommand({
   name: 'finance.missing_invoices.request',
-  input: z.object({ period: zVatPeriod }),
+  // The purchase list of one legal entity (#1280): legalEntityId as in zLegalEntityChoice.
+  input: z.object({ period: zVatPeriod, legalEntityId: zId.optional() }),
   risk: 'R1',
   access: EDITORS,
   handler: async (ctx, input) => {
     vatPeriod(input.period);
-    // One request per period at a time: concurrent clicks wait here, then see the first one's mail.
-    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.missing_invoices:${ctx.orgId}:${input.period}`}, 0))`.execute(ctx.trx);
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    // A request made before #1280 names no entity: it was the default entity's.
+    const defaultEntity = (await defaultLegalEntityId(ctx)) ?? '';
+    // One request per period and entity at a time: concurrent clicks wait here, then see the first one's mail.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.missing_invoices:${ctx.orgId}:${legalEntityId}:${input.period}`}, 0))`.execute(ctx.trx);
     const recent = await ctx.trx
       .selectFrom('crove_kernel.mail_message')
       .select('id')
@@ -182,19 +196,20 @@ export const missingInvoicesRequest = defineCommand({
       .where('source', '=', MISSING_INVOICE_REQUEST_SOURCE)
       .where('created_at', '>', new Date(ctx.now.getTime() - REQUEST_COOLDOWN_MS))
       .where(sql<boolean>`payload ->> 'requestPeriod' = ${input.period}`)
+      .where(sql<boolean>`coalesce(payload ->> 'legalEntityId', ${defaultEntity}) = ${legalEntityId}`)
       .limit(1)
       .executeTakeFirst();
     if (recent) {
       throw new DomainError('REQUEST_TOO_SOON', 409, `Đã gửi đề nghị cho ${periodLabel(input.period)} trong vòng một giờ qua; hãy đợi rồi gửi lại`);
     }
-    const items = await missingIn(ctx, input.period);
+    const items = await missingIn(ctx, input.period, legalEntityId);
     if (items.length === 0) throw new DomainError('NOTHING_MISSING', 409, `Không còn hóa đơn mua vào nào thiếu trong ${periodLabel(input.period)}`);
     const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select('name').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
     const queued = await ctx.run<Queued>('kernel.mail.contact.queue', {
       source: MISSING_INVOICE_REQUEST_SOURCE,
       templateKey: MISSING_INVOICE_TEMPLATE,
       subject: `Đề nghị bổ sung hóa đơn đầu vào ${periodLabel(input.period)}`,
-      payload: mailPayload('request', tenant.name, [{ period: input.period, items }], input.period),
+      payload: mailPayload('request', tenant.name, [{ period: input.period, items }], input.period, legalEntityId),
     });
     await ctx.activity(
       'kernel.mail_message',
@@ -204,7 +219,7 @@ export const missingInvoicesRequest = defineCommand({
         ? `Không gửi được đề nghị bổ sung hóa đơn ${periodLabel(input.period)}: email liên hệ đang bị chặn`
         : `Gửi email đề nghị công ty bổ sung ${items.length} hóa đơn mua vào còn thiếu, ${periodLabel(input.period)}`,
     );
-    ctx.audit({ period: input.period, count: items.length, message_id: queued.messageId, status: queued.status });
+    ctx.audit({ period: input.period, count: items.length, message_id: queued.messageId, status: queued.status, legal_entity_id: legalEntityId });
     return { messageId: queued.messageId, status: queued.status, count: items.length };
   },
 });
@@ -283,22 +298,28 @@ export const missingInvoicesRemind = defineCommand({
     if (!tenant.contact_email) return { action: 'no_contact' };
     const today = vnToday(ctx.now);
     const cutoff = new Date(Date.parse(`${today}T00:00:00Z`) - REMINDER_LOOKBACK_DAYS * 86_400_000).toISOString().slice(0, 10);
+    // The lists of every legal entity (#1280): the mail goes to the company, and lists what each entity still lacks.
     const listed = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')
-      .select('period')
+      .select(['period', 'legal_entity_id'])
       .distinct()
       .where('org_id', '=', ctx.orgId)
       .where('status', '=', 'done')
       .where('removed_at', 'is', null)
       .execute();
-    const periods = listed
-      .map((l) => l.period)
+    const entities = new Map<string, string[]>();
+    for (const l of listed) entities.set(l.period, [...(entities.get(l.period) ?? []), l.legal_entity_id].sort());
+    const periods = [...entities.keys()]
       .filter((p) => {
         const { from, to } = vatPeriod(p);
         return to >= cutoff && from <= today;
       })
       .sort();
-    const { missing, skipped } = await collectMissing(periods, (period) => missingIn(ctx, period));
+    const { missing, skipped } = await collectMissing(periods, async (period) => {
+      const items: Item[] = [];
+      for (const legalEntityId of entities.get(period) ?? []) items.push(...(await missingIn(ctx, period, legalEntityId)));
+      return items;
+    });
     if (missing.length === 0 && skipped.length > 0) {
       // Nothing could be checked: the reminder stays on; this run's audit row keeps it from running again this month.
       ctx.audit({ skipped });

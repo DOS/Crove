@@ -48,14 +48,15 @@ export const notificationDispatch = defineCommand({
         if (!e.success) return { sent: 0 };
         const list = await ctx.trx
           .selectFrom('crove_finance.portal_invoice_list')
-          .select(['id', 'period', 'status', 'created_by', 'removed_at'])
+          .select(['id', 'period', 'status', 'created_by', 'removed_at', 'legal_entity_id'])
           .where('org_id', '=', ctx.orgId)
           .where('id', '=', e.data.listId)
           .executeTakeFirst();
         if (!list || list.removed_at !== null || list.status === 'pending') return { sent: 0 };
         let detail: Record<string, string> = { period: list.period, failed: 'true' };
         if (list.status === 'done') {
-          const found = await ctx.query<PortalReconciliation>('finance.portal_list.reconcile', { period: list.period });
+          // The reconciliation of the list's legal entity (#1280).
+          const found = await ctx.query<PortalReconciliation>('finance.portal_list.reconcile', { period: list.period, legalEntityId: list.legal_entity_id });
           if (found.status !== 'ok') return { sent: 0 };
           const { missing, amountMismatch } = found.value.summary;
           // Everything on the portal is in Crove: nothing to look at.
@@ -114,8 +115,15 @@ export const periodClosingRemind = defineCommand({
     // Read again here: the sweep's page is only a hint.
     const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['vat_filing_period', 'status']).where('org_id', '=', ctx.orgId).executeTakeFirst();
     if (org?.status !== 'active') return { sent: 0 };
-    const lock = await ctx.trx.selectFrom('crove_finance.period_lock').select(sql<string | null>`pg_catalog.to_char(locked_through, 'YYYY-MM-DD')`.as('through')).where('org_id', '=', ctx.orgId).executeTakeFirst();
-    const closing = closingPeriod((org.vat_filing_period as VatFilingPeriod | null) ?? null, lock?.through ?? null, input.today);
+    // Each legal entity locks its own months (#1280): the period is still open while any entity's books are, so the
+    // earliest lock counts (none at all while an entity has never locked).
+    const locks = await ctx.trx
+      .selectFrom('crove_finance.period_lock')
+      .select(sql<string | null>`pg_catalog.to_char(locked_through, 'YYYY-MM-DD')`.as('through'))
+      .where('org_id', '=', ctx.orgId)
+      .execute();
+    const through = locks.some((l) => l.through === null) ? null : (locks.map((l) => l.through as string).sort()[0] ?? null);
+    const closing = closingPeriod((org.vat_filing_period as VatFilingPeriod | null) ?? null, through, input.today);
     if (!closing) return { sent: 0 };
     const sent = await notifyMembers(ctx, {
       kind: PERIOD_CLOSING,
