@@ -617,6 +617,27 @@ export const vi = {
     retry: 'Tải lại',
     loadFailed: 'Chưa tải được vai trò nghiệp vụ của các thành viên ({reason}). Hãy tải lại; khi chưa tải được, đừng coi là họ không có vai trò nào.',
   },
+  approvalPreset: {
+    title: 'Quy tắc duyệt bút toán',
+    intro: 'Ai được duyệt các đề xuất ghi sổ (hóa đơn, chứng từ, bút toán) trước khi chúng vào sổ.',
+    presets: {
+      founder: {
+        title: 'Chủ doanh nghiệp duyệt',
+        body: 'Chủ sở hữu, quản trị viên và kế toán trưởng đều duyệt được. Hợp với doanh nghiệp nhỏ tự làm sổ sách.',
+      },
+      accountant: {
+        title: 'Chỉ kế toán trưởng duyệt',
+        body: 'Chỉ người giữ vai trò kế toán trưởng duyệt được; chủ sở hữu và quản trị viên không duyệt nữa, người soạn không tự duyệt đề xuất của mình, và tổ chức phải luôn còn ít nhất một kế toán trưởng. Hợp với doanh nghiệp có kế toán trưởng hoặc thuê công ty kế toán.',
+      },
+    },
+    current: 'Đang áp dụng',
+    saveHint: 'Đổi quy tắc cần xác thực hai lớp. Quy tắc mới áp dụng ngay, cả với các đề xuất đang chờ duyệt.',
+    save: 'Lưu quy tắc',
+    saved: 'Đã đổi quy tắc duyệt: {rule}',
+    ownerOnly: 'Chỉ chủ sở hữu đổi được quy tắc này.',
+    stepUp: 'đổi quy tắc duyệt sang "{rule}"',
+    giveRole: 'Giao vai trò kế toán trưởng',
+  },
   workingHours: {
     title: 'Giờ làm việc và ngày nghỉ',
     intro: 'Giờ bạn nhận lịch hẹn, theo múi giờ của bạn, và những ngày bạn nghỉ. Mỗi thành viên tự đặt cho mình.',
