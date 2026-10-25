@@ -359,12 +359,16 @@ export async function runLoad(args: LoadArgs, log: (line: string) => void = cons
     log(`outbox: ${args.rate} kernel.file.ingest per second for ${args.seconds} s, one relay`);
     const lags: number[] = [];
     let producing = true;
+    // The relay stops only on an empty claim that started after the last command committed. A claim that started
+    // earlier may have taken its snapshot before that commit and come back empty while production ended meanwhile;
+    // stopping on it left that event behind (19 of 20 relayed, #1241).
     const relay = (async () => {
       for (;;) {
+        const done = !producing;
         const rows = await claim();
         lags.push(...rows);
         if (rows.length === 0) {
-          if (!producing) return;
+          if (done) return;
           await sleep(10);
         }
       }
