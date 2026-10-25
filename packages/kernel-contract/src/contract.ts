@@ -4,6 +4,7 @@ import {
   zBulkApproveItems,
   SOCIAL_REVIEW_CHECKS_MAX,
   zAccount,
+  zCategorizationRule,
   zAgentBudget,
   zAgentRisk,
   zAgentRoleKey,
@@ -136,6 +137,7 @@ import {
   zInviteCreated,
   zInvitePreview,
   zInviteRole,
+  zInviteLegalEntityIds,
   zInviteToken,
   zJournalEntry,
   zJournalReversal,
@@ -192,6 +194,7 @@ import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconci
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
+import { zMisaCode, zMisaGoodsCode } from './misa-goods.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
 import { zPersonalDataErasure, zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
 
@@ -230,6 +233,11 @@ export const contract = {
     setVatFilingPeriod: oc
       .input(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() }))
       .output(z.object({ vatFilingPeriod: zVatFilingPeriod.nullable() })),
+    // Owners only, R3 (issue #1402): the org's approval policy preset (founder or accountant). Switching to accountant
+    // is refused while no member holds the chief accountant role.
+    setApprovalPreset: oc
+      .input(z.object({ preset: z.string().regex(/^[a-z][a-z0-9_]*$/).max(50) }))
+      .output(z.object({ preset: z.string(), version: z.number().int().positive() })),
     // Owners and admins (issue #324): the org's address, or null to clear it. Stored on one line, at most 500
     // characters; a value with control characters is refused.
     setAddress: oc.input(z.object({ address: z.string().max(2000).nullable() })).output(z.object({ address: z.string().nullable() })),
@@ -258,7 +266,9 @@ export const contract = {
     personalDataErase: oc.input(zPersonalDataQuery.extend({ idempotencyKey: zId })).output(zPersonalDataErasure),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
-    invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
+    // An owner may scope the invite to legal entities (#1281): the invitee joins as a member or viewer holding the
+    // external_accountant role for those entities only.
+    invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole, legalEntityIds: zInviteLegalEntityIds.optional() })).output(zInviteCreated),
     // Owners and admins: the org's invites that are still pending or expired, newest first.
     listInvites: oc.output(z.array(zInvite)),
     revokeInvite: oc.input(z.object({ inviteId: zId })).output(z.object({ ok: z.literal(true) })),
@@ -385,6 +395,13 @@ export const contract = {
       move: oc.input(zBookingMove).output(z.object({ bookingId: z.string(), startsAt: z.string() })),
       // Times to offer a client (#1440): read-only; the model, when the deployment has one, reads the pasted message.
       suggest: oc.input(zBookingSuggestInput).output(zBookingSuggestion),
+    },
+    // A member's bookings as a feed for Google Calendar or Outlook (#1382): each host makes, replaces and revokes their
+    // own address; the token is in the create answer only.
+    bookingFeed: {
+      get: oc.input(z.object({})).output(z.object({ createdAt: z.string() }).nullable()),
+      create: oc.input(z.strictObject({})).output(z.object({ token: z.string() })),
+      revoke: oc.input(z.strictObject({})).output(z.object({ revoked: z.boolean() })),
     },
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
@@ -1215,6 +1232,26 @@ export const contract = {
     update: oc
       .input(z.object({ code: zAccountCode, name: z.string().trim().min(1).max(200).optional(), active: z.boolean().optional() }))
       .output(z.object({ code: zAccountCode, name: z.string(), active: z.boolean() })),
+  },
+  // The org's MISA SME item and warehouse codes per stock account (#1398), for the goods purchase export
+  // (GET /api/export/misa/goods-purchases.xlsx). Every member lists them; owners and admins (R1, audited) set one
+  // account's codes (NOT_STOCK_ACCOUNT, UNKNOWN_ACCOUNT: 422) and remove them, so the account falls back to its
+  // parent's codes or the defaults.
+  misaGoodsCodes: {
+    list: oc.output(z.array(zMisaGoodsCode)),
+    set: oc.input(z.object({ accountCode: zAccountCode, itemCode: zMisaCode, warehouseCode: zMisaCode.nullable() })).output(zMisaGoodsCode),
+    remove: oc.input(z.object({ accountCode: zAccountCode })).output(z.object({ removed: z.boolean() })),
+  },
+  // Learned account rules (#1399), shown in Settings. list: every role, newest first (at most 500). create: owners and
+  // admins (R1), a keyword rule for every vendor or for one; RULE_TEXT_TOO_SHORT (422) when fewer than two letters or
+  // digits are left once normalized, RULE_EXISTS (409) for the same keyword and vendor. remove: owners and admins (R1),
+  // any rule, learned or added; RULE_NOT_FOUND (404). Approving an invoice writes the rules learned from it.
+  accountRules: {
+    list: oc.output(z.array(zCategorizationRule)),
+    create: oc
+      .input(z.object({ keyword: z.string().trim().min(1).max(500), accountCode: zAccountCode, vendorPartyId: zId.nullable().optional() }))
+      .output(z.object({ id: zId })),
+    remove: oc.input(z.object({ id: zId })).output(z.object({ id: zId })),
   },
   // VAT working for one month or quarter (issue #316); the Excel file is GET /api/export/vat.xlsx?period=<period>.
   // markPayment (owners, admins, members; R1, audited; #917): the accountant's mark on an input invoice of the period

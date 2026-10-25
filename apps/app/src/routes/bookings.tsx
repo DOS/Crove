@@ -11,6 +11,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
+import { BookingFeedCard } from '../components/booking-feed.tsx';
 import { BookingSuggestCard } from '../components/booking-suggest.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useLocaleSetting } from '../i18n/provider.tsx';
@@ -95,6 +96,7 @@ export function BookingsPage() {
   return (
     <div>
       <PageHeader title={t('title')} subtitle={t('subtitle')} />
+      {org.data && org.data.role !== 'viewer' && <BookingFeedCard />}
       {org.data && org.data.role !== 'viewer' && <BookingSuggestCard slug={slug} />}
       <div className="mb-4 flex flex-wrap gap-2">
         <Tabs value={period} onValueChange={(value) => setPeriod(value as Period)}>

@@ -408,6 +408,9 @@ export function createRpcHandler(
       setVatFilingPeriod: os.org.setVatFilingPeriod.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_vat_filing_period', input, { actor, orgId })),
       ),
+      setApprovalPreset: os.org.setApprovalPreset.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_approval_preset', input, { actor, orgId })),
+      ),
       setAddress: os.org.setAddress.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_address', input, { actor, orgId })),
       ),
@@ -569,6 +572,11 @@ export function createRpcHandler(
             return { ai: 'used' as const, asksForMeeting: reading.asksForMeeting, windows: reading.windows, ...picked };
           }),
         ),
+      },
+      bookingFeed: {
+        get: os.crm.bookingFeed.get.handler(({ context }) => inCrm(context, (orgId, actor) => runtime.query('crm.booking_feed.get', {}, { actor, orgId }))),
+        create: os.crm.bookingFeed.create.handler(crmCommand('crm.booking_feed.create')),
+        revoke: os.crm.bookingFeed.revoke.handler(crmCommand('crm.booking_feed.revoke')),
       },
     },
     social: {
@@ -1600,6 +1608,28 @@ export function createRpcHandler(
       ),
       update: os.accounts.update.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.account.update', input, { actor, orgId })),
+      ),
+    },
+    misaGoodsCodes: {
+      list: os.misaGoodsCodes.list.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.misa_goods_codes.list', {}, { actor, orgId })),
+      ),
+      set: os.misaGoodsCodes.set.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.misa_goods_code.set', input, { actor, orgId })),
+      ),
+      remove: os.misaGoodsCodes.remove.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.misa_goods_code.remove', input, { actor, orgId })),
+      ),
+    },
+    accountRules: {
+      list: os.accountRules.list.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.categorization_rules.list', {}, { actor, orgId })),
+      ),
+      create: os.accountRules.create.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.categorization_rule.create', input, { actor, orgId })),
+      ),
+      remove: os.accountRules.remove.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.categorization_rule.remove', input, { actor, orgId })),
       ),
     },
     vat: {

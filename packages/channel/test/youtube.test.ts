@@ -1,6 +1,6 @@
 // YouTube against recorded answers (shapes from the YouTube Data API v3 and Google OAuth docs); no live call.
 import { describe, expect, it } from 'vitest';
-import { YouTubeConnector, YouTubePublisher, YouTubeRefresher, clipBytes, clipCodepoints, newOAuthAttempt, type Fetch, type PublishInput } from '../src/index.ts';
+import { YouTubeConnector, YouTubePublisher, YouTubeRefresher, clipBytes, clipCodepoints, newOAuthAttempt, youtubeQuotaResetAt, type Fetch, type PublishInput } from '../src/index.ts';
 
 const APP = { clientId: '123456789012-abcdefgh12345678.apps.googleusercontent.com', clientSecret: 'test-google-secret-not-real' };
 const CHANNEL = 'UCabcdefghijklmnopqrstuv';
@@ -446,6 +446,34 @@ describe('YouTube playlists picked from the list go in as pasted ones (#1131)', 
   });
 });
 
+describe('YouTube quota reset (#1142)', () => {
+  it('waits for the next midnight Pacific time, across both daylight saving changes', () => {
+    const at = (iso: string) => youtubeQuotaResetAt(Date.parse(iso)).toISOString();
+    // Daylight time (UTC-7): 05:00 on 25 October waits for midnight, 07:00 UTC.
+    expect(at('2026-10-25T12:00:00Z')).toBe('2026-10-26T07:01:00.000Z');
+    // 23:00 on the last daylight evening: midnight is still daylight time.
+    expect(at('2026-11-01T06:00:00Z')).toBe('2026-11-01T07:01:00.000Z');
+    // Standard time (UTC-8) from 1 November.
+    expect(at('2026-11-01T12:00:00Z')).toBe('2026-11-02T08:01:00.000Z');
+    // The spring change on 14 March 2027: noon the day before waits for a standard midnight, that morning for a daylight one.
+    expect(at('2027-03-13T20:00:00Z')).toBe('2027-03-14T08:01:00.000Z');
+    expect(at('2027-03-14T12:00:00Z')).toBe('2027-03-15T07:01:00.000Z');
+    // Just after midnight on a change day the offset now differs from the next midnight's: 00:30 daylight time on
+    // 1 November waits for a standard midnight, and 00:30 standard time on 14 March for a daylight one.
+    expect(at('2026-11-01T07:30:00Z')).toBe('2026-11-02T08:01:00.000Z');
+    expect(at('2027-03-14T08:30:00Z')).toBe('2027-03-15T07:01:00.000Z');
+  });
+
+  it('sends a publish refused for a spent daily quota to wait for the reset, and a burst limit to the usual backoff', async () => {
+    const daily = google({ 'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 403, body: { error: { message: 'Daily Limit Exceeded.', errors: [{ reason: 'dailyLimitExceeded' }] } } }] });
+    expect(await new YouTubePublisher(APP, daily.fetchImpl).publish(input())).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'dailyLimitExceeded', retryAt: youtubeQuotaResetAt() });
+    const burst = google({ 'POST www.googleapis.com/upload/youtube/v3/videos': [{ status: 403, body: { error: { message: 'Rate limit.', errors: [{ reason: 'userRateLimitExceeded' }] } } }] });
+    const answer = await new YouTubePublisher(APP, burst.fetchImpl).publish(input());
+    expect(answer).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'userRateLimitExceeded' });
+    expect(answer.kind === 'rejected' ? answer.retryAt : 'none').toBeUndefined();
+  });
+});
+
 describe('YouTube remove (#1137)', () => {
   const VIDEO = 'dQw4w9WgXcQ';
   const DELETE = 'DELETE www.googleapis.com/youtube/v3/videos';
@@ -471,7 +499,13 @@ describe('YouTube remove (#1137)', () => {
     const expired = google({ [DELETE]: [refusal(401, 'authError', 'Invalid Credentials')] });
     expect(await remove(expired.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired' });
     const quota = google({ [DELETE]: [refusal(403, 'quotaExceeded', 'The request cannot be completed because you have exceeded your quota.')] });
-    expect(await remove(quota.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'quotaExceeded' });
+    expect(await remove(quota.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'quotaExceeded', retryAt: youtubeQuotaResetAt() });
+    // The API's daily limit (#1142): rate limited with the reset time, never a refusal of the delete. A takedown records
+    // it as failed and a person asks again; only publishing waits for the reset.
+    const daily = google({ [DELETE]: [refusal(403, 'dailyLimitExceeded', 'Daily Limit Exceeded. The quota will be reset at midnight Pacific Time (PT).')] });
+    const answer = await remove(daily.fetchImpl);
+    expect(answer).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'dailyLimitExceeded' });
+    expect(answer.kind === 'rejected' ? answer.retryAt?.getTime() : null).toBe(youtubeQuotaResetAt().getTime());
   });
 
   it('leaves an outage unclear, and calls nothing for a malformed id or a missing token', async () => {

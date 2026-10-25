@@ -55,8 +55,12 @@ export const EXPORT_TABLES = {
   'finance.journal_entry': { from: 'crove_finance.journal_entry', omit: ['search'] },
   'finance.journal_line': { from: 'crove_finance.journal_line', omit: [] },
   'finance.vendor_account_rule': { from: 'crove_finance.vendor_account_rule', omit: [] },
+  // Learned account rules with their provenance (#1399).
+  'finance.categorization_rule': { from: 'crove_finance.categorization_rule', omit: [] },
   // The org's sub-accounts (#319): journal lines name them by code.
   'finance.org_account': { from: 'crove_finance.org_account', omit: [] },
+  // The MISA item and warehouse codes per stock account (#1398), which the goods purchase export writes.
+  'finance.misa_goods_code': { from: 'crove_finance.misa_goods_code', omit: [] },
   // Cash and bank vouchers (#327): their journal entries name them.
   'finance.cash_voucher': { from: 'crove_finance.cash_voucher', omit: [] },
   // General journal vouchers (#888): their journal entries name them.

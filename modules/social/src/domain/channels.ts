@@ -69,6 +69,8 @@ export interface MediaRule {
   maxImageBytes: number | null;
   maxVideoBytes: number | null;
   maxVideoSeconds: number | null;
+  // Allowed video MIME types, where the channel takes fewer than Crove uploads (MP4 and QuickTime); absent means any.
+  videoTypes?: readonly string[];
   // A document's size cap, where kinds takes documents (#1119). A document is always the post's only file.
   maxDocumentBytes?: number;
 }
@@ -518,7 +520,11 @@ export const COVER_RULES: Readonly<Partial<Record<Provider, readonly CoverKind[]
   youtube: ['image'],
   // A video pin's cover is a frame of the video (#813).
   pinterest: ['frame'],
+  // A Zalo OA video article's thumbnail is an image Zalo fetches by URL (#1429).
+  zalo_oa: ['image'],
 };
+// The channels whose video post cannot go out without a cover (#1429): a Zalo OA video article needs its thumbnail.
+export const COVER_REQUIRED: ReadonlySet<Provider> = new Set<Provider>(['zalo_oa']);
 // How a TikTok variant goes out (#903), in `settings.tiktokMode`: posted at once (direct, the default, so variants
 // saved before #903 behave as they did), or sent to the creator's TikTok inbox as a draft they finish and post in the
 // TikTok app (inbox). Inbox mode takes no privacy level, interaction settings or cover: the creator picks them in
@@ -721,8 +727,9 @@ export const WORDPRESS_EXCERPT_MAX = 500;
 // WordPress keeps a term's name in a 200-character column.
 export const WORDPRESS_TERM_MAX = 200;
 
-// YouTube refuses a thumbnail over 2 MB (thumbnails.set).
-export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024 };
+// YouTube refuses a thumbnail over 2 MB (thumbnails.set); Zalo an article image over 1 MB, a video article's thumbnail
+// among them (#1429).
+export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024, zalo_oa: 1024 * 1024 };
 
 // A LinkedIn document's title (#1119), `settings.linkedin.documentTitle`: 1 to DOCUMENT_TITLE_MAX characters once
 // trimmed, counted as LinkedIn counts its text. Unsaid, the adapter sends the post's title or the file's name. The
@@ -744,7 +751,7 @@ export function documentTitleOf(settings: Readonly<Record<string, unknown>> | un
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
-export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'linkedin_page', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord']);
+export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'linkedin_page', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord', 'zalo_oa']);
 
 // The channels whose Crove adapter takes a published post down (#860, #1137, #1138); the others answer
 // REMOVE_NOT_SUPPORTED until their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of
@@ -850,12 +857,14 @@ export const CAPABILITIES: Readonly<Record<Provider, ChannelCapabilities>> = {
   },
   // Zalo OA values: the article/create reference (developers.zalo.me, OA content API). The cover is required, so one
   // image at least; the docs set no image count, and 10 is Crove's cap (#943): the first image is the cover, the others
-  // follow the text as image blocks. Every image file is 1 MB at most. Video articles are not built yet.
+  // follow the text as image blocks. Every image file is 1 MB at most. A video article (#1429) is one video alone, MP4
+  // (Zalo takes MP4 and AVI; Crove uploads MP4 and QuickTime) of up to 50 MB, with no length limit in the docs, and
+  // needs a cover image as its thumbnail (COVER_REQUIRED).
   zalo_oa: {
     provider: 'zalo_oa',
     body: { max: null, count: 'codepoints', required: true },
     title: { max: 150, count: 'codepoints', required: true },
-    media: { min: 1, max: 10, kinds: ['image'], mixed: false, maxVideos: 0, imageTypes: ANY_IMAGE, maxImageBytes: 1 * MB, maxVideoBytes: null, maxVideoSeconds: null },
+    media: { min: 1, max: 10, kinds: ['image', 'video'], mixed: false, maxVideos: 1, imageTypes: ANY_IMAGE, maxImageBytes: 1 * MB, maxVideoBytes: 50 * MB, maxVideoSeconds: null, videoTypes: ['video/mp4'] },
     maxLinks: null,
     scrapesLinkPreview: false,
     unverified: [],
@@ -1261,7 +1270,7 @@ export function instagramReelOffGrid(settings: Readonly<Record<string, unknown>>
 // for the channels whose API has no quota endpoint: how many posts one account may make in a window. Instagram and
 // Threads read their own quota from the platform (#743). The numbers are the platforms' documented per-account limits,
 // kept a little under where they are approximate: TikTok about 15 posts a day per creator, YouTube's 100 uploads a day,
-// X 100 posts per 15 minutes per user, LinkedIn 150 member posts a day.
+// X 100 posts per 15 minutes per user, LinkedIn 150 member posts a day (a page's posts count against its member's).
 export interface PublishLimit {
   count: number;
   windowMs: number;
@@ -1271,6 +1280,18 @@ export const PUBLISH_LIMITS: Readonly<Partial<Record<Provider, PublishLimit>>> =
   youtube: { count: 100, windowMs: 24 * 3_600_000 },
   x: { count: 100, windowMs: 15 * 60_000 },
   linkedin: { count: 150, windowMs: 24 * 3_600_000 },
+  linkedin_page: { count: 150, windowMs: 24 * 3_600_000 },
+};
+
+// Providers whose accounts post with one person's token and share that person's limit (#1096): every LinkedIn Company
+// Page posts with the token of the member who connected it, and LinkedIn counts the member's daily calls across their
+// own channel and all their pages. Such a limit counts the posts of every channel of these providers in the org that the
+// same member connected (connected_by; a reconnect by another member moves the channel, and its past posts, to them).
+// The member's channels in other orgs are not seen, so a member who posts there too may still meet LinkedIn's 429,
+// which waits as any rate limit does.
+export const SHARED_LIMIT_PROVIDERS: Readonly<Partial<Record<Provider, readonly Provider[]>>> = {
+  linkedin: ['linkedin', 'linkedin_page'],
+  linkedin_page: ['linkedin', 'linkedin_page'],
 };
 
 // When the next post may go out under a limit, given when the account's earlier posts in the window started: null when
@@ -1287,7 +1308,7 @@ export function limitWait(starts: readonly Date[], limit: PublishLimit, now: Dat
 // Media a channel fetches by URL (#772): on a deployment whose storage hands out no public file URLs (local disk), these
 // cannot go out, so the composer says so before the post is submitted. Instagram takes a Reel or a video Story without
 // one (Crove uploads the bytes), but not images, carousels or a cover image; Threads, Google Business, Zalo OA (its
-// images) and TikTok photos are fetched by URL always.
+// images, and a video article's cover image, #1429) and TikTok photos are fetched by URL always.
 export function needsPublicUrls(provider: Provider, media: readonly { kind: MediaKind }[], settings?: Readonly<Record<string, unknown>>): boolean {
   if (media.length === 0) return false;
   switch (provider) {

@@ -104,6 +104,33 @@ export const zPartyRef = z.object({
   phone: z.string().max(50).nullable(),
 });
 
+export const ACCOUNT_RULE_SOURCES = ['learned', 'vendor_default', 'builtin', 'user'] as const;
+export const RULE_MATCH_KINDS = ['description', 'keyword'] as const;
+export const zRuleMatchKind = z.enum(RULE_MATCH_KINDS);
+export const zAccountRule = z.object({
+  source: z.enum(ACCOUNT_RULE_SOURCES),
+  ruleId: zId.optional(),
+  scope: z.enum(['vendor', 'org']).optional(),
+  matchKind: zRuleMatchKind.optional(),
+});
+export type AccountRule = z.infer<typeof zAccountRule>;
+
+// A learned account rule as Settings lists it (#1399): what it matches (matchText in normalized form, label as people
+// wrote it), for which vendor (null: every vendor), the account, and its provenance: who confirmed it (their name while
+// they are a member), when, and the invoice whose approval taught it (null for a rule added in Settings).
+export const zCategorizationRule = z.object({
+  id: zId,
+  vendor: z.object({ partyId: zId, name: z.string() }).nullable(),
+  matchKind: zRuleMatchKind,
+  matchText: z.string(),
+  label: z.string().nullable(),
+  accountCode: zAccountCode,
+  confirmedBy: z.string().nullable(),
+  confirmedAt: z.string(),
+  sourceDocument: z.object({ documentId: zId, series: z.string(), number: z.string(), invoiceDate: zLocalDate }).nullable(),
+});
+export type CategorizationRule = z.infer<typeof zCategorizationRule>;
+
 export const zProposedLine = z.object({
   lineNo: z.number().int().positive(),
   description: z.string().max(2000),
@@ -116,6 +143,10 @@ export const zProposedLine = z.object({
   // account of a sale line (direction 'sale', issue #313). The name predates sales.
   debitAccount: zAccountCode,
   reason: z.string().max(500),
+  // What chose debitAccount (#1399): a learned rule (crove_finance.categorization_rule, with its id and whether it is
+  // the vendor's own or every vendor's), the vendor's default account, the built-in keyword list, or a user who picked
+  // it on a revision. Absent on proposals made before #1399.
+  accountRule: zAccountRule.optional(),
 });
 
 // A purchase invoice (the org is the buyer) or a sales invoice (the org is the seller, issue #313).
@@ -238,6 +269,10 @@ export const zOrgDetail = z.object({
   // finance.proposal.approve for a chief accountant, sorted. The screens use it to show what the server would allow;
   // the server checks again on every command.
   permissions: z.array(z.string()),
+  // The org's approval policy preset (issue #1402): founder or accountant (only the chief accountant approves the
+  // ledger's proposals), and the version of the org's choice. Only an owner changes it.
+  approvalPreset: z.string(),
+  approvalPolicyVersion: z.number().int().positive(),
 });
 
 // An org's Social figures on the multi-client home (#1261), read as the member in that org, each as the Social screen it
@@ -310,6 +345,14 @@ export const zOrgExport = z.object({
 // Member invites (issue #35). The token is 32 random bytes in base64url; only its SHA-256 is stored.
 export const zInviteToken = z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'invite token');
 export const zInviteRole = zRole.exclude(['owner']);
+// The legal entities an invite scopes its invitee to (issue #1281): on accept, one external_accountant assignment per
+// entity, so the invitee sees only those. 1 to 20 distinct entities of the org; only an owner sends such an invite, for
+// a member or a viewer.
+export const zInviteLegalEntityIds = z
+  .array(zId)
+  .min(1)
+  .max(20)
+  .refine((ids) => new Set(ids).size === ids.length, 'legal entities must be distinct');
 export const zInviteStatus = z.enum(['pending', 'expired', 'accepted', 'revoked']);
 
 // What the inviter gets back. Never says whether the email has an account. acceptPath (a path on this server,
@@ -335,6 +378,8 @@ export const zInvite = z.object({
   createdAt: z.string(),
   expiresAt: z.string(),
   mail: zInviteMailStatus.nullable(),
+  // The legal entities the invitee will be limited to (#1281), or null for an invite to the whole org.
+  legalEntityIds: z.array(zId).nullable(),
 });
 
 // What the invitee consents to before accepting.
@@ -641,7 +686,7 @@ export const zDuplicateHint = z.object({ keep: zPartyName, duplicate: zPartyName
 export const zDocumentExport = z.object({
   id: zId,
   at: z.string(),
-  format: z.enum(['journal', 'misa_sme_purchases', 'misa_sme_sales']),
+  format: z.enum(['journal', 'misa_sme_purchases', 'misa_sme_goods_purchases', 'misa_sme_sales']),
   from: zLocalDate.nullable(),
   to: zLocalDate.nullable(),
   actorName: z.string().nullable(),
@@ -1243,6 +1288,8 @@ export const zSocialSchedule = z.strictObject({
     .optional(),
 });
 
+// The most slots a channel's queue holds (#1172): social.queue.set refuses more, and the queue editor's helpers stop there.
+export const SOCIAL_QUEUE_SLOTS_MAX = 100;
 export const zSocialQueueSet = z.strictObject({
   connectionId: zId,
   timeZone: z.string().min(1).max(64),
@@ -1251,7 +1298,7 @@ export const zSocialQueueSet = z.strictObject({
   lowDays: z.number().int().min(1).max(30).nullable().optional(),
   slots: z
     .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional(), labelId: zId.nullable().optional() }))
-    .max(100),
+    .max(SOCIAL_QUEUE_SLOTS_MAX),
 });
 
 // Reordering a channel's queue (#1020): the posts trade the slot times they hold. A shuffle takes the posts of the

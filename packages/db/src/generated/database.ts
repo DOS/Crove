@@ -14,6 +14,7 @@ export type NotGranted = undefined;
 
 export interface CroveCrmSchema {
   'crove_crm.booking': CrmBookingTable;
+  'crove_crm.booking_feed': CrmBookingFeedTable;
   'crove_crm.event_type': CrmEventTypeTable;
 }
 
@@ -21,12 +22,14 @@ export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
   'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
+  'crove_finance.categorization_rule': FinanceCategorizationRuleTable;
   'crove_finance.depreciation_line': FinanceDepreciationLineTable;
   'crove_finance.fixed_asset': FinanceFixedAssetTable;
   'crove_finance.input_vat_check': FinanceInputVatCheckTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.journal_voucher': FinanceJournalVoucherTable;
+  'crove_finance.misa_goods_code': FinanceMisaGoodsCodeTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
   'crove_finance.period_balance_delta': FinancePeriodBalanceDeltaTable;
   'crove_finance.period_lock': FinancePeriodLockTable;
@@ -45,6 +48,7 @@ export interface CroveKernelSchema {
   'crove_kernel.agent_template': KernelAgentTemplateTable;
   'crove_kernel.agent_wakeup': KernelAgentWakeupTable;
   'crove_kernel.ai_run': KernelAiRunTable;
+  'crove_kernel.approval_preset': KernelApprovalPresetTable;
   'crove_kernel.audit_event': KernelAuditEventTable;
   'crove_kernel.availability_rule': KernelAvailabilityRuleTable;
   'crove_kernel.budget_policy': KernelBudgetPolicyTable;
@@ -137,6 +141,16 @@ export interface CroveSocialSchema {
   'crove_social.short_link_click': SocialShortLinkClickTable;
   'crove_social.snippet': SocialSnippetTable;
   'crove_social.watermark': SocialWatermarkTable;
+}
+
+/** crove_crm.booking_feed */
+export interface CrmBookingFeedTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  user_id: ColumnType<string, string, NotGranted>;
+  token_sha256: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
 }
 
 /** crove_crm.booking */
@@ -237,6 +251,21 @@ export interface FinanceCashVoucherTable {
   bank_line_id: ColumnType<string | null, string | null, NotGranted>;
 }
 
+/** crove_finance.categorization_rule */
+export interface FinanceCategorizationRuleTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  vendor_party_id: ColumnType<string | null, string | null, NotGranted>;
+  match_kind: ColumnType<string, string, NotGranted>;
+  match_text: ColumnType<string, string, NotGranted>;
+  label: string | null;
+  debit_account: string;
+  confirmed_by: string | null;
+  confirmed_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  source_document_id: string | null;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
 /** crove_finance.depreciation_line */
 export interface FinanceDepreciationLineTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -322,6 +351,17 @@ export interface FinanceJournalVoucherTable {
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   closing_year: ColumnType<number | null, number | null, NotGranted>;
+}
+
+/** crove_finance.misa_goods_code */
+export interface FinanceMisaGoodsCodeTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  account_code: ColumnType<string, string, NotGranted>;
+  item_code: string;
+  warehouse_code: string | null;
+  updated_by: string | null;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_finance.org_account */
@@ -553,6 +593,12 @@ export interface KernelAiRunTable {
   expires_at: ColumnType<Date, Date | string, Date | string>;
   finished_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   error: string | null;
+}
+
+/** crove_kernel.approval_preset */
+export interface KernelApprovalPresetTable {
+  key: ColumnType<string, NotGranted, NotGranted>;
+  ledger_chief_accountant_only: ColumnType<boolean, NotGranted, NotGranted>;
 }
 
 /** crove_kernel.audit_event */
@@ -827,6 +873,7 @@ export interface KernelMemberInviteTable {
   accepted_by: ColumnType<string | null, string | null, NotGranted>;
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
+  legal_entity_ids: ColumnType<string[] | null, string[] | null, NotGranted>;
 }
 
 /** crove_kernel.notification_mute */
@@ -1068,6 +1115,8 @@ export interface KernelTenantTable {
   address: string | null;
   contact_email: string | null;
   missing_invoice_reminder_day: number | null;
+  approval_preset: Generated<string>;
+  approval_policy_version: Generated<number>;
 }
 
 /** crove_kernel.usage_deferral */

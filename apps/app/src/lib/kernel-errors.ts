@@ -52,6 +52,9 @@ export const KERNEL_ERROR_CODES = [
   'INVITE_NOT_PENDING',
   'INVITE_PENDING_BY_OWNER',
   'INVITE_REVOKED',
+  // Invites scoped to legal entities (#1281).
+  'INVITE_SCOPE_OWNER_ONLY',
+  'INVITE_SCOPE_STALE',
   'INVITE_USED',
   'INVITE_RATE_LIMITED',
   'TOO_MANY_INVITES',
@@ -136,6 +139,10 @@ export const KERNEL_ERROR_CODES = [
   'ROLE_REVOKE_WIDENS_SCOPE',
   'ROLE_GRANT_WIDENS_SCOPE',
   'ROLE_PRIVILEGED_FOR_VIEWER',
+  // The approval rule preset (#1402).
+  'UNKNOWN_PRESET',
+  'NO_CHIEF_ACCOUNTANT',
+  'LAST_CHIEF_ACCOUNTANT',
   // Editing a party (#887).
   'INVALID_PARTY_NAME',
   'INVALID_EMAIL',
@@ -228,6 +235,13 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_TAGGED',
   'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
+  // MISA item and warehouse codes of stock accounts (#1398).
+  'NOT_STOCK_ACCOUNT',
+  'MISA_CODE_CONFLICT',
+  // Learned account rules (#1399).
+  'RULE_TEXT_TOO_SHORT',
+  'RULE_EXISTS',
+  'RULE_NOT_FOUND',
   // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
   'JOURNAL_VOUCHER_INVALID',
