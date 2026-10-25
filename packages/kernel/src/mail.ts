@@ -596,7 +596,10 @@ export const queueContactMail = defineCommand({
       .refine((v) => !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(v), 'one line'),
     payload: z.record(z.string().max(64), z.unknown()).refine((p) => Buffer.byteLength(JSON.stringify(p), 'utf8') <= MAIL_PAYLOAD_MAX_BYTES, 'too large'),
   }),
-  risk: 'R1',
+  // A mail queued to a contact is an effect outside Crove (plan §4.7: a send derives at least R2; coordinator
+  // decision on #1563, 2026-10-26): an agent may not queue one without review.
+  risk: 'R2',
+  sideEffect: 'external',
   access: CONTACT_MAIL_ROLES,
   handler: async (ctx, input) => {
     const tenant = await ctx.trx.selectFrom('crove_kernel.tenant').select('contact_email').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();

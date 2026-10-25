@@ -10,9 +10,8 @@ import { financeCommands } from '@crove/mod-finance';
 import { socialCommands } from '@crove/mod-social';
 
 // Commands without a side effect, per module. Annotating a module's commands shrinks its list; a new command must
-// declare one. kernel.mail.contact.queue waits for a decision (#1563): it queues an email to a contact, which derives
-// R2, and it is declared R1.
-const UNANNOTATED_KERNEL = ['kernel.mail.contact.queue'];
+// declare one. Every kernel command declares one.
+const UNANNOTATED_KERNEL: string[] = [];
 // The other modules' commands without a side effect on 2026-10-26, per module (follow-ups of #1563, one per lead).
 const UNANNOTATED_CEILING: Record<string, number> = { finance: 45, social: 158, crm: 12 };
 
@@ -43,6 +42,11 @@ describe('declared risk and side effects (#1563)', () => {
     }
     // Lower a ceiling when a module's commands are annotated; a new command without a side effect fails here.
     for (const [module, count] of Object.entries(counts)) expect(count, module).toBeLessThanOrEqual(UNANNOTATED_CEILING[module] ?? 0);
+  });
+
+  it('declares a mail queued to a contact as an external effect, R2 (#1563)', () => {
+    const queue = all().find((c) => c.name === 'kernel.mail.contact.queue');
+    expect(queue).toMatchObject({ risk: 'R2', sideEffect: 'external' });
   });
 
   it('leaves only the listed kernel commands without a side effect', () => {
