@@ -9,7 +9,7 @@
 // are made post by post, and the result names each copy, each post left out and why, and each copy whose text X or
 // LinkedIn would refuse as a repeat.
 import { useMutation } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -17,6 +17,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { cn } from '@crove/ui/lib/utils';
+import { DateTimeInput } from './date-time-input.tsx';
 import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, queryClient } from '../lib/api.ts';
@@ -162,6 +163,7 @@ export function BulkBar({
 }) {
   const t = useTranslations('social.bulk');
   const ts = useTranslations('social');
+  const dueLabel = useId();
   const f = useFormat();
   const [result, setResult] = useState<Outcome | null>(null);
   // The posts' text and the channels' names as they were when the action ran: a refused post may have left the list since.
@@ -422,10 +424,12 @@ export function BulkBar({
                 </NativeSelect>
               </label>
               {assignEdit.due.mode === 'set' && (
-                <label>
-                  <span className="text-subtle-foreground">{t('assign.dueAt')}</span>
-                  <Input type="datetime-local" className="mt-1 w-52" value={dueValue} onChange={(e) => setDueValue(e.target.value)} />
-                </label>
+                <div>
+                  <span id={dueLabel} className="text-subtle-foreground">
+                    {t('assign.dueAt')}
+                  </span>
+                  <DateTimeInput aria-labelledby={dueLabel} className="mt-1" value={dueValue} onChange={setDueValue} />
+                </div>
               )}
               <Button size="sm" disabled={busy || !assignment} onClick={applyAssign}>
                 {t('assign.apply')}

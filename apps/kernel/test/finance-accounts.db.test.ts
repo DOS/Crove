@@ -448,6 +448,11 @@ suite('chart of accounts: TT133 plus the org sub-accounts (#319)', () => {
   it('deactivates and renames without touching posted entries, refuses new postings, and still reverses', async () => {
     const [vendor] = (await rpc('parties/list', owner, {})).body as Array<{ id: string }>;
     expect((await rpc('parties/setDefaultAccount', owner, { partyId: vendor?.id, accountCode: '6422' })).status).toBe(200);
+    // The approvals above taught the vendor's line rules (#1399), which come before its default: remove them, so the
+    // next invoice is proposed on the default.
+    for (const rule of (await rpc('accountRules/list', owner, undefined)).body as Array<{ id: string }>) {
+      expect((await rpc('accountRules/remove', owner, { id: rule.id })).status).toBe(200);
+    }
     // A proposal edited onto the sub-account while it was in use.
     const pending = await propose('9003');
     const edited = await rpc('inbox/edit', owner, { id: pending, revision: 1, lineAccounts: [{ lineNo: 1, debitAccount: '6422.MKT' }], idempotencyKey: randomUUID() });

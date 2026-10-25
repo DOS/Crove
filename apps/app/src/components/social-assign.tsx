@@ -6,9 +6,9 @@ import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
-import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { DateTimeInput } from './date-time-input.tsx';
 import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -56,8 +56,10 @@ export function AssignCard({ post, canEdit }: { post: { id: string; assigneeUser
             </NativeSelect>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="post-due">{t('due')}</Label>
-            <Input id="post-due" type="datetime-local" value={due} onChange={(e) => setDue(e.target.value)} />
+            <Label id="post-due-label" htmlFor="post-due">
+              {t('due')}
+            </Label>
+            <DateTimeInput id="post-due" aria-labelledby="post-due-label" value={due} onChange={setDue} />
           </div>
           <div className="sm:col-span-2">
             <Button size="sm" disabled={!changed || save.isPending} onClick={() => save.mutate()}>

@@ -44,3 +44,71 @@ export function formatDateValue(value: string, kind: DateKind): string {
   const iso = MONTH_ISO.exec(value);
   return iso ? `${iso[2]}/${iso[1]}` : '';
 }
+
+// Time fields (#1432): 24-hour HH:mm whatever the browser's language, where a native time input shows AM/PM with
+// Chrome in English. The value stays HH:mm, as the native input gave.
+const TIME_TYPED = /^(\d{1,2})[:.hH](\d{2})(?::\d{2})?$/;
+// "9h" and "14h", as Vietnamese writes an hour.
+const HOUR_TYPED = /^(\d{1,2})[hH]$/;
+
+// The HH:mm value of what was typed, or null when it is not a whole time of day: 24:00, 9:5 and 9 are null. Seconds,
+// which a native input may add, are dropped.
+export function parseTimeText(text: string): string | null {
+  const s = text.trim();
+  const typed = TIME_TYPED.exec(s);
+  const hourOnly = typed ? null : HOUR_TYPED.exec(s);
+  if (!typed && !hourOnly) return null;
+  const hour = Number(typed ? typed[1] : hourOnly?.[1]);
+  const minute = typed ? Number(typed[2]) : 0;
+  return hour <= 23 && minute <= 59 ? `${pad(hour)}:${pad(minute)}` : null;
+}
+
+// How an HH:mm (or HH:mm:ss) value reads in the field; "" for no value or one that is not a time.
+export function formatTimeValue(value: string): string {
+  const m = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(value);
+  return m && Number(m[1]) <= 23 && Number(m[2]) <= 59 ? `${m[1]}:${m[2]}` : '';
+}
+
+// A datetime-local value (yyyy-mm-ddTHH:mm, the string lib/social.ts builds) as its date and time; both "" for none.
+export function splitDateTime(value: string): { date: string; time: string } {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(value);
+  return m ? { date: m[1] as string, time: m[2] as string } : { date: '', time: '' };
+}
+
+// And back: "" until both halves are set, as the native datetime-local input gives "" while a part is missing.
+export function joinDateTime(date: string, time: string): string {
+  return date && time ? `${date}T${time}` : '';
+}
+
+// What the fields do with their text (#1432), kept here so it is tested without a browser.
+
+// The value typing `text` sends: the parsed value, "" for an emptied field, or null (nothing is sent) while the text
+// is half-typed, so the field keeps its last value.
+export function typedValue(text: string, parse: (text: string) => string | null): string | null {
+  const value = parse(text);
+  if (value !== null) return value;
+  return text.trim() === '' ? '' : null;
+}
+
+// What is wrong with a date field's text: half-typed or impossible, or a whole date before min or after max (both ISO,
+// which compare as text). The visible field carries this, never the hidden picker.
+export type DateFieldError = 'partial' | 'early' | 'late' | null;
+export function dateFieldError(text: string, kind: DateKind, min?: string, max?: string): DateFieldError {
+  if (text.trim() === '') return null;
+  const iso = parseDateText(text, kind);
+  if (iso === null) return 'partial';
+  if (min && iso < min) return 'early';
+  if (max && iso > max) return 'late';
+  return null;
+}
+
+// The two halves of a date and time field and the value they send: a half changed by typing (or the picker), and a
+// value set from outside, which replaces both halves unless they already say it ("" while a half is missing keeps them).
+export type DateTimeParts = { date: string; time: string };
+export function changeDateTime(parts: DateTimeParts, change: Partial<DateTimeParts>): { parts: DateTimeParts; value: string } {
+  const next = { ...parts, ...change };
+  return { parts: next, value: joinDateTime(next.date, next.time) };
+}
+export function syncDateTime(parts: DateTimeParts, value: string): DateTimeParts {
+  return value === joinDateTime(parts.date, parts.time) ? parts : splitDateTime(value);
+}

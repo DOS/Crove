@@ -28,11 +28,12 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
-import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { RepeatIcon } from '@crove/ui/components/repeat-icon';
 import { cn } from '@crove/ui/lib/utils';
+import { DateInput } from './date-input.tsx';
+import { TimeInput } from './time-input.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -86,6 +87,9 @@ type Dragged = { kind: 'group'; key: string } | { kind: 'post'; id: string };
 // the undated list), and dates whether it may be given any date and time (a planned draft) or only an open slot (#1158).
 type Planning = Omit<PlanTarget, 'post'> & { post: Post; text: string; item: CalendarItem | null; dates: boolean };
 type Scheduling = Extract<SlotRequest, { kind: 'schedule' }>;
+// The date and time typed in the date editor (#1350), kept by SocialCalendar for the target it was opened for.
+type PlanDraft = { date: string; time: string };
+const planKey = (target: Planning) => `${target.post.id}:${target.item?.v.id ?? ''}`;
 
 // The undated drafts the list shows, the post list's default page.
 const UNDATED_LIMIT = 50;
@@ -337,11 +341,14 @@ function UndatedList({
 // A date and time for a draft, without dragging (#1145): its planned time to start with, or the first free 09:00 (the
 // next full hour today) for an undated one. Under a channel filter, the open slots of its queue too (#1158): picking one
 // does what a drop on it does (schedules: an owner or admin puts the channel in it; else the draft is planned then).
+// draft: the date and time typed before the editor moved into the day's dialog or out of it (#1350), which remounts it.
 function PlanEditor({
   target,
   busy,
   slots,
   schedules,
+  draft,
+  onDraft,
   onSave,
   onSlot,
   onClose,
@@ -350,6 +357,8 @@ function PlanEditor({
   busy: boolean;
   slots: readonly OpenSlot[];
   schedules: boolean;
+  draft: PlanDraft | null;
+  onDraft: (draft: PlanDraft) => void;
   onSave: (request: PlanRequest) => void;
   onSlot: (slot: OpenSlot) => void;
   onClose: () => void;
@@ -363,8 +372,16 @@ function PlanEditor({
     const now = new Date();
     return target.at ?? plannedAt(now, now) ?? plannedAt(addDays(startOfDay(now), 1), now) ?? now;
   });
-  const [date, setDate] = useState(dayId(initial));
-  const [time, setTime] = useState(`${String(initial.getHours()).padStart(2, '0')}:${String(initial.getMinutes()).padStart(2, '0')}`);
+  const [date, setDateOnly] = useState(draft?.date ?? dayId(initial));
+  const [time, setTimeOnly] = useState(draft?.time ?? `${String(initial.getHours()).padStart(2, '0')}:${String(initial.getMinutes()).padStart(2, '0')}`);
+  const setDate = (next: string) => {
+    setDateOnly(next);
+    onDraft({ date: next, time });
+  };
+  const setTime = (next: string) => {
+    setTimeOnly(next);
+    onDraft({ date, time: next });
+  };
   const [past, setPast] = useState(false);
   return (
     <Card className="block space-y-3 p-4">
@@ -429,13 +446,13 @@ function PlanEditor({
             <Label htmlFor="plan-date" className="text-xs">
               {t('planDate')}
             </Label>
-            <Input id="plan-date" type="date" autoFocus required value={date} min={dayId(new Date())} onChange={(e) => setDate(e.target.value)} className="w-40" />
+            <DateInput id="plan-date" autoFocus required value={date} min={dayId(new Date())} onChange={setDate} className="w-40" />
           </div>
           <div className="space-y-1">
             <Label htmlFor="plan-time" className="text-xs">
               {t('planTime')}
             </Label>
-            <Input id="plan-time" type="time" required value={time} onChange={(e) => setTime(e.target.value)} className="w-32" />
+            <TimeInput id="plan-time" required value={time} onChange={setTime} className="w-28" />
           </div>
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={busy}>
@@ -670,6 +687,11 @@ export function SocialCalendar({
   const beginDrag = (what: Dragged) => void setTimeout(() => setDragged(what), 0);
   const [refusal, setRefusal] = useState<'dropPast' | 'planPast' | 'slotLabel' | null>(null);
   const [planning, setPlanning] = useState<Planning | null>(null);
+  // What the open date editor holds (#1350), by its target's key: it survives "+N" opening or closing the day's dialog.
+  const [planDraft, setPlanDraft] = useState<(PlanDraft & { key: string }) | null>(null);
+  useEffect(() => {
+    if (!planning) setPlanDraft(null);
+  }, [planning]);
   const [done, setDone] = useState<string | null>(null);
   const [moved, setMoved] = useState<GroupMoveResult | null>(null);
   // A drop while a move is still running, said rather than dropped silently (#1044).
@@ -816,6 +838,7 @@ export function SocialCalendar({
   };
   const openPlan = (target: Planning) => {
     clearNotices();
+    setPlanDraft(null);
     setPlanning(target);
   };
   // What a chip's menu, and its row in the day's list, opens (#1145, #1158): the date editor for a draft at its post's
@@ -859,11 +882,13 @@ export function SocialCalendar({
   // modal dialog cannot be reached).
   const editor = planning && (
     <PlanEditor
-      key={`${planning.post.id}:${planning.item?.v.id ?? ''}`}
+      key={planKey(planning)}
       target={planning}
       busy={plan.isPending || slotting.isPending}
       slots={openSlots}
       schedules={canDecide && connectionId !== undefined && slotVariant(planning, connectionId) !== null}
+      draft={planDraft?.key === planKey(planning) ? planDraft : null}
+      onDraft={(next) => setPlanDraft({ key: planKey(planning), ...next })}
       onSave={sendPlan}
       onSlot={(slot) => connectionId && sendSlot(slotDrop(planning, slot, connectionId, may, new Date()))}
       onClose={() => setPlanning(null)}
