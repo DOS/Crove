@@ -1,5 +1,8 @@
 import { defineConfig } from 'vitest/config';
 
+// Database test files a CI part leaves to another part (#1041): comma-separated globs from the repository root.
+const DB_EXCLUDE = (process.env.CROVE_DB_TEST_EXCLUDE ?? '').split(',').filter(Boolean);
+
 export default defineConfig({
   test: {
     projects: [
@@ -24,7 +27,7 @@ export default defineConfig({
         test: {
           name: 'db',
           include: ['packages/*/test/**/*.db.test.ts', 'modules/*/test/**/*.db.test.ts', 'apps/kernel/test/**/*.db.test.ts'],
-          exclude: ['**/node_modules/**'],
+          exclude: ['**/node_modules/**', ...DB_EXCLUDE],
           fileParallelism: false,
           testTimeout: 30_000,
         },

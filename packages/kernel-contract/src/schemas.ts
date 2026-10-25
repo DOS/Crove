@@ -2329,11 +2329,12 @@ export const zSocialLinkPreview = z.object({
 });
 
 // A channel's options for the composer (#1120): a Pinterest board's sections, a YouTube channel's playlists and a
-// WordPress site's categories and tags, each with its taxonomy (#1131). Pending until the worker read them; failed with
-// why. Options only once they are read; their names are the platform's text, shown as text.
+// WordPress site's categories and tags, each with its taxonomy (#1131), and a TikTok account's creator options (#1497).
+// Pending until the worker read them; failed with why. Options only once they are read; their names are the
+// platform's text, shown as text.
 export const zSocialChannelOptions = z.object({
   connectionId: zId,
-  kind: z.enum(['pinterest_section', 'youtube_playlist', 'wordpress_term']),
+  kind: z.enum(['pinterest_section', 'youtube_playlist', 'wordpress_term', 'tiktok_creator']),
   status: z.enum(['pending', 'ready', 'failed']),
   options: z.array(z.object({ id: z.string(), name: z.string(), taxonomy: z.enum(['category', 'tag']).optional() })),
   error: z.enum(['token_expired', 'permission', 'not_found', 'no_answer']).nullable(),

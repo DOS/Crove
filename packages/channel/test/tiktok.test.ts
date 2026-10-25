@@ -479,3 +479,67 @@ describe('TikTokPublisher late ids (#1475)', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe('TikTokPublisher.options (#1497)', () => {
+  const CREATOR_INFO = 'POST open.tiktokapis.com/v2/post/publish/creator_info/query/';
+  const ask = (over: { secret?: string; externalAccountId?: string; kind?: 'tiktok_creator' | 'youtube_playlist' } = {}) => ({
+    externalAccountId: over.externalAccountId ?? OPEN_ID,
+    secret: over.secret ?? SECRET,
+    kind: over.kind ?? ('tiktok_creator' as const),
+  });
+
+  it("lists the creator's nickname, allowed privacy levels, turned-off interactions and longest video, with the account's token", async () => {
+    const { fetchImpl, calls } = tiktok({
+      [CREATOR_INFO]: [creator(['SELF_ONLY', 'MUTUAL_FOLLOW_FRIENDS', 'NEW_LEVEL'], { creator_nickname: 'Tiệm Bánh\u200b B', duet_disabled: true, stitch_disabled: true })],
+    });
+    expect(await new TikTokPublisher(APP, fetchImpl).options(ask())).toEqual({
+      options: [
+        // The name kept without invisible marks; a level TikTok adds later is not listed until Crove knows it.
+        { id: 'nickname', name: 'Tiệm Bánh B' },
+        { id: 'privacy_MUTUAL_FOLLOW_FRIENDS', name: 'MUTUAL_FOLLOW_FRIENDS' },
+        { id: 'privacy_SELF_ONLY', name: 'SELF_ONLY' },
+        { id: 'off_duet', name: 'off' },
+        { id: 'off_stitch', name: 'off' },
+        { id: 'max_video_seconds', name: '600' },
+      ],
+    });
+    expect(calls.map((c) => [c.route, c.headers.get('authorization')])).toEqual([[CREATOR_INFO, 'Bearer act.token-1']]);
+    expect(calls[0]?.body).toEqual({});
+  });
+
+  it('falls back to the username without a nickname, and lists nothing it cannot read', async () => {
+    const { fetchImpl } = tiktok({ [CREATOR_INFO]: [{ body: { data: { creator_username: 'tiembanhb', privacy_level_options: 'PUBLIC', comment_disabled: 'yes', max_video_post_duration_sec: -5 }, error: ok } }] });
+    expect(await new TikTokPublisher(APP, fetchImpl).options(ask())).toEqual({ options: [{ id: 'nickname', name: 'tiembanhb' }] });
+  });
+
+  it('says when TikTok will not let the account post now, and tells a dead token and a missing grant from an outage', async () => {
+    const { fetchImpl } = tiktok({
+      [CREATOR_INFO]: [
+        { body: { data: {}, error: { code: 'spam_risk_too_many_posts', message: 'daily cap' } } },
+        { body: { data: {}, error: { code: 'spam_risk_user_banned_from_posting', message: 'banned' } } },
+        { status: 401, body: { error: { code: 'access_token_invalid', message: 'expired' } } },
+        { status: 401, body: { error: { code: 'scope_not_authorized', message: 'no video.publish' } } },
+        { status: 429, body: { error: { code: 'rate_limit_exceeded', message: 'slow down' } } },
+        { body: { data: {}, error: { code: 'reached_active_user_cap', message: 'client cap' } } },
+        { status: 503, body: {} },
+      ],
+    });
+    const publisher = new TikTokPublisher(APP, fetchImpl);
+    expect(await publisher.options(ask())).toEqual({ options: [{ id: 'cannot_post', name: 'spam_risk_too_many_posts' }] });
+    expect(await publisher.options(ask())).toEqual({ options: [{ id: 'cannot_post', name: 'spam_risk_user_banned_from_posting' }] });
+    expect(await publisher.options(ask())).toEqual({ refused: 'token_expired' });
+    expect(await publisher.options(ask())).toEqual({ refused: 'permission' });
+    expect(await publisher.options(ask())).toBeNull();
+    expect(await publisher.options(ask())).toBeNull();
+    expect(await publisher.options(ask())).toBeNull();
+  });
+
+  it('asks nothing with an unreadable secret, another kind or a malformed account id', async () => {
+    const { fetchImpl, calls } = tiktok({});
+    const publisher = new TikTokPublisher(APP, fetchImpl);
+    expect(await publisher.options(ask({ secret: '{}' }))).toEqual({ refused: 'token_expired' });
+    expect(await publisher.options(ask({ kind: 'youtube_playlist' }))).toEqual({ refused: 'not_found' });
+    expect(await publisher.options(ask({ externalAccountId: 'not an open id' }))).toEqual({ refused: 'not_found' });
+    expect(calls).toHaveLength(0);
+  });
+});

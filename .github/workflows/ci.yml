@@ -13,11 +13,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
-    name: Lint, typecheck, test
+  # The checks run in parallel jobs (#1041): lint, typecheck and unit tests here, the database tests in `db` split in
+  # three, and `check` below, the required "Lint, typecheck, test", passes only when every one of them passed.
+  static:
+    name: Lint, typecheck, unit tests
     runs-on: ubuntu-latest
-    # The database tests alone take about 13 minutes now (#1041); room for them to grow until they are split.
-    timeout-minutes: 25
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
@@ -79,14 +80,89 @@ jobs:
           CROVE_TEST_S3_URL: http://crove-ci:crove-ci-minio@127.0.0.1:9000/crove-test
         run: pnpm exec vitest run --project unit
 
+      - name: Build web app
+        run: pnpm --filter @crove/app build
+
+  # The database tests run one file at a time (fileParallelism: false) and took 17 minutes in one job (#1041). Two
+  # files take 44% of that (finance-search on 50,000 documents, about 260 s; archive, about 150 s), so they run in a
+  # job of their own and every other file in two shards, each job on its own PostgreSQL. A renamed heavy file fails the
+  # heavy job (no test files found) until this list follows it.
+  db:
+    name: Database tests (${{ matrix.part.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        part:
+          - name: heavy files
+            args: apps/kernel/test/finance-search.db.test.ts apps/kernel/test/archive.db.test.ts
+            exclude: ''
+          - name: shard 1 of 2
+            args: --shard=1/2
+            exclude: apps/kernel/test/finance-search.db.test.ts,apps/kernel/test/archive.db.test.ts
+          - name: shard 2 of 2
+            args: --shard=2/2
+            exclude: apps/kernel/test/finance-search.db.test.ts,apps/kernel/test/archive.db.test.ts
+    services:
+      postgres:
+        image: postgres:17@sha256:2d2b8998d31037bf721cfdf764d76ba74171b4fab3431b7f72c27c56ddbdf9e3
+        env:
+          POSTGRES_PASSWORD: ci-postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      CROVE_TEST_ADMIN_URL: postgres://postgres:ci-postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.34.7 --no-fund --no-audit
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter "@crove/kernel-server..." --filter "@crove/app..." --filter "./modules/*" --filter "@crove/e2e" --filter "crove-monorepo"
+
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 127.0.0.1:9000:9000 -e MINIO_ROOT_USER=crove-ci -e MINIO_ROOT_PASSWORD=crove-ci-minio \
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z@sha256:b6bfe7239bfc83fb90d31612d9704d86039dd714f7904b3f1ad68f211e602372 server /data
+          curl --silent --fail --retry 30 --retry-all-errors --retry-delay 1 http://127.0.0.1:9000/minio/health/live
+
       # The staged upload tests (#109) run on MinIO too: the database decides single use, the bucket holds the bytes.
       - name: Database tests (PostgreSQL 17, S3 tests against MinIO)
         env:
           CROVE_TEST_S3_URL: http://crove-ci:crove-ci-minio@127.0.0.1:9000/crove-test
-        run: pnpm exec vitest run --project db
+          PART_ARGS: ${{ matrix.part.args }}
+          # Read by vitest.config.ts: the files another part runs (vitest's --exclude does not reach a project).
+          CROVE_DB_TEST_EXCLUDE: ${{ matrix.part.exclude }}
+        run: |
+          # PART_ARGS is this file's own matrix value, split into arguments on purpose.
+          # shellcheck disable=SC2086
+          pnpm exec vitest run --project db $PART_ARGS
 
-      - name: Build web app
-        run: pnpm --filter @crove/app build
+  # The required check: it passes only when the static job and every database part passed, so a failed, cancelled or
+  # skipped part fails it.
+  check:
+    name: Lint, typecheck, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [static, db]
+    if: always()
+    steps:
+      - name: Every part passed
+        env:
+          STATIC: ${{ needs.static.result }}
+          DB: ${{ needs.db.result }}
+        run: |
+          echo "static: $STATIC, database tests: $DB"
+          test "$STATIC" = success && test "$DB" = success
 
   # The migrations and the definer hardening guard (External-tenant gate T17) on the Supabase Postgres image that
   # hosted Supabase runs (issue #179): its extensions, its roles and the supautils hooks, with migrations run as
