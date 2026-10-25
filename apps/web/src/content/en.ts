@@ -329,7 +329,7 @@ export const en: Dictionary = {
     deptLabel: 'Department of',
     finance: {
       name: 'Finance',
-      body: 'AI Inbox, vouchers, general journal, ledger, the TT133 chart of accounts, vendors, VAT returns and opening balances.',
+      body: 'AI Inbox for purchase and sales invoices, the general journal and ledgers, B01 and B02 statements, receipts and payments, bank statements, fixed assets, the VAT return as XML for HTKK, exports to MISA SME, books per legal entity and a monthly period lock.',
       people: [
         { name: 'Chị Lan', initials: 'L', agent: false },
         { name: 'Accounting agent', initials: '', agent: true },
@@ -389,7 +389,7 @@ export const en: Dictionary = {
     },
     social: {
       name: 'Social',
-      body: 'Schedule posts for Facebook, LinkedIn, X, YouTube and TikTok. Each channel has its own approval steps, and photos and videos live in one shared library.',
+      body: 'Schedule posts for Facebook, Instagram, Threads, TikTok, YouTube, LinkedIn, X, Zalo OA, Google Business and more. Each channel has its own approval steps, and photos and videos live in one shared library.',
       people: [
         { name: 'Anh Minh', initials: 'M', agent: false },
         { name: 'Social agent', initials: '', agent: true },
@@ -405,6 +405,24 @@ export const en: Dictionary = {
         { label: 'Wed 21/10', today: false, post: null },
         { label: 'Thu 22/10', today: false, post: null },
       ],
+    },
+    crm: {
+      name: 'CRM & Calendar',
+      body: 'A public booking page for each kind of meeting. Clients pick a free time, both sides get a confirmation email with a calendar file, reminders go out on their own, and clients move or cancel with a link that works once.',
+      people: [{ name: 'Chị Hoa', initials: 'H', agent: false }],
+      pageTitle: 'Wholesale rice consultation',
+      pageSub: '30 minutes, at the Long An warehouse',
+      slotsLabel: 'Free times, week of 19/10',
+      days: [
+        { label: 'Mon 19/10', slots: ['09:00', '10:30', '14:00'] },
+        { label: 'Tue 20/10', slots: ['08:30', '14:00', '15:30'], picked: '14:00' },
+        { label: 'Wed 21/10', slots: ['09:30'] },
+        { label: 'Thu 22/10', slots: [] },
+      ],
+      noSlots: 'Fully booked',
+      pickedLabel: 'Picked',
+      booked: { title: 'New booking', who: 'Gạo Sạch Miền Tây Co., Ltd.', when: '14:00, Tue 20/10/2026', state: 'Confirmed' },
+      suggest: 'A client writes "is Tuesday afternoon OK?": AI suggests 14:00 or 15:30, and Chị Hoa checks and sends the reply.',
     },
   },
   trust: {
