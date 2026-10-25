@@ -464,7 +464,7 @@ describe('TikTokPublisher.listRecentPosts', () => {
     // TikTok documents ids as strings; one sent as a 64-bit number is read from the answer's text, never rounded.
     const raw = `{"data":{"videos":[${JSON.stringify(video('7430000000000000002', 2 * DAY, { title: 'Ưu đãi', video_description: 'Ưu đãi cuối tuần #sale' }))},null,{"id":7430000000000000123,"create_time":${seconds(DAY)},"title":"Khai trương chi nhánh mới","video_description":"","share_url":"https://vm.tiktok.com/ZMabc/"},${JSON.stringify(
       video('7430000000000000001', 3 * DAY, { share_url: 'https://tiktok.com.evil.example/v' }),
-    )},${JSON.stringify(video('not-a-number', DAY))},${JSON.stringify(video('7430000000000000004', DAY, { create_time: 'yesterday' }))},${JSON.stringify(video('7430000000000000000', 31 * DAY))}],"cursor":1700000000000,"has_more":true},"error":{"code":"ok","message":"","log_id":"x"}}`;
+    )},${JSON.stringify(video('not-a-number', DAY))},${JSON.stringify(video('7430000000000000004', DAY, { create_time: 'yesterday' }))},${JSON.stringify(video('7430000000000000005', DAY, { create_time: 9e15 }))},${JSON.stringify(video('7430000000000000000', 31 * DAY))}],"cursor":1700000000000,"has_more":true},"error":{"code":"ok","message":"","log_id":"x"}}`;
     const { calls, fetchImpl } = routes({ [list]: [{ body: raw }] });
     const result = await new TikTokPublisher(app, fetchImpl).listRecentPosts({ ...input, since: new Date(Date.now() - 90 * DAY) });
     expect(result && 'posts' in result ? result.posts.map((p) => [p.externalId, p.text, p.permalink]) : result).toEqual([

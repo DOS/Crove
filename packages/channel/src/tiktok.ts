@@ -381,7 +381,10 @@ function videoListOf(raw: string): VideoListAnswer {
 // A video's create_time (UTC seconds), or null.
 function createTimeOf(value: unknown): Date | null {
   const seconds = typeof value === 'number' ? value : typeof value === 'string' && /^\d{1,12}$/.test(value) ? Number(value) : Number.NaN;
-  return Number.isSafeInteger(seconds) && seconds > 0 ? new Date(seconds * 1000) : null;
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) return null;
+  // A safe integer can still be past what a Date holds (about 8.64e15 ms): such a time is no time.
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 const captionOf = (content: { body: string; linkUrl: string | null }, max = TITLE_MAX) => {
