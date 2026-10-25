@@ -2505,6 +2505,16 @@ export const vi = {
       failed: 'Không lưu được ảnh đã cắt',
       cannotRead: 'Trình duyệt không mở được ảnh này để cắt',
     },
+    imageFix: {
+      refused: '{channels} không nhận ảnh này',
+      fix: 'Sửa cho kênh',
+      note: 'Lưu thành ảnh JPEG mới và thay vào bài. Thông tin máy chụp, vị trí trong ảnh sẽ bị bỏ; ảnh gốc vẫn còn trong thư viện.',
+      noteSize: 'Lưu thành ảnh JPEG mới, không quá {max}, và thay vào bài. Thông tin máy chụp, vị trí trong ảnh sẽ bị bỏ; ảnh gốc vẫn còn trong thư viện.',
+      animated: 'Ảnh động sẽ mất chuyển động nếu sửa ở đây. Hãy chuyển ảnh thành video rồi tải lên.',
+      noFit: 'Không thể giảm ảnh xuống dưới {max} mà vẫn đủ rộng cho kênh. Ảnh gốc được giữ nguyên.',
+      cannotRead: 'Trình duyệt này không mở được ảnh để sửa',
+      failed: 'Không lưu được ảnh đã sửa',
+    },
     insights: {
       title: 'Điều gì hiệu quả',
       hint: 'So sánh bài của mỗi kênh trong khoảng đã chọn với mức tương tác trung vị của chính kênh đó (vạch giữa): theo định dạng, nhãn, thứ, giờ đăng (theo múi giờ của bạn) và hashtag dùng từ 3 bài trở lên. Tương tác gồm lượt thích, bình luận, chia sẻ và lưu.',
