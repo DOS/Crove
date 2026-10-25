@@ -247,21 +247,29 @@ export function ListSkeleton({ rows = 3 }: { rows?: number }) {
 export function DataTable({ head, numeric = [], children }: { head: string[]; numeric?: number[]; children: ReactNode }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [scrolls, setScrolls] = useState(false);
+  // The pinned header's height, kept clear when focus scrolls a row into view (WCAG 2.4.11, #1575): Shift+Tab up the
+  // table would otherwise leave the row it reaches under the header.
+  const [headerHeight, setHeaderHeight] = useState(0);
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    const measure = () => setScrolls(el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
+    const header = el.querySelector('thead');
+    const measure = () => {
+      setScrolls(el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
+      setHeaderHeight(header?.offsetHeight ?? 0);
+    };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
     if (el.firstElementChild) observer.observe(el.firstElementChild);
+    if (header) observer.observe(header);
     return () => observer.disconnect();
   }, []);
   return (
     <div className="overflow-hidden rounded-xl border bg-card">
       <Table
         className="min-w-[640px] [&_td]:whitespace-normal"
-        container={{ ref: scroller, className: 'max-h-[max(24rem,calc(100dvh-10rem))] overflow-y-auto', tabIndex: scrolls ? 0 : undefined }}
+        container={{ ref: scroller, className: 'max-h-[max(24rem,calc(100dvh-10rem))] overflow-y-auto', tabIndex: scrolls ? 0 : undefined, style: { scrollPaddingTop: headerHeight } }}
       >
         {/* The rule under the header is a shadow: a collapsed border does not move with a sticky row. */}
         <TableHeader className="sticky top-0 z-10 bg-muted [&_th]:bg-muted [&_th]:shadow-[inset_0_-1px_0_var(--color-border)] [&_tr]:border-b-0">
