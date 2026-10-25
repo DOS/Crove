@@ -14,10 +14,10 @@ import { AUTO_REPLY_STALE_MS, autoReplyCallsOf } from './auto-reply.ts';
 import { REPOST_STALE_MS, repostCallsOf } from './repost.ts';
 import { EDIT_STALE_MS, editCallsOf } from './edit-published.ts';
 import { mentionsOf } from './domain/mentions.ts';
-import { NOT_PUBLIC_NOTES } from './domain/channels.ts';
+import { publishedNote } from './domain/late-ids.ts';
 import { QUEUE_ORDER_COMMANDS, reorderCode } from './queue-order.ts';
 import { channelScope, connectionInScope, postsInScope, refuseChannels, refusePostOutside, type ChannelScope } from './channel-access.ts';
-import { mediaOf, type Trx } from './variants.ts';
+import { mediaOf, settingsOf, type Trx } from './variants.ts';
 import { tickedOf, type TickedCheck } from './review-checklist.ts';
 import { channelFrozen, contextOf, locateSuggestion, postFrozen } from './domain/suggestion.ts';
 
@@ -289,7 +289,8 @@ export interface ActivityItem {
   editable: boolean;
   // A published channel's link, a failed channel's error code; on a published channel not public yet, its note:
   // SENT_TO_APP on a draft sent to the platform's app (#903), WORDPRESS_DRAFT or WORDPRESS_PENDING on a post the site
-  // keeps unpublished (#981).
+  // keeps unpublished (#981); TIKTOK_NO_POST_ID on a TikTok post that never got its public id, POSTED_IN_APP on a
+  // TikTok draft the creator posted in the app (#1475).
   url: string | null;
   code: string | null;
   // On an approval: the review checklist items the reviewer ticked (#1105); null otherwise or without a checklist.
@@ -376,7 +377,7 @@ export const postActivity = defineQuery({
     if ((await postsInScope(ctx, scope, [post.id])).length === 0) throw new DomainError('POST_NOT_FOUND', 404, 'Không tìm thấy bài đăng');
     const variants = await ctx.trx
       .selectFrom('crove_social.post_variant')
-      .select(['id', 'status', 'published_at', 'external_url', 'error_code', 'updated_at', 'removed_at', 'removed_by', 'remove_reason', 'media', 'body', 'revision', 'content_frozen'])
+      .select(['id', 'provider', 'settings', 'status', 'published_at', 'external_url', 'error_code', 'updated_at', 'removed_at', 'removed_by', 'remove_reason', 'media', 'body', 'revision', 'content_frozen'])
       .where('org_id', '=', ctx.orgId)
       .where('post_id', '=', post.id)
       .where(connectionInScope(scope, 'channel_connection_id'))
@@ -500,8 +501,8 @@ export const postActivity = defineQuery({
       }),
       ...variants.flatMap((v): ActivityItem[] => {
         // A draft sent to the platform's app (#903) or kept on the site (#981) carries its note, so the timeline does not
-        // call it out.
-        if (v.status === 'published' && v.published_at) return [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id, url: v.external_url, code: v.error_code !== null && NOT_PUBLIC_NOTES.includes(v.error_code) ? v.error_code : null }];
+        // call it out; so does a TikTok post that never got its public id, or a TikTok draft posted in the app (#1475).
+        if (v.status === 'published' && v.published_at) return [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id, url: v.external_url, code: publishedNote({ ...v, settings: settingsOf(v) }) }];
         if (v.status === 'removed' && v.removed_at) {
           const removed: ActivityItem = { ...none, id: `removed:${v.id}`, kind: 'removed', at: v.removed_at.toISOString(), userId: v.removed_by, variantId: v.id, body: v.remove_reason };
           return v.published_at ? [{ ...none, id: `published:${v.id}`, kind: 'published', at: v.published_at.toISOString(), variantId: v.id }, removed] : [removed];

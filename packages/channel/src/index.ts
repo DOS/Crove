@@ -210,6 +210,28 @@ export interface MetricsInput {
 }
 export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extra?: Record<string, unknown> } | { refused: 'token_expired' | 'gone' } | null;
 
+// A published post the platform gives its public id only later (#1475, TikTok): a public post gets it once the
+// platform's moderation passes, and a draft sent to the account's app becomes a post once the account posts it there.
+// The worker asks again, reading the status only; it never posts. externalRef: the platform's tracking id of the post
+// (TikTok's publish_id). scopes: what the connection was granted, for a read only some grants allow (its address).
+export interface LateIdInput {
+  externalAccountId: string;
+  secret: string;
+  externalRef: string;
+  scopes: readonly string[];
+}
+// posted: out, with its public id (and its address when the platform gives one); posted_without_id: out, with no public
+// id yet (moderation still running, or a post not public); waiting: still processing, or a draft not posted yet; failed:
+// the platform says it will not be posted, or will not answer for it again; refused: the token no longer works; null:
+// no answer worth keeping (an outage, a rate limit), ask again later.
+export type LateIdResult =
+  | { kind: 'posted'; externalId: string; url: string | null }
+  | { kind: 'posted_without_id' }
+  | { kind: 'waiting' }
+  | { kind: 'failed'; code: string }
+  | { kind: 'refused' }
+  | null;
+
 // What a platform says about a connected account itself (#645): its followers (subscribers on YouTube), and the people
 // it reached over the last day where the platform gives that. null: no answer worth keeping (a network failure, a
 // malformed answer); refused: the token or the permission was refused.
@@ -374,6 +396,8 @@ export interface Publisher {
   // Providers that report how a post did: null when the platform did not answer (try again later), refused when the
   // token no longer works or the post is gone.
   metrics?(input: MetricsInput): Promise<MetricsResult>;
+  // Providers that give a published post's public id only later (#1475, TikTok): where it stands now, read only.
+  lateId?(input: LateIdInput): Promise<LateIdResult>;
   // Providers that report an account's followers (#645), read once a day.
   accountMetrics?(input: AccountMetricsInput): Promise<AccountMetricsResult>;
   // Providers that list the account's own recent posts (#1054), so posts published outside Crove can be counted.

@@ -20,7 +20,11 @@
 // the draft is in the app, not public, with no post id yet. Photos go through content/init with post_mode
 // MEDIA_UPLOAD and their description. It needs the video.upload scope, which Crove asks for only when the deployment
 // sets CHANNEL_TIKTOK_INBOX (its TikTok app must be approved for it), and which connections made before then lack.
-import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+// Late ids (#1475): TikTok gives a public post's id (publicaly_available_post_id) only once its moderation passes, which
+// may come after PUBLISH_COMPLETE, and an inbox draft moves on to PUBLISH_COMPLETE once the creator posts it in TikTok.
+// lateId asks status/fetch again for such a post (a read, never a post), and reads its address from video/query where
+// the connection has video.list.
+import type { ConnectedAccount, LateIdInput, LateIdResult, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { videoCoverOf } from './cover.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -336,6 +340,12 @@ interface StatusAnswer {
   publicaly_available_post_id?: unknown;
 }
 
+// The first public post id of a status answer, as written in its text (a 64-bit integer, or a string of digits), never
+// through a JS number. A draft the creator turned into several posts gives several; the first is the post's.
+const postIdOf = (raw: string) => /"publicaly_available_post_id"\s*:\s*\[\s*"?(\d{1,32})/.exec(raw)?.[1];
+// A video's address as video/query gives it: https on tiktok.com only.
+const SHARE_URL = /^https:\/\/(?:[a-z0-9-]+\.)*tiktok\.com\/\S{1,1900}$/i;
+
 const captionOf = (content: { body: string; linkUrl: string | null }, max = TITLE_MAX) => {
   const body = content.body.trim();
   return (content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body).slice(0, max);
@@ -572,19 +582,65 @@ export class TikTokPublisher implements Publisher {
     }
     switch (answer.status) {
       case 'PUBLISH_COMPLETE': {
-        // The first id as written in the answer (a 64-bit integer, or a string of digits), never through a JS number.
-        const id = /"publicaly_available_post_id"\s*:\s*\[\s*"?(\d{1,32})/.exec(raw)?.[1];
-        // A private (SELF_ONLY) post has no public id: it is known by its publish_id.
+        const id = postIdOf(raw);
+        // A private (SELF_ONLY) post has no public id: it is known by its publish_id. A public one still in moderation
+        // has none yet either; the late-id sweep asks again for it (#1475).
         return { kind: 'accepted', externalId: id ?? input.externalRef, url: null };
       }
       case 'SEND_TO_USER_INBOX':
         // Inbox mode (#903): the draft is in the creator's TikTok inbox. The check ends here; the post is not public and
-        // has no id until the creator posts it in TikTok, so it is known by its publish_id.
+        // has no id until the creator posts it in TikTok, so it is known by its publish_id. The late-id sweep asks again
+        // until they do (#1475).
         return { kind: 'accepted', externalId: input.externalRef, url: null, sentToApp: true };
       case 'FAILED':
         return { kind: 'rejected', error: 'bad_request', code: typeof answer.fail_reason === 'string' ? answer.fail_reason.slice(0, 100) : 'FAILED' };
       default:
         return { kind: 'pending', externalRef: input.externalRef, checkAfterSeconds: CHECK_AFTER_SECONDS };
+    }
+  }
+
+  // Where a published post without its public id stands now (#1475): status/fetch again, a read only. PUBLISH_COMPLETE
+  // with an id is the post out with its id (and its address from video/query, with video.list); without one, out with no
+  // public id yet (moderation, or a post not public); FAILED, never posted; any other status is still on its way (an
+  // inbox draft waits at SEND_TO_USER_INBOX until the creator posts it). A refused token is the connection's; a publish_id
+  // TikTok refuses for good (invalid_publish_id) will not answer again; a rate limit or an outage is asked again later.
+  async lateId(input: LateIdInput): Promise<LateIdResult> {
+    const s = tiktokSecretOf(input.secret);
+    if (!s) return { kind: 'refused' };
+    if (!PUBLISH_ID.test(input.externalRef)) return { kind: 'failed', code: 'BAD_PUBLISH_ID' };
+    let answer: StatusAnswer;
+    let raw = '';
+    try {
+      ({ data: answer, raw } = await this.client.callRaw<StatusAnswer>('POST', '/post/publish/status/fetch/', s.accessToken, { publish_id: input.externalRef }));
+    } catch (error) {
+      const result = publishResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { kind: 'refused' };
+      const status = result.kind === 'rejected' ? (result.httpStatus ?? 0) : 0;
+      if (result.kind === 'rejected' && (result.error === 'bad_request' || result.error === 'permission') && status >= 400 && status < 500) return { kind: 'failed', code: (result.code ?? 'STATUS_REFUSED').slice(0, 100) };
+      return null;
+    }
+    switch (answer.status) {
+      case 'PUBLISH_COMPLETE': {
+        const id = postIdOf(raw);
+        if (!id) return { kind: 'posted_without_id' };
+        return { kind: 'posted', externalId: id, url: input.scopes.includes(TIKTOK_METRICS_SCOPE) ? await this.shareUrl(s.accessToken, id) : null };
+      }
+      case 'FAILED':
+        return { kind: 'failed', code: typeof answer.fail_reason === 'string' && answer.fail_reason ? answer.fail_reason.slice(0, 100) : 'FAILED' };
+      default:
+        return { kind: 'waiting' };
+    }
+  }
+
+  // A video's address from video/query (video.list); null when TikTok does not give one, whatever the reason: the id is
+  // recorded all the same.
+  private async shareUrl(token: string, id: string): Promise<string | null> {
+    try {
+      const answer = await this.client.call<{ videos?: { share_url?: unknown }[] }>('POST', '/video/query/?fields=id,share_url', token, { filters: { video_ids: [id] } });
+      const url = answer.videos?.[0]?.share_url;
+      return typeof url === 'string' && SHARE_URL.test(url) ? url : null;
+    } catch {
+      return null;
     }
   }
 }

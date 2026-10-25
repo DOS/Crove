@@ -3391,6 +3391,8 @@ export const en = {
       createdAi: 'drafted the post with AI',
       suggested: 'suggested an edit',
       sentToApp: 'was sent to the TikTok app as a draft; open TikTok to post it',
+      postedInApp: 'was posted in TikTok',
+      tiktokNoPostId: 'was posted, but TikTok has not given its post id',
       wordpressDraft: 'was saved as a draft on WordPress; open the dashboard to publish it',
       wordpressPending: 'was sent for review on WordPress; it goes up once someone approves and publishes it',
       kind: {
@@ -4337,6 +4339,8 @@ export const en = {
       failed: 'The platform refused this post.',
       platformSaid: 'The platform said: {message}',
       sentToApp: 'Sent to the TikTok app, open TikTok to post it. You add music and post it there; until then nobody can see it.',
+      postedInApp: 'Posted in TikTok.',
+      tiktokNoPostId: 'TikTok has not given this post its id, so {brand} has no link or counts for it. You can find the post in TikTok.',
       scopeMissing: 'This TikTok channel was connected before {brand} could send drafts to the TikTok app. Reconnect it to allow that; the post is paused, not lost, and goes once the channel is reconnected.',
       inboxNotEnabled: 'This server does not send drafts to the TikTok app (its TikTok app is not set up for it), so nothing was sent. Choose Post now, then publish again.',
       scopeMissingFailed:'TikTok did not let {brand} send drafts to the TikTok app for this channel. Reconnect the channel, then publish again.',
