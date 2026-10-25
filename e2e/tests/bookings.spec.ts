@@ -65,6 +65,7 @@ test('a visitor books on the public page, the host sees it in the app, cancels i
   });
 
   await test.step('the host sees the booking on the Bookings screen and cancels it', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'CRM', exact: true }).click();
     await page.getByRole('navigation').getByRole('link', { name: 'Lịch hẹn' }).click();
     await expect(page).toHaveURL(new RegExp(`/o/${slug}/bookings$`));
     const row = page.getByTestId('booking-row').filter({ hasText: 'Nguyễn Văn Khách' });

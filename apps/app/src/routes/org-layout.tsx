@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Outlet, useNavigate, useParams } from '@tanstack/react-router';
+import { Outlet, useLocation, useNavigate, useParams } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { NavIcon } from '@crove/ui/components/nav-icon';
-import { ALL_NAV, NAV_GROUPS, NavDrawer, ShellNav, type NavItem } from '../components/app-nav.tsx';
+import { NavDrawer, ShellNav } from '../components/app-nav.tsx';
 import { CommandPalette, type PaletteEntry } from '../components/command-palette.tsx';
 import { Toaster } from '../components/toaster.tsx';
 import { Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { LOCALE_NAMES, LOCALES } from '../i18n/locale.ts';
 import { useFormat, useLocaleSetting } from '../i18n/provider.tsx';
 import { orpc } from '../lib/api.ts';
+import { ALL_NAV, appOfPath, installedApps, type AppId } from '../lib/apps.ts';
 import { getConfig } from '../lib/auth.ts';
 import { installedItems } from '../lib/modules.ts';
 import { isPaletteShortcut, searchTerm } from '../lib/palette.ts';
@@ -35,10 +36,13 @@ function useSettled<T>(value: T, ms: number): T {
 
 export function OrgLayout() {
   const NAV = useMemo(() => installedItems(getConfig().modules, ALL_NAV), []);
-  const groups = useMemo(
-    () => NAV_GROUPS.map((g) => ({ id: g.id, items: installedItems<NavItem>(getConfig().modules, g.items) })).filter((g) => g.items.length > 0),
-    [],
-  );
+  const apps = useMemo(() => installedApps(getConfig().modules), []);
+  // The app of the screen (#1528), from the URL so a deep link opens in its app; on the org's own screens (Settings,
+  // the chart) the menu keeps the app last used.
+  const { pathname } = useLocation();
+  const screenApp = appOfPath(pathname);
+  const lastApp = useRef<AppId>('home');
+  if (screenApp) lastApp.current = screenApp;
   const [menuOpen, setMenuOpen] = useState(false);
   const { slug } = useParams({ strict: false }) as { slug: string };
   const navigate = useNavigate();
@@ -183,7 +187,9 @@ export function OrgLayout() {
   const shellNav = (onNavigate?: () => void) => (
     <ShellNav
       slug={slug}
-      groups={groups}
+      apps={apps}
+      app={screenApp ?? lastApp.current}
+      inApp={screenApp !== null}
       badges={{ inbox: inboxCount > 0 ? inboxCount : null, alerts: workUnread, notifications: unread }}
       orgs={me.data?.orgs ?? []}
       email={me.data?.email}
@@ -198,12 +204,7 @@ export function OrgLayout() {
 
   return (
     <div className="flex min-h-full bg-background">
-      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r bg-sidebar px-3 py-4 md:flex">
-        <div className="mb-6 px-2">
-          <Logo />
-        </div>
-        {shellNav()}
-      </aside>
+      <aside className="sticky top-0 hidden h-screen w-72 shrink-0 border-r bg-sidebar md:flex">{shellNav()}</aside>
       <div className="min-w-0 flex-1">
         {/* The phone's header (issue #1245): the menu button, the org's name and the palette; the rest is in the drawer. */}
         <header className="sticky top-0 z-10 flex items-center gap-2 border-b bg-sidebar px-3 py-2 md:hidden">
