@@ -17,7 +17,7 @@ import type { MemberRole, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import { approvalCovers, effectiveContent, type BaseContent } from './domain/approval.ts';
 import { shortOfPolicy } from './policy.ts';
-import { PUBLISH_LIMITS, SENT_TO_APP, STATUS_PUBLISHES, isProvider, limitWait, WORDPRESS_DRAFT, WORDPRESS_PENDING } from './domain/channels.ts';
+import { PUBLISH_LIMITS, SENT_TO_APP, SHARED_LIMIT_PROVIDERS, STATUS_PUBLISHES, isProvider, limitWait, WORDPRESS_DRAFT, WORDPRESS_PENDING } from './domain/channels.ts';
 import { sentLink, sentSettings } from './domain/utm.ts';
 import { POSSIBLE_DUPLICATE } from './domain/duplicate.ts';
 import { withShortLink } from './short-links.ts';
@@ -283,16 +283,26 @@ async function queuePaused(ctx: CommandContext, v: VariantRow): Promise<boolean>
 
 // When the variant's account may post again under its channel's counted limit (#775), or null when it may now. Counts
 // the account's publish calls in the window from the call ledger, whatever came of them except a refusal: a post that
-// went out, one still on its way, and an unclear one all used the account's allowance.
+// went out, one still on its way, and an unclear one all used the account's allowance. A limit the channel shares with
+// the other channels of its member (SHARED_LIMIT_PROVIDERS, LinkedIn's pages, #1096) counts their calls too.
 async function limitedUntil(ctx: CommandContext, v: VariantRow): Promise<Date | null> {
   const limit = isProvider(v.provider) ? PUBLISH_LIMITS[v.provider] : undefined;
   if (!limit) return null;
   const since = new Date(ctx.now.getTime() - limit.windowMs);
+  const shared = isProvider(v.provider) ? (SHARED_LIMIT_PROVIDERS[v.provider] ?? []) : [];
+  // The channels whose calls count: this one, and those of the same member on the providers sharing its limit.
+  const channels =
+    shared.length === 0
+      ? sql`pv.channel_connection_id = ${v.channel_connection_id}::uuid`
+      : sql`pv.channel_connection_id IN (
+          SELECT cc.id FROM crove_kernel.channel_connection cc
+          JOIN crove_kernel.channel_connection mine ON mine.org_id = cc.org_id AND mine.id = ${v.channel_connection_id}::uuid
+          WHERE cc.org_id = ${ctx.orgId}::uuid AND (cc.id = mine.id OR (cc.provider = ANY(${[...shared]}::text[]) AND cc.connected_by = mine.connected_by)))`;
   const { rows } = await sql<{ started_at: Date }>`
     SELECT c.started_at FROM crove_kernel.external_call c
     JOIN crove_social.post_variant pv ON pv.org_id = c.org_id AND pv.id::text = split_part(c.key, ':', 2)
     WHERE c.org_id = ${ctx.orgId}::uuid AND c.module = 'social' AND c.step = ${PUBLISH_STEP} AND c.started_at > ${since}
-      AND c.state <> 'failed' AND pv.channel_connection_id = ${v.channel_connection_id}::uuid AND pv.id <> ${v.id}::uuid
+      AND c.state <> 'failed' AND ${channels} AND pv.id <> ${v.id}::uuid
     ORDER BY c.started_at DESC LIMIT ${limit.count}`.execute(ctx.trx);
   return limitWait(rows.map((r) => r.started_at), limit, ctx.now);
 }
