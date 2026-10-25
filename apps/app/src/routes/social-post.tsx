@@ -846,7 +846,8 @@ function TikTokDisclosureField({ settings, photo, disabled, onChange }: { settin
 // connect (#982). reel: the post goes out as an Instagram Reel (#1019). photo: the post is photos only (TikTok's
 // disclosure label names a photo or a video, #1078). threadNameDefault: a Discord forum post's name when none is given
 // (#1103), from the post's title or its text's first line. videoSeconds: the post's longest video, for a TikTok
-// account's own length limit (#1497).
+// account's own length limit (#1497). readOnly: a channel that went out or that the person may not edit, whose TikTok
+// block asks TikTok for nothing.
 function ProviderSettings({
   provider,
   settings,
@@ -858,6 +859,7 @@ function ProviderSettings({
   photo = false,
   threadNameDefault = '',
   connectionId = null,
+  readOnly = false,
   videoSeconds = null,
 }: {
   provider: string;
@@ -870,6 +872,7 @@ function ProviderSettings({
   photo?: boolean;
   threadNameDefault?: string;
   connectionId?: string | null;
+  readOnly?: boolean;
   videoSeconds?: number | null;
 }) {
   const t = useTranslations('social');
@@ -1112,7 +1115,7 @@ function ProviderSettings({
       {inbox ? (
         <p className="text-xs text-subtle-foreground">{t('ttInboxHint')}</p>
       ) : (
-        <TikTokDirectSettings connectionId={connectionId} settings={settings} onChange={onChange} disabled={disabled} photo={photo} branded={branded} videoSeconds={videoSeconds} />
+        <TikTokDirectSettings connectionId={readOnly ? null : connectionId} settings={settings} onChange={onChange} disabled={disabled} photo={photo} branded={branded} videoSeconds={videoSeconds} />
       )}
     </div>
   );
@@ -1143,6 +1146,7 @@ function TikTokDirectSettings({
   videoSeconds: number | null;
 }) {
   const t = useTranslations('social');
+  const id = useId();
   const list = useChannelOptions(connectionId, TIKTOK_CREATOR_STALE_MS);
   const creator = list.ready ? tiktokCreatorOf(list.options) : null;
   // Only a list that names its levels narrows the choice; otherwise the four, as before.
@@ -1166,10 +1170,13 @@ function TikTokDirectSettings({
   return (
     <>
       {creator?.nickname && <p className="text-sm font-medium break-words">{t('ttHeading', { nickname: creator.nickname })}</p>}
-      {creator?.cannotPost && <p className="text-xs text-warning">{t('ttCannotPost')}</p>}
+      {/* A daily cap passes; a ban is TikTok's to lift, so it is not told to try again (creator_info reference). */}
+      {creator?.cannotPost && <p className="text-xs text-warning">{t(creator.cannotPost === 'spam_risk_user_banned_from_posting' ? 'ttBanned' : 'ttCannotPost')}</p>}
       <div className="space-y-1.5">
-        <Label className="text-xs">{t('ttPrivacy')}</Label>
-        <NativeSelect size="sm" className="w-full max-w-xs" value={chosen} disabled={disabled} aria-invalid={gone || undefined} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
+        <Label htmlFor={`${id}-privacy`} className="text-xs">
+          {t('ttPrivacy')}
+        </Label>
+        <NativeSelect id={`${id}-privacy`} size="sm" className="w-full max-w-xs" value={chosen} disabled={disabled} aria-invalid={gone || undefined} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
           <NativeSelectOption value="">{t('ttPrivacyChoose')}</NativeSelectOption>
           {/* A level saved earlier that the account no longer offers stays listed, so the choice shows as invalid. */}
           {gone && <NativeSelectOption value={chosen}>{isTikTokPrivacy(chosen) ? t(`ttPrivacyOption.${chosen}`) : chosen}</NativeSelectOption>}
@@ -2066,6 +2073,7 @@ function ChannelEditor({
   own,
   onChange,
   disabled,
+  readOnly = false,
   status,
   statusError,
   footer,
@@ -2086,6 +2094,8 @@ function ChannelEditor({
   own: Own;
   onChange: (own: Own) => void;
   disabled: boolean;
+  // A channel that went out or that the person may not edit (not a save in progress): it reads no live options.
+  readOnly?: boolean;
   status?: VariantStatus;
   // The variant's error or note (#903: SENT_TO_APP on a draft sent to the TikTok app), for its status label.
   statusError?: { code: string | null } | null;
@@ -2272,6 +2282,7 @@ function ChannelEditor({
         photo={content.media.length > 0 && content.media.every((m) => m.mime.startsWith('image/'))}
         threadNameDefault={provider === 'discord' ? discordThreadName(null, content.title || null, content.body) : ''}
         connectionId={connectionId ?? null}
+        readOnly={readOnly}
         videoSeconds={longestVideoSeconds(content.media)}
         onChange={(settings) => onChange({ ...own, settings })}
       />
@@ -4177,6 +4188,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 scopes={grants.get(v.connectionId) ?? []}
                 onAiUsed={() => setAiUsed(true)}
                 disabled={frozen || !canWrite || save.isPending}
+                readOnly={frozen || !canWrite}
                 status={v.status}
                 statusError={v.error}
                 onChange={(next) => setOwn({ ...own, [v.id]: next })}

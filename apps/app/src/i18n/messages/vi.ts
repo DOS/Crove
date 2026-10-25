@@ -4653,6 +4653,7 @@ export const vi = {
     ttHeading: 'Đăng lên TikTok của {nickname}',
     ttTurnedOff: 'Bạn đã tắt mục này trong TikTok',
     ttCannotPost: 'TikTok tạm không cho tài khoản này đăng thêm, hãy thử lại sau',
+    ttBanned: 'TikTok đang chặn tài khoản này đăng bài. Hãy mở ứng dụng TikTok để xem lý do; khi TikTok gỡ chặn mới đăng được.',
     ttPrivacyGone: 'Tài khoản TikTok này không còn cho chọn quyền xem này. Hãy chọn lại.',
     ttVideoTooLong: 'Video dài {actual, number} giây, tài khoản TikTok này chỉ đăng được video dài tối đa {limit, number} giây',
     ttCreatorLoading: 'Đang lấy các lựa chọn của tài khoản từ TikTok…',

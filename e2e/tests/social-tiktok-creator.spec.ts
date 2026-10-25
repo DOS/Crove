@@ -1,11 +1,13 @@
 // The TikTok composer shows the account's own options (#1497), at phone width. The worker reads TikTok's creator_info
 // only on a real account, so the list it would record is written with SQL, on a sandbox channel turned into a TikTok
 // one, as social-flows.spec.ts writes the states a real platform gives.
+import { randomUUID } from 'node:crypto';
 import { expect, test } from '@playwright/test';
 import { exec, sql } from '../lib/db.ts';
 import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 
-const CHANNEL = 'Tiệm Bánh TikTok';
+// Its own name each run: the e2e database keeps the channels of earlier runs.
+const CHANNEL = `Tiệm Bánh TikTok ${randomUUID().slice(0, 8)}`;
 // What the worker records for an account that may post only as "Only me", with Duet turned off.
 const ITEMS = [
   { id: 'nickname', name: 'Tiệm Bánh B' },

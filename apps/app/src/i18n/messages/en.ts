@@ -4654,6 +4654,7 @@ export const en = {
     ttHeading: 'Posting to {nickname} on TikTok',
     ttTurnedOff: 'You turned this off in TikTok',
     ttCannotPost: 'TikTok is not letting this account post more for now; try again later',
+    ttBanned: 'TikTok is blocking this account from posting. Open the TikTok app to see why; posting works again once TikTok lifts the block.',
     ttPrivacyGone: 'This TikTok account no longer offers this privacy level. Choose again.',
     ttVideoTooLong: 'The video runs {actual, number} seconds; this TikTok account posts videos of up to {limit, number} seconds',
     ttCreatorLoading: "Reading the account's options from TikTok…",
