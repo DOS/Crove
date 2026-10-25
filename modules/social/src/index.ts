@@ -17,6 +17,7 @@ export * from './review-checklist.ts';
 export * from './metrics.ts';
 export * from './domain/story-metrics.ts';
 export * from './external-posts.ts';
+export * from './late-ids.ts';
 export * from './domain/goals.ts';
 export * from './goals.ts';
 export * from './domain/period-summary.ts';

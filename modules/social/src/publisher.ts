@@ -412,7 +412,7 @@ export async function runEditJob(deps: PublishDeps, orgId: string, variantId: st
     // files only, each URL asked for by the adapter right before the call that names it.
     const mediaUrl = mediaUrlOf(deps, mediaFileOf(deps, orgId, { content, settings }));
     try {
-      const r = await withTimeout(timeout, () => publisher.edit!({ ...credential, externalId: begun.externalId, content, settings, mediaUrl, callKey: begun.callKey }));
+      const r = await withTimeout(timeout, () => publisher.edit!({ ...credential, externalId: begun.externalId, content, settings, mediaUrl, scopes: begun.scopes, callKey: begun.callKey }));
       // What the record takes: codes and messages cut to their columns.
       result =
         r.kind === 'edited'

@@ -1,6 +1,6 @@
 // YouTube against recorded answers (shapes from the YouTube Data API v3 and Google OAuth docs); no live call.
 import { describe, expect, it } from 'vitest';
-import { YouTubeConnector, YouTubePublisher, YouTubeRefresher, clipBytes, clipCodepoints, newOAuthAttempt, youtubeQuotaResetAt, type Fetch, type PublishInput } from '../src/index.ts';
+import { YouTubeConnector, YouTubePublisher, YouTubeRefresher, clipBytes, clipCodepoints, newOAuthAttempt, youtubeQuotaResetAt, type EditInput, type Fetch, type PublishInput } from '../src/index.ts';
 
 const APP = { clientId: '123456789012-abcdefgh12345678.apps.googleusercontent.com', clientSecret: 'test-google-secret-not-real' };
 const CHANNEL = 'UCabcdefghijklmnopqrstuv';
@@ -514,6 +514,125 @@ describe('YouTube remove (#1137)', () => {
     const none = google({});
     expect(await remove(none.fetchImpl, 'not-a-video-id')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
     expect(await new YouTubePublisher(APP, none.fetchImpl).remove({ externalAccountId: CHANNEL, secret: '{}', externalId: VIDEO })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
+    expect(none.calls).toHaveLength(0);
+  });
+});
+
+describe('YouTube edit (#1474)', () => {
+  const VIDEO = 'dQw4w9WgXcQ';
+  const LIST = 'GET www.googleapis.com/youtube/v3/videos';
+  const UPDATE = 'PUT www.googleapis.com/youtube/v3/videos';
+  const FORCE_SSL = 'https://www.googleapis.com/auth/youtube.force-ssl';
+  const GRANTED = ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly', FORCE_SSL];
+  const content = { body: 'Giá mới 99.000đ <ưu đãi>, gọi 0901 234 567', title: 'Khai trương chi nhánh', linkUrl: 'https://example.com/a', media: [video] };
+  const edit = (fetchImpl: Fetch, over: Partial<EditInput> = {}) =>
+    new YouTubePublisher(APP, fetchImpl).edit({ externalAccountId: CHANNEL, secret: SECRET, externalId: VIDEO, content, settings: {}, scopes: GRANTED, callKey: 'edit-1', ...over });
+  const refusal = (status: number, reason: string, message: string) => ({ status, body: { error: { code: status, message, errors: [{ reason }] } } });
+  // The snippet as videos.list answers it: read-only properties beside the writable ones.
+  const live = {
+    publishedAt: '2026-10-20T08:00:00Z',
+    channelId: CHANNEL,
+    // Renamed in YouTube Studio since it went out: the edit keeps that title.
+    title: 'Khai trương chi nhánh Quận 7',
+    description: 'Giá cũ',
+    thumbnails: { default: { url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg', width: 120, height: 90 } },
+    channelTitle: 'Tiệm bánh',
+    tags: ['bánh mì', 'khai trương'],
+    categoryId: '26',
+    liveBroadcastContent: 'none',
+    defaultLanguage: 'vi',
+    localized: { title: 'Khai trương chi nhánh', description: 'Giá cũ' },
+    defaultAudioLanguage: 'vi',
+  };
+  const listed = (snippet: Record<string, unknown> = live) => ({ body: { kind: 'youtube#videoListResponse', items: [{ kind: 'youtube#video', id: VIDEO, snippet }] } });
+  const updated = { body: { kind: 'youtube#video', id: VIDEO, snippet: {} } };
+
+  it('reads the live snippet, then sends it back with the new description, its title, category, tags and languages kept', async () => {
+    const { fetchImpl, calls } = google({ [LIST]: [listed()], [UPDATE]: [updated] });
+    expect(await edit(fetchImpl)).toEqual({ kind: 'edited' });
+    expect(calls.map((c) => c.route)).toEqual([LIST, UPDATE]);
+    expect(calls[0]?.url.searchParams.get('part')).toBe('snippet');
+    expect(calls[0]?.url.searchParams.get('id')).toBe(VIDEO);
+    expect(calls[1]?.url.searchParams.get('part')).toBe('snippet');
+    expect(calls[1]?.headers.get('authorization')).toBe('Bearer ya29.token-1');
+    // The live title, not the one stored at publish; the snippet properties that keep a value, so nothing the request
+    // leaves out is cleared, and no read-only one; the description as publish builds it (the link after the text,
+    // angle brackets taken out).
+    expect(calls[1]?.body).toEqual({
+      id: VIDEO,
+      snippet: {
+        title: 'Khai trương chi nhánh Quận 7',
+        description: 'Giá mới 99.000đ ưu đãi, gọi 0901 234 567\n\nhttps://example.com/a',
+        categoryId: '26',
+        tags: ['bánh mì', 'khai trương'],
+        defaultLanguage: 'vi',
+        defaultAudioLanguage: 'vi',
+      },
+    });
+  });
+
+  it('sends a video without tags or a language without them (a Short as any other video)', async () => {
+    const { fetchImpl, calls } = google({ [LIST]: [listed({ title: 'Short', categoryId: '22', description: '#shorts' })], [UPDATE]: [updated] });
+    expect(await edit(fetchImpl)).toEqual({ kind: 'edited' });
+    expect(calls[1]?.body).toEqual({ id: VIDEO, snippet: { title: 'Short', description: 'Giá mới 99.000đ ưu đãi, gọi 0901 234 567\n\nhttps://example.com/a', categoryId: '22' } });
+    // A snippet YouTube answers without a title: the one stored at publish stands in, as the update needs one.
+    const untitled = google({ [LIST]: [listed({ title: '  ', categoryId: '22' })], [UPDATE]: [updated] });
+    expect(await edit(untitled.fetchImpl)).toEqual({ kind: 'edited' });
+    expect((untitled.calls[1]?.body as { snippet?: { title?: unknown } } | undefined)?.snippet?.title).toBe('Khai trương chi nhánh');
+  });
+
+  it('tells a connection without the force-ssl scope to reconnect before any call, and the same from YouTube', async () => {
+    const none = google({});
+    expect(await edit(none.fetchImpl, { scopes: GRANTED.filter((s) => s !== FORCE_SSL) })).toEqual({ kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_EDIT' });
+    expect(none.calls).toHaveLength(0);
+    // A grant that lost the scope since it was stored: YouTube's 403 says so, after the read only.
+    const lost = google({ [LIST]: [listed()], [UPDATE]: [refusal(403, 'insufficientPermissions', 'Request had insufficient authentication scopes.')] });
+    expect(await edit(lost.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_EDIT' });
+    const scope = google({ [LIST]: [listed()], [UPDATE]: [refusal(403, 'ACCESS_TOKEN_SCOPE_INSUFFICIENT', 'Request had insufficient authentication scopes.')] });
+    expect(await edit(scope.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_EDIT' });
+  });
+
+  it('answers POST_NOT_FOUND for a video YouTube no longer has, read or updated', async () => {
+    const empty = google({ [LIST]: [{ body: { kind: 'youtube#videoListResponse', items: [] } }] });
+    expect(await edit(empty.fetchImpl)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    expect(empty.calls.map((c) => c.route)).toEqual([LIST]);
+    const gone = google({ [LIST]: [refusal(404, 'videoNotFound', 'The video that you are trying to retrieve cannot be found.')] });
+    expect(await edit(gone.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    const between = google({ [LIST]: [listed()], [UPDATE]: [refusal(404, 'videoNotFound', 'Video not found.')] });
+    expect(await edit(between.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+  });
+
+  it('changes nothing when the read fails or is unreadable: a failure, never an unclear edit', async () => {
+    const down = google({ [LIST]: [refusal(503, 'backendError', 'Backend Error')] });
+    expect(await edit(down.fetchImpl)).toEqual({ kind: 'rejected', error: 'transient', code: 'backendError' });
+    expect(down.calls.map((c) => c.route)).toEqual([LIST]);
+    const odd = google({ [LIST]: [{ body: { kind: 'youtube#videoListResponse' } }] });
+    expect(await edit(odd.fetchImpl)).toEqual({ kind: 'rejected', error: 'transient', code: 'SNIPPET_UNREADABLE' });
+    // Without the live category the update would change it: nothing is sent.
+    const nocat = google({ [LIST]: [listed({ title: 'T', description: 'x' })] });
+    expect(await edit(nocat.fetchImpl)).toEqual({ kind: 'rejected', error: 'transient', code: 'SNIPPET_UNREADABLE' });
+    expect(nocat.calls.map((c) => c.route)).toEqual([LIST]);
+  });
+
+  it('maps a spent quota, a dead token and a refused snippet, and leaves an outage or an odd answer of the update unclear', async () => {
+    const quota = google({ [LIST]: [listed()], [UPDATE]: [refusal(403, 'quotaExceeded', 'The request cannot be completed because you have exceeded your quota.')] });
+    expect(await edit(quota.fetchImpl)).toEqual({ kind: 'rejected', error: 'rate_limited', code: 'quotaExceeded', message: 'The request cannot be completed because you have exceeded your quota.' });
+    const daily = google({ [LIST]: [refusal(403, 'dailyLimitExceeded', 'Daily Limit Exceeded.')] });
+    expect(await edit(daily.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'dailyLimitExceeded' });
+    const expired = google({ [LIST]: [refusal(401, 'authError', 'Invalid Credentials')] });
+    expect(await edit(expired.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    const invalid = google({ [LIST]: [listed()], [UPDATE]: [refusal(400, 'invalidDescription', 'The request metadata specifies an invalid video description.')] });
+    expect(await edit(invalid.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'invalidDescription' });
+    const down = google({ [LIST]: [listed()], [UPDATE]: [refusal(503, 'backendError', 'Backend Error')] });
+    expect(await edit(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'backendError' });
+    const other = google({ [LIST]: [listed()], [UPDATE]: [{ body: { kind: 'youtube#video', id: 'aaaaaaaaaaa' } }] });
+    expect(await edit(other.fetchImpl)).toEqual({ kind: 'unknown', code: 'NOT_CONFIRMED' });
+  });
+
+  it('calls nothing for a malformed id or a missing token', async () => {
+    const none = google({});
+    expect(await edit(none.fetchImpl, { externalId: 'not-a-video-id' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await edit(none.fetchImpl, { secret: '{}' })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
     expect(none.calls).toHaveLength(0);
   });
 });
