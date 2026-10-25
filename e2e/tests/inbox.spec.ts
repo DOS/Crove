@@ -354,6 +354,15 @@ test('reject a proposal with a reason through the dialog', async ({ page }) => {
     await expect(reject).toBeFocused();
   });
 
+  await test.step('R opens the same dialog (DESIGN.md §5.2, #1580), and the page lists the key', async () => {
+    await expect(page.getByText('R từ chối', { exact: false })).toBeVisible();
+    await page.keyboard.press('r');
+    await expect(dialog).toBeVisible();
+    await expect(reason).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+  });
+
   await test.step('on a 360 px phone, reject with a reason', async () => {
     await page.setViewportSize({ width: 360, height: 740 });
     await reject.click();
