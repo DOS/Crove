@@ -164,6 +164,7 @@ import {
   zVatReport,
   zExchangeRate,
   zInputVatCheckOutcome,
+  zVatReturnMark,
   zAccountLedger,
   zFinancialStatements,
   zLedgerPeriod,
@@ -188,12 +189,13 @@ import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
 import { zMemberRoles, zRoleAssignInput } from './roles.ts';
 import { zCalendarEventAdd, zCalendarEventCancel, zCalendarEventView, zCalendarRange, zCalendarSlot, zCalendarSlotsQuery, zMyCalendar, zWorkingHours } from './calendar.ts';
-import { zBookingCancel, zBookingItem, zBookingListQuery, zBookingMove, zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
+import { zBookingCancel, zBookingItem, zBookingListQuery, zBookingMove, zBookingSuggestInput, zBookingSuggestion, zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
+import { zMisaCode, zMisaGoodsCode } from './misa-goods.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
 import { zPersonalDataErasure, zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
 
@@ -392,6 +394,15 @@ export const contract = {
       list: oc.input(zBookingListQuery).output(z.array(zBookingItem)),
       cancel: oc.input(zBookingCancel).output(z.object({ bookingId: z.string(), status: z.literal('cancelled') })),
       move: oc.input(zBookingMove).output(z.object({ bookingId: z.string(), startsAt: z.string() })),
+      // Times to offer a client (#1440): read-only; the model, when the deployment has one, reads the pasted message.
+      suggest: oc.input(zBookingSuggestInput).output(zBookingSuggestion),
+    },
+    // A member's bookings as a feed for Google Calendar or Outlook (#1382): each host makes, replaces and revokes their
+    // own address; the token is in the create answer only.
+    bookingFeed: {
+      get: oc.input(z.object({})).output(z.object({ createdAt: z.string() }).nullable()),
+      create: oc.input(z.strictObject({})).output(z.object({ token: z.string() })),
+      revoke: oc.input(z.strictObject({})).output(z.object({ revoked: z.boolean() })),
     },
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
@@ -1223,6 +1234,15 @@ export const contract = {
       .input(z.object({ code: zAccountCode, name: z.string().trim().min(1).max(200).optional(), active: z.boolean().optional() }))
       .output(z.object({ code: zAccountCode, name: z.string(), active: z.boolean() })),
   },
+  // The org's MISA SME item and warehouse codes per stock account (#1398), for the goods purchase export
+  // (GET /api/export/misa/goods-purchases.xlsx). Every member lists them; owners and admins (R1, audited) set one
+  // account's codes (NOT_STOCK_ACCOUNT, UNKNOWN_ACCOUNT: 422) and remove them, so the account falls back to its
+  // parent's codes or the defaults.
+  misaGoodsCodes: {
+    list: oc.output(z.array(zMisaGoodsCode)),
+    set: oc.input(z.object({ accountCode: zAccountCode, itemCode: zMisaCode, warehouseCode: zMisaCode.nullable() })).output(zMisaGoodsCode),
+    remove: oc.input(z.object({ accountCode: zAccountCode })).output(z.object({ removed: z.boolean() })),
+  },
   // Learned account rules (#1399), shown in Settings. list: every role, newest first (at most 500). create: owners and
   // admins (R1), a keyword rule for every vendor or for one; RULE_TEXT_TOO_SHORT (422) when fewer than two letters or
   // digits are left once normalized, RULE_EXISTS (409) for the same keyword and vendor. remove: owners and admins (R1),
@@ -1251,6 +1271,10 @@ export const contract = {
         }),
       )
       .output(z.object({ documentId: zId, outcome: zInputVatCheckOutcome })),
+    // markReturn (owners, admins, members; R1, audited; #1400): marks the period's VAT return filed with [22], [25] and
+    // [43] as filed (figures; without them Crove's own working is recorded) and the tax calendar's done mark with it,
+    // or takes both back (done false). The next period's [22] is prefilled from this [43].
+    markReturn: oc.input(zVatReturnMark).output(z.object({ period: zVatPeriod, done: z.boolean() })),
   },
   // The tax portal's purchase-invoice list (issue #465) for one VAT period. reconcile: every role; the lists of the
   // period and how their invoices compare with Crove's purchases. import (owners, admins, members; R1): files an .xlsx

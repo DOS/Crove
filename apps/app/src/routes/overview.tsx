@@ -191,7 +191,7 @@ export function OverviewPage() {
             <div className="overflow-x-auto">
               <DataTable head={[tt('columns.due'), tt('columns.obligation'), tt('columns.period'), '']}>
                 {dues.map((d) => (
-                  <DueRow key={`${d.obligation}:${d.period}`} due={d} canMark={canMarkTaxDone(role)} />
+                  <DueRow key={`${d.obligation}:${d.period}`} due={d} canMark={canMarkTaxDone(role, d.obligation, financeOn)} />
                 ))}
               </DataTable>
             </div>

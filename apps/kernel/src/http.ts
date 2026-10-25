@@ -19,7 +19,9 @@ import {
   ORG_HEADER,
   SOCIAL_IMAGE_TYPES,
   XLSX_CONTENT_TYPE,
+  accountParents,
   type FixedAsset,
+  type MisaGoodsCode,
   type UploadPurpose,
 } from '@crove/kernel-contract';
 import {
@@ -41,6 +43,7 @@ import {
   JOURNAL_EXPORT_LIMIT,
   MISA_SME_CASH_PAYMENT,
   MISA_SME_CASH_RECEIPT,
+  MISA_SME_PURCHASE_GOODS,
   MISA_SME_PURCHASE_SERVICE,
   MISA_SME_SALES,
   buildJournalWorkbook,
@@ -51,9 +54,11 @@ import {
   buildMisaWorkbook,
   buildVat01Xml,
   buildVatWorkbook,
+  xmlCarryForward,
   cashRows,
-  purchaseRows,
+  goodsPurchaseRows,
   salesRows,
+  servicePurchaseRows,
   type CashVoucher,
   type JournalEntryView,
   type FinancialStatements,
@@ -97,6 +102,7 @@ import type { MailProvider } from './mail.ts';
 import { RateLimiter } from './rate-limit.ts';
 import { reviewAnswer, reviewFile, reviewMedia, reviewView, REVIEW_ANSWERS_PER_MINUTE, REVIEW_FILES_PER_MINUTE, REVIEW_VIEWS_PER_MINUTE } from './review-link.ts';
 import { reportView, REPORT_VIEWS_PER_MINUTE } from './report-link.ts';
+import { bookingFeed, renderBookingFeedIcs } from './booking-feed.ts';
 import { CALENDAR_FEED_HITS_PER_MINUTE, calendarFeed, renderIcs } from './calendar-feed.ts';
 import { BIO_HITS_PER_MINUTE, BIO_PAGE_CSP, bioGo, bioImage, bioView, renderBioPage } from './bio-page.ts';
 import { createTurnstileVerifier, type TurnstileVerifier } from './turnstile.ts';
@@ -113,7 +119,7 @@ import {
 import { STATUS_PAGE_CSP, readStatusFile, renderStatusPage, statusView, type ProbeStatus } from './status-page.ts';
 import { shortLinkTarget, SHORT_LINK_HITS_PER_MINUTE } from './short-link.ts';
 import { ORG_SLUG, attachmentDisposition } from './attachment.ts';
-import { createRpcHandler, resolveMembership, resolveOrg, type RpcChannels, type SocialDrafter } from './rpc.ts';
+import { createRpcHandler, resolveMembership, resolveOrg, type BookingReader, type RpcChannels, type SocialDrafter } from './rpc.ts';
 import type { TaxCodeLookup } from './tax-lookup.ts';
 import type { PortalSync } from './portal-sync.ts';
 import { hasVideoTrack, imageSize, sniffVideo, videoDurationMs, type ImageSize } from './media-probe.ts';
@@ -177,6 +183,8 @@ export interface HttpDeps {
   channels?: RpcChannels;
   // Drafts Social posts with the deployment's model (Social plan S7); unset: AI drafting answers 503.
   socialWriter?: SocialDrafter;
+  // Reads a client's message for booking suggestions (#1440); unset: suggestions give the next free slots only.
+  bookingReader?: BookingReader;
   // The public tax registry lookup for onboarding (issue #324); unset: off (TAX_CODE_LOOKUP_URL).
   taxLookup?: TaxCodeLookup;
   // The assisted purchase-invoice sync from the tax portal (issue #325); unset: off (TAX_PORTAL_SYNC).
@@ -377,7 +385,7 @@ function clientIp(c: Context, trustedHops: number): string | null {
 export function createHttpApp(deps: HttpDeps) {
   const { config, runtime, store, authenticate } = deps;
   const app = new Hono<{ Variables: { user: AuthUser } }>();
-  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL, {}, config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null, config.BRAND_NAME) : undefined, deps.channels, deps.socialWriter, deps.taxLookup, undefined, undefined, deps.portalSync);
+  const rpc = createRpcHandler(runtime, deps.mailer ? createInviteMailSender(deps.mailer, config.PUBLIC_URL, {}, config.INBOUND_DOMAIN && config.INBOUND_SECRET ? config.INBOUND_DOMAIN : null, config.BRAND_NAME) : undefined, deps.channels, deps.socialWriter, deps.taxLookup, undefined, undefined, deps.portalSync, deps.bookingReader);
   const perMinute = config.API_RATE_LIMIT_PER_MINUTE;
   const limiter = deps.rateLimiter !== undefined ? deps.rateLimiter : perMinute > 0 ? new RateLimiter({ perMinute }) : null;
 
@@ -692,6 +700,44 @@ export function createHttpApp(deps: HttpDeps) {
     });
   }
 
+  // Calendar feeds for Google Calendar or Outlook, which can only fetch a URL: the token is in the path. The posting
+  // calendar (#862), with the social module, and a member's bookings (#1382), with the crm module, share the route; a
+  // token is looked up as one, then the other (each a 43-character random token, so neither can name the other's
+  // feed). Nothing in the kernel logs request paths (and the deploy's Caddyfile keeps no access log), and a failed
+  // lookup logs the database error, never the request. An unknown, malformed or revoked token is a plain 404.
+  const socialFeeds = runtime.installed('social');
+  const bookingFeeds = runtime.installed('crm');
+  if (socialFeeds || bookingFeeds) {
+    const calendarFeedLimit = deps.calendarFeedLimit ?? new RateLimiter({ perMinute: CALENDAR_FEED_HITS_PER_MINUTE });
+    app.get('/cal/:file', async (c) => {
+      const decision = calendarFeedLimit.take(clientBucket(clientIp(c, config.TRUSTED_PROXY_HOPS)));
+      if (!decision.allowed) {
+        warnIfUntrustedProxy(c, config.TRUSTED_PROXY_HOPS);
+        c.header('retry-after', String(decision.retryAfterSeconds));
+        return c.json({ code: 'RATE_LIMITED', message: 'Bạn gửi quá nhiều yêu cầu, hãy thử lại sau', retryAfterSeconds: decision.retryAfterSeconds }, 429);
+      }
+      const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
+      try {
+        const file = c.req.param('file');
+        const token = file.endsWith('.ics') ? file.slice(0, -4) : null;
+        const now = new Date();
+        let ics: string | null = null;
+        if (token && socialFeeds) {
+          const feed = await calendarFeed(runtime, token);
+          if (feed) ics = renderIcs(feed, config.PUBLIC_URL, now, config.BRAND_NAME);
+        }
+        if (token && ics === null && bookingFeeds) {
+          const feed = await bookingFeed(runtime, token);
+          if (feed) ics = renderBookingFeedIcs(feed, config.PUBLIC_URL, now, config.BRAND_NAME);
+        }
+        if (ics === null) return c.text('Không tìm thấy lịch này', 404, headers);
+        return c.body(ics, 200, { ...headers, 'content-type': 'text/calendar; charset=utf-8' });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+  }
+
   // The client review page (#589): no account, the link's token is the only credential. It comes in the body, never the
   // URL, so it stays out of access logs; each client address has a small budget, and an unknown, revoked or expired
   // link answers like a malformed one.
@@ -725,23 +771,6 @@ export function createHttpApp(deps: HttpDeps) {
       try {
         const view = await reportView(runtime, await c.req.json().catch(() => null));
         return view ? c.json(view) : c.json({ code: 'REPORT_LINK_INVALID', message: 'Liên kết báo cáo không hợp lệ, đã bị thu hồi hoặc đã hết hạn' }, 404);
-      } catch (error) {
-        return problem(c, error);
-      }
-    });
-    // The posting calendar feed (#862) for Google Calendar or Outlook, which can only fetch a URL: the token is in the
-    // path. Nothing in the kernel logs request paths (and the deploy's Caddyfile keeps no access log), and a failed
-    // lookup logs the database error, never the request. An unknown, malformed or revoked token is a plain 404.
-    const calendarFeedLimit = deps.calendarFeedLimit ?? new RateLimiter({ perMinute: CALENDAR_FEED_HITS_PER_MINUTE });
-    app.get('/cal/:file', async (c) => {
-      const limited = reviewBudget(c, calendarFeedLimit);
-      if (limited) return limited;
-      const headers = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer' };
-      try {
-        const file = c.req.param('file');
-        const feed = file.endsWith('.ics') ? await calendarFeed(runtime, file.slice(0, -4)) : null;
-        if (!feed) return c.text('Không tìm thấy lịch này', 404, headers);
-        return c.body(renderIcs(feed, config.PUBLIC_URL, new Date(), config.BRAND_NAME), 200, { ...headers, 'content-type': 'text/calendar; charset=utf-8' });
       } catch (error) {
         return problem(c, error);
       }
@@ -1351,7 +1380,8 @@ export function createHttpApp(deps: HttpDeps) {
     });
 
     // Purchase vouchers in the MISA SME import template (issue #317), same roles, range and audit as the journal
-    // export above.
+    // export above. Lines on a stock account (152, 153, 156) are left out: they go to the goods purchase file below
+    // (#1398), and the audit row says so. `entries` counts the vouchers with a line in the file.
     app.get('/api/export/misa/purchases.xlsx', async (c) => {
       try {
         const user = c.get('user');
@@ -1362,16 +1392,53 @@ export function createHttpApp(deps: HttpDeps) {
         if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
           throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
         }
-        const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_SERVICE, vouchers.flatMap(purchaseRows), config.BRAND_NAME);
+        const perVoucher = vouchers.map(servicePurchaseRows).filter((rows) => rows.length > 0);
+        const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_SERVICE, perVoucher.flat(), config.BRAND_NAME);
         await runtime.execute(
           'finance.journal.export',
-          { from: range.from, to: range.to, entries: vouchers.length, format: 'misa_sme_purchases' },
+          { from: range.from, to: range.to, entries: perVoucher.length, format: 'misa_sme_purchases', stockLines: 'excluded' },
           { actor: actorOf(user), orgId },
         );
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'misa-mua-dich-vu', ORG_SLUG], 'xlsx'),
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // Purchase lines on a stock account (152, 153, 156) in MISA SME's goods purchase template (#1398), with the org's
+    // MISA item and warehouse codes (Settings), same roles, range and audit as the purchase export. An invoice that
+    // also has other lines has those in the services file above, under another voucher number.
+    app.get('/api/export/misa/goods-purchases.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined, limit: JOURNAL_EXPORT_LIMIT };
+        const vouchers = await runtime.query<PurchaseVoucher[]>('finance.vouchers.purchases', range, { actor: actorOf(user), orgId });
+        if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
+          throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
+        }
+        const codes = await runtime.query<MisaGoodsCode[]>('finance.misa_goods_codes.list', {}, { actor: actorOf(user), orgId });
+        // The chart's parent chain, along which a sub-account without codes takes its parent's.
+        const chart = await runtime.query<Array<{ code: string; parentCode: string | null }>>('finance.accounts.list', {}, { actor: actorOf(user), orgId });
+        const parents = accountParents(chart);
+        const perVoucher = vouchers.map((v) => goodsPurchaseRows(v, codes, parents)).filter((rows) => rows.length > 0);
+        const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_GOODS, perVoucher.flat(), config.BRAND_NAME);
+        await runtime.execute(
+          'finance.journal.export',
+          { from: range.from, to: range.to, entries: perVoucher.length, format: 'misa_sme_goods_purchases' },
+          { actor: actorOf(user), orgId },
+        );
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'misa-mua-hang-nhap-kho', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });
@@ -1484,8 +1551,15 @@ export function createHttpApp(deps: HttpDeps) {
         const deductSuggested = c.req.query('deduct') === 'suggested';
         const deductInput = !deductSuggested && c.req.query('deductInput') === '1';
         const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period }, { actor: actorOf(user), orgId });
-        const xml = buildVat01Xml(declaration, undefined, deductSuggested ? { deductible: declaration.report.paymentChecks.suggested25 } : { deductInput });
-        // The export's audit row (period, invoice count, format and the [25] choice only). No row, no download.
+        // [22] (#1400): the [43] of the return filed for the period before, or ?carried=<whole dong> as the accountant
+        // edited it on the VAT screen (422 unless a whole number of at most 14 digits).
+        const carried = xmlCarryForward(declaration.report, c.req.query('carried'));
+        const xml = buildVat01Xml(declaration, undefined, {
+          carriedForward: carried.amount,
+          ...(deductSuggested ? { deductible: declaration.report.paymentChecks.suggested25 } : { deductInput }),
+        });
+        // The export's audit row (period, invoice count, format, the [25] choice and where [22] came from; no amount).
+        // No row, no download.
         const documents = declaration.report.input.documents.length + declaration.report.output.documents.length;
         await runtime.execute(
           'finance.vat.export',
@@ -1495,6 +1569,7 @@ export function createHttpApp(deps: HttpDeps) {
             format: 'htkk_01gtgt_xml',
             ...(deductInput ? { deductInput } : {}),
             ...(deductSuggested ? { deductSuggested } : {}),
+            carryForward: carried.source,
           },
           { actor: actorOf(user), orgId },
         );

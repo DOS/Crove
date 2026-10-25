@@ -12,6 +12,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
 import { ChartOfAccountsCard } from './accounts.tsx';
+import { MisaGoodsCodesCard } from './misa-goods-codes.tsx';
 import { AccountRulesCard } from './account-rules.tsx';
 import { ApprovalPresetCard, MEMBERS_CARD_ID } from './approval-preset.tsx';
 import { LegalEntitiesCard } from './legal-entities.tsx';
@@ -1135,6 +1136,8 @@ export function SettingsPage() {
         {getConfig().modules.includes('finance') && canManage && <LegalEntitiesCard key={org.data?.slug} />}
         {/* The chart of accounts belongs to the finance module (#319). */}
         {getConfig().modules.includes('finance') && <ChartOfAccountsCard canManage={canManage} />}
+        {/* The MISA codes of stock purchases (#1398), for the goods purchase export. */}
+        {getConfig().modules.includes('finance') && <MisaGoodsCodesCard key={org.data?.slug} canManage={canManage} />}
         {/* The account rules learned from approvals, and keyword rules (#1399). */}
         {getConfig().modules.includes('finance') && org.data && <AccountRulesCard key={org.data.slug} canManage={canManage} />}
         <TwoFactorCard />

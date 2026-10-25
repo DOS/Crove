@@ -9,6 +9,7 @@ import { normalizeNumber, normalizeSeries, type ParsedInvoice } from '@crove/l10
 export * from './errors.ts';
 export * from './eval.ts';
 export * from './proofread.ts';
+export * from './scheduling.ts';
 export * from './social.ts';
 export * from './summary.ts';
 

@@ -27,8 +27,10 @@ export function taxPeriodParts(period: string): { kind: 'year'; year: number } |
   return periodParts(period);
 }
 
-// Who may mark an obligation done (kernel.tax_obligation.done): owners, admins and members.
-export function canMarkTaxDone(role: string | null | undefined): boolean {
+// Who may mark an obligation done (kernel.tax_obligation.done): owners, admins and members. With the finance module on,
+// the VAT return's mark records the return as filed (finance.vat.return_mark, #1400), which only owners and admins do.
+export function canMarkTaxDone(role: string | null | undefined, obligation?: TaxObligation, financeOn = false): boolean {
+  if (obligation === 'vat_return' && financeOn) return role === 'owner' || role === 'admin';
   return role === 'owner' || role === 'admin' || role === 'member';
 }
 

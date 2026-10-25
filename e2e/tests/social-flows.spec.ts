@@ -214,6 +214,39 @@ test('retries a failed channel and settles the channels Crove could not account 
   expect(Object.fromEntries(rows.map((r) => [r.display_name, r.status]))).toEqual({ [failed]: 'published', [seen]: 'published', [dropped]: 'cancelled' });
 });
 
+test('publishes many failed posts again at once from the attention list (#1456)', async ({ page }) => {
+  await signInNewUser(page, newEmail('social-bulk-retry'));
+  const slug = await createOrg(page, 'Công ty Đăng Lại Nhiều');
+  const channel = 'Kênh Lỗi Hàng Loạt';
+  await connectSandbox(page, channel);
+  const posts: string[] = [];
+  for (const body of ['Bài lỗi thứ nhất', 'Bài lỗi thứ hai']) {
+    await page.goto(`/o/${slug}/social`);
+    await page.getByRole('link', { name: 'Soạn bài' }).click();
+    await page.getByLabel('Nội dung chung').fill(body);
+    await submitApproveSchedule(page, [channel]);
+    posts.push(postIdOf(page));
+  }
+  // What a platform outage leaves behind, which the sandbox never produces on its own.
+  exec(
+    `UPDATE crove_social.post_variant SET status = 'failed', error_kind = 'bad_request', error_code = 'E2E_REFUSED', updated_at = now() WHERE post_id IN (:'a', :'b')`,
+    { a: posts[0] ?? '', b: posts[1] ?? '' },
+  );
+
+  await page.goto(`/o/${slug}/social`);
+  await page.getByRole('tab', { name: /Cần xử lý/ }).click();
+  await page.getByText('Chọn mọi bài đang hiện').click();
+  await expect(page.getByText('Đã chọn 2 bài')).toBeVisible();
+  page.once('dialog', (d) => void d.accept());
+  await page.getByRole('button', { name: 'Đăng lại', exact: true }).click();
+  await expect(page.getByText('Đăng lại: xong 2, 0 bài không có gì để làm, 0 bài bị từ chối.')).toBeVisible();
+
+  // Each is a new attempt due now: the worker's sweep publishes both to the sandbox.
+  await expect
+    .poll(() => sql<{ status: string }>(`SELECT status FROM crove_social.post_variant WHERE post_id IN (:'a', :'b')`, { a: posts[0] ?? '', b: posts[1] ?? '' }).map((r) => r.status), { timeout: 45_000 })
+    .toEqual(['published', 'published']);
+});
+
 test('keeps uploaded images in the library with the posts that use them', async ({ page }) => {
   await signInNewUser(page, newEmail('social-library'));
   await createOrg(page, 'Công ty Thư Viện');

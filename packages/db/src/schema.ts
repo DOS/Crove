@@ -409,6 +409,18 @@ export type InputVatCheckTable = Refine<
   'legal_entity_id'
 >;
 
+// The VAT return 01/GTGT marked filed for a period (#1400), with [22], [25] and [43] as filed. Append-only; the latest
+// row of a period is its state. source: 'entered' on the VAT screen, 'computed' when marked done from the tax calendar.
+export const VAT_RETURN_FILED_STATUSES = ['filed', 'withdrawn'] as const;
+export const VAT_RETURN_FILED_SOURCES = ['entered', 'computed'] as const;
+export type VatReturnFiledTable = Refine<
+  G.FinanceVatReturnFiledTable,
+  {
+    status: ColumnType<(typeof VAT_RETURN_FILED_STATUSES)[number], (typeof VAT_RETURN_FILED_STATUSES)[number], never>;
+    source: ColumnType<(typeof VAT_RETURN_FILED_SOURCES)[number] | null, (typeof VAT_RETURN_FILED_SOURCES)[number] | null, never>;
+  }
+>;
+
 // Learned account rules (#1399): the line's whole item description, normalized, or a keyword in it. What a rule matches
 // never changes in place.
 export const CATEGORIZATION_RULE_MATCH_KINDS = ['description', 'keyword'] as const;
@@ -692,6 +704,7 @@ type Refined = Tables<{
   'crove_finance.fixed_asset': FixedAssetTable;
   'crove_finance.categorization_rule': CategorizationRuleTable;
   'crove_finance.input_vat_check': InputVatCheckTable;
+  'crove_finance.vat_return_filed': VatReturnFiledTable;
   'crove_finance.journal_voucher': JournalVoucherTable;
   'crove_finance.portal_invoice_list': PortalInvoiceListTable;
   'crove_finance.portal_invoice_row': PortalInvoiceRowTable;

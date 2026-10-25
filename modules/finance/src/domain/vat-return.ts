@@ -87,6 +87,21 @@ export function vatPeriod(period: string): VatPeriod {
   return { period, kind: 'month', from: `${year}-${match[2]}-01`, to: lastDayOfMonth(year, month) };
 }
 
+/**
+ * The periods whose return carries [22] into `period` (#1400): the month, and the quarter when that month ends one,
+ * that end the day before `period` starts. [22] is the previous return's [43] (the form's own rule, see
+ * docs/integrations/htkk-01gtgt-xml.md); the period of the same kind comes first, and the other kind is a fallback for
+ * an org that changed its filing period (#318) between the two returns.
+ */
+export function previousVatPeriods(period: VatPeriod): string[] {
+  const [year, month] = period.from.split('-').map(Number) as [number, number];
+  const prevYear = month === 1 ? year - 1 : year;
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const keys = [`${prevYear}-${String(prevMonth).padStart(2, '0')}`];
+  if (prevMonth % 3 === 0) keys.push(`${prevYear}-Q${prevMonth / 3}`);
+  return period.kind === 'quarter' ? keys.reverse() : keys;
+}
+
 export interface VatLineInput {
   amount: Money;
   vatRate: string | null;

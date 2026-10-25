@@ -77,6 +77,8 @@ const send = (r: BulkRequest) =>
       ? client.social.posts.submit({ postId: r.postId })
       : r.action === 'queue'
       ? client.social.variants.schedule({ postId: r.postId, variantIds: r.variantIds, queue: true })
+      : r.action === 'retry'
+      ? client.social.variants.retry({ variantIds: r.variantIds })
       : client.social.variants.cancel({ variantIds: r.variantIds });
 
 // The same call as the post page's "Move the time" and the calendar's drag.
@@ -245,6 +247,8 @@ export function BulkBar({
       return;
     }
     if (action === 'cancel' && !window.confirm(t('confirmCancel', { count: posts.length }))) return;
+    // A retry publishes at once (#1456), so it is confirmed like a cancel.
+    if (action === 'retry' && !window.confirm(t('confirmRetry', { count: posts.length }))) return;
     if (action === 'archive' && !window.confirm(t('confirmArchive', { count: posts.length }))) return;
     snapshot();
     run.mutate({ action });
@@ -624,7 +628,7 @@ export function BulkBar({
           ))}
         </Card>
       )}
-      {result && (result.action === 'approve' || result.action === 'queue' || result.action === 'cancel') && (
+      {result && (result.action === 'approve' || result.action === 'queue' || result.action === 'retry' || result.action === 'cancel') && (
         <Card className="block space-y-1 p-3 text-sm">
           <p className="text-foreground">{t('result', { action: t(`action.${result.action}`), done: result.result.done.length, skipped: result.result.skipped.length, refused: result.result.refused.length })}</p>
           {result.result.refused.map((r) => (

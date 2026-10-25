@@ -335,6 +335,10 @@ export interface EditInput {
   externalId: string;
   content: PublishContent;
   settings: Readonly<Record<string, unknown>>;
+  // A short-lived public URL for one of content.media, as at publish, for a platform whose edit sends the post whole
+  // and fetches its images again (Zalo's article/update, #1430); null when the storage cannot hand one out. Absent in
+  // callers that have no storage.
+  mediaUrl?(fileId: string): Promise<string | null>;
   // The external_call key of this edit.
   callKey: string;
 }

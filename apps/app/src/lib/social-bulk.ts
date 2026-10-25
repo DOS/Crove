@@ -8,7 +8,7 @@ import { localTime, zonedToEpoch } from '@crove/mod-social/contract';
 import { CANCELLABLE } from './social.ts';
 import { MAX_LABELS_PER_POST } from './social-labels.ts';
 
-export type BulkAction = 'approve' | 'submit' | 'queue' | 'cancel' | 'move' | 'labels' | 'assign' | 'replace' | 'addChannel' | 'duplicate' | ArchiveAction;
+export type BulkAction = 'approve' | 'submit' | 'queue' | 'retry' | 'cancel' | 'move' | 'labels' | 'assign' | 'replace' | 'addChannel' | 'duplicate' | ArchiveAction;
 // The edits the server makes for many posts in one command: labels and the assignee (#1057), find and replace (#1144),
 // a channel added (#1178).
 export type EditAction = 'labels' | 'assign' | 'replace' | 'addChannel';
@@ -41,11 +41,14 @@ export interface BulkPost {
 const SIGNED_OFF = ['approved', 'scheduled', 'paused'];
 // What social.post.submit sends to review by default (#1178): drafts and channels sent back.
 const SUBMITTABLE = ['draft', 'changes_requested', 'rejected'];
+// What social.variant.retry publishes again now (#1456): channels that failed, and those Crove could not account for.
+const RETRYABLE = ['failed', 'needs_attention'];
 
 export type BulkRequest =
   | { action: 'approve'; postId: string; variants: { variantId: string; revision: number; contentHash: string }[] }
   | { action: 'submit'; postId: string }
   | { action: 'queue'; postId: string; variantIds: string[] }
+  | { action: 'retry'; postId: string; variantIds: string[] }
   | { action: 'cancel'; postId: string; variantIds: string[] };
 
 // The request for one post, or null when the post has nothing the action applies to.
@@ -60,6 +63,12 @@ export function bulkRequest(post: BulkPost, action: PostAction, canDecide: boole
   if (action === 'queue') {
     if (!canDecide) return null;
     const variantIds = post.variants.filter((v) => v.status === 'approved').map((v) => v.id);
+    return variantIds.length > 0 ? { action, postId: post.id, variantIds } : null;
+  }
+  // Owners and admins, as on the post page; the server checks each channel's approval again.
+  if (action === 'retry') {
+    if (!canDecide) return null;
+    const variantIds = post.variants.filter((v) => RETRYABLE.includes(v.status)).map((v) => v.id);
     return variantIds.length > 0 ? { action, postId: post.id, variantIds } : null;
   }
   const variantIds = post.variants.filter((v) => (CANCELLABLE as readonly string[]).includes(v.status) && (canDecide || !SIGNED_OFF.includes(v.status))).map((v) => v.id);
