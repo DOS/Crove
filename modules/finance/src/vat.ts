@@ -36,7 +36,7 @@ import {
   type SideTotals,
   type VatPeriod,
 } from './domain/vat-return.ts';
-import { defaultLegalEntityId } from './legal-entity.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { needsPaymentCheck, nonCashThreshold, paymentMethodKind, type PaymentMethodKind } from './domain/non-cash-payment.ts';
 import { HtkkAmountError, form01XmlValues } from './domain/vat-01gtgt-xml.ts';
 
@@ -45,7 +45,8 @@ const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // More invoices than this in one period (per side) is refused rather than cut short: a partial VAT working is wrong.
 export const VAT_PERIOD_LIMIT = 5_000;
 
-export const zVatPeriodInput = z.object({ period: zVatPeriod });
+// The VAT working of one legal entity (#1280): legalEntityId as in zLegalEntityChoice.
+export const zVatPeriodInput = z.object({ period: zVatPeriod, legalEntityId: zId.optional() });
 
 // Why an invoice needs a look before the figures are filed (VAT_WARNINGS, shared with the API contract).
 export { VAT_WARNINGS };
@@ -175,7 +176,7 @@ interface PeriodInvoice {
   paymentMethod: string | null;
 }
 
-async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: DocumentDirection): Promise<PeriodInvoice[]> {
+async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: DocumentDirection, legalEntityId: string): Promise<PeriodInvoice[]> {
   const periodDate = direction === 'purchase' ? 'j.entry_date' : 'd.invoice_date';
   const docs = await ctx.trx
     .selectFrom('crove_finance.purchase_document as d')
@@ -185,6 +186,7 @@ async function periodInvoices(ctx: QueryContext, period: VatPeriod, direction: D
     )
     .select(['d.id', 'd.invoice_date', 'j.entry_date', 'd.invoice_series', 'd.invoice_number', 'd.subtotal', 'd.vat_amount', 'd.total', 'd.payment_method', 'p.name', 'p.tax_code'])
     .where('d.org_id', '=', ctx.orgId)
+    .where('d.legal_entity_id', '=', legalEntityId)
     .where('d.direction', '=', direction)
     .where(periodDate, '>=', period.from)
     .where(periodDate, '<=', period.to)
@@ -329,9 +331,9 @@ function paymentChecks(input: PeriodInvoice[], marks: Map<string, CheckMark>, va
 
 // The latest mark of each of `periods` (#1400) of one legal entity (#1280: each entity files its own returns, so [22]
 // comes from the same entity's previous return); a withdrawn one counts as none.
-async function filedReturns(ctx: QueryContext, legalEntityId: string | null, periods: string[]): Promise<Map<string, VatFiledReturn>> {
+async function filedReturns(ctx: QueryContext, legalEntityId: string, periods: string[]): Promise<Map<string, VatFiledReturn>> {
   const out = new Map<string, VatFiledReturn>();
-  if (periods.length === 0 || legalEntityId === null) return out;
+  if (periods.length === 0) return out;
   const rows = await ctx.trx
     .selectFrom('crove_finance.vat_return_filed')
     .select(['period', 'status', 'source', 'carried_in_amount', 'deductible_amount', 'carried_out_amount', 'created_at'])
@@ -357,18 +359,18 @@ async function filedReturns(ctx: QueryContext, legalEntityId: string | null, per
   return out;
 }
 
-// The period's own filed return, and the [22] the return just before it carries in.
-async function returnChain(ctx: QueryContext, period: VatPeriod): Promise<{ carryForward: VatCarryForward; filed: VatFiledReturn | null }> {
+// The period's own filed return of the legal entity, and the [22] the entity's return just before it carries in.
+async function returnChain(ctx: QueryContext, period: VatPeriod, legalEntityId: string): Promise<{ carryForward: VatCarryForward; filed: VatFiledReturn | null }> {
   const lookedFor = previousVatPeriods(period);
-  // The books are the default entity's until the VAT screens take an entity (#1280 part 2).
-  const filed = await filedReturns(ctx, await defaultLegalEntityId(ctx), [period.period, ...lookedFor]);
+  const filed = await filedReturns(ctx, legalEntityId, [period.period, ...lookedFor]);
   const previous = lookedFor.map((p) => filed.get(p)).find((r) => r !== undefined) ?? null;
   return { carryForward: { amount: previous?.carriedOut ?? '0', previous, lookedFor }, filed: filed.get(period.period) ?? null };
 }
 
-export async function loadVatReport(ctx: QueryContext, periodText: string): Promise<VatReport> {
+// The VAT working of one legal entity (#1280).
+export async function loadVatReport(ctx: QueryContext, periodText: string, legalEntityId: string): Promise<VatReport> {
   const period = vatPeriod(periodText);
-  const purchases = await periodInvoices(ctx, period, 'purchase');
+  const purchases = await periodInvoices(ctx, period, 'purchase', legalEntityId);
   const marks = await latestMarks(
     ctx,
     purchases.map((p) => p.view.id),
@@ -380,9 +382,9 @@ export async function loadVatReport(ctx: QueryContext, periodText: string): Prom
   // Sales are told apart by the org's tax code (#313). Without one Crove cannot know them, so the output side says it
   // is not available, unless sales were recorded while a tax code was set (they stay in the books and count).
   const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
-  const sales = (await periodInvoices(ctx, period, 'sale')).map((p) => p.view);
+  const sales = (await periodInvoices(ctx, period, 'sale', legalEntityId)).map((p) => p.view);
   const output = side(Boolean(org?.tax_code) || sales.length > 0, sales);
-  const chain = await returnChain(ctx, period);
+  const chain = await returnChain(ctx, period, legalEntityId);
   return {
     period,
     input,
@@ -397,7 +399,7 @@ export const vatPeriodQuery = defineQuery({
   name: 'finance.vat.period',
   input: zVatPeriodInput,
   access: ALL,
-  handler: (ctx, input): Promise<VatReport> => loadVatReport(ctx, input.period),
+  handler: async (ctx, input): Promise<VatReport> => loadVatReport(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId)),
 });
 
 // The taxpayer block of the HTKK return (issue #332): the org's tax code (#313), name and address (#324, #692).
@@ -413,12 +415,14 @@ export interface VatDeclaration {
 }
 
 // The VAT working of a period with the taxpayer it is declared for, for the HTKK XML export
-// (GET /api/export/vat-01gtgt.xml). A return names the taxpayer's tax code, so an org without one is refused.
+// (GET /api/export/vat-01gtgt.xml). A return names the taxpayer's tax code, so an org without one is refused. The
+// working is the legal entity's (#1280); the taxpayer block is still the org's.
 export const vatDeclarationQuery = defineQuery({
   name: 'finance.vat.declaration',
   input: zVatPeriodInput,
   access: ALL,
   handler: async (ctx, input): Promise<VatDeclaration> => {
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['tax_code', 'name', 'address', 'vat_filing_period']).where('org_id', '=', ctx.orgId).executeTakeFirst();
     if (!org?.tax_code) {
       throw new DomainError('TAX_CODE_REQUIRED', 422, 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi xuất lại.');
@@ -436,7 +440,7 @@ export const vatDeclarationQuery = defineQuery({
           : 'Tổ chức khai thuế GTGT theo quý nên không xuất được tờ khai XML theo tháng. Chọn một quý, hoặc đổi kỳ khai trong Cài đặt.',
       );
     }
-    return { report: await loadVatReport(ctx, input.period), taxpayer: { taxCode: org.tax_code, name: org.name, address: org.address } };
+    return { report: await loadVatReport(ctx, input.period, legalEntityId), taxpayer: { taxCode: org.tax_code, name: org.name, address: org.address } };
   },
 });
 
@@ -465,6 +469,7 @@ export const vatExport = defineCommand({
     ctx.audit({
       period: input.period,
       documents: input.documents,
+      ...(input.legalEntityId ? { legal_entity_id: input.legalEntityId } : {}),
       ...(input.format ? { format: input.format } : {}),
       ...(input.deductInput ? { deduct_input: true } : {}),
       ...(input.deductSuggested ? { deduct_suggested: true } : {}),
@@ -493,7 +498,7 @@ export const vatPaymentMark = defineCommand({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới đánh dấu được hóa đơn');
     const doc = await ctx.trx
       .selectFrom('crove_finance.purchase_document as d')
-      .select(['d.id', 'd.direction', 'd.invoice_date', 'd.total', 'd.payment_method'])
+      .select(['d.id', 'd.direction', 'd.invoice_date', 'd.total', 'd.payment_method', 'd.legal_entity_id'])
       .where('d.org_id', '=', ctx.orgId)
       .where('d.id', '=', input.documentId)
       .where(({ not, exists, selectFrom }) =>
@@ -515,6 +520,8 @@ export const vatPaymentMark = defineCommand({
         .selectFrom('crove_finance.cash_voucher')
         .select('voucher_type')
         .where('org_id', '=', ctx.orgId)
+        // A voucher of the invoice's legal entity (#1280); the database holds both parents of a mark to one entity.
+        .where('legal_entity_id', '=', doc.legal_entity_id)
         .where('id', '=', voucherId)
         .executeTakeFirst();
       if (voucher?.voucher_type !== 'bank_debit') throw new DomainError('VOUCHER_NOT_BANK', 422, 'Chứng từ này không phải giấy báo Nợ của tổ chức');
@@ -538,6 +545,8 @@ const FILERS: readonly MemberRole[] = ['owner', 'admin'];
 // the [43] the form's formulas give; a period already marked filed keeps its figures. done false takes both marks
 // back (a withdrawn row, then kernel.tax_obligation.undo). The audit row holds the period, the choice and the source,
 // never the figures.
+// Each legal entity files its own return (#1280; legalEntityId as in zLegalEntityChoice), and the tax calendar keeps its
+// done mark per entity (#1496): the mark is the entity's own.
 export const vatReturnMark = defineCommand({
   name: 'finance.vat.return_mark',
   input: zVatReturnMark,
@@ -548,11 +557,9 @@ export const vatReturnMark = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const period = vatPeriod(input.period);
-    // The default entity's return until this command takes an entity (#1280 part 2); its rows name it explicitly.
-    const legalEntityId = await defaultLegalEntityId(ctx);
-    if (legalEntityId === null) throw new DomainError('FORBIDDEN', 403, 'Bạn không có quyền với sổ của pháp nhân này');
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     const current = (await filedReturns(ctx, legalEntityId, [period.period])).get(period.period) ?? null;
-    const mark = { obligation: 'vat_return' as const, period: period.period };
+    const mark = { obligation: 'vat_return' as const, period: period.period, legalEntityId };
     if (!input.done) {
       if (input.figures) throw new DomainError('INVALID', 422, 'Bỏ đánh dấu đã nộp thì không kèm số liệu');
       if (current) {
@@ -562,7 +569,7 @@ export const vatReturnMark = defineCommand({
           .execute();
       }
       await ctx.run('kernel.tax_obligation.undo', mark);
-      ctx.audit({ period: period.period, done: false, withdrawn: current !== null });
+      ctx.audit({ period: period.period, done: false, withdrawn: current !== null, legal_entity_id: legalEntityId });
       return { period: period.period, done: false };
     }
     let figures: { carriedIn: string; deductible: string; carriedOut: string } | null = null;
@@ -571,7 +578,7 @@ export const vatReturnMark = defineCommand({
       figures = { carriedIn: money(input.figures.carriedIn).toFixed(0), deductible: money(input.figures.deductible).toFixed(0), carriedOut: money(input.figures.carriedOut).toFixed(0) };
     } else if (!current) {
       source = 'computed';
-      const report = await loadVatReport(ctx, period.period);
+      const report = await loadVatReport(ctx, period.period, legalEntityId);
       let values: ReturnType<typeof form01XmlValues>;
       try {
         values = form01XmlValues(report.indicators, { carriedForward: report.carryForward.amount, deductible: report.paymentChecks.suggested25 });
@@ -604,7 +611,7 @@ export const vatReturnMark = defineCommand({
         .execute();
     }
     await ctx.run('kernel.tax_obligation.done', mark);
-    ctx.audit({ period: period.period, done: true, source: recorded ? source : (current?.source ?? source), recorded });
+    ctx.audit({ period: period.period, done: true, source: recorded ? source : (current?.source ?? source), recorded, legal_entity_id: legalEntityId });
     return { period: period.period, done: true };
   },
 });

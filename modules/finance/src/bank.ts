@@ -12,7 +12,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { zBankStatementImport, zLedgerPeriod, type BankImportPreview, type BankImportResult, type BankLines, type BankStatementImport } from '@crove/kernel-contract';
+import { zBankStatementImport, zId, zLedgerPeriod, type BankImportPreview, type BankImportResult, type BankLines, type BankStatementImport } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { resolveLegalEntity } from './legal-entity.ts';
 import { Decimal } from '@crove/l10n-vn';
@@ -176,15 +176,18 @@ export const bankImport = defineCommand({
 
 export const bankLines = defineQuery({
   name: 'finance.bank.lines',
-  input: z.object({ bankAccount: z.string().max(50), period: zLedgerPeriod }),
+  input: z.object({ bankAccount: z.string().max(50), period: zLedgerPeriod, legalEntityId: zId.optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<BankLines> => {
     await bankAccount(ctx, input.bankAccount, false);
     const period = ledgerPeriod(input.period);
+    // The lines of one legal entity (#1280).
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     const rows = await ctx.trx
       .selectFrom('crove_finance.bank_line')
       .select(['id', 'value_date', 'description', 'amount', 'running_balance', 'bank_ref', 'ambiguous', 'import_id'])
       .where('org_id', '=', ctx.orgId)
+      .where('legal_entity_id', '=', legalEntityId)
       .where('bank_account', '=', input.bankAccount)
       .where('value_date', '>=', period.from)
       .where('value_date', '<=', period.to)

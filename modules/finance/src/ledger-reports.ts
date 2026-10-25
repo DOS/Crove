@@ -7,9 +7,10 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { zAccountCode, zLedgerPeriod } from '@crove/kernel-contract';
+import { zAccountCode, zId, zLedgerPeriod } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { mergeChart, type OrgAccountRow, type Tt133AccountRow } from './accounts.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import {
   PAYABLE_ACCOUNT,
   RECEIVABLE_ACCOUNT,
@@ -33,7 +34,8 @@ const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 // More journal lines than this in one period is refused rather than cut short: a partial ledger is wrong.
 export const LEDGER_LINE_LIMIT = 50_000;
 
-export const zLedgerPeriodInput = z.object({ period: zLedgerPeriod });
+// The books of one legal entity (#1280): legalEntityId as in zLegalEntityChoice.
+export const zLedgerPeriodInput = z.object({ period: zLedgerPeriod, legalEntityId: zId.optional() });
 
 export interface LedgerReport {
   period: LedgerPeriod;
@@ -77,8 +79,9 @@ interface LedgerDataRow {
 // The chart, the opening balance, the period's lines and their parties in ONE statement (#365): a statement sees one
 // snapshot even in the query's READ COMMITTED transaction, so an entry posted while the report reads is in all of it or
 // in none (four statements could show a reversal in the period without the entry it undoes in the opening balance).
-// The parts are typed Kysely queries; the statement around them only aggregates each into a JSON array.
-async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<LedgerData> {
+// The parts are typed Kysely queries; the statement around them only aggregates each into a JSON array. The lines are
+// those of one legal entity (#1280); the chart and the parties are the org's.
+async function loadLedgerData(ctx: QueryContext, periodText: string, legalEntityId: string): Promise<LedgerData> {
   const period = ledgerPeriod(periodText);
   // The org's whole chart (#319): the TT133 accounts and the org's sub-accounts, inactive ones included (posted lines
   // may name them). A sub-account's parent is its parent_code, so it rolls up into its parent like a TT133 account.
@@ -97,6 +100,7 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
     .select(kept.as('party_id'))
     .select((eb) => [eb.fn.sum<string>('l.debit').as('debit'), eb.fn.sum<string>('l.credit').as('credit')])
     .where('l.org_id', '=', ctx.orgId)
+    .where('l.legal_entity_id', '=', legalEntityId)
     .where('j.entry_date', '<', period.from)
     .groupBy(['l.account_code', kept]);
 
@@ -124,6 +128,7 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
       'l.credit',
     ])
     .where('j.org_id', '=', ctx.orgId)
+    .where('j.legal_entity_id', '=', legalEntityId)
     .where('j.entry_date', '>=', period.from)
     .where('j.entry_date', '<=', period.to)
     .orderBy('j.entry_date')
@@ -191,7 +196,7 @@ async function loadLedgerData(ctx: QueryContext, periodText: string): Promise<Le
 // and party in SQL instead: trialBalance only adds debits and credits up and nets them per party, so one summed row
 // per (account, party) gives the same balance as every line. The chart, the opening balance and the sums are read in
 // ONE statement, as in loadLedgerData (#365).
-export async function yearTrialBalance(ctx: QueryContext, year: number): Promise<TrialBalance> {
+export async function yearTrialBalance(ctx: QueryContext, year: number, legalEntityId: string): Promise<TrialBalance> {
   const period = ledgerPeriod(String(year));
   const tt133 = ctx.trx.selectFrom('crove_finance.account').select(['code', 'name', 'parent_code']);
   const own = ctx.trx.selectFrom('crove_finance.org_account').select(['code', 'name', 'parent_code', 'root_code', 'active']).where('org_id', '=', ctx.orgId);
@@ -204,7 +209,8 @@ export async function yearTrialBalance(ctx: QueryContext, year: number): Promise
       .select('l.account_code')
       .select(kept.as('party_id'))
       .select((eb) => [eb.fn.sum<string>('l.debit').as('debit'), eb.fn.sum<string>('l.credit').as('credit')])
-      .where('l.org_id', '=', ctx.orgId);
+      .where('l.org_id', '=', ctx.orgId)
+      .where('l.legal_entity_id', '=', legalEntityId);
     q = from === null ? q.where('j.entry_date', '<', to) : q.where('j.entry_date', '>=', from).where('j.entry_date', '<=', to);
     return q.groupBy(['l.account_code', kept]);
   };
@@ -265,7 +271,7 @@ export const ledgerPeriodQuery = defineQuery({
   name: 'finance.ledger.period',
   input: zLedgerPeriodInput,
   access: ALL,
-  handler: async (ctx, input): Promise<LedgerReport> => report(await loadLedgerData(ctx, input.period)),
+  handler: async (ctx, input): Promise<LedgerReport> => report(await loadLedgerData(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId))),
 });
 
 export const ledgerAccountQuery = defineQuery({
@@ -273,7 +279,7 @@ export const ledgerAccountQuery = defineQuery({
   input: zLedgerPeriodInput.extend({ accountCode: zAccountCode }),
   access: ALL,
   handler: async (ctx, input): Promise<AccountLedgerView> => {
-    const data = await loadLedgerData(ctx, input.period);
+    const data = await loadLedgerData(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId));
     if (!data.chart.some((a) => a.code === input.accountCode)) {
       throw new DomainError('UNKNOWN_ACCOUNT', 422, `Tài khoản ${input.accountCode} không có trong hệ thống tài khoản của tổ chức`);
     }
@@ -287,7 +293,7 @@ export const ledgerBookQuery = defineQuery({
   input: zLedgerPeriodInput,
   access: ALL,
   handler: async (ctx, input): Promise<LedgerBook> => {
-    const data = await loadLedgerData(ctx, input.period);
+    const data = await loadLedgerData(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId));
     const base = report(data);
     const ledgers = base.trialBalance.rows.filter((row) => row.level === 0).map((row) => ledgerView(data, row.accountCode));
     return { ...base, ledgers, lines: data.lines.length };
@@ -302,7 +308,7 @@ export const ledgerExport = defineCommand({
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
-    ctx.audit({ period: input.period, lines: input.lines });
+    ctx.audit({ period: input.period, lines: input.lines, ...(input.legalEntityId ? { legal_entity_id: input.legalEntityId } : {}) });
     return { ok: true as const };
   },
 });
