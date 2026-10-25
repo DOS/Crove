@@ -256,20 +256,29 @@ const inTimeOrder = <T extends Holder>(holders: readonly T[]) => [...holders].so
 // Shuffles the holders' times (Sattolo's algorithm over the holders in time order): each holder in turn trades times with
 // one before it, picked by `random` (in [0, 1), as Math.random; tests pass their own), when both may take the other's
 // time. With no kept slots in the way every post ends at another time; a post nobody may trade with keeps its own.
+// Kept slots can refuse every trade a pass picks (posts with a label between posts without, #1412), so a pass that moved
+// nothing is drawn again, up to SHUFFLE_PASSES times: a shuffle the member asked for moves something whenever a trade is
+// possible at all, and the order stays as it was only when none is.
+const SHUFFLE_PASSES = 20;
+
 export function shuffleTimes<T extends Holder>(holders: readonly T[], fits: (holder: T, at: number) => boolean, random: () => number = Math.random): Map<string, number> {
   const order = inTimeOrder(holders);
-  const times = order.map((h) => h.at);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.min(i - 1, Math.floor(random() * i));
-    const a = order[i] as T;
-    const b = order[j] as T;
-    const [ta, tb] = [times[i] as number, times[j] as number];
-    if (fits(a, tb) && fits(b, ta)) {
-      times[i] = tb;
-      times[j] = ta;
+  for (let pass = 1; ; pass++) {
+    const times = order.map((h) => h.at);
+    let traded = false;
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.min(i - 1, Math.floor(random() * i));
+      const a = order[i] as T;
+      const b = order[j] as T;
+      const [ta, tb] = [times[i] as number, times[j] as number];
+      if (fits(a, tb) && fits(b, ta)) {
+        times[i] = tb;
+        times[j] = ta;
+        traded = true;
+      }
     }
+    if (traded || pass >= SHUFFLE_PASSES) return new Map(order.map((h, k) => [h.id, times[k] as number]));
   }
-  return new Map(order.map((h, k) => [h.id, times[k] as number]));
 }
 
 // Moves one holder to the front: it takes the earliest time it can reach, and each holder it passes moves one place

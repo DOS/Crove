@@ -16,11 +16,18 @@
 // is on its way to the platform (#1223); and one whose takedown from its platform is on its way (a person's ask the
 // platform has not answered yet, or a planned takedown, #861, that will still be asked for). Also an open copy of a repeat:
 // a repost of an evergreen post, or a copy of a series still running, whose open state holds the next repost or copy
-// back (the worker's scans, evergreen_due and recurring_due, wait for it); such a copy is cancelled instead.
+// back (the worker's scans, evergreen_due and recurring_due, wait for it); such a copy is cancelled instead. The source
+// is locked for that check, so its repeats turned on meanwhile are either seen or wait. A copy archived while its source
+// did not repeat counts as done for the scans and the worker's commands (#1341): turning the repeats back on later is
+// never stalled by it.
 //
 // Archiving also stops what would bring the post back on its own: its evergreen reposts and its repeat on weekdays are
 // turned off (a restore leaves them off), and its open review links, of the post alone and of plans that include it,
 // are revoked, so a client cannot answer for a post the team archived.
+//
+// A restore clears the review reminder marks of its channels in review (#703, #1331): the reminder sweep marks an
+// archived post's as sent without telling anyone, so a post restored in review would otherwise never be reminded. Its
+// review keeps its start (review_since), so one that has waited long is reminded on the next pass.
 //
 // The bulk commands take up to 100 posts, lock them in id order (as the other bulk edits do) and run the single
 // command on each as a nested command, with its checks and its audit row; a post left out is named with the reason.
@@ -62,6 +69,17 @@ async function lockOwn(ctx: CommandContext, postId: string, userId: string) {
     if (row.author_user_id !== userId) throw new DomainError('FORBIDDEN', 403, 'Thành viên chỉ lưu trữ hoặc khôi phục được bài mình viết; hãy nhờ chủ sở hữu hoặc quản trị viên');
   }
   return post;
+}
+
+// The posts and the sources they repeat, locked together in id order before anything else of them is read, as the other
+// locks of several posts: archiving a copy checks its source (#1341), and taking the copy first and the source after
+// would wait in a cycle with a bulk command that took the source first. A post's repost_of and recurrence_source_id never
+// change once it is written, so reading them unlocked is safe.
+async function lockWithSources(ctx: CommandContext, ids: string[]): Promise<Set<string>> {
+  const rows = await ctx.trx.selectFrom('crove_social.post').select(['repost_of', 'recurrence_source_id']).where('org_id', '=', ctx.orgId).where('id', 'in', ids).execute();
+  const all = [...new Set([...ids, ...rows.flatMap((r) => [r.repost_of, r.recurrence_source_id]).filter((id): id is string => id !== null)])];
+  const locked = await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', all).orderBy('id').forUpdate().execute();
+  return new Set(locked.map((r) => r.id));
 }
 
 // A published channel whose takedown is on its way: asked and not answered yet, or planned (#861) and still to be asked
@@ -114,7 +132,9 @@ async function editing(ctx: CommandContext, variants: readonly VariantRow[]): Pr
 
 // A copy whose open state holds its source's next repeat back, as the worker's scans read it: a repost of a post still
 // evergreen that has not ended (published, partly, failed or cancelled), or a copy of a series still running with a
-// channel not done (published, failed, cancelled or removed).
+// channel not done (published, failed, cancelled or removed). The copy and its source are locked already
+// (lockWithSources, #1341), so a social.post.set_evergreen or recurrence_set on the source either committed before this
+// read or waits for the archive, and never turns the repeats on between the check and the archive.
 async function openRepeatCopy(ctx: CommandContext, postId: string): Promise<boolean> {
   const { rows } = await sql<{ open: boolean }>`
     SELECT EXISTS (
@@ -139,6 +159,7 @@ export const postArchive = defineCommand({
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<ArchiveResult> => {
     const userId = requireUser(ctx);
+    await lockWithSources(ctx, [input.postId]);
     const post = await lockOwn(ctx, input.postId, userId);
     if (post.archived_at !== null) return { postId: post.id, archived: true, changed: false };
     const variants = await lockVariants(ctx.trx, ctx.orgId, post.id);
@@ -186,7 +207,23 @@ export const postRestore = defineCommand({
     if (post.archived_at === null) return { postId: post.id, archived: false, changed: false };
     // Nothing else changes: not its status, its channels, its labels, nor the time of its last change.
     await ctx.trx.updateTable('crove_social.post').set({ archived_at: null, archived_by: null }).where('org_id', '=', ctx.orgId).where('id', '=', post.id).execute();
-    ctx.audit({ post_id: post.id, archived_at: post.archived_at.toISOString() });
+    // Its channels in review are reminded again: the sweep marked them while it was archived. Only those marks go; a
+    // reminder sent before the archive stays sent (the sweep keeps an earlier mark), so archiving and restoring never
+    // repeats one.
+    const since = post.archived_at;
+    const reminded = await ctx.trx
+      .updateTable('crove_social.post_variant')
+      .set({
+        reminded_waiting_at: sql<Date | null>`CASE WHEN reminded_waiting_at >= ${since} THEN NULL ELSE reminded_waiting_at END`,
+        reminded_due_at: sql<Date | null>`CASE WHEN reminded_due_at >= ${since} THEN NULL ELSE reminded_due_at END`,
+      })
+      .where('org_id', '=', ctx.orgId)
+      .where('post_id', '=', post.id)
+      .where('status', '=', 'in_review')
+      .where((eb) => eb.or([eb('reminded_waiting_at', '>=', since), eb('reminded_due_at', '>=', since)]))
+      .returning('id')
+      .execute();
+    ctx.audit({ post_id: post.id, archived_at: post.archived_at.toISOString(), ...(reminded.length > 0 ? { reminders_reset: reminded.map((r) => r.id).sort() } : {}) });
     return { postId: post.id, archived: false, changed: true };
   },
 });
@@ -217,9 +254,10 @@ function bulk(name: 'social.post.bulk_archive' | 'social.post.bulk_restore', sin
     handler: async (ctx, input): Promise<BulkArchiveResult> => {
       requireUser(ctx);
       const ids = [...input.postIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-      // Every post named, locked in id order, so two bulk commands (or a bulk and a single one) never wait in a cycle.
-      const found = await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', ids).orderBy('id').forUpdate().execute();
-      const there = new Set(found.map((r) => r.id));
+      // Every post named, with the sources it repeats, locked in id order, so two bulk commands (or a bulk and a single
+      // one) never wait in a cycle.
+      const locked = await lockWithSources(ctx, ids);
+      const there = new Set(ids.filter((id) => locked.has(id)));
       // A post outside a limited member's channels is not_allowed before anything else is said of it (#1099).
       const visible = new Set(await postsInScope(ctx, await channelScope(ctx), [...there]));
       const result: BulkArchiveResult = { done: [], skipped: [] };

@@ -1434,6 +1434,7 @@ export const en = {
     },
   },
   inbox: {
+    listShortcuts: 'Shortcuts: J or N next proposal · K or P previous one · Enter opens the selected one',
     addressCopied: 'Address copied',
     copyRefused: 'The browser refused to copy. Select the address on screen and copy it by hand.',
     socialAttention: {
@@ -1730,6 +1731,7 @@ export const en = {
     viewInJournal: 'View in the journal',
   },
   guide: {
+    contents: 'On this page',
     title: 'Quick guide',
     subtitle: 'Three steps to record purchase invoices: upload, approve and export to Excel. The guide is in Vietnamese.',
     firmTitle: 'Guide for accounting firms',

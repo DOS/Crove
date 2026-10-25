@@ -43,7 +43,9 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
-  'crove_finance.period_balance_delta',
+  'crove_crm.booking_feed',
+  'crove_finance.categorization_rule',
+  'crove_finance.misa_goods_code',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -238,6 +240,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // #1382: a member's booking feed address (the SHA-256 of its token); the member makes and revokes it.
+  'crove_crm.booking_feed': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), user_id: o.owner, token_sha256: hex64() } }) },
   // #1314: a booking page's event type, hosted by a member; slugs are unique per org.
   'crove_crm.event_type': {
     make: (o) => ({ row: { org_id: o.id, id: randomUUID(), slug: `rls-${tag()}`, title: 'RLS matrix event type', duration_min: 30, host_user_id: o.owner, created_by: o.owner } }),
@@ -265,6 +269,10 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         ],
       };
     },
+  },
+  // #1399: a learned account rule. An org-wide keyword rule names no vendor and no source document.
+  'crove_finance.categorization_rule': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), match_kind: 'keyword', match_text: `rls matrix ${tag()}`, debit_account: '6422' } }),
   },
   // Monthly depreciation and allocation of the register (#919): append-only, one row per asset and month, naming the
   // journal entry that posted it. Tenant roles read and insert; nothing updates or deletes a line.
@@ -322,6 +330,11 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         ],
       };
     },
+  },
+  // #1398: an org's MISA SME item and warehouse codes (Mã hàng, Mã kho) for purchase lines on a stock account (152, 153,
+  // 156 or a sub-account of one), one row per (org, account). Owners and admins set and clear them.
+  'crove_finance.misa_goods_code': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), account_code: `156.${tag().toUpperCase()}`, item_code: 'RLS', warehouse_code: 'KHO' } }),
   },
   // An org's sub-accounts under the TT133 chart (#319): one row per (org, code), never deleted. The code extends its
   // parent's (here 6422.<tag>); a trigger fills root_code. Tenant roles update only name, active and updated_by (a
