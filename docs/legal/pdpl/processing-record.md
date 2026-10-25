@@ -107,7 +107,7 @@ The tenant row stays, marked `closed` (`docs/runbooks/org-offboarding.md`).
 
 | Service | What it receives | Source |
 |---|---|---|
-| AI endpoint (`AI_BASE_URL`; D9: the DOS.AI gateway) | Finance: the text of PDFs (at most 60,000 characters) and the bytes of photos. Social: post briefs, drafts and images for alt text. XML e-invoices never go to it. No redaction before sending. Prompts and raw answers are not stored: `ai_run` keeps status, cost and taint only. | `modules/finance/src/extract.ts`, `packages/agent/src/index.ts`, `packages/agent/src/social.ts`, `20261018050000_crove_kernel_agents_org_chart.sql` |
+| AI endpoint (`AI_BASE_URL`; D9: the DOS.AI gateway) | Finance: the text of PDFs (at most 60,000 characters) and the bytes of photos. Social: post briefs, drafts and images for alt text. CRM: a client's message a member pastes for booking suggestions (at most 4,000 characters, #1440), which may name the client. XML e-invoices never go to it. No redaction before sending. Prompts and raw answers are not stored: `ai_run` keeps status, cost and taint only. | `modules/finance/src/extract.ts`, `packages/agent/src/index.ts`, `packages/agent/src/social.ts`, `packages/agent/src/scheduling.ts`, `20261018050000_crove_kernel_agents_org_chart.sql` |
 | SMTP or Resend | recipient address and content of sign-in mails, invites and reports | `.env.example` (`SMTP_*`) |
 | S3-compatible storage | every file, export, archive and backup | `.env.example` (`S3_*`), `docs/runbooks/provision-pilot.md` |
 | Cloudflare Email Routing and a mail worker | the raw message of every mail sent to an org's inbound address, attachments included, relayed to Crove | `tools/inbound-mail/worker.js`, `docs/runbooks/provision-pilot.md` |
