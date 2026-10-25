@@ -35,12 +35,14 @@ export const MAX_POST_MEDIA = 20;
 export type LibraryItem = Awaited<ReturnType<typeof client.social.media.list>>['items'][number];
 
 // The org's library (S9), page by page, newest first; search matches the file name, tag one of its tags (#904).
-// usable: only the files the member may use (#1196), for pickers that send or attach them.
-export function useLibrary(search: string, tag: string | null = null, enabled = true, usable = false) {
+// usable: only the files the member may use (#1196), for pickers that send or attach them. Archived files (#1302) are
+// left out, or listed alone with archived.
+export function useLibrary(search: string, tag: string | null = null, enabled = true, usable = false, archived = false) {
   const term = search.trim();
   return useInfiniteQuery({
-    queryKey: ['social-library', term, tag, usable],
-    queryFn: ({ pageParam }) => client.social.media.list({ ...(term ? { search: term } : {}), ...(tag ? { tag } : {}), ...(usable ? { usable: true } : {}), ...(pageParam ? { before: pageParam } : {}) }),
+    queryKey: ['social-library', term, tag, usable, archived],
+    queryFn: ({ pageParam }) =>
+      client.social.media.list({ ...(term ? { search: term } : {}), ...(tag ? { tag } : {}), ...(usable ? { usable: true } : {}), ...(archived ? { archived: true } : {}), ...(pageParam ? { before: pageParam } : {}) }),
     initialPageParam: null as { createdAt: string; fileId: string } | null,
     getNextPageParam: (page) => {
       const last = page.items.at(-1);
@@ -172,7 +174,8 @@ export function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; o
   const t = useTranslations('social');
   const [search, setSearch] = useState('');
   const [tag, setTag] = useState<string | null>(null);
-  const library = useLibrary(search, tag);
+  // Only the files this member may attach (#1081, #1302): another channel's own media would be refused on save.
+  const library = useLibrary(search, tag, true, true);
   const all = library.data?.pages.flatMap((p) => p.items) ?? [];
   const items = all.filter((item) => !only || only.includes(item.mime));
   const chosen = new Set(media.map((m) => m.fileId));
