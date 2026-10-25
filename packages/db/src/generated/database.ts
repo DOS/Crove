@@ -70,6 +70,9 @@ export interface CroveKernelSchema {
   'crove_kernel.position': KernelPositionTable;
   'crove_kernel.proposal': KernelProposalTable;
   'crove_kernel.proposal_policy': KernelProposalPolicyTable;
+  'crove_kernel.role': KernelRoleTable;
+  'crove_kernel.role_assignment': KernelRoleAssignmentTable;
+  'crove_kernel.role_permission': KernelRolePermissionTable;
   'crove_kernel.task': KernelTaskTable;
   'crove_kernel.task_comment': KernelTaskCommentTable;
   'crove_kernel.tax_obligation_done': KernelTaxObligationDoneTable;
@@ -941,6 +944,31 @@ export interface KernelProposalTable {
   escalated_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   request_input: ColumnType<unknown, string | null | undefined, string | null>;
   resubmitted_from: string | null;
+}
+
+/** crove_kernel.role_assignment */
+export interface KernelRoleAssignmentTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  user_id: ColumnType<string, NotGranted, NotGranted>;
+  role_key: ColumnType<string, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string | null, NotGranted, NotGranted>;
+  scope: ColumnType<string, NotGranted, NotGranted>;
+  granted_by: ColumnType<string, NotGranted, NotGranted>;
+  granted_at: ColumnType<Date, NotGranted, NotGranted>;
+}
+
+/** crove_kernel.role_permission */
+export interface KernelRolePermissionTable {
+  role_key: ColumnType<string, NotGranted, NotGranted>;
+  permission: ColumnType<string, NotGranted, NotGranted>;
+}
+
+/** crove_kernel.role */
+export interface KernelRoleTable {
+  key: ColumnType<string, NotGranted, NotGranted>;
+  module: ColumnType<string, NotGranted, NotGranted>;
+  scope: ColumnType<string, NotGranted, NotGranted>;
 }
 
 /** crove_kernel.task_comment */

@@ -20,7 +20,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
@@ -406,7 +406,7 @@ export function VouchersPage() {
         </label>
       </div>
       {vouchers.isLoading ? (
-        <Spinner />
+        <TableSkeleton columns={5} />
       ) : vouchers.error && rows.length === 0 ? (
         <ErrorText>{errorMessage(vouchers.error)}</ErrorText>
       ) : rows.length === 0 ? (
