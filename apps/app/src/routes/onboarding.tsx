@@ -89,7 +89,7 @@ export function OnboardingPage() {
                 </Label>
                 <button
                   type="button"
-                  className="rounded-sm p-0.5 text-subtle-foreground hover:text-muted-foreground"
+                  className="rounded-sm p-0.5 text-subtle-foreground outline-none hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
                   aria-label={t('taxCodeAbout')}
                   aria-expanded={aboutTaxCode}
                   aria-controls="onboarding-tax-code-about"
@@ -117,11 +117,10 @@ export function OnboardingPage() {
                   </Button>
                 )}
               </div>
-              {aboutTaxCode && (
-                <p id="onboarding-tax-code-about" className="text-xs text-muted-foreground">
-                  {getConfig().taxCodeLookup ? `${t('taxCodeHint')} ${t('taxCodeHintLookup')}` : t('taxCodeHint')}
-                </p>
-              )}
+              {/* Always in the page, so the button's aria-controls names an element; hidden until the button opens it. */}
+              <p id="onboarding-tax-code-about" hidden={!aboutTaxCode} className="text-xs text-muted-foreground">
+                {getConfig().taxCodeLookup ? `${t('taxCodeHint')} ${t('taxCodeHintLookup')}` : t('taxCodeHint')}
+              </p>
               {invalidTaxCode && <ErrorText>{t('taxCodeInvalid')}</ErrorText>}
               {lookup.error && <ErrorText>{errorMessage(lookup.error)}</ErrorText>}
             </div>
