@@ -135,6 +135,20 @@ export const vi = {
     loading: 'Đang đếm các việc đang chờ',
     taxSubtitle: 'Tờ khai, khoản nộp và báo cáo của tổ chức này đến hạn trong 30 ngày, cùng các việc đã quá hạn mà chưa đánh dấu xong.',
     vatNext: 'Tờ khai thuế GTGT {period} đến hạn ngày',
+    // One card per installed app (#1528).
+    apps: {
+      title: 'Ứng dụng',
+      open: 'Mở {app}',
+      failed: 'Chưa tải được số liệu.',
+      retry: 'Thử lại',
+      accounting: {
+        vatDue: '{days, plural, other {ngày nữa}} đến hạn tờ khai GTGT {period}',
+        vatOverdue: '{days, plural, other {ngày}} quá hạn tờ khai GTGT {period}',
+        noPeriod: 'Chưa chọn kỳ khai GTGT',
+      },
+      social: { scheduled: '{count, plural, other {bài đăng lên lịch trong 7 ngày tới}}' },
+      crm: { upcoming: '{count, plural, other {lịch hẹn sắp tới của bạn}}' },
+    },
     waiting: {
       title: 'Đang chờ bạn',
       empty: 'Không có việc gì đang chờ bạn',
