@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useId, useRef, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { brandName } from '../i18n/brand.ts';
 import { auth, authErrorText, authFailure, type AuthFailure } from '../lib/auth.ts';
@@ -9,7 +9,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { ConfirmDialog } from './confirm-dialog.tsx';
-import { ErrorText, Notice, Spinner } from './ui.tsx';
+import { ErrorText, fieldControl, fieldErrorId, Notice, Spinner } from './ui.tsx';
 
 interface Enrollment {
   factorId: string;
@@ -40,6 +40,9 @@ export function MfaChallengeForm({ onVerified }: { onVerified: () => Promise<voi
   const t = useTranslations('twoFactor');
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
+  // The code field names the error under it (#1515), and takes the focus back after a refused code.
+  const codeId = useId();
+  const codeInput = useRef<HTMLInputElement>(null);
   // A Supabase Auth failure, or 'noFactor'; worded at render.
   const [error, setError] = useState<AuthFailure | 'noFactor' | null>(null);
 
@@ -55,7 +58,9 @@ export function MfaChallengeForm({ onVerified }: { onVerified: () => Promise<voi
       const { error: verifyError } = await auth().mfa.challengeAndVerify({ factorId: factor.id, code: code.trim() });
       if (verifyError) {
         setCode('');
-        return setError(authFailure(verifyError));
+        setError(authFailure(verifyError));
+        codeInput.current?.focus();
+        return;
       }
       await onVerified();
     } finally {
@@ -68,6 +73,8 @@ export function MfaChallengeForm({ onVerified }: { onVerified: () => Promise<voi
       <Label className="flex-col items-stretch gap-1 font-normal">
         <span className="text-muted-foreground">{t('code')}</span>
         <Input
+          ref={codeInput}
+          {...fieldControl(codeId, { error: Boolean(error) })}
           required
           autoFocus
           inputMode="numeric"
@@ -79,7 +86,7 @@ export function MfaChallengeForm({ onVerified }: { onVerified: () => Promise<voi
           onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
         />
       </Label>
-      {error && <ErrorText>{error === 'noFactor' ? t('noFactor') : authErrorText(error, root)}</ErrorText>}
+      {error && <ErrorText id={fieldErrorId(codeId)}>{error === 'noFactor' ? t('noFactor') : authErrorText(error, root)}</ErrorText>}
       <Button type="submit" size="lg" className="w-full" disabled={busy}>
         {busy ? t('checking') : t('confirm')}
       </Button>
@@ -97,6 +104,10 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
   const [busy, setBusy] = useState(false);
   // Kept as a code or message key and worded at render, so a language switch rewords them (issue #215).
   const [error, setError] = useState<AuthFailure | null>(null);
+  // While the setup form is open, a refusal is about the code it asks for: the field names it and takes the focus back
+  // (#1515).
+  const codeId = useId();
+  const codeInput = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<'enabled' | 'disabled' | null>(null);
   const verified = factors.data?.totp ?? [];
 
@@ -130,7 +141,11 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
     if (!enrollment) return;
     void run(async () => {
       const { error: e } = await auth().mfa.challengeAndVerify({ factorId: enrollment.factorId, code: code.trim() });
-      if (e) return authFailure(e);
+      if (e) {
+        setCode('');
+        codeInput.current?.focus();
+        return authFailure(e);
+      }
       setEnrollment(null);
       setNotice('enabled');
       onEnabled?.();
@@ -179,6 +194,8 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
             <Label className="flex-col items-stretch gap-1 font-normal">
               <span className="text-muted-foreground">{t('code')}</span>
               <Input
+                ref={codeInput}
+                {...fieldControl(codeId, { error: Boolean(error) })}
                 required
                 inputMode="numeric"
                 autoComplete="one-time-code"
@@ -221,7 +238,7 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
             </Button>
           )
         )}
-        {error && <ErrorText>{authErrorText(error, root)}</ErrorText>}
+        {error && <ErrorText id={enrollment ? fieldErrorId(codeId) : undefined}>{authErrorText(error, root)}</ErrorText>}
         {notice && <Notice>{t(notice)}</Notice>}
       </div>
     </Card>
