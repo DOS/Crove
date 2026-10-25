@@ -51,6 +51,9 @@ export interface ArchivePart {
   generation: string;
   sha256: string;
   bytes: number;
+  // The legal entity whose books the part holds (#1280); absent for the default entity's parts and in packages built
+  // before #1280.
+  legalEntityId?: string;
 }
 
 export interface ArchiveDocument {
@@ -105,31 +108,39 @@ export async function runYearArchive(
 
   const parts: ArchivePart[] = [];
   const notes: string[] = [];
-  const store1 = async (name: string, kind: ArchivePart['kind'], bytes: Uint8Array, contentType: string) => {
-    const sha256 = sha256Hex(bytes);
-    const key = archiveKey(orgId, year, sha256);
-    const generation = await store.put(key, bytes, contentType);
-    parts.push({ name, kind, key, generation, sha256, bytes: bytes.byteLength });
-  };
+  // The books of each legal entity (#1280): the default entity's parts keep their names, another entity's carry the
+  // start of its id. A source without the list (a package asked for before #1280) holds the default entity's books.
+  const entities: Array<{ id: string; isDefault: boolean } | null> = source.legalEntities?.length ? source.legalEntities : [null];
+  for (const entity of entities) {
+    const own = entity && !entity.isDefault ? { legalEntityId: entity.id } : {};
+    const of = entity ? { legalEntityId: entity.id } : {};
+    const suffix = entity && !entity.isDefault ? `-${entity.id.slice(0, 8)}` : '';
+    const store1 = async (name: string, kind: ArchivePart['kind'], bytes: Uint8Array, contentType: string) => {
+      const sha256 = sha256Hex(bytes);
+      const key = archiveKey(orgId, year, sha256);
+      const generation = await store.put(key, bytes, contentType);
+      parts.push({ name, kind, key, generation, sha256, bytes: bytes.byteLength, ...own });
+    };
 
-  const entries = await runtime.query<JournalEntryView[]>('finance.journal.list', { from: `${year}-01-01`, to: `${year}-12-31`, limit: JOURNAL_EXPORT_LIMIT }, scope);
-  if (entries.length >= JOURNAL_EXPORT_LIMIT) {
-    throw new DomainError('EXPORT_TOO_LARGE', 422, `Năm ${year} có quá nhiều bút toán để đóng gói một lần`);
-  }
-  await store1(`so-nhat-ky-${year}.xlsx`, 'journal', await buildJournalWorkbook([...entries].reverse(), source.orgSlug, brand), XLSX);
-  const book = await runtime.query<LedgerBook>('finance.ledger.book', { period: String(year) }, scope);
-  await store1(`so-sach-${year}.xlsx`, 'ledger', await buildLedgerWorkbook(book, source.orgSlug, brand), XLSX);
-  const statements = await runtime.query<FinancialStatements>('finance.statements.period', { period: String(year) }, scope);
-  await store1(`bao-cao-tai-chinh-${year}.xlsx`, 'statements', await buildStatementsWorkbook(statements, source.orgSlug, brand), XLSX);
+    const entries = await runtime.query<JournalEntryView[]>('finance.journal.list', { from: `${year}-01-01`, to: `${year}-12-31`, limit: JOURNAL_EXPORT_LIMIT, ...of }, scope);
+    if (entries.length >= JOURNAL_EXPORT_LIMIT) {
+      throw new DomainError('EXPORT_TOO_LARGE', 422, `Năm ${year} có quá nhiều bút toán để đóng gói một lần`);
+    }
+    await store1(`so-nhat-ky-${year}${suffix}.xlsx`, 'journal', await buildJournalWorkbook([...entries].reverse(), source.orgSlug, brand), XLSX);
+    const book = await runtime.query<LedgerBook>('finance.ledger.book', { period: String(year), ...of }, scope);
+    await store1(`so-sach-${year}${suffix}.xlsx`, 'ledger', await buildLedgerWorkbook(book, source.orgSlug, brand), XLSX);
+    const statements = await runtime.query<FinancialStatements>('finance.statements.period', { period: String(year), ...of }, scope);
+    await store1(`bao-cao-tai-chinh-${year}${suffix}.xlsx`, 'statements', await buildStatementsWorkbook(statements, source.orgSlug, brand), XLSX);
 
-  for (const period of vatPeriods(year, source.vatFilingPeriod)) {
-    const report = await runtime.query<VatReport>('finance.vat.period', { period }, scope);
-    await store1(`gtgt-${period}.xlsx`, 'vat_working', await buildVatWorkbook(report, source.orgSlug, brand), XLSX);
-    if (!source.hasTaxCode) continue;
-    const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period }, scope);
-    // The filing date is the day in Vietnam, not in UTC.
-    const xml = buildVat01Xml(declaration, (options.now?.() ?? new Date()).toLocaleDateString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }));
-    await store1(`01gtgt-${period}.xml`, 'vat_xml', new TextEncoder().encode(xml), 'application/xml');
+    for (const period of vatPeriods(year, source.vatFilingPeriod)) {
+      const report = await runtime.query<VatReport>('finance.vat.period', { period, ...of }, scope);
+      await store1(`gtgt-${period}${suffix}.xlsx`, 'vat_working', await buildVatWorkbook(report, source.orgSlug, brand), XLSX);
+      if (!source.hasTaxCode) continue;
+      const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period, ...of }, scope);
+      // The filing date is the day in Vietnam, not in UTC.
+      const xml = buildVat01Xml(declaration, (options.now?.() ?? new Date()).toLocaleDateString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh' }));
+      await store1(`01gtgt-${period}${suffix}.xml`, 'vat_xml', new TextEncoder().encode(xml), 'application/xml');
+    }
   }
   if (!source.hasTaxCode) notes.push('Tổ chức chưa có mã số thuế nên gói không có tờ khai 01/GTGT dạng XML');
 

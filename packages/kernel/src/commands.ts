@@ -488,10 +488,17 @@ function changesContent(payload: unknown, lineAccounts: z.infer<typeof zLineAcco
 export const editProposal = defineCommand({
   name: 'kernel.proposal.edit',
   proposalEditor: true,
-  // lineAccounts, an exchangeRate for a foreign-currency invoice read without one (#918), or both.
+  // lineAccounts, an exchangeRate for a foreign-currency invoice read without one (#918), the legal entity whose books
+  // the invoice goes to (#1280), or several of them.
   input: z
-    .object({ id: zId, revision: z.number().int().positive(), lineAccounts: zLineAccounts.min(1).optional(), exchangeRate: zExchangeRate.optional() })
-    .refine((v) => v.lineAccounts !== undefined || v.exchangeRate !== undefined, 'lineAccounts or exchangeRate'),
+    .object({
+      id: zId,
+      revision: z.number().int().positive(),
+      lineAccounts: zLineAccounts.min(1).optional(),
+      exchangeRate: zExchangeRate.optional(),
+      legalEntityId: zId.optional(),
+    })
+    .refine((v) => v.lineAccounts !== undefined || v.exchangeRate !== undefined || v.legalEntityId !== undefined, 'lineAccounts, exchangeRate or legalEntityId'),
   risk: 'R1',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.proposal', id: input.id }),
@@ -506,7 +513,12 @@ export const editProposal = defineCommand({
     if (!authors) throw new DomainError('NOT_EDITABLE', 422, 'Đề xuất thiếu thông tin người soạn nên không chỉnh sửa được');
     const revised = await ctx.run<{ changed: boolean; payload: unknown }>(
       reviser,
-      { payload: proposal.payload, lineAccounts: input.lineAccounts ?? [], ...(input.exchangeRate ? { exchangeRate: input.exchangeRate } : {}) },
+      {
+        payload: proposal.payload,
+        lineAccounts: input.lineAccounts ?? [],
+        ...(input.exchangeRate ? { exchangeRate: input.exchangeRate } : {}),
+        ...(input.legalEntityId ? { legalEntityId: input.legalEntityId } : {}),
+      },
       { proposalId: proposal.id },
     );
     if (!revised.changed) return { revision: proposal.revision, changed: false };
@@ -686,6 +698,9 @@ export const BULK_ITEM_REFUSALS: ReadonlySet<string> = new Set([
   'PERIOD_LOCKED',
   // Posting on or before the org's opening entry (#366).
   'BEFORE_OPENING_BALANCE',
+  // A legal entity the approver may not see, or a document posted in another entity before (#1280).
+  'LEGAL_ENTITY_NOT_ALLOWED',
+  'SOURCE_LEGAL_ENTITY',
 ]);
 
 // Whether a nested approval's error refuses only that item.

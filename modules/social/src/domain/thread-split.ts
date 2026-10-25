@@ -104,7 +104,7 @@ export function splitThread(provider: Provider, text: string, options: ThreadSpl
   const source = withoutSignature(text, settings);
   const sentFirst = (piece: string) => {
     const body = withSignature(piece, settings);
-    return sentText(provider, body, sentLink(provider, linkUrl, settings, body), mediaCount);
+    return sentText(provider, body, sentLink(provider, linkUrl, settings, body), mediaCount, settings);
   };
   const suffix = (i: number, n: number | null) => (n === null ? '' : ` ${i + 1}/${n}`);
   const gaps = gapsOf(source);

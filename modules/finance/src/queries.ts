@@ -7,10 +7,12 @@ import { RECEIVABLE_ACCOUNT, VAT_OUTPUT, money } from '@crove/l10n-vn';
 import { chartAccounts, type OrgChartAccount } from './accounts.ts';
 import { OPEN_REVERSAL_STATUSES, REVERSAL_KIND } from './reversal.ts';
 import { VOUCHER_SOURCE } from './domain/cash-voucher.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import type { PurchaseVoucher, SalesVoucher } from './misa.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
-const zRange = z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() });
+// A date range of one legal entity's books (#1280): legalEntityId as in zLegalEntityChoice.
+const zRange = z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), legalEntityId: zId.optional() });
 
 export const vendorsList = defineQuery({
   name: 'finance.vendors.list',
@@ -121,6 +123,7 @@ export const documentsList = defineQuery({
   input: zRange,
   access: ALL,
   handler: async (ctx, input) => {
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     let query = ctx.trx
       .selectFrom('crove_finance.purchase_document as d')
       .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
@@ -155,6 +158,7 @@ export const documentsList = defineQuery({
         'v.created_at as voided_at',
       ])
       .where('d.org_id', '=', ctx.orgId)
+      .where('d.legal_entity_id', '=', legalEntityId)
       .orderBy('d.invoice_date', 'desc')
       .orderBy('d.created_at', 'desc')
       .limit(1000);
@@ -230,10 +234,10 @@ export interface JournalEntryView {
 
 export const JOURNAL_EXPORT_LIMIT = 20_000;
 
-// Entries with their lines, newest first: those in the date range, or the one entry `id`.
+// Entries with their lines, newest first: those of one legal entity (#1280) in the date range, or the one entry `id`.
 async function loadEntries(
   ctx: QueryContext,
-  filter: { from?: string | undefined; to?: string | undefined; limit?: number | undefined; id?: string },
+  filter: { from?: string | undefined; to?: string | undefined; limit?: number | undefined; id?: string; legalEntityId?: string },
 ): Promise<JournalEntryView[]> {
   let entries = ctx.trx
     .selectFrom('crove_finance.journal_entry as j')
@@ -282,6 +286,7 @@ async function loadEntries(
     .orderBy('j.created_at', 'desc')
     .limit(filter.limit ?? 1000);
   if (filter.id) entries = entries.where('j.id', '=', filter.id);
+  if (filter.legalEntityId) entries = entries.where('j.legal_entity_id', '=', filter.legalEntityId);
   if (filter.from) entries = entries.where('j.entry_date', '>=', filter.from);
   if (filter.to) entries = entries.where('j.entry_date', '<=', filter.to);
   const rows = await entries.execute();
@@ -362,7 +367,7 @@ export const journalList = defineQuery({
   name: 'finance.journal.list',
   input: zRange.extend({ limit: z.number().int().positive().max(JOURNAL_EXPORT_LIMIT).optional() }),
   access: ALL,
-  handler: (ctx, input): Promise<JournalEntryView[]> => loadEntries(ctx, input),
+  handler: async (ctx, input): Promise<JournalEntryView[]> => loadEntries(ctx, { ...input, legalEntityId: await resolveLegalEntity(ctx, input.legalEntityId) }),
 });
 
 // Records one Excel export of the journal (GET /api/export/journal.xlsx) after the workbook is built. It changes
@@ -395,7 +400,8 @@ export const journalExport = defineCommand({
     // The range too, null for an open end (#878), so a document's history can name the exports it was in.
     const range = { from: input.from ?? null, to: input.to ?? null };
     const stock = input.stockLines ? { stockLines: input.stockLines } : {};
-    ctx.audit(input.format ? { entries: input.entries, format: input.format, ...range, ...stock } : { entries: input.entries, ...range });
+    const entity = input.legalEntityId ? { legal_entity_id: input.legalEntityId } : {};
+    ctx.audit(input.format ? { entries: input.entries, format: input.format, ...range, ...stock, ...entity } : { entries: input.entries, ...range, ...entity });
     return { ok: true as const };
   },
 });
@@ -421,12 +427,13 @@ interface VoucherSource {
 }
 
 // The recorded documents of one direction whose journal entry falls in the date range, oldest first, with their lines.
-// A voided document (its entry reversed, #165) is left out: it is no longer in Crove's books.
+// A voided document (its entry reversed, #165) is left out: it is no longer in Crove's books. Of one legal entity (#1280).
 async function loadVouchers(
   ctx: QueryContext,
   direction: DocumentDirection,
-  input: { from?: string | undefined; to?: string | undefined; limit?: number | undefined },
+  input: { from?: string | undefined; to?: string | undefined; limit?: number | undefined; legalEntityId?: string | undefined },
 ): Promise<VoucherSource[]> {
+  const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
   let documents = ctx.trx
     .selectFrom('crove_finance.journal_entry as j')
     .innerJoin('crove_finance.purchase_document as d', (join) =>
@@ -448,6 +455,7 @@ async function loadVouchers(
       'p.address as party_address',
     ])
     .where('j.org_id', '=', ctx.orgId)
+    .where('j.legal_entity_id', '=', legalEntityId)
     .where('d.direction', '=', direction)
     .where('j.reverses_entry_id', 'is', null)
     .where('v.document_id', 'is', null)

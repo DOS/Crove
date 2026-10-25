@@ -1629,8 +1629,8 @@ export function createRpcHandler(
       ),
     },
     accountRules: {
-      list: os.accountRules.list.handler(({ context }) =>
-        inFinance(context, (orgId, actor) => runtime.query('finance.categorization_rules.list', {}, { actor, orgId })),
+      list: os.accountRules.list.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.categorization_rules.list', input ?? {}, { actor, orgId })),
       ),
       create: os.accountRules.create.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.categorization_rule.create', input, { actor, orgId })),
@@ -1705,8 +1705,8 @@ export function createRpcHandler(
       ),
     },
     fixedAssets: {
-      list: os.fixedAssets.list.handler(({ context }) =>
-        inFinance(context, (orgId, actor) => runtime.query('finance.fixed_assets.list', {}, { actor, orgId })),
+      list: os.fixedAssets.list.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.fixed_assets.list', input ?? {}, { actor, orgId })),
       ),
       create: os.fixedAssets.create.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => {
@@ -1762,7 +1762,9 @@ export function createRpcHandler(
       suggestions: os.bank.suggestions.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.bank.suggestions', input, { actor, orgId })),
       ),
-      openLines: os.bank.openLines.handler(({ context }) => inFinance(context, (orgId, actor) => runtime.query('finance.bank.open_lines', {}, { actor, orgId }))),
+      openLines: os.bank.openLines.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.bank.open_lines', input ?? {}, { actor, orgId })),
+      ),
     },
     // AI agents (ADR-0029). The kernel module owns them; a template of a module that is off answers MODULE_DISABLED.
     chart: {
