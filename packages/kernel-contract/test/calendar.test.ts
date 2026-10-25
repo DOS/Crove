@@ -1,10 +1,11 @@
-// The calendar core (#1313): time zones, Vietnamese holidays and free slots.
+// The calendar core (#1313): time zones, Vietnamese holidays and free slots; a team's free slots (#1373).
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_WORKING_HOURS,
   freeSlots,
   isTimeZone,
   isVietnamHoliday,
+  teamSlots,
   vietnamHolidays,
   weekdayOf,
   zCalendarEventAdd,
@@ -198,5 +199,34 @@ describe('freeSlots', () => {
       }
       for (let k = 1; k < slots.length; k++) expect((slots[k] as Interval).start > (slots[k - 1] as Interval).start).toBe(true);
     }
+  });
+});
+
+describe('team slots (#1373)', () => {
+  it("offers any host's slot for round-robin and only shared slots for a collective type (random cases)", () => {
+    const next = rng(1373);
+    const key = (s: Interval) => `${s.start}:${s.end}`;
+    for (let i = 0; i < 200; i++) {
+      const hosts = 1 + Math.floor(next() * 4);
+      // Slots on a half-hour grid with two lengths, so hosts share some and differ on others.
+      const perHost = Array.from({ length: hosts }, () =>
+        Array.from({ length: Math.floor(next() * 12) }, () => {
+          const start = at('2026-11-02T00:00:00Z') + Math.floor(next() * 16) * 30 * M;
+          return { start, end: start + (next() < 0.8 ? 30 : 60) * M };
+        }).sort((a, b) => a.start - b.start),
+      );
+      const any = teamSlots('any', perHost);
+      const all = teamSlots('all', perHost);
+      const offered = (list: Interval[], s: Interval) => list.some((x) => key(x) === key(s));
+      expect(new Set(any.map(key)).size, `case ${i}`).toBe(any.length);
+      expect(new Set(all.map(key)).size, `case ${i}`).toBe(all.length);
+      for (const list of perHost) for (const s of list) expect(offered(any, s), `case ${i}`).toBe(true);
+      for (const s of any) expect(perHost.some((list) => offered(list, s)), `case ${i}`).toBe(true);
+      for (const s of all) expect(perHost.every((list) => offered(list, s)), `case ${i}`).toBe(true);
+      for (const s of perHost[0] ?? []) if (perHost.every((list) => offered(list, s))) expect(offered(all, s), `case ${i}`).toBe(true);
+      for (const list of [any, all]) for (let k = 1; k < list.length; k++) expect((list[k] as Interval).start >= (list[k - 1] as Interval).start).toBe(true);
+    }
+    expect(teamSlots('any', [])).toEqual([]);
+    expect(teamSlots('all', [])).toEqual([]);
   });
 });

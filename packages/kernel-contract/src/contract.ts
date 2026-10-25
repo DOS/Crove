@@ -185,7 +185,7 @@ import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
 import { zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
 import { zMemberRoles, zRoleAssignInput } from './roles.ts';
 import { zCalendarEventAdd, zCalendarEventCancel, zCalendarEventView, zCalendarRange, zCalendarSlot, zCalendarSlotsQuery, zMyCalendar, zWorkingHours } from './calendar.ts';
-import { zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
+import { zBookingCancel, zBookingItem, zBookingListQuery, zBookingMove, zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
 import { zOpeningBalanceImport, zOpeningBalancePreview } from './opening-balance.ts';
 import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconciliation } from './portal-list.ts';
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
@@ -375,6 +375,13 @@ export const contract = {
       create: oc.input(zEventTypeInput).output(zEventType),
       update: oc.input(zEventTypeUpdate).output(zEventType),
       setActive: oc.input(zEventTypeSetActive).output(zEventType),
+    },
+    // Bookings of the public booking page (#1320): a member lists those they host (owners and admins the org's), and
+    // the host cancels or moves one; the visitor is mailed.
+    bookings: {
+      list: oc.input(zBookingListQuery).output(z.array(zBookingItem)),
+      cancel: oc.input(zBookingCancel).output(z.object({ bookingId: z.string(), status: z.literal('cancelled') })),
+      move: oc.input(zBookingMove).output(z.object({ bookingId: z.string(), startsAt: z.string() })),
     },
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.

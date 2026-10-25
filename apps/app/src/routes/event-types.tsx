@@ -1,19 +1,32 @@
 // The org's event types in Settings (issue #1314), with the crm module: the kinds of meeting a client books with a
 // member on the booking page (C3). Owners and admins add and change any; a member those they host; a viewer reads.
 // Event types are archived, not deleted. The server enforces every rule; the screen offers only what can succeed.
+// Team types (#1373): owners and admins pick round-robin or collective and the co-hosts; a member sees them only.
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
-import { EVENT_TYPE_LOCATION_KINDS, type EventType, type EventTypeLocationKind } from '@crove/kernel-contract';
+import { EVENT_TYPE_ASSIGNMENTS, EVENT_TYPE_LOCATION_KINDS, type EventType, type EventTypeAssignment, type EventTypeLocationKind } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
+import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
-import { draftOf, hostChoices, inputOf, mayManage, withTitle, type EventTypeDraft, type EventTypeMember } from '../lib/event-types.ts';
+import {
+  coHostChoices,
+  draftOf,
+  hostChoices,
+  inputOf,
+  mayManage,
+  withCoHost,
+  withHost,
+  withTitle,
+  type EventTypeDraft,
+  type EventTypeMember,
+} from '../lib/event-types.ts';
 
 const refresh = () => queryClient.invalidateQueries({ queryKey: orpc.crm.eventTypes.list.key() });
 
@@ -94,15 +107,42 @@ function EventTypeForm({
         </NativeSelect>
         <Input className="min-w-48 flex-1" maxLength={500} placeholder={t(`locationPlaceholders.${draft.locationKind}`)} aria-label={t('fields.locationValue')} value={draft.locationValue} onChange={(e) => set('locationValue', e.target.value)} />
       </div>
-      <NativeSelect className="w-full" value={draft.hostUserId} disabled={!manager} onChange={(e) => set('hostUserId', e.target.value)} aria-label={t('fields.host')}>
-        {hostChoices(members, me, manager).map((m) => (
-          <NativeSelectOption key={m.userId} value={m.userId}>
-            {m.displayName ?? m.email}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
+      <div className="flex flex-wrap gap-2">
+        <NativeSelect className="min-w-48 flex-1" value={draft.hostUserId} disabled={!manager} onChange={(e) => setDraft((d) => withHost(d, e.target.value))} aria-label={t('fields.host')}>
+          {hostChoices(members, me, manager).map((m) => (
+            <NativeSelectOption key={m.userId} value={m.userId}>
+              {m.displayName ?? m.email}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <NativeSelect className="min-w-48" value={draft.assignment} disabled={!manager} onChange={(e) => set('assignment', e.target.value as EventTypeAssignment)} aria-label={t('fields.assignment')}>
+          {EVENT_TYPE_ASSIGNMENTS.map((a) => (
+            <NativeSelectOption key={a} value={a}>
+              {t(`assignments.${a}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </div>
+      {draft.assignment !== 'single' && (
+        <fieldset className="space-y-1" aria-invalid={invalid === 'coHostUserIds'}>
+          <legend className="text-xs text-muted-foreground">{t('fields.coHostUserIds')}</legend>
+          <p className="text-xs text-subtle-foreground">{t(`assignmentHints.${draft.assignment}`)}</p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {coHostChoices(members, draft.hostUserId).map((m) => (
+              <label key={m.userId} className="flex items-center gap-2 text-sm">
+                <Checkbox checked={draft.coHostUserIds.includes(m.userId)} disabled={!manager} onCheckedChange={(on) => setDraft((d) => withCoHost(d, m.userId, on === true))} />
+                {m.displayName ?? m.email}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
       <Textarea maxLength={1000} rows={2} placeholder={t('descriptionPlaceholder')} aria-label={t('fields.description')} value={draft.description} onChange={(e) => set('description', e.target.value)} />
-      {invalid && <ErrorText>{t('invalidField', { field: t(`fields.${invalid}` as 'fields.title') })}</ErrorText>}
+      {invalid === 'coHostUserIds' ? (
+        <ErrorText>{t('coHostsNeeded')}</ErrorText>
+      ) : invalid ? (
+        <ErrorText>{t('invalidField', { field: t(`fields.${invalid}` as 'fields.title') })}</ErrorText>
+      ) : null}
       <div className="flex gap-2">
         <Button type="submit" variant="outline" size="sm" disabled={pending || !draft.title.trim() || !draft.slug.trim()}>
           {pending ? <Spinner className="text-current" /> : null}
@@ -133,6 +173,7 @@ function EventTypeRow({ type, members, me, manager, editor }: { type: EventType;
   // A viewer changes nothing, even a type they still host.
   const canManage = editor && mayManage(type, me, manager);
   const host = nameOf(members, type.hostUserId);
+  const coHosts = type.coHostUserIds.map((id) => nameOf(members, id)).filter((n): n is string => n !== null);
   return (
     <li className="py-2 text-sm">
       {editing ? (
@@ -159,6 +200,7 @@ function EventTypeRow({ type, members, me, manager, editor }: { type: EventType;
             <p className="text-xs text-subtle-foreground">
               <span className="font-mono">/{type.slug}</span> · {t('minutes', { count: String(type.durationMin) })} · {t(`locations.${type.locationKind}`)}
               {host ? ` · ${t('hostedBy', { name: host })}` : null}
+              {type.assignment !== 'single' ? ` · ${t(`assignments.${type.assignment}`)}${coHosts.length > 0 ? `: ${coHosts.join(', ')}` : ''}` : null}
             </p>
           </div>
           {canManage && (

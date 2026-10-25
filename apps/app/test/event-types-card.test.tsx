@@ -35,7 +35,7 @@ const members = [
   { userId: OWNER, email: 'owner@example.test', displayName: 'Minh', role: 'owner' as const },
 ];
 const at = '2026-10-24T00:00:00.000Z';
-const base = { description: null, bufferBeforeMin: 0, bufferAfterMin: 0, minNoticeMin: 240, horizonDays: 60, dailyLimit: null, locationValue: null, createdAt: at, updatedAt: at };
+const base = { description: null, bufferBeforeMin: 0, bufferAfterMin: 0, minNoticeMin: 240, horizonDays: 60, dailyLimit: null, locationValue: null, assignment: 'single' as const, coHostUserIds: [], createdAt: at, updatedAt: at };
 const types: EventType[] = [
   { ...base, id: '00000000-0000-7000-8000-0000000000a1', slug: 'tu-van-thue', title: 'Tư vấn thuế', durationMin: 30, locationKind: 'video', hostUserId: ME, active: true },
   { ...base, id: '00000000-0000-7000-8000-0000000000a2', slug: 'doi-soat', title: 'Đối soát', durationMin: 60, locationKind: 'in_person', hostUserId: OWNER, active: false },

@@ -505,6 +505,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         update: os.crm.eventTypes.update.handler(crmCommand('crm.event_type.update')),
         setActive: os.crm.eventTypes.setActive.handler(crmCommand('crm.event_type.set_active')),
       },
+      bookings: {
+        list: os.crm.bookings.list.handler(({ context, input }) => inCrm(context, (orgId, actor) => runtime.query('crm.booking.list', input, { actor, orgId }))),
+        cancel: os.crm.bookings.cancel.handler(crmCommand('crm.booking.cancel')),
+        move: os.crm.bookings.move.handler(crmCommand('crm.booking.move')),
+      },
     },
     social: {
       posts: {

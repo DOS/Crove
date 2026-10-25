@@ -50,6 +50,8 @@ export const QUEUES = {
   yearArchive: 'finance-year-archive',
   // Created by the crm bookings migration (20261031020000).
   crmBooking: 'crm-booking',
+  // Created by the crm booking manage migration (20261031250000).
+  crmBookingRemind: 'crm-booking-remind',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 
