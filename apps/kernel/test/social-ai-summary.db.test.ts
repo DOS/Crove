@@ -285,9 +285,11 @@ suite('AI summary of a period, and the rate and goals it repeats (#1237, #1164, 
       }
     });
     expect(pages.now).toMatchObject({ posts: 2, goals: { month: '2026-09' }, rateBases: { reach: { engagement: 61, denominator: 700 } } });
-    // The sections key came after (#1259): null for a link without sections, left out here.
-    const { sections, ...now } = pages.now as Record<string, unknown>;
+    // The sections key came after (#1259): null for a link without sections, left out here; so did the Google Business
+    // figures (#1477), empty here.
+    const { sections, performance, ...now } = pages.now as Record<string, unknown>;
     expect(sections).toBeNull();
+    expect(performance).toEqual([]);
     expect(strip(now)).toEqual(pages.before);
   });
 

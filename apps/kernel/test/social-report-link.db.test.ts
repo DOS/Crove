@@ -306,9 +306,9 @@ suite('social report links on PostgreSQL (#643)', () => {
     const previous = readFileSync(join(MIGRATIONS, '20261028200000_crove_social_report_external.sql'), 'utf8');
     const [now, before] = await admin(async (c) => {
       const read = async () => (await c.query<{ page: string }>('SELECT crove_social.report_link_view($1)::text AS page', [token])).rows[0]?.page;
-      // The audience list (#1146) and the Reels (#1151) came after: left out of today's answer, which has the audience
-      // empty here.
-      const current = (await c.query<{ page: string; audience: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels', 'sections'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
+      // The audience list (#1146), the Reels (#1151) and the Google Business figures (#1477) came after: left out of
+      // today's answer, which has the audience empty here.
+      const current = (await c.query<{ page: string; audience: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels', 'sections', 'performance'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
       expect(current?.audience).toEqual([]);
       await c.query('BEGIN');
       try {
@@ -380,7 +380,7 @@ suite('social report links on PostgreSQL (#643)', () => {
     const previous = readFileSync(join(MIGRATIONS, '20261028240000_crove_social_story_report.sql'), 'utf8');
     const [now, audience, before] = await admin(async (c) => {
       // The Reels (#1151) came after.
-      const current = (await c.query<{ page: string; audience: unknown }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels', 'sections'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
+      const current = (await c.query<{ page: string; audience: unknown }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['audience', 'reels', 'sections', 'performance'])::text AS page, crove_social.report_link_view($1) -> 'audience' AS audience`, [token])).rows[0];
       await c.query('BEGIN');
       try {
         await c.query(previous);
@@ -582,8 +582,8 @@ suite('social report links on PostgreSQL (#643)', () => {
     const previous = readFileSync(join(MIGRATIONS, '20261029100000_crove_social_follower_demographics.sql'), 'utf8');
     const pages = await admin(async (c) => {
       const read = async (token: string, without: string) => (await c.query<{ page: string }>(`SELECT (crove_social.report_link_view($1) - ${without})::text AS page`, [token])).rows[0]?.page;
-      // The rate sums (#1164) came after: left out of today's answer.
-      const readNow = async (token: string) => (await c.query<{ page: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['reels', 'sections'])::text AS page`, [token])).rows[0]?.page;
+      // The rate sums (#1164) and the Google Business figures (#1477) came after: left out of today's answer.
+      const readNow = async (token: string) => (await c.query<{ page: string }>(`SELECT (${WITHOUT_RATES('crove_social.report_link_view($1)')} - ARRAY['reels', 'sections', 'performance'])::text AS page`, [token])).rows[0]?.page;
       const now = [await readNow(plain.token), await readNow(outside.token)];
       const reels = (await c.query<{ reels: unknown }>("SELECT crove_social.report_link_view($1) -> 'reels' AS reels", [plain.token])).rows[0]?.reels;
       await c.query('BEGIN');
@@ -710,7 +710,8 @@ suite('social report links on PostgreSQL (#643)', () => {
     const pages = await admin(async (c) => {
       const read = async (token: string, without: string) => (await c.query<{ page: string }>(`SELECT (crove_social.report_link_view($1) - ${without})::text AS page`, [token])).rows[0]?.page;
       const now: (string | undefined)[] = [];
-      for (const l of links) now.push(await read(l.token, "'sections'"));
+      // The Google Business figures (#1477) came after: left out of today's answer, empty here.
+      for (const l of links) now.push(await read(l.token, "ARRAY['sections', 'performance']"));
       const sections = (await c.query<{ s: unknown }>("SELECT crove_social.report_link_view($1) -> 'sections' AS s", [links[0]?.token])).rows[0]?.s;
       await c.query('BEGIN');
       try {

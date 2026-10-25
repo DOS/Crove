@@ -4,6 +4,10 @@
 // next day. The Metrics tab draws each channel's followers over 7, 30 or 90 days from these snapshots.
 // Who follows the account (#1146) is asked for at most once a week per channel, within the same daily pass: the day's
 // snapshot keeps it, and a week passes before the channel is asked again, also when the platform gave nothing.
+// A Google Business Profile location's performance (#1477), its calls, direction requests, website clicks and profile
+// views per day, comes with the same daily read: Google gives these days late, so each read gives the last 14 days
+// again, the day's snapshot keeps them all, and readers take each day from the latest snapshot that holds it. A token
+// Google refuses there marks the connection expired, as publishing does.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId, zSocialAudience } from '@crove/kernel-contract';
@@ -26,6 +30,14 @@ export const AUDIENCE_EVERY_DAYS = 7;
 export type SocialAudience = z.infer<typeof zSocialAudience>;
 
 const zCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable();
+// A location's figures per day (#1477), as account_snapshot.performance keeps them: its CHECK allows 31 days.
+export const PERFORMANCE_MAX_DAYS = 31;
+const zFigure = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const zPerformanceFigures = z.strictObject({ calls: zFigure, directions: zFigure, websiteClicks: zFigure, views: zFigure });
+const zPerformance = z
+  .record(z.iso.date(), zPerformanceFigures)
+  .refine((p) => Object.keys(p).length <= PERFORMANCE_MAX_DAYS, 'too many days');
+export type SocialPerformance = z.infer<typeof zPerformance>;
 
 export const accountRecord = defineCommand({
   name: 'social.account.record',
@@ -37,6 +49,8 @@ export const accountRecord = defineCommand({
     // Who follows the account (#1146), when it was asked for: null when the platform gave nothing (kept as {} so the
     // channel waits a week all the same); absent when it was not asked.
     audience: zSocialAudience.nullable().optional(),
+    // A Google Business location's figures per day (#1477); absent on other channels.
+    performance: zPerformance.optional(),
     error: z.enum(['no_answer', 'token_expired', 'permission']).optional(),
   }),
   risk: 'R1',
@@ -53,6 +67,7 @@ export const accountRecord = defineCommand({
         followers: input.followers === undefined || input.followers === null ? null : String(input.followers),
         reach: input.reach === undefined || input.reach === null ? null : String(input.reach),
         audience: input.audience === undefined ? null : JSON.stringify(input.audience ?? {}),
+        performance: input.performance === undefined ? null : JSON.stringify(input.performance),
         error: input.error ?? null,
         captured_at: ctx.now,
       })
@@ -74,6 +89,16 @@ export interface AccountTrend {
   points: AccountPoint[];
   // The latest audience taken in the window (#1146), with its day; null when none was.
   audience: (SocialAudience & { day: string }) | null;
+  // A Google Business location's figures per day in the window (#1477), oldest first, each day as Google last gave it;
+  // empty on other channels.
+  performance: PerformanceDay[];
+}
+export interface PerformanceDay {
+  day: string;
+  calls: number;
+  directions: number;
+  websiteClicks: number;
+  views: number;
 }
 
 // Whether a channel's audience is due on a day (#1146): no snapshot of the AUDIENCE_EVERY_DAYS days up to it asked for
@@ -127,11 +152,32 @@ export const accountTrends = defineQuery({
       const parsed = zSocialAudience.safeParse(r.audience);
       if (parsed.success) audienceByChannel.set(r.connection_id, { ...parsed.data, day: r.captured_on });
     }
+    // Each day's figures of the window's Google Business channels (#1477), from the latest snapshot that holds the day:
+    // a later read corrects an earlier one, so a day counts once.
+    const performance = await sql<{ connection_id: string; provider: string; day: string; figures: unknown }>`
+      SELECT DISTINCT ON (s.channel_connection_id, d.key) s.channel_connection_id AS connection_id, c.provider, d.key AS day, d.value AS figures
+      FROM crove_social.account_snapshot s
+      JOIN crove_kernel.channel_connection c ON c.org_id = s.org_id AND c.id = s.channel_connection_id
+      CROSS JOIN LATERAL pg_catalog.jsonb_each(s.performance) d
+      WHERE s.org_id = ${ctx.orgId}
+        AND s.performance IS NOT NULL
+        AND s.captured_on >= (pg_catalog.now() AT TIME ZONE 'UTC')::date - ${input.days}::int
+        AND d.key >= pg_catalog.to_char((pg_catalog.now() AT TIME ZONE 'UTC')::date - ${input.days}::int, 'YYYY-MM-DD')
+        AND ${connectionInScope(scope, 's.channel_connection_id')}
+      ORDER BY s.channel_connection_id, d.key, s.captured_on DESC
+      LIMIT 60000`.execute(ctx.trx);
     const byChannel = new Map<string, AccountTrend>();
+    const trendOf = (connectionId: string, provider: string) => {
+      const trend = byChannel.get(connectionId) ?? { connectionId, provider, points: [], audience: audienceByChannel.get(connectionId) ?? null, performance: [] };
+      byChannel.set(connectionId, trend);
+      return trend;
+    };
     for (const r of rows) {
-      const trend = byChannel.get(r.connection_id) ?? { connectionId: r.connection_id, provider: r.provider, points: [], audience: audienceByChannel.get(r.connection_id) ?? null };
-      trend.points.push({ day: r.captured_on, followers: r.followers === null ? null : Number(r.followers), reach: r.reach === null ? null : Number(r.reach) });
-      byChannel.set(r.connection_id, trend);
+      trendOf(r.connection_id, r.provider).points.push({ day: r.captured_on, followers: r.followers === null ? null : Number(r.followers), reach: r.reach === null ? null : Number(r.reach) });
+    }
+    for (const r of performance.rows) {
+      const figures = zPerformanceFigures.safeParse(r.figures);
+      if (figures.success) trendOf(r.connection_id, r.provider).performance.push({ day: r.day, ...figures.data });
     }
     return [...byChannel.values()];
   },
@@ -166,15 +212,28 @@ export async function sweepAccounts(deps: AccountDeps): Promise<{ recorded: numb
     const publisher = deps.publishers[row.provider];
     try {
       const options = { actor: ACTOR, orgId: row.org_id };
+      // The connection's version before its token is read, for the expiry below (#1477).
+      const version = row.provider === 'google_business' ? (await deps.runtime.query<{ version: string | null }>('social.account.connection_version', { connectionId: row.connection_id }, options)).version : null;
       const sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: row.connection_id }, options);
       const secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: row.org_id, provider: sealed.provider, externalAccountId: sealed.externalAccountId });
       const { due } = await deps.runtime.query<{ due: boolean }>('social.account.audience_due', { connectionId: row.connection_id, day }, options);
       const result = await publisher?.accountMetrics?.({ externalAccountId: sealed.externalAccountId, secret, ...(due ? { audience: true } : {}) });
+      // A token Google Business refuses (#1477) marks the connection expired, unless it changed since it was read (a
+      // reconnect brought a new token). Other channels keep the day's refusal only, as before.
+      if (result && 'refused' in result && result.refused === 'token_expired' && row.provider === 'google_business' && version) {
+        await deps.runtime.execute('kernel.channel.mark_expired', { connectionId: row.connection_id, reason: 'token_expired', ifVersion: version }, options);
+      }
+      const performance = result && !('refused' in result) && result.performance !== undefined ? performanceFrom(result.performance) : null;
       const counts = !result
         ? { error: 'no_answer' as const }
         : 'refused' in result
           ? { error: result.refused }
-          : { followers: result.followers, reach: result.reach ?? null, ...(due && result.audience !== undefined ? { audience: audienceFrom(result.audience) } : {}) };
+          : {
+              followers: result.followers,
+              reach: result.reach ?? null,
+              ...(due && result.audience !== undefined ? { audience: audienceFrom(result.audience) } : {}),
+              ...(performance ? { performance } : {}),
+            };
       const done = await deps.runtime.execute<{ recorded: boolean }>('social.account.record', { connectionId: row.connection_id, capturedOn: day, ...counts }, options);
       if (done.recorded && !('error' in counts)) out.recorded += 1;
       else out.skipped += 1;
@@ -197,5 +256,23 @@ function audienceFrom(audience: unknown): SocialAudience | null {
   return parsed.success ? parsed.data : null;
 }
 
+// An adapter's figures per day as the record command takes them (#1477); out of bounds counts as none given.
+function performanceFrom(performance: unknown): SocialPerformance | null {
+  const parsed = zPerformance.safeParse(performance);
+  return parsed.success ? parsed.data : null;
+}
+
+// A connection's version (its updated_at), so a refused token marks it expired only when no reconnect came between
+// (#1477, as kernel.channel.mark_expired's ifVersion); null when there is no such connection.
+export const accountConnectionVersion = defineQuery({
+  name: 'social.account.connection_version',
+  input: z.strictObject({ connectionId: zId }),
+  access: 'system',
+  handler: async (ctx, input): Promise<{ version: string | null }> => {
+    const row = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('updated_at').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).executeTakeFirst();
+    return { version: row ? row.updated_at.toISOString() : null };
+  },
+});
+
 export const accountCommands = [accountRecord];
-export const accountQueries = [accountTrends, accountAudienceDue];
+export const accountQueries = [accountTrends, accountAudienceDue, accountConnectionVersion];
