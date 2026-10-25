@@ -7,9 +7,12 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@crove/ui/components/dialog';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { Textarea } from '@crove/ui/components/textarea';
+import { ConfirmDialog } from '../components/confirm-dialog.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { useLegalEntity } from '../components/entity-switcher.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
@@ -318,6 +321,9 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   // it, as before). The date starts at the first day after both.
   const [postLate, setPostLate] = useState(false);
   const [postingDate, setPostingDate] = useState<string | null>(null);
+  // The reject dialog and the reason typed in it.
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
 
   const payload = detail.data?.payload ?? null;
   const lines = useMemo(
@@ -481,25 +487,19 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const fileId = item.file?.id;
   const reextractButton =
     item.canReextract && fileId ? (
-      <Button
-        variant="outline"
-        size="lg"
+      <ConfirmDialog
+        render={<Button variant="outline" size="lg" />}
         disabled={busy}
-        onClick={() => {
-          const ask = pending
-            ? t('confirmRereadPending')
-            : item.voided
-              ? t('confirmRereadVoided')
-              : item.status === 'expired'
-                ? t('confirmRereadExpired')
-                : t('confirmRereadOther');
-          if (!window.confirm(ask)) return;
-          reextract.mutate({ fileId, idempotencyKey: crypto.randomUUID() });
-        }}
+        title={t('rereadTitle')}
+        description={
+          pending ? t('rereadPending') : item.voided ? t('rereadVoided') : item.status === 'expired' ? t('rereadExpired') : t('rereadOther')
+        }
+        confirm={t('reread')}
+        onConfirm={() => reextract.mutate({ fileId, idempotencyKey: crypto.randomUUID() })}
       >
         {reextract.isPending ? <Spinner className="text-current" /> : null}
         {t('reread')}
-      </Button>
+      </ConfirmDialog>
     ) : null;
   const lastRun = item.extraction;
   const lastRunFailed = lastRun !== null && lastRun.status === 'failed' && lastRun.version !== lastRun.proposalVersion;
@@ -520,18 +520,52 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
         {reextractButton}
         {item.canReject && (
-          <Button
-            variant="destructive"
-            size="lg"
-            disabled={busy}
-            onClick={() => {
-              const reason = window.prompt(t('rejectPrompt'));
-              if (reason === null) return;
-              reject.mutate({ id, ...(reason.trim() ? { reason: reason.trim().slice(0, 500) } : {}) });
+          // The reason is asked in a dialog (#1512) that stays open until the rejection is done, so a refusal is
+          // shown where the reason was typed and the reviewer can try again without typing it twice.
+          <Dialog
+            open={rejectOpen}
+            onOpenChange={(open) => {
+              setRejectOpen(open);
+              // A refusal shown in the dialog belongs to that attempt: reopening starts without it.
+              if (!open) reject.reset();
             }}
           >
-            {t('reject')}
-          </Button>
+            <DialogTrigger render={<Button variant="destructive" size="lg" />} disabled={busy}>
+              {t('reject')}
+            </DialogTrigger>
+            <DialogContent variant="destructive" closeLabel={root('common.close')}>
+              <form
+                className="grid gap-4"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const reason = rejectReason.trim();
+                  reject.mutate({ id, ...(reason ? { reason: reason.slice(0, 500) } : {}) });
+                }}
+              >
+                <DialogHeader>
+                  <DialogTitle>{t('rejectTitle')}</DialogTitle>
+                  <DialogDescription>{t('rejectDescription')}</DialogDescription>
+                </DialogHeader>
+                <Label className="flex-col items-stretch gap-1 font-normal">
+                  <span className="text-muted-foreground">{t('rejectReason')}</span>
+                  <Textarea
+                    maxLength={500}
+                    placeholder={t('rejectReasonPlaceholder')}
+                    value={rejectReason}
+                    onChange={(e) => setRejectReason(e.target.value)}
+                  />
+                </Label>
+                {reject.error && <ErrorText>{errorMessage(reject.error)}</ErrorText>}
+                <DialogFooter>
+                  <DialogClose render={<Button type="button" variant="outline" />}>{root('common.cancel')}</DialogClose>
+                  <Button type="submit" variant="destructive" disabled={reject.isPending}>
+                    {reject.isPending ? <Spinner className="text-current" /> : null}
+                    {t('reject')}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
         )}
         {item.canEdit && dirty && (
           <Button
@@ -581,17 +615,17 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
         {reextractButton}
         {item.canResubmit && (
-          <Button
-            size="lg"
+          <ConfirmDialog
+            render={<Button size="lg" />}
             disabled={busy}
-            onClick={() => {
-              if (!window.confirm(t('confirmResubmit'))) return;
-              resubmit.mutate({ id, idempotencyKey: crypto.randomUUID() });
-            }}
+            title={t('resubmitTitle')}
+            description={t('resubmitDescription')}
+            confirm={t('resubmit')}
+            onConfirm={() => resubmit.mutate({ id, idempotencyKey: crypto.randomUUID() })}
           >
             {resubmit.isPending ? <Spinner className="text-current" /> : null}
             {t('resubmit')}
-          </Button>
+          </ConfirmDialog>
         )}
         <Badge variant={item.status === 'executed' ? 'success' : item.status === 'expired' ? 'warning' : 'secondary'}>
           {item.status === 'executed'
