@@ -1,6 +1,6 @@
 -- Crove finance (issue #1280, part 2a; plan §4.6, ADR-0021 sections 2, 3 and 7): voucher numbering, the period lock
 -- and the posting path per legal entity. Idempotent; applied files stay untouched. Builds on part 1
--- (20261102100000_crove_finance_legal_entity_scope.sql), which gave every finance book row a legal_entity_id.
+-- (20261102140000_crove_finance_legal_entity_scope.sql), which gave every finance book row a legal_entity_id.
 --
 -- Several parents. crove_finance.legal_entity_fill (trigger b_legal_entity) now takes any number of (parent table,
 -- parent key column) pairs: every parent a row names must be of the row's entity, and the first one found gives it.
@@ -650,7 +650,7 @@ REVOKE CREATE ON SCHEMA crove_finance FROM crove_definer_tenant;
 -- ---------------------------------------------------------------------------
 -- The nightly comparison, also checking each line's entity
 -- ---------------------------------------------------------------------------
--- Same as 20261102100000, plus 'legal_entity' when one of the entry's lines on the account names another entity than
+-- Same as 20261102140000, plus 'legal_entity' when one of the entry's lines on the account names another entity than
 -- the entry. Same signature, owner and grants.
 CREATE OR REPLACE FUNCTION crove_finance.period_balance_differences(p_limit int)
 RETURNS TABLE (org_id uuid, account_code text, period_month date, entry_id uuid, mismatch text[])

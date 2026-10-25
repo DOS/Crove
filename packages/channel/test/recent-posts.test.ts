@@ -1,19 +1,19 @@
 // Listing an account's own recent posts (#1054, #1431) against recorded answers (shapes from Meta's docs for
 // /{page-id}/published_posts, /{ig-user-id}/media and /{threads-user-id}/threads, the YouTube Data API's channels.list
-// and playlistItems.list, and Zalo's article/getslice); no live call.
+// and playlistItems.list, Zalo's article/getslice and TikTok's video/list, #1476); no live call.
 import { describe, expect, it } from 'vitest';
-import { FacebookPagePublisher, graphTime, InstagramPublisher, pagingCursor, platformLink, RECENT_POSTS_MAX, recentSince, ThreadsPublisher, YouTubePublisher, ZaloOaPublisher, type Fetch } from '../src/index.ts';
+import { FacebookPagePublisher, graphTime, InstagramPublisher, pagingCursor, platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince, ThreadsPublisher, TikTokPublisher, YouTubePublisher, ZaloOaPublisher, type Fetch } from '../src/index.ts';
 
-// Answers per "METHOD host/path" in order; records each call.
+// Answers per "METHOD host/path" in order (a string body goes as written); records each call.
 function routes(answers: Record<string, { status?: number; body: unknown }[]>) {
-  const calls: { route: string; query: URLSearchParams; authorization: string | null; headers: Headers }[] = [];
+  const calls: { route: string; query: URLSearchParams; authorization: string | null; headers: Headers; body: string | null }[] = [];
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
     const headers = new Headers(init?.headers);
-    calls.push({ route, query: url.searchParams, authorization: headers.get('authorization'), headers });
+    calls.push({ route, query: url.searchParams, authorization: headers.get('authorization'), headers, body: typeof init?.body === 'string' ? init.body : null });
     const answer = answers[route]?.shift() ?? { status: 500, body: { error: { message: `no answer for ${route}`, code: 1 } } };
-    return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
+    return new Response(typeof answer.body === 'string' ? answer.body : JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
   };
   return { calls, fetchImpl };
 }
@@ -446,5 +446,115 @@ describe('ZaloOaPublisher.listRecentPosts', () => {
     expect(partial && 'posts' in partial ? partial.posts.map((p) => p.externalId) : partial).toEqual(['d0000000000000000001']);
     expect(await publisher.listRecentPosts(input)).toEqual({ refused: 'token_expired' });
     expect(await publisher.listRecentPosts({ ...input, secret: '{}' })).toEqual({ refused: 'token_expired' });
+  });
+});
+
+describe('TikTokPublisher.listRecentPosts', () => {
+  const app = { clientKey: 'awtestclientkey01', clientSecret: 'test-tiktok-secret-not-real', videoList: true };
+  const secret = JSON.stringify({ accessToken: 'act.tiktok-1', refreshToken: 'rft.tiktok-1' });
+  const list = 'POST open.tiktokapis.com/v2/video/list/';
+  const status = 'POST open.tiktokapis.com/v2/post/publish/status/fetch/';
+  const scopes = ['user.info.basic', 'video.publish', 'video.list'];
+  const input = { externalAccountId: '-000AbCdEf', secret, since: new Date(0), scopes };
+  const seconds = (ago: number) => Math.floor((Date.now() - ago) / 1000);
+  const ok = (data: unknown) => ({ body: { data, error: { code: 'ok', message: '', log_id: '20261025000000ABCDEF' } } });
+  const video = (id: string, ago: number, extra: Record<string, unknown> = {}) => ({ id, create_time: seconds(ago), title: '', video_description: '', share_url: `https://www.tiktok.com/@shop/video/${id}`, ...extra });
+
+  it("lists the account's own public videos of the last 30 days, newest first, with their ids as written, and stops at an older one", async () => {
+    // TikTok documents ids as strings; one sent as a 64-bit number is read from the answer's text, never rounded.
+    const raw = `{"data":{"videos":[${JSON.stringify(video('7430000000000000002', 2 * DAY, { title: 'Ưu đãi', video_description: 'Ưu đãi cuối tuần #sale' }))},null,{"id":7430000000000000123,"create_time":${seconds(DAY)},"title":"Khai trương chi nhánh mới","video_description":"","share_url":"https://vm.tiktok.com/ZMabc/"},${JSON.stringify(
+      video('7430000000000000001', 3 * DAY, { share_url: 'https://tiktok.com.evil.example/v' }),
+    )},${JSON.stringify(video('not-a-number', DAY))},${JSON.stringify(video('7430000000000000004', DAY, { create_time: 'yesterday' }))},${JSON.stringify(video('7430000000000000005', DAY, { create_time: 9e15 }))},${JSON.stringify(video('7430000000000000000', 31 * DAY))}],"cursor":1700000000000,"has_more":true},"error":{"code":"ok","message":"","log_id":"x"}}`;
+    const { calls, fetchImpl } = routes({ [list]: [{ body: raw }] });
+    const result = await new TikTokPublisher(app, fetchImpl).listRecentPosts({ ...input, since: new Date(Date.now() - 90 * DAY) });
+    expect(result && 'posts' in result ? result.posts.map((p) => [p.externalId, p.text, p.permalink]) : result).toEqual([
+      ['7430000000000000123', 'Khai trương chi nhánh mới', 'https://vm.tiktok.com/ZMabc/'],
+      ['7430000000000000002', 'Ưu đãi cuối tuần #sale', 'https://www.tiktok.com/@shop/video/7430000000000000002'],
+      ['7430000000000000001', '', null],
+    ]);
+    const first = result && 'posts' in result ? result.posts[0] : undefined;
+    expect(Math.abs((first?.publishedAt.getTime() ?? 0) - (Date.now() - DAY))).toBeLessThan(5000);
+    // The video older than 30 days ended the listing, whatever has_more said.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.authorization).toBe('Bearer act.tiktok-1');
+    expect(calls[0]?.query.get('fields')).toBe('id,create_time,title,video_description,share_url');
+    expect(JSON.parse(calls[0]?.body ?? '{}')).toEqual({ max_count: 20 });
+  });
+
+  it("gives a video the id publish records for it, so a video Crove published is Crove's", async () => {
+    // The late-id sweep records the public id status/fetch gives (#1475); the listing gives the same string.
+    const { fetchImpl } = routes({
+      [status]: [{ body: '{"data":{"status":"PUBLISH_COMPLETE","publicaly_available_post_id":[7430000000000000777]},"error":{"code":"ok"}}' }],
+      [list]: [{ body: `{"data":{"videos":[{"id":7430000000000000777,"create_time":${seconds(DAY)},"title":"Bài của Crove"}],"cursor":1,"has_more":false},"error":{"code":"ok"}}` }],
+    });
+    const publisher = new TikTokPublisher(app, fetchImpl);
+    const late = await publisher.lateId({ externalAccountId: input.externalAccountId, secret, externalRef: 'v_pub_file~v2-1.123', scopes: ['video.publish'] });
+    const listed = await publisher.listRecentPosts(input);
+    expect(late).toMatchObject({ kind: 'posted', externalId: '7430000000000000777' });
+    expect(listed && 'posts' in listed ? listed.posts.map((p) => p.externalId) : listed).toEqual(['7430000000000000777']);
+  });
+
+  it('reads on by the cursor while has_more, and stops without more, on a cursor that does not move back, or at the page cap', async () => {
+    // Cursors are create times in ms inside the window, moving back.
+    const c1 = Date.now() - 2 * DAY;
+    const c2 = Date.now() - 3 * DAY;
+    const page = (from: number, n: number) => Array.from({ length: n }, (_, i) => video(`74300000000${String(1000 + from + i).padStart(8, '0')}`, DAY + (from + i) * 60_000));
+    const { calls, fetchImpl } = routes({ [list]: [ok({ videos: page(0, 20), cursor: c1, has_more: true }), ok({ videos: page(20, 3), cursor: c2, has_more: false })] });
+    const result = await new TikTokPublisher(app, fetchImpl).listRecentPosts(input);
+    const posts = result && 'posts' in result ? result.posts : [];
+    expect(posts).toHaveLength(23);
+    expect(posts.every((p, i) => i === 0 || (posts[i - 1] as { publishedAt: Date }).publishedAt >= p.publishedAt)).toBe(true);
+    expect(calls.map((c) => JSON.parse(c.body ?? '{}'))).toEqual([{ max_count: 20 }, { max_count: 20, cursor: c1 }]);
+
+    const stuck = routes({ [list]: [ok({ videos: page(0, 20), cursor: c1, has_more: true }), ok({ videos: page(20, 20), cursor: c1, has_more: true })] });
+    await new TikTokPublisher(app, stuck.fetchImpl).listRecentPosts(input);
+    expect(stuck.calls).toHaveLength(2);
+
+    const many = routes({ [list]: Array.from({ length: RECENT_PAGES_MAX + 2 }, (_, i) => ok({ videos: page(i * 20, 20), cursor: c1 - i, has_more: true })) });
+    const capped = await new TikTokPublisher(app, many.fetchImpl).listRecentPosts(input);
+    expect(capped && 'posts' in capped ? capped.posts.length : capped).toBe(RECENT_PAGES_MAX * 20);
+    expect(many.calls).toHaveLength(RECENT_PAGES_MAX);
+    expect(RECENT_PAGES_MAX * 20).toBeLessThanOrEqual(RECENT_POSTS_MAX);
+
+    // An older video at the top of a page (a pinned one) is skipped without ending the listing; a cursor past the
+    // window ends it; a time from the future is skipped.
+    const pinned = routes({
+      [list]: [
+        ok({ videos: [video('7430000000000000900', 40 * DAY), video('7430000000000000901', -10 * DAY), ...page(0, 2)], cursor: c1, has_more: true }),
+        ok({ videos: page(2, 2), cursor: Date.now() - 31 * DAY, has_more: true }),
+        ok({ videos: page(4, 2), cursor: c2, has_more: false }),
+      ],
+    });
+    const kept = await new TikTokPublisher(app, pinned.fetchImpl).listRecentPosts(input);
+    expect(kept && 'posts' in kept ? kept.posts.map((p) => p.externalId).sort() : kept).toEqual([...page(0, 4)].map((v) => v.id).sort());
+    expect(pinned.calls).toHaveLength(2);
+  });
+
+  it('asks nothing without video.list, says a missing scope as the permission, marks an expired token, has no answer on a failure, and keeps what came before a later failure', async () => {
+    const none = routes({});
+    const publisher = new TikTokPublisher(app, none.fetchImpl);
+    expect(await publisher.listRecentPosts({ ...input, scopes: ['user.info.basic', 'video.publish'] })).toEqual({ refused: 'permission' });
+    expect(await publisher.listRecentPosts({ externalAccountId: input.externalAccountId, secret, since: input.since })).toEqual({ refused: 'permission' });
+    expect(none.calls).toEqual([]);
+    expect(await publisher.listRecentPosts({ ...input, secret: '{}' })).toEqual({ refused: 'token_expired' });
+
+    const { fetchImpl } = routes({
+      [list]: [
+        // TikTok answers a scope the user did not grant with 401 too: the permission, never an expired token.
+        { status: 401, body: { data: {}, error: { code: 'scope_not_authorized', message: 'The user did not authorize the scope required for completing this request.', log_id: 'x' } } },
+        { status: 401, body: { data: {}, error: { code: 'access_token_invalid', message: 'The access token is invalid or not found in the request.', log_id: 'x' } } },
+        { status: 500, body: { data: {}, error: { code: 'internal_error', message: 'Something went wrong.', log_id: 'x' } } },
+        { status: 429, body: { data: {}, error: { code: 'rate_limit_exceeded', message: 'Too many requests.', log_id: 'x' } } },
+      ],
+    });
+    const asked = new TikTokPublisher(app, fetchImpl);
+    expect(await asked.listRecentPosts(input)).toEqual({ refused: 'permission' });
+    expect(await asked.listRecentPosts(input)).toEqual({ refused: 'token_expired' });
+    expect(await asked.listRecentPosts(input)).toBeNull();
+    expect(await asked.listRecentPosts(input)).toBeNull();
+
+    const later = routes({ [list]: [ok({ videos: [video('7430000000000002000', DAY)], cursor: 1761000000000, has_more: true }), { status: 401, body: { error: { code: 'access_token_invalid' } } }] });
+    const partial = await new TikTokPublisher(app, later.fetchImpl).listRecentPosts(input);
+    expect(partial && 'posts' in partial ? partial.posts.map((p) => p.externalId) : partial).toEqual(['7430000000000002000']);
   });
 });

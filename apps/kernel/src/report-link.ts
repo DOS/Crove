@@ -49,7 +49,13 @@ export interface ReportPage {
   audience: { channel: string; provider: string; day: string; audience: { age: AudienceSlice[]; gender: AudienceSlice[]; cities: AudienceSlice[]; countries: AudienceSlice[] } }[];
   // The period's Reels (#1151) and the median of their average watch time in milliseconds (null when none reports one).
   reels: { posts: number; medianAvgWatchTimeMs: number | null };
+  // What each Google Business channel of the link brought (#1477): its calls, direction requests, website clicks and
+  // profile views over the period's days with figures (each day as Google last gave it), the latest such day, and with
+  // the comparison the same of the period before; null without the channels section.
+  performance: { channel: string; provider: string; days: number; lastDay: string | null; totals: PerformanceTotals; previous: { days: number; totals: PerformanceTotals } | null }[] | null;
 }
+
+type PerformanceTotals = { calls: number; directions: number; websiteClicks: number; views: number };
 
 type RateBases = { [B in 'reach' | 'impressions']?: { engagement: number; denominator: number } };
 
