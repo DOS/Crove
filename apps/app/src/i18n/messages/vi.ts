@@ -2453,6 +2453,16 @@ export const vi = {
       genders: { F: 'Nữ', M: 'Nam', U: 'Không rõ' },
       share: '{percent} · {count} người',
     },
+    performance: {
+      title: 'Hồ sơ doanh nghiệp trên Google',
+      hint: 'Số cuộc gọi, lượt chỉ đường, lượt nhấp vào trang web và lượt xem hồ sơ của từng địa điểm trên Google Tìm kiếm và Google Maps. Google thường cập nhật trễ 3 đến 4 ngày, nên số liệu những ngày gần đây có thể còn thay đổi.',
+      reportHint: 'Số liệu của từng địa điểm trên Google Tìm kiếm và Google Maps trong kỳ báo cáo. Google thường cập nhật trễ 3 đến 4 ngày, nên những ngày cuối kỳ có thể chưa có đủ số liệu.',
+      through: 'Có số liệu đến ngày {date}',
+      calls: 'Cuộc gọi',
+      directions: 'Chỉ đường',
+      websiteClicks: 'Lượt nhấp vào trang web',
+      views: 'Lượt xem hồ sơ',
+    },
     gbp: {
       topic: 'Kiểu bài',
       topics: { STANDARD: 'Bài cập nhật', EVENT: 'Sự kiện', OFFER: 'Ưu đãi' },

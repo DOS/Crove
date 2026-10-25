@@ -39,6 +39,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/t
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { AccountGrowth, ChangeChip, ChannelTotals, EngagementRateCard, TopPosts } from '../components/social-growth.tsx';
 import { FollowerAudiences } from '../components/social-audience.tsx';
+import { ProfilePerformance } from '../components/social-performance.tsx';
 import { WhatWorks } from '../components/social-insights.tsx';
 import { OutsidePostCell, OutsideSwitch } from '../components/social-external-posts.tsx';
 import { mergePublished } from '../lib/social-external.ts';
@@ -176,6 +177,7 @@ function Metrics({ slug, names, labelId }: { slug: string; names: Map<string, st
       {exportCsv.data?.truncated && <p className="text-xs text-warning">{t('metricsExportCut')}</p>}
       <AccountGrowth days={days} names={names} />
       <FollowerAudiences days={days} names={names} />
+      <ProfilePerformance days={days} names={names} />
       {data.length === 0 && extra.length === 0 ? (
         <Empty title={t('empty.metrics')} hint={t('metricsHint')} />
       ) : (

@@ -24,7 +24,10 @@ class FakePlatform implements Publisher {
   readonly publishSafety = 'reconcile_only' as const;
   asked: AccountMetricsInput[] = [];
   answers = new Map<string, AccountMetricsResult>();
-  constructor(readonly provider: 'google_business' | 'sandbox') {}
+  readonly provider: 'google_business' | 'sandbox';
+  constructor(provider: 'google_business' | 'sandbox') {
+    this.provider = provider;
+  }
   async publish(): Promise<PublishResult> {
     return { kind: 'rejected', error: 'bad_request', code: 'NOT_IN_THIS_TEST' };
   }
