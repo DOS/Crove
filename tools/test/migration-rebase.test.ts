@@ -40,6 +40,21 @@ describe('migration:rebase plan', () => {
     );
     expect(rewriteReferences('unchanged', [])).toBe('unchanged');
   });
+
+  it('rewrites a bare version too, unless a base file holds it, and never another file of the same version', () => {
+    const renames = [{ from: m('20261101233000', 'crove_kernel_feature'), to: m('20261102010000', 'crove_kernel_feature') }];
+    const text = 'Mine: 20261101233000_crove_kernel_feature.sql (20261101233000_crove_kernel_feature). Main has 20261101233000_crove_kernel_other.sql. THIS = 20261101233000.';
+    // No base file holds the version: the bare mention is this file's.
+    expect(rewriteReferences(text.replace('20261101233000_crove_kernel_other', '20261101220000_crove_kernel_other'), renames)).toBe(
+      'Mine: 20261102010000_crove_kernel_feature.sql (20261102010000_crove_kernel_feature). Main has 20261101220000_crove_kernel_other.sql. THIS = 20261102010000.',
+    );
+    // A base file holds it: only the full names move; main's file and the bare version stay.
+    expect(rewriteReferences(text, renames, ['20261101233000'])).toBe(
+      'Mine: 20261102010000_crove_kernel_feature.sql (20261102010000_crove_kernel_feature). Main has 20261101233000_crove_kernel_other.sql. THIS = 20261101233000.',
+    );
+    // A longer name that starts with the renamed one is another file.
+    expect(rewriteReferences('20261101233000_crove_kernel_feature_more.sql', renames, ['20261101233000'])).toBe('20261101233000_crove_kernel_feature_more.sql');
+  });
 });
 
 describe('migration:rebase in a repository', () => {
@@ -91,6 +106,42 @@ describe('migration:rebase in a repository', () => {
     // A second run finds nothing left to rename once committed.
     run('commit', '-q', '-m', 'rename');
     expect(rebaseMigrations({ base: 'main', fetch: false, cwd: dir, log: () => {} })).toEqual([]);
+  }, 60_000);
+
+  it('leaves references to a base file of the same version alone', () => {
+    dir = mkdtempSync(join(tmpdir(), 'crove-migration-rebase-'));
+    run('init', '-q', '-b', 'main');
+    run('config', 'user.email', 'test@example.com');
+    run('config', 'user.name', 'test');
+    run('config', 'core.hooksPath', join(dir, '.no-hooks'));
+    run('config', 'core.autocrlf', 'false');
+    write(m('20261101230000'), 'SELECT 1;\n');
+    run('add', '.');
+    run('commit', '-q', '-m', 'base');
+    run('checkout', '-q', '-b', 'feature');
+    write(m('20261102000000', 'crove_kernel_feature'), 'SELECT 2;\n');
+    run('add', '.');
+    run('commit', '-q', '-m', 'feature');
+    run('checkout', '-q', 'main');
+    write(m('20261102000000', 'crove_kernel_audit_stamp'), 'SELECT 3;\n');
+    run('add', '.');
+    run('commit', '-q', '-m', 'main moves');
+    run('checkout', '-q', 'feature');
+    run('merge', '-q', '--no-edit', 'main');
+    // A re-copy the branch makes after the merge, naming main's file of the same version, and its own file.
+    write(m('20261102000000', 'crove_kernel_feature'), '-- copied verbatim from 20261102000000_crove_kernel_audit_stamp.sql (main)\nSELECT 2;\n');
+    write('docs/feature.md', 'Adds 20261102000000_crove_kernel_feature.sql.\n');
+    run('add', '.');
+    run('commit', '-q', '-m', 'recopy');
+
+    const lines: string[] = [];
+    const renames = rebaseMigrations({ base: 'main', fetch: false, cwd: dir, log: (line: string) => lines.push(line) });
+    expect(renames).toEqual([{ from: m('20261102000000', 'crove_kernel_feature'), to: m('20261102010000', 'crove_kernel_feature') }]);
+    expect(readFileSync(join(dir, m('20261102010000', 'crove_kernel_feature')), 'utf8')).toBe(
+      '-- copied verbatim from 20261102000000_crove_kernel_audit_stamp.sql (main)\nSELECT 2;\n',
+    );
+    expect(readFileSync(join(dir, 'docs/feature.md'), 'utf8')).toBe('Adds 20261102010000_crove_kernel_feature.sql.\n');
+    expect(lines.some((line) => line.includes('20261102000000 is also'))).toBe(true);
   }, 60_000);
 
   it('refuses a dirty tree', () => {
