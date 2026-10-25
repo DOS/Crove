@@ -147,15 +147,36 @@ suite('Google Business performance on PostgreSQL (#1477)', () => {
     expect(await status(refused)).toBe('expired');
     expect(await status(quota)).toBe('active');
     expect(await status(shop)).toBe('active');
-    // Other channels keep the day's refusal only, as before.
+    // Since #1546 every channel's refused token marks it expired, not only Google Business.
     expect(await today(other)).toMatchObject({ error: 'token_expired' });
-    expect(await status(other)).toBe('active');
+    expect(await status(other)).toBe('expired');
     // Nothing is due again the same day.
     gbp.asked = [];
     await sweepAccounts({ runtime: worker, broker: vault, workerDb, publishers: { google_business: gbp, sandbox } });
     expect(gbp.asked.filter((a) => a.externalAccountId.startsWith('accounts/1/'))).toEqual([]);
     // The version check is the worker's alone.
     await expect(api.query('social.account.connection_version', { connectionId: shop }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('marks any channel expired on a refused token (#1546), but keeps one reconnected meanwhile and one only refused permission', async () => {
+    const o = await org();
+    const refused = await connect(o, 'sandbox', 'sandbox-1546-refused');
+    const reconnected = await connect(o, 'sandbox', 'sandbox-1546-reconnected');
+    const forbidden = await connect(o, 'sandbox', 'sandbox-1546-permission');
+    const sandbox = new FakePlatform('sandbox');
+    sandbox.answers.set('sandbox-1546-refused', { refused: 'token_expired' });
+    sandbox.answers.set('sandbox-1546-reconnected', { refused: 'token_expired' });
+    sandbox.answers.set('sandbox-1546-permission', { refused: 'permission' });
+    const answer = sandbox.accountMetrics.bind(sandbox);
+    // A reconnect lands between the sweep reading the connection and the platform refusing the old token.
+    sandbox.accountMetrics = async (input) => {
+      if (input.externalAccountId === 'sandbox-1546-reconnected') await admin((c) => c.query("UPDATE crove_kernel.channel_connection SET updated_at = now() + interval '1 second' WHERE id = $1", [reconnected]));
+      return answer(input);
+    };
+    await sweepAccounts({ runtime: worker, broker: vault, workerDb, publishers: { sandbox } });
+    expect(await status(refused)).toBe('expired');
+    expect(await status(reconnected)).toBe('active');
+    expect(await status(forbidden)).toBe('active');
   });
 
   it('shows each day on the Metrics tab as Google last gave it, within the window and only to its org', async () => {

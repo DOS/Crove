@@ -212,15 +212,16 @@ export async function sweepAccounts(deps: AccountDeps): Promise<{ recorded: numb
     const publisher = deps.publishers[row.provider];
     try {
       const options = { actor: ACTOR, orgId: row.org_id };
-      // The connection's version before its token is read, for the expiry below (#1477).
-      const version = row.provider === 'google_business' ? (await deps.runtime.query<{ version: string | null }>('social.account.connection_version', { connectionId: row.connection_id }, options)).version : null;
+      // The connection's version before its token is read, for the expiry below (#1477, #1546).
+      const { version } = await deps.runtime.query<{ version: string | null }>('social.account.connection_version', { connectionId: row.connection_id }, options);
       const sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: row.connection_id }, options);
       const secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: row.org_id, provider: sealed.provider, externalAccountId: sealed.externalAccountId });
       const { due } = await deps.runtime.query<{ due: boolean }>('social.account.audience_due', { connectionId: row.connection_id, day }, options);
       const result = await publisher?.accountMetrics?.({ externalAccountId: sealed.externalAccountId, secret, ...(due ? { audience: true } : {}) });
-      // A token Google Business refuses (#1477) marks the connection expired, unless it changed since it was read (a
-      // reconnect brought a new token). Other channels keep the day's refusal only, as before.
-      if (result && 'refused' in result && result.refused === 'token_expired' && row.provider === 'google_business' && version) {
+      // A token the platform refuses marks the connection expired (#1477 for Google Business, every channel since
+      // #1546), unless it changed since it was read (a reconnect brought a new token): its scheduled posts wait and the
+      // owner is told now, not when the next post fails.
+      if (result && 'refused' in result && result.refused === 'token_expired' && version) {
         await deps.runtime.execute('kernel.channel.mark_expired', { connectionId: row.connection_id, reason: 'token_expired', ifVersion: version }, options);
       }
       const performance = result && !('refused' in result) && result.performance !== undefined ? performanceFrom(result.performance) : null;
