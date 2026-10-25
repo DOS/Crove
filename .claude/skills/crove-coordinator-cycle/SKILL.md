@@ -52,10 +52,10 @@ For each worker that ended a turn:
 
 Since 2026-10-25 the owner runs long-lived area team leads, sessions named `Agent <n>: <area>` (today 1 Accounting, 2 Frontend, 3 Social Management, 4 Kernel & Security, 5 CRM & Calendar). Keep that list in each cycle comment on #1210.
 
-- A team lead picks its next issue from its own area, may run up to 2 background subagents, and reports to the coordinator: `READY FOR COORDINATOR REVIEW` for protected-path PRs, `MERGED` for the rest, `RESERVE <version> for #<n>` before writing a migration.
+- A team lead picks its next issue from its own area, may run up to 2 background subagents, and reports to the coordinator: `READY FOR COORDINATOR REVIEW` for protected-path PRs, `MERGED` for the rest.
 - Each cycle, check every team lead with `list_sessions` and `list_events`. One that is idle with nothing claimed gets a message to take its next issue. One whose area has no work left gets the derive step (section 3, item 2) for its area.
 - Use `SendMessage` to a session id: it works on automated turns, while `start_session` does not. Start a new team lead only on the owner's own turn, when the owner asks for one.
-- Migration versions: open PRs reserve versions in the cycle comment's table, so no two open PRs share one. A reservation does not survive another PR merging a higher version first, so right before merging a PR renames its migrations above main's newest (a valid UTC hour), pushes and waits for green. Give out versions in a row, never round jumps.
+- Migration versions (#1492): nobody reserves or hands out versions. A PR names its migration above main's newest when it starts, and right before merging its lead runs `pnpm migration:rebase` (renames to whole hours after main's newest, in order, references included), pushes and waits for green. The order check and the recheck workflow still catch a PR that skipped it.
 
 ## 3. Keep the workers busy
 
