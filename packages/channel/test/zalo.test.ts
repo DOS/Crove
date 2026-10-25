@@ -7,13 +7,20 @@ const REDIRECT = 'https://crove.example/channels/oauth/zalo_oa/callback';
 const SECRET = JSON.stringify({ accessToken: 'zalo-access-1', refreshToken: 'zalo-refresh-1' });
 
 function zalo(routes: Record<string, { status?: number; body: unknown }[]>) {
-  const calls: { route: string; headers: Headers; form: URLSearchParams; json: unknown }[] = [];
+  const calls: { route: string; headers: Headers; form: URLSearchParams; json: unknown; multipart: FormData | null; query: URLSearchParams }[] = [];
   const fetchImpl: Fetch = async (input, init) => {
     const url = new URL(input);
     const route = `${init?.method ?? 'GET'} ${url.host}${url.pathname}`;
     const headers = new Headers(init?.headers);
     const body = typeof init?.body === 'string' ? init.body : '';
-    calls.push({ route, headers, form: new URLSearchParams(headers.get('content-type')?.includes('urlencoded') ? body : ''), json: headers.get('content-type')?.includes('json') ? JSON.parse(body) : null });
+    calls.push({
+      route,
+      headers,
+      form: new URLSearchParams(headers.get('content-type')?.includes('urlencoded') ? body : ''),
+      json: headers.get('content-type')?.includes('json') ? JSON.parse(body) : null,
+      multipart: init?.body instanceof FormData ? init.body : null,
+      query: url.searchParams,
+    });
     const answer = routes[route]?.shift() ?? { status: 500, body: { error: -1, message: `no answer for ${route}` } };
     return new Response(JSON.stringify(answer.body), { status: answer.status ?? 200, headers: { 'content-type': 'application/json' } });
   };
@@ -227,6 +234,181 @@ describe('ZaloOaPublisher', () => {
     const publisher = new ZaloOaPublisher(APP, fetchImpl);
     expect(await publisher.publish(input())).toEqual({ kind: 'pending', externalRef: 'tok-3', checkAfterSeconds: 20 });
     expect(await publisher.status({ externalAccountId: '579745863508352884', secret: SECRET, externalRef: 'tok-3' })).toMatchObject({ kind: 'rejected', error: 'bad_request' });
+  });
+});
+
+// Video articles (#1429), against answers shaped like Zalo's OA content docs (upload_video/preparevideo, then
+// upload_video/verify, then article/create with type video).
+describe('ZaloOaPublisher video articles', () => {
+  const UPLOAD = 'POST openapi.zalo.me/v2.0/article/upload_video/preparevideo';
+  const CHECK = 'GET openapi.zalo.me/v2.0/article/upload_video/verify';
+  const CREATE = 'POST openapi.zalo.me/v2.0/article/create';
+  const VERIFY = 'POST openapi.zalo.me/v2.0/article/verify';
+  const SLICE = 'GET openapi.zalo.me/v2.0/article/getslice';
+  const bytes = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 109, 112, 52, 50]);
+  const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 12_000_000, altText: null, durationSeconds: 42 };
+  const content = { body: 'Mở bán bánh trung thu.\n\nĐặt trước giảm 10%.', title: 'Bánh trung thu 2026', linkUrl: null, media: [clip] };
+  const input = (over: Partial<PublishInput> = {}): PublishInput => ({
+    externalAccountId: '579745863508352884',
+    secret: SECRET,
+    content,
+    readMedia: async (fileId) => {
+      if (fileId !== 'v-1') throw new Error('only the video is read');
+      return bytes;
+    },
+    mediaUrl: async (fileId) => `https://bucket.example/${fileId}?sig=1`,
+    settings: { cover: { fileId: 'c-1' } },
+    callKey: 'call-1',
+    contentHash: `sha256:${'0'.repeat(64)}`,
+    ...over,
+  });
+  const fast = { pollMs: 0 };
+  const ready = { body: { error: 0, message: 'Success', data: { status: 1, video_id: 'f9377bde4e9ba7c5fe8', status_message: 'Video is ready', convert_percent: 100 } } };
+  const converting = { body: { error: 0, message: 'Success', data: { status: 3, video_id: 'f9377bde4e9ba7c5fe8', status_message: 'Video is being converted', convert_percent: 0 } } };
+
+  it('uploads the video once, waits for its video_id, creates one video article and returns its id', async () => {
+    const { fetchImpl, calls } = zalo({
+      [UPLOAD]: [{ body: { error: 0, message: 'Success', data: { token: 'vtok-1' } } }],
+      [CHECK]: [converting, ready],
+      [CREATE]: [{ body: { error: 0, data: { token: 'tok-v1' } } }],
+      [VERIFY]: [{ body: { error: 0, data: { id: 'art-v1' } } }],
+    });
+    expect(await new ZaloOaPublisher(APP, fetchImpl, fast).publish(input())).toEqual({ kind: 'accepted', externalId: 'art-v1', url: null });
+    expect(calls.map((c) => c.route)).toEqual([UPLOAD, CHECK, CHECK, CREATE, VERIFY]);
+    // The file goes up as the multipart field `file`; the check sends the upload's token as a header.
+    const file = calls[0]?.multipart?.get('file');
+    expect(file).toBeInstanceOf(Blob);
+    expect(new Uint8Array(await (file as Blob).arrayBuffer())).toEqual(bytes);
+    expect(calls[0]?.headers.get('access_token')).toBe('zalo-access-1');
+    expect(calls[1]?.headers.get('token')).toBe('vtok-1');
+    expect(calls[1]?.headers.get('access_token')).toBe('zalo-access-1');
+    expect(calls[3]?.json).toEqual({
+      type: 'video',
+      title: 'Bánh trung thu 2026',
+      description: 'Mở bán bánh trung thu.',
+      video_id: 'f9377bde4e9ba7c5fe8',
+      avatar: 'https://bucket.example/c-1?sig=1',
+      status: 'show',
+      comment: 'show',
+    });
+    expect(calls[4]?.json).toEqual({ token: 'tok-v1' });
+  });
+
+  it('asks for the thumbnail URL again right before article/create, since a presigned URL lives a minute (#1429 review)', async () => {
+    const { fetchImpl, calls } = zalo({
+      [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-5' } } }],
+      [CHECK]: [converting, ready],
+      [CREATE]: [{ body: { error: 0, data: { token: 'tok-v5' } } }],
+      [VERIFY]: [{ body: { error: 0, data: { id: 'art-v5' } } }],
+    });
+    // Each URL names how many Zalo calls were made before it was asked for.
+    const minted: string[] = [];
+    const mediaUrl = async (fileId: string) => {
+      const url = `https://bucket.example/${fileId}?after=${calls.length}`;
+      minted.push(url);
+      return url;
+    };
+    expect(await new ZaloOaPublisher(APP, fetchImpl, fast).publish(input({ mediaUrl }))).toEqual({ kind: 'accepted', externalId: 'art-v5', url: null });
+    // One check before the upload, one after the video is ready; the article names the second.
+    expect(minted).toEqual(['https://bucket.example/c-1?after=0', 'https://bucket.example/c-1?after=3']);
+    expect(calls[3]?.json).toMatchObject({ avatar: 'https://bucket.example/c-1?after=3' });
+    // A URL the storage cannot give by then is transient: nothing is visible yet.
+    const again = zalo({ [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-6' } } }], [CHECK]: [ready] });
+    let asked = 0;
+    const gone = async (fileId: string) => (++asked === 1 ? `https://bucket.example/${fileId}` : null);
+    expect(await new ZaloOaPublisher(APP, again.fetchImpl, fast).publish(input({ mediaUrl: gone }))).toEqual({ kind: 'rejected', error: 'transient', code: 'MEDIA_URL_UNAVAILABLE' });
+    expect(again.calls.some((c) => c.route === CREATE)).toBe(false);
+  });
+
+  it('cuts the description to 300 characters and turns comments off when settings.comments is false', async () => {
+    const { fetchImpl, calls } = zalo({
+      [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-2' } } }],
+      [CHECK]: [ready],
+      [CREATE]: [{ body: { error: 0, data: { token: 'tok-v2' } } }],
+      [VERIFY]: [{ body: { error: 0, data: {} } }],
+    });
+    const long = { ...content, body: `${'á'.repeat(400)}\nphần sau` };
+    const result = await new ZaloOaPublisher(APP, fetchImpl, fast).publish(input({ content: long, settings: { cover: { fileId: 'c-1' }, comments: false } }));
+    // Zalo still processing the article is pending, as for an image article.
+    expect(result).toEqual({ kind: 'pending', externalRef: 'tok-v2', checkAfterSeconds: 20 });
+    expect(calls[2]?.json).toMatchObject({ description: 'á'.repeat(300), comment: 'hide' });
+  });
+
+  it('creates no article for a video still processing when the wait ends; the next attempt uploads again', async () => {
+    const { fetchImpl, calls } = zalo({ [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-3' } } }], [CHECK]: [converting, converting] });
+    const result = await new ZaloOaPublisher(APP, fetchImpl, { pollMs: 0, processingWaitMs: 0 }).publish(input());
+    expect(result).toEqual({ kind: 'rejected', error: 'transient', code: 'ZALO_VIDEO_PROCESSING' });
+    expect(calls.map((c) => c.route)).toEqual([UPLOAD, CHECK]);
+    // A spent budget stops before the article too.
+    const late = zalo({ [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-4' } } }], [CHECK]: [ready] });
+    expect(await new ZaloOaPublisher(APP, late.fetchImpl, { pollMs: 0, budgetMs: 0 }).publish(input())).toEqual({ kind: 'rejected', error: 'transient', code: 'ZALO_VIDEO_PROCESSING' });
+    expect(late.calls.some((c) => c.route === CREATE)).toBe(false);
+  });
+
+  it('refuses a video Zalo locked, failed or deleted, with its own code and no article', async () => {
+    for (const [status, code] of [
+      [2, 'ZALO_VIDEO_LOCKED'],
+      [4, 'ZALO_VIDEO_FAILED'],
+      [5, 'ZALO_VIDEO_DELETED'],
+    ] as const) {
+      const { fetchImpl, calls } = zalo({ [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-5' } } }], [CHECK]: [{ body: { error: 0, data: { status, status_message: 'Video failed', convert_error_code: 1 } } }] });
+      expect(await new ZaloOaPublisher(APP, fetchImpl, fast).publish(input())).toEqual({ kind: 'rejected', error: 'bad_request', code, message: 'Video failed' });
+      expect(calls.some((c) => c.route === CREATE)).toBe(false);
+    }
+  });
+
+  it('turns an upload or check failure into a rejection, since nothing is visible yet', async () => {
+    const down = zalo({ [UPLOAD]: [{ status: 502, body: {} }] });
+    expect(await new ZaloOaPublisher(APP, down.fetchImpl, fast).publish(input())).toEqual({ kind: 'rejected', error: 'transient', code: 'HTTP_502' });
+    const dead = zalo({ [UPLOAD]: [{ body: { error: -216, message: 'Access token is invalid' } }] });
+    expect(await new ZaloOaPublisher(APP, dead.fetchImpl, fast).publish(input())).toMatchObject({ kind: 'rejected', error: 'token_expired', code: '-216' });
+    const lost = zalo({ [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-6' } } }], [CHECK]: [{ status: 503, body: {} }] });
+    expect(await new ZaloOaPublisher(APP, lost.fetchImpl, fast).publish(input())).toEqual({ kind: 'rejected', error: 'transient', code: 'HTTP_503' });
+    expect([...down.calls, ...dead.calls, ...lost.calls].some((c) => c.route === CREATE)).toBe(false);
+  });
+
+  it('refuses before any call a video without a cover image, without a public URL, of another type, over 50 MB or beside an image', async () => {
+    const { fetchImpl, calls } = zalo({});
+    const publisher = new ZaloOaPublisher(APP, fetchImpl, fast);
+    expect(await publisher.publish(input({ settings: {} }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'ZALO_VIDEO_COVER_REQUIRED' });
+    expect(await publisher.publish(input({ settings: { cover: { atMs: 1000 } } }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
+    // Local disk: the video could be uploaded, but Zalo fetches the thumbnail from a public URL.
+    expect(await publisher.publish(input({ mediaUrl: async () => null }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' });
+    expect(await publisher.publish(input({ content: { ...content, media: [{ ...clip, mime: 'video/quicktime' }] } }))).toMatchObject({ kind: 'rejected', code: 'VIDEO_TYPE' });
+    expect(await publisher.publish(input({ content: { ...content, media: [{ ...clip, sizeBytes: 50 * 1024 * 1024 + 1 }] } }))).toMatchObject({ kind: 'rejected', code: 'VIDEO_TOO_LARGE' });
+    const image = { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 500_000, altText: null };
+    expect(await publisher.publish(input({ content: { ...content, media: [image, clip] } }))).toMatchObject({ kind: 'rejected', code: 'ONE_VIDEO_REQUIRED' });
+    expect(await publisher.publish(input({ content: { ...content, title: '  ' } }))).toMatchObject({ kind: 'rejected', code: 'TITLE_REQUIRED' });
+    expect(await publisher.publish(input({ readMedia: async () => Promise.reject(new Error('gone')) }))).toMatchObject({ kind: 'rejected', code: 'MEDIA_UNREADABLE' });
+    expect(calls).toHaveLength(0);
+  });
+
+  // The job records an unclear article/create as unknown and reconciles before anything else (reconcile_only): the
+  // recorded answers below are that path, and the article is found once, never created a second time.
+  it('answers unknown when article/create fails, then finds the article through getslice among video articles', async () => {
+    const { fetchImpl, calls } = zalo({
+      [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-7' } } }],
+      [CHECK]: [ready],
+      [CREATE]: [{ status: 502, body: {} }],
+      [SLICE]: [{ body: { error: 0, message: 'Success', data: { medias: [{ id: 'art-old', type: 'video', title: 'Bánh trung thu 2026', create_date: Date.now() - 365 * 86_400_000 }, { id: 'art-v7', type: 'video', title: 'Bánh trung thu 2026', status: 'show', create_date: Date.now() - 30_000 }], total: 2 } } }],
+    });
+    const publisher = new ZaloOaPublisher(APP, fetchImpl, fast);
+    expect(await publisher.publish(input())).toEqual({ kind: 'unknown', code: 'HTTP_502', message: 'Zalo answered 502' });
+    const window = { externalAccountId: '579745863508352884', secret: SECRET, callKey: 'call-1', contentHash: `sha256:${'0'.repeat(64)}`, content, settings: { cover: { fileId: 'c-1' } }, after: new Date(Date.now() - 600_000), before: new Date() };
+    expect(await publisher.reconcile(window)).toEqual({ found: true, externalId: 'art-v7', url: null });
+    const slice = calls.find((c) => c.route === SLICE);
+    expect(Object.fromEntries(slice?.query ?? [])).toEqual({ offset: '0', limit: '20', type: 'video' });
+    expect(calls.filter((c) => c.route === CREATE)).toHaveLength(1);
+  });
+
+  it('reports pending, never a rejection, once the video article was created', async () => {
+    const { fetchImpl } = zalo({
+      [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-8' } } }],
+      [CHECK]: [ready],
+      [CREATE]: [{ body: { error: 0, data: { token: 'tok-v8' } } }],
+      [VERIFY]: [{ body: { error: -216, message: 'Access token is invalid' } }],
+    });
+    expect(await new ZaloOaPublisher(APP, fetchImpl, fast).publish(input())).toEqual({ kind: 'pending', externalRef: 'tok-v8', checkAfterSeconds: 20 });
   });
 });
 

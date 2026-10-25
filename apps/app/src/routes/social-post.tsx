@@ -1187,7 +1187,7 @@ function CoverField({ provider, media, settings, onChange, disabled }: { provide
   const mode: CoverKind | 'none' = cover ? coverKind(cover) : pickingImage ? 'image' : 'none';
   // A kind the channel does not take still shows when set (through the API), so it can be changed.
   const options: (CoverKind | 'none')[] = ['none', ...kinds, ...(cover && !kinds.includes(coverKind(cover)) ? [coverKind(cover)] : [])];
-  const hint = provider === 'instagram' || provider === 'tiktok' || provider === 'youtube' ? provider : 'other';
+  const hint = provider === 'instagram' || provider === 'tiktok' || provider === 'youtube' || provider === 'zalo_oa' ? provider : 'other';
   return (
     <div className="space-y-2 rounded-lg border p-3">
       <Label className="text-xs" htmlFor={id}>
