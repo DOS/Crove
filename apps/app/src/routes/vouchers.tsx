@@ -19,6 +19,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { AmountInput } from '../components/amount-input.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -243,12 +244,11 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
                     </NativeSelectOption>
                   ))}
                 </NativeSelect>
-                <Input
-                  inputMode="numeric"
+                <AmountInput
                   aria-label={t('form.lineAmountFor', { line: String(i + 1) })}
                   placeholder={t('form.lineAmount')}
                   value={l.amount}
-                  onChange={(e) => setLine(l.key, { amount: e.target.value })}
+                  onChange={(amount) => setLine(l.key, { amount })}
                   className="w-full text-right tabular-nums"
                 />
                 <Input

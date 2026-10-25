@@ -1529,6 +1529,7 @@ export interface SocialPostTable {
   archived_by: string | null;
   due_soon_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   overdue_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  search_text: ColumnType<string | null, never, never>;
 }
 
 /** crove_social.post_variant */
@@ -1580,6 +1581,7 @@ export interface SocialPostVariantTable {
   edit_state: string | null;
   published_revision: number | null;
   edit_error_code: string | null;
+  search_text: ColumnType<string | null, never, never>;
 }
 
 /** crove_social.post_version */
