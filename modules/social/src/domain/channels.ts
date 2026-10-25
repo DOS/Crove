@@ -1261,7 +1261,7 @@ export function instagramReelOffGrid(settings: Readonly<Record<string, unknown>>
 // for the channels whose API has no quota endpoint: how many posts one account may make in a window. Instagram and
 // Threads read their own quota from the platform (#743). The numbers are the platforms' documented per-account limits,
 // kept a little under where they are approximate: TikTok about 15 posts a day per creator, YouTube's 100 uploads a day,
-// X 100 posts per 15 minutes per user, LinkedIn 150 member posts a day.
+// X 100 posts per 15 minutes per user, LinkedIn 150 member posts a day (a page's posts count against its member's).
 export interface PublishLimit {
   count: number;
   windowMs: number;
@@ -1271,6 +1271,18 @@ export const PUBLISH_LIMITS: Readonly<Partial<Record<Provider, PublishLimit>>> =
   youtube: { count: 100, windowMs: 24 * 3_600_000 },
   x: { count: 100, windowMs: 15 * 60_000 },
   linkedin: { count: 150, windowMs: 24 * 3_600_000 },
+  linkedin_page: { count: 150, windowMs: 24 * 3_600_000 },
+};
+
+// Providers whose accounts post with one person's token and share that person's limit (#1096): every LinkedIn Company
+// Page posts with the token of the member who connected it, and LinkedIn counts the member's daily calls across their
+// own channel and all their pages. Such a limit counts the posts of every channel of these providers in the org that the
+// same member connected (connected_by; a reconnect by another member moves the channel, and its past posts, to them).
+// The member's channels in other orgs are not seen, so a member who posts there too may still meet LinkedIn's 429,
+// which waits as any rate limit does.
+export const SHARED_LIMIT_PROVIDERS: Readonly<Partial<Record<Provider, readonly Provider[]>>> = {
+  linkedin: ['linkedin', 'linkedin_page'],
+  linkedin_page: ['linkedin', 'linkedin_page'],
 };
 
 // When the next post may go out under a limit, given when the account's earlier posts in the window started: null when

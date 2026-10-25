@@ -5,7 +5,8 @@
 // is then removed, with the time and who asked, and what reads published variants only (metrics, first comments,
 // threads, reposts, evergreen) leaves it alone. A post the platform no longer has counts as removed, so asking again
 // after a failed or unclear call is harmless; nothing asks again by itself. A post may also be set to come down at a
-// time (#861, settings.removeAt): the worker's sweep asks once when it comes (social.remove.schedule).
+// time (#861, settings.removeAt): the worker's sweep asks once when it comes (social.remove.schedule), and a watch
+// (social.remove.watch, #937) tells the owners and admins when that ask's job never recorded an answer.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
@@ -215,10 +216,79 @@ export const removeSchedule = defineCommand({
     const calls = (await removeCallsOf(ctx.trx, ctx.orgId, [v])).get(v.id) ?? [];
     await setVariant(ctx, v.id, { removed_by: null, remove_reason: null, remove_requested_at: ctx.now });
     ctx.audit({ post_id: v.post_id, variant_id: v.id, provider: v.provider, scheduled: true, remove_at: removeAtOf(settings) });
-    await ctx.emit('social.variant.remove_requested', { post_id: v.post_id, variant_id: v.id, provider: v.provider, after: calls.at(-1)?.key ?? null });
+    // scheduled: the relay also queues the watch below (#937).
+    await ctx.emit('social.variant.remove_requested', { post_id: v.post_id, variant_id: v.id, provider: v.provider, after: calls.at(-1)?.key ?? null, scheduled: true });
     return { queued: true };
   },
 });
+
+// The watch of a planned takedown (#937): the relay queues it with the remove job, to run once REMOVE_STALE_MS has
+// passed, so a job that never recorded an answer (the worker died before or during the call, and the remove queue never
+// retries) still tells the owners and admins, as record would. It never calls the platform.
+export const REMOVE_WATCH_AFTER_MS = REMOVE_STALE_MS + 2 * 60_000;
+export type RemoveWatch = { told: false; reason: 'not_published' | 'not_scheduled' | 'stale' | 'not_stale' | 'recorded' } | { told: true; code: 'REMOVE_NOT_RUN' | 'OUTCOME_UNKNOWN' };
+
+// Looks at the call the planned ask's job made (the first after `after`). None, though the ask is stale: the job never
+// ran, and that is recorded as a failed call that was never made (REMOVE_NOT_RUN), so a late job of the ask stops at its
+// begin and a second watch finds an answer. A call still started past REMOVE_STALE_MS: its answer is unclear, recorded
+// as such (OUTCOME_UNKNOWN), never asked again. Either way the owners and admins are told once, and a person may ask
+// again from the post page. A person's own ask since (removed_by set) is left to them.
+export const removeWatch = defineCommand({
+  name: 'social.remove.watch',
+  input: z.strictObject({ variantId: zId, after: z.string().min(1).max(300).nullable() }),
+  risk: 'R1',
+  access: 'system',
+  target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
+  handler: async (ctx, input): Promise<RemoveWatch> => {
+    requireSystem(ctx);
+    const v = await lockVariant(ctx, input.variantId);
+    if (v.status !== 'published' || !v.external_post_id) return { told: false, reason: 'not_published' };
+    const by = (await ctx.trx.selectFrom('crove_social.post_variant').select('removed_by').where('org_id', '=', ctx.orgId).where('id', '=', v.id).executeTakeFirstOrThrow()).removed_by;
+    if (!v.remove_requested_at || by !== null) return { told: false, reason: 'not_scheduled' };
+    const calls = (await removeCallsOf(ctx.trx, ctx.orgId, [v])).get(v.id) ?? [];
+    const seen = input.after === null ? -1 : calls.findIndex((c) => c.key === input.after);
+    if (input.after !== null && seen < 0) return { told: false, reason: 'stale' };
+    const call = calls[seen + 1];
+    const now = ctx.now.getTime();
+    let code: 'REMOVE_NOT_RUN' | 'OUTCOME_UNKNOWN';
+    if (!call) {
+      if (now - v.remove_requested_at.getTime() <= REMOVE_STALE_MS) return { told: false, reason: 'not_stale' };
+      const stepName = calls.length === 0 ? REMOVE_STEP : `${REMOVE_STEP}_${calls.length + 1}`;
+      const callKey = publishCallKey(v.id, callRevision(v), v.attempt, stepName);
+      code = 'REMOVE_NOT_RUN';
+      await ctx.trx
+        .insertInto('crove_kernel.external_call')
+        .values({ org_id: ctx.orgId, key: callKey, module: 'social', target: v.provider, step: stepName, retry_safety: 'idempotent', request_hash: v.content_hash, started_at: ctx.now })
+        .execute();
+      await ctx.trx
+        .updateTable('crove_kernel.external_call')
+        .set({ state: 'failed', error_kind: 'transient', error_code: code, finished_at: ctx.now, updated_at: ctx.now })
+        .where('org_id', '=', ctx.orgId)
+        .where('key', '=', callKey)
+        .execute();
+    } else if (call.state === 'started') {
+      if (now - call.started_at.getTime() <= REMOVE_STALE_MS) return { told: false, reason: 'not_stale' };
+      code = 'OUTCOME_UNKNOWN';
+      await ctx.trx
+        .updateTable('crove_kernel.external_call')
+        .set({ state: 'ambiguous', error_kind: 'unknown', error_code: code, updated_at: ctx.now })
+        .where('org_id', '=', ctx.orgId)
+        .where('key', '=', call.key)
+        .where('state', '=', 'started')
+        .execute();
+    } else {
+      return { told: false, reason: 'recorded' };
+    }
+    ctx.audit({ post_id: v.post_id, variant_id: v.id, provider: v.provider, code });
+    await ctx.emit('social.variant.remove_failed', { post_id: v.post_id, variant_id: v.id, provider: v.provider, code, scheduled: true });
+    return { told: true, code };
+  },
+});
+
+/** The watch job of a planned takedown (#937). after: the last remove call the ask saw. */
+export async function runRemoveWatch(deps: { runtime: Runtime }, orgId: string, variantId: string, after: string | null): Promise<RemoveWatch> {
+  return deps.runtime.execute<RemoveWatch>('social.remove.watch', { variantId, after }, { actor: SWEEP_ACTOR, orgId });
+}
 
 const SWEEP_ACTOR: SystemActor = { type: 'system', component: 'social.remove' };
 // How often the worker looks for planned takedowns, and how many it takes per pass: a post comes down within a minute
@@ -247,4 +317,4 @@ export async function sweepRemovals(deps: { runtime: Runtime; workerDb: Db }, pr
   return queued;
 }
 
-export const removeCommands = [variantRemove, removeBegin, removeRecord, removeSchedule];
+export const removeCommands = [variantRemove, removeBegin, removeRecord, removeSchedule, removeWatch];
