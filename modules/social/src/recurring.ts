@@ -145,12 +145,15 @@ export const recurringNext = defineCommand({
     const rule = parseRecurrence(row.recurrence);
     if (!rule) return { postId: null, reason: 'not_series' };
     if (rule.times !== null && row.recurrence_count >= rule.times) return endSeries(ctx, input.postId, 'times');
+    // A copy still on its way holds the next one back; an archived one (#1299) waits for nobody, as recurring_due reads
+    // it (#1341).
     const open = await ctx.trx
       .selectFrom('crove_social.post as c')
       .innerJoin('crove_social.post_variant as v', (j) => j.onRef('v.org_id', '=', 'c.org_id').onRef('v.post_id', '=', 'c.id'))
       .select('c.id')
       .where('c.org_id', '=', ctx.orgId)
       .where('c.recurrence_source_id', '=', input.postId)
+      .where('c.archived_at', 'is', null)
       .where('v.status', 'not in', [...COPY_DONE])
       .executeTakeFirst();
     if (open) return { postId: null, reason: 'open_copy' };
