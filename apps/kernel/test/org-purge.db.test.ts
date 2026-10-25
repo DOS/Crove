@@ -262,8 +262,18 @@ suite('org purge on PostgreSQL (#1024)', () => {
     ];
     const purged = (await one<{ src: string }>(`SELECT prosrc AS src FROM pg_proc WHERE oid = 'crove_kernel.org_purge(integer)'::regprocedure`)).src;
     const named = new Set([...purged.matchAll(/'(crove_[a-z]+\.[a-z_]+)'/g), ...purged.matchAll(/DELETE FROM (crove_[a-z]+\.[a-z_]+)/g)].map((m) => m[1]));
+    // Tables whose rows go with a parent the purge deletes, through an ON DELETE CASCADE foreign key (checked below).
+    const cascaded: Record<string, string> = { 'crove_kernel.role_assignment': 'crove_kernel.tenant_member' };
     const tables = Object.keys(await snapshot(randomUUID()));
-    expect(tables.filter((t) => !kept.includes(t) && !named.has(t))).toEqual([]);
+    expect(tables.filter((t) => !kept.includes(t) && !named.has(t) && !(t in cascaded))).toEqual([]);
+    for (const [child, parent] of Object.entries(cascaded)) {
+      expect(named.has(parent), parent).toBe(true);
+      const fk = await one<{ n: number }>(
+        `SELECT count(*)::int AS n FROM pg_constraint WHERE contype = 'f' AND conrelid = $1::regclass AND confrelid = $2::regclass AND confdeltype = 'c'`,
+        [child, parent],
+      );
+      expect(fk.n, `${child} cascades from ${parent}`).toBe(1);
+    }
     expect(kept.filter((t) => named.has(t) && t !== 'crove_kernel.task_comment' && t !== 'crove_social.post_approval')).toEqual([]);
   });
 

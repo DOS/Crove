@@ -2,6 +2,7 @@
 // Card, Badge, ...) from @crove/ui directly and these composites from here.
 import { Alert } from '@crove/ui/components/alert';
 import { Empty as EmptyRoot, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@crove/ui/components/empty';
+import { Skeleton } from '@crove/ui/components/skeleton';
 import { Spinner as SpinnerIcon } from '@crove/ui/components/spinner';
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
@@ -82,6 +83,48 @@ export function Notice({ children }: { children: ReactNode }) {
 export function Spinner({ className }: { className?: string }) {
   const t = useTranslations('common');
   return <SpinnerIcon className={cn('text-ring', className)} aria-label={t('loading')} />;
+}
+
+// While a table loads (DESIGN.md §4.3 and §5.3, #1379): the table's card, its header strip and rows of its own height,
+// so the page does not jump when the rows arrive. The region says it is busy; the bars say nothing to screen readers.
+export function TableSkeleton({ columns = 4, rows = 5 }: { columns?: number; rows?: number }) {
+  const t = useTranslations('common');
+  const cells = Array.from({ length: columns }, (_, i) => i);
+  return (
+    <div aria-busy="true" className="overflow-hidden rounded-xl border bg-card">
+      <span className="sr-only">{t('loading')}</span>
+      <div className="flex h-10 items-center gap-6 bg-muted px-4">
+        {cells.map((i) => (
+          <Skeleton key={i} className="h-3 flex-1 bg-background/70" />
+        ))}
+      </div>
+      {Array.from({ length: rows }, (_, r) => (
+        <div key={r} className="flex h-12 items-center gap-6 border-t px-4">
+          {cells.map((i) => (
+            // The first column holds a name, the others shorter values: the bars follow that shape.
+            <Skeleton key={i} className={cn('h-3.5', i === 0 ? 'flex-[2]' : 'flex-1')} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// While a list of cards loads (journal entries, tasks, notifications): cards of the list's height, as above.
+export function ListSkeleton({ rows = 3 }: { rows?: number }) {
+  const t = useTranslations('common');
+  return (
+    <div aria-busy="true" className="space-y-3">
+      <span className="sr-only">{t('loading')}</span>
+      {Array.from({ length: rows }, (_, r) => (
+        <div key={r} className="space-y-2.5 rounded-xl border bg-card p-4">
+          <Skeleton className="h-4 w-1/3" />
+          <Skeleton className="h-3 w-2/3" />
+          <Skeleton className="h-3 w-1/2" />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // A table with one header row; the body rows are TableRow/TableCell from @crove/ui. `numeric` lists the columns that

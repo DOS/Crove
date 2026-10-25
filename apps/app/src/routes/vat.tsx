@@ -6,7 +6,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, client, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { isZeroAmount } from '../lib/decimal.ts';
@@ -270,7 +270,7 @@ export function VatPage() {
         </div>
       )}
       {report.isLoading ? (
-        <Spinner />
+        <TableSkeleton columns={3} rows={8} />
       ) : report.error ? (
         <ErrorText>{errorMessage(report.error)}</ErrorText>
       ) : data ? (

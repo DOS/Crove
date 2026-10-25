@@ -2,9 +2,11 @@
 // Vietnam come from @crove/kernel-contract (vietnamToday, vietnamMonth), the helper the kernel shares (#560); here they
 // read the browser's clock and only shape the hints, since the kernel decides by the database clock.
 
-// The roles that may lock (finance.period.lock) and unlock (finance.period.unlock); the kernel checks again.
+// Who may lock (finance.period.lock: owners and admins) and unlock (finance.period.unlock: owners, and a chief accountant
+// through an org-wide role assignment, ADR-0021, #1279); the kernel checks again.
 export const canLockPeriods = (role: string | null | undefined) => role === 'owner' || role === 'admin';
-export const canUnlockPeriods = (role: string | null | undefined) => role === 'owner';
+export const canUnlockPeriods = (role: string | null | undefined, permissions: readonly string[] = []) =>
+  role === 'owner' || (role != null && permissions.includes('finance.period.unlock'));
 
 export function previousMonth(month: string): string {
   const [year, m] = month.split('-').map(Number) as [number, number];

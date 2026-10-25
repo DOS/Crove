@@ -11,7 +11,7 @@ import { Button } from '@crove/ui/components/button';
 import { Input } from '@crove/ui/components/input';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { EditParty, MergeParty, PartyDuplicates } from '../components/party-edit.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
 import { nextCustomerCursor } from '../lib/parties.ts';
@@ -106,7 +106,7 @@ export function CustomersPage() {
         <Input type="search" placeholder={t('search')} aria-label={t('search')} maxLength={100} value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       {customers.isLoading ? (
-        <Spinner />
+        <TableSkeleton columns={4} />
       ) : customers.error && rows.length === 0 ? (
         <ErrorText>{errorMessage(customers.error)}</ErrorText>
       ) : rows.length === 0 ? (
