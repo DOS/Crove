@@ -2,8 +2,12 @@
 // member, the host, on the public booking page (C3, #1318). Owners and admins manage every event type of the org; a
 // member manages the ones they host. Each slug names its page, so it is unique per org (event_type_slug_uq). Event
 // types are archived, never deleted, so bookings keep their type.
+//
+// Team types (#1373, step C8): a type may name up to nine co-hosts beside its lead host, booked round-robin (one free
+// host) or collectively (every host). A team books other members' time, so only owners and admins make a type a team
+// type, change its co-hosts or change how it assigns; a member who leads one still edits everything else.
 import { z } from 'zod';
-import { zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate, type EventType, type EventTypeInput } from '@crove/kernel-contract';
+import { zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate, type EventType, type EventTypeAssignment, type EventTypeInput } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 
@@ -28,6 +32,8 @@ const COLUMNS = [
   'location_kind',
   'location_value',
   'host_user_id',
+  'assignment',
+  'co_host_user_ids',
   'active',
   'created_at',
   'updated_at',
@@ -47,6 +53,8 @@ interface Row {
   location_kind: EventType['locationKind'];
   location_value: string | null;
   host_user_id: string;
+  assignment: EventTypeAssignment;
+  co_host_user_ids: string[];
   active: boolean;
   created_at: Date | string;
   updated_at: Date | string;
@@ -67,6 +75,8 @@ function view(r: Row): EventType {
     locationKind: r.location_kind,
     locationValue: r.location_value,
     hostUserId: r.host_user_id,
+    assignment: r.assignment,
+    coHostUserIds: r.co_host_user_ids,
     active: r.active,
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
@@ -86,6 +96,8 @@ const columnsOf = (input: EventTypeInput) => ({
   location_kind: input.locationKind,
   location_value: input.locationValue?.trim() || null,
   host_user_id: input.hostUserId,
+  assignment: input.assignment,
+  co_host_user_ids: input.coHostUserIds,
 });
 
 function userOf(actor: QueryContext['actor']): string {
@@ -110,6 +122,22 @@ async function assertHost(ctx: CommandContext, hostUserId: string): Promise<void
     .where('user_id', '=', hostUserId)
     .executeTakeFirst();
   if (!member || !HOSTS.includes(member.role)) throw new DomainError('EVENT_TYPE_HOST_INVALID', 422, 'Người chủ trì phải là thành viên được sửa lịch của tổ chức');
+}
+
+// A single type has no co-host; a team type has at least one, each named once and none of them the lead host.
+function assertTeamShape(input: EventTypeInput): void {
+  const co = input.coHostUserIds;
+  if (input.assignment === 'single' ? co.length > 0 : co.length === 0) {
+    throw new DomainError('EVENT_TYPE_TEAM_INVALID', 422, 'Loại lịch hẹn theo nhóm cần ít nhất một người cùng chủ trì; loại một người thì không có');
+  }
+  if (new Set(co).size !== co.length || co.includes(input.hostUserId)) {
+    throw new DomainError('EVENT_TYPE_TEAM_INVALID', 422, 'Mỗi người cùng chủ trì chỉ ghi một lần và không trùng người chủ trì chính');
+  }
+}
+
+// Only owners and admins set up a team: it books other members' time.
+function assertMayTeam(ctx: CommandContext): void {
+  if (!manager(ctx)) throw new DomainError('EVENT_TYPE_TEAM_FORBIDDEN', 403, 'Chỉ chủ sở hữu hoặc quản trị viên mới lập lịch hẹn theo nhóm');
 }
 
 // Another event type took the slug after the check (the unique constraint).
@@ -154,7 +182,10 @@ export const eventTypeCreate = defineCommand({
   handler: async (ctx, input): Promise<EventType> => {
     const userId = userOf(ctx.actor);
     assertMayHost(ctx, userId, input.hostUserId);
+    assertTeamShape(input);
+    if (input.assignment !== 'single') assertMayTeam(ctx);
     await assertHost(ctx, input.hostUserId);
+    for (const coHost of input.coHostUserIds) await assertHost(ctx, coHost);
     if (!(await slugFree(ctx, input.slug, null))) throw slugTaken(input.slug);
     const row = await ctx.trx
       .insertInto('crove_crm.event_type')
@@ -162,7 +193,7 @@ export const eventTypeCreate = defineCommand({
       .returning(COLUMNS)
       .executeTakeFirstOrThrow()
       .catch(onWrite(input.slug));
-    ctx.audit({ eventTypeId: row.id, slug: row.slug, hostUserId: row.host_user_id });
+    ctx.audit({ eventTypeId: row.id, slug: row.slug, hostUserId: row.host_user_id, assignment: row.assignment, coHostUserIds: row.co_host_user_ids });
     return view(row);
   },
 });
@@ -179,7 +210,13 @@ export const eventTypeUpdate = defineCommand({
     // A member may neither change another host's type nor hand theirs to someone else.
     assertMayHost(ctx, userId, before.host_user_id);
     assertMayHost(ctx, userId, fields.hostUserId);
+    assertTeamShape(fields);
+    const teamChanged =
+      fields.assignment !== before.assignment || fields.coHostUserIds.length !== before.co_host_user_ids.length || fields.coHostUserIds.some((id, i) => id !== before.co_host_user_ids[i]);
+    if (teamChanged) assertMayTeam(ctx);
     if (fields.hostUserId !== before.host_user_id) await assertHost(ctx, fields.hostUserId);
+    // A co-host added now must be able to host; one kept from before who no longer can is skipped when booking.
+    for (const coHost of fields.coHostUserIds) if (!before.co_host_user_ids.includes(coHost)) await assertHost(ctx, coHost);
     if (!(await slugFree(ctx, fields.slug, eventTypeId))) throw slugTaken(fields.slug);
     const row = await ctx.trx
       .updateTable('crove_crm.event_type')
@@ -193,8 +230,16 @@ export const eventTypeUpdate = defineCommand({
     // kept after a personal-data erasure.
     const previous = view(before);
     const next = view(row);
-    const changed = (Object.keys(next) as (keyof EventType)[]).filter((k) => k !== 'updatedAt' && previous[k] !== next[k]);
-    ctx.audit({ eventTypeId, slug: row.slug, hostUserId: row.host_user_id, previousHostUserId: before.host_user_id, changed });
+    const changed = (Object.keys(next) as (keyof EventType)[]).filter((k) => k !== 'updatedAt' && k !== 'coHostUserIds' && previous[k] !== next[k]);
+    if (teamChanged) changed.push('coHostUserIds');
+    ctx.audit({
+      eventTypeId,
+      slug: row.slug,
+      hostUserId: row.host_user_id,
+      previousHostUserId: before.host_user_id,
+      ...(teamChanged ? { assignment: row.assignment, coHostUserIds: row.co_host_user_ids } : {}),
+      changed,
+    });
     return view(row);
   },
 });

@@ -1,6 +1,6 @@
 // Helpers for the event types card in Settings (issue #1314). The server enforces every rule; these only turn the form
 // into the saved shape and keep it from offering what cannot succeed.
-import { slugOf, type EventType, type EventTypeInput, type EventTypeLocationKind } from '@crove/kernel-contract';
+import { EVENT_TYPE_CO_HOSTS_MAX, slugOf, type EventType, type EventTypeAssignment, type EventTypeInput, type EventTypeLocationKind } from '@crove/kernel-contract';
 
 export interface EventTypeMember {
   userId: string;
@@ -25,6 +25,9 @@ export interface EventTypeDraft {
   locationKind: EventTypeLocationKind;
   locationValue: string;
   hostUserId: string;
+  // Team types (#1373): who books it, and the hosts beside the lead (kept while the user switches back and forth).
+  assignment: EventTypeAssignment;
+  coHostUserIds: string[];
 }
 
 export function draftOf(type: EventType | null, hostUserId: string): EventTypeDraft {
@@ -43,6 +46,8 @@ export function draftOf(type: EventType | null, hostUserId: string): EventTypeDr
       locationKind: 'video',
       locationValue: '',
       hostUserId,
+      assignment: 'single',
+      coHostUserIds: [],
     };
   }
   return {
@@ -59,7 +64,21 @@ export function draftOf(type: EventType | null, hostUserId: string): EventTypeDr
     locationKind: type.locationKind,
     locationValue: type.locationValue ?? '',
     hostUserId: type.hostUserId,
+    assignment: type.assignment,
+    coHostUserIds: type.coHostUserIds,
   };
+}
+
+/** The draft with this lead host: they leave the co-hosts if they were one. */
+export function withHost(draft: EventTypeDraft, hostUserId: string): EventTypeDraft {
+  return { ...draft, hostUserId, coHostUserIds: draft.coHostUserIds.filter((id) => id !== hostUserId) };
+}
+
+/** The draft with a co-host added or taken off, up to the most a team holds. */
+export function withCoHost(draft: EventTypeDraft, userId: string, on: boolean): EventTypeDraft {
+  const rest = draft.coHostUserIds.filter((id) => id !== userId);
+  if (!on || userId === draft.hostUserId) return { ...draft, coHostUserIds: rest };
+  return rest.length >= EVENT_TYPE_CO_HOSTS_MAX ? draft : { ...draft, coHostUserIds: [...rest, userId] };
 }
 
 /** The draft after the title changed: the slug follows it until the user edits the slug. */
@@ -82,6 +101,8 @@ export function inputOf(draft: EventTypeDraft): { input: EventTypeInput } | { in
   if (draft.minNoticeHours.trim() === '' || !Number.isFinite(noticeHours) || noticeHours < 0) return { invalid: 'minNoticeHours' };
   const dailyLimit = draft.dailyLimit.trim() === '' ? null : whole(draft.dailyLimit);
   if (draft.dailyLimit.trim() !== '' && dailyLimit === null) return { invalid: 'dailyLimit' };
+  const team = draft.assignment !== 'single';
+  if (team && draft.coHostUserIds.length === 0) return { invalid: 'coHostUserIds' };
   return {
     input: {
       slug: draft.slug.trim(),
@@ -96,6 +117,9 @@ export function inputOf(draft: EventTypeDraft): { input: EventTypeInput } | { in
       locationKind: draft.locationKind,
       locationValue: draft.locationValue.trim() || null,
       hostUserId: draft.hostUserId,
+      assignment: draft.assignment,
+      // A single type has none; switching back from a team drops them.
+      coHostUserIds: team ? draft.coHostUserIds : [],
     },
   };
 }
@@ -104,6 +128,11 @@ export function inputOf(draft: EventTypeDraft): { input: EventTypeInput } | { in
 export function hostChoices(members: readonly EventTypeMember[], me: string, manager: boolean): EventTypeMember[] {
   const hosts = members.filter((m) => m.role !== 'viewer');
   return manager ? hosts : hosts.filter((m) => m.userId === me);
+}
+
+/** Who the form offers as co-host of a team type: any member who may edit a calendar, but the lead host. */
+export function coHostChoices(members: readonly EventTypeMember[], hostUserId: string): EventTypeMember[] {
+  return members.filter((m) => m.role !== 'viewer' && m.userId !== hostUserId);
 }
 
 /** Whether the user may change this event type: owners and admins all, a member those they host. */

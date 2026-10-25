@@ -6,6 +6,12 @@ import { zId } from './schemas.ts';
 export const EVENT_TYPE_LOCATION_KINDS = ['in_person', 'phone', 'video'] as const;
 export type EventTypeLocationKind = (typeof EVENT_TYPE_LOCATION_KINDS)[number];
 
+// Who hosts a booking (#1373): the lead host alone; one free host of the team (round-robin); or every host together
+// (collective). A team type names 1 to EVENT_TYPE_CO_HOSTS_MAX co-hosts beside its lead host.
+export const EVENT_TYPE_ASSIGNMENTS = ['single', 'round_robin', 'collective'] as const;
+export type EventTypeAssignment = (typeof EVENT_TYPE_ASSIGNMENTS)[number];
+export const EVENT_TYPE_CO_HOSTS_MAX = 9;
+
 export const EVENT_TYPE_SLUG_MAX = 60;
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -36,6 +42,8 @@ export const zEventTypeInput = z.strictObject({
   locationKind: z.enum(EVENT_TYPE_LOCATION_KINDS),
   locationValue: z.string().trim().max(500).nullable(),
   hostUserId: zId,
+  assignment: z.enum(EVENT_TYPE_ASSIGNMENTS).default('single'),
+  coHostUserIds: z.array(zId).max(EVENT_TYPE_CO_HOSTS_MAX).default([]),
 });
 export type EventTypeInput = z.infer<typeof zEventTypeInput>;
 
@@ -123,7 +131,10 @@ export type BookingListQuery = z.infer<typeof zBookingListQuery>;
 export const zBookingItem = z.strictObject({
   id: z.string(),
   eventType: z.strictObject({ id: z.string(), slug: z.string(), title: z.string(), active: z.boolean() }),
+  // The host whose calendar holds the booking (for a round-robin type, the one it landed on).
   hostUserId: z.string(),
+  // Every host it holds, that one first (a collective booking holds each host of its type).
+  hostUserIds: z.array(z.string()),
   status: z.enum(BOOKING_STATUSES),
   startsAt: z.string(),
   endsAt: z.string(),
