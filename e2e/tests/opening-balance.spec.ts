@@ -18,6 +18,7 @@ test('import opening balances from the Excel template', async ({ page }) => {
   const dir = mkdtempSync(join(tmpdir(), 'crove-opening-'));
 
   const template = await test.step('open the screen from the journal and download the template', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Kế toán', exact: true }).click();
     await page.getByRole('navigation').getByRole('link', { name: 'Bút toán' }).click();
     await page.getByRole('link', { name: 'Nhập số dư đầu kỳ' }).click();
     await expect(page.getByRole('heading', { name: 'Số dư đầu kỳ' })).toBeVisible();

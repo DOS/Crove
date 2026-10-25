@@ -19,7 +19,8 @@ import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { DateInput } from '../components/date-input.tsx';
 import { DateTimeInput } from '../components/date-time-input.tsx';
 import { TimeInput } from '../components/time-input.tsx';
-import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
+import { CoverImageField, MediaField, MediaReplace, type MediaItem } from '../components/social-media.tsx';
+import { replaceInChannels, replaceInEditable, replaceMedia } from '../lib/social-image-fix.ts';
 import { AiPhotoPicker, aiDraftInput, useAiPhotos } from '../components/social-ai-photos.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview, useLinkPreview } from '../components/social-preview.tsx';
@@ -2769,8 +2770,15 @@ export function SocialComposePage() {
     }
   };
 
+  // An image fixed for a channel that refused it (#1500) takes the original's place everywhere in the post: the shared
+  // images and every channel's own images that hold it (#1505).
+  const fixEverywhere = (fromFileId: string, next: MediaItem) => {
+    setBase((b) => ({ ...b, media: replaceMedia(b.media, fromFileId, next) }));
+    setOwn((o) => replaceInChannels(o, fromFileId, next));
+  };
   if (channels.isLoading || signatureRows.isPending) return <Spinner />;
   return (
+    <MediaReplace.Provider value={fixEverywhere}>
     <div onKeyDown={onKey}>
       <PageHeader
         title={t('composeTitle')}
@@ -3012,6 +3020,7 @@ export function SocialComposePage() {
         </div>
       </div>
     </div>
+    </MediaReplace.Provider>
   );
 }
 
@@ -4056,8 +4065,16 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   // The AI rewrite box of the text a channel sends (#1156): its own text's, or the shared text's.
   const rewriteTarget = (v: Variant): string | null =>
     getConfig().aiEnabled === true && canWrite && EDITABLE.includes(v.status) && !save.isPending ? ((own[v.id] ?? ownOf(v)).custom ? ownRewriteId(v.connectionId) : SHARED_REWRITE_ID) : null;
+  // An image fixed for a channel that refused it (#1500) takes the original's place everywhere it is still editable
+  // (#1505): the shared images and the own images of every channel yet to go out, edited or not; a channel that went
+  // out keeps what it sent.
+  const fixEverywhere = (fromFileId: string, next: MediaItem) => {
+    setBase((b) => (b ? { ...b, media: replaceMedia(b.media, fromFileId, next) } : b));
+    setOwn((o) => replaceInEditable(o, Object.fromEntries(p.variants.filter((v) => EDITABLE.includes(v.status)).map((v) => [v.id, o[v.id] ?? ownOf(v)])), fromFileId, next));
+  };
 
   return (
+    <MediaReplace.Provider value={fixEverywhere}>
     <div onKeyDown={onKey}>
       <p role="status" className="sr-only" data-testid="review-arrival">
         {arrival}
@@ -4429,5 +4446,6 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
         />
       </div>
     </div>
+    </MediaReplace.Provider>
   );
 }

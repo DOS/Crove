@@ -13,6 +13,7 @@ test('enter a general journal voucher, approve it and find it numbered in the jo
   const slug = await createOrg(page, 'Công ty Bút Toán');
 
   await test.step('enter the voucher on the journal screen', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Kế toán', exact: true }).click();
     await page.getByRole('navigation').getByRole('link', { name: 'Bút toán' }).click();
     await page.getByRole('button', { name: 'Lập phiếu kế toán' }).click();
     const form = page.getByRole('form', { name: 'Phiếu kế toán khác' });
@@ -41,6 +42,7 @@ test('enter a general journal voucher, approve it and find it numbered in the jo
   });
 
   await test.step('the entry is in the journal as NVK00001', async () => {
+    await page.getByRole('navigation').getByRole('link', { name: 'Kế toán', exact: true }).click();
     await page.getByRole('navigation').getByRole('link', { name: 'Bút toán' }).click();
     await expect(page.getByText('NVK00001 Trích trước lương tháng 10')).toBeVisible();
   });
