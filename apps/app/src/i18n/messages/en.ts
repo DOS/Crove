@@ -302,6 +302,10 @@ export const en = {
     daysLeft: '{days, plural, =0 {due today} one {# day left} other {# days left}}',
     overdue: '{days, plural, one {# day overdue} other {# days overdue}}',
     markDone: 'Done',
+    // Each legal entity marks its own dues (#1553).
+    markDoneFor: 'Done for {entity}',
+    openEntities: 'Still open: {names}',
+    openCount: '{count, plural, one {# entity still open} other {# entities still open}}',
     nothingDue: 'Nothing due in 30 days',
     empty: 'No tax obligation due in the next 30 days',
     emptyHint: "Choose the company's VAT filing period and the obligations that apply to it in Settings to see its calendar here.",
@@ -1715,6 +1719,10 @@ export const en = {
     approvedToast: 'Approved and posted {name}',
     rejectedToast: 'Rejected {name}',
     viewCustomer: 'View in customers',
+    // Whose books the invoice goes to, with several legal entities (#1542).
+    entity: 'Recorded in the books of',
+    entitySuggest: 'You are working in {chosen}.',
+    entityMove: 'Move the invoice to {chosen}',
     timeline: 'Document history',
     timelineEmpty: 'No activity recorded yet',
     timelineMore: 'Only the latest 200 entries are shown',

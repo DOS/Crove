@@ -300,6 +300,10 @@ export const vi = {
     daysLeft: '{days, plural, =0 {hạn cuối là hôm nay} other {còn # ngày}}',
     overdue: '{days, plural, other {quá hạn # ngày}}',
     markDone: 'Đã xong',
+    // Each legal entity marks its own dues (#1553).
+    markDoneFor: 'Đã xong cho {entity}',
+    openEntities: 'Chưa xong: {names}',
+    openCount: '{count, plural, other {# pháp nhân chưa xong}}',
     nothingDue: 'Không có việc trong 30 ngày',
     empty: 'Không có việc thuế nào trong 30 ngày tới',
     emptyHint: 'Chọn kỳ khai thuế GTGT và các việc áp dụng cho doanh nghiệp trong Cài đặt để lịch thuế hiện ở đây.',
@@ -1712,6 +1716,10 @@ export const vi = {
     approvedToast: 'Đã duyệt và ghi sổ {name}',
     rejectedToast: 'Đã từ chối {name}',
     viewCustomer: 'Xem trong danh sách khách hàng',
+    // Whose books the invoice goes to, with several legal entities (#1542).
+    entity: 'Ghi vào sổ của pháp nhân',
+    entitySuggest: 'Bạn đang làm việc với {chosen}.',
+    entityMove: 'Chuyển hóa đơn sang {chosen}',
     timeline: 'Lịch sử chứng từ',
     timelineEmpty: 'Chưa có hoạt động nào được ghi lại',
     timelineMore: 'Chỉ hiện 200 hoạt động gần nhất',
