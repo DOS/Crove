@@ -5,6 +5,7 @@ import type { Messages } from './vi.ts';
 // or tags differ from the Vietnamese one, fails the typecheck.
 export const en = {
   common: {
+    toasts: 'Results',
     datePlaceholder: 'dd/mm/yyyy',
     monthPlaceholder: 'mm/yyyy',
     openCalendar: 'Open the calendar',
@@ -1373,6 +1374,8 @@ export const en = {
     },
   },
   inbox: {
+    addressCopied: 'Address copied',
+    copyRefused: 'The browser refused to copy. Select the address on screen and copy it by hand.',
     socialAttention: {
       title: 'Social needs you ({count, number})',
       noText: 'Post without text',
@@ -1500,6 +1503,8 @@ export const en = {
     },
   },
   inboxDetail: {
+    approvedToast: 'Approved and posted {name}',
+    rejectedToast: 'Rejected {name}',
     viewCustomer: 'View in customers',
     timeline: 'Document history',
     timelineEmpty: 'No activity recorded yet',

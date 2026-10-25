@@ -3,6 +3,7 @@
 // names and types of every t() call against these messages (see ../catalog.ts).
 export const vi = {
   common: {
+    toasts: 'Thông báo kết quả',
     datePlaceholder: 'dd/mm/yyyy',
     monthPlaceholder: 'mm/yyyy',
     openCalendar: 'Mở lịch',
@@ -1371,6 +1372,8 @@ export const vi = {
     },
   },
   inbox: {
+    addressCopied: 'Đã chép địa chỉ',
+    copyRefused: 'Trình duyệt không cho chép. Hãy chọn địa chỉ trên màn hình rồi chép bằng tay.',
     socialAttention: {
       title: 'Mạng xã hội cần bạn xử lý ({count, number})',
       noText: 'Bài chưa có nội dung',
@@ -1497,6 +1500,8 @@ export const vi = {
     },
   },
   inboxDetail: {
+    approvedToast: 'Đã duyệt và ghi sổ {name}',
+    rejectedToast: 'Đã từ chối {name}',
     viewCustomer: 'Xem trong danh sách khách hàng',
     timeline: 'Lịch sử chứng từ',
     timelineEmpty: 'Chưa có hoạt động nào được ghi lại',

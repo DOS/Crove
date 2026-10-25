@@ -5,6 +5,7 @@ import { useTranslations } from 'use-intl';
 import { NavIcon } from '@crove/ui/components/nav-icon';
 import { ALL_NAV, NAV_GROUPS, NavDrawer, ShellNav, type NavItem } from '../components/app-nav.tsx';
 import { CommandPalette, type PaletteEntry } from '../components/command-palette.tsx';
+import { Toaster } from '../components/toaster.tsx';
 import { Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { LOCALE_NAMES, LOCALES } from '../i18n/locale.ts';
 import { useFormat, useLocaleSetting } from '../i18n/provider.tsx';
@@ -227,6 +228,7 @@ export function OrgLayout() {
           <OrgLeftNotice />
           {me.isSuccess && !org ? <p className="text-sm text-destructive">{t('notMember')}</p> : <Outlet />}
         </main>
+        <Toaster />
         <CommandPalette
           entries={paletteEntries}
           found={foundEntries}
