@@ -11,7 +11,7 @@
 // - Scheduling needs the variant's latest decision to be an approval of its current revision and hash.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { SOCIAL_IMAGE_TYPES, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId, zSocialMemberFilter } from '@crove/kernel-contract';
+import { SOCIAL_IMAGE_TYPES, SOCIAL_QUEUE_SLOTS_MAX, SOCIAL_REVIEW_CHECKS_MAX, SOCIAL_VIDEO_TYPES, zId, zSocialMemberFilter } from '@crove/kernel-contract';
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
@@ -103,7 +103,8 @@ const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MEMBERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const ADMINS: readonly MemberRole[] = ['owner', 'admin'];
 export { MAX_CHANNELS_PER_POST };
-const MAX_SLOTS = 100;
+// The contract's limit (#1172), which the queue editor's helpers stop at too.
+const MAX_SLOTS = SOCIAL_QUEUE_SLOTS_MAX;
 
 
 const zBody = z.string().max(100_000);

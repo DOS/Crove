@@ -1243,6 +1243,8 @@ export const zSocialSchedule = z.strictObject({
     .optional(),
 });
 
+// The most slots a channel's queue holds (#1172): social.queue.set refuses more, and the queue editor's helpers stop there.
+export const SOCIAL_QUEUE_SLOTS_MAX = 100;
 export const zSocialQueueSet = z.strictObject({
   connectionId: zId,
   timeZone: z.string().min(1).max(64),
@@ -1251,7 +1253,7 @@ export const zSocialQueueSet = z.strictObject({
   lowDays: z.number().int().min(1).max(30).nullable().optional(),
   slots: z
     .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional(), labelId: zId.nullable().optional() }))
-    .max(100),
+    .max(SOCIAL_QUEUE_SLOTS_MAX),
 });
 
 // Reordering a channel's queue (#1020): the posts trade the slot times they hold. A shuffle takes the posts of the

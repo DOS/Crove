@@ -12,6 +12,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { DateInput } from './date-input.tsx';
 import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -92,11 +93,11 @@ export function PlanReviewCard({ channels, canManage }: { channels: readonly { i
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="space-y-1.5">
           <Label htmlFor="plan-from">{t('from')}</Label>
-          <Input id="plan-from" type="date" value={period.from} onChange={(e) => setPeriod({ ...period, from: e.target.value })} />
+          <DateInput id="plan-from" value={period.from} onChange={(from) => setPeriod({ ...period, from })} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="plan-to">{t('to')}</Label>
-          <Input id="plan-to" type="date" value={period.to} onChange={(e) => setPeriod({ ...period, to: e.target.value })} />
+          <DateInput id="plan-to" value={period.to} onChange={(to) => setPeriod({ ...period, to })} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="plan-days">{t('validFor')}</Label>
