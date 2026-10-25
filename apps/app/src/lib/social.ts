@@ -97,10 +97,11 @@ export function connectPlatforms(offered: readonly string[]): (typeof CONNECT_PL
 }
 
 // A variant's text against its channel's limit, the way the platform counts, with the link the channel's adapter adds.
-export function textBudget(provider: string, body: string, link: { linkUrl?: string | null; mediaCount?: number } = {}): { used: number; max: number | null } {
+// settings: the variant's, whose link card (#1498) keeps the link out of the text.
+export function textBudget(provider: string, body: string, link: { linkUrl?: string | null; mediaCount?: number; settings?: Readonly<Record<string, unknown>> } = {}): { used: number; max: number | null } {
   if (!isProvider(provider)) return { used: body.length, max: null };
   const rule = CAPABILITIES[provider].body;
-  return { used: countText(sentText(provider, body, link.linkUrl, link.mediaCount ?? 0), rule.count), max: rule.max };
+  return { used: countText(sentText(provider, body, link.linkUrl, link.mediaCount ?? 0, link.settings), rule.count), max: rule.max };
 }
 
 export function hasTitle(provider: string): boolean {
