@@ -459,7 +459,7 @@ suite('journal reversal through the API, and voided purchase documents (#165)', 
       async (c) =>
         (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.journal.export' AND outcome = 'ok'`, [org.orgId])).rows,
     );
-    expect(audits.map((a) => a.detail)).toContainEqual({ entries: 1, format: 'misa_sme_purchases', from: null, to: null });
+    expect(audits.map((a) => a.detail)).toContainEqual({ entries: 1, format: 'misa_sme_purchases', from: null, to: null, stockLines: 'excluded' });
   });
 
   it('holds every writer to the void and replacement rules', async () => {

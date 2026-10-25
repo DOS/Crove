@@ -118,23 +118,33 @@ async function openCredential(deps: PublishDeps, orgId: string, connectionId: st
   }
 }
 
-async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, work: PublishWork, credential: { externalAccountId: string; secret: string }): Promise<PublishRecord> {
-  // A deployment's (or a test's) own limit first, then the adapter's (video uploads take minutes), then the default.
-  const timeout = deps.callTimeoutMs ?? publisher.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
-  // Only the variant's own images and its video's cover image (#642), of this org.
+// The stored file of one of the variant's own images or its video's cover image (#642), of this org; any other file
+// throws.
+function mediaFileOf(deps: PublishDeps, orgId: string, work: Pick<PublishWork, 'content' | 'settings'>) {
   const cover = coverOf(work.settings);
-  const mediaFile = async (fileId: string) => {
+  return async (fileId: string) => {
     if (!work.content.media.some((m) => m.fileId === fileId) && !(cover && 'fileId' in cover && cover.fileId === fileId)) throw new Error('not an image of this variant');
     return deps.runtime.query<{ storageKey: string; generation: string | null; sha256: string; contentType: string; filename: string }>('social.media.file', { fileId }, { actor: ACTOR, orgId });
   };
-  // A presigned GET of the exact version, where the store hands them out (S3); valid briefly, enough for the platform
-  // to fetch it right after the call that names it.
-  const mediaUrl = async (fileId: string): Promise<string | null> => {
+}
+
+// A presigned GET of the exact version, where the store hands them out (S3); valid briefly, enough for the platform
+// to fetch it right after the call that names it.
+function mediaUrlOf(deps: PublishDeps, mediaFile: ReturnType<typeof mediaFileOf>) {
+  return async (fileId: string): Promise<string | null> => {
     const direct = deps.store?.direct;
     if (!direct) return null;
     const file = await mediaFile(fileId);
     return direct.presignDownload({ key: file.storageKey, generation: file.generation, sha256: file.sha256 }, { filename: file.filename, contentType: file.contentType });
   };
+}
+
+async function provide(deps: PublishDeps, orgId: string, publisher: Publisher, work: PublishWork, credential: { externalAccountId: string; secret: string }): Promise<PublishRecord> {
+  // A deployment's (or a test's) own limit first, then the adapter's (video uploads take minutes), then the default.
+  const timeout = deps.callTimeoutMs ?? publisher.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
+  const cover = coverOf(work.settings);
+  const mediaFile = mediaFileOf(deps, orgId, work);
+  const mediaUrl = mediaUrlOf(deps, mediaFile);
   const readMedia = async (fileId: string): Promise<Uint8Array> => {
     if (!deps.store) throw new Error('media storage not available');
     const file = await mediaFile(fileId);
@@ -398,8 +408,11 @@ export async function runEditJob(deps: PublishDeps, orgId: string, variantId: st
     const short = begun.shortLink && deps.publicUrl ? { target: begun.shortLink.target, url: shortUrl(deps.publicUrl, begun.shortLink.code) } : null;
     const content = short ? shortened(begun.content, short) : begun.content;
     const settings = short ? shortenedSettings(begun.settings, short) : begun.settings;
+    // For a platform whose edit sends the post whole and fetches its images again (Zalo, #1430): the variant's own
+    // files only, each URL asked for by the adapter right before the call that names it.
+    const mediaUrl = mediaUrlOf(deps, mediaFileOf(deps, orgId, { content, settings }));
     try {
-      const r = await withTimeout(timeout, () => publisher.edit!({ ...credential, externalId: begun.externalId, content, settings, callKey: begun.callKey }));
+      const r = await withTimeout(timeout, () => publisher.edit!({ ...credential, externalId: begun.externalId, content, settings, mediaUrl, callKey: begun.callKey }));
       // What the record takes: codes and messages cut to their columns.
       result =
         r.kind === 'edited'

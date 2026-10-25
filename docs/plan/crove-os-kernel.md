@@ -1039,12 +1039,12 @@ Existing fork schemas are not in the Crove DB. The `crove_` prefix is kept so se
 | Rule | Mechanism | Fails at |
 |---|---|---|
 | No deep imports; isomorphic contracts; DAG | `exports` + pnpm isolation; dependency-cruiser generated from `dependsOn`; pure `domain/`; the shell does not import kernel/db | Typecheck, G5 |
-| No cross-module SQL | Module role + `$pickTables` + ast-grep (SQL in `infra/` may only mention `crove_<id>.` and `crove_kernel.`) | `permission denied`, lint |
+| No cross-module SQL | Module role + `$pickTables` + ast-grep (SQL in `infra/` may only mention `crove_<id>.` and `crove_kernel.`) | `permission denied`, lint. On `main`: `tools/test/module-schemas.test.ts` (#1464) fails when a file under `modules/<id>/` names a schema other than `crove_<id>` and `crove_kernel` |
 | Tenant conventions | `apply_tenant_conventions()` + pgTAP conformance | G3 |
 | No side-door writes | Not exposed through PostgREST; revoked from anon, authenticated, PUBLIC; module roles cannot INSERT directly into outbox/audit | G3 |
 | Valid registry | Every command has permission, risk (>= derived risk), idempotency, i18n, `implement()`, synthetic examples | G5 |
 | Money and dates | Ban `parseFloat`/`Number()`/`+` on Money; ban `new Date(str)` and `Date.now()` outside Clock | G5 |
-| Allowed imports | pg-boss, ai/@ai-sdk, @orpc/server, @base-ui only in their designated packages; ban string model ids and `@ai-sdk/gateway` | G5: `tools/test/allowed-imports.test.ts` (#1387) checks the sources and the workspace manifests: pg-boss and `@orpc/server` only in `apps/kernel`, `ai` and `@ai-sdk/*` only in `packages/agent`, `@base-ui/*` only in `packages/ui`, `@ai-sdk/gateway` nowhere. String model ids are not checked yet |
+| Allowed imports | pg-boss, ai/@ai-sdk, @orpc/server, @base-ui only in their designated packages; ban string model ids and `@ai-sdk/gateway` | G5: `tools/test/allowed-imports.test.ts` (#1387) checks the sources and the workspace manifests: pg-boss and `@orpc/server` only in `apps/kernel`, `ai` and `@ai-sdk/*` only in `packages/agent`, `@base-ui/*` only in `packages/ui`, `@ai-sdk/gateway` nowhere; `tools/test/model-ids.test.ts` (#1462) refuses a model id literal of a known family in any product source (the model comes from `AI_MODEL`) |
 
 ### 5.5 DB schema and migrations
 

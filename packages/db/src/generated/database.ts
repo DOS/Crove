@@ -29,6 +29,7 @@ export interface CroveFinanceSchema {
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.journal_voucher': FinanceJournalVoucherTable;
+  'crove_finance.misa_goods_code': FinanceMisaGoodsCodeTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
   'crove_finance.period_balance_delta': FinancePeriodBalanceDeltaTable;
   'crove_finance.period_lock': FinancePeriodLockTable;
@@ -350,6 +351,17 @@ export interface FinanceJournalVoucherTable {
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   closing_year: ColumnType<number | null, number | null, NotGranted>;
+}
+
+/** crove_finance.misa_goods_code */
+export interface FinanceMisaGoodsCodeTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  account_code: ColumnType<string, string, NotGranted>;
+  item_code: string;
+  warehouse_code: string | null;
+  updated_by: string | null;
+  updated_at: ColumnType<Date, Date | string | undefined, Date | string>;
 }
 
 /** crove_finance.org_account */
