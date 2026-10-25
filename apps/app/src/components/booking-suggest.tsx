@@ -3,7 +3,7 @@
 // asks for; the slots are real free slots of the type inside them, else the next free ones. The member copies the
 // draft reply and sends it themselves: nothing is sent or saved here.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { zonedInstant, type BookingSuggestion } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
@@ -22,6 +22,7 @@ export function BookingSuggestCard({ slug }: { slug: string }) {
   const t = useTranslations('bookings.suggest');
   const { locale } = useLocaleSetting();
   const [open, setOpen] = useState(false);
+  const replyRef = useRef<HTMLTextAreaElement>(null);
   const types = useQuery({ ...orpc.crm.eventTypes.list.queryOptions(), enabled: open });
   const active = (types.data ?? []).filter((e) => e.active);
   const [typeId, setTypeId] = useState('');
@@ -51,6 +52,9 @@ export function BookingSuggestCard({ slug }: { slug: string }) {
       await navigator.clipboard.writeText(reply);
       setCopied(true);
     } catch {
+      // No clipboard (a plain-HTTP page, or refused): the reply is selected for a manual copy.
+      replyRef.current?.focus();
+      replyRef.current?.select();
       setCopied(false);
     }
   };
@@ -113,7 +117,7 @@ export function BookingSuggestCard({ slug }: { slug: string }) {
               : t(`ai.${result.ai === 'used' ? 'noWindows' : result.ai}`)}
           </p>
           {result.ai === 'used' && result.windows.length > 0 && !result.inWindows && <p className="text-xs text-muted-foreground">{t('outside')}</p>}
-          <Textarea rows={7} aria-label={t('replyLabel')} value={reply} onChange={(e) => setReply(e.target.value)} />
+          <Textarea ref={replyRef} rows={7} aria-label={t('replyLabel')} value={reply} onChange={(e) => setReply(e.target.value)} />
           <div className="flex items-center gap-2">
             <Button size="sm" variant="outline" onClick={() => void copy()}>
               {copied ? t('copied') : t('copy')}
