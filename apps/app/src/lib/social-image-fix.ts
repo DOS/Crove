@@ -4,6 +4,7 @@
 // This module decides, from the contract's limits, whether an image needs the fix, what it must become and the encodes
 // to try; the drawing runs in components/social-image-fix.tsx.
 import { CAPABILITIES, IMAGE_RULES, isProvider, mediaKindOf, type Provider } from '@crove/mod-social/contract';
+import { CROP_MAX_SIDE } from './social-crop.ts';
 
 // Every channel takes JPEG (a test checks the contract), so the fix always makes one.
 export const FIX_TYPE = 'image/jpeg';
@@ -69,32 +70,42 @@ export interface FixStep {
   height: number;
 }
 
-// The encodes to try, in order, for a width x height image (turned the way its EXIF says): the full size at
+// The encodes to try, in order, for a width x height image (turned the way its EXIF says): at most CROP_MAX_SIDE on
+// the long side, as a crop is saved (a full-size 24 MP phone photo is over the canvas iOS Safari draws), at
 // FIX_QUALITY, then at FIX_LOW_QUALITY, then smaller by FIX_SCALE at a time, down to the narrowest the channels take
 // (and never a long side under FIX_MIN_SIDE), with that floor itself as the last step. Without a byte limit the first
-// encode always fits, so it is the only one. An image already narrower than the floor is never made smaller; one with
-// no size (never a decoded image) has no step.
+// encode always fits, so it is the only one. The cap never makes an image narrower than the channels' minimum, and an
+// image already at or under the floor is never made smaller; one with no size (never a decoded image) has no step.
 export function fixSteps(width: number, height: number, target: Pick<FixTarget, 'maxBytes' | 'minWidth'>): FixStep[] {
   if (!(width > 0 && height > 0)) return [];
-  const steps: FixStep[] = [{ quality: FIX_QUALITY, width, height }];
+  const long = Math.max(width, height);
+  const floor = Math.min(1, Math.max(target.minWidth / width, FIX_MIN_SIDE / long));
+  const start = Math.min(1, Math.max(CROP_MAX_SIDE / long, floor));
+  const at = (scale: number, quality: number): FixStep => ({ quality, width: Math.max(Math.round(width * scale), Math.min(width, target.minWidth)), height: Math.max(1, Math.round(height * scale)) });
+  const steps: FixStep[] = [at(start, FIX_QUALITY)];
   if (target.maxBytes === null) return steps;
-  steps.push({ quality: FIX_LOW_QUALITY, width, height });
-  const floor = Math.max(target.minWidth / width, FIX_MIN_SIDE / Math.max(width, height));
-  if (floor >= 1) return steps;
-  let scale = FIX_SCALE;
-  for (; scale > floor; scale *= FIX_SCALE) steps.push({ quality: FIX_LOW_QUALITY, width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) });
-  steps.push({ quality: FIX_LOW_QUALITY, width: Math.max(target.minWidth, Math.round(width * floor)), height: Math.max(1, Math.round(height * floor)) });
+  steps.push(at(start, FIX_LOW_QUALITY));
+  for (let scale = start * FIX_SCALE; scale > floor; scale *= FIX_SCALE) steps.push(at(scale, FIX_LOW_QUALITY));
+  if (floor < start) steps.push(at(floor, FIX_LOW_QUALITY));
   return steps;
 }
 
-// Runs the encodes in order and returns the first whose bytes fit the limit, or null when none does (the original is
-// kept). encode is the browser's canvas in the app and a fake in the tests.
-export async function firstFit<T extends { size: number }>(steps: readonly FixStep[], maxBytes: number | null, encode: (step: FixStep) => Promise<T>): Promise<{ step: FixStep; result: T } | null> {
+// The outcome of the encodes: the first whose bytes fit, too_large when every one that worked was over the limit,
+// failed when none worked (the browser could not draw or encode the image at any size).
+export type FitResult<T> = { step: FixStep; result: T } | 'too_large' | 'failed';
+
+// Runs the encodes in order and returns the first whose bytes fit the limit. An encode that fails (null, or an error
+// such as a canvas over the browser's limit) moves on to the next, smaller step. encode is the browser's canvas in the
+// app and a fake in the tests.
+export async function firstFit<T extends { size: number }>(steps: readonly FixStep[], maxBytes: number | null, encode: (step: FixStep) => Promise<T | null>): Promise<FitResult<T>> {
+  let encoded = false;
   for (const step of steps) {
-    const result = await encode(step);
+    const result = await encode(step).catch(() => null);
+    if (!result) continue;
+    encoded = true;
     if (maxBytes === null || result.size <= maxBytes) return { step, result };
   }
-  return null;
+  return encoded ? 'too_large' : 'failed';
 }
 
 const ascii = (bytes: Uint8Array, at: number, text: string) => [...text].every((c, i) => bytes[at + i] === c.charCodeAt(0));

@@ -55,7 +55,7 @@ describe('fixing a refused image in the media editor (#1500)', () => {
   it('offers "Sửa cho kênh" under a PNG Instagram and Zalo OA refuse, to a JPEG of at most 1 MB', () => {
     const html = render([png, jpeg]);
     expect(html.match(/Sửa cho kênh/g)).toHaveLength(1);
-    expect(html).toContain('Instagram, Zalo OA chưa nhận ảnh này');
+    expect(html).toContain('Instagram, Zalo OA không nhận ảnh này');
     expect(html).toContain('không quá 1.0 MB');
     expect(html).toContain('ảnh gốc vẫn còn trong thư viện');
     expect(fixDisabled(html)).toBe(false);

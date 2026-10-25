@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CAPABILITIES, IMAGE_RULES, PROVIDERS } from '@crove/mod-social/contract';
+import { CROP_MAX_SIDE } from '../src/lib/social-crop.ts';
 import { FIX_LOW_QUALITY, FIX_MIN_SIDE, FIX_QUALITY, FIX_TYPE, firstFit, fixName, fixSteps, imageFix, isAnimated, refusals, replaceMedia, takesFixType, type FixStep } from '../src/lib/social-image-fix.ts';
 
 const MB = 1024 * 1024;
@@ -48,24 +49,35 @@ describe('fixing an image a channel refuses (#1500)', () => {
     expect(FIX_TYPE).toBe('image/jpeg');
   });
 
-  it('encodes once at full size when no channel has a byte limit', () => {
-    expect(fixSteps(4032, 3024, { maxBytes: null, minWidth: 320 })).toEqual([{ quality: FIX_QUALITY, width: 4032, height: 3024 }]);
+  it('encodes once when no channel has a byte limit, at most CROP_MAX_SIDE on the long side', () => {
+    expect(fixSteps(1080, 1080, { maxBytes: null, minWidth: 320 })).toEqual([{ quality: FIX_QUALITY, width: 1080, height: 1080 }]);
+    expect(fixSteps(4032, 3024, { maxBytes: null, minWidth: 320 })).toEqual([{ quality: FIX_QUALITY, width: CROP_MAX_SIDE, height: 1620 }]);
   });
 
   it('steps the quality down, then the size, never below the minimum width', () => {
     const steps = fixSteps(4032, 3024, { maxBytes: MB, minWidth: 320 });
-    expect(steps.slice(0, 2)).toEqual([
-      { quality: FIX_QUALITY, width: 4032, height: 3024 },
-      { quality: FIX_LOW_QUALITY, width: 4032, height: 3024 },
+    expect(steps.slice(0, 3)).toEqual([
+      { quality: FIX_QUALITY, width: 2160, height: 1620 },
+      { quality: FIX_LOW_QUALITY, width: 2160, height: 1620 },
+      { quality: FIX_LOW_QUALITY, width: 1728, height: 1296 },
     ]);
-    expect(steps[2]).toEqual({ quality: FIX_LOW_QUALITY, width: 3226, height: 2419 });
     for (let i = 1; i < steps.length; i++) expect(steps[i]!.width).toBeLessThanOrEqual(steps[i - 1]!.width);
     expect(steps.every((s) => s.width >= 320)).toBe(true);
     expect(steps.at(-1)).toEqual({ quality: FIX_LOW_QUALITY, width: 320, height: 240 });
-    // A tall image: its width is held to the channel's minimum, not its long side.
+    // A tall image: its width is held to the channel's minimum, not its long side, even over the cap.
     const tall = fixSteps(1200, 3600, { maxBytes: MB, minWidth: 1080 });
-    expect(tall.every((s) => s.width >= 1080)).toBe(true);
-    expect(tall.at(-1)).toMatchObject({ width: 1080, height: 3240 });
+    expect(tall).toEqual([
+      { quality: FIX_QUALITY, width: 1080, height: 3240 },
+      { quality: FIX_LOW_QUALITY, width: 1080, height: 3240 },
+    ]);
+  });
+
+  it('never draws a 24 MP phone photo at full size, which iOS Safari cannot', () => {
+    // 5712 x 4284 (iPhone 48 MP sensor, 24 MP output) is over the ~16.7 MP canvas iOS Safari allows.
+    const steps = fixSteps(5712, 4284, { maxBytes: MB, minWidth: 320 });
+    expect(steps[0]).toEqual({ quality: FIX_QUALITY, width: 2160, height: 1620 });
+    expect(steps.every((s) => Math.max(s.width, s.height) <= CROP_MAX_SIDE && s.width * s.height < 16_777_216)).toBe(true);
+    expect(steps.at(-1)).toEqual({ quality: FIX_LOW_QUALITY, width: 320, height: 240 });
   });
 
   it('never makes the long side shorter than FIX_MIN_SIDE, nor an image already at its floor smaller', () => {
@@ -81,7 +93,7 @@ describe('fixing an image a channel refuses (#1500)', () => {
     expect(fixSteps(Number.NaN, 100, { maxBytes: null, minWidth: 0 })).toEqual([]);
   });
 
-  it('keeps the first encode that fits, or none', async () => {
+  it('keeps the first encode that fits, or says every one was too large', async () => {
     const steps = fixSteps(4032, 3024, { maxBytes: MB, minWidth: 320 });
     // A fake encoder whose bytes follow the area and the quality.
     const tried: FixStep[] = [];
@@ -90,11 +102,24 @@ describe('fixing an image a channel refuses (#1500)', () => {
       return { size: Math.round(s.width * s.height * s.quality * 0.3) };
     };
     const fit = await firstFit(steps, MB, encode);
-    expect(fit?.result.size).toBeLessThanOrEqual(MB);
-    expect(fit?.step).toBe(tried.at(-1));
+    expect(fit).toMatchObject({ step: tried.at(-1) });
+    expect(typeof fit === 'object' && fit.result.size).toBeLessThanOrEqual(MB);
     expect(tried.length).toBeLessThan(steps.length);
-    expect(await firstFit(steps, 10, encode)).toBeNull();
+    expect(await firstFit(steps, 10, encode)).toBe('too_large');
     expect(await firstFit(steps.slice(0, 1), null, encode)).toMatchObject({ step: steps[0] });
+  });
+
+  it('moves on to the next step when an encode fails, and says failed when none works', async () => {
+    const steps = fixSteps(4032, 3024, { maxBytes: MB, minWidth: 320 });
+    // The browser cannot draw the large sizes: null for the first, an error for the second.
+    const encode = async (s: FixStep) => {
+      if (s === steps[0]) return null;
+      if (s === steps[1]) throw new Error('canvas');
+      return { size: 1000 };
+    };
+    expect(await firstFit(steps, MB, encode)).toEqual({ step: steps[2], result: { size: 1000 } });
+    expect(await firstFit(steps, MB, async () => null)).toBe('failed');
+    expect(await firstFit([], MB, encode)).toBe('failed');
   });
 
   it('tells an animated WebP or PNG from a still one by its first bytes', () => {

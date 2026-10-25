@@ -14,20 +14,20 @@ import { FIX_TYPE, firstFit, fixName, fixSteps, imageFix, isAnimated, type FixSt
 const fileBytes = (fileId: string) => queryClient.fetchQuery({ queryKey: ['social-media', fileId], queryFn: () => fetchFile(fileId), staleTime: Infinity });
 
 // One encode: the image drawn at the step's size on white (a transparent PNG has no background in a JPEG) and saved
-// as a JPEG at the step's quality. The canvas writes no EXIF, so the camera and location details are dropped.
-async function encode(canvas: HTMLCanvasElement, bitmap: ImageBitmap, step: FixStep): Promise<Blob> {
+// as a JPEG at the step's quality, on a canvas of its own. The canvas writes no EXIF, so the camera and location
+// details are dropped. null when the browser cannot draw or encode it (a canvas over its size limit, for one).
+async function encode(bitmap: ImageBitmap, step: FixStep): Promise<Blob | null> {
+  const canvas = document.createElement('canvas');
   canvas.width = step.width;
   canvas.height = step.height;
   const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('canvas');
+  if (!ctx) return null;
   // Pixels of the saved image, not a colour of the interface.
   ctx.fillStyle = 'white';
   ctx.fillRect(0, 0, step.width, step.height);
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bitmap, 0, 0, step.width, step.height);
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, FIX_TYPE, step.quality));
-  if (!blob) throw new Error('canvas');
-  return blob;
+  return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, FIX_TYPE, step.quality));
 }
 
 export function ImageFix({ item, providers, disabled, onFixed }: { item: MediaItem; providers: readonly string[]; disabled: boolean; onFixed: (next: MediaItem) => void }) {
@@ -47,9 +47,9 @@ export function ImageFix({ item, providers, disabled, onFixed }: { item: MediaIt
         throw new Error(t('cannotRead'));
       });
       try {
-        const canvas = document.createElement('canvas');
-        const fit = await firstFit(fixSteps(bitmap.width, bitmap.height, target), target.maxBytes, (step) => encode(canvas, bitmap, step));
-        if (!fit) throw new Error(t('noFit', { max: sizeLabel(target.maxBytes ?? 0) }));
+        const fit = await firstFit(fixSteps(bitmap.width, bitmap.height, target), target.maxBytes, (step) => encode(bitmap, step));
+        if (fit === 'failed') throw new Error(t('failed'));
+        if (fit === 'too_large') throw new Error(t('noFit', { max: sizeLabel(target.maxBytes ?? 0) }));
         const file = new File([fit.result], fixName(item.filename), { type: FIX_TYPE });
         const stored = (await uploadFiles([file], 'social')).files[0];
         if (!stored) throw new Error(t('failed'));
