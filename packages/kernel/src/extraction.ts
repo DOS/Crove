@@ -47,13 +47,15 @@ export interface LatestExtraction {
   error: string | null;
   // A pending run that is not stale.
   inFlight: boolean;
+  // The legal entity whose document the file is (#1280); a re-extraction stays in it.
+  legalEntityId: string;
 }
 
 // The file's newest extraction run, or undefined if it has not been read yet.
 export async function latestExtraction(ctx: QueryContext, fileId: string): Promise<LatestExtraction | undefined> {
   const row = await ctx.trx
     .selectFrom('crove_kernel.extraction')
-    .select(['id', 'version', 'status', 'error', pendingSince.as('fresh')])
+    .select(['id', 'version', 'status', 'error', 'legal_entity_id', pendingSince.as('fresh')])
     .where('org_id', '=', ctx.orgId)
     .where('file_id', '=', fileId)
     .orderBy('version', 'desc')
@@ -62,7 +64,7 @@ export async function latestExtraction(ctx: QueryContext, fileId: string): Promi
   if (!row) return undefined;
   const inFlight = row.status === 'pending' && row.fresh;
   const error = row.status === 'pending' && !inFlight ? STALE_RUN_ERROR : row.error;
-  return { id: row.id, version: row.version, status: row.status, error, inFlight };
+  return { id: row.id, version: row.version, status: row.status, error, inFlight, legalEntityId: row.legal_entity_id };
 }
 
 // Of the given proposals, those whose recorded purchase document was voided by reversing its journal entry (#165).
@@ -99,6 +101,28 @@ export async function refuseWhileReextracting(ctx: CommandContext, fileId: strin
   if (pending) {
     throw new DomainError('EXTRACTION_PENDING', 409, 'Chứng từ đang được đọc lại; hãy chờ kết quả rồi thử lại', { version: pending.version });
   }
+}
+
+// The legal entity a file's first reading belongs to (#1280): the entity of the member who uploaded it when that member
+// is limited to legal entities (its only one; with several, the org's default entity when it is one of them, else the
+// first), so the member sees what it uploaded; otherwise (owners, admins, members with an org-wide role, an emailed
+// file) null, which the fill trigger turns into the org's default entity. The same rule as enter_context's le_scope.
+export async function uploaderEntity(ctx: CommandContext, uploader: string | null): Promise<string | null> {
+  if (!uploader) return null;
+  const { rows } = await sql<{ entity: string | null }>`
+    SELECT CASE
+      WHEN m.role IN ('owner', 'admin') THEN NULL
+      WHEN EXISTS (SELECT 1 FROM crove_kernel.role_assignment a WHERE a.org_id = m.org_id AND a.user_id = m.user_id AND a.legal_entity_id IS NULL) THEN NULL
+      ELSE (
+        SELECT a.legal_entity_id FROM crove_kernel.role_assignment a
+        LEFT JOIN crove_kernel.legal_entity e ON e.org_id = a.org_id AND e.id = a.legal_entity_id
+        WHERE a.org_id = m.org_id AND a.user_id = m.user_id
+        ORDER BY e.is_default DESC NULLS LAST, a.legal_entity_id
+        LIMIT 1)
+    END AS entity
+    FROM crove_kernel.tenant_member m
+    WHERE m.org_id = ${ctx.orgId} AND m.user_id = ${uploader}`.execute(ctx.trx);
+  return rows[0]?.entity ?? null;
 }
 
 async function lockFile(ctx: CommandContext, fileId: string) {
@@ -173,6 +197,7 @@ export const reextractFile = defineCommand({
       .values({
         org_id: ctx.orgId,
         file_id: input.fileId,
+        legal_entity_id: latest.legalEntityId,
         method: null,
         status: 'pending',
         result: null,
@@ -239,9 +264,10 @@ export const recordExtraction = defineCommand({
         .limit(1)
         .executeTakeFirst();
       if (existing) return { extractionId: existing.id, proposalId: null, duplicate: true };
+      const entity = await uploaderEntity(ctx, file.created_by);
       run = await ctx.trx
         .insertInto('crove_kernel.extraction')
-        .values({ org_id: ctx.orgId, file_id: input.fileId, ...outcome })
+        .values({ org_id: ctx.orgId, file_id: input.fileId, ...(entity ? { legal_entity_id: entity } : {}), ...outcome })
         .returning(['id', 'version', 'requested_by'])
         .executeTakeFirstOrThrow();
       current = undefined;

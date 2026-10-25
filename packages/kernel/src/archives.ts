@@ -9,6 +9,7 @@ import { ACCEPTED_UPLOAD_TYPES, ARCHIVE_ENTRY_REASONS, MAX_BATCH_ENTRIES, MAX_BA
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
 import { archiveEntries, fileStatuses, type StoredArchiveEntry } from './file-status.ts';
+import { uploaderEntity } from './extraction.ts';
 import { ingestFileRow, isArchiveType, zIngestFile } from './files.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -108,10 +109,12 @@ export const recordArchive = defineCommand({
       const filed = await ingestFileRow(ctx, { ...entry.file, source: email ? 'email' : 'upload' }, archive.created_by);
       entries[index] = { name: entry.name, outcome: filed.duplicate ? 'duplicate' : 'stored', reason: null, fileId: filed.fileId };
     }
+    const entity = await uploaderEntity(ctx, archive.created_by);
     const run = await ctx.trx
       .insertInto('crove_kernel.extraction')
       .values({
         org_id: ctx.orgId,
+        ...(entity ? { legal_entity_id: entity } : {}),
         file_id: archive.id,
         method: 'archive',
         status: input.status,
