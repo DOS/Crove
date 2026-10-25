@@ -22,6 +22,7 @@ import { sql } from 'kysely';
 import { JOURNAL_VOUCHER_SOURCE, journalVoucherTitle, journalVoucherTotal } from './domain/journal-voucher.ts';
 import { closingDescription, closingLines, type AccountBalance, type ClosingLine } from './domain/year-closing.ts';
 import { postJournalVoucher } from './journal-voucher.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { databaseToday, dateLabel, periodLockState } from './period-lock.ts';
 
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -29,14 +30,15 @@ const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const yearEnd = (year: number) => `${year}-12-31`;
 
 // Each class 5 to 9 account's debits and credits through the year's last day, every entry and reversal included, so
-// what an earlier closing moved is already netted out.
-async function resultBalances(ctx: QueryContext, year: number): Promise<AccountBalance[]> {
+// what an earlier closing moved is already netted out. Of one legal entity (#1280: each entity closes its own books).
+async function resultBalances(ctx: QueryContext, year: number, legalEntityId: string): Promise<AccountBalance[]> {
   const rows = await ctx.trx
     .selectFrom('crove_finance.journal_line as l')
     .innerJoin('crove_finance.journal_entry as j', (join) => join.onRef('j.org_id', '=', 'l.org_id').onRef('j.id', '=', 'l.entry_id'))
     .select('l.account_code')
     .select((eb) => [eb.fn.sum<string>('l.debit').as('debit'), eb.fn.sum<string>('l.credit').as('credit')])
     .where('l.org_id', '=', ctx.orgId)
+    .where('l.legal_entity_id', '=', legalEntityId)
     .where('j.entry_date', '<=', yearEnd(year))
     .where((eb) => eb.or(['5', '6', '7', '8', '9'].map((c) => eb('l.account_code', 'like', `${c}%`))))
     .groupBy('l.account_code')
@@ -45,8 +47,8 @@ async function resultBalances(ctx: QueryContext, year: number): Promise<AccountB
 }
 
 // Whether the year has a closing in force: a closing voucher whose entry has no reversal dated in the year. A reversal
-// dated later leaves the year's balances closed, so the year stays closed.
-export async function isClosed(ctx: QueryContext, year: number): Promise<boolean> {
+// dated later leaves the year's balances closed, so the year stays closed. Of one legal entity (#1280).
+export async function isClosed(ctx: QueryContext, year: number, legalEntityId: string): Promise<boolean> {
   const row = await ctx.trx
     .selectFrom('crove_finance.journal_voucher as v')
     .innerJoin('crove_finance.journal_entry as e', (join) =>
@@ -54,6 +56,7 @@ export async function isClosed(ctx: QueryContext, year: number): Promise<boolean
     )
     .select('v.id')
     .where('v.org_id', '=', ctx.orgId)
+    .where('v.legal_entity_id', '=', legalEntityId)
     .where('v.closing_year', '=', year)
     .where(({ not, exists, selectFrom }) =>
       not(exists(selectFrom('crove_finance.journal_entry as r').select(sql<number>`1`.as('one')).whereRef('r.org_id', '=', 'e.org_id').whereRef('r.reverses_entry_id', '=', 'e.id').where('r.entry_date', '<=', yearEnd(year)))),
@@ -65,8 +68,8 @@ export async function isClosed(ctx: QueryContext, year: number): Promise<boolean
 // The closing of the year as a proposal payload, from the ledger as it reads now. Refuses a year with nothing to
 // close, and lines a voucher cannot hold (more than its line limit, or a fraction of a dong). Unlike a voucher entered
 // by hand, an inactive sub-account is not refused: its balance must be closed too.
-async function buildClosing(ctx: QueryContext, year: number): Promise<YearClosingProposal> {
-  const lines = closingLines(await resultBalances(ctx, year));
+async function buildClosing(ctx: QueryContext, year: number, legalEntityId: string): Promise<YearClosingProposal> {
+  const lines = closingLines(await resultBalances(ctx, year, legalEntityId));
   if (lines.length === 0) throw new DomainError('CLOSING_EMPTY', 422, `Năm ${year} không có số dư doanh thu, chi phí để kết chuyển`);
   const built = {
     date: yearEnd(year),
@@ -74,6 +77,7 @@ async function buildClosing(ctx: QueryContext, year: number): Promise<YearClosin
     lines: lines.map((l) => ({ account: l.account, party: null, debit: l.debit, credit: l.credit })),
     total: journalVoucherTotal(lines),
     closingYear: year,
+    legalEntityId,
   };
   const parsed = zYearClosingProposal.safeParse(built);
   if (!parsed.success) {
@@ -84,18 +88,18 @@ async function buildClosing(ctx: QueryContext, year: number): Promise<YearClosin
   return parsed.data;
 }
 
-// The year has ended by the database clock, is not locked and has no closing in force.
-async function assertClosable(ctx: QueryContext, year: number) {
+// The year has ended by the database clock, is not locked and has no closing in force, in the legal entity.
+async function assertClosable(ctx: QueryContext, year: number, legalEntityId: string) {
   const today = await databaseToday(ctx.trx);
   if (yearEnd(year) >= today) throw new DomainError('YEAR_NOT_ENDED', 422, `Năm ${year} chưa kết thúc nên chưa kết chuyển được`);
-  const { lockedThrough } = await periodLockState(ctx);
+  const { lockedThrough } = await periodLockState(ctx, legalEntityId);
   if (lockedThrough && yearEnd(year) <= lockedThrough) {
     throw new DomainError('PERIOD_LOCKED', 409, `Sổ đã khóa đến hết ngày ${dateLabel(lockedThrough)}, nên không ghi được bút toán ngày ${dateLabel(yearEnd(year))}`, {
       lockedThrough,
       entryDate: yearEnd(year),
     });
   }
-  if (await isClosed(ctx, year)) throw new DomainError('YEAR_CLOSED', 409, `Năm ${year} đã kết chuyển; muốn làm lại thì đảo bút toán kết chuyển với ngày ${dateLabel(yearEnd(year))} trước`);
+  if (await isClosed(ctx, year, legalEntityId)) throw new DomainError('YEAR_CLOSED', 409, `Năm ${year} đã kết chuyển; muốn làm lại thì đảo bút toán kết chuyển với ngày ${dateLabel(yearEnd(year))} trước`);
 }
 
 const sameLines = (a: readonly ClosingLine[], b: YearClosingProposal['lines']) =>
@@ -106,9 +110,11 @@ export const prepareYearClosing = defineCommand({
   input: zYearClosingRequest,
   risk: 'R1',
   access: REQUESTERS,
-  handler: async (ctx, { year }) => {
-    await assertClosable(ctx, year);
-    const payload = await buildClosing(ctx, year);
+  handler: async (ctx, { year, legalEntityId: requested }) => {
+    // The legal entity whose year is closed (#1280), stored with the proposal so the approver posts it there.
+    const legalEntityId = await resolveLegalEntity(ctx, requested);
+    await assertClosable(ctx, year, legalEntityId);
+    const payload = await buildClosing(ctx, year, legalEntityId);
     return { kind: JOURNAL_VOUCHER_KIND, command: YEAR_CLOSING_COMMAND, title: journalVoucherTitle(payload), payload };
   },
 });
@@ -122,18 +128,19 @@ export const recordYearClosing = defineCommand({
   handler: async (ctx, { payload }) => {
     if (!ctx.proposalId) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
     const year = payload.closingYear;
-    // One closing of the org at a time: a second approval waits here, then finds the year closed.
-    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_finance.year_closing:${ctx.orgId}`}, 0))`.execute(ctx.trx);
-    await assertClosable(ctx, year);
+    const legalEntityId = await resolveLegalEntity(ctx, payload.legalEntityId);
+    // One closing of the org and entity at a time: a second approval waits here, then finds the year closed.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_finance.year_closing:${ctx.orgId}:${legalEntityId}`}, 0))`.execute(ctx.trx);
+    await assertClosable(ctx, year, legalEntityId);
     if (payload.date !== yearEnd(year) || payload.description !== closingDescription(year)) {
       throw new DomainError('CLOSING_STALE', 409, `Đề xuất kết chuyển năm ${year} không còn khớp sổ; hãy lập lại`);
     }
     // The lines are built again from the ledger as it reads now; a posting dated in the year since the proposal was
     // made changes them, and the proposal is refused rather than posting a closing that leaves balances behind.
-    const current = closingLines(await resultBalances(ctx, year));
+    const current = closingLines(await resultBalances(ctx, year, legalEntityId));
     if (!sameLines(current, payload.lines) || journalVoucherTotal(payload.lines) !== payload.total) {
       throw new DomainError('CLOSING_STALE', 409, `Sổ năm ${year} đã thay đổi từ khi lập đề xuất kết chuyển; hãy từ chối đề xuất này và lập lại`);
     }
-    return postJournalVoucher(ctx, payload, year);
+    return postJournalVoucher(ctx, { ...payload, legalEntityId }, year);
   },
 });

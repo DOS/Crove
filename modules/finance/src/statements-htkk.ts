@@ -6,17 +6,20 @@
 // trial balance list. They are warnings: the accountant decides, the file is still written.
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { STATEMENTS_HTKK_WARNINGS, vietnamToday, zStatementsHtkkYear, type StatementsHtkkCheck, type StatementsHtkkWarning } from '@crove/kernel-contract';
+import { STATEMENTS_HTKK_WARNINGS, vietnamToday, zId, zStatementsHtkkYear, type StatementsHtkkCheck, type StatementsHtkkWarning } from '@crove/kernel-contract';
 import { DomainError, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { buildStatementsXml, f01Values, type BctcInput, type BctcTaxpayer } from './domain/statements-htkk-xml.ts';
 import { HtkkAmountError } from './domain/vat-01gtgt-xml.ts';
 import { yearTrialBalance } from './ledger-reports.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { financialStatements } from './statements.ts';
 import { isClosed } from './year-closing.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
-export const zStatementsYearInput = z.object({ year: zStatementsHtkkYear });
+// The statements of one legal entity (#1280): legalEntityId as in zLegalEntityChoice. The taxpayer block is still the
+// org's (its tax code, name and address).
+export const zStatementsYearInput = z.object({ year: zStatementsHtkkYear, legalEntityId: zId.optional() });
 export { STATEMENTS_HTKK_WARNINGS, type StatementsHtkkWarning };
 
 export interface StatementsFiling {
@@ -27,13 +30,13 @@ export interface StatementsFiling {
   uncovered: string[];
 }
 
-async function loadFiling(ctx: QueryContext, year: number): Promise<Omit<StatementsFiling, 'taxpayer'>> {
-  const current = await financialStatements(ctx, String(year));
-  const previous = await financialStatements(ctx, String(year - 1));
-  const tb = await yearTrialBalance(ctx, year);
+async function loadFiling(ctx: QueryContext, year: number, legalEntityId: string): Promise<Omit<StatementsFiling, 'taxpayer'>> {
+  const current = await financialStatements(ctx, String(year), legalEntityId);
+  const previous = await financialStatements(ctx, String(year - 1), legalEntityId);
+  const tb = await yearTrialBalance(ctx, year, legalEntityId);
   const { uncovered } = f01Values(tb);
   const warnings: StatementsHtkkWarning[] = [];
-  if (!(await isClosed(ctx, year))) warnings.push('YEAR_NOT_CLOSED');
+  if (!(await isClosed(ctx, year, legalEntityId))) warnings.push('YEAR_NOT_CLOSED');
   if (!current.b01.balanced || !previous.b01.balanced) warnings.push('B01_UNBALANCED');
   if ([current, previous].some((s) => s.b01.unmapped.length > 0 || s.b02.unmapped.length > 0)) warnings.push('UNMAPPED_BALANCES');
   if (uncovered.length > 0) warnings.push('F01_UNCOVERED');
@@ -49,8 +52,8 @@ export const statementsHtkkCheckQuery = defineQuery({
   name: 'finance.statements.htkk_check',
   input: zStatementsYearInput,
   access: ALL,
-  handler: async (ctx, { year }): Promise<StatementsHtkkCheck> => {
-    const { warnings, uncovered } = await loadFiling(ctx, year);
+  handler: async (ctx, { year, legalEntityId }): Promise<StatementsHtkkCheck> => {
+    const { warnings, uncovered } = await loadFiling(ctx, year, await resolveLegalEntity(ctx, legalEntityId));
     return { year, warnings, uncovered };
   },
 });
@@ -60,10 +63,11 @@ export const statementsHtkkQuery = defineQuery({
   name: 'finance.statements.htkk',
   input: zStatementsYearInput,
   access: ALL,
-  handler: async (ctx, { year }): Promise<StatementsFiling> => {
+  handler: async (ctx, { year, legalEntityId }): Promise<StatementsFiling> => {
+    const entity = await resolveLegalEntity(ctx, legalEntityId);
     const org = await ctx.trx.selectFrom('crove_kernel.tenant').select(['tax_code', 'name', 'address']).where('org_id', '=', ctx.orgId).executeTakeFirst();
     if (!org?.tax_code) throw new DomainError('TAX_CODE_REQUIRED', 422, 'Tổ chức chưa có mã số thuế. Nhập mã số thuế trong Cài đặt rồi xuất lại.');
-    return { ...(await loadFiling(ctx, year)), taxpayer: { taxCode: org.tax_code, name: org.name, address: org.address } };
+    return { ...(await loadFiling(ctx, year, entity)), taxpayer: { taxCode: org.tax_code, name: org.name, address: org.address } };
   },
 });
 

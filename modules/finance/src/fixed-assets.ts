@@ -20,6 +20,7 @@ import {
   zDepreciationRequest,
   zFixedAssetCreate,
   zFixedAssetEnd,
+  zId,
   type DepreciationProposal,
   type FixedAsset,
 } from '@crove/kernel-contract';
@@ -31,6 +32,7 @@ import { lastMonth, monthAmount, monthsBetween, remainingValue } from './domain/
 import { journalVoucherTitle, journalVoucherTotal } from './domain/journal-voucher.ts';
 import { canonical } from './domain/money.ts';
 import { postJournalVoucher } from './journal-voucher.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { dateLabel, periodLockState } from './period-lock.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -60,8 +62,9 @@ interface AssetRow {
   source_line_no: number | null;
 }
 
-function assetRows(ctx: QueryContext) {
-  return ctx.trx
+// The register of one legal entity (#1280), or every entity the caller sees when none is named (a lookup by id).
+function assetRows(ctx: QueryContext, legalEntityId?: string) {
+  const rows = ctx.trx
     .selectFrom('crove_finance.fixed_asset')
     .select([
       'id',
@@ -79,6 +82,7 @@ function assetRows(ctx: QueryContext) {
       'source_line_no',
     ])
     .where('org_id', '=', ctx.orgId);
+  return legalEntityId === undefined ? rows : rows.where('legal_entity_id', '=', legalEntityId);
 }
 
 const scheduled = (a: AssetRow) => ({ cost: a.cost, startMonth: a.start_month, months: a.months, endedMonth: a.ended_month });
@@ -103,14 +107,17 @@ export const createFixedAsset = defineCommand({
       throw new DomainError('ASSET_ACCOUNTS', 422, 'Tài khoản chi phí phải là 154, tài khoản loại 6 hoặc loại 8');
     }
     await assertUsableAccounts(ctx, [input.assetAccount, input.expenseAccount, ...(accumulated ? [accumulated] : [])]);
+    // The register of one legal entity (#1280); an entry from a purchase line must be of the document's entity.
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     const source = input.source ?? null;
     if (source) {
-      // A live purchase of the org whose line was posted to this asset account, for this cost.
+      // A live purchase of the org and entity whose line was posted to this asset account, for this cost.
       const line = await ctx.trx
         .selectFrom('crove_finance.purchase_line as l')
         .innerJoin('crove_finance.purchase_document as d', (join) => join.onRef('d.org_id', '=', 'l.org_id').onRef('d.id', '=', 'l.document_id'))
         .select(['l.amount', 'l.debit_account', 'd.direction'])
         .where('l.org_id', '=', ctx.orgId)
+        .where('d.legal_entity_id', '=', legalEntityId)
         .where('l.document_id', '=', source.documentId)
         .where('l.line_no', '=', source.lineNo)
         .where(({ not, exists, selectFrom }) =>
@@ -126,6 +133,7 @@ export const createFixedAsset = defineCommand({
       .insertInto('crove_finance.fixed_asset')
       .values({
         org_id: ctx.orgId,
+        legal_entity_id: legalEntityId,
         kind: input.kind,
         name: input.name,
         cost: input.cost,
@@ -144,7 +152,7 @@ export const createFixedAsset = defineCommand({
         if (error?.code === '23505') throw new DomainError('ASSET_EXISTS', 409, 'Dòng hóa đơn này đã có trong sổ tài sản');
         throw error;
       });
-    ctx.audit({ asset_id: row.id, kind: input.kind, cost: input.cost, months: input.months });
+    ctx.audit({ asset_id: row.id, kind: input.kind, cost: input.cost, months: input.months, legal_entity_id: legalEntityId });
     await ctx.activity('finance.fixed_asset', row.id, 'fixed_asset.created', `Ghi sổ tài sản: ${input.name}`);
     return { assetId: row.id };
   },
@@ -189,16 +197,19 @@ export const endFixedAsset = defineCommand({
 
 export const fixedAssetsQuery = defineQuery({
   name: 'finance.fixed_assets.list',
-  input: z.object({}),
+  input: z.object({ legalEntityId: zId.optional() }),
   access: ALL,
-  handler: async (ctx): Promise<FixedAsset[]> => {
-    const assets = await assetRows(ctx).orderBy('start_month').orderBy('created_at').orderBy('id').limit(5000).execute();
+  handler: async (ctx, input): Promise<FixedAsset[]> => {
+    // The register of one legal entity (#1280).
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    const assets = await assetRows(ctx, legalEntityId).orderBy('start_month').orderBy('created_at').orderBy('id').limit(5000).execute();
     if (assets.length === 0) return [];
     const posted = await ctx.trx
       .selectFrom('crove_finance.depreciation_line')
       .select(['asset_id'])
       .select((eb) => [eb.fn.sum<string>('amount').as('posted'), eb.fn.countAll<string>().as('months'), sql<string>`pg_catalog.to_char(pg_catalog.max(month), 'YYYY-MM-DD')`.as('last')])
       .where('org_id', '=', ctx.orgId)
+      .where('legal_entity_id', '=', legalEntityId)
       .groupBy('asset_id')
       .execute();
     const byAsset = new Map(posted.map((p) => [p.asset_id, p]));
@@ -227,24 +238,25 @@ export const fixedAssetsQuery = defineQuery({
   },
 });
 
-// The month's voucher from the register as it reads now. Refuses a locked month, a month with nothing to post, and
-// a month already posted.
-async function buildDepreciation(ctx: QueryContext, month: string): Promise<DepreciationProposal> {
+// The month's voucher from the register of one legal entity (#1280) as it reads now. Refuses a locked month, a month
+// with nothing to post, and a month already posted.
+async function buildDepreciation(ctx: QueryContext, month: string, legalEntityId: string): Promise<DepreciationProposal> {
   const date = lastDay(month);
-  const { lockedThrough } = await periodLockState(ctx);
+  const { lockedThrough } = await periodLockState(ctx, legalEntityId);
   if (lockedThrough && date <= lockedThrough) {
     throw new DomainError('PERIOD_LOCKED', 409, `Sổ đã khóa đến hết ngày ${dateLabel(lockedThrough)}, nên không ghi được bút toán ngày ${dateLabel(date)}`, {
       lockedThrough,
       entryDate: date,
     });
   }
-  const assets = await assetRows(ctx).where('start_month', '<=', firstDay(month)).orderBy('id').execute();
+  const assets = await assetRows(ctx, legalEntityId).where('start_month', '<=', firstDay(month)).orderBy('id').execute();
   const due = assets.map((a) => ({ asset: a, amount: monthAmount(scheduled(a), firstDay(month)) })).filter((d) => !money(d.amount).isZero());
   if (due.length === 0) throw new DomainError('DEPRECIATION_EMPTY', 422, `Tháng ${monthLabel(month)} không có tài sản nào cần khấu hao hay phân bổ`);
   const done = await ctx.trx
     .selectFrom('crove_finance.depreciation_line')
     .select('asset_id')
     .where('org_id', '=', ctx.orgId)
+    .where('legal_entity_id', '=', legalEntityId)
     .where('month', '=', firstDay(month))
     .execute();
   const posted = new Set(done.map((d) => d.asset_id));
@@ -270,6 +282,7 @@ async function buildDepreciation(ctx: QueryContext, month: string): Promise<Depr
     total: journalVoucherTotal(lines),
     depreciationMonth: month,
     assets: open.map((d) => ({ assetId: d.asset.id, amount: d.amount })),
+    legalEntityId,
   };
   const parsed = zDepreciationProposal.safeParse(built);
   if (!parsed.success) {
@@ -285,8 +298,9 @@ export const prepareDepreciation = defineCommand({
   input: zDepreciationRequest,
   risk: 'R1',
   access: REQUESTERS,
-  handler: async (ctx, { month }) => {
-    const payload = await buildDepreciation(ctx, month);
+  handler: async (ctx, { month, legalEntityId: requested }) => {
+    // The legal entity whose register is depreciated (#1280), stored with the proposal so the approver posts it there.
+    const payload = await buildDepreciation(ctx, month, await resolveLegalEntity(ctx, requested));
     return { kind: JOURNAL_VOUCHER_KIND, command: DEPRECIATION_COMMAND, title: journalVoucherTitle(payload), payload };
   },
 });
@@ -307,14 +321,15 @@ export const recordDepreciation = defineCommand({
   handler: async (ctx, { payload }) => {
     if (!ctx.proposalId) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
     const month = payload.depreciationMonth;
-    // One depreciation of the org at a time: a second approval waits here, then finds the month posted.
-    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_finance.depreciation:${ctx.orgId}`}, 0))`.execute(ctx.trx);
+    const legalEntityId = await resolveLegalEntity(ctx, payload.legalEntityId);
+    // One depreciation of the org and entity at a time: a second approval waits here, then finds the month posted.
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove_finance.depreciation:${ctx.orgId}:${legalEntityId}`}, 0))`.execute(ctx.trx);
     // The month is built again from the register; an entry added, changed or ended since makes the proposal stale.
-    const current = await buildDepreciation(ctx, month);
+    const current = await buildDepreciation(ctx, month, legalEntityId);
     if (!sameProposal(current, payload)) {
       throw new DomainError('DEPRECIATION_STALE', 409, `Sổ tài sản đã thay đổi từ khi lập đề xuất khấu hao tháng ${monthLabel(month)}; hãy từ chối đề xuất này và lập lại`);
     }
-    const result = await postJournalVoucher(ctx, payload);
+    const result = await postJournalVoucher(ctx, { ...payload, legalEntityId });
     await ctx.trx
       .insertInto('crove_finance.depreciation_line')
       .values(payload.assets.map((a) => ({ org_id: ctx.orgId, asset_id: a.assetId, month: firstDay(month), amount: a.amount, entry_id: result.journalEntryId })))
@@ -327,11 +342,11 @@ export const recordDepreciation = defineCommand({
 // of entries) is the record of who took the register out, and a failure stops the download.
 export const exportFixedAssets = defineCommand({
   name: 'finance.fixed_asset.export',
-  input: z.object({ assets: z.number().int().min(0) }),
+  input: z.object({ assets: z.number().int().min(0), legalEntityId: zId.optional() }),
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
-    ctx.audit({ assets: input.assets });
+    ctx.audit({ assets: input.assets, ...(input.legalEntityId ? { legal_entity_id: input.legalEntityId } : {}) });
     return { ok: true as const };
   },
 });

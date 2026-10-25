@@ -32,6 +32,7 @@ import { Decimal } from '@crove/l10n-vn';
 import { matchLine, type MatchCandidate } from './domain/bank-match.ts';
 import { VOUCHER_SOURCE } from './domain/cash-voucher.ts';
 import { ledgerPeriod } from './domain/ledger-reports.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
@@ -56,6 +57,8 @@ export interface StoredBankLine {
   reference: string | null;
   ambiguous: boolean;
   importId: string;
+  // The legal entity whose books the line is in (#1280); a voucher made from it is in the same entity.
+  legalEntityId: string;
 }
 
 // The lines, as the org has them, in no particular order; ids of other orgs or of no line are left out.
@@ -63,7 +66,7 @@ async function findBankLines(ctx: QueryContext, ids: readonly string[]): Promise
   if (ids.length === 0) return [];
   const rows = await ctx.trx
     .selectFrom('crove_finance.bank_line')
-    .select(['id', 'bank_account', 'value_date', 'description', 'amount', 'running_balance', 'bank_ref', 'ambiguous', 'import_id'])
+    .select(['id', 'bank_account', 'value_date', 'description', 'amount', 'running_balance', 'bank_ref', 'ambiguous', 'import_id', 'legal_entity_id'])
     .where('org_id', '=', ctx.orgId)
     .where('id', 'in', ids)
     .execute();
@@ -77,6 +80,7 @@ async function findBankLines(ctx: QueryContext, ids: readonly string[]): Promise
     reference: row.bank_ref,
     ambiguous: row.ambiguous,
     importId: row.import_id,
+    legalEntityId: row.legal_entity_id,
   }));
 }
 
@@ -138,15 +142,15 @@ export const bankVoucherType = (amount: string): VoucherType => (new Decimal(amo
 
 // Refuses a voucher that does not follow its line, or a line already settled; with pendingToo, a line already
 // proposed as well (asking for a voucher; posting the proposal that names it is the point). The line is read as the
-// org has it.
+// org has it; with legalEntityId, only a line of that legal entity (#1280) is found.
 export async function checkBankLineVoucher(
   ctx: QueryContext,
   bankLineId: string,
   voucher: { type: VoucherType; date: string; cashAccount: string; total: string },
-  options: { pendingToo: boolean },
+  options: { pendingToo: boolean; legalEntityId?: string | undefined },
 ): Promise<StoredBankLine> {
   const line = await findBankLine(ctx, bankLineId);
-  if (!line) throw new DomainError('BANK_LINE_NOT_FOUND', 422, 'Không tìm thấy dòng sao kê; hãy tải lại trang ngân hàng');
+  if (!line || (options.legalEntityId !== undefined && line.legalEntityId !== options.legalEntityId)) throw new DomainError('BANK_LINE_NOT_FOUND', 422, 'Không tìm thấy dòng sao kê; hãy tải lại trang ngân hàng');
   const problems: string[] = [];
   if (voucher.type !== bankVoucherType(line.amount)) problems.push('TYPE');
   if (voucher.cashAccount !== line.bankAccount) problems.push('ACCOUNT');
@@ -176,7 +180,8 @@ const readParties = (ctx: QueryContext): Promise<PartyRow[]> =>
   ctx.trx.selectFrom('crove_kernel.party').select(['id', 'name', 'tax_code']).where('org_id', '=', ctx.orgId).execute();
 
 // The voucher a line makes and the party it is probably about, given the org's parties. withBalances: false leaves out
-// the open-balance reason (its query is the costliest, and only finance.bank.line_voucher shows it).
+// the open-balance reason (its query is the costliest, and only finance.bank.line_voucher shows it). Invoices and
+// balances are read in the line's legal entity (#1280).
 async function lineVoucherFor(
   ctx: QueryContext,
   line: StoredBankLine,
@@ -193,6 +198,7 @@ async function lineVoucherFor(
     .leftJoin('crove_finance.purchase_document_void as x', (join) => join.onRef('x.org_id', '=', 'd.org_id').onRef('x.document_id', '=', 'd.id'))
     .select(['d.party_id', 'd.invoice_series', 'd.invoice_number', 'd.total'])
     .where('d.org_id', '=', ctx.orgId)
+    .where('d.legal_entity_id', '=', line.legalEntityId)
     .where('d.direction', '=', inflow ? 'sale' : 'purchase')
     .where('d.total', '=', amount.toFixed())
     .where('d.invoice_date', '<=', line.date)
@@ -210,6 +216,7 @@ async function lineVoucherFor(
         .innerJoin('crove_finance.journal_entry as e', (join) => join.onRef('e.org_id', '=', 'l.org_id').onRef('e.id', '=', 'l.entry_id'))
         .select(['l.party_id', side.as('balance')])
         .where('l.org_id', '=', ctx.orgId)
+        .where('l.legal_entity_id', '=', line.legalEntityId)
         .where('l.party_id', 'is not', null)
         .where('l.account_code', 'like', inflow ? '131%' : '331%')
         .where('e.entry_date', '<=', line.date)
@@ -270,14 +277,17 @@ export const bankLineVoucher = defineQuery({
 // them at once, each through kernel.proposal.request as a user would. At most BANK_SUGGESTIONS_MAX lines are read.
 export const bankSuggestions = defineQuery({
   name: 'finance.bank.suggestions',
-  input: z.object({ bankAccount: zAccountCode, period: zLedgerPeriod }),
+  input: z.object({ bankAccount: zAccountCode, period: zLedgerPeriod, legalEntityId: zId.optional() }),
   access: REQUESTERS,
   handler: async (ctx, input): Promise<BankLineVoucher[]> => {
     const period = ledgerPeriod(input.period);
+    // The lines of one legal entity (#1280).
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     const ids = await ctx.trx
       .selectFrom('crove_finance.bank_line')
       .select('id')
       .where('org_id', '=', ctx.orgId)
+      .where('legal_entity_id', '=', legalEntityId)
       .where('bank_account', '=', input.bankAccount)
       .where('value_date', '>=', period.from)
       .where('value_date', '<=', period.to)
@@ -304,12 +314,14 @@ export const bankSuggestions = defineQuery({
 });
 
 // The open lines of each bank account (no voucher, no pending voucher proposal): how many, how many flagged as
-// ambiguous at import, and the oldest one's date. The Inbox lists them as statement lines to resolve (stage 2b).
+// ambiguous at import, and the oldest one's date. The Inbox lists them as statement lines to resolve (stage 2b). The
+// lines of one legal entity (#1280).
 export const bankOpenLines = defineQuery({
   name: 'finance.bank.open_lines',
-  input: z.object({}),
+  input: z.object({ legalEntityId: zId.optional() }),
   access: ALL,
-  handler: async (ctx): Promise<BankOpenLines> => {
+  handler: async (ctx, input): Promise<BankOpenLines> => {
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     const rows = await ctx.trx
       .selectFrom('crove_finance.bank_line as l')
       .select([
@@ -319,6 +331,7 @@ export const bankOpenLines = defineQuery({
         sql<string>`pg_catalog.to_char(pg_catalog.min(l.value_date), 'YYYY-MM-DD')`.as('oldest'),
       ])
       .where('l.org_id', '=', ctx.orgId)
+      .where('l.legal_entity_id', '=', legalEntityId)
       .where(({ not, exists, selectFrom }) =>
         not(
           exists(

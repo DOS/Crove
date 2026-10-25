@@ -1112,6 +1112,8 @@ export const contract = {
           revision: z.number().int().positive(),
           lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).min(1).max(1000).optional(),
           exchangeRate: zExchangeRate.optional(),
+          // The legal entity whose books a purchase or sale invoice is recorded in (#1280); approval then posts it there.
+          legalEntityId: zId.optional(),
           idempotencyKey: zId,
         }),
       )
@@ -1185,7 +1187,7 @@ export const contract = {
     duplicateHints: oc.input(z.object({})).output(z.array(zDuplicateHint)),
   },
   documents: {
-    list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zPurchaseDocument)),
+    list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), legalEntityId: zId.optional() })).output(z.array(zPurchaseDocument)),
     // Every role (issue #878): the exports a recorded document went out in, for its history.
     exports: oc.input(z.object({ documentId: zId })).output(z.array(zDocumentExport)),
   },
@@ -1198,10 +1200,10 @@ export const contract = {
   // Every role (#673): parties by name or tax code, documents by series, number or party, journal entries by
   // description or amount. Vietnamese marks and case are ignored, and each word matches the start of a word.
   search: {
-    query: oc.input(z.object({ q: z.string().trim().min(2).max(100) })).output(zSearchResult),
+    query: oc.input(z.object({ q: z.string().trim().min(2).max(100), legalEntityId: zId.optional() })).output(zSearchResult),
   },
   journal: {
-    list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional() })).output(z.array(zJournalEntry)),
+    list: oc.input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), legalEntityId: zId.optional() })).output(z.array(zJournalEntry)),
     // One entry, for example the one a reversal proposal names.
     get: oc.input(z.object({ id: zId })).output(zJournalEntry),
   },
@@ -1210,7 +1212,9 @@ export const contract = {
   // (command finance.voucher.record) and posted when its proposal is approved.
   vouchers: {
     list: oc
-      .input(z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), type: zVoucherType.optional(), before: zVoucherCursor.optional() }))
+      .input(
+        z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), type: zVoucherType.optional(), before: zVoucherCursor.optional(), legalEntityId: zId.optional() }),
+      )
       .output(zCashVoucherPage),
   },
   // Opening balances from Excel (#320), owners and admins. preview checks a trial balance read from the template and
@@ -1249,9 +1253,11 @@ export const contract = {
   // digits are left once normalized, RULE_EXISTS (409) for the same keyword and vendor. remove: owners and admins (R1),
   // any rule, learned or added; RULE_NOT_FOUND (404). Approving an invoice writes the rules learned from it.
   accountRules: {
-    list: oc.output(z.array(zCategorizationRule)),
+    list: oc.input(zLegalEntityChoice.optional()).output(z.array(zCategorizationRule)),
     create: oc
-      .input(z.object({ keyword: z.string().trim().min(1).max(500), accountCode: zAccountCode, vendorPartyId: zId.nullable().optional() }))
+      .input(
+        z.object({ keyword: z.string().trim().min(1).max(500), accountCode: zAccountCode, vendorPartyId: zId.nullable().optional(), legalEntityId: zId.optional() }),
+      )
       .output(z.object({ id: zId })),
     remove: oc.input(z.object({ id: zId })).output(z.object({ id: zId })),
   },
@@ -1261,7 +1267,7 @@ export const contract = {
   // not_deductible, or cleared. NOT_FLAGGED (409) when the invoice does not need the check; VOUCHER_NOT_BANK (422)
   // when the voucher is not a báo Nợ of the org.
   vat: {
-    period: oc.input(z.object({ period: zVatPeriod })).output(zVatReport),
+    period: oc.input(z.object({ period: zVatPeriod, legalEntityId: zId.optional() })).output(zVatReport),
     markPayment: oc
       .input(
         z.object({
@@ -1282,8 +1288,8 @@ export const contract = {
   // uploaded with purpose 'import' as a list of the period; the worker reads it (poll reconcile until no list is
   // pending). remove (owners, admins, members; R1): takes a list out of its period; it is kept.
   portalList: {
-    reconcile: oc.input(z.object({ period: zVatPeriod })).output(zPortalReconciliation),
-    import: oc.input(z.object({ period: zVatPeriod, fileId: zId })).output(z.object({ listId: zId })),
+    reconcile: oc.input(z.object({ period: zVatPeriod, legalEntityId: zId.optional() })).output(zPortalReconciliation),
+    import: oc.input(z.object({ period: zVatPeriod, fileId: zId, legalEntityId: zId.optional() })).output(z.object({ listId: zId })),
     remove: oc.input(z.object({ listId: zId })).output(z.object({ listId: zId })),
   },
   // The assisted sync from the tax portal (issue #325, ADR-0036), off unless the deployment sets TAX_PORTAL_SYNC=true
@@ -1303,7 +1309,7 @@ export const contract = {
   missingInvoices: {
     status: oc.output(zMissingInvoiceStatus),
     request: oc
-      .input(z.object({ period: zVatPeriod }))
+      .input(z.object({ period: zVatPeriod, legalEntityId: zId.optional() }))
       .output(z.object({ messageId: zId, status: z.enum(['queued', 'suppressed']), count: z.number().int().positive() })),
     setReminder: oc
       .input(z.object({ day: z.number().int().min(1).max(MISSING_INVOICE_REMINDER_DAY_MAX).nullable() }))
@@ -1312,14 +1318,14 @@ export const contract = {
   // Ledger reports of a month, quarter or year (issue #321): the trial balance and the receivables and payables per
   // party, and the general ledger of one account. The Excel workbook is GET /api/export/ledger.xlsx?period=<period>.
   ledger: {
-    period: oc.input(z.object({ period: zLedgerPeriod })).output(zLedgerReport),
-    account: oc.input(z.object({ period: zLedgerPeriod, accountCode: zAccountCode })).output(zAccountLedger),
+    period: oc.input(z.object({ period: zLedgerPeriod, legalEntityId: zId.optional() })).output(zLedgerReport),
+    account: oc.input(z.object({ period: zLedgerPeriod, accountCode: zAccountCode, legalEntityId: zId.optional() })).output(zAccountLedger),
     // Issue #154: the DRAFT B01-DNN at the period's last day and B02-DNN for the period. The Excel workbook is
     // GET /api/export/statements.xlsx?period=<period>.
-    statements: oc.input(z.object({ period: zLedgerPeriod })).output(zFinancialStatements),
+    statements: oc.input(z.object({ period: zLedgerPeriod, legalEntityId: zId.optional() })).output(zFinancialStatements),
     // Issue #920: what the HTKK XML of a year's statements (GET /api/export/statements-htkk.xml?year=<year>) would get
     // wrong or leave out, for the screen to say before the download.
-    statementsHtkkCheck: oc.input(z.object({ year: zStatementsHtkkYear })).output(zStatementsHtkkCheck),
+    statementsHtkkCheck: oc.input(z.object({ year: zStatementsHtkkYear, legalEntityId: zId.optional() })).output(zStatementsHtkkCheck),
   },
   // Period lock (#329): every member reads it; owners and admins lock the next month once it has ended; only owners
   // unlock the last locked month (R3: fresh MFA), with a reason. A retry with the same idempotencyKey returns the first
@@ -1340,7 +1346,7 @@ export const contract = {
   // early. A month's depreciation is asked for with inbox.request (finance.depreciation.record). The Excel workbook is
   // GET /api/export/fixed-assets.xlsx. A retry with the same idempotencyKey returns the first result.
   fixedAssets: {
-    list: oc.output(z.array(zFixedAsset)),
+    list: oc.input(zLegalEntityChoice.optional()).output(z.array(zFixedAsset)),
     create: oc.input(zFixedAssetCreate.extend({ idempotencyKey: zId })).output(z.object({ assetId: zId })),
     end: oc.input(zFixedAssetEnd.extend({ idempotencyKey: zId })).output(z.object({ assetId: zId })),
   },
@@ -1358,16 +1364,16 @@ export const contract = {
   bank: {
     preview: oc.input(zBankStatementImport).output(zBankImportPreview),
     import: oc.input(zBankStatementImport.extend({ idempotencyKey: zId })).output(zBankImportResult),
-    lines: oc.input(z.object({ bankAccount: zAccountCode, period: zLedgerPeriod })).output(zBankLines),
+    lines: oc.input(z.object({ bankAccount: zAccountCode, period: zLedgerPeriod, legalEntityId: zId.optional() })).output(zBankLines),
     // The báo Có or báo Nợ a line makes and the party it is probably about (#326, stage 2a), for the voucher form; the
     // voucher itself is asked for with inbox.request (finance.voucher.record, bankLineId set). Owners, admins and
     // members, who may ask for vouchers.
     lineVoucher: oc.input(z.object({ bankLineId: zId })).output(zBankLineVoucher),
     // The open lines of an account and period whose party is named by its tax code or an invoice of the amount, with
     // the voucher each makes (stage 2b); the SPA asks for them one by one with inbox.request. Owners, admins and members.
-    suggestions: oc.input(z.object({ bankAccount: zAccountCode, period: zLedgerPeriod })).output(z.array(zBankLineVoucher)),
+    suggestions: oc.input(z.object({ bankAccount: zAccountCode, period: zLedgerPeriod, legalEntityId: zId.optional() })).output(z.array(zBankLineVoucher)),
     // The open lines per bank account, for the Inbox (stage 2b). Every member.
-    openLines: oc.output(zBankOpenLines),
+    openLines: oc.input(zLegalEntityChoice.optional()).output(zBankOpenLines),
   },
   // The org chart (ADR-0029): positions shared by members and AI agents. Every member reads it; changing it is the
   // owner's (R3: role keys, holders and reporting lines decide what agents may do). A retry with the same
