@@ -22,7 +22,7 @@ export interface TeamMemberRow {
   // Posts they wrote with a channel published in the period (each post once).
   published: number;
   // Posts assigned to them with a due date in the period, and those of them overdue: the due date has passed and no
-  // channel went out by it (a cancelled post is neither).
+  // channel went out by it (a cancelled post is neither, nor an archived one that never went out).
   assigned: number;
   overdue: number;
   // Review decisions they made in the period (one per post and decision, whatever the channels), and the median time

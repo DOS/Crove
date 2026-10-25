@@ -224,11 +224,13 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     const id = (await o.bookings())[0]?.id as string;
     await o.confirm(id);
     const [booking] = await o.bookings();
+    // The visitor's and the host's mail of one step share a transaction, so the same created_at, and ids made in the
+    // same millisecond (uuid_v7) in random order: within a step, the visitor's is listed first.
     const mails = async () =>
       (
         await admin((c) =>
           c.query<{ source: string; to_address: string; template_key: string; status: string; subject: string; payload: Record<string, unknown> }>(
-            'SELECT source, to_address, template_key, status, subject, payload FROM crove_kernel.mail_message WHERE org_id = $1 AND source_id = $2 ORDER BY created_at, id',
+            "SELECT source, to_address, template_key, status, subject, payload FROM crove_kernel.mail_message WHERE org_id = $1 AND source_id = $2 ORDER BY created_at, payload->>'recipient' = 'host', id",
             [o.orgId, id],
           ),
         )
