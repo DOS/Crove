@@ -19,6 +19,7 @@ import {
   ORG_HEADER,
   SOCIAL_IMAGE_TYPES,
   XLSX_CONTENT_TYPE,
+  accountParents,
   type FixedAsset,
   type MisaGoodsCode,
   type UploadPurpose,
@@ -1399,7 +1400,10 @@ export function createHttpApp(deps: HttpDeps) {
           throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
         }
         const codes = await runtime.query<MisaGoodsCode[]>('finance.misa_goods_codes.list', {}, { actor: actorOf(user), orgId });
-        const perVoucher = vouchers.map((v) => goodsPurchaseRows(v, codes)).filter((rows) => rows.length > 0);
+        // The chart's parent chain, along which a sub-account without codes takes its parent's.
+        const chart = await runtime.query<Array<{ code: string; parentCode: string | null }>>('finance.accounts.list', {}, { actor: actorOf(user), orgId });
+        const parents = accountParents(chart);
+        const perVoucher = vouchers.map((v) => goodsPurchaseRows(v, codes, parents)).filter((rows) => rows.length > 0);
         const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_GOODS, perVoucher.flat(), config.BRAND_NAME);
         await runtime.execute(
           'finance.journal.export',

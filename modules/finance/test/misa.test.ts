@@ -21,7 +21,23 @@ import {
   type PurchaseVoucher,
   type SalesVoucher,
 } from '../src/misa.ts';
-import { MISA_GOODS_DEFAULTS, isStockAccount, resolveMisaGoodsCodes } from '@crove/kernel-contract';
+import { MISA_GOODS_DEFAULTS, accountParents, isStockAccount, resolveMisaGoodsCodes } from '@crove/kernel-contract';
+
+// An org chart: the TT133 stock accounts and some sub-accounts, as finance.accounts.list gives them. 152.A and 152.AB
+// are siblings under 152; 15212 was created under 152 before 1521 existed, so it is not 1521's child either.
+const PARENTS = accountParents([
+  { code: '152', parentCode: null },
+  { code: '153', parentCode: null },
+  { code: '156', parentCode: null },
+  { code: '1521', parentCode: '152' },
+  { code: '15212', parentCode: '152' },
+  { code: '15215', parentCode: '1521' },
+  { code: '152.A', parentCode: '152' },
+  { code: '152.AB', parentCode: '152' },
+  { code: '1561', parentCode: '156' },
+  { code: '15611', parentCode: '1561' },
+  { code: '156.HCM', parentCode: '156' },
+]);
 
 // Golden header rows, verbatim from the MISA SME templates (sources in docs/integrations/misa-sme-import.md).
 // A change here is a change of the import file: check it against the partner's template first.
@@ -476,12 +492,37 @@ describe('MISA item and warehouse codes for stock accounts (#1398)', () => {
       { accountCode: '156', itemCode: 'HANGHOA', warehouseCode: 'KHO01' },
       { accountCode: '1561', itemCode: 'HH-HN', warehouseCode: null },
     ];
-    expect(resolveMisaGoodsCodes('1561', saved)).toEqual({ itemCode: 'HH-HN', warehouseCode: null, from: '1561' });
-    expect(resolveMisaGoodsCodes('15611', saved)).toEqual({ itemCode: 'HH-HN', warehouseCode: null, from: '1561' });
-    expect(resolveMisaGoodsCodes('156.HCM', saved)).toEqual({ itemCode: 'HANGHOA', warehouseCode: 'KHO01', from: '156' });
-    expect(resolveMisaGoodsCodes('1521', saved)).toEqual({ ...MISA_GOODS_DEFAULTS['152'], from: null });
-    expect(resolveMisaGoodsCodes('153', [])).toEqual({ itemCode: 'CCDC', warehouseCode: 'KCCDC', from: null });
-    expect(resolveMisaGoodsCodes('6422', saved)).toBeNull();
+    expect(resolveMisaGoodsCodes('1561', saved, PARENTS)).toEqual({ itemCode: 'HH-HN', warehouseCode: null, from: '1561' });
+    expect(resolveMisaGoodsCodes('15611', saved, PARENTS)).toEqual({ itemCode: 'HH-HN', warehouseCode: null, from: '1561' });
+    expect(resolveMisaGoodsCodes('156.HCM', saved, PARENTS)).toEqual({ itemCode: 'HANGHOA', warehouseCode: 'KHO01', from: '156' });
+    expect(resolveMisaGoodsCodes('1521', saved, PARENTS)).toEqual({ ...MISA_GOODS_DEFAULTS['152'], from: null });
+    expect(resolveMisaGoodsCodes('153', [], PARENTS)).toEqual({ itemCode: 'CCDC', warehouseCode: 'KCCDC', from: null });
+    expect(resolveMisaGoodsCodes('6422', saved, PARENTS)).toBeNull();
+  });
+
+  it('follows the chart parent chain, not the code text: a code that merely starts with another is not its child', () => {
+    const saved = [
+      { accountCode: '152', itemCode: 'NVL-CHUNG', warehouseCode: 'KNVL' },
+      { accountCode: '152.A', itemCode: 'NVL-A', warehouseCode: 'KHO-A' },
+      { accountCode: '1521', itemCode: 'NVL-1521', warehouseCode: null },
+    ];
+    // 152.AB is a sibling of 152.A under 152: it takes 152's codes.
+    expect(resolveMisaGoodsCodes('152.AB', saved, PARENTS)).toEqual({ itemCode: 'NVL-CHUNG', warehouseCode: 'KNVL', from: '152' });
+    expect(resolveMisaGoodsCodes('152.A', saved, PARENTS)).toEqual({ itemCode: 'NVL-A', warehouseCode: 'KHO-A', from: '152.A' });
+    // 15212 sits under 152, not under 1521; 15215 does sit under 1521.
+    expect(resolveMisaGoodsCodes('15212', saved, PARENTS)).toEqual({ itemCode: 'NVL-CHUNG', warehouseCode: 'KNVL', from: '152' });
+    expect(resolveMisaGoodsCodes('15215', saved, PARENTS)).toEqual({ itemCode: 'NVL-1521', warehouseCode: null, from: '1521' });
+    // Without 152's codes, 152.AB and 15212 fall back to the defaults.
+    const noRoot = saved.filter((s) => s.accountCode !== '152');
+    expect(resolveMisaGoodsCodes('152.AB', noRoot, PARENTS)).toEqual({ ...MISA_GOODS_DEFAULTS['152'], from: null });
+    expect(resolveMisaGoodsCodes('15212', noRoot, PARENTS)).toEqual({ ...MISA_GOODS_DEFAULTS['152'], from: null });
+    // An account the chart does not know inherits from nobody, and a parent loop ends.
+    expect(resolveMisaGoodsCodes('152.ZZ', saved, PARENTS)).toEqual({ ...MISA_GOODS_DEFAULTS['152'], from: null });
+    const loop = accountParents([
+      { code: '1529', parentCode: '1528' },
+      { code: '1528', parentCode: '1529' },
+    ]);
+    expect(resolveMisaGoodsCodes('1529', [], loop)).toEqual({ ...MISA_GOODS_DEFAULTS['152'], from: null });
   });
 });
 
@@ -498,7 +539,7 @@ describe('goods purchases: one invoice split between the goods and the services 
     });
 
   it('puts the stock lines in the goods voucher and the rest in the services voucher, VAT adding up to the invoice', () => {
-    const goods = goodsPurchaseRows(mixed(), []);
+    const goods = goodsPurchaseRows(mixed(), [], PARENTS);
     const services = servicePurchaseRows(mixed());
     expect(goods.map((r) => [r.line.lineNo, r.voucherNo, r.goods.itemCode, r.goods.warehouseCode, r.vatAmount, r.vatAccount])).toEqual([
       [1, 'CRMH6172839A4B5C', 'HH', 'KHH', '800000', '1331'],
@@ -510,14 +551,14 @@ describe('goods purchases: one invoice split between the goods and the services 
 
   it('gives a goods-only invoice no services rows and a services-only invoice no goods rows', () => {
     expect(servicePurchaseRows(purchase({ vatAmount: '80000', lines: [line(1, '1000000', '8%', '1521')] }))).toEqual([]);
-    expect(goodsPurchaseRows(purchase(), [])).toEqual([]);
+    expect(goodsPurchaseRows(purchase(), [], PARENTS)).toEqual([]);
   });
 
   it('writes the goods voucher with the org codes, warehouse and stock account, exact amounts and inert text', async () => {
     const saved = [{ accountCode: '156', itemCode: 'THEP01', warehouseCode: 'KHO.HN' }];
     const voucher = mixed();
     voucher.vendor = { name: '=HYPERLINK("http://evil.example","x")', taxCode: '0101234564', address: '1 Láng Hạ' };
-    const sheet = await readBack(MISA_SME_PURCHASE_GOODS, goodsPurchaseRows(voucher, saved));
+    const sheet = await readBack(MISA_SME_PURCHASE_GOODS, goodsPurchaseRows(voucher, saved, PARENTS));
     expect(sheet.rowCount).toBe(3);
     const first = rowValues(sheet, 2, GOODS_HEADERS);
     expect(first).toMatchObject({
@@ -560,7 +601,7 @@ describe('goods purchases: one invoice split between the goods and the services 
 
   it('leaves Kho blank for an account whose codes have no warehouse, and keeps large amounts exact', async () => {
     const voucher = purchase({ vatAmount: '0', lines: [{ ...line(1, '1234567890123456.7891', '0%', '1521'), quantity: '3', unitPrice: '411522630041152.26303333' }] });
-    const sheet = await readBack(MISA_SME_PURCHASE_GOODS, goodsPurchaseRows(voucher, [{ accountCode: '152', itemCode: 'NVL01', warehouseCode: null }]));
+    const sheet = await readBack(MISA_SME_PURCHASE_GOODS, goodsPurchaseRows(voucher, [{ accountCode: '152', itemCode: 'NVL01', warehouseCode: null }], PARENTS));
     const at = (h: string) => sheet.getRow(2).getCell(GOODS_HEADERS.indexOf(h) + 1).value;
     expect(at('Mã hàng (*)')).toBe('NVL01');
     expect(at('Kho')).toBeNull();

@@ -26,7 +26,7 @@ import {
   sum,
   type DecimalValue,
 } from '@crove/l10n-vn';
-import { isStockAccount, resolveMisaGoodsCodes, type MisaGoodsCode, type ResolvedMisaGoodsCodes } from '@crove/kernel-contract';
+import { isStockAccount, resolveMisaGoodsCodes, type AccountParents, type MisaGoodsCode, type ResolvedMisaGoodsCodes } from '@crove/kernel-contract';
 import { canonical, roundToCurrency } from './domain/money.ts';
 import { decimalCell, textCell } from './export.ts';
 
@@ -257,15 +257,16 @@ export function servicePurchaseRows(voucher: PurchaseVoucher): PurchaseRow[] {
  * The goods template's rows of a purchase voucher (#1398): its lines on a stock account (152, 153, 156 or a
  * sub-account of one), under the goods voucher number, each with the org's MISA item and warehouse codes for its
  * account (`saved`, from finance.misa_goods_codes.list; resolveMisaGoodsCodes picks the account's own, its nearest
- * parent's, or the default).
+ * ancestor's along the chart's parent chain `parents`, or the default).
  */
 export function goodsPurchaseRows(
   voucher: PurchaseVoucher,
   saved: ReadonlyArray<Pick<MisaGoodsCode, 'accountCode' | 'itemCode' | 'warehouseCode'>>,
+  parents: AccountParents,
 ): GoodsPurchaseRow[] {
   const voucherNo = misaVoucherNo(GOODS_PURCHASE_VOUCHER_PREFIX, voucher.entryId);
   return purchaseRows(voucher).flatMap((row) => {
-    const goods = resolveMisaGoodsCodes(row.line.debitAccount, saved);
+    const goods = resolveMisaGoodsCodes(row.line.debitAccount, saved, parents);
     return goods ? [{ ...row, voucherNo, goods }] : [];
   });
 }

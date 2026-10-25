@@ -24,7 +24,7 @@ import {
   servicePurchaseRows,
   type PurchaseVoucher,
 } from '@crove/mod-finance';
-import type { MisaGoodsCode } from '@crove/kernel-contract';
+import { accountParents, type MisaGoodsCode } from '@crove/kernel-contract';
 import { money } from '@crove/l10n-vn';
 import { createAuthenticator } from '../src/auth.ts';
 import { loadConfig } from '../src/config.ts';
@@ -131,7 +131,8 @@ suite('MISA SME goods purchases: codes per stock account and the goods template 
     const ctx = { actor: asUser(owner.userId), orgId: org.orgId };
     const vouchers = await runtime.query<PurchaseVoucher[]>('finance.vouchers.purchases', { from }, ctx);
     const codes = await runtime.query<MisaGoodsCode[]>('finance.misa_goods_codes.list', {}, ctx);
-    return { goods: vouchers.flatMap((v) => goodsPurchaseRows(v, codes)), services: vouchers.flatMap(servicePurchaseRows) };
+    const parents = accountParents(await runtime.query<Array<{ code: string; parentCode: string | null }>>('finance.accounts.list', {}, ctx));
+    return { goods: vouchers.flatMap((v) => goodsPurchaseRows(v, codes, parents)), services: vouchers.flatMap(servicePurchaseRows) };
   }
 
   // Uploads the fixture invoice under a new number, reads it into a proposal, puts each line on the given account and
@@ -334,5 +335,20 @@ suite('MISA SME goods purchases: codes per stock account and the goods template 
     await runtime.execute('finance.journal.export', { from: '2026-01-01', entries: 3, format: 'misa_sme_purchases' }, { actor: asUser(owner.userId), orgId: org.orgId });
     const history = await rpc('documents/exports', owner, { documentId });
     expect((history.body as Array<{ format: string }>).map((e) => e.format)).toEqual(['misa_sme_goods_purchases', 'misa_sme_purchases']);
+  });
+
+  it('takes a sub-account codes along the chart, never from a sibling whose code it starts with', async () => {
+    for (const code of ['156.A', '156.AB']) {
+      expect((await rpc('accounts/create', owner, { parentCode: '156', code, name: `Kho ${code}` })).status).toBe(200);
+    }
+    expect((await rpc('misaGoodsCodes/set', owner, { accountCode: '156.A', itemCode: 'HH-A', warehouseCode: 'KHO-A' })).status).toBe(200);
+    await record('5004', { 1: '156.AB', 2: '156.A', 3: '156.AB' });
+    const rows = (await fileRows('2026-01-01')).goods.filter((r) => r.voucher.invoice.number === '5004');
+    // 156.AB sits under 156, beside 156.A: it takes 156's codes (set in the first test), not 156.A's.
+    expect(rows.map((r) => [r.line.debitAccount, r.goods.itemCode, r.goods.warehouseCode, r.goods.from])).toEqual([
+      ['156.AB', 'HANGHOA', null, '156'],
+      ['156.A', 'HH-A', 'KHO-A', '156.A'],
+      ['156.AB', 'HANGHOA', null, '156'],
+    ]);
   });
 });

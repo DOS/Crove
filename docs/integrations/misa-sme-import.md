@@ -142,8 +142,8 @@ There is no address or tax code column for the vendor in this template: MISA tak
 **Item and warehouse codes.** `Mã hàng (*)` is required and must exist in the firm's MISA catalog; `Kho` names a
 warehouse of it. Each org keeps a small map from stock account to the two codes (`crove_finance.misa_goods_code`,
 Settings > "Mã hàng và mã kho cho MISA"; owners and admins edit it, every member sees it). For a line, Crove takes the
-codes of its own account, else those of its nearest parent that has codes (a sub-account's code starts with its
-parent's), else these defaults:
+codes of its own account, else those of its nearest ancestor that has codes, following the chart's parent chain (not
+the code text: `152.AB` does not take the codes of its sibling `152.A`), else these defaults:
 
 | Account | Mã hàng | Kho |
 |---|---|---|

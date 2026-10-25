@@ -53,17 +53,30 @@ export interface ResolvedMisaGoodsCodes extends MisaGoodsCodes {
   from: string | null;
 }
 
-// The codes for a stock account: its own saved codes, else those of its nearest parent with saved codes (a
-// sub-account's code starts with its parent's, so the longest saved code that prefixes it), else the default of its
-// root. null for an account that is not a stock account.
-export function resolveMisaGoodsCodes(account: string, saved: ReadonlyArray<Pick<MisaGoodsCode, 'accountCode' | 'itemCode' | 'warehouseCode'>>): ResolvedMisaGoodsCodes | null {
+// Each account's parent in the org's chart (finance.accounts.list: parentCode, null for a level-1 TT133 account).
+export type AccountParents = ReadonlyMap<string, string | null>;
+
+export function accountParents(accounts: ReadonlyArray<{ code: string; parentCode: string | null }>): AccountParents {
+  return new Map(accounts.map((a) => [a.code, a.parentCode]));
+}
+
+// The codes for a stock account: its own saved codes, else those of its nearest ancestor with saved codes, following
+// the chart's parent chain (`parents`), else the default of its root. The chain, not the code text: 152.A is not the
+// parent of 152.AB (both sit under 152), nor 1521 of 15212 when 15212 was created under 152 before 1521 existed. An
+// account missing from `parents` inherits from nobody. null for an account that is not a stock account.
+export function resolveMisaGoodsCodes(
+  account: string,
+  saved: ReadonlyArray<Pick<MisaGoodsCode, 'accountCode' | 'itemCode' | 'warehouseCode'>>,
+  parents: AccountParents,
+): ResolvedMisaGoodsCodes | null {
   const root = stockRoot(account);
   if (!root) return null;
-  let best: (typeof saved)[number] | null = null;
-  for (const row of saved) {
-    if (!account.startsWith(row.accountCode)) continue;
-    if (!best || row.accountCode.length > best.accountCode.length) best = row;
+  const byAccount = new Map(saved.map((row) => [row.accountCode, row]));
+  const seen = new Set<string>();
+  for (let code: string | null | undefined = account; code && !seen.has(code); code = parents.get(code)) {
+    seen.add(code);
+    const row = byAccount.get(code);
+    if (row) return { itemCode: row.itemCode, warehouseCode: row.warehouseCode, from: row.accountCode };
   }
-  if (best) return { itemCode: best.itemCode, warehouseCode: best.warehouseCode, from: best.accountCode };
   return { ...MISA_GOODS_DEFAULTS[root], from: null };
 }

@@ -6,7 +6,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
-import { isStockAccount, resolveMisaGoodsCodes, type MisaGoodsCode } from '@crove/kernel-contract';
+import { accountParents, isStockAccount, resolveMisaGoodsCodes, type AccountParents, type MisaGoodsCode } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -61,11 +61,12 @@ function CodesForm({ account, initial, onDone }: { account: ChartAccount; initia
   );
 }
 
-function StockAccountRow({ account, saved, canManage }: { account: ChartAccount; saved: readonly MisaGoodsCode[]; canManage: boolean }) {
+function StockAccountRow({ account, saved, parents, canManage }: { account: ChartAccount; saved: readonly MisaGoodsCode[]; parents: AccountParents; canManage: boolean }) {
   const t = useTranslations('misaGoods');
   const [editing, setEditing] = useState(false);
   const remove = useMutation(orpc.misaGoodsCodes.remove.mutationOptions({ onSuccess: refresh }));
-  const codes = resolveMisaGoodsCodes(account.code, saved);
+  // The badge names the account the codes come from: along the chart's parent chain, as the export resolves them.
+  const codes = resolveMisaGoodsCodes(account.code, saved, parents);
   if (!codes) return null;
   const own = codes.from === account.code;
   return (
@@ -117,6 +118,7 @@ export function MisaGoodsCodesCard({ canManage }: { canManage: boolean }) {
   const savedRows = saved.data ?? [];
   // Stock accounts in use, plus an inactive one that still has codes of its own (so they can be cleared).
   const stock = (accounts.data ?? []).filter((a) => isStockAccount(a.code) && (a.active || savedRows.some((s) => s.accountCode === a.code)));
+  const parents = accountParents(accounts.data ?? []);
   const error = accounts.error ?? saved.error;
   return (
     <Card className="block p-4" aria-label={t('title')}>
@@ -129,7 +131,7 @@ export function MisaGoodsCodesCard({ canManage }: { canManage: boolean }) {
       ) : (
         <ul className="mt-3 divide-y">
           {stock.map((a) => (
-            <StockAccountRow key={a.code} account={a} saved={savedRows} canManage={canManage} />
+            <StockAccountRow key={a.code} account={a} saved={savedRows} parents={parents} canManage={canManage} />
           ))}
         </ul>
       )}
