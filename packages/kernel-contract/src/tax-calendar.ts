@@ -284,8 +284,9 @@ export const zTaxProfile = z.strictObject({
 export type TaxProfile = z.infer<typeof zTaxProfile>;
 
 export const zTaxPeriod = z.string().regex(/^20\d{2}(-(0[1-9]|1[0-2]|Q[1-4]))?$/);
-// One obligation of one period (kernel.tax_obligation.done and .undo).
-export const zTaxObligationMark = z.strictObject({ obligation: z.enum(TAX_OBLIGATIONS), period: zTaxPeriod });
+// One obligation of one period for one legal entity (kernel.tax_obligation.done and .undo, #1496). Each entity files its
+// own returns; without legalEntityId the mark is the org's default entity's.
+export const zTaxObligationMark = z.strictObject({ obligation: z.enum(TAX_OBLIGATIONS), period: zTaxPeriod, legalEntityId: z.uuid().optional() });
 
 // An obligation still to do on the home screen: due in the next 30 days, or overdue and not marked done. daysLeft is
 // negative once the due date has passed.
