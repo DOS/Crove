@@ -10,6 +10,7 @@ export async function confirmUnverifiedSignature(page: Page): Promise<void> {
 // Presses Tab until the target has the focus, as a keyboard-only user reaches it (#1517); fails after max presses, so a
 // control the keyboard cannot reach is a test failure.
 export async function tabTo(page: Page, target: Locator, max = 80): Promise<void> {
+  if (await target.evaluate((el) => el === document.activeElement)) return;
   for (let i = 0; i < max; i++) {
     await page.keyboard.press('Tab');
     if (await target.evaluate((el) => el === document.activeElement)) return;

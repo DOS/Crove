@@ -72,7 +72,9 @@ test('every sidebar screen fits 360px with no horizontal scroll and passes an ax
   for (let i = 0; i < appCount; i++) {
     await apps.getByRole('link').nth(i).click();
     await page.waitForLoadState('networkidle');
-    for (const path of await sidebar.getByRole('link').evaluateAll((anchors) => anchors.map((a) => (a as HTMLAnchorElement).pathname))) links.add(path);
+    // The app's own screens only: the sidebar also links out (the support address).
+    const paths = await sidebar.getByRole('link').evaluateAll((anchors) => anchors.filter((a) => (a as HTMLAnchorElement).origin === location.origin).map((a) => (a as HTMLAnchorElement).pathname));
+    for (const path of paths) links.add(path);
   }
   expect(links.size).toBeGreaterThan(5);
 
