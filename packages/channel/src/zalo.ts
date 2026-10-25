@@ -9,7 +9,15 @@
 // Publish: an article is created asynchronously (`article/create` answers a token), then `article/verify` turns the
 // token into the article id once Zalo has processed it. Zalo fetches every image from a public URL (1 MB at most each):
 // the first is the cover, the others follow the text as image blocks (#943).
-import type { ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, Refresher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+//
+// A video article (#1429), per the OA content docs (developers.zalo.me, "Tải video lên cho nội dung bài viết" and
+// "Nội dung dạng bài viết có gắn video"): the video goes up first as a multipart POST to
+// `article/upload_video/preparevideo` (MP4 or AVI, 50 MB at most), which answers a token; `article/upload_video/verify`
+// (a GET with the token as a header) reports its status (1 ready, 3 processing, 2 locked, 4 failed, 5 deleted, 0
+// unknown) and its video_id. Only then is the article created, `type: 'video'` with the video_id and a thumbnail URL
+// (avatar), and checked with `article/verify` like any article.
+import type { ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, Refresher, PublishInput, PublishMedia, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+import { videoCoverOf } from './cover.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const ZALO_HOSTS = ['oauth.zaloapp.com', 'openapi.zalo.me'] as const;
@@ -25,6 +33,18 @@ const AUTHOR_MAX = 50;
 // media rule of @crove/mod-social. Zalo refuses an image file over 1 MB.
 const IMAGES_MAX = 10;
 const IMAGE_MAX_BYTES = 1024 * 1024;
+// A video article's file (#1429): Zalo takes MP4 and AVI up to 50 MB; Crove's uploads are MP4 or QuickTime, so MP4.
+const VIDEO_MAX_BYTES = 50 * 1024 * 1024;
+// The upload of a video of up to 50 MB; with the processing wait it stays inside callTimeoutMs.
+const VIDEO_UPLOAD_TIMEOUT_MS = 180_000;
+// How long a publish waits for Zalo to process a video; with the upload it stays inside callTimeoutMs.
+const PROCESSING_WAIT_MS = 300_000;
+// The last status check, the article and its check (15 s each at most) plus slack fit between the budget and
+// callTimeoutMs.
+const VIDEO_CALL_MARGIN_MS = 90_000;
+// Zalo's video statuses that end the wait without a video (upload_video/verify): locked, failed, deleted.
+const VIDEO_DEAD: Readonly<Record<number, string>> = { 2: 'ZALO_VIDEO_LOCKED', 4: 'ZALO_VIDEO_FAILED', 5: 'ZALO_VIDEO_DELETED' };
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export interface ZaloAppConfig {
   appId: string;
@@ -111,16 +131,25 @@ class ZaloClient {
     return { accessToken: json.access_token, refreshToken: json.refresh_token, expiresAt: new Date(now + (Number.isFinite(seconds) && seconds > 0 ? seconds : 90_000) * 1000) };
   }
 
-  async api<T>(method: 'GET' | 'POST', path: string, token: string, options: { params?: Record<string, string>; json?: unknown } = {}): Promise<T> {
+  // headers: more request headers (the video check's token); multipart: a form whose content type fetch sets with its
+  // boundary (a video upload); timeoutMs: longer than the default, for an upload.
+  async api<T>(method: 'GET' | 'POST', path: string, token: string, options: { params?: Record<string, string>; json?: unknown; headers?: Record<string, string>; multipart?: FormData; timeoutMs?: number } = {}): Promise<T> {
     const url = new URL(`${API}/${path}`);
     for (const [k, v] of Object.entries(options.params ?? {})) url.searchParams.set(k, v);
-    const headers: Record<string, string> = { access_token: token, accept: 'application/json' };
-    let body: string | undefined;
+    const headers: Record<string, string> = { ...options.headers, access_token: token, accept: 'application/json' };
+    let body: string | FormData | undefined;
     if (options.json !== undefined) {
       headers['content-type'] = 'application/json';
       body = JSON.stringify(options.json);
+    } else if (options.multipart) {
+      body = options.multipart;
     }
-    const response = await this.fetch(url.toString(), { method, headers, ...(body === undefined ? {} : { body }) });
+    const response = await this.fetch(url.toString(), {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body }),
+      ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
+    });
     const json = (await response.json().catch(() => null)) as ({ error?: unknown; message?: unknown; data?: unknown } & Record<string, unknown>) | null;
     const code = typeof json?.error === 'number' ? json.error : undefined;
     if (!response.ok || !json || (code !== undefined && code !== 0)) {
@@ -221,6 +250,14 @@ interface CreateAnswer {
 interface VerifyAnswer {
   id?: unknown;
 }
+interface VideoTokenAnswer {
+  token?: unknown;
+}
+interface VideoStatusAnswer {
+  status?: unknown;
+  video_id?: unknown;
+  status_message?: unknown;
+}
 interface SliceAnswer {
   // create_date: milliseconds since the epoch.
   medias?: { id?: unknown; title?: unknown; create_date?: unknown }[];
@@ -251,13 +288,37 @@ interface ArticleImage {
   caption: string | null;
 }
 
+// The article's description: the text's first line, cut to Zalo's 300 characters.
+function descriptionOf(input: PublishInput): string {
+  const body = input.content.body.trim();
+  return (body.split('\n').find((line) => line.trim()) ?? body).trim().slice(0, DESCRIPTION_MAX);
+}
+
+// A video article (#1429): the title, the description, the processed video and its thumbnail; Zalo's video article
+// has no author or body. Its status defaults to hidden, so it is shown at once like the other articles.
+function videoArticleOf(input: PublishInput, videoId: string, avatar: string) {
+  return {
+    type: 'video',
+    title: (input.content.title ?? '').trim().slice(0, TITLE_MAX),
+    description: descriptionOf(input),
+    video_id: videoId,
+    avatar,
+    status: 'show',
+    comment: input.settings.comments === false ? 'hide' : 'show',
+  };
+}
+
+// Nothing is visible before the article, so a failure while uploading or waiting for the video posted nothing.
+const beforeArticle = (result: PublishResult): PublishResult =>
+  result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
+
 // The article Zalo shows: the post's title and text, the text's first lines as the description, the first image as
 // the cover. The cover is shown at the top of the article, so the other images follow the text as image blocks, in
 // order, each captioned with its alt text (Zalo's caption is optional). Comments are on unless settings.comments is
 // false (#943).
 function articleOf(input: PublishInput, images: readonly ArticleImage[], defaultAuthor = 'Crove') {
   const body = input.content.body.trim();
-  const description = (body.split('\n').find((line) => line.trim()) ?? body).trim().slice(0, DESCRIPTION_MAX);
+  const description = descriptionOf(input);
   const author = typeof input.settings.author === 'string' && input.settings.author.trim() ? input.settings.author.trim().slice(0, AUTHOR_MAX) : defaultAuthor.slice(0, AUTHOR_MAX);
   const paragraphs = body.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
   if (input.content.linkUrl) paragraphs.push(input.content.linkUrl);
@@ -280,12 +341,20 @@ function articleOf(input: PublishInput, images: readonly ArticleImage[], default
 export class ZaloOaPublisher implements Publisher {
   readonly provider = 'zalo_oa' as const;
   readonly publishSafety: RetrySafety = 'reconcile_only';
+  // A video's upload and processing take minutes; within the job's stale limit (600 s).
+  readonly callTimeoutMs = 420_000;
   private readonly client: ZaloClient;
   private readonly defaultAuthor: string;
+  private readonly processingWaitMs: number;
+  private readonly pollMs: number;
+  private readonly budgetMs: number;
 
-  constructor(app: ZaloAppConfig, fetchImpl?: Fetch) {
+  constructor(app: ZaloAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number; budgetMs?: number } = {}) {
     this.client = new ZaloClient(app, fetchImpl);
     this.defaultAuthor = app.defaultAuthor ?? 'Crove';
+    this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
+    this.pollMs = timing.pollMs ?? 5000;
+    this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -293,6 +362,7 @@ export class ZaloOaPublisher implements Publisher {
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
     const media = input.content.media;
     if (media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_REQUIRED' };
+    if (media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, s.accessToken);
     // The channel checks hold these back already; a post past them is refused whole, never cut.
     if (media.length > IMAGES_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_MEDIA' };
     if (media.some((m) => m.sizeBytes > IMAGE_MAX_BYTES)) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TOO_LARGE' };
@@ -309,9 +379,81 @@ export class ZaloOaPublisher implements Publisher {
     } catch (error) {
       return zaloPublishResult(error);
     }
-    // The article exists from here; the token tells where it stands. Nothing after this point is a rejection.
-    const verified = await this.verify(s.accessToken, token);
+    return this.created(s.accessToken, token);
+  }
+
+  // The article exists once article/create answered a token; the token tells where it stands. Nothing after this point
+  // is a rejection.
+  private async created(accessToken: string, token: string): Promise<PublishResult> {
+    const verified = await this.verify(accessToken, token);
     return verified.kind === 'rejected' ? { kind: 'pending', externalRef: token, checkAfterSeconds: CHECK_AFTER_SECONDS } : verified;
+  }
+
+  // One video as a video article (#1429): the upload, a wait until Zalo has processed it, then the article. Nothing is
+  // visible before article/create, so every failure before it posted nothing and the next attempt uploads again; a
+  // video still processing when the wait ends is transient. article/create is the one visible step: its unclear answer
+  // is unknown, and the job reconciles through getslice before anything is tried again.
+  private async publishVideo(input: PublishInput, accessToken: string): Promise<PublishResult> {
+    const { media } = input.content;
+    const video: PublishMedia | undefined = media[0];
+    if (!video || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
+    // Zalo takes MP4 and AVI; a QuickTime file would be refused after its upload.
+    if (video.mime !== 'video/mp4') return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TYPE' };
+    if (video.sizeBytes > VIDEO_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TOO_LARGE' };
+    if (!(input.content.title ?? '').trim()) return { kind: 'rejected', error: 'bad_request', code: 'TITLE_REQUIRED' };
+    // The thumbnail is required: the variant's cover image (#642), fetched by Zalo from a public URL like the images.
+    const cover = videoCoverOf(input.settings);
+    if (!cover) return { kind: 'rejected', error: 'bad_request', code: 'ZALO_VIDEO_COVER_REQUIRED' };
+    if (!('fileId' in cover)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
+    const avatar = await input.mediaUrl(cover.fileId).catch(() => null);
+    if (!avatar) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    let bytes: Uint8Array;
+    try {
+      bytes = await input.readMedia(video.fileId);
+    } catch {
+      return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+    }
+    if (bytes.byteLength > VIDEO_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TOO_LARGE' };
+    // One budget for the upload and the wait, ending well before the job gives up on the call (callTimeoutMs): past it
+    // nothing is visible yet, so the call stops as transient instead of creating an article after the job recorded
+    // unknown.
+    const budgetEnd = Date.now() + this.budgetMs;
+    const processing = (): PublishResult => ({ kind: 'rejected', error: 'transient', code: 'ZALO_VIDEO_PROCESSING' });
+    let videoId: string;
+    try {
+      const form = new FormData();
+      form.set('file', new Blob([new Uint8Array(bytes)], { type: video.mime }), 'video.mp4');
+      const upload = await this.client.api<VideoTokenAnswer>('POST', 'article/upload_video/preparevideo', accessToken, { multipart: form, timeoutMs: VIDEO_UPLOAD_TIMEOUT_MS });
+      if (typeof upload?.token !== 'string' || !upload.token) return { kind: 'rejected', error: 'transient', code: 'NO_VIDEO_TOKEN' };
+      const uploadToken = upload.token;
+      const deadline = Math.min(Date.now() + this.processingWaitMs, budgetEnd);
+      for (;;) {
+        const got = await this.client.api<VideoStatusAnswer>('GET', 'article/upload_video/verify', accessToken, { headers: { token: uploadToken } });
+        const status = typeof got?.status === 'number' ? got.status : typeof got?.status === 'string' && /^\d$/.test(got.status) ? Number(got.status) : 0;
+        const id = typeof got?.video_id === 'string' || typeof got?.video_id === 'number' ? String(got.video_id) : '';
+        if (status === 1 && id) {
+          videoId = id;
+          break;
+        }
+        const dead = VIDEO_DEAD[status];
+        if (dead) return { kind: 'rejected', error: 'bad_request', code: dead, ...(typeof got?.status_message === 'string' ? { message: got.status_message.slice(0, 500) } : {}) };
+        // 3 (processing), 0 (unknown) or a status Crove does not know: asked again until the wait ends.
+        if (Date.now() >= deadline) return processing();
+        await sleep(Math.min(this.pollMs, Math.max(0, deadline - Date.now())));
+      }
+    } catch (error) {
+      return beforeArticle(zaloPublishResult(error));
+    }
+    if (Date.now() >= budgetEnd) return processing();
+    let token: string;
+    try {
+      const answer = await this.client.api<CreateAnswer>('POST', 'article/create', accessToken, { json: videoArticleOf(input, videoId, avatar) });
+      if (typeof answer?.token !== 'string' || !answer.token) return { kind: 'unknown', code: 'NO_ARTICLE_TOKEN' };
+      token = answer.token;
+    } catch (error) {
+      return zaloPublishResult(error);
+    }
+    return this.created(accessToken, token);
   }
 
   async status(input: StatusInput): Promise<PublishResult> {
@@ -324,8 +466,10 @@ export class ZaloOaPublisher implements Publisher {
     const s = zaloSecretOf(input.secret);
     const title = (input.content.title ?? '').trim().slice(0, TITLE_MAX);
     if (!s || !title) return { found: 'unknown' };
+    // Zalo lists normal and video articles apart (#1429): a post with a video is looked for among the video articles.
+    const type = input.content.media.some((m) => m.mime.startsWith('video/')) ? 'video' : 'normal';
     try {
-      const answer = await this.client.api<SliceAnswer>('GET', 'article/getslice', s.accessToken, { params: { offset: '0', limit: '20', type: 'normal' } });
+      const answer = await this.client.api<SliceAnswer>('GET', 'article/getslice', s.accessToken, { params: { offset: '0', limit: '20', type } });
       // The same title is often reused (a weekly offer), so only an article created in the call's window counts; one
       // without a creation time cannot be told apart from an older one.
       const from = input.after.getTime() - 60_000;
@@ -345,7 +489,6 @@ export class ZaloOaPublisher implements Publisher {
     }
   }
 
-  // Views and shares of an article, when Zalo reports them on its detail.
   // The OA's followers (#645), from its profile.
   async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
     const s = zaloSecretOf(input.secret);
@@ -362,6 +505,8 @@ export class ZaloOaPublisher implements Publisher {
     }
   }
 
+  // Views and shares of an article, when Zalo reports them on its detail. A video article is read through the same
+  // article/getdetail (#1429); Zalo's sample answer for one carries no counts, so it may report none.
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const s = zaloSecretOf(input.secret);
     if (!s) return { refused: 'token_expired' };
