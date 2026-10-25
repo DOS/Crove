@@ -7,8 +7,8 @@ import { EDIT_STALE_MS, editState } from '../src/edit-published.ts';
 
 describe('EDIT_READY and editRefusal (#1223)', () => {
   it('names the channels whose adapter edits, and refuses the rest as the issue lists them', () => {
-    expect([...EDIT_READY].sort()).toEqual(['discord', 'facebook_page', 'linkedin', 'linkedin_page', 'mastodon', 'sandbox', 'telegram']);
-    for (const provider of ['instagram', 'threads', 'bluesky', 'x', 'tiktok', 'zalo_oa', 'wordpress', 'youtube', 'pinterest', 'google_business']) {
+    expect([...EDIT_READY].sort()).toEqual(['discord', 'facebook_page', 'linkedin', 'linkedin_page', 'mastodon', 'sandbox', 'telegram', 'zalo_oa']);
+    for (const provider of ['instagram', 'threads', 'bluesky', 'x', 'tiktok', 'wordpress', 'youtube', 'pinterest', 'google_business']) {
       expect(editRefusal(provider, {}, [])).toBe('provider');
     }
     expect(editRefusal('myspace', {}, [])).toBe('provider');
@@ -16,12 +16,16 @@ describe('EDIT_READY and editRefusal (#1223)', () => {
     for (const provider of PROVIDERS) expect(editRefusal(provider, {}, []) === null).toBe(EDIT_READY.has(provider));
   });
 
-  it('refuses a poll, a Story or a Reel, and a Facebook video, on a channel that edits', () => {
+  it('refuses a poll, a Story or a Reel, a Facebook video and a Zalo video article, on a channel that edits', () => {
     expect(editRefusal('telegram', { poll: { options: ['Có', 'Không'] } }, [])).toBe('poll');
     expect(editRefusal('linkedin', { poll: { question: 'Bạn chọn?', options: ['A', 'B'] } }, [])).toBe('poll');
     expect(editRefusal('facebook_page', { postType: 'story' }, ['image'])).toBe('post_type');
     expect(editRefusal('facebook_page', { postType: 'reel' }, ['video'])).toBe('post_type');
     expect(editRefusal('facebook_page', {}, ['video'])).toBe('video');
+    // A Zalo video article (#1429, #1430): its update needs the video_id, which Crove does not keep. An article of
+    // images is corrected.
+    expect(editRefusal('zalo_oa', {}, ['video'])).toBe('video');
+    expect(editRefusal('zalo_oa', {}, ['image', 'image'])).toBeNull();
     // A video elsewhere keeps its text as a caption the edit reaches.
     expect(editRefusal('telegram', {}, ['video'])).toBeNull();
     expect(editRefusal('facebook_page', {}, ['image', 'image'])).toBeNull();

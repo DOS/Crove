@@ -16,15 +16,38 @@
 // (a GET with the token as a header) reports its status (1 ready, 3 processing, 2 locked, 4 failed, 5 deleted, 0
 // unknown) and its video_id. Only then is the article created, `type: 'video'` with the video_id and a thumbnail URL
 // (avatar), and checked with `article/verify` like any article.
-import type { ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, Refresher, PublishInput, PublishMedia, PublishResult, ReconcileInput, ReconcileResult, RetrySafety, StatusInput } from './index.ts';
+//
+// Takedown and correction (#1430), per the OA content docs ("Xóa nội dung dạng bài viết", "Cập nhật nội dung",
+// "Kiểm tra kết quả tiến trình tạo nội dung"): `article/remove` takes `{ id }` and answers at once; `article/update`
+// takes the whole article with its id and answers a token, which `article/verify` turns into the article id once Zalo
+// has processed it, as for `article/create`.
+import type { ConnectedAccount, EditInput, EditResult, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, Refresher, PublishContent, PublishInput, PublishMedia, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety, StatusInput } from './index.ts';
+import { EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { videoCoverOf } from './cover.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const ZALO_HOSTS = ['oauth.zaloapp.com', 'openapi.zalo.me'] as const;
 const TOKEN_URL = 'https://oauth.zaloapp.com/v4/oa/access_token';
 const API = 'https://openapi.zalo.me/v2.0';
-// Zalo's error codes for a token it no longer accepts.
-const TOKEN_ERRORS = new Set([-216, -124, -118]);
+// Zalo's error codes for a token it no longer accepts; -220 is "access_token is expired or removed" in the OA error
+// table (developers.zalo.me, "Mã lỗi Official Account API").
+const TOKEN_ERRORS = new Set([-216, -220, -124, -118]);
+// The same table's rate limits, of the app or of the OA.
+const RATE_LIMITED = -32;
+// "Article is being processed": asked again later.
+const ARTICLE_PROCESSING = -214;
+// "<data_field> is invalid!" in the OA error table: for article/remove and article/getdetail, whose one parameter is the
+// article id, the sign of an id Zalo does not know.
+const INVALID_PARAM = -201;
+// Errors of the OA or the app themselves (the OA disabled or missing, the app inactive, removed or not granted the
+// API, the OA unverified or without the service package, the OA's type): the article's presence cannot be read
+// through them, so a takedown refused with one is never taken for an article already gone.
+const ACCESS_ERRORS = new Set([-204, -205, -209, -212, -219, -221, -223, -224, -235]);
+// An article id as Zalo gives it.
+const ARTICLE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+// How long an edit waits for Zalo to process the updated article; with the update and the last check (15 s each at
+// most) it stays inside the job's default call timeout (60 s).
+const EDIT_WAIT_MS = 20_000;
 const CHECK_AFTER_SECONDS = 20;
 const TITLE_MAX = 150;
 const DESCRIPTION_MAX = 300;
@@ -278,7 +301,7 @@ function zaloPublishResult(error: unknown): PublishResult {
   const code = error.code === undefined ? `HTTP_${error.status}` : String(error.code);
   if (error.status >= 500) return { kind: 'unknown', code, message: error.message };
   if ((error.code !== undefined && TOKEN_ERRORS.has(error.code)) || error.status === 401) return { kind: 'rejected', error: 'token_expired', code, message: error.message, httpStatus: error.status };
-  if (error.status === 429) return { kind: 'rejected', error: 'rate_limited', code, message: error.message, httpStatus: error.status };
+  if (error.status === 429 || error.code === RATE_LIMITED) return { kind: 'rejected', error: 'rate_limited', code, message: error.message, httpStatus: error.status };
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
 }
 
@@ -288,8 +311,14 @@ interface ArticleImage {
   caption: string | null;
 }
 
+// What an article is built from: a post to publish, or a published one to correct (#1430).
+interface ArticleInput {
+  content: PublishContent;
+  settings: Readonly<Record<string, unknown>>;
+}
+
 // The article's description: the text's first line, cut to Zalo's 300 characters.
-function descriptionOf(input: PublishInput): string {
+function descriptionOf(input: ArticleInput): string {
   const body = input.content.body.trim();
   return (body.split('\n').find((line) => line.trim()) ?? body).trim().slice(0, DESCRIPTION_MAX);
 }
@@ -316,7 +345,7 @@ const beforeArticle = (result: PublishResult): PublishResult =>
 // the cover. The cover is shown at the top of the article, so the other images follow the text as image blocks, in
 // order, each captioned with its alt text (Zalo's caption is optional). Comments are on unless settings.comments is
 // false (#943).
-function articleOf(input: PublishInput, images: readonly ArticleImage[], defaultAuthor = 'Crove') {
+function articleOf(input: ArticleInput, images: readonly ArticleImage[], defaultAuthor = 'Crove') {
   const body = input.content.body.trim();
   const description = descriptionOf(input);
   const author = typeof input.settings.author === 'string' && input.settings.author.trim() ? input.settings.author.trim().slice(0, AUTHOR_MAX) : defaultAuthor.slice(0, AUTHOR_MAX);
@@ -348,13 +377,15 @@ export class ZaloOaPublisher implements Publisher {
   private readonly processingWaitMs: number;
   private readonly pollMs: number;
   private readonly budgetMs: number;
+  private readonly editWaitMs: number;
 
-  constructor(app: ZaloAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number; budgetMs?: number } = {}) {
+  constructor(app: ZaloAppConfig, fetchImpl?: Fetch, timing: { processingWaitMs?: number; pollMs?: number; budgetMs?: number; editWaitMs?: number } = {}) {
     this.client = new ZaloClient(app, fetchImpl);
     this.defaultAuthor = app.defaultAuthor ?? 'Crove';
     this.processingWaitMs = timing.processingWaitMs ?? PROCESSING_WAIT_MS;
     this.pollMs = timing.pollMs ?? 5000;
     this.budgetMs = timing.budgetMs ?? this.callTimeoutMs - VIDEO_CALL_MARGIN_MS;
+    this.editWaitMs = timing.editWaitMs ?? EDIT_WAIT_MS;
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -516,7 +547,7 @@ export class ZaloOaPublisher implements Publisher {
   async metrics(input: MetricsInput): Promise<MetricsResult> {
     const s = zaloSecretOf(input.secret);
     if (!s) return { refused: 'token_expired' };
-    if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.externalId)) return { refused: 'gone' };
+    if (!ARTICLE_ID.test(input.externalId)) return { refused: 'gone' };
     try {
       const answer = await this.client.api<DetailAnswer>('GET', 'article/getdetail', s.accessToken, { params: { id: input.externalId } });
       const metrics: Partial<Record<MetricName, number>> = {};
@@ -529,6 +560,98 @@ export class ZaloOaPublisher implements Publisher {
       const result = zaloPublishResult(error);
       if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
       return null;
+    }
+  }
+
+  // Takes the article down (#1430): `article/remove` with `{ id }`, answered `{ error: 0 }` at once (OA content docs,
+  // "Xóa nội dung dạng bài viết"); a video article (#1429) is an article too. Zalo's error table names no code for an
+  // article it no longer has, so a refusal that is not about the token, a rate limit, an article still processing or
+  // the OA or app themselves is checked with article/getdetail: an id both calls call invalid (-201) counts as removed,
+  // an article still there is ZALO_CANNOT_REMOVE (a person removes it on Zalo), anything else stays unclear.
+  async remove(input: RemoveInput): Promise<RemoveResult> {
+    const s = zaloSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!ARTICLE_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    try {
+      await this.client.api('POST', 'article/remove', s.accessToken, { json: { id: input.externalId } });
+      return { kind: 'removed' };
+    } catch (error) {
+      if (error instanceof ZaloError && error.code === ARTICLE_PROCESSING) return { kind: 'rejected', error: 'transient', code: String(ARTICLE_PROCESSING), message: error.message };
+      const result = zaloPublishResult(error);
+      if (result.kind === 'rejected' && result.error === 'bad_request' && !(error instanceof ZaloError && error.code !== undefined && ACCESS_ERRORS.has(error.code))) {
+        return this.removedAlready(s.accessToken, input.externalId, result.message, error instanceof ZaloError && error.code === INVALID_PARAM);
+      }
+      return removeResult(result);
+    }
+  }
+
+  // After a takedown Zalo refused for the article: whether the article is really gone. Only the documented "invalid
+  // parameter" (-201) from both calls counts as gone, the id being the one parameter of each: any other refusal (the
+  // app's appsecret_proof, its quota or money, a policy, a bare 4xx) is about the app or the account and refuses both
+  // calls alike while the article is still live, so it stays unclear and a person looks (#1466 review). What Zalo
+  // answers for a deleted article is still to confirm on a live OA.
+  private async removedAlready(accessToken: string, id: string, refused: string | undefined, removeSaidInvalid: boolean): Promise<RemoveResult> {
+    try {
+      const answer = await this.client.api<{ id?: unknown }>('GET', 'article/getdetail', accessToken, { params: { id } });
+      const found = typeof answer?.id === 'string' || typeof answer?.id === 'number' ? String(answer.id) : '';
+      return found === id ? { kind: 'rejected', error: 'bad_request', code: 'ZALO_CANNOT_REMOVE', ...(refused ? { message: refused } : {}) } : { kind: 'unknown', code: 'REMOVE_UNCONFIRMED' };
+    } catch (error) {
+      return removeSaidInvalid && error instanceof ZaloError && error.code === INVALID_PARAM ? { kind: 'removed' } : { kind: 'unknown', code: 'REMOVE_UNCONFIRMED' };
+    }
+  }
+
+  // Corrects the article (#1430): `article/update` takes the whole article with its id (OA content docs, "Cập nhật nội
+  // dung"), so it is built again as publish builds it (articleOf) from the post as it goes out after the edit: the new
+  // text and description, the same title, author and comment setting, the same cover and images, fetched again by Zalo
+  // from fresh URLs asked for right before the call (a presigned URL lives a minute). Zalo answers a token, which
+  // article/verify turns into the article's id once processed; the edit waits EDIT_WAIT_MS for that. Nothing after the
+  // token is a rejection: the update was taken, and an answer that does not come in time is unclear. A video article
+  // (#1429) is refused before any call, as the module refuses it first: its update needs the video_id, which Crove does
+  // not keep.
+  async edit(input: EditInput): Promise<EditResult> {
+    const s = zaloSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!ARTICLE_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const { media } = input.content;
+    if (media.some((m) => m.mime.startsWith('video/'))) return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
+    // The checks of publish: an article Zalo would refuse is not sent.
+    if (media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_REQUIRED' };
+    if (media.length > IMAGES_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TOO_MANY_MEDIA' };
+    if (media.some((m) => m.sizeBytes > IMAGE_MAX_BYTES)) return { kind: 'rejected', error: 'bad_request', code: 'IMAGE_TOO_LARGE' };
+    if (!(input.content.title ?? '').trim()) return { kind: 'rejected', error: 'bad_request', code: 'TITLE_REQUIRED' };
+    const mediaUrl = input.mediaUrl;
+    if (!mediaUrl) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    const urls = await Promise.all(media.map((m) => mediaUrl(m.fileId).catch(() => null)));
+    if (urls.some((url) => !url)) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    const images = media.map((m, i) => ({ url: urls[i] as string, caption: m.altText?.trim() || null }));
+    let token: string;
+    try {
+      const answer = await this.client.api<CreateAnswer>('POST', 'article/update', s.accessToken, { json: { id: input.externalId, ...articleOf(input, images, this.defaultAuthor) } });
+      if (typeof answer?.token !== 'string' || !answer.token) return { kind: 'unknown', code: 'NO_ARTICLE_TOKEN' };
+      token = answer.token;
+    } catch (error) {
+      if (error instanceof ZaloError && error.code === ARTICLE_PROCESSING) return { kind: 'rejected', error: 'transient', code: String(ARTICLE_PROCESSING), message: error.message };
+      return editResult(zaloPublishResult(error));
+    }
+    return this.updated(s.accessToken, token, input.externalId);
+  }
+
+  // The update's token until Zalo names the article: edited when it names this one; a token still processing, an
+  // outage or no id yet is asked again until the wait ends; any other answer leaves the edit unclear, with its code.
+  private async updated(accessToken: string, token: string, id: string): Promise<EditResult> {
+    const deadline = Date.now() + this.editWaitMs;
+    for (;;) {
+      try {
+        const answer = await this.client.api<VerifyAnswer>('POST', 'article/verify', accessToken, { json: { token } });
+        const got = typeof answer?.id === 'string' || typeof answer?.id === 'number' ? String(answer.id) : '';
+        // Another id would mean Zalo made the update a new article: a person checks.
+        if (got) return got === id ? { kind: 'edited' } : { kind: 'unknown', code: 'ZALO_OTHER_ARTICLE' };
+      } catch (error) {
+        const again = !(error instanceof ZaloError) || error.code === ARTICLE_PROCESSING || error.code === RATE_LIMITED || error.status >= 500 || error.status === 429;
+        if (!again && error instanceof ZaloError) return { kind: 'unknown', code: error.code === undefined ? `HTTP_${error.status}` : String(error.code) };
+      }
+      if (Date.now() >= deadline) return { kind: 'unknown', code: 'ZALO_EDIT_PROCESSING' };
+      await sleep(Math.min(this.pollMs, Math.max(0, deadline - Date.now())));
     }
   }
 
