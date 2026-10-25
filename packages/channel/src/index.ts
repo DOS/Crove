@@ -251,6 +251,10 @@ export interface RecentPostsInput {
   externalAccountId: string;
   secret: string;
   since: Date;
+  // What the platform granted the connection, as stored at connect: an adapter whose listing needs a permission connect
+  // asks for only on some deployments (TikTok's video.list, #1476) refuses before any call when it is missing. Absent
+  // in callers that do not read it.
+  scopes?: readonly string[];
 }
 export interface RecentPost {
   // The platform's id of the post, in the shape publish answers and metrics reads.

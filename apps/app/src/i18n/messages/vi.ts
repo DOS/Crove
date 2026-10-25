@@ -2787,7 +2787,7 @@ export const vi = {
       summaryHint: 'AI viết bản nháp từ số liệu của kỳ, kênh và nhãn đã chọn, chỉ dùng đúng các con số đó. Hãy đọc lại và sửa trước khi tạo liên kết; nhận xét chỉ được lưu khi bạn tạo liên kết.',
       summaryUndo: 'Lấy lại nhận xét cũ',
       includeExternal: 'Tính cả bài đăng ngoài {brand}',
-      includeExternalHint: 'Bài kênh đăng thẳng trên Facebook, Instagram, YouTube, Threads hoặc Zalo OA cũng được tính vào số tổng và bài nổi bật của báo cáo.',
+      includeExternalHint: 'Bài kênh đăng thẳng trên Facebook, Instagram, YouTube, Threads, Zalo OA hoặc TikTok cũng được tính vào số tổng và bài nổi bật của báo cáo. Riêng TikTok, kênh cần được cấp quyền xem danh sách video lúc kết nối.',
       withExternal: 'gồm bài đăng ngoài {brand}',
       label: 'Chỉ tính bài có nhãn',
       labelAll: 'Mọi bài đăng',
@@ -2799,7 +2799,7 @@ export const vi = {
     external: {
       chip: 'Đăng ngoài {brand}',
       switch: 'Tính cả bài đăng ngoài {brand}',
-      hint: 'Gồm bài kênh đăng thẳng trên Facebook, Instagram, YouTube, Threads hoặc Zalo OA trong 30 ngày gần nhất. {brand} lấy về mỗi 6 giờ, mỗi bài chỉ tính một lần.',
+      hint: 'Gồm bài kênh đăng thẳng trên Facebook, Instagram, YouTube, Threads, Zalo OA hoặc TikTok trong 30 ngày gần nhất. {brand} lấy về mỗi 6 giờ, mỗi bài chỉ tính một lần. Riêng TikTok, kênh cần được cấp quyền xem danh sách video lúc kết nối.',
       noLabels: 'Bài đăng ngoài {brand} không có nhãn nên không được tính khi đang lọc theo nhãn.',
       noText: '(Không có chữ)',
     },

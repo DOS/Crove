@@ -7,16 +7,26 @@
 // only when it was made with that option; otherwise every total stays as it was.
 //
 // Credentials stay in the worker (ADR-0025): the sweep opens a connection's token with kernel.channel.credential and
-// hands it to the adapter; the commands it runs never see it. A token the platform refuses marks the connection
-// expired, so an owner or admin reconnects it, as publishing does.
+// hands it to the adapter, with the scopes the connection was granted; the commands it runs never see the token. A
+// token the platform refuses marks the connection expired, so an owner or admin reconnects it, as publishing does.
+//
+// TikTok (#1476) gives a public post's id only after its moderation, and an inbox draft becomes a post only when the
+// creator posts it in the app (#1475), so for a while a Crove video can be on TikTok while its variant still holds a
+// publish_id, or no id at all. While a TikTok variant of the channel may be in that state (publishing, waiting for its
+// status, or still asked about by the late-id sweep), the bring-in holds back every listed video created since a day
+// before it went out (tiktokHeldFrom): such a video comes in at a later bring-in, once the late id has made it Crove's
+// (and external_post_is_crove drops it) or the asking has ended.
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { zId } from '@crove/kernel-contract';
 import type { Db, MemberRole } from '@crove/db';
 import { METRIC_NAMES, RECENT_POSTS_MAX, RECENT_POSTS_MAX_DAYS, type Publisher, type RecentPost, type RecentPostsResult } from '@crove/channel';
-import { DomainError, defineCommand, defineQuery, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, defineQuery, type CommandContext, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
 import { eachBounded } from './metrics.ts';
 import { channelScope, connectionInScope } from './channel-access.ts';
+import { tiktokModeOf } from './domain/channels.ts';
+import { LATE_ID_DAYS, lateIdOver, lateIdWait } from './domain/late-ids.ts';
+import { settingsOf } from './variants.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const ACTOR: SystemActor = { type: 'system', component: 'social.external_posts' };
@@ -78,6 +88,42 @@ function requireSystem(ctx: { actor: { type: string } }): void {
   if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');
 }
 
+// How long before a TikTok variant went out its video may have been created: the status check of a direct post runs
+// for up to a day after the upload, and published_at is when it ended.
+const TIKTOK_HOLD_MARGIN_MS = 86_400_000;
+// The variant statuses during which a TikTok post may already be on TikTok before Crove records it as published.
+const TIKTOK_ON_ITS_WAY = ['publishing', 'processing'] as const;
+
+// From when the listed videos of a TikTok channel are held back (#1476), or null when nothing is: a day before the
+// earliest of its variants that may be on TikTok without the public id Crove will record. That is a variant on its way
+// (publishing, or waiting for TikTok's status) that can become public (an inbox draft, or a direct post to
+// PUBLIC_TO_EVERYONE; any other direct post never shows in video/list), or a published one the late-id sweep still asks
+// about (lateIdWait, within its 7 days). Once the late id lands, external_post_is_crove makes the video Crove's at the
+// import and at every read; once the asking ends without one, the hold lifts.
+async function tiktokHeldFrom(trx: CommandContext['trx'], orgId: string, connectionId: string, now: Date): Promise<Date | null> {
+  const rows = await trx
+    .selectFrom('crove_social.post_variant')
+    .select(['provider', 'status', 'settings', 'external_post_id', 'error_code', 'published_at'])
+    .where('org_id', '=', orgId)
+    .where('channel_connection_id', '=', connectionId)
+    .where('provider', '=', 'tiktok')
+    .where((eb) => eb.or([eb('status', 'in', [...TIKTOK_ON_ITS_WAY]), eb.and([eb('status', '=', 'published'), eb('published_at', '>', new Date(now.getTime() - LATE_ID_DAYS * 86_400_000))])]))
+    .execute();
+  let from: number | null = null;
+  for (const row of rows) {
+    const settings = settingsOf(row);
+    let at: number | null = null;
+    if (row.status === 'published') {
+      if (row.published_at && lateIdWait({ ...row, settings }) && !lateIdOver(row.published_at, now)) at = row.published_at.getTime();
+    } else {
+      const mode = tiktokModeOf(settings);
+      if (mode === 'inbox' || (mode === 'direct' && settings.privacyLevel === 'PUBLIC_TO_EVERYONE')) at = (row.published_at ?? now).getTime();
+    }
+    if (at !== null) from = Math.min(from ?? at, at);
+  }
+  return from === null ? null : new Date(from - TIKTOK_HOLD_MARGIN_MS);
+}
+
 // One bring-in of a channel's recent posts: the ones Crove did not publish on it are kept (their text and link
 // refreshed when already there), and the channel's last bring-in is noted, with why nothing came when nothing did.
 export const externalPostImport = defineCommand({
@@ -92,7 +138,7 @@ export const externalPostImport = defineCommand({
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
     requireSystem(ctx);
-    const connection = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('id').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).executeTakeFirst();
+    const connection = await ctx.trx.selectFrom('crove_kernel.channel_connection').select(['id', 'provider']).where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).executeTakeFirst();
     if (!connection) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
     const byId = new Map(input.posts.map((p) => [p.externalId, p] as const));
     const listed = [...byId.values()];
@@ -108,6 +154,16 @@ export const externalPostImport = defineCommand({
               WHERE crove_social.external_post_is_crove(${ctx.orgId}::uuid, ${connection.id}::uuid, p.id, p.link)`.execute(ctx.trx)
           ).rows;
     for (const v of crove) byId.delete(v.id);
+    // A TikTok video that may be a Crove post still without its public id waits for a later bring-in (#1476).
+    const heldFrom = connection.provider === 'tiktok' ? await tiktokHeldFrom(ctx.trx, ctx.orgId, connection.id, ctx.now) : null;
+    let held = 0;
+    if (heldFrom) {
+      for (const p of byId.values()) {
+        if (Date.parse(p.publishedAt) < heldFrom.getTime()) continue;
+        byId.delete(p.externalId);
+        held += 1;
+      }
+    }
     const fresh = [...byId.values()];
     if (fresh.length > 0) {
       await ctx.trx
@@ -134,7 +190,7 @@ export const externalPostImport = defineCommand({
       .values({ org_id: ctx.orgId, channel_connection_id: connection.id, ran_at: ctx.now, found: input.posts.length, error: input.error ?? null })
       .onConflict((oc) => oc.columns(['org_id', 'channel_connection_id']).doUpdateSet({ ran_at: ctx.now, found: input.posts.length, error: input.error ?? null }))
       .execute();
-    return { kept: fresh.length, crove: input.posts.length - fresh.length };
+    return { kept: fresh.length, crove: input.posts.length - fresh.length - held, held };
   },
 });
 
@@ -240,8 +296,22 @@ export const metricsExternal = defineQuery({
   },
 });
 
+// What the sweep hands an adapter about a channel besides its token: the scopes it was granted, for a listing only
+// some grants allow (TikTok's video.list, #1476).
+export const externalPostChannel = defineQuery({
+  name: 'social.external_post.channel',
+  input: z.strictObject({ connectionId: zId }),
+  access: 'system',
+  handler: async (ctx, input): Promise<{ scopes: string[] }> => {
+    requireSystem(ctx);
+    const row = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('scopes').where('org_id', '=', ctx.orgId).where('id', '=', input.connectionId).executeTakeFirst();
+    if (!row) throw new DomainError('CHANNEL_NOT_FOUND', 404, 'Không tìm thấy kênh đã kết nối này');
+    return { scopes: [...row.scopes] };
+  },
+});
+
 export const externalPostCommands = [externalPostImport, externalPostRecord];
-export const externalPostQueries = [externalPostTarget, metricsExternal];
+export const externalPostQueries = [externalPostTarget, externalPostChannel, metricsExternal];
 
 interface SealedChannelCredential {
   provider: string;
@@ -293,7 +363,8 @@ export async function sweepExternalPosts(deps: ExternalPostDeps): Promise<{ impo
     let result: RecentPostsResult = null;
     try {
       const { externalAccountId, secret } = await openSecret(deps, row.org_id, row.connection_id);
-      result = (await publisher?.listRecentPosts?.({ externalAccountId, secret, since })) ?? null;
+      const { scopes } = await deps.runtime.query<{ scopes: string[] }>('social.external_post.channel', { connectionId: row.connection_id }, options);
+      result = (await publisher?.listRecentPosts?.({ externalAccountId, secret, since, scopes })) ?? null;
     } catch (error) {
       // A connection whose owner left, or a credential that will not open: nothing to list; the publish path reports it.
       warn('channel', row.connection_id, error);
