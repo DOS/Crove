@@ -50,7 +50,7 @@ export const QUEUES = {
   yearArchive: 'finance-year-archive',
   // Created by the crm bookings migration (20261031020000).
   crmBooking: 'crm-booking',
-  // Created by the period balance migration (20261031230000).
+  // Created by the period balance migration (20261101020000).
   periodBalanceVerify: 'finance-period-balance-verify',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];

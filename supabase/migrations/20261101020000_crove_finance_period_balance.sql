@@ -30,7 +30,7 @@
 --   not filtered by their row security, so it compares every line whatever a tenant role could see (as
 --   require_entry_balanced does, #76). It returns references only, no amounts.
 --
--- The entries posted before this migration get their deltas from the next one (20261031230100), in its own
+-- The entries posted before this migration get their deltas from the next one (20261101020100), in its own
 -- transaction, once this body is the one every new posting runs.
 SET LOCAL lock_timeout = '2s';
 
@@ -58,9 +58,10 @@ CREATE TABLE IF NOT EXISTS crove_finance.period_balance_delta (
   credit numeric NOT NULL CHECK (credit >= 0),
   line_count int NOT NULL CHECK (line_count > 0),
   PRIMARY KEY (org_id, id),
-  -- One delta per entry and account; it also backs the entry foreign key (G3).
+  -- One delta per entry and account. No foreign key to journal_entry: the definer appends only for the entry it has
+  -- just inserted, and the nightly comparison reports a delta without lines as 'extra'. A key would also change which
+  -- rule refuses the deletion of a reversed entry (journal_entry_reverses_fk, ledger-reversal invariant).
   CONSTRAINT period_balance_delta_entry_account_uq UNIQUE (org_id, entry_id, account_code),
-  CONSTRAINT period_balance_delta_entry_fk FOREIGN KEY (org_id, entry_id) REFERENCES crove_finance.journal_entry (org_id, id),
   CONSTRAINT period_balance_delta_month_start CHECK (EXTRACT(DAY FROM period_month) = 1)
 );
 

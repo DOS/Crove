@@ -17,7 +17,7 @@ import { QUEUES } from '../src/jobs-schema.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const BACKFILL = readFileSync(new URL('../../../supabase/migrations/20261031230100_crove_finance_period_balance_backfill.sql', import.meta.url), 'utf8');
+const BACKFILL = readFileSync(new URL('../../../supabase/migrations/20261101020100_crove_finance_period_balance_backfill.sql', import.meta.url), 'utf8');
 
 const suite = ADMIN ? describe : describe.skip;
 
