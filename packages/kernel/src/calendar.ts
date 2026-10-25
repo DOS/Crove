@@ -140,6 +140,7 @@ export const calendarHoursSave = defineCommand({
   name: 'kernel.calendar.hours.save',
   input: zWorkingHours,
   risk: 'R1',
+  sideEffect: 'internal',
   access: EDITORS,
   handler: async (ctx, input) => {
     const userId = userOf(ctx.actor);
@@ -163,6 +164,7 @@ export const calendarEventAdd = defineCommand({
   name: 'kernel.calendar.event.add',
   input: zCalendarEventAdd,
   risk: 'R1',
+  sideEffect: 'internal',
   access: EDITORS,
   handler: async (ctx, input): Promise<CalendarEventView> => {
     const userId = userOf(ctx.actor);
@@ -181,6 +183,7 @@ export const calendarEventCancel = defineCommand({
   name: 'kernel.calendar.event.cancel',
   input: zCalendarEventCancel,
   risk: 'R1',
+  sideEffect: 'internal',
   access: EDITORS,
   handler: async (ctx, input) => {
     const userId = userOf(ctx.actor);

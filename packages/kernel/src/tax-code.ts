@@ -14,6 +14,7 @@ export const setTaxCode = defineCommand({
   name: 'kernel.org.set_tax_code',
   input: z.object({ taxCode: z.string().trim().max(20).nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin'],
   handler: async (ctx, input) => {
     const taxCode = input.taxCode ? normalizeTaxCode(input.taxCode) : null;
@@ -44,6 +45,7 @@ export const setVatFilingPeriod = defineCommand({
   name: 'kernel.org.set_vat_filing_period',
   input: z.object({ vatFilingPeriod: z.enum(VAT_FILING_PERIODS).nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin'],
   handler: async (ctx, input) => {
     const before = await ctx.trx.selectFrom('crove_kernel.tenant').select('vat_filing_period').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();

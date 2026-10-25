@@ -148,6 +148,7 @@ export const changeMemberRole = defineCommand({
   name: 'kernel.member.change_role',
   input: z.object({ userId: zId, role: zRole }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: ['owner'],
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input) => {
@@ -193,6 +194,7 @@ export const removeMember = defineCommand({
   name: 'kernel.member.remove',
   input: z.object({ userId: zId }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: ['owner'],
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input) => {
@@ -224,6 +226,7 @@ export const ingestFile = defineCommand({
   name: 'kernel.file.ingest',
   input: zIngestFile,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: (ctx, input) => ingestFileRow(ctx, input, ctx.actor.type === 'user' ? ctx.actor.userId : null),
 });
@@ -251,6 +254,7 @@ export function beginUploadCommand(limits: UploadBeginLimits = DEFAULT_UPLOAD_BE
     // social: an image or video for a post, so the grant allows a video's size (#409); a document stays at 25 MB.
     input: z.object({ purpose: z.enum(UPLOAD_PURPOSES).optional() }),
     risk: 'R1',
+    sideEffect: 'internal',
     access: MEMBERS,
     handler: async (ctx, input) => {
       if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tải tệp lên được');
@@ -297,6 +301,7 @@ export const claimUpload = defineCommand({
   name: 'kernel.file.upload.claim',
   input: z.object({ uploadId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.file_upload', id: input.uploadId }),
   handler: async (ctx, input) => {
@@ -331,6 +336,7 @@ export const receiveInbound = defineCommand({
     files: z.array(zIngestFile).max(20),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const message = await ctx.trx
@@ -400,6 +406,7 @@ export function inboundRotateCommand(limits: InboundRotateLimits = DEFAULT_INBOU
     name: 'kernel.inbound.rotate',
     input: z.object({}),
     risk: 'R3',
+    sideEffect: 'internal',
     access: ['owner'],
     handler: async (ctx) => {
       if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được địa chỉ nhận hóa đơn');
@@ -424,6 +431,7 @@ export const requestProposal = defineCommand({
   name: 'kernel.proposal.request',
   input: z.object({ command: z.enum(REQUESTABLE), input: z.record(z.string(), z.unknown()) }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới tạo được đề xuất');
@@ -500,6 +508,7 @@ export const editProposal = defineCommand({
     })
     .refine((v) => v.lineAccounts !== undefined || v.exchangeRate !== undefined || v.legalEntityId !== undefined, 'lineAccounts, exchangeRate or legalEntityId'),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.proposal', id: input.id }),
   handler: async (ctx, input) => {
@@ -567,6 +576,8 @@ export const approveProposal = defineCommand({
     postingDate: zLocalDate.optional(),
   }),
   risk: 'R3',
+  // Approving runs the proposal's command: a posting, a payment or another R3 effect.
+  sideEffect: 'financial',
   access: APPROVERS,
   // A chief accountant (an org-wide role assignment holding it, #1279) passes this gate too; P12 still decides.
   permission: LEDGER_APPROVE_PERMISSION,
@@ -747,6 +758,7 @@ export const approveProposals = defineCommand({
   // stays short; the Inbox sends a larger selection in several batches, each under the same step-up freshness rule.
   input: z.object({ items: zBulkApproveItems }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: APPROVERS,
   // A chief accountant (an org-wide role assignment holding it, #1279) passes this gate too; P12 still decides.
   permission: LEDGER_APPROVE_PERMISSION,
@@ -796,6 +808,7 @@ export const rejectProposal = defineCommand({
   name: 'kernel.proposal.reject',
   input: z.object({ id: zId, reason: z.string().max(500).optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.proposal', id: input.id }),
   handler: async (ctx, input) => {
@@ -827,6 +840,7 @@ export const revokeSession = defineCommand({
   name: 'kernel.session.revoke',
   input: zSessionRevoke,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin', 'member', 'viewer'],
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input) => {

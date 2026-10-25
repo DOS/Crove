@@ -196,6 +196,7 @@ export const recordDirectMail = defineCommand({
     providerMessageId: z.string().min(1).max(255).optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người gửi mới ghi được kết quả gửi thư');
@@ -239,6 +240,7 @@ export const addMailSuppression = defineCommand({
   name: 'kernel.mail.suppression.add',
   input: z.object({ email: zMailAddress, scope: zScope }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới chặn được địa chỉ');
@@ -260,6 +262,7 @@ export const liftMailSuppression = defineCommand({
   name: 'kernel.mail.suppression.lift',
   input: z.object({ email: zMailAddress, scope: zScope, reason: z.string().trim().min(1).max(500) }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới bỏ chặn được địa chỉ');
@@ -314,6 +317,7 @@ export const recordMailEvent = defineCommand({
     detail: z.record(z.string().max(32), z.string().max(64)).refine((d) => Object.keys(d).length <= 8),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const mail = await ctx.trx
@@ -418,6 +422,7 @@ export const beginQueuedMail = defineCommand({
   name: 'kernel.mail.queue.begin',
   input: z.object({ messageId: zId, provider: zProviderName, safety: zSafety }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input): Promise<QueuedMailBegin> => {
     requireSystem(ctx);
@@ -509,6 +514,7 @@ export const recordQueuedMail = defineCommand({
     providerMessageId: z.string().min(1).max(255).optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     requireSystem(ctx);

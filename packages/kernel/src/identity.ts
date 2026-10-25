@@ -87,6 +87,7 @@ export function orgCreateCommand(limits: OrgCreateLimits = DEFAULT_ORG_CREATE_LI
     name: 'kernel.org.create',
     input: z.object({ name: z.string().trim().min(1).max(200) }),
     risk: 'R1',
+    sideEffect: 'internal',
     access: ['owner'],
     bootstrap: async (trx, actor, input, idempotencyKey) => {
       // Transaction-local, read by the definer right below.

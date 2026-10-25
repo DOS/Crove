@@ -10,6 +10,7 @@ export const recordImageSize = defineCommand({
   name: 'kernel.file.image_size.record',
   input: z.object({ fileId: zId, width: z.number().int().min(1).max(100_000), height: z.number().int().min(1).max(100_000) }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input) => {

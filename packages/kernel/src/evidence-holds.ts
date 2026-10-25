@@ -17,6 +17,7 @@ export const recordFileHold = defineCommand({
     z.strictObject({ fileId: zId, error: z.string().regex(HOLD_ERROR_CODE) }),
   ]),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input) => {

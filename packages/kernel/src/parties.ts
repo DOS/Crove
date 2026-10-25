@@ -48,6 +48,7 @@ export const updateParty = defineCommand({
     phone: zText(100),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin', 'member'],
   handler: async (ctx, input) => {
     const name = oneLine(input.name, PARTY_NAME_MAX_LENGTH);
@@ -134,6 +135,7 @@ export const markDuplicate = defineCommand({
   name: 'kernel.party.mark_duplicate',
   input: z.object({ partyId: zId, keepId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MANAGERS,
   handler: async (ctx, { partyId, keepId }) => {
     if (partyId === keepId) throw new DomainError('SAME_PARTY', 422, 'Hãy chọn hai đối tác khác nhau');
@@ -180,6 +182,7 @@ export const unmarkDuplicate = defineCommand({
   name: 'kernel.party.unmark_duplicate',
   input: z.object({ partyId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MANAGERS,
   handler: async (ctx, { partyId }) => {
     const party = await ctx.trx
