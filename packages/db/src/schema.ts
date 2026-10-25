@@ -398,6 +398,15 @@ export const INPUT_VAT_CHECK_OUTCOMES = ['paid_by_bank', 'not_deductible', 'clea
 export type InputVatCheckOutcome = (typeof INPUT_VAT_CHECK_OUTCOMES)[number];
 export type InputVatCheckTable = Refine<G.FinanceInputVatCheckTable, { outcome: ColumnType<InputVatCheckOutcome, InputVatCheckOutcome, never> }>;
 
+// Learned account rules (#1399): the line's whole item description, normalized, or a keyword in it. What a rule matches
+// never changes in place.
+export const CATEGORIZATION_RULE_MATCH_KINDS = ['description', 'keyword'] as const;
+export type CategorizationRuleMatchKind = (typeof CATEGORIZATION_RULE_MATCH_KINDS)[number];
+export type CategorizationRuleTable = Refine<
+  G.FinanceCategorizationRuleTable,
+  { match_kind: ColumnType<CategorizationRuleMatchKind, CategorizationRuleMatchKind, never> }
+>;
+
 // The register of fixed assets and prepaid costs (#919). Tenant roles update only the end of a schedule, once.
 export const FIXED_ASSET_KINDS = ['fixed_asset', 'prepaid_cost'] as const;
 export type FixedAssetKind = (typeof FIXED_ASSET_KINDS)[number];
@@ -650,6 +659,7 @@ type Refined = Tables<{
   'crove_finance.org_account': OrgAccountTable;
   'crove_finance.cash_voucher': CashVoucherTable;
   'crove_finance.fixed_asset': FixedAssetTable;
+  'crove_finance.categorization_rule': CategorizationRuleTable;
   'crove_finance.input_vat_check': InputVatCheckTable;
   'crove_finance.journal_voucher': JournalVoucherTable;
   'crove_finance.portal_invoice_list': PortalInvoiceListTable;

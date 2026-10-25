@@ -882,7 +882,11 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                     <tr key={l.lineNo}>
                       <td className="py-2 pr-2 text-foreground">
                         {l.description}
-                        <p className="text-xs text-subtle-foreground">{l.reason}</p>
+                        {/* What chose the account (#1399): a learned rule, the vendor's default, the built-in keywords or a user. */}
+                        <p className="text-xs text-subtle-foreground">
+                          {l.accountRule && <Badge variant="secondary" className="mr-1.5">{t(`accountRuleSource.${l.accountRule.source}`)}</Badge>}
+                          {l.accountRule?.source === 'user' ? null : l.reason}
+                        </p>
                       </td>
                       <td className="py-2 pr-2 text-right text-foreground tabular-nums">{money(l.amount)}</td>
                       <td className="py-2">
