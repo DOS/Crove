@@ -2,7 +2,9 @@
 -- per legal entity, as the finance books are since 20261102140000 (#1485). Idempotent; applied files stay untouched.
 --
 --   crove_kernel.extraction     a reading of a file: the entity whose document it is. No parent: the entity the writer
---                               names (a re-extraction names the file's previous run's), else the org's default entity.
+--                               names, else the org's default entity. The worker's first reading names the entity of
+--                               the member who uploaded the file when that member is limited to legal entities, so it
+--                               sees its own upload (kernel uploaderEntity); a re-extraction names the previous run's.
 --   crove_kernel.notification   a member's notice: about a file reading it takes the reading's entity (notifyMembers
 --                               names it), else the org's default entity.
 --
