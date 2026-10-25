@@ -197,8 +197,9 @@ export type ExtractionTable = Refine<
     // How many entries an archive run's result lists (#432); NULL for every other run. Set by the database from the
     // result on every insert and update (trigger extraction_entry_count), never by the code.
     entry_count: ColumnType<number | null, never, never>;
+    legal_entity_id: LegalEntityColumn;
   },
-  'version'
+  'version' | 'legal_entity_id'
 >;
 
 // 'approved' exists only inside the transaction of kernel.proposal.approve today: it marks the proposal approved for
@@ -210,6 +211,7 @@ export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
 
 // eligible_approvers is set on every new proposal; NULL only on proposals decided before the approval policy existed.
 export type ProposalTable = Refine<G.KernelProposalTable, { status: Generated<ProposalStatus> }>;
+export type NotificationTable = Refine<G.KernelNotificationTable, { legal_entity_id: LegalEntityColumn }, 'legal_entity_id'>;
 
 // ADR-0029 Phase 1 (issue #79): agents in an org chart shared with humans. See the migration
 // 20261018050000_crove_kernel_agents_org_chart.sql for the rules the database enforces.
@@ -343,8 +345,9 @@ export type CorrectionKind = (typeof CORRECTION_KINDS)[number];
 export const EXCHANGE_RATE_SOURCES = ['invoice', 'entered'] as const;
 export type ExchangeRateSource = (typeof EXCHANGE_RATE_SOURCES)[number];
 
-// The legal entity of a finance row (#1280): the parent's, or the one the writer names, or the org's default entity,
-// filled in by the insert trigger b_legal_entity (crove_finance.legal_entity_fill) and never changed afterwards.
+// The legal entity of a finance or kernel row (#1280): the parent's, or the one the writer names, or the org's default
+// entity, filled in by the insert trigger b_legal_entity (crove_finance.legal_entity_fill, crove_kernel.legal_entity_fill)
+// and never changed afterwards.
 type LegalEntityColumn = ColumnType<string, string | undefined, never>;
 
 export type PurchaseDocumentTable = Refine<
@@ -685,6 +688,7 @@ type Refined = Tables<{
   'crove_kernel.party': PartyTable;
   'crove_kernel.file': FileTable;
   'crove_kernel.extraction': ExtractionTable;
+  'crove_kernel.notification': NotificationTable;
   'crove_kernel.record_le': RecordLeTable;
   'crove_kernel.proposal': ProposalTable;
   'crove_kernel.agent_template': AgentTemplateTable;

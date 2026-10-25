@@ -753,6 +753,7 @@ export interface KernelExtractionTable {
   requested_by: ColumnType<string | null, string | null, NotGranted>;
   completed_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   entry_count: ColumnType<number | null, number | null, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_kernel.file */
@@ -931,6 +932,7 @@ export interface KernelNotificationTable {
   detail: ColumnType<unknown, string | undefined, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   read_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_kernel.org_usage */
