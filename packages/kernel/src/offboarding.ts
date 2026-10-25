@@ -21,6 +21,8 @@ const OWNERS: readonly MemberRole[] = ['owner'];
 export const EXPORT_TABLES = {
   'kernel.tenant': { from: 'crove_kernel.tenant', omit: ['inbound_token'] },
   'kernel.tenant_member': { from: 'crove_kernel.tenant_member', omit: [] },
+  // Who held which built-in role (#1279), org-wide or for one legal entity.
+  'kernel.role_assignment': { from: 'crove_kernel.role_assignment', omit: [] },
   // The org's legal entities (#1278): the companies and branches its books are kept for.
   'kernel.legal_entity': { from: 'crove_kernel.legal_entity', omit: [] },
   'kernel.member_invite': { from: 'crove_kernel.member_invite', omit: ['token_sha256'] },

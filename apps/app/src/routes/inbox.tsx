@@ -187,7 +187,7 @@ export function InboxPage() {
   // kernel decides each item as if approved alone and reports the ones it refused.
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [bulk, setBulk] = useState<BulkRun | null>(null);
-  const bulkEnabled = tab === 'pending' && canApproveProposals(org.data?.role);
+  const bulkEnabled = tab === 'pending' && canApproveProposals(org.data?.role, org.data?.permissions);
   const selectable = bulkEnabled ? (items.data ?? []).filter((item) => bulkSelectable(item, REVERSAL_KIND)) : [];
   const chosen = selectable.filter((item) => selected.has(item.id));
   const sending = bulk?.sending ?? false;

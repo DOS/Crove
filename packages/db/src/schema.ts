@@ -117,6 +117,14 @@ export const LEGAL_ENTITY_KINDS = ['company', 'branch', 'household'] as const;
 export type LegalEntityKind = (typeof LEGAL_ENTITY_KINDS)[number];
 export type LegalEntityTable = Refine<G.KernelLegalEntityTable, { kind: Generated<LegalEntityKind> }>;
 
+// The built-in roles a member can hold on top of their base role (issue #1279, plan §4.6), and their assignments: an
+// org-wide role covers the whole org, a legal_entity role (external_accountant) names one legal entity. Tenant roles
+// only read the three tables; crove_kernel.role_assignment_grant() and role_assignment_revoke() write assignments.
+export const ROLE_SCOPES = ['org', 'legal_entity'] as const;
+export type RoleScope = (typeof ROLE_SCOPES)[number];
+export type RoleTable = Refine<G.KernelRoleTable, { scope: RoleScope }>;
+export type RoleAssignmentTable = Refine<G.KernelRoleAssignmentTable, { scope: RoleScope }>;
+
 // A pending, accepted or revoked invite (issue #35). Tenant roles insert invites and may only set status,
 // revoked_at and revoked_by; crove_kernel.invite_accept() is the only writer of accepted_at and accepted_by.
 export const INVITE_ROLES = ['admin', 'member', 'viewer'] as const;
@@ -609,6 +617,8 @@ type Refined = Tables<{
   'crove_crm.event_type': CrmEventTypeTable;
   'crove_kernel.calendar_event': CalendarEventTable;
   'crove_kernel.legal_entity': LegalEntityTable;
+  'crove_kernel.role': RoleTable;
+  'crove_kernel.role_assignment': RoleAssignmentTable;
   'crove_kernel.tax_obligation_done': TaxObligationDoneTable;
   'crove_kernel.tax_profile': TaxProfileTable;
   'crove_kernel.tenant': TenantTable;

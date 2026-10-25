@@ -13,6 +13,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
 import { ChartOfAccountsCard } from './accounts.tsx';
 import { LegalEntitiesCard } from './legal-entities.tsx';
+import { MemberRolesRow } from './member-roles.tsx';
 import { WorkingHoursCard } from './working-hours.tsx';
 import { EventTypesCard } from './event-types.tsx';
 import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
@@ -941,6 +942,10 @@ export function SettingsPage() {
   const org = useQuery(orpc.org.get.queryOptions());
   const me = useQuery(orpc.me.get.queryOptions());
   const search: { invite?: string } = useSearch({ strict: false });
+  // Role assignments (#1279): owners and admins see who holds which role; owners give and take them back.
+  const managesMembers = org.data?.role === 'owner' || org.data?.role === 'admin';
+  const memberRoles = useQuery({ ...orpc.org.memberRoles.queryOptions(), enabled: managesMembers });
+  const entities = useQuery({ ...orpc.legalEntities.list.queryOptions(), enabled: managesMembers });
 
   if (org.isLoading) return <Spinner />;
   if (org.error) return <ErrorText>{errorMessage(org.error)}</ErrorText>;
@@ -1018,10 +1023,37 @@ export function SettingsPage() {
                     <Badge variant={m.role === 'owner' ? 'brand' : 'secondary'}>{root(`roles.${m.role}`)}</Badge>
                   )}
                 </div>
+                {memberRoles.data && (
+                  <MemberRolesRow
+                    userId={m.userId}
+                    name={m.displayName ?? m.email}
+                    baseRole={m.role}
+                    data={memberRoles.data}
+                    entities={entities.data ?? []}
+                    isOwner={isOwner}
+                  />
+                )}
                 {isOwner && me.data && m.userId !== me.data.userId && <MemberSessions userId={m.userId} name={m.displayName ?? m.email} />}
               </li>
             ))}
           </ul>
+          {/* The roles could not be read: say so with a retry, instead of showing members as holding none (#1279). */}
+          {(memberRoles.error || entities.error) && (
+            <div className="mt-2 flex flex-wrap items-center gap-2" role="alert">
+              <ErrorText>{root('memberRoles.loadFailed', { reason: errorMessage(memberRoles.error ?? entities.error) })}</ErrorText>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (memberRoles.error) void memberRoles.refetch();
+                  if (entities.error) void entities.refetch();
+                }}
+              >
+                {root('memberRoles.retry')}
+              </Button>
+            </div>
+          )}
           {canManage && (
             <>
               <InviteMember isOwner={isOwner} initialEmail={search.invite} />
