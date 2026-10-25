@@ -43,8 +43,8 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_finance.period_balance_delta',
   'crove_kernel.role_assignment',
-  'crove_social.media_archive',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -329,6 +329,14 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   // column grant), so the update probes assign name to itself.
   'crove_finance.org_account': {
     make: (o) => ({ row: { org_id: o.id, code: `6422.${tag().toUpperCase()}`, name: 'RLS matrix sub-account', parent_code: '6422' } }),
+  },
+  // What one journal entry adds to one account in its month (#1284): append-only, one row per (org, entry, account),
+  // inserted only by the posting definer (tenant roles read). The row names the fixture's entry, with its own account
+  // code so every row is unique.
+  'crove_finance.period_balance_delta': {
+    make: (o) => ({
+      row: { org_id: o.id, id: randomUUID(), entry_id: o.entry, account_code: `6422.${tag().toUpperCase()}`, period_month: '2026-10-01', debit: '100', credit: '0', line_count: 1 },
+    }),
   },
   // The period lock of an org (#329): one row per org, the months locked so far. Tenant roles only read it; the lock
   // and unlock definers write it. The rows exist for both orgs: the posting guard creates an org's row (nothing locked)
