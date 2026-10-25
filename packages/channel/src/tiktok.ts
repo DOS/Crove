@@ -450,6 +450,9 @@ export class TikTokPublisher implements Publisher {
     try {
       answer = await this.client.call('POST', '/video/query/?fields=id,view_count,like_count,comment_count,share_count', s.accessToken, { filters: { video_ids: [input.externalId] } });
     } catch (error) {
+      // TikTok answers a missing grant (no video.list, the default) with 401 too: that is no counts, never an expired
+      // token, which would mark the connection expired (#1546).
+      if (error instanceof TikTokError && (error.code === 'scope_not_authorized' || error.code === 'scope_permission_missed')) return null;
       if (error instanceof TikTokError && (error.status === 401 || error.code === 'access_token_invalid')) return { refused: 'token_expired' };
       return null;
     }
