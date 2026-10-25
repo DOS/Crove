@@ -852,11 +852,11 @@ export function SocialPage() {
                   <>
                     <label className="text-xs">
                       <span className="text-subtle-foreground">{t('filters.from')}</span>
-                      <DateInput className="mt-1 w-44" value={search.from ?? ''} onChange={(from) => setSearch({ from: from || undefined })} />
+                      <DateInput aria-label={t('filters.from')} className="mt-1 w-44" value={search.from ?? ''} onChange={(from) => setSearch({ from: from || undefined })} />
                     </label>
                     <label className="text-xs">
                       <span className="text-subtle-foreground">{t('filters.to')}</span>
-                      <DateInput className="mt-1 w-44" value={search.to ?? ''} onChange={(to) => setSearch({ to: to || undefined })} />
+                      <DateInput aria-label={t('filters.to')} className="mt-1 w-44" value={search.to ?? ''} onChange={(to) => setSearch({ to: to || undefined })} />
                     </label>
                   </>
                 )}

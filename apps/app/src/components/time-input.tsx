@@ -1,13 +1,15 @@
 // A time-of-day field that reads 24-hour HH:mm whatever the browser's language (#1432), where a native time input shows
 // AM/PM with Chrome in English. The value in and out is HH:mm, like the native input it replaces. It works as DateInput
 // does: a whole time sets it at once, a half-typed one marks the field invalid and, on leaving it, puts the last value
-// back, and the button opens the browser's own picker on a hidden native input.
+// back (a whole one reads as HH:mm then: "9h30" becomes "09:30"), and the button opens the browser's own picker on a
+// hidden native input that belongs to no form.
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { useTranslations } from 'use-intl';
 import { ClockIcon } from '@crove/ui/components/clock-icon';
 import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
-import { formatTimeValue, parseTimeText } from '../lib/date-input.ts';
+import { NO_FORM } from './date-input.tsx';
+import { formatTimeValue, parseTimeText, typedValue } from '../lib/date-input.ts';
 
 type Passed = Pick<ComponentProps<'input'>, 'id' | 'required' | 'disabled' | 'readOnly' | 'autoFocus' | 'aria-label' | 'aria-labelledby' | 'aria-describedby'>;
 
@@ -47,13 +49,11 @@ export function TimeInput({
         value={text}
         onChange={(e) => {
           setText(e.target.value);
-          const time = parseTimeText(e.target.value);
-          if (time !== null) onChange(time);
-          else if (e.target.value.trim() === '') onChange('');
+          const next = typedValue(e.target.value, parseTimeText);
+          if (next !== null) onChange(next);
         }}
-        onBlur={() => {
-          if (partial) setText(formatTimeValue(value));
-        }}
+        // The last value back over a half-typed time; a whole one as HH:mm.
+        onBlur={() => setText(formatTimeValue(value))}
       />
       {/* The browser's picker, laid over the button so its popover opens there: never focused or read on its own. */}
       <input
@@ -62,6 +62,7 @@ export function TimeInput({
         step={60}
         tabIndex={-1}
         aria-hidden="true"
+        form={NO_FORM}
         className="pointer-events-none absolute inset-y-0 right-0 w-9 opacity-0"
         value={formatTimeValue(value)}
         onChange={(e) => {

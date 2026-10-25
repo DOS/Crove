@@ -1,6 +1,6 @@
 // Date fields (#1304): what they read and show, whatever the browser's language.
 import { describe, expect, it } from 'vitest';
-import { formatDateValue, formatTimeValue, joinDateTime, parseDateText, parseTimeText, splitDateTime } from '../src/lib/date-input.ts';
+import { changeDateTime, dateFieldError, formatDateValue, formatTimeValue, joinDateTime, parseDateText, parseTimeText, splitDateTime, syncDateTime, typedValue } from '../src/lib/date-input.ts';
 
 describe('date input', () => {
   it('reads a day as dd/mm/yyyy, its short and dashed forms, and ISO', () => {
@@ -64,5 +64,44 @@ describe('time input (#1432)', () => {
     expect(joinDateTime('2026-10-25', '14:30')).toBe('2026-10-25T14:30');
     expect(joinDateTime('2026-10-25', '')).toBe('');
     expect(joinDateTime('', '14:30')).toBe('');
+  });
+});
+
+// What the fields do as a person types (#1432), without a browser: the components call exactly these.
+describe('field behaviour (#1432)', () => {
+  it('sends nothing for a half-typed time or date, so the field keeps its last value, and "" when emptied', () => {
+    expect(typedValue('14:', parseTimeText)).toBeNull();
+    expect(typedValue('9h', parseTimeText)).toBe('09:00');
+    expect(typedValue('14:30', parseTimeText)).toBe('14:30');
+    expect(typedValue('  ', parseTimeText)).toBe('');
+    expect(typedValue('25/10/20', (s) => parseDateText(s, 'day'))).toBeNull();
+  });
+
+  it('marks a date before min or after max on the visible field, half-typed first', () => {
+    expect(dateFieldError('24/10/2026', 'day', '2026-10-25')).toBe('early');
+    expect(dateFieldError('25/10/2026', 'day', '2026-10-25')).toBeNull();
+    expect(dateFieldError('2026-10-26', 'day', undefined, '2026-10-25')).toBe('late');
+    expect(dateFieldError('31/02/2026', 'day', '2026-10-25')).toBe('partial');
+    expect(dateFieldError('', 'day', '2026-10-25')).toBeNull();
+    expect(dateFieldError('09/2026', 'month', undefined, '2026-08')).toBe('late');
+  });
+
+  it('sends "" while one half of a date and time is filled, keeps that half, then the whole value', () => {
+    const date = changeDateTime(splitDateTime(''), { date: '2026-10-25' });
+    expect(date.value).toBe('');
+    const parts = syncDateTime(date.parts, date.value);
+    expect(parts).toEqual({ date: '2026-10-25', time: '' });
+    const both = changeDateTime(parts, { time: '14:30' });
+    expect(both.value).toBe('2026-10-25T14:30');
+    expect(syncDateTime(both.parts, both.value)).toBe(both.parts);
+    // Clearing the time sends "" and keeps the date.
+    const cleared = changeDateTime(both.parts, { time: '' });
+    expect(cleared.value).toBe('');
+    expect(syncDateTime(cleared.parts, '')).toEqual({ date: '2026-10-25', time: '' });
+  });
+
+  it('replaces both halves with a value set from outside, and clears them for a reset', () => {
+    expect(syncDateTime({ date: '2026-10-25', time: '' }, '2026-11-02T09:15')).toEqual({ date: '2026-11-02', time: '09:15' });
+    expect(syncDateTime({ date: '2026-10-25', time: '14:30' }, '')).toEqual({ date: '', time: '' });
   });
 });

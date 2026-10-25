@@ -79,3 +79,36 @@ export function splitDateTime(value: string): { date: string; time: string } {
 export function joinDateTime(date: string, time: string): string {
   return date && time ? `${date}T${time}` : '';
 }
+
+// What the fields do with their text (#1432), kept here so it is tested without a browser.
+
+// The value typing `text` sends: the parsed value, "" for an emptied field, or null (nothing is sent) while the text
+// is half-typed, so the field keeps its last value.
+export function typedValue(text: string, parse: (text: string) => string | null): string | null {
+  const value = parse(text);
+  if (value !== null) return value;
+  return text.trim() === '' ? '' : null;
+}
+
+// What is wrong with a date field's text: half-typed or impossible, or a whole date before min or after max (both ISO,
+// which compare as text). The visible field carries this, never the hidden picker.
+export type DateFieldError = 'partial' | 'early' | 'late' | null;
+export function dateFieldError(text: string, kind: DateKind, min?: string, max?: string): DateFieldError {
+  if (text.trim() === '') return null;
+  const iso = parseDateText(text, kind);
+  if (iso === null) return 'partial';
+  if (min && iso < min) return 'early';
+  if (max && iso > max) return 'late';
+  return null;
+}
+
+// The two halves of a date and time field and the value they send: a half changed by typing (or the picker), and a
+// value set from outside, which replaces both halves unless they already say it ("" while a half is missing keeps them).
+export type DateTimeParts = { date: string; time: string };
+export function changeDateTime(parts: DateTimeParts, change: Partial<DateTimeParts>): { parts: DateTimeParts; value: string } {
+  const next = { ...parts, ...change };
+  return { parts: next, value: joinDateTime(next.date, next.time) };
+}
+export function syncDateTime(parts: DateTimeParts, value: string): DateTimeParts {
+  return value === joinDateTime(parts.date, parts.time) ? parts : splitDateTime(value);
+}

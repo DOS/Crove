@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { IntlProvider } from 'use-intl';
 import { afterEach, describe, expect, it } from 'vitest';
+import { DateInput } from '../src/components/date-input.tsx';
 import { DateTimeInput } from '../src/components/date-time-input.tsx';
 import { TimeInput } from '../src/components/time-input.tsx';
 import { catalog } from '../src/i18n/runtime.ts';
@@ -106,6 +107,17 @@ describe('TimeInput and DateTimeInput', () => {
     const locked = render(<DateTimeInput aria-label="At a time" disabled value="2026-10-25T14:30" onChange={() => undefined} />);
     expect(locked).not.toContain('Open the clock');
     expect(locked).not.toContain('Open the calendar');
+  });
+
+  it('marks a date before min on the visible field, and keeps the hidden pickers out of any form', () => {
+    const html = render(<DateInput aria-label="Date" value="2026-10-20" min="2026-10-25" onChange={() => undefined} />);
+    expect(html).toMatch(/<input[^>]*aria-label="Date"[^>]*aria-invalid="true"/);
+    expect(html).toMatch(/<input[^>]*type="date"[^>]*form="crove-picker-without-form"/);
+    expect(render(<DateInput aria-label="Date" value="2026-10-25" min="2026-10-25" onChange={() => undefined} />)).not.toContain('aria-invalid="');
+    expect(render(<TimeInput aria-label="Time" value="09:30" onChange={() => undefined} />)).toMatch(/type="time"[^>]*form="crove-picker-without-form"/);
+    // The browser's message names the bound as dd/mm/yyyy.
+    expect(catalog('en').common.dateTooEarly).toBe('Must be {min} or later');
+    expect(catalog('vi').common.dateTooEarly).toBe('Không được trước {min}');
   });
 
   it('names the date half by the id a label points to', () => {

@@ -6,6 +6,7 @@
 import { useMutation, useQueries, useQuery } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { useTranslations } from 'use-intl';
+import { SOCIAL_QUEUE_SLOTS_MAX } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Checkbox } from '@crove/ui/components/checkbox';
 import { ChannelSetPicker } from './social-channel-sets.tsx';
@@ -33,6 +34,7 @@ export function QueueSuggestButton({
   onSuggest: (slots: QueueSuggestion[]) => void;
 }) {
   const t = useTranslations('social.queueTools');
+  const ts = useTranslations('social');
   const id = useId();
   // Shared with the "Giờ đẹp" buttons and the other queues on the page.
   const history = useQuery({ ...orpc.social.metrics.summary.queryOptions({ input: { days: BEST_TIME_DAYS } }), staleTime: 10 * 60_000 });
@@ -49,8 +51,8 @@ export function QueueSuggestButton({
           : null;
   return (
     <>
-      {/* A disabled button takes no pointer events, so the reason sits on its wrapper. */}
-      <span title={reason ?? t('suggestHint', { days: String(BEST_TIME_DAYS), zone })}>
+      {/* A disabled button takes no pointer events, so the reason sits on its wrapper: a full queue's first (#1172). */}
+      <span title={full ? ts('queueFull', { max: String(SOCIAL_QUEUE_SLOTS_MAX) }) : (reason ?? t('suggestHint', { days: String(BEST_TIME_DAYS), zone }))}>
         <Button
           type="button"
           variant="outline"

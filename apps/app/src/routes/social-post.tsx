@@ -1912,7 +1912,7 @@ function GbpField({ provider, settings, onChange, disabled }: { provider: string
             </Label>
             <div className="flex gap-1.5">
               <DateInput id={id('start')} value={g.event.startDate} disabled={disabled} className="min-w-0 flex-1" onChange={(startDate) => set({ ...g, event: { ...g.event, startDate } })} />
-              <TimeInput aria-label={t('startTime')} value={g.event.startTime} disabled={disabled} className="w-24 shrink-0" onChange={(startTime) => set({ ...g, event: { ...g.event, startTime } })} />
+              <TimeInput aria-label={t('startTime')} value={g.event.startTime} disabled={disabled} className="w-28 shrink-0" onChange={(startTime) => set({ ...g, event: { ...g.event, startTime } })} />
             </div>
           </div>
           <div className="space-y-1">
@@ -1921,7 +1921,7 @@ function GbpField({ provider, settings, onChange, disabled }: { provider: string
             </Label>
             <div className="flex gap-1.5">
               <DateInput id={id('end')} value={g.event.endDate} disabled={disabled} className="min-w-0 flex-1" onChange={(endDate) => set({ ...g, event: { ...g.event, endDate } })} />
-              <TimeInput aria-label={t('endTime')} value={g.event.endTime} disabled={disabled} className="w-24 shrink-0" onChange={(endTime) => set({ ...g, event: { ...g.event, endTime } })} />
+              <TimeInput aria-label={t('endTime')} value={g.event.endTime} disabled={disabled} className="w-28 shrink-0" onChange={(endTime) => set({ ...g, event: { ...g.event, endTime } })} />
             </div>
           </div>
         </div>

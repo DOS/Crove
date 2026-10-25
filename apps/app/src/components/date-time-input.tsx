@@ -8,7 +8,7 @@ import { useTranslations } from 'use-intl';
 import { cn } from '@crove/ui/lib/utils';
 import { DateInput } from './date-input.tsx';
 import { TimeInput } from './time-input.tsx';
-import { joinDateTime, splitDateTime } from '../lib/date-input.ts';
+import { changeDateTime, splitDateTime, syncDateTime, type DateTimeParts } from '../lib/date-input.ts';
 
 export function DateTimeInput({
   value,
@@ -38,14 +38,14 @@ export function DateTimeInput({
 }) {
   const t = useTranslations('common');
   const [parts, setParts] = useState(() => splitDateTime(value));
-  const joined = joinDateTime(parts.date, parts.time);
   // A value set from outside (a best time, a reset) replaces both halves; "" while a half is missing keeps the other.
   useEffect(() => {
-    if (value !== joined) setParts(splitDateTime(value));
-  }, [value, joined]);
-  const set = (next: { date: string; time: string }) => {
-    setParts(next);
-    onChange(joinDateTime(next.date, next.time));
+    setParts((current) => syncDateTime(current, value));
+  }, [value]);
+  const set = (change: Partial<DateTimeParts>) => {
+    const next = changeDateTime(parts, change);
+    setParts(next.parts);
+    onChange(next.value);
   };
   const minDay = min ? splitDateTime(min).date : '';
 
@@ -56,19 +56,19 @@ export function DateTimeInput({
         disabled={disabled}
         required={required}
         {...(minDay ? { min: minDay } : {})}
-        className="w-36 shrink-0"
+        className="w-40 shrink-0"
         {...(inputClassName ? { inputClassName } : {})}
         value={parts.date}
-        onChange={(date) => set({ ...parts, date })}
+        onChange={(date) => set({ date })}
       />
       <TimeInput
         aria-label={t('time')}
         disabled={disabled}
         required={required}
-        className="w-24 shrink-0"
+        className="w-28 shrink-0"
         {...(inputClassName ? { inputClassName } : {})}
         value={parts.time}
-        onChange={(time) => set({ ...parts, time })}
+        onChange={(time) => set({ time })}
       />
     </span>
   );

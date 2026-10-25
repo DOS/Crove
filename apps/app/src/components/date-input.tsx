@@ -1,13 +1,17 @@
 // A date or month field that reads dd/mm/yyyy and mm/yyyy whatever the browser's language (#1304). The value in and out
 // is ISO, like the native inputs it replaces. Typing a whole, real date sets it at once; a half-typed one marks the field
-// invalid and, on leaving it, puts the last value back. The button opens the browser's own picker on a hidden native
-// input, which keeps min and max.
+// invalid and, on leaving it, puts the last value back. A whole date before min or after max marks it invalid too, with
+// the bound as dd/mm/yyyy (#1432). The button opens the browser's own picker on a hidden native input, which keeps min
+// and max for the picker but belongs to no form, so a submit never stops on that hidden field.
 import { useEffect, useRef, useState, type ComponentProps } from 'react';
 import { useTranslations } from 'use-intl';
 import { CalendarIcon } from '@crove/ui/components/calendar-icon';
 import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
-import { formatDateValue, parseDateText, type DateKind } from '../lib/date-input.ts';
+import { dateFieldError, formatDateValue, parseDateText, typedValue, type DateKind } from '../lib/date-input.ts';
+
+// The form attribute of the hidden pickers: an id no element has, so they belong to no form.
+export const NO_FORM = 'crove-picker-without-form';
 
 type Passed = Pick<ComponentProps<'input'>, 'id' | 'required' | 'disabled' | 'readOnly' | 'autoFocus' | 'min' | 'max' | 'aria-label' | 'aria-labelledby' | 'aria-describedby'>;
 
@@ -29,11 +33,23 @@ export function DateInput({
   useEffect(() => {
     setText((current) => (parseDateText(current, kind) === value ? current : formatDateValue(value, kind)));
   }, [value, kind]);
-  const partial = text.trim() !== '' && parseDateText(text, kind) === null;
-  // A half-typed or impossible date blocks the form's submit, which would otherwise send the last valid value.
+  const lo = min === undefined || min === '' ? undefined : String(min);
+  const hi = max === undefined || max === '' ? undefined : String(max);
+  const error = dateFieldError(text, kind, lo, hi);
+  const partial = error === 'partial';
+  // A half-typed, impossible or out-of-range date blocks the form's submit, which would otherwise send the last valid
+  // value (or one the server refuses), and the browser says why on this field.
+  const message =
+    error === 'partial'
+      ? t(kind === 'day' ? 'invalidDate' : 'invalidMonth')
+      : error === 'early'
+        ? t('dateTooEarly', { min: formatDateValue(lo ?? '', kind) })
+        : error === 'late'
+          ? t('dateTooLate', { max: formatDateValue(hi ?? '', kind) })
+          : '';
   useEffect(() => {
-    field.current?.setCustomValidity(partial ? (kind === 'day' ? t('invalidDate') : t('invalidMonth')) : '');
-  }, [partial, kind, t]);
+    field.current?.setCustomValidity(message);
+  }, [message]);
   const locked = props.disabled || props.readOnly;
 
   return (
@@ -46,14 +62,13 @@ export function DateInput({
         inputMode="numeric"
         autoComplete="off"
         placeholder={kind === 'day' ? t('datePlaceholder') : t('monthPlaceholder')}
-        aria-invalid={partial || undefined}
+        aria-invalid={error !== null || undefined}
         className={cn('w-full pr-9 tabular-nums', inputClassName)}
         value={text}
         onChange={(e) => {
           setText(e.target.value);
-          const iso = parseDateText(e.target.value, kind);
-          if (iso !== null) onChange(iso);
-          else if (e.target.value.trim() === '') onChange('');
+          const next = typedValue(e.target.value, (s) => parseDateText(s, kind));
+          if (next !== null) onChange(next);
         }}
         onBlur={() => {
           if (partial) setText(formatDateValue(value, kind));
@@ -65,6 +80,8 @@ export function DateInput({
         type={kind === 'day' ? 'date' : 'month'}
         tabIndex={-1}
         aria-hidden="true"
+        // No form owns it (no element has this id): its min and max limit the picker, never a submit.
+        form={NO_FORM}
         className="pointer-events-none absolute inset-y-0 right-0 w-9 opacity-0"
         value={value}
         {...(min !== undefined ? { min } : {})}
