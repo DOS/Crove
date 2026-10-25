@@ -89,7 +89,7 @@ suite('TikTok creator options as channel options on PostgreSQL (#1497)', () => {
   const request = (o: Org, connectionId: string) => rt.execute<ChannelOptionList>('social.channel_option.request', { connectionId }, { actor: asUser(o.member), orgId: o.orgId });
   const get = (o: Org, connectionId: string) => rt.query<ChannelOptionList | null>('social.channel_option.get', { connectionId }, { actor: asUser(o.member), orgId: o.orgId });
   const events = (o: Org) =>
-    admin(async (c) => (await c.query<{ payload: { option_id: string; kind: string } }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.channel_option.requested' ORDER BY created_at", [o.orgId])).rows);
+    admin(async (c) => (await c.query<{ payload: { option_id: string; kind: string } }>("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.channel_option.requested' ORDER BY created_at, id", [o.orgId])).rows);
   const optionId = async (o: Org, connectionId: string) =>
     admin(async (c) => (await c.query<{ id: string }>('SELECT id FROM crove_social.channel_option WHERE org_id = $1 AND channel_connection_id = $2', [o.orgId, connectionId])).rows[0]?.id as string);
   const stored = (id: string) => admin(async (c) => (await c.query<{ kind: string; status: string; items: string; error: string | null }>('SELECT kind, status, items::text AS items, error FROM crove_social.channel_option WHERE id = $1', [id])).rows[0]);
