@@ -1695,18 +1695,33 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
           // Reads: none of the org's other rows, all in its default entity.
           const read = expectRows(await probe(scoped, (c) => c.query(`SELECT org_id::text AS org FROM ${table} WHERE ${others}`)), `${where} (read)`);
           expect(read.rows, `${where}: rows of another entity`).toEqual([]);
-          // Inserts: the factory's row (the default entity, named or inherited) is refused.
-          if (can(table, 'crove_app', 'INSERT')) {
-            const inserted = await probe(scoped, async (c) => {
-              const built = factory.make(orgs.A);
-              for (const row of built.setup ?? []) {
-                const q = insertSql(row);
-                await c.query(q.text, q.values);
-              }
+          // Inserts: the factory's row (the default entity, named or inherited from a parent) is refused by RLS. Its
+          // setup rows are committed first as the database owner, so the denial is the target row's, not a parent's.
+          const built = factory.make(orgs.A);
+          // A setup that a deferred check ties to the completing rows (a purchase document and its entry) commits with
+          // them; completing rows that need the target row itself cannot, so then the setup commits alone. A setup that
+          // commits neither way (a line or a void must join its entry in the entry's transaction) leaves the insert probe
+          // out, and only for a factory that already documents why its insert probe is special.
+          let parents = true;
+          if (built.setup?.length) {
+            parents = await adminTx([...built.setup, ...(built.complete ?? [])])
+              .catch(() => adminTx(built.setup ?? []))
+              .then(
+                () => true,
+                (error: unknown) => {
+                  if (!factory.noInsertControl && !factory.insertDenied) throw error;
+                  return false;
+                },
+              );
+          }
+          if (parents && can(table, 'crove_app', 'INSERT')) {
+            const inserted = await probe(scoped, (c) => {
               const q = insertSql({ table, values: built.row });
               return c.query(q.text, q.values);
             });
-            expect(inserted.ok, `${where}: inserting a row of another entity succeeded`).toBe(false);
+            // 42501: row-level security, or a writer guard that keeps every app writer out of this table (portal rows,
+            // tax rates and voids are written by the worker or a definer); either way the target row is refused.
+            expect(inserted, `${where} (insert): a row of another entity must be refused with 42501`).toMatchObject({ ok: false, code: '42501' });
           }
           // Updates and deletes: nothing changes.
           const cols = columnsToUpdate(table, 'crove_app');
