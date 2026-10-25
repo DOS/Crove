@@ -34,4 +34,14 @@ export function canMarkTaxDone(role: string | null | undefined, obligation?: Tax
   return role === 'owner' || role === 'admin' || role === 'member';
 }
 
+// Which legal entity a due row's "done" marks (#1553): each entity marks its own obligations, and the row stays until
+// every entity it lists as open has. The Overview marks the entity chosen in the shell, and only while it is still
+// open, so a user working in one entity never marks another's due. Without a choice (the multi-client home,
+// chosen === undefined, or an entity list not known yet, null) a single open entity is marked, and several send the
+// user to that org's Overview instead.
+export function entityToMark(open: readonly { id: string }[], chosen: string | null | undefined): string | null {
+  if (chosen === undefined || chosen === null) return open.length === 1 ? (open[0]?.id ?? null) : null;
+  return open.some((e) => e.id === chosen) ? chosen : null;
+}
+
 export type { TaxObligation };

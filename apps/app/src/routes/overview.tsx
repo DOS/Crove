@@ -12,7 +12,7 @@ import { NavIcon, type NavIconName } from '@crove/ui/components/nav-icon';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
 import { DueWhen, TONE_CLASS, usePeriodLabel } from '../components/tax-due.tsx';
-import { useChosenEntity } from '../components/entity-switcher.tsx';
+import { useChosenEntity, useLegalEntity } from '../components/entity-switcher.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -22,7 +22,7 @@ import { getConfig } from '../lib/auth.ts';
 import { deadlineTone } from '../lib/clients.ts';
 import { allCounted, waitingItems, type WaitingKey } from '../lib/overview.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
-import { canMarkTaxDone } from '../lib/tax-calendar.ts';
+import { canMarkTaxDone, entityToMark } from '../lib/tax-calendar.ts';
 import { useWorkNotifications } from './notifications.tsx';
 
 
@@ -126,11 +126,15 @@ function AppCards({ slug, vat, vatLoaded }: { slug: string; vat: { period: strin
   );
 }
 
-function DueRow({ due, canMark }: { due: TaxDueView; canMark: boolean }) {
+// A due of the org, marked done by each legal entity on its own (#1553): with several entities the row names the ones
+// still open and marks the entity chosen in the shell.
+function DueRow({ due, canMark, severalEntities, chosen }: { due: TaxDueView; canMark: boolean; severalEntities: boolean; chosen: string | null }) {
   const tt = useTranslations('taxCalendar');
   const periodLabel = usePeriodLabel();
+  const markFor = entityToMark(due.openEntities, chosen);
+  const markName = due.openEntities.find((e) => e.id === markFor)?.name ?? '';
   const done = useMutation({
-    mutationFn: () => client.org.markTaxObligation({ obligation: due.obligation, period: due.period, done: true }),
+    mutationFn: () => client.org.markTaxObligation({ obligation: due.obligation, period: due.period, done: true, ...(markFor ? { legalEntityId: markFor } : {}) }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: orpc.org.overview.key() });
     },
@@ -143,12 +147,17 @@ function DueRow({ due, canMark }: { due: TaxDueView; canMark: boolean }) {
       <TableCell className="px-4 py-3" title={due.legalBasis}>
         {tt(`obligations.${due.obligation}`)}
       </TableCell>
-      <TableCell className="px-4 py-3 text-muted-foreground">{periodLabel(due.period)}</TableCell>
+      <TableCell className="px-4 py-3 text-muted-foreground">
+        {periodLabel(due.period)}
+        {severalEntities && due.openEntities.length > 0 && (
+          <span className="block text-xs text-subtle-foreground">{tt('openEntities', { names: due.openEntities.map((e) => e.name).join(', ') })}</span>
+        )}
+      </TableCell>
       <TableCell className="px-4 py-3 text-right">
-        {canMark && (
+        {canMark && markFor && (
           <Button size="sm" variant="outline" onClick={() => done.mutate()} disabled={done.isPending}>
             {done.isPending ? <Spinner className="text-current" /> : null}
-            {tt('markDone')}
+            {severalEntities ? tt('markDoneFor', { entity: markName }) : tt('markDone')}
           </Button>
         )}
         {done.error && <ErrorText>{errorMessage(done.error)}</ErrorText>}
@@ -178,6 +187,8 @@ export function OverviewPage() {
   const reviews = useQuery({ ...orpc.social.reviewInbox.queryOptions({ input: {} }), enabled: socialOn, refetchInterval: every });
   // Open statement lines of the entity chosen in the shell (#1280), the books the bank screen opens on.
   const entity = useChosenEntity();
+  // Each entity marks its own tax dues (#1553); with several, the rows say which are still open.
+  const books = useLegalEntity(slug);
   const bank = useQuery({ ...orpc.bank.openLines.queryOptions({ input: { legalEntityId: entity.legalEntityId } }), enabled: financeOn && entity.ready, refetchInterval: every });
 
   const counts = {
@@ -289,7 +300,7 @@ export function OverviewPage() {
             <div className="overflow-x-auto">
               <DataTable head={[tt('columns.due'), tt('columns.obligation'), tt('columns.period'), '']}>
                 {dues.map((d) => (
-                  <DueRow key={`${d.obligation}:${d.period}`} due={d} canMark={canMarkTaxDone(role, d.obligation, financeOn)} />
+                  <DueRow key={`${d.obligation}:${d.period}`} due={d} canMark={canMarkTaxDone(role, d.obligation, financeOn)} severalEntities={books.entities.length > 1} chosen={books.entityId} />
                 ))}
               </DataTable>
             </div>
