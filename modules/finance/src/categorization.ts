@@ -18,6 +18,7 @@ import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { descriptionRuleText, keywordRuleText, money, type LearnedRule, type ProposedLine } from '@crove/l10n-vn';
 import { assertUsableAccounts } from './accounts.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const MANAGERS: readonly MemberRole[] = ['owner', 'admin'];
@@ -29,14 +30,16 @@ export const RULE_LIST_LIMIT = 500;
 const USER_CHOSEN_REASON = 'Người dùng chọn';
 
 // The rules a suggestion reads for an invoice of `partyId` (null: a vendor not yet in the books): the vendor's own and
-// every vendor's, each newest first, skipping a rule whose sub-account was deactivated since.
-export async function rulesForSuggestion(ctx: QueryContext, partyId: string | null): Promise<LearnedRule[]> {
+// every vendor's, each newest first, skipping a rule whose sub-account was deactivated since. Rules are learned per
+// legal entity (#1280), so only those of the invoice's entity are read.
+export async function rulesForSuggestion(ctx: QueryContext, partyId: string | null, legalEntityId: string): Promise<LearnedRule[]> {
   const load = async (vendor: boolean) => {
     if (vendor && partyId === null) return [];
     const rows = await ctx.trx
       .selectFrom('crove_finance.categorization_rule as r')
       .select(['r.id', 'r.match_kind', 'r.match_text', 'r.label', 'r.debit_account'])
       .where('r.org_id', '=', ctx.orgId)
+      .where('r.legal_entity_id', '=', legalEntityId)
       .where((eb) => (vendor && partyId !== null ? eb('r.vendor_party_id', '=', partyId) : eb('r.vendor_party_id', 'is', null)))
       .where(({ or, exists, selectFrom }) =>
         or([
@@ -103,9 +106,11 @@ export async function learnFromApproval(
 
 export const categorizationRulesList = defineQuery({
   name: 'finance.categorization_rules.list',
-  input: z.object({}),
+  // The rules of one legal entity (#1280): legalEntityId as in zLegalEntityChoice.
+  input: z.object({ legalEntityId: zId.optional() }),
   access: ALL,
-  handler: async (ctx): Promise<CategorizationRule[]> => {
+  handler: async (ctx, input): Promise<CategorizationRule[]> => {
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     const rows = await ctx.trx
       .selectFrom('crove_finance.categorization_rule as r')
       .leftJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'r.org_id').onRef('p.id', '=', 'r.vendor_party_id'))
@@ -126,6 +131,7 @@ export const categorizationRulesList = defineQuery({
         'd.invoice_date',
       ])
       .where('r.org_id', '=', ctx.orgId)
+      .where('r.legal_entity_id', '=', legalEntityId)
       .orderBy('r.confirmed_at', 'desc')
       .orderBy('r.id', 'desc')
       .limit(RULE_LIST_LIMIT)
@@ -162,6 +168,8 @@ export const createCategorizationRule = defineCommand({
     accountCode: zAccountCode,
     // Omitted or null: the rule applies to every vendor.
     vendorPartyId: zId.nullable().optional(),
+    // The legal entity whose invoices the rule is for (#1280), as in zLegalEntityChoice.
+    legalEntityId: zId.optional(),
   }),
   risk: 'R1',
   access: MANAGERS,
@@ -177,6 +185,7 @@ export const createCategorizationRule = defineCommand({
       });
     }
     await assertUsableAccounts(ctx, [input.accountCode]);
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     const vendorPartyId = input.vendorPartyId ?? null;
     if (vendorPartyId !== null) {
       const party = await ctx.trx.selectFrom('crove_kernel.party').select('id').where('org_id', '=', ctx.orgId).where('id', '=', vendorPartyId).executeTakeFirst();
@@ -186,6 +195,7 @@ export const createCategorizationRule = defineCommand({
       .insertInto('crove_finance.categorization_rule')
       .values({
         org_id: ctx.orgId,
+        legal_entity_id: legalEntityId,
         vendor_party_id: vendorPartyId,
         match_kind: 'keyword',
         match_text: text,
@@ -198,7 +208,7 @@ export const createCategorizationRule = defineCommand({
       .returning('id')
       .executeTakeFirst();
     if (!row) throw new DomainError('RULE_EXISTS', 409, `Đã có quy tắc cho từ khóa "${input.keyword}"; hãy xóa quy tắc cũ trước nếu muốn đổi tài khoản`);
-    ctx.audit({ ruleId: row.id, matchKind: 'keyword', matchText: text, accountCode: input.accountCode, vendorPartyId });
+    ctx.audit({ ruleId: row.id, matchKind: 'keyword', matchText: text, accountCode: input.accountCode, vendorPartyId, legalEntityId });
     return { id: row.id };
   },
 });

@@ -9,10 +9,12 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Table, TableBody, TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { isZeroAmount } from '../lib/decimal.ts';
+import { exportQuery } from '../lib/legal-entity-choice.ts';
 import { OPENING_BALANCE_SOURCE, canImportOpeningBalance } from '../lib/opening-balance.ts';
 import { MAX_REASON_LENGTH, canAskReversal, defaultReversalDate, reversalErrorMessage, reversalFormError } from '../lib/reversal.ts';
 import { canEnterVoucher } from '../lib/vouchers.ts';
@@ -148,12 +150,13 @@ export function JournalPage() {
   const [entering, setEntering] = useState(false);
   const [closing, setClosing] = useState(false);
   const range = { ...(from ? { from } : {}), ...(to ? { to } : {}) };
-  const journal = useQuery(orpc.journal.list.queryOptions({ input: range }));
+  // The journal of the entity chosen in the shell (#1280); the exports follow it.
+  const entity = useChosenEntity();
+  const journal = useQuery({ ...orpc.journal.list.queryOptions({ input: { ...range, legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const org = useQuery(orpc.org.get.queryOptions());
 
   const download = async (path: string, filename: string) => {
-    const params = new URLSearchParams(range);
-    const response = await apiFetch(`${path}?${params}`);
+    const response = await apiFetch(`${path}?${exportQuery(range, entity.legalEntityId)}`);
     const url = URL.createObjectURL(await response.blob());
     const a = document.createElement('a');
     a.href = url;
@@ -257,7 +260,7 @@ export function JournalPage() {
           <ErrorText>{errorMessage(exportXlsx.error ?? exportMisa.error ?? exportMisaGoods.error ?? exportMisaSales.error)}</ErrorText>
         </div>
       )}
-      {journal.isLoading ? (
+      {journal.isPending ? (
         <ListSkeleton />
       ) : journal.error ? (
         <ErrorText>{errorMessage(journal.error)}</ErrorText>

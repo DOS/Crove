@@ -10,7 +10,7 @@
 // (kernel.proposal.edit); it writes nothing.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import { BLOCKING_CHECK_IDS, isRevenueAccount, zAccountCode, zExchangeRate, zLocalDate, zPurchaseProposal, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
+import { BLOCKING_CHECK_IDS, isRevenueAccount, zAccountCode, zExchangeRate, zId, zLocalDate, zPurchaseProposal, type DocumentDirection, type PurchaseProposal, type RelatedInvoiceRef } from '@crove/kernel-contract';
 import { DomainError, defineCommand, type CommandContext } from '@crove/kernel-runtime';
 import {
   PAYABLE_ACCOUNT,
@@ -25,6 +25,7 @@ import {
 } from '@crove/l10n-vn';
 import { assertUsableAccounts, isInactiveDefaultRefusal } from './accounts.ts';
 import { postJournalEntry } from './ledger.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { learnFromApproval } from './categorization.ts';
 import { postReversal } from './reversal.ts';
 import { journalMemo } from './memo.ts';
@@ -82,13 +83,22 @@ export async function upsertParty(ctx: CommandContext, ref: PurchaseProposal['se
 
 // The voided document of this invoice that no later document has replaced yet, or null. There is at most one: every
 // document of an invoice but the first replaces a voided one, each at most once. The same invoice is the same supplier,
-// series and number for a purchase, and the same series and number for a sale (the org numbers its own invoices).
-async function replaceableDocument(ctx: CommandContext, direction: DocumentDirection, partyId: string, series: string, number: string): Promise<string | null> {
+// series and number for a purchase, and the same series and number for a sale (the org numbers its own invoices), in
+// the legal entity the invoice is recorded in (#1280: a document stays in its entity).
+async function replaceableDocument(
+  ctx: CommandContext,
+  legalEntityId: string,
+  direction: DocumentDirection,
+  partyId: string,
+  series: string,
+  number: string,
+): Promise<string | null> {
   let query = ctx.trx
     .selectFrom('crove_finance.purchase_document as d')
     .innerJoin('crove_finance.purchase_document_void as v', (join) => join.onRef('v.org_id', '=', 'd.org_id').onRef('v.document_id', '=', 'd.id'))
     .select('d.id')
     .where('d.org_id', '=', ctx.orgId)
+    .where('d.legal_entity_id', '=', legalEntityId)
     .where('d.direction', '=', direction)
     .where('d.invoice_series', '=', series)
     .where('d.invoice_number', '=', number)
@@ -113,9 +123,10 @@ async function replaceableDocument(ctx: CommandContext, direction: DocumentDirec
 // latest document of that invoice (same direction,
 // same supplier for a purchase), with whether it is voided and its entry. A replacement links to it whether it is in
 // force (this approval voids it) or already voided by a reversal and replaced by nothing yet; an adjustment links only
-// to one in force. The database checks the link again (check_document_corrects).
-async function correctedDocument(ctx: CommandContext, direction: DocumentDirection, partyId: string, related: RelatedInvoiceRef) {
-  const key = `crove_finance.invoice_correction:${ctx.orgId}:${direction}:${direction === 'sale' ? '' : partyId}:${related.series}/${related.number}`;
+// to one in force. The database checks the link again (check_document_corrects). Only a document of the same legal
+// entity (#1280) is corrected.
+async function correctedDocument(ctx: CommandContext, legalEntityId: string, direction: DocumentDirection, partyId: string, related: RelatedInvoiceRef) {
+  const key = `crove_finance.invoice_correction:${ctx.orgId}:${legalEntityId}:${direction}:${direction === 'sale' ? '' : partyId}:${related.series}/${related.number}`;
   await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${key}, 0))`.execute(ctx.trx);
   let query = ctx.trx
     .selectFrom('crove_finance.purchase_document as d')
@@ -136,6 +147,7 @@ async function correctedDocument(ctx: CommandContext, direction: DocumentDirecti
         .as('replaced'),
     ])
     .where('d.org_id', '=', ctx.orgId)
+    .where('d.legal_entity_id', '=', legalEntityId)
     .where('d.direction', '=', direction)
     .where('d.invoice_series', '=', related.series)
     .where('d.invoice_number', '=', related.number);
@@ -218,11 +230,17 @@ export function latePostingRefusal(direction: DocumentDirection, issueDate: stri
 // dated on or before the org's opening entry in force (#366). Otherwise the entry stays on the invoice date, as before
 // #478. Read after the posting: the posted entry holds the org's period_lock row FOR SHARE until commit (the guard on
 // journal_entry), and both a lock and an opening entry need it FOR UPDATE, so neither moves before this posting commits.
-async function lateReason(ctx: CommandContext, issueDate: string, postingDate: string): Promise<'locked' | 'opening'> {
-  const row = await ctx.trx.selectFrom('crove_finance.period_lock').select('locked_through').where('org_id', '=', ctx.orgId).executeTakeFirst();
+// The lock and the opening entry are those of the legal entity the invoice is posted in (#1280).
+async function lateReason(ctx: CommandContext, legalEntityId: string, issueDate: string, postingDate: string): Promise<'locked' | 'opening'> {
+  const row = await ctx.trx
+    .selectFrom('crove_finance.period_lock')
+    .select('locked_through')
+    .where('org_id', '=', ctx.orgId)
+    .where('legal_entity_id', '=', legalEntityId)
+    .executeTakeFirst();
   const lockedThrough = row?.locked_through ?? null;
   if (lockedThrough !== null && issueDate <= lockedThrough) return 'locked';
-  const openingDate = await liveOpeningDate(ctx);
+  const openingDate = await liveOpeningDate(ctx, legalEntityId);
   if (openingDate !== null && issueDate <= openingDate) return 'opening';
   throw new DomainError(
     'POSTING_DATE_NOT_ALLOWED',
@@ -263,12 +281,16 @@ export const revisePurchase = defineCommand({
     lineAccounts: z.array(z.object({ lineNo: z.number().int().positive(), debitAccount: zAccountCode })).max(1000),
     // The rate of a foreign-currency invoice read without one (#918): the proposal is converted to VND at it.
     exchangeRate: zExchangeRate.optional(),
+    // The legal entity whose books the invoice is recorded in (#1280): the editor must see it; approval posts it there.
+    legalEntityId: zId.optional(),
   }),
   risk: 'R1',
   access: 'proposal_revision',
   revises: 'finance.purchase.record',
-  handler: async (ctx, { payload: before, lineAccounts, exchangeRate }) => {
-    const payload = exchangeRate ? withEnteredRate(before, exchangeRate) : before;
+  handler: async (ctx, { payload: before, lineAccounts, exchangeRate, legalEntityId }) => {
+    const rated = exchangeRate ? withEnteredRate(before, exchangeRate) : before;
+    const movesEntity = legalEntityId !== undefined && legalEntityId !== before.legalEntityId;
+    const payload = movesEntity ? { ...rated, legalEntityId: await resolveLegalEntity(ctx, legalEntityId) } : rated;
     const lineNos = new Set(payload.lines.map((l) => l.lineNo));
     if (lineAccounts.some((l) => !lineNos.has(l.lineNo))) throw new DomainError('UNKNOWN_LINE', 422, 'Có dòng không thuộc hóa đơn này');
     const overrides = new Map(lineAccounts.map((l) => [l.lineNo, l.debitAccount]));
@@ -279,7 +301,7 @@ export const revisePurchase = defineCommand({
       chosen.push({ lineNo: l.lineNo, debitAccount: account });
       return { ...l, debitAccount: account, reason: 'Người dùng chọn', accountRule: { source: 'user' as const } };
     });
-    if (chosen.length === 0 && !exchangeRate) return { changed: false as const, payload };
+    if (chosen.length === 0 && !exchangeRate && !movesEntity) return { changed: false as const, payload };
     // The accounts the user picked now; the others are checked again when the proposal is approved.
     assertDirectionAccounts(directionOf(payload), chosen);
     await assertUsableAccounts(ctx, chosen.map((l) => l.debitAccount));
@@ -394,17 +416,20 @@ export const recordPurchase = defineCommand({
       throw new DomainError('TOTAL_MISMATCH', 422, 'Tổng các dòng và thuế không khớp tổng thanh toán của hóa đơn');
     }
 
+    // The legal entity whose books it goes to (#1280): the revision's, else the one resolved for the approver. The
+    // approver must see it.
+    const legalEntityId = await resolveLegalEntity(ctx, payload.legalEntityId);
     const partyId = await upsertParty(ctx, sale ? payload.buyer : payload.seller, direction);
     // The invoice recorded again after its document was voided by a reversal (#165): the new document names the
     // voided one it replaces. Any other document of the same invoice still in force makes this a duplicate, refused
     // by the database (purchase_document_purchase_invoice_uq, purchase_document_sale_invoice_uq,
     // purchase_document_replaces_uq).
-    const replaces = await replaceableDocument(ctx, direction, partyId, invoice.series, invoice.number);
+    const replaces = await replaceableDocument(ctx, legalEntityId, direction, partyId, invoice.series, invoice.number);
     // A replacement or an adjustment invoice (#916): link it to the original, and void the original a replacement takes
     // the place of, reversing its entry on the replacement's posting date, before the replacement is recorded.
     const related = invoice.related ?? null;
     const entryDate = lateDate ?? invoice.issueDate;
-    const corrected = related ? await correctedDocument(ctx, direction, partyId, related) : null;
+    const corrected = related ? await correctedDocument(ctx, legalEntityId, direction, partyId, related) : null;
     let voidedOriginal: string | null = null;
     if (related?.kind === 'replacement' && corrected?.inForce) {
       const entry = await documentEntry(ctx, corrected.id);
@@ -421,6 +446,7 @@ export const recordPurchase = defineCommand({
       .insertInto('crove_finance.purchase_document')
       .values({
         org_id: ctx.orgId,
+        legal_entity_id: legalEntityId,
         direction,
         party_id: partyId,
         invoice_series: invoice.series,
@@ -509,6 +535,7 @@ export const recordPurchase = defineCommand({
       // A purchase invoice's approver may choose a later posting date; a sale posts on its invoice date.
       beforeOpening: sale ? 'fixed' : 'posting_date',
       sourceId: document.id,
+      legalEntityId,
       lines: journal.map((j) => ({
         lineNo: j.lineNo,
         accountCode: j.accountCode,
@@ -518,7 +545,7 @@ export const recordPurchase = defineCommand({
         memo: j.memo,
       })),
     });
-    const late = lateDate ? await lateReason(ctx, invoice.issueDate, lateDate) : null;
+    const late = lateDate ? await lateReason(ctx, legalEntityId, invoice.issueDate, lateDate) : null;
 
     // Remember the debit account carrying the largest amount (either sign) for this vendor. Sales remember nothing.
     const main = sale ? undefined : [...lines].sort((a, b) => money(b.amount).abs().comparedTo(money(a.amount).abs()))[0];
@@ -551,6 +578,7 @@ export const recordPurchase = defineCommand({
 
     ctx.audit({
       direction,
+      legal_entity_id: legalEntityId,
       ...(learned.length > 0 ? { learned_rules: learned } : {}),
       ...(replaces ? { replaces_document_id: replaces } : {}),
       ...(related ? { correction_kind: related.kind, corrects_document_id: corrected?.id ?? null, voided_document_id: voidedOriginal } : {}),

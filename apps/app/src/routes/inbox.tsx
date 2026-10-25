@@ -11,6 +11,7 @@ import { Label } from '@crove/ui/components/label';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { cn } from '@crove/ui/lib/utils';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { IntakePanel, useIntake } from '../components/intake.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
@@ -57,7 +58,9 @@ function isFileStatus(status: string): status is FileStatus {
 function OpenBankLines({ slug }: { slug: string }) {
   const t = useTranslations('inbox');
   const f = useFormat();
-  const open = useQuery(orpc.bank.openLines.queryOptions());
+  // The lines of the entity chosen in the shell (#1280), the books the bank screen opens on.
+  const entity = useChosenEntity();
+  const open = useQuery({ ...orpc.bank.openLines.queryOptions({ input: { legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const accounts = (open.data?.accounts ?? []).filter((a) => a.open > 0);
   if (accounts.length === 0) return null;
   return (

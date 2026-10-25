@@ -232,6 +232,9 @@ export const zPurchaseProposal = z.object({
   extractionMethod: z.enum(['einvoice_xml', 'pdf_text_ai', 'image_ai']),
   // Absent on proposals read before #674.
   signature: zProposalSignature.optional(),
+  // The legal entity whose books the invoice is recorded in (#1280), set by a revision (inbox.edit legalEntityId).
+  // Absent: the entity resolved for the approver as in zLegalEntityChoice (the org's default entity for an owner).
+  legalEntityId: zId.optional(),
 });
 export type PurchaseProposal = z.infer<typeof zPurchaseProposal>;
 
@@ -516,6 +519,9 @@ export const zCashVoucherProposal = z.object({
   total: zVoucherAmount,
   // The bank statement line the voucher settles (#326); absent on vouchers entered by hand.
   bankLineId: zId.optional(),
+  // The legal entity whose books the voucher is posted in (#1280), resolved when it was asked for. Absent on proposals
+  // made before #1280: the entity resolved for the approver.
+  legalEntityId: zId.optional(),
 });
 export type CashVoucherProposal = z.infer<typeof zCashVoucherProposal>;
 
@@ -542,6 +548,9 @@ export const zJournalVoucherProposal = z.object({
     .min(2)
     .max(JOURNAL_VOUCHER_MAX_LINES),
   total: zJournalAmount,
+  // The legal entity whose books the voucher is posted in (#1280), resolved when it was asked for. Absent on proposals
+  // made before #1280: the entity resolved for the approver.
+  legalEntityId: zId.optional(),
 });
 export type JournalVoucherProposal = z.infer<typeof zJournalVoucherProposal>;
 
@@ -934,6 +943,9 @@ export const zVatReturnMark = z.strictObject({
   period: zVatPeriod,
   done: z.boolean(),
   figures: z.strictObject({ carriedIn: zVatWholeDong, deductible: zVatWholeDong, carriedOut: zVatWholeDong }).optional(),
+  // The legal entity whose return it is (#1280), as in zLegalEntityChoice. Only the default entity's return carries
+  // the tax calendar's done mark for now; another entity's is recorded in vat_return_filed alone.
+  legalEntityId: zId.optional(),
 });
 
 // Ledger reports for a month ("2026-09"), a quarter ("2026-Q3") or a year ("2026") (issue #321): the trial balance,

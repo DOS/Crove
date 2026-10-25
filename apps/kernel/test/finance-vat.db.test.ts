@@ -656,8 +656,10 @@ suite('VAT working per month or quarter (#316)', () => {
       { period: '2026-06', status: 'withdrawn', source: null, c22: null, c25: null, c43: null, marked_by: owner.userId },
     ]);
     const audits = await admin(async (c) => (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.vat.return_mark' AND outcome = 'ok' ORDER BY occurred_at`, [org.orgId])).rows);
-    expect(audits.map((a: { detail: Record<string, unknown> }) => a.detail)).toContainEqual({ period: '2026-05', done: true, source: 'computed', recorded: true });
-    expect(audits.map((a: { detail: Record<string, unknown> }) => a.detail)).toContainEqual({ period: '2026-06', done: false, withdrawn: true });
+    // The default legal entity's return (#1280).
+    const entity = { legal_entity_id: expect.any(String) };
+    expect(audits.map((a: { detail: Record<string, unknown> }) => a.detail)).toContainEqual({ period: '2026-05', done: true, source: 'computed', recorded: true, ...entity });
+    expect(audits.map((a: { detail: Record<string, unknown> }) => a.detail)).toContainEqual({ period: '2026-06', done: false, withdrawn: true, ...entity });
     expect(JSON.stringify(audits)).not.toContain('2713332');
 
     // History never changes, not even for the database owner.

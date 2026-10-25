@@ -12,6 +12,7 @@ import { journalMemo } from './memo.ts';
 import { BOOK_CURRENCY, convertInvoice, type ForeignAmounts } from './domain/foreign-currency.ts';
 import { isOwnTaxCode } from './own-tax-code.ts';
 import { rulesForSuggestion } from './categorization.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import {
   bookableLines,
   bookableSaleLines,
@@ -89,6 +90,8 @@ export const purchaseLookup = defineQuery({
     number: z.string(),
     // The invoice a replacement or an adjustment names (#916).
     related: z.object({ series: z.string(), number: z.string() }).nullable().default(null),
+    // The legal entity whose learned rules apply (#1280); omitted, the org's default entity.
+    legalEntityId: zId.optional(),
   }),
   access: 'system',
   handler: async (ctx, input): Promise<InvoiceLookup> => {
@@ -175,7 +178,7 @@ export const purchaseLookup = defineQuery({
     return {
       direction: sale ? 'sale' : 'purchase',
       vendorDefault: rule?.debit_account ?? null,
-      learnedRules: sale ? [] : await rulesForSuggestion(ctx, ruleParty?.id ?? null),
+      learnedRules: sale ? [] : await rulesForSuggestion(ctx, ruleParty?.id ?? null, await resolveLegalEntity(ctx, input.legalEntityId)),
       duplicateDocumentId: document?.id ?? null,
       duplicateProposalId: duplicate?.id ?? null,
       relatedDocumentId: original?.id ?? null,

@@ -25,6 +25,7 @@ import {
   voucherCode,
   zCashVoucherProposal,
   zCashVoucherRequest,
+  zId,
   zLocalDate,
   zVoucherCursor,
   zVoucherType,
@@ -48,6 +49,7 @@ import {
   type VoucherProblem,
 } from './domain/cash-voucher.ts';
 import { postJournalEntry } from './ledger.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import type { CashVoucher } from './misa.ts';
 import { JOURNAL_EXPORT_LIMIT } from './queries.ts';
 
@@ -93,12 +95,20 @@ export const prepareVoucher = defineCommand({
   handler: async (ctx, input) => {
     const partyId = input.partyId ?? null;
     await checkVoucher(ctx, { type: input.type, cashAccount: input.cashAccount, partyId, lines: input.lines });
+    // The legal entity whose books the voucher goes to (#1280): a bank line's own, else the one resolved for the caller.
+    // It is stored with the proposal, so the approver posts it there.
+    let legalEntityId: string;
     if (input.bankLineId) {
       // One voucher proposal per line at a time: a second request for the line waits here for the first to commit,
       // then sees its proposal.
       await lockBankLine(ctx, input.bankLineId);
       const voucher = { type: input.type, date: input.date, cashAccount: input.cashAccount, total: voucherTotal(input.lines) };
-      await checkBankLineVoucher(ctx, input.bankLineId, voucher, { pendingToo: true });
+      const line = await checkBankLineVoucher(ctx, input.bankLineId, voucher, { pendingToo: true, legalEntityId: input.legalEntityId });
+      // The line's entity, checked against the caller's scope like a named one (the line's own policy already hides
+      // another entity's lines).
+      legalEntityId = await resolveLegalEntity(ctx, line.legalEntityId);
+    } else {
+      legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     }
     const party = partyId ? await findParty(ctx, partyId, false) : null;
     const built: CashVoucherProposal = {
@@ -111,6 +121,7 @@ export const prepareVoucher = defineCommand({
       lines: input.lines.map((l) => ({ account: l.account, amount: l.amount, ...(l.memo?.trim() ? { memo: l.memo.trim() } : {}) })),
       total: voucherTotal(input.lines),
       ...(input.bankLineId ? { bankLineId: input.bankLineId } : {}),
+      legalEntityId,
     };
     // The payload is stored as the proposal and parsed again with this schema when it is approved
     // (finance.voucher.record). A payload the schema refuses (a party whose stored name or tax code is longer than a
@@ -143,9 +154,21 @@ export const recordVoucher = defineCommand({
     const total = voucherTotal(payload.lines);
     if (total !== payload.total) throw new DomainError('VOUCHER_INVALID', 422, 'Tổng số tiền không khớp các dòng của chứng từ', { problems: ['TOTAL_MISMATCH'] });
     // The line it settles is checked again: another voucher may have settled it since the proposal was made. The
-    // database checks it once more under the line's lock when the voucher is inserted.
+    // database checks it once more under the line's lock when the voucher is inserted. The voucher is in the line's
+    // legal entity (#1280), else in the one stored with the proposal (resolved again, so the approver must see it).
+    let legalEntityId: string;
     if (payload.bankLineId) {
-      await checkBankLineVoucher(ctx, payload.bankLineId, { type: payload.type, date: payload.date, cashAccount: payload.cashAccount, total }, { pendingToo: false });
+      const line = await checkBankLineVoucher(
+        ctx,
+        payload.bankLineId,
+        { type: payload.type, date: payload.date, cashAccount: payload.cashAccount, total },
+        { pendingToo: false, legalEntityId: payload.legalEntityId },
+      );
+      // The line's entity, checked against the caller's scope like a named one (the line's own policy already hides
+      // another entity's lines).
+      legalEntityId = await resolveLegalEntity(ctx, line.legalEntityId);
+    } else {
+      legalEntityId = await resolveLegalEntity(ctx, payload.legalEntityId);
     }
     const party = partyId ? await findParty(ctx, partyId, true) : null;
     const journal = buildVoucherJournal(payload);
@@ -155,6 +178,7 @@ export const recordVoucher = defineCommand({
       .insertInto('crove_finance.cash_voucher')
       .values({
         org_id: ctx.orgId,
+        legal_entity_id: legalEntityId,
         voucher_type: payload.type,
         voucher_date: payload.date,
         cash_account: payload.cashAccount,
@@ -184,6 +208,7 @@ export const recordVoucher = defineCommand({
       description: voucherEntryDescription(code, described),
       sourceType: VOUCHER_SOURCE,
       sourceId: voucher.id,
+      legalEntityId,
       // A voucher made from a bank statement line has the line's date; any other voucher's date is the user's.
       beforeOpening: payload.bankLineId ? 'fixed' : 'later_date',
       lines: journal.map((j) => ({
@@ -197,7 +222,7 @@ export const recordVoucher = defineCommand({
         memo: j.memo,
       })),
     });
-    ctx.audit({ voucher_type: payload.type, number: voucher.number, amount: total, lines: payload.lines.length });
+    ctx.audit({ voucher_type: payload.type, number: voucher.number, amount: total, lines: payload.lines.length, legal_entity_id: legalEntityId });
     await ctx.activity('finance.cash_voucher', voucher.id, 'voucher.recorded', `Ghi sổ ${VOUCHER_LABELS[payload.type].toLowerCase()} ${code}: ${payload.description}`);
     await ctx.emit('finance.voucher.recorded', { voucherId: voucher.id, journalEntryId, type: payload.type, number: voucher.number });
     return { voucherId: voucher.id, journalEntryId, code };
@@ -210,9 +235,11 @@ export const recordVoucher = defineCommand({
 // follow. A voucher has at most one entry and that entry at most one reversal, so each voucher is one row.
 export const vouchersList = defineQuery({
   name: 'finance.vouchers.list',
-  input: z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), type: zVoucherType.optional(), before: zVoucherCursor.optional() }),
+  input: z.object({ from: zLocalDate.optional(), to: zLocalDate.optional(), type: zVoucherType.optional(), before: zVoucherCursor.optional(), legalEntityId: zId.optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<CashVoucherPage> => {
+    // The vouchers of one legal entity (#1280).
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     let query = ctx.trx
       .selectFrom('crove_finance.cash_voucher as v')
       .leftJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'v.org_id').onRef('p.id', '=', 'v.party_id'))
@@ -238,6 +265,7 @@ export const vouchersList = defineQuery({
         'r.entry_date as reversal_date',
       ])
       .where('v.org_id', '=', ctx.orgId)
+      .where('v.legal_entity_id', '=', legalEntityId)
       .orderBy('v.voucher_date', 'desc')
       .orderBy('v.id', 'desc')
       // One more than a page, to tell whether another page follows.
@@ -276,9 +304,11 @@ export const cashVouchers = defineQuery({
     to: zLocalDate.optional(),
     type: z.enum(['cash_receipt', 'cash_payment']),
     limit: z.number().int().positive().max(JOURNAL_EXPORT_LIMIT).optional(),
+    legalEntityId: zId.optional(),
   }),
   access: ALL,
   handler: async (ctx, input): Promise<CashVoucher[]> => {
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     let query = ctx.trx
       .selectFrom('crove_finance.cash_voucher as v')
       .innerJoin('crove_finance.journal_entry as j', (join) =>
@@ -299,6 +329,7 @@ export const cashVouchers = defineQuery({
         'p.address as party_address',
       ])
       .where('v.org_id', '=', ctx.orgId)
+      .where('v.legal_entity_id', '=', legalEntityId)
       .where('v.voucher_type', '=', input.type)
       .where('r.id', 'is', null)
       .orderBy('v.voucher_date')

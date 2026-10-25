@@ -2,6 +2,7 @@
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
 import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_REQUIRED, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, TIKTOK_PRIVACY_LEVELS, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, LINK_CARD_DESCRIPTION_MAX, LINK_CARD_PROVIDERS, LINK_CARD_TITLE_MAX, linkCardOf, linkCardSize,pinterestSectionOf, IG_HASHTAGS_MAX, IG_MENTIONS_MAX, captionHashtags, captionMentions } from './channels.ts';
+import { REEL_COVER_REFUSED, videoTitleRule } from './channels.ts';
 import { SIGNATURE_MAX, signatureOf, withSignature, withoutSignature } from './signature.ts';
 import { sentLink } from './utm.ts';
 
@@ -139,6 +140,8 @@ export type IssueCode =
   | 'COVER_OUT_OF_RANGE'
   // A video on a channel that cannot post it without a cover image (#1429, a Zalo OA video article's thumbnail).
   | 'COVER_REQUIRED'
+  // A cover on a Reel of a channel whose Reels take none through the API (#1499, Facebook).
+  | 'REEL_COVER_NOT_SUPPORTED'
   // A video of a type the channel does not take (#1429, QuickTime on Zalo OA).
   | 'VIDEO_TYPE_NOT_ALLOWED'
   // The post type (#644): one the channel does not post; a Story that is not one image or video; a Reel that is not one
@@ -334,7 +337,8 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   }
   if (signatureOf(variant.settings) === 'invalid') issues.push({ code: 'SIGNATURE_INVALID', field: 'settings.signature', limit: SIGNATURE_MAX, actual: null });
   // A Discord forum post (#1103) takes the post's title as its name, cut to Discord's limit by the adapter.
-  const titleRule = caps.title ?? (isDiscordForum(variant.provider, variant.settings) ? DISCORD_FORUM_TITLE : null);
+  // A Facebook Page video or Reel (#1499) takes the post's title, where its text and photo posts take none.
+  const titleRule = caps.title ?? videoTitleRule(variant.provider, variant.settings, variant.media) ?? (isDiscordForum(variant.provider, variant.settings) ? DISCORD_FORUM_TITLE : null);
   if (story) {
     // Nothing to check: the title is not sent either.
   } else if (titleRule) checkText(issues, 'title', variant.title ?? '', titleRule);
@@ -759,6 +763,12 @@ function checkCover(issues: Issue[], variant: VariantDraft): void {
   }
   // A Story takes no cover (#644), nor a draft sent to the TikTok inbox (#903): the creator picks it in TikTok.
   const tiktokInbox = variant.provider === 'tiktok' && tiktokModeOf(variant.settings) === 'inbox';
+  // A Facebook Reel (#1499): its feed videos take an image, its Reels none through the API, said apart so the member
+  // knows to change the cover in Facebook.
+  if (postTypeOf(variant.settings) === 'reel' && REEL_COVER_REFUSED.has(variant.provider)) {
+    issues.push({ code: 'REEL_COVER_NOT_SUPPORTED', field, limit: null, actual: null });
+    return;
+  }
   if (postTypeOf(variant.settings) === 'story' || tiktokInbox || !COVER_RULES[variant.provider]?.includes(coverKind(cover))) {
     issues.push({ code: 'COVER_NOT_SUPPORTED', field, limit: null, actual: null });
     return;

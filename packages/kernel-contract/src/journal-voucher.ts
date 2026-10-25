@@ -29,6 +29,8 @@ export const zJournalVoucherRequest = z.object({
   // Diễn giải of the voucher.
   description: z.string().trim().min(1).max(300),
   lines: z.array(zJournalVoucherLineRequest).min(2).max(JOURNAL_VOUCHER_MAX_LINES),
+  // The legal entity whose books it is for (#1280), as in zLegalEntityChoice.
+  legalEntityId: zId.optional(),
 });
 export type JournalVoucherRequest = z.infer<typeof zJournalVoucherRequest>;
 
@@ -40,7 +42,8 @@ export function journalVoucherCode(number: number): string {
 // Year-end closing (issue #889), kết chuyển: classes 5 to 8 to 911, then the year's result to 4212, as a general
 // journal voucher dated the year's last day. A user names the year; the server builds every line from the ledger.
 export const YEAR_CLOSING_COMMAND = 'finance.closing.record';
-export const zYearClosingRequest = z.object({ year: z.number().int().min(2000).max(2100) });
+// Each legal entity closes its own books (#1280): legalEntityId as in zLegalEntityChoice.
+export const zYearClosingRequest = z.object({ year: z.number().int().min(2000).max(2100), legalEntityId: zId.optional() });
 export type YearClosingRequest = z.infer<typeof zYearClosingRequest>;
 // The proposal (kind finance.journal_voucher, shown as one) with the year it closes.
 export const zYearClosingProposal = zJournalVoucherProposal.extend({ closingYear: zYearClosingRequest.shape.year });
@@ -51,7 +54,8 @@ export type YearClosingProposal = z.infer<typeof zYearClosingProposal>;
 // the month; the server builds the lines from the register.
 export const DEPRECIATION_COMMAND = 'finance.depreciation.record';
 export const zMonth = z.string().regex(/^(20\d{2}|2100)-(0[1-9]|1[0-2])$/, 'YYYY-MM');
-export const zDepreciationRequest = z.object({ month: zMonth });
+// The register of one legal entity (#1280): legalEntityId as in zLegalEntityChoice.
+export const zDepreciationRequest = z.object({ month: zMonth, legalEntityId: zId.optional() });
 export type DepreciationRequest = z.infer<typeof zDepreciationRequest>;
 // The proposal (kind finance.journal_voucher, shown as one) with the month and each asset's amount, which recording
 // writes to crove_finance.depreciation_line.

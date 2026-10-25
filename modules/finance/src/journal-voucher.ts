@@ -31,6 +31,7 @@ import {
   type JournalVoucherProblem,
 } from './domain/journal-voucher.ts';
 import { postJournalEntry } from './ledger.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { dateLabel, periodLockState } from './period-lock.ts';
 
 const REQUESTERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -68,9 +69,11 @@ export const prepareJournalVoucher = defineCommand({
   handler: async (ctx, input) => {
     const lines = input.lines.map((l) => ({ ...l, partyId: l.partyId ?? null }));
     const parties = await checkVoucher(ctx, lines, false);
-    // A month already locked is refused now, while the user is still on the form; the posting guard refuses it again
-    // when the proposal is approved, with a lock made since.
-    const { lockedThrough } = await periodLockState(ctx);
+    // The legal entity whose books the voucher goes to (#1280), stored with the proposal so the approver posts it there.
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    // A month already locked (in that entity) is refused now, while the user is still on the form; the posting guard
+    // refuses it again when the proposal is approved, with a lock made since.
+    const { lockedThrough } = await periodLockState(ctx, legalEntityId);
     if (lockedThrough && input.date <= lockedThrough) {
       throw new DomainError('PERIOD_LOCKED', 409, `Sổ đã khóa đến hết ngày ${dateLabel(lockedThrough)}, nên không ghi được bút toán ngày ${dateLabel(input.date)}`, {
         lockedThrough,
@@ -91,6 +94,7 @@ export const prepareJournalVoucher = defineCommand({
         };
       }),
       total: journalVoucherTotal(lines),
+      legalEntityId,
     };
     // The payload is stored as the proposal and parsed again with this schema when it is approved. One the schema
     // refuses (a party whose stored name is longer than a voucher holds, say) could never be approved, so it is
@@ -109,8 +113,11 @@ export const prepareJournalVoucher = defineCommand({
 
 // Inserts the voucher (the database numbers it) and posts its entry, in the command's transaction: the approval of a
 // general journal voucher, and of a year-end closing (year-closing.ts, closingYear set). The payload has been checked.
+// The voucher is numbered and posted in the payload's legal entity (#1280), resolved again for the approver (absent on
+// a proposal made before #1280: the entity resolved for the approver).
 export async function postJournalVoucher(ctx: CommandContext, payload: JournalVoucherProposal, closingYear: number | null = null) {
   if (!ctx.proposalId) throw new DomainError('FORBIDDEN', 403, 'Lệnh này chỉ chạy qua đề xuất đã duyệt');
+  const legalEntityId = await resolveLegalEntity(ctx, payload.legalEntityId);
   const total = journalVoucherTotal(payload.lines);
   const journal = buildJournalVoucherJournal(payload);
   if (!journalIsBalanced(journal)) throw new DomainError('UNBALANCED', 422, 'Bút toán không cân');
@@ -118,6 +125,7 @@ export async function postJournalVoucher(ctx: CommandContext, payload: JournalVo
     .insertInto('crove_finance.journal_voucher')
     .values({
       org_id: ctx.orgId,
+      legal_entity_id: legalEntityId,
       voucher_date: payload.date,
       description: payload.description,
       proposal_id: ctx.proposalId,
@@ -132,6 +140,7 @@ export async function postJournalVoucher(ctx: CommandContext, payload: JournalVo
     description: journalVoucherEntryDescription(code, payload.description),
     sourceType: JOURNAL_VOUCHER_SOURCE,
     sourceId: voucher.id,
+    legalEntityId,
     beforeOpening: 'later_date',
     lines: journal.map((j, i) => ({
       lineNo: j.lineNo,
@@ -142,7 +151,7 @@ export async function postJournalVoucher(ctx: CommandContext, payload: JournalVo
       memo: j.memo,
     })),
   });
-  ctx.audit({ number: voucher.number, total, lines: payload.lines.length, ...(closingYear ? { closingYear } : {}) });
+  ctx.audit({ number: voucher.number, total, lines: payload.lines.length, legal_entity_id: legalEntityId, ...(closingYear ? { closingYear } : {}) });
   await ctx.activity('finance.journal_voucher', voucher.id, 'journal_voucher.recorded', `Ghi sổ ${JOURNAL_VOUCHER_LABEL.toLowerCase()} ${code}: ${payload.description}`);
   await ctx.emit('finance.journal_voucher.recorded', { voucherId: voucher.id, journalEntryId, number: voucher.number });
   return { voucherId: voucher.id, journalEntryId, code };

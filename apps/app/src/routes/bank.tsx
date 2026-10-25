@@ -14,6 +14,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -59,7 +60,9 @@ function StatementImport({ bankAccount, onImported }: { bankAccount: string; onI
   const pick = useRef(0);
 
   const statement = file.status === 'read' && mapping ? statementRows(file.rows, mapping) : null;
-  const input = statement && statement.length > 0 ? { bankAccount, filename: file.status === 'read' ? file.name : '', rows: statement } : null;
+  // The lines go to the books of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
+  const input = statement && statement.length > 0 && entity.ready ? { bankAccount, filename: file.status === 'read' ? file.name : '', rows: statement, legalEntityId: entity.legalEntityId } : null;
   const imported = useMutation(
     orpc.bank.import.mutationOptions({
       onSuccess: (result) => {
@@ -251,7 +254,9 @@ interface ProposeRun {
 function ProposeMatched({ bankAccount, month }: { bankAccount: string; month: string }) {
   const t = useTranslations('bank');
   const f = useFormat();
-  const suggestions = useQuery(orpc.bank.suggestions.queryOptions({ input: { bankAccount, period: month } }));
+  // The open lines of the entity chosen in the shell (#1280); each voucher goes to that entity's books.
+  const entity = useChosenEntity();
+  const suggestions = useQuery({ ...orpc.bank.suggestions.queryOptions({ input: { bankAccount, period: month, legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const [run, setRun] = useState<ProposeRun | null>(null);
   const items = suggestions.data ?? [];
 
@@ -274,6 +279,7 @@ function ProposeMatched({ bankAccount, month }: { bankAccount: string; month: st
             description: voucher.description,
             lines: [{ account: voucher.counterAccount, amount: voucher.amount }],
             bankLineId: item.line.id,
+            legalEntityId: entity.legalEntityId,
           },
         });
         state.done += 1;
@@ -341,7 +347,12 @@ export function BankPage() {
   const canImport = org.data?.role === 'owner' || org.data?.role === 'admin' || org.data?.role === 'member';
   // Bank accounts are sub-accounts of 112 in the chart of accounts, which owners and admins keep (#319).
   const canManageAccounts = org.data?.role === 'owner' || org.data?.role === 'admin';
-  const lines = useQuery({ ...orpc.bank.lines.queryOptions({ input: { bankAccount: account ?? '1121', period: month } }), enabled: account !== null && /^\d{4}-\d{2}$/.test(month) });
+  // The statement lines of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
+  const lines = useQuery({
+    ...orpc.bank.lines.queryOptions({ input: { bankAccount: account ?? '1121', period: month, legalEntityId: entity.legalEntityId } }),
+    enabled: entity.ready && account !== null && /^\d{4}-\d{2}$/.test(month),
+  });
   // The line whose voucher is being entered.
   const [entering, setEntering] = useState<BankLine | null>(null);
 
@@ -383,7 +394,7 @@ export function BankPage() {
             </label>
           </div>
           {canImport && current?.active && (
-            <StatementImport key={account} bankAccount={account} onImported={(_result, to) => to && setMonth(to.slice(0, 7))} />
+            <StatementImport key={`${account}:${entity.legalEntityId ?? ''}`} bankAccount={account} onImported={(_result, to) => to && setMonth(to.slice(0, 7))} />
           )}
           {canImport && /^\d{4}-\d{2}$/.test(month) && <ProposeMatched key={`${account}:${month}`} bankAccount={account} month={month} />}
           {entering && <LineVoucher key={entering.id} slug={slug} line={entering} onClose={() => setEntering(null)} />}
