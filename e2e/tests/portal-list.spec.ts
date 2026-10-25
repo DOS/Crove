@@ -96,12 +96,14 @@ test('import the tax portal purchase list and see which invoices Crove lacks', a
   await expect(page.getByRole('definition').getByText(BUYER_TAX_CODE, { exact: true })).toBeVisible();
 
   await test.step('upload a purchase e-invoice; it waits in the Inbox', async () => {
+    await nav.getByRole('link', { name: 'Trang chủ', exact: true }).click();
     await nav.getByRole('link', { name: 'Hộp thư chứng từ' }).click();
     await page.locator('input[type=file]').setInputFiles(INVOICE);
     await expect(page.getByRole('row').filter({ has: page.getByRole('link', { name: SELLER }) })).toBeVisible({ timeout: 60_000 });
   });
 
   await test.step('open the reconciliation screen: no list yet', async () => {
+    await nav.getByRole('link', { name: 'Kế toán', exact: true }).click();
     await nav.getByRole('link', { name: 'Đối chiếu cổng thuế' }).click();
     await expect(page.getByRole('heading', { name: 'Đối chiếu hóa đơn mua vào với cổng thuế' })).toBeVisible();
     await choosePeriod(page);
@@ -139,6 +141,7 @@ test('import the tax portal purchase list and see which invoices Crove lacks', a
     await form.getByLabel('Email liên hệ của công ty').fill('ketoan@nguoimua.example');
     await form.getByRole('button', { name: 'Lưu email' }).click();
     await expect(page.getByText('ketoan@nguoimua.example', { exact: true })).toBeVisible();
+    await nav.getByRole('link', { name: 'Kế toán', exact: true }).click();
     await nav.getByRole('link', { name: 'Đối chiếu cổng thuế' }).click();
     await choosePeriod(page);
     await expect(card.getByText('Gửi email tới ketoan@nguoimua.example liệt kê 1 hóa đơn', { exact: false })).toBeVisible();

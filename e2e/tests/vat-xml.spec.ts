@@ -26,6 +26,7 @@ test('export the VAT return of a month as the HTKK XML of form 01/GTGT', async (
   const nav = page.getByRole('navigation');
 
   await test.step('the XML export waits for the org tax code', async () => {
+    await nav.getByRole('link', { name: 'Kế toán', exact: true }).click();
     await nav.getByRole('link', { name: 'Tờ khai GTGT' }).click();
     await expect(page.getByRole('button', { name: 'Xuất XML cho HTKK' })).toBeDisabled();
     await expect(page.getByText('Muốn xuất tờ khai XML cho HTKK, hãy nhập mã số thuế của tổ chức trong Cài đặt.')).toBeVisible();
@@ -42,6 +43,7 @@ test('export the VAT return of a month as the HTKK XML of form 01/GTGT', async (
   });
 
   await test.step('upload the e-invoice the org issued and approve the sale with a second factor', async () => {
+    await nav.getByRole('link', { name: 'Trang chủ', exact: true }).click();
     await nav.getByRole('link', { name: 'Hộp thư chứng từ' }).click();
     await page.locator('input[type=file]').setInputFiles(INVOICE);
     const proposal = page.getByRole('row').filter({ has: page.getByRole('link', { name: BUYER }) });
@@ -58,6 +60,7 @@ test('export the VAT return of a month as the HTKK XML of form 01/GTGT', async (
   });
 
   await test.step('download the XML of September 2026 and read it back', async () => {
+    await nav.getByRole('link', { name: 'Kế toán', exact: true }).click();
     await nav.getByRole('link', { name: 'Tờ khai GTGT' }).click();
     await page.getByLabel('Kỳ khai', { exact: true }).selectOption('month');
     await page.getByLabel('Năm', { exact: true }).selectOption('2026');
