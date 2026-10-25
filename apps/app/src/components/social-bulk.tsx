@@ -17,6 +17,7 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { cn } from '@crove/ui/lib/utils';
+import { DateTimeInput } from './date-time-input.tsx';
 import { ErrorText } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, queryClient } from '../lib/api.ts';
@@ -422,10 +423,12 @@ export function BulkBar({
                 </NativeSelect>
               </label>
               {assignEdit.due.mode === 'set' && (
-                <label>
-                  <span className="text-subtle-foreground">{t('assign.dueAt')}</span>
-                  <Input type="datetime-local" className="mt-1 w-52" value={dueValue} onChange={(e) => setDueValue(e.target.value)} />
-                </label>
+                <div>
+                  <span id="bulk-due-label" className="text-subtle-foreground">
+                    {t('assign.dueAt')}
+                  </span>
+                  <DateTimeInput aria-labelledby="bulk-due-label" className="mt-1" value={dueValue} onChange={setDueValue} />
+                </div>
               )}
               <Button size="sm" disabled={busy || !assignment} onClick={applyAssign}>
                 {t('assign.apply')}

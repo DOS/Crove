@@ -396,8 +396,10 @@ test('shows the latest metrics of a published channel on the post and in the Met
 
   // A client report link of today (#643), opened without an account: the totals, the channel and the post.
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date());
-  await panel.getByLabel('Từ ngày', { exact: true }).fill(today);
-  await panel.getByLabel('Đến ngày', { exact: true }).fill(today);
+  // The range is typed as dd/mm/yyyy, whatever the browser's language (#1432).
+  const [ty, tm, td] = today.split('-');
+  await panel.getByLabel('Từ ngày', { exact: true }).fill(`${td}/${tm}/${ty}`);
+  await panel.getByLabel('Đến ngày', { exact: true }).fill(`${td}/${tm}/${ty}`);
   await panel.getByLabel('Tên báo cáo').fill('Báo cáo hôm nay');
   await panel.getByRole('button', { name: 'Tạo liên kết báo cáo' }).click();
   const link = await panel.getByLabel('Liên kết báo cáo').inputValue();
@@ -901,6 +903,18 @@ test('draws a post on six channels as one chip, and "+9" opens every post of the
   const [y, m, d] = day.split('-');
   const title = `Các bài ngày ${d}/${m}/${y}`;
   const dialog = page.getByRole('dialog', { name: title });
+  // A time typed in the date editor above the calendar is still there in the day's list and after it closes (#1350).
+  await page.getByRole('button', { name: 'Đổi ngày dự kiến của bài: Bài sáu kênh' }).focus();
+  await page.keyboard.press('Enter');
+  await page.getByLabel('Giờ', { exact: true }).fill('21:15');
+  await more.click();
+  await expect(dialog.getByLabel('Giờ', { exact: true })).toHaveValue('21:15');
+  await dialog.getByRole('button', { name: 'Đóng' }).click();
+  await expect(dialog).toBeHidden();
+  const editorTime = page.getByLabel('Giờ', { exact: true });
+  await expect(editorTime).toHaveValue('21:15');
+  await page.locator('form').filter({ has: editorTime }).getByRole('button', { name: 'Hủy' }).click();
+  await expect(editorTime).toHaveCount(0);
   await more.focus();
   await page.keyboard.press('Enter');
   await expect(dialog).toBeVisible();

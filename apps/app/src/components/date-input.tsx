@@ -9,17 +9,18 @@ import { Input } from '@crove/ui/components/input';
 import { cn } from '@crove/ui/lib/utils';
 import { formatDateValue, parseDateText, type DateKind } from '../lib/date-input.ts';
 
-type Passed = Pick<ComponentProps<'input'>, 'id' | 'required' | 'disabled' | 'readOnly' | 'min' | 'max' | 'aria-label'>;
+type Passed = Pick<ComponentProps<'input'>, 'id' | 'required' | 'disabled' | 'readOnly' | 'autoFocus' | 'min' | 'max' | 'aria-label' | 'aria-labelledby' | 'aria-describedby'>;
 
 export function DateInput({
   kind = 'day',
   value,
   onChange,
   className,
+  inputClassName,
   min,
   max,
   ...props
-}: Passed & { kind?: DateKind; value: string; onChange: (value: string) => void; className?: string }) {
+}: Passed & { kind?: DateKind; value: string; onChange: (value: string) => void; className?: string; inputClassName?: string }) {
   const t = useTranslations('common');
   const [text, setText] = useState(() => formatDateValue(value, kind));
   const picker = useRef<HTMLInputElement>(null);
@@ -46,7 +47,7 @@ export function DateInput({
         autoComplete="off"
         placeholder={kind === 'day' ? t('datePlaceholder') : t('monthPlaceholder')}
         aria-invalid={partial || undefined}
-        className="w-full pr-9 tabular-nums"
+        className={cn('w-full pr-9 tabular-nums', inputClassName)}
         value={text}
         onChange={(e) => {
           setText(e.target.value);

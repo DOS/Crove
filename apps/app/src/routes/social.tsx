@@ -12,6 +12,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { SOCIAL_IMAGE_TYPES, SOCIAL_VIDEO_TYPES } from '@crove/kernel-contract';
 import { AGENDA_STATUSES, bestTimes, engagementRateOfBases, type PublishedSample } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
+import { DateInput } from '../components/date-input.tsx';
 import { MediaTagEditor, TagFilter, Thumb, sizeLabel, useLibrary, type LibraryItem } from '../components/social-media.tsx';
 import { PEXELS_URL, StockCredit, StockPhotoSearch, pexelsHref, useStockPhotosEnabled } from '../components/social-stock-photos.tsx';
 import { SocialBoard } from '../components/social-board.tsx';
@@ -851,11 +852,11 @@ export function SocialPage() {
                   <>
                     <label className="text-xs">
                       <span className="text-subtle-foreground">{t('filters.from')}</span>
-                      <Input type="date" className="mt-1 w-44" value={search.from ?? ''} onChange={(e) => setSearch({ from: e.target.value || undefined })} />
+                      <DateInput className="mt-1 w-44" value={search.from ?? ''} onChange={(from) => setSearch({ from: from || undefined })} />
                     </label>
                     <label className="text-xs">
                       <span className="text-subtle-foreground">{t('filters.to')}</span>
-                      <Input type="date" className="mt-1 w-44" value={search.to ?? ''} onChange={(e) => setSearch({ to: e.target.value || undefined })} />
+                      <DateInput className="mt-1 w-44" value={search.to ?? ''} onChange={(to) => setSearch({ to: to || undefined })} />
                     </label>
                   </>
                 )}

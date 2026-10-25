@@ -15,6 +15,9 @@ import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
 import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature, editRefusal } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
+import { DateInput } from '../components/date-input.tsx';
+import { DateTimeInput } from '../components/date-time-input.tsx';
+import { TimeInput } from '../components/time-input.tsx';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { AiPhotoPicker, aiDraftInput, useAiPhotos } from '../components/social-ai-photos.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
@@ -1367,10 +1370,10 @@ function RemoveAtField({ settings, disabled, onChange, onApplyAll }: { settings:
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-2">
-        <Label htmlFor={id} className="text-xs">
+        <Label id={`${id}-label`} htmlFor={id} className="text-xs">
           {t('removeAt')}
         </Label>
-        <Input id={id} type="datetime-local" className="h-8 w-auto" disabled={disabled} value={parsed !== null && parsed !== 'invalid' ? toLocalInput(parsed) : ''} onChange={(e) => set(fromLocalInput(e.target.value))} />
+        <DateTimeInput id={id} aria-labelledby={`${id}-label`} disabled={disabled} value={parsed !== null && parsed !== 'invalid' ? toLocalInput(parsed) : ''} onChange={(value) => set(fromLocalInput(value))} />
         {current !== null && (
           <Button variant="ghost" size="sm" disabled={disabled} onClick={() => set(null)}>
             {t('removeAtClear')}
@@ -1908,8 +1911,8 @@ function GbpField({ provider, settings, onChange, disabled }: { provider: string
               {t('starts')}
             </Label>
             <div className="flex gap-1.5">
-              <Input id={id('start')} type="date" value={g.event.startDate} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, event: { ...g.event, startDate: e.target.value } })} />
-              <Input type="time" aria-label={t('startTime')} value={g.event.startTime} disabled={disabled} className="h-8 w-28" onChange={(e) => set({ ...g, event: { ...g.event, startTime: e.target.value } })} />
+              <DateInput id={id('start')} value={g.event.startDate} disabled={disabled} className="min-w-0 flex-1" onChange={(startDate) => set({ ...g, event: { ...g.event, startDate } })} />
+              <TimeInput aria-label={t('startTime')} value={g.event.startTime} disabled={disabled} className="w-24 shrink-0" onChange={(startTime) => set({ ...g, event: { ...g.event, startTime } })} />
             </div>
           </div>
           <div className="space-y-1">
@@ -1917,8 +1920,8 @@ function GbpField({ provider, settings, onChange, disabled }: { provider: string
               {t('ends')}
             </Label>
             <div className="flex gap-1.5">
-              <Input id={id('end')} type="date" value={g.event.endDate} disabled={disabled} className="h-8" onChange={(e) => set({ ...g, event: { ...g.event, endDate: e.target.value } })} />
-              <Input type="time" aria-label={t('endTime')} value={g.event.endTime} disabled={disabled} className="h-8 w-28" onChange={(e) => set({ ...g, event: { ...g.event, endTime: e.target.value } })} />
+              <DateInput id={id('end')} value={g.event.endDate} disabled={disabled} className="min-w-0 flex-1" onChange={(endDate) => set({ ...g, event: { ...g.event, endDate } })} />
+              <TimeInput aria-label={t('endTime')} value={g.event.endTime} disabled={disabled} className="w-24 shrink-0" onChange={(endTime) => set({ ...g, event: { ...g.event, endTime } })} />
             </div>
           </div>
         </div>
@@ -3023,7 +3026,7 @@ function SchedulePanel({ post, names, onDone }: { post: Post; names: Map<string,
       </div>
       {mode === 'time' && !perChannel && (
         <div className="flex flex-wrap items-center gap-2">
-          <Input type="datetime-local" aria-label={t('atTime')} value={when} min={min} onChange={(e) => setWhen(e.target.value)} className="max-w-xs" />
+          <DateTimeInput aria-label={t('atTime')} value={when} min={min} onChange={setWhen} />
           {/* One channel: the shared time is its time (#980). */}
           {only && <BestTimeButton connectionId={only.connectionId} timeZone={post.timeZone} exceptVariantId={only.id} onPick={(at) => setWhen(toLocalInput(at))} />}
         </div>
@@ -3041,7 +3044,7 @@ function SchedulePanel({ post, names, onDone }: { post: Post; names: Map<string,
               <span id={`time-${v.id}`} className="min-w-40 text-foreground">
                 {names.get(v.connectionId) ?? providerName(v.provider)} <span className="text-xs text-subtle-foreground">{providerName(v.provider)}</span>
               </span>
-              <Input type="datetime-local" aria-labelledby={`time-${v.id}`} value={timeOf(v.id)} min={min} onChange={(e) => setTimes((prev) => ({ ...prev, [v.id]: e.target.value }))} className="max-w-xs" />
+              <DateTimeInput aria-labelledby={`time-${v.id}`} value={timeOf(v.id)} min={min} onChange={(value) => setTimes((prev) => ({ ...prev, [v.id]: value }))} />
               <BestTimeButton connectionId={v.connectionId} timeZone={post.timeZone} exceptVariantId={v.id} onPick={(at) => setTimes((prev) => ({ ...prev, [v.id]: toLocalInput(at) }))} />
             </div>
           ))}
@@ -3170,7 +3173,7 @@ function RecurrencePanel({ post, published, onDone }: { post: Post; published: b
           {t('recurrence.time')}
         </Label>
         <div className="flex flex-wrap items-center gap-2">
-          <Input id={`${id}-time`} type="time" className="w-32" value={time} disabled={busy} onChange={(e) => setTime(e.target.value)} />
+          <TimeInput id={`${id}-time`} className="w-28" value={time} disabled={busy} onChange={setTime} />
           <span className="text-xs text-subtle-foreground">{t('recurrence.timeZone', { zone: post.timeZone })}</span>
         </div>
       </div>
@@ -3185,7 +3188,7 @@ function RecurrencePanel({ post, published, onDone }: { post: Post; published: b
             <NativeSelectOption value="times">{t('recurrence.endTimes')}</NativeSelectOption>
             <NativeSelectOption value="both">{t('recurrence.endBoth')}</NativeSelectOption>
           </NativeSelect>
-          {byDate && <Input type="date" aria-label={t('recurrence.untilLabel')} className="w-40" value={until} disabled={busy} onChange={(e) => setUntil(e.target.value)} />}
+          {byDate && <DateInput aria-label={t('recurrence.untilLabel')} className="w-40" value={until} disabled={busy} onChange={setUntil} />}
           {byTimes && (
             <Input type="number" aria-label={t('recurrence.timesLabel')} min={1} max={SOCIAL_RECURRENCE_TIMES_MAX} className="w-24" value={times} disabled={busy} onChange={(e) => setTimes(e.target.value)} />
           )}
@@ -3512,7 +3515,7 @@ function MoveTime({ variantId, connectionId, timeZone, at, onDone }: { variantId
   }
   return (
     <span className="flex flex-wrap items-center gap-2">
-      <Input type="datetime-local" aria-label={t('moveTime')} value={when} min={toLocalInput(new Date().toISOString())} onChange={(e) => setWhen(e.target.value)} className="h-8 max-w-56" />
+      <DateTimeInput aria-label={t('moveTime')} value={when} min={toLocalInput(new Date().toISOString())} onChange={setWhen} />
       <BestTimeButton connectionId={connectionId} timeZone={timeZone} exceptVariantId={variantId} disabled={move.isPending} onPick={(next) => setWhen(toLocalInput(next))} />
       <Button size="sm" disabled={move.isPending || !fromLocalInput(when)} onClick={() => move.mutate()}>
         {t('moveTimeSave')}

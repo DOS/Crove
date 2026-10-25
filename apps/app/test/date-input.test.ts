@@ -1,6 +1,6 @@
 // Date fields (#1304): what they read and show, whatever the browser's language.
 import { describe, expect, it } from 'vitest';
-import { formatDateValue, parseDateText } from '../src/lib/date-input.ts';
+import { formatDateValue, formatTimeValue, joinDateTime, parseDateText, parseTimeText, splitDateTime } from '../src/lib/date-input.ts';
 
 describe('date input', () => {
   it('reads a day as dd/mm/yyyy, its short and dashed forms, and ISO', () => {
@@ -31,5 +31,38 @@ describe('date input', () => {
     expect(formatDateValue('2026-09', 'month')).toBe('09/2026');
     expect(formatDateValue('', 'day')).toBe('');
     expect(formatDateValue('garbage', 'month')).toBe('');
+  });
+});
+
+describe('time input (#1432)', () => {
+  it('reads a 24-hour time, its short and Vietnamese forms, and drops seconds', () => {
+    expect(parseTimeText('14:30')).toBe('14:30');
+    expect(parseTimeText(' 9:05 ')).toBe('09:05');
+    expect(parseTimeText('9h30')).toBe('09:30');
+    expect(parseTimeText('14h')).toBe('14:00');
+    expect(parseTimeText('09.15')).toBe('09:15');
+    expect(parseTimeText('00:00')).toBe('00:00');
+    expect(parseTimeText('23:59:30')).toBe('23:59');
+  });
+
+  it('refuses what is not a whole time of day', () => {
+    for (const text of ['24:00', '12:60', '9:5', '9', '930', '', '2:30 PM', 'trưa']) expect(parseTimeText(text), text).toBeNull();
+  });
+
+  it('shows HH:mm, and nothing for no value', () => {
+    expect(formatTimeValue('09:05')).toBe('09:05');
+    expect(formatTimeValue('09:05:00')).toBe('09:05');
+    expect(formatTimeValue('')).toBe('');
+    expect(formatTimeValue('25:00')).toBe('');
+  });
+
+  it('splits a datetime-local value into its date and time, and joins them back only when both are set', () => {
+    expect(splitDateTime('2026-10-25T14:30')).toEqual({ date: '2026-10-25', time: '14:30' });
+    expect(splitDateTime('2026-10-25T14:30:15')).toEqual({ date: '2026-10-25', time: '14:30' });
+    expect(splitDateTime('')).toEqual({ date: '', time: '' });
+    expect(splitDateTime('2026-10-25')).toEqual({ date: '', time: '' });
+    expect(joinDateTime('2026-10-25', '14:30')).toBe('2026-10-25T14:30');
+    expect(joinDateTime('2026-10-25', '')).toBe('');
+    expect(joinDateTime('', '14:30')).toBe('');
   });
 });

@@ -16,7 +16,22 @@ import { COPY_POSTS_LIMIT, copyQueue, replacedCount, type CopyResult, type CopyS
 
 type Channel = { id: string; provider: string; displayName: string };
 
-export function QueueSuggestButton({ connectionId, timeZone, slots, onSuggest }: { connectionId: string; timeZone: string; slots: readonly { weekday: number; minute: number }[]; onSuggest: (slots: QueueSuggestion[]) => void }) {
+// full: the queue holds as many slots as it may (#1172); fullHint is the id of the note saying so.
+export function QueueSuggestButton({
+  connectionId,
+  timeZone,
+  slots,
+  full = false,
+  fullHint,
+  onSuggest,
+}: {
+  connectionId: string;
+  timeZone: string;
+  slots: readonly { weekday: number; minute: number }[];
+  full?: boolean;
+  fullHint?: string;
+  onSuggest: (slots: QueueSuggestion[]) => void;
+}) {
   const t = useTranslations('social.queueTools');
   const id = useId();
   // Shared with the "Giờ đẹp" buttons and the other queues on the page.
@@ -36,7 +51,14 @@ export function QueueSuggestButton({ connectionId, timeZone, slots, onSuggest }:
     <>
       {/* A disabled button takes no pointer events, so the reason sits on its wrapper. */}
       <span title={reason ?? t('suggestHint', { days: String(BEST_TIME_DAYS), zone })}>
-        <Button type="button" variant="outline" size="sm" disabled={found?.state !== 'ready'} aria-describedby={reason ? `${id}-why` : undefined} onClick={() => found?.state === 'ready' && onSuggest(found.slots)}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={full || found?.state !== 'ready'}
+          aria-describedby={full && fullHint ? fullHint : reason ? `${id}-why` : undefined}
+          onClick={() => !full && found?.state === 'ready' && onSuggest(found.slots)}
+        >
           {t('suggest')}
         </Button>
       </span>
