@@ -27,6 +27,20 @@ export function chooseEntity(entities: readonly VisibleEntity[], kept: string | 
   return (entities.find((e) => e.isDefault) ?? entities[0])?.id ?? null;
 }
 
+// The entity an invoice proposal is recorded in (#1542), and the one to suggest moving it to. A proposal names its entity
+// once a revision set it (inbox.edit); before that the kernel records it in the approver's default entity, so that is
+// what shows. The shell's choice is suggested only for a proposal that names none, when it is another entity.
+export function proposalEntity(
+  entities: readonly VisibleEntity[],
+  proposalEntityId: string | null,
+  chosen: string | null,
+): { effective: string | null; suggest: string | null } {
+  const named = proposalEntityId !== null && entities.some((e) => e.id === proposalEntityId) ? proposalEntityId : null;
+  const effective = named ?? chooseEntity(entities, null);
+  const suggest = proposalEntityId === null && chosen !== null && chosen !== effective ? chosen : null;
+  return { effective, suggest };
+}
+
 // The query string of an /api/export download: its own parameters, and the chosen entity's legalEntityId when there
 // is one (the server answers for the default entity without it).
 export function exportQuery(params: Record<string, string>, legalEntityId: string | undefined): URLSearchParams {

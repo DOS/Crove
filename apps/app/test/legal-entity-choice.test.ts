@@ -1,6 +1,6 @@
 // The legal entity the finance screens work in (#1486): which one, and where the switcher shows.
 import { afterEach, describe, expect, it } from 'vitest';
-import { chooseEntity, exportQuery, isEntityPath, keepEntity, keptEntity, type VisibleEntity } from '../src/lib/legal-entity-choice.ts';
+import { chooseEntity, exportQuery, isEntityPath, keepEntity, keptEntity, proposalEntity, type VisibleEntity } from '../src/lib/legal-entity-choice.ts';
 
 const e = (id: string, isDefault = false): VisibleEntity => ({ id, name: `Pháp nhân ${id}`, isDefault });
 
@@ -38,6 +38,18 @@ describe('legal entity choice', () => {
     // No entity seen (an empty or failed list): the server answers for the default entity.
     expect(exportQuery({ period: '2026-09' }, undefined).toString()).toBe('period=2026-09');
     expect(exportQuery({}, 'e1').toString()).toBe('legalEntityId=e1');
+  });
+
+  it('shows the entity a proposal is recorded in, and suggests the shell choice only for one that names none (#1542)', () => {
+    const all = [e('a'), e('b', true), e('c')];
+    // Named by a revision: that entity, and nothing to suggest.
+    expect(proposalEntity(all, 'c', 'a')).toEqual({ effective: 'c', suggest: null });
+    // Not named: the default entity, and the shell's other choice is suggested.
+    expect(proposalEntity(all, null, 'a')).toEqual({ effective: 'b', suggest: 'a' });
+    expect(proposalEntity(all, null, 'b')).toEqual({ effective: 'b', suggest: null });
+    // Named but not visible to the caller: shown as the default, never suggested over.
+    expect(proposalEntity(all, 'gone', 'a')).toEqual({ effective: 'b', suggest: null });
+    expect(proposalEntity([], null, null)).toEqual({ effective: null, suggest: null });
   });
 
   it('keeps one choice per org', () => {
