@@ -4,7 +4,7 @@
 // found wherever a module's source names one: Kysely table names (`selectFrom('crove_social.post')`), raw SQL and
 // strings alike. A module's tests are held to the same rule. Migrations are checked by the G2 lint
 // (tools/ci/migration-lint.mjs).
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -17,11 +17,11 @@ const SCHEMA = /\bcrove_([a-z][a-z0-9_]*)\./g;
 
 function sources(dir: string): string[] {
   const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    if (SKIPPED_DIRS.has(name)) continue;
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) out.push(...sources(path));
-    else if (/\.(ts|tsx|mts|cts|js|mjs|cjs|sql)$/.test(name)) out.push(path);
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (SKIPPED_DIRS.has(entry.name)) continue;
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sources(path));
+    else if (entry.isFile() && /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|sql)$/.test(entry.name)) out.push(path);
   }
   return out;
 }
