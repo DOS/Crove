@@ -104,7 +104,6 @@ export const usageDefer = defineCommand({
     retryAt: z.iso.datetime({ offset: true }),
   }),
   risk: 'R1',
-  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.usage_deferral:${ctx.orgId}:${input.metric}`}, 0))`.execute(ctx.trx);

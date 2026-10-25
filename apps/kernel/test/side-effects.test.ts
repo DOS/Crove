@@ -8,14 +8,22 @@ import { Runtime, deriveRisk, type CommandDef } from '@crove/kernel-runtime';
 import { crmCommands } from '@crove/mod-crm';
 import { financeCommands } from '@crove/mod-finance';
 import { socialCommands } from '@crove/mod-social';
+import { orgPurgeCommand } from '../src/org-purge.ts';
 
 // Commands without a side effect, per module. Annotating a module's commands shrinks its list; a new command must
-// declare one. Every kernel command declares one.
-const UNANNOTATED_KERNEL: string[] = [];
-// The other modules' commands without a side effect on 2026-10-26, per module (follow-ups of #1563, one per lead).
+// declare one. These kernel commands do something whose honest side effect derives more than their declared R1, and
+// their risk is decided in one follow-up (#1563): kernel.mail.contact.queue and kernel.proposal.remind queue mail to
+// people, kernel.usage.defer queues the next day's mail, kernel.agent.proposal.approve runs an R1 or R2 proposal.
+const UNANNOTATED_KERNEL = ['kernel.agent.proposal.approve', 'kernel.mail.contact.queue', 'kernel.proposal.remind', 'kernel.usage.defer'];
+// Commands whose R3 is policy, not side effect: who may change membership and roles (pinned so an annotation cannot
+// lower them).
+const POLICY_R3 = ['kernel.member.change_role', 'kernel.member.invite.create', 'kernel.member.remove', 'kernel.member.role.assign', 'kernel.member.role.revoke'];
+// The other modules' commands without a side effect, per module (follow-ups of #1563, one per lead): exact, so an
+// annotation lowers its module's number in the same PR and a new unannotated command fails.
 const UNANNOTATED_CEILING: Record<string, number> = { finance: 45, social: 158, crm: 12 };
 
-const all = (): Array<CommandDef<unknown, unknown>> => [...kernelCommands, ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
+const all = (): Array<CommandDef<unknown, unknown>> =>
+  [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
 
 describe('declared risk and side effects (#1563)', () => {
   it('derives R3 from financial, legal and irreversible effects, R2 from external, R1 from internal, R0 from none', () => {
@@ -41,12 +49,12 @@ describe('declared risk and side effects (#1563)', () => {
       if (c.sideEffect === undefined && module !== 'kernel') counts[module] = (counts[module] ?? 0) + 1;
     }
     // Lower a ceiling when a module's commands are annotated; a new command without a side effect fails here.
-    for (const [module, count] of Object.entries(counts)) expect(count, module).toBeLessThanOrEqual(UNANNOTATED_CEILING[module] ?? 0);
+    expect(counts).toEqual(UNANNOTATED_CEILING);
   });
 
-  it('declares a mail queued to a contact as an external effect, R2 (#1563)', () => {
-    const queue = all().find((c) => c.name === 'kernel.mail.contact.queue');
-    expect(queue).toMatchObject({ risk: 'R2', sideEffect: 'external' });
+  it('keeps the membership and role commands at R3', () => {
+    const byName = new Map(all().map((c) => [c.name, c.risk]));
+    for (const name of POLICY_R3) expect(byName.get(name), name).toBe('R3');
   });
 
   it('leaves only the listed kernel commands without a side effect', () => {

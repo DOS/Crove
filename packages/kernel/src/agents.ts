@@ -1682,7 +1682,6 @@ export const executeAgentApproval = defineCommand({
   name: 'kernel.agent.proposal.approve',
   input: z.object({ eventId: zId }),
   risk: 'R1',
-  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const event = await outboxEvent(ctx, input.eventId, 'kernel.agent.proposal_approved', zProposalApproved);

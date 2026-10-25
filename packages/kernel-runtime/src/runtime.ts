@@ -9,9 +9,11 @@ import { sha256Hex } from './storage.ts';
 
 export type Risk = 'R0' | 'R1' | 'R2' | 'R3';
 
-// What a command does beyond its own transaction (plan §4.2, §4.7 "Derived risk", #1563): none (reads or computes
-// only), internal (a reversible write inside Crove), external (an effect outside Crove or visible to customers,
-// including a queued send), financial, legal or irreversible. The declared risk is at least the risk it derives.
+// What a command does (plan §4.2, §4.7 "Derived risk", #1563): none (reads or computes only), internal (a reversible
+// write inside Crove), external (an effect outside Crove or visible to customers, including a queued send), financial,
+// legal or irreversible. It covers everything the command's transaction does, the commands it runs included (an
+// approval runs the approved command), but not what a later command does with what it leaves behind. The declared
+// risk is at least the risk it derives.
 export const SIDE_EFFECTS = ['none', 'internal', 'external', 'financial', 'legal', 'irreversible'] as const;
 export type SideEffect = (typeof SIDE_EFFECTS)[number];
 

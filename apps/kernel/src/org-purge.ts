@@ -88,6 +88,7 @@ export function orgPurgeCommand(deps: { store: BlobStore; held?: HeldCheck | nul
     name: 'kernel.org.purge',
     input: zOrgPurge,
     risk: 'R3',
+    sideEffect: 'irreversible',
     access: 'system',
     handler: async (ctx, input) => {
       // A large org takes longer than the pool's limits (15 s per statement, 10 s idle between them); local to this

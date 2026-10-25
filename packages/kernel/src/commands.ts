@@ -406,7 +406,8 @@ export function inboundRotateCommand(limits: InboundRotateLimits = DEFAULT_INBOU
     name: 'kernel.inbound.rotate',
     input: z.object({}),
     risk: 'R3',
-    sideEffect: 'internal',
+    // The old address stops receiving at once and is never given out again (a tombstone).
+    sideEffect: 'irreversible',
     access: ['owner'],
     handler: async (ctx) => {
       if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đổi được địa chỉ nhận hóa đơn');

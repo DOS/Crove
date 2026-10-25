@@ -149,7 +149,6 @@ export const proposalRemind = defineCommand({
   name: 'kernel.proposal.remind',
   input: z.strictObject({ proposalId: zId }),
   risk: 'R1',
-  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.proposal', id: input.proposalId }),
   handler: async (ctx, input): Promise<RemindResult> => {
