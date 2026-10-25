@@ -1,4 +1,4 @@
--- The deltas of the journal entries posted before 20261101070000 (issue #1284). Idempotent: an entry that already has
+-- The deltas of the journal entries posted before 20261101160000 (issue #1284). Idempotent: an entry that already has
 -- its deltas is skipped, so the statement adds each missing entry once whenever it runs.
 --
 -- Its own migration, so it runs after the new posting body is committed and every new posting appends its own deltas.
