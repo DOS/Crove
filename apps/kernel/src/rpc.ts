@@ -1550,6 +1550,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inFinance(context, (orgId, actor) => runtime.execute('finance.account.update', input, { actor, orgId })),
       ),
     },
+    misaGoodsCodes: {
+      list: os.misaGoodsCodes.list.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.misa_goods_codes.list', {}, { actor, orgId })),
+      ),
+      set: os.misaGoodsCodes.set.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.misa_goods_code.set', input, { actor, orgId })),
+      ),
+      remove: os.misaGoodsCodes.remove.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.misa_goods_code.remove', input, { actor, orgId })),
+      ),
+    },
     accountRules: {
       list: os.accountRules.list.handler(({ context }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.categorization_rules.list', {}, { actor, orgId })),

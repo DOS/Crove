@@ -83,8 +83,8 @@ const FIRM_GUIDE: readonly FirmGuideStep[] = [
     id: 'handover',
     title: 'Bước 7. Đưa số liệu sang phần mềm kế toán của hãng',
     items: [
-      `Nếu hãng dùng MISA SME: ở ${q(vi.nav.journal)} bấm ${q(vi.journal.exportMisa)} và ${q(vi.journal.exportMisaSales)}; ở ${q(vi.nav.vouchers)} bấm ${q(vi.vouchers.exportReceipts)} và ${q(vi.vouchers.exportPayments)}. Mỗi file theo mẫu nhập khẩu từ Excel của MISA.`,
-      'Trước khi nhập vào MISA, điền mã hàng hoặc mã dịch vụ theo danh mục của hãng ({brand} để trống vì không biết mã của hãng), rồi kiểm tra các dòng chưa có thuế suất. Giấy báo Có, giấy báo Nợ chưa xuất được sang MISA.',
+      `Nếu hãng dùng MISA SME: ở ${q(vi.nav.journal)} bấm ${q(vi.journal.exportMisa)}, ${q(vi.journal.exportMisaGoods)} và ${q(vi.journal.exportMisaSales)}; ở ${q(vi.nav.vouchers)} bấm ${q(vi.vouchers.exportReceipts)} và ${q(vi.vouchers.exportPayments)}. Mỗi file theo mẫu nhập khẩu từ Excel của MISA.`,
+      `Hàng mua nhập kho (TK 152, 153, 156) lấy mã hàng và mã kho ở ${q(vi.nav.settings)}, mục ${q(vi.misaGoods.title)}; hãy đặt đúng mã trong danh mục MISA của hãng trước khi xuất. Với các file khác, điền mã hàng hoặc mã dịch vụ theo danh mục của hãng ({brand} để trống vì không biết mã của hãng). Trước khi nhập vào MISA, kiểm tra các dòng chưa có thuế suất. Giấy báo Có, giấy báo Nợ chưa xuất được sang MISA.`,
       `Với phần mềm khác, ${q(vi.journal.export)} ở ${q(vi.nav.journal)} cho file Excel ghi từng dòng Nợ/Có.`,
     ],
   },

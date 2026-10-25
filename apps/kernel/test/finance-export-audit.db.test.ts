@@ -1,6 +1,6 @@
 // No audit row, no download (issue #365): every file export of the finance module writes its audit row through an
 // export command after the file is built, and only then answers with the file. Here the export commands fail as a
-// failed audit write would, and each route must answer an error instead of a file: the journal, both MISA exports, the
+// failed audit write would, and each route must answer an error instead of a file: the journal, the MISA exports, the
 // VAT working and its HTKK XML (finance.vat.export), the ledger reports (finance.ledger.export), the financial
 // statements, also as HTKK XML (#920), and the register of fixed assets (#919). On a real PostgreSQL 17; the commands
 // themselves are covered by the export tests of each report. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run
@@ -134,6 +134,7 @@ suite('finance exports: no audit row, no download (#365)', () => {
   it.each([
     ['the journal', '/api/export/journal.xlsx?from=2026-09-01&to=2026-09-30', 'finance.journal.export'],
     ['MISA purchases', '/api/export/misa/purchases.xlsx?from=2026-09-01&to=2026-09-30', 'finance.journal.export'],
+    ['MISA goods purchases', '/api/export/misa/goods-purchases.xlsx?from=2026-09-01&to=2026-09-30', 'finance.journal.export'],
     ['MISA sales', '/api/export/misa/sales.xlsx?from=2026-09-01&to=2026-09-30', 'finance.journal.export'],
     ['the VAT working', '/api/export/vat.xlsx?period=2026-09', 'finance.vat.export'],
     ['the VAT return as HTKK XML', '/api/export/vat-01gtgt.xml?period=2026-09', 'finance.vat.export'],

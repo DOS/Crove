@@ -44,7 +44,6 @@ const MACHINERY = new Set([
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
   'crove_crm.booking_feed',
-  'crove_finance.misa_goods_code',
   'crove_finance.vat_return_filed',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
