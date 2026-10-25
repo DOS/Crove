@@ -23,10 +23,11 @@ import { invoiceCheckMessage } from '../lib/invoice-checks.ts';
 import { parseExchangeRate } from '../lib/exchange-rate.ts';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { journalVoucherProblem } from '../lib/journal-voucher.ts';
+import { SM_UP, useMediaQuery } from '../lib/media.ts';
 import { toast } from '../lib/toast.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
 import { partySearch } from '../lib/parties.ts';
-import { nextPendingId, previousPendingId } from '../lib/review.ts';
+import { checksByConcern, nextPendingId, previousPendingId } from '../lib/review.ts';
 import { useReviewShortcuts, type ReviewHandlers } from '../lib/review-shortcuts.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
@@ -340,6 +341,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   );
   const accountName = (code: string) => accounts.data?.find((a) => a.code === code)?.name ?? '';
 
+  const wide = useMediaQuery(SM_UP);
   // The decision is said on the Inbox the reviewer goes back to (#1384), in the verb of its button.
   const done = async (said: string) => {
     toast(said);
@@ -484,6 +486,101 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
     if (approve.variables) approve.mutate(approve.variables);
   };
 
+  // The proposal's actions (#1409): in the header from sm up; on a phone, in a bar fixed to the bottom while it is
+  // pending, so the reviewer acts where the entry was read. One placement is rendered, so each button is on the page once.
+  const headerActions = (
+    pending ? (
+      <>
+        {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
+        {reextractButton}
+        {item.canReject && (
+          <Button
+            variant="destructive"
+            size="lg"
+            disabled={busy}
+            onClick={() => {
+              const reason = window.prompt(t('rejectPrompt'));
+              if (reason === null) return;
+              reject.mutate({ id, ...(reason.trim() ? { reason: reason.trim().slice(0, 500) } : {}) });
+            }}
+          >
+            {t('reject')}
+          </Button>
+        )}
+        {item.canEdit && dirty && (
+          <Button
+            variant="outline"
+            size="lg"
+            disabled={busy}
+            onClick={() =>
+              edit.mutate({
+                id,
+                revision: item.revision,
+                idempotencyKey: crypto.randomUUID(),
+                lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
+              })
+            }
+          >
+            {edit.isPending ? <Spinner className="text-current" /> : null}
+            {t('saveEdit')}
+          </Button>
+        )}
+        {item.canApprove && reversal && (
+          <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
+            {approve.isPending ? <Spinner className="text-current" /> : null}
+            {t('approveReversal')}
+          </Button>
+        )}
+        {item.canApprove && voucher && (
+          <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
+            {approve.isPending ? <Spinner className="text-current" /> : null}
+            {t('approveVoucher')}
+          </Button>
+        )}
+        {item.canApprove && journalVoucher && (
+          <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
+            {approve.isPending ? <Spinner className="text-current" /> : null}
+            {t('approveJournalVoucher')}
+          </Button>
+        )}
+        {item.canApprove && !plain && (
+          <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
+            {approve.isPending ? <Spinner className="text-current" /> : null}
+            {t('approve')}
+          </Button>
+        )}
+      </>
+    ) : (
+      <>
+        {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
+        {reextractButton}
+        {item.canResubmit && (
+          <Button
+            size="lg"
+            disabled={busy}
+            onClick={() => {
+              if (!window.confirm(t('confirmResubmit'))) return;
+              resubmit.mutate({ id, idempotencyKey: crypto.randomUUID() });
+            }}
+          >
+            {resubmit.isPending ? <Spinner className="text-current" /> : null}
+            {t('resubmit')}
+          </Button>
+        )}
+        <Badge variant={item.status === 'executed' ? 'success' : item.status === 'expired' ? 'warning' : 'secondary'}>
+          {item.status === 'executed'
+            ? t('executedAt', { at: f.dateTime(item.decidedAt) })
+            : item.status === 'rejected'
+              ? t('rejected')
+              : item.status === 'expired'
+                ? t('expired')
+                : item.status}
+        </Badge>
+        {item.voided && <Badge variant="destructive">{t('voidedBadge')}</Badge>}
+      </>
+    )
+  );
+
   return (
     <>
       <Link to="/o/$slug/inbox" params={{ slug }} className="text-sm text-subtle-foreground hover:text-muted-foreground">
@@ -509,98 +606,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
                       : t('journalVoucherSubtitle', { date: f.date(journalVoucher.date) })
                     : undefined
           }
-          actions={
-            pending ? (
-              <>
-                {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
-                {reextractButton}
-                {item.canReject && (
-                  <Button
-                    variant="destructive"
-                    size="lg"
-                    disabled={busy}
-                    onClick={() => {
-                      const reason = window.prompt(t('rejectPrompt'));
-                      if (reason === null) return;
-                      reject.mutate({ id, ...(reason.trim() ? { reason: reason.trim().slice(0, 500) } : {}) });
-                    }}
-                  >
-                    {t('reject')}
-                  </Button>
-                )}
-                {item.canEdit && dirty && (
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    disabled={busy}
-                    onClick={() =>
-                      edit.mutate({
-                        id,
-                        revision: item.revision,
-                        idempotencyKey: crypto.randomUUID(),
-                        lineAccounts: lines.map((l) => ({ lineNo: l.lineNo, debitAccount: l.debitAccount })),
-                      })
-                    }
-                  >
-                    {edit.isPending ? <Spinner className="text-current" /> : null}
-                    {t('saveEdit')}
-                  </Button>
-                )}
-                {item.canApprove && reversal && (
-                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
-                    {approve.isPending ? <Spinner className="text-current" /> : null}
-                    {t('approveReversal')}
-                  </Button>
-                )}
-                {item.canApprove && voucher && (
-                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
-                    {approve.isPending ? <Spinner className="text-current" /> : null}
-                    {t('approveVoucher')}
-                  </Button>
-                )}
-                {item.canApprove && journalVoucher && (
-                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
-                    {approve.isPending ? <Spinner className="text-current" /> : null}
-                    {t('approveJournalVoucher')}
-                  </Button>
-                )}
-                {item.canApprove && !plain && (
-                  <Button size="lg" disabled={!approveReady} onClick={submitApproval}>
-                    {approve.isPending ? <Spinner className="text-current" /> : null}
-                    {t('approve')}
-                  </Button>
-                )}
-              </>
-            ) : (
-              <>
-                {item.requestedByAgent && <Badge variant="proposal">{t('agentProposed', { name: item.requestedByAgent.name })}</Badge>}
-                {reextractButton}
-                {item.canResubmit && (
-                  <Button
-                    size="lg"
-                    disabled={busy}
-                    onClick={() => {
-                      if (!window.confirm(t('confirmResubmit'))) return;
-                      resubmit.mutate({ id, idempotencyKey: crypto.randomUUID() });
-                    }}
-                  >
-                    {resubmit.isPending ? <Spinner className="text-current" /> : null}
-                    {t('resubmit')}
-                  </Button>
-                )}
-                <Badge variant={item.status === 'executed' ? 'success' : item.status === 'expired' ? 'warning' : 'secondary'}>
-                  {item.status === 'executed'
-                    ? t('executedAt', { at: f.dateTime(item.decidedAt) })
-                    : item.status === 'rejected'
-                      ? t('rejected')
-                      : item.status === 'expired'
-                        ? t('expired')
-                        : item.status}
-                </Badge>
-                {item.voided && <Badge variant="destructive">{t('voidedBadge')}</Badge>}
-              </>
-            )
-          }
+          actions={wide || !pending ? headerActions : undefined}
         />
       </div>
       {stepUp && (
@@ -692,7 +698,8 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
           </ErrorText>
         </div>
       )}
-      {pending && (item.canApprove || item.canEdit) && <p className="mb-4 text-xs text-subtle-foreground">{t('shortcuts')}</p>}
+      {/* A phone has no keyboard for them (#1409). */}
+      {wide && pending && (item.canApprove || item.canEdit) && <p className="mb-4 text-xs text-subtle-foreground">{t('shortcuts')}</p>}
       {pending && dirty && (
         <p className="mb-4 text-sm text-muted-foreground">{t('dirty')}</p>
       )}
@@ -856,7 +863,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
             <Card className="block p-4">
               <p className="text-sm font-medium text-muted-foreground">{t('checks')}</p>
               <ul className="mt-3 space-y-1.5">
-                {payload.checks.map((c) => (
+                {checksByConcern(payload.checks).map((c) => (
                   <li key={c.id} className="flex items-start gap-2 text-sm">
                     <Badge variant={CHECK_TONE[c.status]}>{CHECK_ICON[c.status]}</Badge>
                     <span className="text-muted-foreground">{invoiceCheckMessage(c, root, { money, date: f.date })}</span>
@@ -949,6 +956,15 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         )}
       </div>
       <ProposalTimeline id={item.id} documentId={item.status === 'executed' ? (item.result?.documentId ?? null) : null} />
+      {!wide && pending && (
+        <>
+          {/* Room for the bar below, so the last of the page is not hidden under it. */}
+          <div aria-hidden="true" className="h-20" />
+          <div className="fixed inset-x-0 bottom-0 z-20 flex flex-wrap items-center justify-end gap-2 border-t bg-sidebar px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+            {headerActions}
+          </div>
+        </>
+      )}
     </>
   );
 }

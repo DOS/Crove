@@ -1,6 +1,6 @@
 // Bulk approval batches and review shortcuts (issue #315).
 import { describe, expect, it } from 'vitest';
-import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextAfterDecision, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, showMatched, steppedIndex, type BulkBatch } from '../src/lib/review.ts';
+import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextAfterDecision, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, checksByConcern, showMatched, steppedIndex, type BulkBatch } from '../src/lib/review.ts';
 
 const REVERSAL = 'finance.reversal';
 
@@ -176,5 +176,18 @@ describe('list focus steps (#1405)', () => {
     expect(steppedIndex(-1, 3, 1)).toBe(0);
     expect(steppedIndex(-1, 3, -1)).toBe(2);
     expect(steppedIndex(-1, 0, 1)).toBeNull();
+  });
+});
+
+describe('check order (#1409)', () => {
+  it('lists failed checks first, then warnings, then passes, keeping the stored order in each group', () => {
+    const checks = [
+      { id: 'a', status: 'pass' },
+      { id: 'b', status: 'warn' },
+      { id: 'c', status: 'fail' },
+      { id: 'd', status: 'pass' },
+      { id: 'e', status: 'warn' },
+    ];
+    expect(checksByConcern(checks).map((c) => c.id)).toEqual(['c', 'b', 'e', 'a', 'd']);
   });
 });
