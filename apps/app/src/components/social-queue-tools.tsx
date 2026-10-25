@@ -6,6 +6,7 @@
 import { useMutation, useQueries, useQuery } from '@tanstack/react-query';
 import { useId, useState } from 'react';
 import { useTranslations } from 'use-intl';
+import { SOCIAL_QUEUE_SLOTS_MAX } from '@crove/kernel-contract';
 import { Button } from '@crove/ui/components/button';
 import { Checkbox } from '@crove/ui/components/checkbox';
 import { ChannelSetPicker } from './social-channel-sets.tsx';
@@ -16,8 +17,24 @@ import { COPY_POSTS_LIMIT, copyQueue, replacedCount, type CopyResult, type CopyS
 
 type Channel = { id: string; provider: string; displayName: string };
 
-export function QueueSuggestButton({ connectionId, timeZone, slots, onSuggest }: { connectionId: string; timeZone: string; slots: readonly { weekday: number; minute: number }[]; onSuggest: (slots: QueueSuggestion[]) => void }) {
+// full: the queue holds as many slots as it may (#1172); fullHint is the id of the note saying so.
+export function QueueSuggestButton({
+  connectionId,
+  timeZone,
+  slots,
+  full = false,
+  fullHint,
+  onSuggest,
+}: {
+  connectionId: string;
+  timeZone: string;
+  slots: readonly { weekday: number; minute: number }[];
+  full?: boolean;
+  fullHint?: string;
+  onSuggest: (slots: QueueSuggestion[]) => void;
+}) {
   const t = useTranslations('social.queueTools');
+  const ts = useTranslations('social');
   const id = useId();
   // Shared with the "Giờ đẹp" buttons and the other queues on the page.
   const history = useQuery({ ...orpc.social.metrics.summary.queryOptions({ input: { days: BEST_TIME_DAYS } }), staleTime: 10 * 60_000 });
@@ -34,9 +51,16 @@ export function QueueSuggestButton({ connectionId, timeZone, slots, onSuggest }:
           : null;
   return (
     <>
-      {/* A disabled button takes no pointer events, so the reason sits on its wrapper. */}
-      <span title={reason ?? t('suggestHint', { days: String(BEST_TIME_DAYS), zone })}>
-        <Button type="button" variant="outline" size="sm" disabled={found?.state !== 'ready'} aria-describedby={reason ? `${id}-why` : undefined} onClick={() => found?.state === 'ready' && onSuggest(found.slots)}>
+      {/* A disabled button takes no pointer events, so the reason sits on its wrapper: a full queue's first (#1172). */}
+      <span title={full ? ts('queueFull', { max: String(SOCIAL_QUEUE_SLOTS_MAX) }) : (reason ?? t('suggestHint', { days: String(BEST_TIME_DAYS), zone }))}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={full || found?.state !== 'ready'}
+          aria-describedby={full && fullHint ? fullHint : reason ? `${id}-why` : undefined}
+          onClick={() => !full && found?.state === 'ready' && onSuggest(found.slots)}
+        >
           {t('suggest')}
         </Button>
       </span>

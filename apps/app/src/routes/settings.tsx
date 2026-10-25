@@ -13,6 +13,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { StepUpPrompt, TwoFactorCard } from '../components/two-factor.tsx';
 import { ChartOfAccountsCard } from './accounts.tsx';
 import { MisaGoodsCodesCard } from './misa-goods-codes.tsx';
+import { AccountRulesCard } from './account-rules.tsx';
 import { LegalEntitiesCard } from './legal-entities.tsx';
 import { MemberRolesRow } from './member-roles.tsx';
 import { WorkingHoursCard } from './working-hours.tsx';
@@ -1074,6 +1075,8 @@ export function SettingsPage() {
         {getConfig().modules.includes('finance') && <ChartOfAccountsCard canManage={canManage} />}
         {/* The MISA codes of stock purchases (#1398), for the goods purchase export. */}
         {getConfig().modules.includes('finance') && <MisaGoodsCodesCard key={org.data?.slug} canManage={canManage} />}
+        {/* The account rules learned from approvals, and keyword rules (#1399). */}
+        {getConfig().modules.includes('finance') && org.data && <AccountRulesCard key={org.data.slug} canManage={canManage} />}
         <TwoFactorCard />
         {me.data && <MySessions userId={me.data.userId} />}
         {isOwner && org.data && <Offboarding name={org.data.name} slug={org.data.slug} />}

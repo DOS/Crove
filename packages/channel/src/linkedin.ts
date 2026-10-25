@@ -51,6 +51,10 @@ const ORGANIZATION_ID = /^\d{1,32}$/;
 const ORGANIZATION_URN = /^urn:li:organization:(\d{1,32})$/;
 // Pages read from one grant at most (the connect request then keeps OAUTH_MAX_ACCOUNTS_PER_GRANT of them).
 const MAX_PAGES_LISTED = 1000;
+// Pages named during connect (#1096): only those the connect request keeps (OAUTH_MAX_ACCOUNTS_PER_GRANT of
+// @crove/kernel-contract, which the kernel's linkedin-pages-config test holds this to); the rest are listed unnamed,
+// for the count of those left out.
+export const LINKEDIN_PAGES_NAMED = 100;
 const ACL_PAGE_SIZE = 100;
 // Organizations named in one batch lookup.
 const NAME_BATCH = 50;
@@ -243,7 +247,7 @@ export class LinkedInPageConnector implements OAuthConnector {
     const ids = await this.administered(token).catch((error: unknown) => {
       throw connectorError(error);
     });
-    const names = await this.names(token, ids);
+    const names = await this.names(token, ids.slice(0, LINKEDIN_PAGES_NAMED));
     const secret = JSON.stringify({ accessToken: token });
     return ids.map((id) => ({ provider: 'linkedin_page' as const, externalAccountId: id, displayName: (names.get(id) ?? `LinkedIn Page ${id}`).slice(0, 200), scopes: granted, expiresAt, secret }));
   }

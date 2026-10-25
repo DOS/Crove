@@ -6,7 +6,7 @@ import { Skeleton } from '@crove/ui/components/skeleton';
 import { Spinner as SpinnerIcon } from '@crove/ui/components/spinner';
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslations } from 'use-intl';
 import { brandName } from '../i18n/brand.ts';
 import { takeOrgLeftNotice } from '../lib/api.ts';
@@ -129,11 +129,29 @@ export function ListSkeleton({ rows = 3 }: { rows?: number }) {
 
 // A table with one header row; the body rows are TableRow/TableCell from @crove/ui. `numeric` lists the columns that
 // hold amounts: their headers are right-aligned like the amounts (DESIGN.md 4.3).
+// A list's table (DESIGN.md §4.3). Its header stays in view (#1444): a table taller than the window scrolls inside its
+// card, under a pinned header, and only then becomes a tab stop, so the keyboard can scroll it too.
 export function DataTable({ head, numeric = [], children }: { head: string[]; numeric?: number[]; children: ReactNode }) {
+  const scroller = useRef<HTMLDivElement>(null);
+  const [scrolls, setScrolls] = useState(false);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    const measure = () => setScrolls(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, []);
   return (
     <div className="overflow-hidden rounded-xl border bg-card">
-      <Table className="min-w-[640px] [&_td]:whitespace-normal">
-        <TableHeader className="bg-muted">
+      <Table
+        className="min-w-[640px] [&_td]:whitespace-normal"
+        container={{ ref: scroller, className: 'max-h-[max(24rem,calc(100dvh-10rem))] overflow-y-auto', tabIndex: scrolls ? 0 : undefined }}
+      >
+        {/* The rule under the header is a shadow: a collapsed border does not move with a sticky row. */}
+        <TableHeader className="sticky top-0 z-10 bg-muted [&_th]:bg-muted [&_th]:shadow-[inset_0_-1px_0_var(--color-border)] [&_tr]:border-b-0">
           <TableRow className="hover:bg-transparent">
             {head.map((h, i) => (
               <TableHead key={i} className={cn('px-4 text-xs font-medium text-subtle-foreground', numeric.includes(i) && 'text-right')}>

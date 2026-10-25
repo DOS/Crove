@@ -2,6 +2,7 @@
 // to come down by the worker's sweep (no member, no reason), the remove job takes it down, and the channel shows it as
 // removed by nobody. A channel whose adapter cannot remove, a post that went out after its takedown time and one
 // already asked for are never picked; the commands refuse a takedown less than five minutes after the post goes out.
+// A planned ask whose job never recorded an answer is told to the owners and admins by its watch (#937).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
 import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
-import { removeWindowMs, runPublishJob, runRemoveJob, socialCommands, socialQueries, sweepRemovals, type PostView, type Provider } from '@crove/mod-social';
+import { removeWindowMs, runPublishJob, runRemoveJob, runRemoveWatch, socialCommands, socialQueries, sweepRemovals, type PostView, type Provider } from '@crove/mod-social';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -147,7 +148,7 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
 
     expect(await sweep()).toBeGreaterThanOrEqual(1);
     const asked = await requested(o, id);
-    expect(asked).toEqual([{ post_id: postId, variant_id: id, provider: 'sandbox', after: null }]);
+    expect(asked).toEqual([{ post_id: postId, variant_id: id, provider: 'sandbox', after: null, scheduled: true }]);
     expect(await variant(o, postId)).toMatchObject({ status: 'published', removal: { state: 'pending', code: null } });
     const audit = await admin(async (c) => (await c.query<{ actor_type: string; detail: Record<string, unknown> }>("SELECT actor_type, detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'social.remove.schedule' AND outcome = 'ok'", [o.orgId])).rows);
     expect(audit).toEqual([{ actor_type: 'system', detail: expect.objectContaining({ post_id: postId, variant_id: id, provider: 'sandbox', scheduled: true, remove_at: new Date(Date.parse(removeAt)).toISOString() }) }]);
@@ -192,7 +193,7 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     const { postId, id } = await publishedPost(o, platform, { removeAt: today22, publishedAgoMs: 12 * 3_600_000, provider: 'bluesky', account: DID, secret: JSON.stringify({ identifier: DID, appPassword: 'abcd-efgh-ijkl-mnop' }) });
 
     expect(await sweep(['bluesky'])).toBeGreaterThanOrEqual(1);
-    expect(await requested(o, id)).toEqual([{ post_id: postId, variant_id: id, provider: 'bluesky', after: null }]);
+    expect(await requested(o, id)).toEqual([{ post_id: postId, variant_id: id, provider: 'bluesky', after: null, scheduled: true }]);
     expect(await runRemoveJob({ runtime: worker, broker: vault, publishers: { bluesky: platform }, callTimeoutMs: 2_000 }, o.orgId, id, 'bluesky', null)).toEqual({ action: 'call', state: 'succeeded' });
     expect(deleted).toEqual([{ repo: DID, collection: 'app.bsky.feed.post', rkey: RKEY }]);
     expect(await variant(o, postId)).toMatchObject({ status: 'removed', removedBy: null });
@@ -224,12 +225,12 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     const yearly = await publishedPost(o, sandbox, { removeAt: inVietnam(Date.now() - 1_800_000), publishedAgoMs: 365 * 86_400_000 + 1_800_000 });
 
     await sweep(['sandbox', 'telegram', 'threads']);
-    expect(await requested(o, yearly.id)).toEqual([{ post_id: yearly.postId, variant_id: yearly.id, provider: 'sandbox', after: null }]);
+    expect(await requested(o, yearly.id)).toEqual([{ post_id: yearly.postId, variant_id: yearly.id, provider: 'sandbox', after: null, scheduled: true }]);
     for (const v of [other, late, later, broken, garbled, close, far, stale]) {
       expect(await requested(o, v.id)).toEqual([]);
       expect((await variant(o, v.postId)).status).toBe('published');
     }
-    expect(await requested(o, fresh.id)).toEqual([{ post_id: fresh.postId, variant_id: fresh.id, provider: 'telegram', after: null }]);
+    expect(await requested(o, fresh.id)).toEqual([{ post_id: fresh.postId, variant_id: fresh.id, provider: 'telegram', after: null, scheduled: true }]);
     for (const v of [late, later, broken, garbled, close, far, stale]) expect(await due(['sandbox', 'telegram'])).not.toContain(v.id);
     // The command checks again on its own: a provider outside REMOVE_READY, a late publish.
     const schedule = (variantId: string) => worker.execute('social.remove.schedule', { variantId }, { actor: { type: 'system', component: 'social.remove' }, orgId: o.orgId });
@@ -314,6 +315,71 @@ suite('taking a post down at a set time on PostgreSQL (#861)', () => {
     expect(second?.payload).toEqual({ post_id: asked.postId, variant_id: asked.id, provider: 'sandbox', code: 'NO_RIGHTS' });
     expect(await dispatch(second?.id as string)).toEqual({ sent: 0, mailed: 0, push: [] });
     expect(await notices(asked.postId)).toEqual([]);
+  });
+
+  // #937: the remove queue never retries, so a worker that died before or during the call left the planned ask with no
+  // answer, and nobody was told. The watch, queued with the job, tells the owners and admins once and never calls.
+  it('tells the owners and admins once when a planned takedown never got an answer, without calling the platform (#937)', async () => {
+    const o = await org();
+    let removals = 0;
+    const sandbox = new SandboxPublisher();
+    const counting: Publisher = { provider: 'sandbox', publishSafety: sandbox.publishSafety, publish: (i) => sandbox.publish(i), remove: async () => (removals++, { kind: 'removed' }) };
+    const deps = { runtime: worker, broker: vault, publishers: { sandbox: counting }, callTimeoutMs: 2_000 };
+    const failures = () => admin(async (c) => (await c.query<{ id: string; payload: Record<string, unknown> }>("SELECT id, payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.variant.remove_failed' ORDER BY created_at", [o.orgId])).rows);
+    const calls = (id: string) => admin(async (c) => (await c.query<{ key: string; state: string; error_kind: string | null; error_code: string | null; finished: boolean }>("SELECT key, state, error_kind, error_code, finished_at IS NOT NULL AS finished FROM crove_kernel.external_call WHERE key LIKE $1 ORDER BY started_at, key", [`social.publish:${id}:%:remove%`])).rows);
+    const age = (id: string) => admin((c) => c.query("UPDATE crove_social.post_variant SET remove_requested_at = now() - interval '11 minutes' WHERE id = $1", [id]));
+
+    // The job never ran. Watched before the ask went stale: nothing yet (the worker runs the watch again later).
+    const lost = await publishedPost(o, counting, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 3_600_000 });
+    await sweep();
+    expect(await runRemoveWatch({ runtime: worker }, o.orgId, lost.id, null)).toEqual({ told: false, reason: 'not_stale' });
+    await age(lost.id);
+    expect(await runRemoveWatch({ runtime: worker }, o.orgId, lost.id, null)).toEqual({ told: true, code: 'REMOVE_NOT_RUN' });
+    expect(await calls(lost.id)).toEqual([{ key: `social.publish:${lost.id}:1:1:remove`, state: 'failed', error_kind: 'transient', error_code: 'REMOVE_NOT_RUN', finished: true }]);
+    expect((await failures()).map((f) => f.payload)).toEqual([{ post_id: lost.postId, variant_id: lost.id, provider: 'sandbox', code: 'REMOVE_NOT_RUN', scheduled: true }]);
+    expect(await variant(o, lost.postId)).toMatchObject({ status: 'published', removal: { state: 'failed', code: 'REMOVE_NOT_RUN' } });
+    const [notice] = await failures();
+    expect(await worker.execute('social.notification.dispatch', { eventId: notice?.id }, { actor: { type: 'system', component: 'social.notify' }, orgId: o.orgId })).toMatchObject({ sent: 1 });
+    // Once: a second watch finds the answer, and the job, had it only been late, stops at its begin.
+    expect(await runRemoveWatch({ runtime: worker }, o.orgId, lost.id, null)).toEqual({ told: false, reason: 'recorded' });
+    expect(await runRemoveJob(deps, o.orgId, lost.id, 'sandbox', null)).toEqual({ action: 'none', reason: 'stale' });
+    expect(removals).toBe(0);
+    expect(await failures()).toHaveLength(1);
+    // A person asks again from the post page: the call is made, the watch of the old ask stays quiet.
+    await exec(o, 'social.variant.remove', { variantId: lost.id });
+    expect(await runRemoveJob(deps, o.orgId, lost.id, 'sandbox', `social.publish:${lost.id}:1:1:remove`)).toEqual({ action: 'call', state: 'succeeded' });
+    expect(removals).toBe(1);
+    expect(await runRemoveWatch({ runtime: worker }, o.orgId, lost.id, null)).toEqual({ told: false, reason: 'not_published' });
+
+    // The worker died mid-call: the call is still started past the stale limit. Its answer is unclear, recorded as such,
+    // and the platform is not asked again.
+    const cut = await publishedPost(o, counting, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 3_600_000 });
+    await sweep();
+    await age(cut.id);
+    const key = `social.publish:${cut.id}:1:1:remove`;
+    await admin((c) => c.query("INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, started_at) VALUES ($1, $2, 'social', 'sandbox', 'remove', 'idempotent', NULL, now() - interval '5 minutes')", [o.orgId, key]));
+    expect(await runRemoveWatch({ runtime: worker }, o.orgId, cut.id, null)).toEqual({ told: false, reason: 'not_stale' });
+    await admin((c) => c.query('DELETE FROM crove_kernel.external_call WHERE org_id = $1 AND key = $2', [o.orgId, key]));
+    await admin((c) => c.query("INSERT INTO crove_kernel.external_call (org_id, key, module, target, step, retry_safety, request_hash, started_at) VALUES ($1, $2, 'social', 'sandbox', 'remove', 'idempotent', NULL, now() - interval '11 minutes')", [o.orgId, key]));
+    expect(await runRemoveWatch({ runtime: worker }, o.orgId, cut.id, null)).toEqual({ told: true, code: 'OUTCOME_UNKNOWN' });
+    expect(await calls(cut.id)).toEqual([{ key, state: 'ambiguous', error_kind: 'unknown', error_code: 'OUTCOME_UNKNOWN', finished: false }]);
+    expect((await failures()).at(-1)?.payload).toEqual({ post_id: cut.postId, variant_id: cut.id, provider: 'sandbox', code: 'OUTCOME_UNKNOWN', scheduled: true });
+    expect(await variant(o, cut.postId)).toMatchObject({ status: 'published', removal: { state: 'unknown', code: 'OUTCOME_UNKNOWN' } });
+    expect(await runRemoveWatch({ runtime: worker }, o.orgId, cut.id, null)).toEqual({ told: false, reason: 'recorded' });
+    expect(removals).toBe(1);
+
+    // A planned takedown whose job recorded its answer: the watch finds it and says nothing.
+    const done = await publishedPost(o, counting, { removeAt: inVietnam(Date.now() - 60_000), publishedAgoMs: 3_600_000 });
+    await sweep();
+    expect(await runRemoveJob(deps, o.orgId, done.id, 'sandbox', null)).toEqual({ action: 'call', state: 'succeeded' });
+    expect(await runRemoveWatch({ runtime: worker }, o.orgId, done.id, null)).toEqual({ told: false, reason: 'not_published' });
+    // A person's own ask is left to them, and a person may not run the watch.
+    const own = await publishedPost(o, counting, { removeAt: null, publishedAgoMs: 3_600_000 });
+    await exec(o, 'social.variant.remove', { variantId: own.id });
+    await age(own.id);
+    expect(await runRemoveWatch({ runtime: worker }, o.orgId, own.id, null)).toEqual({ told: false, reason: 'not_scheduled' });
+    await expect(api.execute('social.remove.watch', { variantId: own.id, after: null }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await failures()).toHaveLength(2);
   });
 
   it('never copies a planned takedown into a duplicate or an evergreen repost', async () => {

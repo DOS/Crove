@@ -9,6 +9,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
+import { DateInput } from '../components/date-input.tsx';
 import { CampaignLine, ColorChoice, LabelChip, refreshLabels, useLabels, type SocialLabel } from '../components/social-labels.tsx';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
@@ -70,13 +71,13 @@ function LabelForm({
               <Label htmlFor={`${id}-from`} className="text-xs">
                 {t('startsOn')}
               </Label>
-              <Input id={`${id}-from`} type="date" value={d.startsOn} disabled={pending} onChange={(e) => setD({ ...d, startsOn: e.target.value })} className="w-44" />
+              <DateInput id={`${id}-from`} value={d.startsOn} disabled={pending} onChange={(startsOn) => setD({ ...d, startsOn })} className="w-44" />
             </div>
             <div className="space-y-1">
               <Label htmlFor={`${id}-to`} className="text-xs">
                 {t('endsOn')}
               </Label>
-              <Input id={`${id}-to`} type="date" value={d.endsOn} min={d.startsOn || undefined} disabled={pending} onChange={(e) => setD({ ...d, endsOn: e.target.value })} className="w-44" />
+              <DateInput id={`${id}-to`} value={d.endsOn} min={d.startsOn || undefined} disabled={pending} onChange={(endsOn) => setD({ ...d, endsOn })} className="w-44" />
             </div>
             <div className="space-y-1">
               <Label htmlFor={`${id}-utm-campaign`} className="text-xs">

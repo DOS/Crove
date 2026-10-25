@@ -21,6 +21,7 @@ export interface CroveFinanceSchema {
   'crove_finance.account': FinanceAccountTable;
   'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
+  'crove_finance.categorization_rule': FinanceCategorizationRuleTable;
   'crove_finance.depreciation_line': FinanceDepreciationLineTable;
   'crove_finance.fixed_asset': FinanceFixedAssetTable;
   'crove_finance.input_vat_check': FinanceInputVatCheckTable;
@@ -236,6 +237,21 @@ export interface FinanceCashVoucherTable {
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   bank_line_id: ColumnType<string | null, string | null, NotGranted>;
+}
+
+/** crove_finance.categorization_rule */
+export interface FinanceCategorizationRuleTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  vendor_party_id: ColumnType<string | null, string | null, NotGranted>;
+  match_kind: ColumnType<string, string, NotGranted>;
+  match_text: ColumnType<string, string, NotGranted>;
+  label: string | null;
+  debit_account: string;
+  confirmed_by: string | null;
+  confirmed_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  source_document_id: string | null;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_finance.depreciation_line */
@@ -839,6 +855,7 @@ export interface KernelMemberInviteTable {
   accepted_by: ColumnType<string | null, string | null, NotGranted>;
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
+  legal_entity_ids: ColumnType<string[] | null, string[] | null, NotGranted>;
 }
 
 /** crove_kernel.notification_mute */
