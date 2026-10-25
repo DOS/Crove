@@ -495,23 +495,39 @@ describe('TikTokPublisher.listRecentPosts', () => {
   });
 
   it('reads on by the cursor while has_more, and stops without more, on a cursor that does not move back, or at the page cap', async () => {
+    // Cursors are create times in ms inside the window, moving back.
+    const c1 = Date.now() - 2 * DAY;
+    const c2 = Date.now() - 3 * DAY;
     const page = (from: number, n: number) => Array.from({ length: n }, (_, i) => video(`74300000000${String(1000 + from + i).padStart(8, '0')}`, DAY + (from + i) * 60_000));
-    const { calls, fetchImpl } = routes({ [list]: [ok({ videos: page(0, 20), cursor: 1761000000000, has_more: true }), ok({ videos: page(20, 3), cursor: 1760000000000, has_more: false })] });
+    const { calls, fetchImpl } = routes({ [list]: [ok({ videos: page(0, 20), cursor: c1, has_more: true }), ok({ videos: page(20, 3), cursor: c2, has_more: false })] });
     const result = await new TikTokPublisher(app, fetchImpl).listRecentPosts(input);
     const posts = result && 'posts' in result ? result.posts : [];
     expect(posts).toHaveLength(23);
     expect(posts.every((p, i) => i === 0 || (posts[i - 1] as { publishedAt: Date }).publishedAt >= p.publishedAt)).toBe(true);
-    expect(calls.map((c) => JSON.parse(c.body ?? '{}'))).toEqual([{ max_count: 20 }, { max_count: 20, cursor: 1761000000000 }]);
+    expect(calls.map((c) => JSON.parse(c.body ?? '{}'))).toEqual([{ max_count: 20 }, { max_count: 20, cursor: c1 }]);
 
-    const stuck = routes({ [list]: [ok({ videos: page(0, 20), cursor: 1761000000000, has_more: true }), ok({ videos: page(20, 20), cursor: 1761000000000, has_more: true })] });
+    const stuck = routes({ [list]: [ok({ videos: page(0, 20), cursor: c1, has_more: true }), ok({ videos: page(20, 20), cursor: c1, has_more: true })] });
     await new TikTokPublisher(app, stuck.fetchImpl).listRecentPosts(input);
     expect(stuck.calls).toHaveLength(2);
 
-    const many = routes({ [list]: Array.from({ length: RECENT_PAGES_MAX + 2 }, (_, i) => ok({ videos: page(i * 20, 20), cursor: 1761000000000 - i, has_more: true })) });
+    const many = routes({ [list]: Array.from({ length: RECENT_PAGES_MAX + 2 }, (_, i) => ok({ videos: page(i * 20, 20), cursor: c1 - i, has_more: true })) });
     const capped = await new TikTokPublisher(app, many.fetchImpl).listRecentPosts(input);
     expect(capped && 'posts' in capped ? capped.posts.length : capped).toBe(RECENT_PAGES_MAX * 20);
     expect(many.calls).toHaveLength(RECENT_PAGES_MAX);
     expect(RECENT_PAGES_MAX * 20).toBeLessThanOrEqual(RECENT_POSTS_MAX);
+
+    // An older video at the top of a page (a pinned one) is skipped without ending the listing; a cursor past the
+    // window ends it; a time from the future is skipped.
+    const pinned = routes({
+      [list]: [
+        ok({ videos: [video('7430000000000000900', 40 * DAY), video('7430000000000000901', -10 * DAY), ...page(0, 2)], cursor: c1, has_more: true }),
+        ok({ videos: page(2, 2), cursor: Date.now() - 31 * DAY, has_more: true }),
+        ok({ videos: page(4, 2), cursor: c2, has_more: false }),
+      ],
+    });
+    const kept = await new TikTokPublisher(app, pinned.fetchImpl).listRecentPosts(input);
+    expect(kept && 'posts' in kept ? kept.posts.map((p) => p.externalId).sort() : kept).toEqual([...page(0, 4)].map((v) => v.id).sort());
+    expect(pinned.calls).toHaveLength(2);
   });
 
   it('asks nothing without video.list, says a missing scope as the permission, marks an expired token, has no answer on a failure, and keeps what came before a later failure', async () => {

@@ -473,24 +473,22 @@ export class TikTokPublisher implements Publisher {
         return null;
       }
       const videos: unknown[] = Array.isArray(answer.videos) ? answer.videos : [];
-      let older = false;
       for (const item of videos) {
         if (!item || typeof item !== 'object') continue;
         const v = item as ListedVideo;
         const id = typeof v.id === 'string' ? v.id : typeof v.id === 'number' && Number.isSafeInteger(v.id) ? String(v.id) : '';
         const at = createTimeOf(v.create_time);
-        if (!VIDEO_ID.test(id) || !at) continue;
-        if (at < since) {
-          older = true;
-          continue;
-        }
+        // Outside the window, or a time from the future no video can have yet (a day of clock skew allowed).
+        if (!VIDEO_ID.test(id) || !at || at < since || at.getTime() > Date.now() + 86_400_000) continue;
         const title = typeof v.title === 'string' ? v.title.trim() : '';
         const description = typeof v.video_description === 'string' ? v.video_description.trim() : '';
         posts.push({ externalId: id, text: description.length > title.length ? description : title, permalink: platformLink(v.share_url, TIKTOK_POST_HOSTS), publishedAt: at });
       }
-      // The next page only while TikTok says there is one, with a cursor that moves back in time.
+      // The next page only while TikTok says there is one, with a cursor (the create time, in ms, the list has reached)
+      // that moves back in time and is still inside the window: one older video on a page (a pinned one) does not end
+      // the listing, the cursor passing the window does (#1487 review).
       const next = typeof answer.cursor === 'number' && Number.isSafeInteger(answer.cursor) && answer.cursor > 0 ? answer.cursor : null;
-      if (older || answer.has_more !== true || next === null || (cursor !== null && next >= cursor)) break;
+      if (answer.has_more !== true || next === null || (cursor !== null && next >= cursor) || next < since.getTime()) break;
       cursor = next;
     }
     // Newest first, a video listed twice kept once.
