@@ -827,6 +827,7 @@ export interface KernelMemberInviteTable {
   accepted_by: ColumnType<string | null, string | null, NotGranted>;
   revoked_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   revoked_by: string | null;
+  legal_entity_ids: ColumnType<string[] | null, string[] | null, NotGranted>;
 }
 
 /** crove_kernel.notification_mute */

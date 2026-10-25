@@ -4736,6 +4736,8 @@ export const en = {
       INVITE_NOT_PENDING: 'This invite was already used or revoked.',
       INVITE_PENDING_BY_OWNER: 'An owner already invited this email and the invite is still valid. Ask the owner to revoke or resend it.',
       INVITE_REVOKED: 'This invite was revoked.',
+      INVITE_SCOPE_OWNER_ONLY: 'Only an owner can invite someone to work with some legal entities only.',
+      INVITE_SCOPE_STALE: 'This invite can no longer be used because its legal entities changed. Ask an owner to invite you again.',
       INVITE_USED: 'This invite was already used.',
       INVITE_RATE_LIMITED: 'Too many invites were sent. Try again later.',
       TOO_MANY_INVITES: 'The organization has too many pending invites. Revoke some first.',
