@@ -231,7 +231,7 @@ describe('ThreadsPublisher.listRecentPosts', () => {
     // The post older than 30 days ended the listing.
     expect(calls).toHaveLength(1);
     expect(calls[0]?.authorization).toBe('Bearer threads-token-1');
-    expect(calls[0]?.query.get('fields')).toBe('id,text,permalink,timestamp,media_type,is_reply');
+    expect(calls[0]?.query.get('fields')).toBe('id,text,permalink,timestamp,media_type');
     expect(calls[0]?.query.get('limit')).toBe('100');
     expect(Math.abs(Number(calls[0]?.query.get('since')) * 1000 - (Date.now() - 30 * DAY))).toBeLessThan(60_000);
     expect(calls.every((c) => !c.query.has('access_token'))).toBe(true);
@@ -324,8 +324,9 @@ describe('YouTubePublisher.listRecentPosts', () => {
     expect(result && 'posts' in result ? result.posts.map((p) => [p.externalId, p.text, p.permalink]) : result).toEqual([
       ['aaaaaaaaaa1', 'Khai trương chi nhánh\n\nMời bạn ghé thăm', 'https://www.youtube.com/watch?v=aaaaaaaaaa1'],
       ['bbbbbbbbbb2', 'Hậu trường #shorts', 'https://www.youtube.com/watch?v=bbbbbbbbbb2'],
-      ['dddddddddd4', 'Tuần trước', 'https://www.youtube.com/watch?v=dddddddddd4'],
+      // Newest first by publish time: the video made public 5 days ago comes before the one of 6 days ago.
       ['ffffffffff6', 'Ra mắt muộn', 'https://www.youtube.com/watch?v=ffffffffff6'],
+      ['dddddddddd4', 'Tuần trước', 'https://www.youtube.com/watch?v=dddddddddd4'],
     ]);
     const first = result && 'posts' in result ? result.posts[0] : undefined;
     expect(Math.abs((first?.publishedAt.getTime() ?? 0) - (Date.now() - DAY))).toBeLessThan(5000);

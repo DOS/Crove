@@ -537,7 +537,8 @@ export class ZaloOaPublisher implements Publisher {
   // paged by offset (OA content docs, "Lấy danh sách nội dung dạng bài viết" and "... dạng video"), so both are read,
   // RECENT_SLICE a page and at most RECENT_PAGES_MAX pages each. Zalo's list gives a title (the excerpt), a status, a
   // creation time and a page address; a hidden article is left out, and an article counts from its creation. The docs
-  // do not say the list is newest first, so a slice is read until a page holds no article created since then. A refused
+  // do not give the list's order; it is taken as newest first, as reconcile takes it, so a slice is read until a page
+  // holds no article created since then. A refused
   // token is said at once; any other failure after the first page ends that slice with what came before it.
   async listRecentPosts(input: RecentPostsInput): Promise<RecentPostsResult> {
     const s = zaloSecretOf(input.secret);

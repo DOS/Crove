@@ -649,7 +649,8 @@ export class YouTubePublisher implements Publisher {
       pageToken = typeof next === 'string' && next && next.length <= PAGE_TOKEN_MAX ? next : null;
       if (older || !pageToken) break;
     }
-    return { posts: posts.slice(0, RECENT_POSTS_MAX) };
+    // Newest first by publish time, as recent.ts promises: a video made public late was read after newer uploads.
+    return { posts: posts.sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime()).slice(0, RECENT_POSTS_MAX) };
   }
 
   // The channel's latest uploads with the same title in the window.

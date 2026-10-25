@@ -377,8 +377,9 @@ export class ThreadsPublisher implements Publisher {
 
   // The account's own posts since a date (#1431): `GET /{threads-user-id}/threads` under threads_basic, paged by its
   // after cursor, newest first, at most RECENT_POSTS_MAX_DAYS back. Meta lists the user's posts there and their replies
-  // on an endpoint of their own; a reply all the same (is_reply, a field of every Threads media) is skipped, and so is
-  // a repost (media_type REPOST_FACADE), which is someone else's post. A quote post is the account's own. A page after
+  // on an endpoint of their own, so only the fields that page documents are asked for (an undocumented one could make
+  // Meta refuse the whole listing, and the sweep would then find nothing for good, #1470 review); a reply that comes all
+  // the same with is_reply is skipped, and so is a repost (media_type REPOST_FACADE), which is someone else's post. A quote post is the account's own. A page after
   // the first that fails ends the listing with what came before it.
   async listRecentPosts(input: RecentPostsInput): Promise<RecentPostsResult> {
     const token = tokenIn(input.secret);
@@ -392,7 +393,7 @@ export class ThreadsPublisher implements Publisher {
       try {
         answer = await this.client.call<ThreadsListAnswer>('GET', `${VERSION}/${input.externalAccountId}/threads`, {
           token,
-          params: { fields: 'id,text,permalink,timestamp,media_type,is_reply', since: String(Math.floor(since.getTime() / 1000)), limit: String(RECENT_PAGE), ...(after ? { after } : {}) },
+          params: { fields: 'id,text,permalink,timestamp,media_type', since: String(Math.floor(since.getTime() / 1000)), limit: String(RECENT_PAGE), ...(after ? { after } : {}) },
         });
       } catch (error) {
         if (page > 0) break;
