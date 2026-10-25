@@ -316,7 +316,7 @@ BEGIN
   END IF;
 
   IF v_opening_entry THEN
-    -- One opening entry in force per org.
+    -- One opening entry in force per org and legal entity.
     SELECT o.id INTO v_in_force
     FROM crove_finance.journal_entry o
     WHERE o.org_id = NEW.org_id AND o.legal_entity_id = NEW.legal_entity_id AND o.source_type = 'finance.opening_balance'
