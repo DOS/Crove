@@ -8,7 +8,7 @@ import { sql } from 'kysely';
 import type { Db } from '@crove/db';
 import type { QueuedMailBegin } from '@crove/kernel';
 import type { Runtime } from '@crove/kernel-runtime';
-import type { MailErrorKind, MailProvider, OutboundMail, SendResult } from '@crove/mail';
+import type { MailAttachment, MailErrorKind, MailProvider, OutboundMail, SendResult } from '@crove/mail';
 import { bounceAddress } from './invite-mail.ts';
 
 export const MAIL_SEND_QUEUE = 'kernel-mail-send';
@@ -46,7 +46,7 @@ export interface MailTemplateInput {
   execute<T>(command: string, input: unknown): Promise<T>;
 }
 export interface MailTemplate {
-  render(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string; replyTo?: string } | null>;
+  render(input: MailTemplateInput): Promise<{ subject: string; text: string; html: string; replyTo?: string; attachments?: readonly MailAttachment[] } | null>;
 }
 export type MailTemplates = Readonly<Record<string, MailTemplate>>;
 
@@ -148,7 +148,7 @@ async function sendOne(deps: MailQueueDeps, job: MailJob, mail: Extract<QueuedMa
   }
   if (!content) return { outcome: 'failed', code: 'TEMPLATE_DATA' };
   const returnPath = mail.bounceToken ? bounceAddress(mail.bounceToken, deps.bounceDomain) : undefined;
-  const outbound: OutboundMail = { to: mail.to, subject: content.subject, text: content.text, html: content.html, messageId: mail.messageIdHeader, ...(returnPath ? { returnPath } : {}), ...(content.replyTo ? { replyTo: content.replyTo } : {}) };
+  const outbound: OutboundMail = { to: mail.to, subject: content.subject, text: content.text, html: content.html, messageId: mail.messageIdHeader, ...(returnPath ? { returnPath } : {}), ...(content.replyTo ? { replyTo: content.replyTo } : {}), ...(content.attachments?.length ? { attachments: content.attachments } : {}) };
   if (!deps.mailer.enabled) {
     // The log provider shows the mail in the logs; nothing leaves the deployment.
     await Promise.resolve()

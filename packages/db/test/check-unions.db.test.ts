@@ -15,7 +15,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migrate } from '../src/migrate.ts';
 import {
   ACTOR_TYPES,
+  EVENT_TYPE_ASSIGNMENTS,
   EVENT_TYPE_LOCATION_KINDS,
+  BOOKING_MANAGE_ACTIONS,
+  BOOKING_MANAGE_OUTCOMES,
   BOOKING_REFUSALS,
   BOOKING_STATUSES,
   AGENT_RISKS,
@@ -121,8 +124,11 @@ const unions = <const M extends Unions<M> & Readonly<Record<string, readonly str
 
 // schema.table.column -> the const array of schema.ts the column is refined to.
 const UNIONS = unions({
+  'crove_crm.booking.manage_action': BOOKING_MANAGE_ACTIONS,
+  'crove_crm.booking.manage_outcome': BOOKING_MANAGE_OUTCOMES,
   'crove_crm.booking.refusal': BOOKING_REFUSALS,
   'crove_crm.booking.status': BOOKING_STATUSES,
+  'crove_crm.event_type.assignment': EVENT_TYPE_ASSIGNMENTS,
   'crove_crm.event_type.location_kind': EVENT_TYPE_LOCATION_KINDS,
   'crove_kernel.agent.max_risk': AGENT_RISKS,
   'crove_kernel.agent.runtime': AGENT_RUNTIMES,

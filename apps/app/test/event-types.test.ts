@@ -1,8 +1,8 @@
 // The event types card's helpers (issue #1314): the form to the saved input and back, the slug that follows the
-// title, and who may host or manage.
+// title, and who may host or manage; team types (#1373) with their co-hosts.
 import { describe, expect, it } from 'vitest';
 import { slugOf, type EventType } from '@crove/kernel-contract';
-import { draftOf, hostChoices, inputOf, mayManage, withTitle, type EventTypeMember } from '../src/lib/event-types.ts';
+import { coHostChoices, draftOf, hostChoices, inputOf, mayManage, withCoHost, withHost, withTitle, type EventTypeMember } from '../src/lib/event-types.ts';
 
 const ME = '00000000-0000-7000-8000-000000000001';
 const OTHER = '00000000-0000-7000-8000-000000000002';
@@ -42,6 +42,8 @@ describe('event type form', () => {
         locationKind: 'video',
         locationValue: null,
         hostUserId: ME,
+        assignment: 'single',
+        coHostUserIds: [],
       },
     });
     expect(inputOf({ ...draft, durationMin: '30.5' })).toEqual({ invalid: 'durationMin' });
@@ -64,6 +66,8 @@ describe('event type form', () => {
       locationKind: 'phone',
       locationValue: '0901234567',
       hostUserId: OTHER,
+      assignment: 'round_robin',
+      coHostUserIds: [ME],
       active: true,
       createdAt: '2026-10-24T00:00:00.000Z',
       updatedAt: '2026-10-24T00:00:00.000Z',
@@ -79,5 +83,21 @@ describe('event type form', () => {
     expect(mayManage(type, ME, false)).toBe(false);
     expect(mayManage(type, ME, true)).toBe(true);
     expect(mayManage({ hostUserId: ME } as EventType, ME, false)).toBe(true);
+  });
+
+  it('keeps a team type to co-hosts who are neither the lead nor viewers, and needs one', () => {
+    expect(coHostChoices(members, ME).map((m) => m.userId)).toEqual([OTHER]);
+    const single = withTitle(draftOf(null, ME), 'Nhóm');
+    const team = { ...single, assignment: 'collective' as const };
+    expect(inputOf(team)).toEqual({ invalid: 'coHostUserIds' });
+    const withOther = withCoHost(team, OTHER, true);
+    expect(withOther.coHostUserIds).toEqual([OTHER]);
+    expect(withCoHost(withOther, ME, true).coHostUserIds).toEqual([OTHER]);
+    expect(withCoHost(withOther, OTHER, false).coHostUserIds).toEqual([]);
+    // A co-host made the lead leaves the co-hosts.
+    expect(withHost(withOther, OTHER)).toMatchObject({ hostUserId: OTHER, coHostUserIds: [] });
+    // Back to a single host: the co-hosts are not sent.
+    const back = inputOf({ ...withOther, assignment: 'single' });
+    expect('input' in back && back.input.coHostUserIds).toEqual([]);
   });
 });

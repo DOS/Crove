@@ -15,6 +15,15 @@ export interface OutboundMail {
   returnPath?: string;
   // Where replies go (#669: the org's inbound address, so a client's reply with invoices reaches the Inbox).
   replyTo?: string;
+  // Files sent with the mail, as text (#1319: a booking's .ics event).
+  attachments?: readonly MailAttachment[];
+}
+
+export interface MailAttachment {
+  filename: string;
+  // The MIME type, parameters included ("text/calendar; method=PUBLISH; charset=UTF-8").
+  contentType: string;
+  content: string;
 }
 
 // How safe it is to repeat a send whose outcome is unknown (ADR-0025): 'idempotent' when the provider drops a repeat
