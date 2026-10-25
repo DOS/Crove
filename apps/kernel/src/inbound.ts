@@ -207,6 +207,8 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
       messageId: messageId.slice(0, 500),
       from: email.from,
       subject: email.subject?.slice(0, 500) ?? null,
+      // The mail's text (#779), for an AI draft of a Social post a member may start from it.
+      text: email.text,
       files,
     },
     { actor: { type: 'system', component: 'inbound.email' }, orgId },

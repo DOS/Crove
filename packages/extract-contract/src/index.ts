@@ -48,6 +48,8 @@ export const EXTRACT_LIMITS = {
   maxPageSiteChars: 200,
   // The page's main text (#779), for an AI draft written from it.
   maxPageTextChars: 4000,
+  // A mail's text (#779): its text/plain part, or its HTML reduced to text, for an AI draft of a Social post.
+  maxMailTextChars: 20_000,
   // A blog's feed (#708): at most this many bytes, of which the newest items come back.
   maxFeedBytes: 1024 * 1024,
   maxFeedItems: 50,
@@ -175,6 +177,8 @@ export const zExtractedEmail = z.strictObject({
   messageId: zText.nullable(),
   from: zText.nullable(),
   subject: zText.nullable(),
+  // The mail's text (#779), at most maxMailTextChars; null when it has none.
+  text: z.string().min(1).max(EXTRACT_LIMITS.maxMailTextChars).nullable(),
   deliveredTo: zText.nullable(),
   to: z.array(zText).max(EXTRACT_LIMITS.maxRecipients),
   attachments: z.array(z.strictObject({ filename: zText.nullable(), content: z.base64() })).max(EXTRACT_LIMITS.maxAttachments),

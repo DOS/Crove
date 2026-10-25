@@ -6,7 +6,7 @@ import type { Address } from 'postal-mime';
 import { EXTRACT_LIMITS, zExtractSuccess, type ExtractFailure, type ExtractKind, type ExtractResponse, type ExtractSuccess } from '@crove/extract-contract';
 import { DsnError, readDsn } from './dsn.ts';
 import { EInvoiceParseError, parseEInvoiceXml } from './einvoice-xml.ts';
-import { HtmlMetaError, readHtmlMeta } from './html-meta.ts';
+import { HtmlMetaError, htmlText, readHtmlMeta } from './html-meta.ts';
 import { FeedError, readFeed } from './feed.ts';
 import { PortalListError, readPortalList } from './portal-list.ts';
 import { ArchiveError, readZip } from './zip.ts';
@@ -40,6 +40,25 @@ function base64Of(content: ArrayBuffer | Uint8Array | string, encoding: string |
   return Buffer.from(content instanceof Uint8Array ? content : new Uint8Array(content)).toString('base64');
 }
 
+// A mail's text (#779): its text/plain part, else its HTML reduced to text, at most maxMailTextChars; null when it has
+// none. Control characters are dropped and blank lines collapse to one, so the text stays readable.
+function mailText(text: string | undefined, html: string | undefined): string | null {
+  const max = EXTRACT_LIMITS.maxMailTextChars;
+  if (text && text.trim()) {
+    const lines = text
+      .replace(/\r\n?/g, '\n')
+      // oxlint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+      .split('\n')
+      .map((line) => line.replace(/[ \t]+/g, ' ').trimEnd());
+    const kept = lines.filter((line, i) => line !== '' || (i > 0 && lines[i - 1] !== '')).join('\n').trim();
+    // Cut in UTF-16 units, never inside a surrogate pair: within the contract's length and the column's characters.
+    const end = kept.length > max && kept.charCodeAt(max - 1) >= 0xd800 && kept.charCodeAt(max - 1) <= 0xdbff ? max - 1 : max;
+    if (kept) return kept.slice(0, end).trim() || null;
+  }
+  return html ? htmlText(html, max) : null;
+}
+
 async function mime(bytes: Uint8Array): Promise<ExtractSuccess> {
   const email = await PostalMime.parse(bytes, {
     attachmentEncoding: 'base64',
@@ -54,6 +73,7 @@ async function mime(bytes: Uint8Array): Promise<ExtractSuccess> {
       messageId: cap(email.messageId),
       from: cap(addressOf(email.from)),
       subject: cap(email.subject),
+      text: mailText(email.text, email.html),
       deliveredTo: cap(email.deliveredTo),
       to: (email.to ?? [])
         .map(addressOf)

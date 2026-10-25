@@ -808,6 +808,7 @@ export interface KernelInboundMessageTable {
   subject: string | null;
   attachment_count: Generated<number>;
   received_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  body_text: string | null;
 }
 
 /** crove_kernel.kill_switch */
