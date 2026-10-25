@@ -3390,6 +3390,8 @@ export const vi = {
       createdAi: 'đã nhờ AI soạn bài',
       suggested: 'đã đề xuất sửa',
       sentToApp: 'đã được gửi vào ứng dụng TikTok dưới dạng bản nháp, hãy mở TikTok để đăng',
+      postedInApp: 'đã được đăng trong TikTok',
+      tiktokNoPostId: 'đã được đăng, nhưng TikTok chưa trả mã bài',
       wordpressDraft: 'đã được lưu nháp trên WordPress, hãy mở trang quản trị để đăng',
       wordpressPending: 'đã được gửi chờ duyệt trên WordPress, bài hiện lên khi có người duyệt và đăng',
       kind: {
@@ -4336,6 +4338,8 @@ export const vi = {
       failed: 'Nền tảng từ chối bài này.',
       platformSaid: 'Nền tảng báo: {message}',
       sentToApp: 'Đã gửi vào ứng dụng TikTok, hãy mở TikTok để đăng. Bạn thêm nhạc và đăng trong TikTok; trước lúc đó chưa ai xem được bài.',
+      postedInApp: 'Đã đăng trong TikTok.',
+      tiktokNoPostId: 'TikTok chưa trả mã bài, nên {brand} chưa có đường dẫn và số liệu của bài này. Bạn có thể xem bài ngay trong TikTok.',
       scopeMissing: 'Kênh TikTok này được kết nối từ trước khi {brand} gửi được bản nháp vào ứng dụng TikTok. Hãy kết nối lại kênh để cho phép việc này; bài đang tạm dừng, không bị mất, và sẽ tự gửi sau khi kênh được kết nối lại.',
       inboxNotEnabled: 'Máy chủ này chưa bật gửi bản nháp vào ứng dụng TikTok (ứng dụng TikTok của máy chủ chưa được thiết lập cho việc này), nên chưa gửi gì. Hãy chọn Đăng ngay rồi đăng lại.',
       scopeMissingFailed:'TikTok chưa cho {brand} gửi bản nháp vào ứng dụng TikTok của kênh này. Hãy kết nối lại kênh rồi đăng lại.',
