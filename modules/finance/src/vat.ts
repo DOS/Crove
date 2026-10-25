@@ -19,12 +19,13 @@
 // invoice always stays in its invoice period: a sale is never posted late (record.ts).
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { INPUT_VAT_CHECK_OUTCOMES, VAT_WARNINGS, zId, zVatPeriod, type DocumentDirection } from '@crove/kernel-contract';
+import { INPUT_VAT_CHECK_OUTCOMES, VAT_WARNINGS, zId, zVatPeriod, zVatReturnMark, type DocumentDirection } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { money, type Money } from '@crove/l10n-vn';
 import {
   documentVatByRate,
   form01Indicators,
+  previousVatPeriods,
   reducedRateApplies,
   type InvoiceRateInput,
   sideTotals,
@@ -36,6 +37,7 @@ import {
   type VatPeriod,
 } from './domain/vat-return.ts';
 import { needsPaymentCheck, nonCashThreshold, paymentMethodKind, type PaymentMethodKind } from './domain/non-cash-payment.ts';
+import { form01XmlValues } from './domain/vat-01gtgt-xml.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -92,12 +94,31 @@ export interface VatPaymentChecks {
   suggested25: Money;
 }
 
+// A period's VAT return as marked filed (#1400): [22], [25] and [43] in whole dong, and where they come from.
+export interface VatFiledReturn {
+  period: string;
+  source: 'entered' | 'computed';
+  carriedIn: string;
+  deductible: string;
+  carriedOut: string;
+  markedAt: string;
+}
+
+// [22] of a period: the [43] of the return filed for the period just before it, or 0 when there is none (#1400).
+export interface VatCarryForward {
+  amount: string;
+  previous: VatFiledReturn | null;
+  lookedFor: string[];
+}
+
 export interface VatReport {
   period: VatPeriod;
   input: VatSide;
   output: VatSide;
   indicators: FormIndicator[];
   paymentChecks: VatPaymentChecks;
+  carryForward: VatCarryForward;
+  filed: VatFiledReturn | null;
 }
 
 function invoiceView(
@@ -305,6 +326,42 @@ function paymentChecks(input: PeriodInvoice[], marks: Map<string, CheckMark>, va
   };
 }
 
+// The latest mark of each of `periods` (#1400); a withdrawn one counts as none.
+async function filedReturns(ctx: QueryContext, periods: string[]): Promise<Map<string, VatFiledReturn>> {
+  const out = new Map<string, VatFiledReturn>();
+  if (periods.length === 0) return out;
+  const rows = await ctx.trx
+    .selectFrom('crove_finance.vat_return_filed')
+    .select(['period', 'status', 'source', 'carried_in_amount', 'deductible_amount', 'carried_out_amount', 'created_at'])
+    .distinctOn('period')
+    .where('org_id', '=', ctx.orgId)
+    .where('period', 'in', periods)
+    .orderBy('period')
+    .orderBy('created_at', 'desc')
+    .orderBy('id', 'desc')
+    .execute();
+  for (const row of rows) {
+    if (row.status !== 'filed' || row.source === null) continue;
+    out.set(row.period, {
+      period: row.period,
+      source: row.source,
+      carriedIn: money(row.carried_in_amount ?? '0').toFixed(0),
+      deductible: money(row.deductible_amount ?? '0').toFixed(0),
+      carriedOut: money(row.carried_out_amount ?? '0').toFixed(0),
+      markedAt: new Date(row.created_at).toISOString(),
+    });
+  }
+  return out;
+}
+
+// The period's own filed return, and the [22] the return just before it carries in.
+async function returnChain(ctx: QueryContext, period: VatPeriod): Promise<{ carryForward: VatCarryForward; filed: VatFiledReturn | null }> {
+  const lookedFor = previousVatPeriods(period);
+  const filed = await filedReturns(ctx, [period.period, ...lookedFor]);
+  const previous = lookedFor.map((p) => filed.get(p)).find((r) => r !== undefined) ?? null;
+  return { carryForward: { amount: previous?.carriedOut ?? '0', previous, lookedFor }, filed: filed.get(period.period) ?? null };
+}
+
 export async function loadVatReport(ctx: QueryContext, periodText: string): Promise<VatReport> {
   const period = vatPeriod(periodText);
   const purchases = await periodInvoices(ctx, period, 'purchase');
@@ -321,7 +378,15 @@ export async function loadVatReport(ctx: QueryContext, periodText: string): Prom
   const org = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirst();
   const sales = (await periodInvoices(ctx, period, 'sale')).map((p) => p.view);
   const output = side(Boolean(org?.tax_code) || sales.length > 0, sales);
-  return { period, input, output, indicators: form01Indicators(input.totals, output.totals), paymentChecks: paymentChecks(purchases, marks, input.totals.vat) };
+  const chain = await returnChain(ctx, period);
+  return {
+    period,
+    input,
+    output,
+    indicators: form01Indicators(input.totals, output.totals),
+    paymentChecks: paymentChecks(purchases, marks, input.totals.vat),
+    ...chain,
+  };
 }
 
 export const vatPeriodQuery = defineQuery({
@@ -386,6 +451,9 @@ export const vatExport = defineCommand({
     // The HTKK XML with [25] = [24] (#692), or with the suggested [25] (#917), the accountant's choice for that download.
     deductInput: z.boolean().optional(),
     deductSuggested: z.boolean().optional(),
+    // Where [22] of the HTKK XML came from (#1400): the previous filed return's [43], an amount the accountant typed,
+    // or 0 for want of a previous return. Never the amount.
+    carryForward: z.enum(['previous', 'edited', 'none']).optional(),
   }),
   risk: 'R0',
   access: ALL,
@@ -396,6 +464,7 @@ export const vatExport = defineCommand({
       ...(input.format ? { format: input.format } : {}),
       ...(input.deductInput ? { deduct_input: true } : {}),
       ...(input.deductSuggested ? { deduct_suggested: true } : {}),
+      ...(input.carryForward ? { carry_forward: input.carryForward } : {}),
     });
     return { ok: true as const };
   },
@@ -453,5 +522,69 @@ export const vatPaymentMark = defineCommand({
       .execute();
     ctx.audit({ document_id: doc.id, outcome: input.outcome, ...(voucherId ? { voucher_id: voucherId } : {}) });
     return { documentId: doc.id, outcome: input.outcome };
+  },
+});
+
+// Marks the period's VAT return filed (#1400), with the tax calendar's done mark hung on it: one appended row of
+// crove_finance.vat_return_filed with [22], [25] and [43] as filed, and kernel.tax_obligation.done for vat_return in
+// the same transaction. With figures (the VAT screen) they are recorded as entered. Without them (the tax calendar's
+// done button) Crove records its own working: [22] from the return before, [25] the suggested deduction (#917) and
+// the [43] the form's formulas give; a period already marked filed keeps its figures. done false takes both marks
+// back (a withdrawn row, then kernel.tax_obligation.undo). The audit row holds the period, the choice and the source,
+// never the figures.
+export const vatReturnMark = defineCommand({
+  name: 'finance.vat.return_mark',
+  input: zVatReturnMark,
+  risk: 'R1',
+  access: MARKERS,
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const period = vatPeriod(input.period);
+    const current = (await filedReturns(ctx, [period.period])).get(period.period) ?? null;
+    const mark = { obligation: 'vat_return' as const, period: period.period };
+    if (!input.done) {
+      if (input.figures) throw new DomainError('INVALID', 422, 'Bỏ đánh dấu đã nộp thì không kèm số liệu');
+      if (current) {
+        await ctx.trx
+          .insertInto('crove_finance.vat_return_filed')
+          .values({ org_id: ctx.orgId, period: period.period, status: 'withdrawn', source: null, carried_in_amount: null, deductible_amount: null, carried_out_amount: null, marked_by: ctx.actor.userId })
+          .execute();
+      }
+      await ctx.run('kernel.tax_obligation.undo', mark);
+      ctx.audit({ period: period.period, done: false, withdrawn: current !== null });
+      return { period: period.period, done: false };
+    }
+    let figures: { carriedIn: string; deductible: string; carriedOut: string } | null = null;
+    let source: 'entered' | 'computed' = 'entered';
+    if (input.figures) {
+      figures = { carriedIn: money(input.figures.carriedIn).toFixed(0), deductible: money(input.figures.deductible).toFixed(0), carriedOut: money(input.figures.carriedOut).toFixed(0) };
+    } else if (!current) {
+      source = 'computed';
+      const report = await loadVatReport(ctx, period.period);
+      const values = form01XmlValues(report.indicators, { carriedForward: report.carryForward.amount, deductible: report.paymentChecks.suggested25 });
+      figures = { carriedIn: values['22'], deductible: values['25'], carriedOut: values['43'] };
+    }
+    // The same figures marked again add no row.
+    const recorded =
+      figures !== null &&
+      !(current && current.source === source && current.carriedIn === figures.carriedIn && current.deductible === figures.deductible && current.carriedOut === figures.carriedOut);
+    if (figures && recorded) {
+      await ctx.trx
+        .insertInto('crove_finance.vat_return_filed')
+        .values({
+          org_id: ctx.orgId,
+          period: period.period,
+          status: 'filed',
+          source,
+          carried_in_amount: figures.carriedIn,
+          deductible_amount: figures.deductible,
+          carried_out_amount: figures.carriedOut,
+          marked_by: ctx.actor.userId,
+        })
+        .execute();
+    }
+    await ctx.run('kernel.tax_obligation.done', mark);
+    ctx.audit({ period: period.period, done: true, source: recorded ? source : (current?.source ?? source), recorded });
+    return { period: period.period, done: true };
   },
 });

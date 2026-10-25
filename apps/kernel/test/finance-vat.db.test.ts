@@ -323,8 +323,8 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(valueOf(quarterly, 'ct24')).toBe('360000');
 
     expect((await xmlAudits()).map((row: { detail: unknown }) => row.detail)).toEqual([
-      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml' },
-      { period: '2026-Q3', documents: 2, format: 'htkk_01gtgt_xml' },
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml', carry_forward: 'none' },
+      { period: '2026-Q3', documents: 2, format: 'htkk_01gtgt_xml', carry_forward: 'none' },
     ]);
     // A malformed period downloads nothing and records nothing.
     expect((await exportXml(await tokenFor(owner), '2026-13')).status).toBe(422);
@@ -395,9 +395,9 @@ suite('VAT working per month or quarter (#316)', () => {
       expect((await rpc('org/setAddress', owned, { address: null }, org.slug)).status).toBe(200);
     }
     expect((await xmlAudits()).slice(before).map((row: { detail: unknown }) => row.detail)).toEqual([
-      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml', deduct_input: true },
-      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml' },
-      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml' },
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml', deduct_input: true, carry_forward: 'none' },
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml', carry_forward: 'none' },
+      { period: '2026-09', documents: 1, format: 'htkk_01gtgt_xml', carry_forward: 'none' },
     ]);
   });
 
@@ -551,7 +551,7 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(xml.status).toBe(200);
     const text = await xml.text();
     expect(['ct24', 'ct25'].map((tag) => valueOf(text, tag))).toEqual(['2880000', '1980000']);
-    expect((await xmlAudits()).at(-1)?.detail).toEqual({ period: '2026-05', documents: 4, format: 'htkk_01gtgt_xml', deduct_suggested: true });
+    expect((await xmlAudits()).at(-1)?.detail).toEqual({ period: '2026-05', documents: 4, format: 'htkk_01gtgt_xml', deduct_suggested: true, carry_forward: 'none' });
 
     // Cleared: back to unchecked.
     expect((await rpc('vat/markPayment', owned, { documentId: cash.documentId, outcome: 'cleared' })).status).toBe(200);

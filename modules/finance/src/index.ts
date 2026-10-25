@@ -9,7 +9,7 @@ import { prepareReversal, reverseEntry } from './reversal.ts';
 import { openingBalancePost, openingBalancePreview } from './opening-balance.ts';
 import { fileForExtraction, purchaseLookup } from './extract.ts';
 import { accountsList, documentsList, journalExport, journalGet, journalList, purchaseVouchers, salesVouchers, vendorsList, voidedProposals } from './queries.ts';
-import { vatDeclarationQuery, vatExport, vatPaymentMark, vatPeriodQuery } from './vat.ts';
+import { vatDeclarationQuery, vatExport, vatPaymentMark, vatPeriodQuery, vatReturnMark } from './vat.ts';
 import { ledgerAccountQuery, ledgerBookQuery, ledgerExport, ledgerPeriodQuery } from './ledger-reports.ts';
 import { portalListImport, portalListReconcile, portalListRecord, portalListRemove, portalListSource } from './portal-list.ts';
 import { portalSyncCommands, portalSyncQueries } from './portal-sync.ts';
@@ -75,7 +75,7 @@ export * from './domain/portal-reconcile.ts';
 export { foldVietnamese, portalStatus } from './domain/portal-status.ts';
 export { buildJournalWorkbook } from './export.ts';
 export { buildVatWorkbook, VAT_RATE_LABELS, VAT_WARNING_LABELS } from './vat-export.ts';
-export { buildVat01Xml } from './vat-xml.ts';
+export { buildVat01Xml, xmlCarryForward, type XmlCarryForwardSource } from './vat-xml.ts';
 export { buildLedgerWorkbook } from './ledger-export.ts';
 export { buildStatementsWorkbook } from './statements-export.ts';
 export { buildStatementsHtkkXml, type StatementsFiling } from './statements-htkk.ts';
@@ -126,7 +126,7 @@ export { SEARCH_LIMIT, searchAmount, type SearchResult } from './search.ts';
 export { ARCHIVE_FORMAT, type ArchiveSource, type ArchiveSourceFile, type RecordedArchive } from './year-archive.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, vatPaymentMark, ...portalSyncCommands, ...financeNotificationCommands, ...yearArchiveCommands, ...fixedAssetCommands, ...categorizationCommands];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, vatPaymentMark, vatReturnMark, ...portalSyncCommands, ...financeNotificationCommands, ...yearArchiveCommands, ...fixedAssetCommands, ...categorizationCommands];
 export const financeQueries = [
   ...fixedAssetQueries,
   ...statementsHtkkQueries,

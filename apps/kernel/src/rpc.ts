@@ -393,9 +393,16 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       taxProfile: os.org.taxProfile.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.tax_profile.get', {}, { actor, orgId }))),
       setTaxProfile: os.org.setTaxProfile.handler(({ context, input }) => inOrg(context, (orgId, actor) => runtime.execute('kernel.tax_profile.save', input, { actor, orgId }))),
+      // The VAT return's done mark goes through finance when it is on (#1400): finance.vat.return_mark records the
+      // return as filed, with Crove's own figures, and writes the same done mark in the same transaction, so the next
+      // period's [22] has a [43] to start from.
       markTaxObligation: os.org.markTaxObligation.handler(({ context, input }) =>
-        inOrg(context, (orgId, actor) => {
+        inOrg(context, async (orgId, actor) => {
           const { done, ...mark } = input;
+          if (finance && mark.obligation === 'vat_return' && /^\d{4}-(\d{2}|Q\d)$/.test(mark.period)) {
+            await runtime.execute('finance.vat.return_mark', { period: mark.period, done }, { actor, orgId });
+            return { ...mark, done };
+          }
           return runtime.execute(done ? 'kernel.tax_obligation.done' : 'kernel.tax_obligation.undo', mark, { actor, orgId });
         }),
       ),
@@ -1559,6 +1566,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       ),
       markPayment: os.vat.markPayment.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.vat.payment_mark', input, { actor, orgId })),
+      ),
+      markReturn: os.vat.markReturn.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.vat.return_mark', input, { actor, orgId })),
       ),
     },
     portalList: {

@@ -29,7 +29,7 @@ function declaration(period: string, input: VatInvoiceView[], output: VatInvoice
   const inputSide = { available: true, documents: input, totals: sideTotals(input) };
   const outputSide = { available: true, documents: output, totals: sideTotals(output) };
   return {
-    report: { period: vatPeriod(period), input: inputSide, output: outputSide, indicators: form01Indicators(inputSide.totals, outputSide.totals), paymentChecks: { items: [], vatAtRisk: '0', notDeductibleVat: '0', unchecked: 0, suggested25: inputSide.totals.vat } },
+    report: { period: vatPeriod(period), input: inputSide, output: outputSide, indicators: form01Indicators(inputSide.totals, outputSide.totals), paymentChecks: { items: [], vatAtRisk: '0', notDeductibleVat: '0', unchecked: 0, suggested25: inputSide.totals.vat }, carryForward: { amount: '0', previous: null, lookedFor: [] }, filed: null },
     taxpayer: { taxCode: '0101234564', name, address },
   };
 }

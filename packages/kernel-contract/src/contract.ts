@@ -164,6 +164,7 @@ import {
   zVatReport,
   zExchangeRate,
   zInputVatCheckOutcome,
+  zVatReturnMark,
   zAccountLedger,
   zFinancialStatements,
   zLedgerPeriod,
@@ -1246,6 +1247,10 @@ export const contract = {
         }),
       )
       .output(z.object({ documentId: zId, outcome: zInputVatCheckOutcome })),
+    // markReturn (owners, admins, members; R1, audited; #1400): marks the period's VAT return filed with [22], [25] and
+    // [43] as filed (figures; without them Crove's own working is recorded) and the tax calendar's done mark with it,
+    // or takes both back (done false). The next period's [22] is prefilled from this [43].
+    markReturn: oc.input(zVatReturnMark).output(z.object({ period: zVatPeriod, done: z.boolean() })),
   },
   // The tax portal's purchase-invoice list (issue #465) for one VAT period. reconcile: every role; the lists of the
   // period and how their invoices compare with Crove's purchases. import (owners, admins, members; R1): files an .xlsx

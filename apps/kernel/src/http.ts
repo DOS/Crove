@@ -51,6 +51,7 @@ import {
   buildMisaWorkbook,
   buildVat01Xml,
   buildVatWorkbook,
+  xmlCarryForward,
   cashRows,
   purchaseRows,
   salesRows,
@@ -1484,8 +1485,15 @@ export function createHttpApp(deps: HttpDeps) {
         const deductSuggested = c.req.query('deduct') === 'suggested';
         const deductInput = !deductSuggested && c.req.query('deductInput') === '1';
         const declaration = await runtime.query<VatDeclaration>('finance.vat.declaration', { period }, { actor: actorOf(user), orgId });
-        const xml = buildVat01Xml(declaration, undefined, deductSuggested ? { deductible: declaration.report.paymentChecks.suggested25 } : { deductInput });
-        // The export's audit row (period, invoice count, format and the [25] choice only). No row, no download.
+        // [22] (#1400): the [43] of the return filed for the period before, or ?carried=<whole dong> as the accountant
+        // edited it on the VAT screen (422 unless a whole number of at most 14 digits).
+        const carried = xmlCarryForward(declaration.report, c.req.query('carried'));
+        const xml = buildVat01Xml(declaration, undefined, {
+          carriedForward: carried.amount,
+          ...(deductSuggested ? { deductible: declaration.report.paymentChecks.suggested25 } : { deductInput }),
+        });
+        // The export's audit row (period, invoice count, format, the [25] choice and where [22] came from; no amount).
+        // No row, no download.
         const documents = declaration.report.input.documents.length + declaration.report.output.documents.length;
         await runtime.execute(
           'finance.vat.export',
@@ -1495,6 +1503,7 @@ export function createHttpApp(deps: HttpDeps) {
             format: 'htkk_01gtgt_xml',
             ...(deductInput ? { deductInput } : {}),
             ...(deductSuggested ? { deductSuggested } : {}),
+            carryForward: carried.source,
           },
           { actor: actorOf(user), orgId },
         );
