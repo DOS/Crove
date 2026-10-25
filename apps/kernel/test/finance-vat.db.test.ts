@@ -667,11 +667,14 @@ suite('VAT working per month or quarter (#316)', () => {
 
     // A raw insert in a member's own context, past the command: refused for a viewer at once (and for an owner who
     // names someone else), and for an owner at commit, with no audit row of the command. Tenant roles cannot update.
-    const raw = async (userId: string, markedBy: string, statement = 'INSERT') => {
+    // contextOrg: the org whose context the session enters (org A by default), or null for no context at all, as
+    // crove_tenant.
+    const raw = async (userId: string, markedBy: string, statement = 'INSERT', contextOrg: string | null = org.orgId) => {
       const c = await pool.connect();
       try {
         await c.query('BEGIN');
-        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, org.orgId]);
+        if (contextOrg) await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, contextOrg]);
+        else await c.query('SET LOCAL ROLE crove_tenant');
         if (statement === 'INSERT') {
           await c.query(
             `INSERT INTO crove_finance.vat_return_filed (org_id, period, status, source, carried_in_amount, deductible_amount, carried_out_amount, marked_by)
@@ -694,6 +697,9 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(await raw(owner.userId, viewer.userId)).toBe('VAT_RETURN_FORBIDDEN');
     expect(await raw(owner.userId, owner.userId)).toBe('VAT_RETURN_UNAUDITED');
     expect(await raw(owner.userId, owner.userId, 'UPDATE')).toMatch(/permission denied/);
+    // A context of another org (org B's owner) naming org A, and no context at all: refused.
+    expect(await raw(outsider.userId, outsider.userId, 'INSERT', otherOrg.orgId)).toMatch(/row-level security/);
+    expect(await raw(owner.userId, owner.userId, 'INSERT', null)).toMatch(/row-level security/);
     expect((await period('2026-09')).carryForward.previous).toBeNull();
   });
 });

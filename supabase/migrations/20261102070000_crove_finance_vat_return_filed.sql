@@ -11,7 +11,7 @@
 --     calendar, so Crove's own working: [22] from the previous return, [25] the suggested deduction);
 --   - withdrawn: the done mark was taken back; no figures.
 -- finance.vat.return_mark (owners and admins, R1, audited) is the only writer: tenant roles read and insert (the
--- guards below hold an insert to that command), nobody updates or deletes.
+-- guards below hold an insert to that command, failing closed), nobody updates or deletes.
 -- Kept with the books: the org purge never deletes a crove_finance row.
 SET LOCAL lock_timeout = '2s';
 
@@ -47,28 +47,38 @@ CREATE INDEX IF NOT EXISTS vat_return_filed_period_idx ON crove_finance.vat_retu
 SELECT crove_kernel.apply_tenant_rls('crove_finance.vat_return_filed', true);
 SELECT crove_kernel.make_append_only('crove_finance.vat_return_filed');
 
--- Only the command writes a row. vat_return_filed_guard refuses an insert that is not by a user who is an owner or an
--- admin of the org in context, or that names another user as marked_by; vat_return_filed_requires_audit lets a row
--- commit only with the 'ok' audit row of finance.vat.return_mark for its period by that user in the same transaction
--- (the runtime writes it as the command ends), as tenant_tax_code_guard and tenant_tax_code_requires_audit do for the
--- tax code. Staff (a superuser, or a role that can act as the table's owner) are not held back, so a support fix is
--- not locked out.
+-- Only the command writes a row, and the checks fail closed:
+-- - vat_return_filed_guard (AFTER INSERT, so the tenant policy refuses a row for another org first, with its own
+--   error) refuses every row unless the sealed context is of the row's org and is a user who is an owner or an admin
+--   of it and names themselves as marked_by (VAT_RETURN_FORBIDDEN). No context, or a context of another org, is
+--   refused. The one other actor let through is the org's own system context, which the RLS matrix's control insert
+--   (apps/kernel/test/invariant/rls-matrix.db.test.ts, crove_worker in the system context of its own org) needs; no
+--   product path writes the table from it, and such a row cannot commit (next point).
+-- - vat_return_filed_requires_audit (deferred to commit) lets a row commit only with the 'ok' audit row of
+--   finance.vat.return_mark for its period by that user in the same transaction (the runtime writes it as the command
+--   ends), as tenant_tax_code_guard and tenant_tax_code_requires_audit do for the tax code.
+-- Staff (a superuser, or a role that can act as the table's owner) are not held back, so a support fix is not locked
+-- out.
 CREATE OR REPLACE FUNCTION crove_finance.vat_return_filed_guard()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_staff boolean;
+  v_org uuid := crove_kernel.ctx_org_id();
+  v_actor text := crove_kernel.ctx_actor_type();
 BEGIN
   SELECT r.rolsuper
          OR pg_catalog.pg_has_role(r.oid, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID), 'USAGE')
     INTO v_staff
   FROM pg_catalog.pg_roles r WHERE r.rolname = SESSION_USER;
-  -- A row for another org than the one in context (or with no context) is left to the tenant policy, which refuses it.
-  -- An org's system context (the worker) has no writer here either, but is not refused at once: a row it inserted
-  -- cannot commit, since vat_return_filed_requires_audit wants the command's audit row by that user.
-  IF COALESCE(v_staff, false) OR crove_kernel.ctx_org_id() IS DISTINCT FROM NEW.org_id OR crove_kernel.ctx_actor_type() = 'system' THEN
-    RETURN NEW;
+  IF COALESCE(v_staff, false) THEN
+    RETURN NULL;
   END IF;
-  IF crove_kernel.ctx_actor_type() IS DISTINCT FROM 'user'
+  IF v_org IS NOT NULL AND v_org = NEW.org_id AND v_actor = 'system' THEN
+    RETURN NULL;
+  END IF;
+  IF v_org IS NULL
+     OR v_org IS DISTINCT FROM NEW.org_id
+     OR v_actor IS DISTINCT FROM 'user'
      OR crove_kernel.ctx_user_id() IS DISTINCT FROM NEW.marked_by
      OR NOT EXISTS (
        SELECT 1 FROM crove_kernel.tenant_member m
@@ -77,10 +87,10 @@ BEGIN
     RAISE EXCEPTION 'VAT_RETURN_FORBIDDEN' USING ERRCODE = '42501',
       DETAIL = 'only finance.vat.return_mark, run by an owner or an admin of the org, marks a VAT return filed';
   END IF;
-  RETURN NEW;
+  RETURN NULL;
 END $$;
 DROP TRIGGER IF EXISTS vat_return_filed_guard ON crove_finance.vat_return_filed;
-CREATE TRIGGER vat_return_filed_guard BEFORE INSERT ON crove_finance.vat_return_filed
+CREATE TRIGGER vat_return_filed_guard AFTER INSERT ON crove_finance.vat_return_filed
   FOR EACH ROW EXECUTE FUNCTION crove_finance.vat_return_filed_guard();
 
 CREATE OR REPLACE FUNCTION crove_finance.vat_return_filed_requires_audit()

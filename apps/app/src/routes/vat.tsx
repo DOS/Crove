@@ -240,11 +240,13 @@ function FiledReturn({ data, carried, deduct25, canFile }: { data: VatReport; ca
     setForm(null);
     await Promise.all([queryClient.invalidateQueries({ queryKey: orpc.vat.period.key() }), queryClient.invalidateQueries({ queryKey: orpc.org.overview.key() })]);
   };
+  // The period travels with each mutation, so switching period while one is in flight never marks another period.
   const save = useMutation({
-    mutationFn: (figures: { carriedIn: string; deductible: string; carriedOut: string }) => client.vat.markReturn({ period, done: true, figures }),
+    mutationFn: (v: { period: string; figures: { carriedIn: string; deductible: string; carriedOut: string } }) =>
+      client.vat.markReturn({ period: v.period, done: true, figures: v.figures }),
     onSuccess: done,
   });
-  const withdraw = useMutation({ mutationFn: () => client.vat.markReturn({ period, done: false }), onSuccess: done });
+  const withdraw = useMutation({ mutationFn: (target: string) => client.vat.markReturn({ period: target, done: false }), onSuccess: done });
   const open = () => {
     const c22 = filed?.carriedIn ?? carried ?? data.carryForward.amount;
     const c25 = filed?.deductible ?? deduct25;
@@ -284,7 +286,7 @@ function FiledReturn({ data, carried, deduct25, canFile }: { data: VatReport; ca
             {filed ? t('edit') : t('mark')}
           </Button>
           {filed && (
-            <Button size="sm" variant="ghost" disabled={withdraw.isPending} onClick={() => withdraw.mutate()}>
+            <Button size="sm" variant="ghost" disabled={withdraw.isPending} onClick={() => withdraw.mutate(period)}>
               {withdraw.isPending ? <Spinner className="text-current" /> : null}
               {t('withdraw')}
             </Button>
@@ -296,7 +298,7 @@ function FiledReturn({ data, carried, deduct25, canFile }: { data: VatReport; ca
           className="mt-2 space-y-2"
           onSubmit={(e) => {
             e.preventDefault();
-            if (valid) save.mutate({ carriedIn: figures.carriedIn as string, deductible: figures.deductible as string, carriedOut: figures.carriedOut as string });
+            if (valid) save.mutate({ period, figures: { carriedIn: figures.carriedIn as string, deductible: figures.deductible as string, carriedOut: figures.carriedOut as string } });
           }}>
           <p className="text-xs text-subtle-foreground">{t('formHint')}</p>
           <div className="flex flex-wrap gap-3">
@@ -474,6 +476,7 @@ export function VatPage() {
           </section>
 
           <FiledReturn
+            key={data.period.period}
             data={data}
             carried={carried}
             deduct25={deductAmount(deduct, data.indicators.find((i) => i.code === '24')?.amount ?? '0', data.paymentChecks.suggested25)}
