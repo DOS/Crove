@@ -24,6 +24,8 @@ export const NAV_GROUPS = [
       // In-app notifications of the kernel and finance (#671), with the unread count.
       { to: '/o/$slug/notifications', label: 'alerts', module: 'kernel' },
       { to: '/o/$slug/tasks', label: 'tasks', module: 'kernel' },
+      // Bookings of the public booking page (#1320).
+      { to: '/o/$slug/bookings', label: 'bookings', module: 'crm' },
     ],
   },
   {

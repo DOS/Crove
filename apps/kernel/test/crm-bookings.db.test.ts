@@ -9,10 +9,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { isVietnamHoliday, zonedDate, zonedInstant, type EventType, type PersonalDataErasure, type PersonalDataResult } from '@crove/kernel-contract';
+import { isVietnamHoliday, zonedDate, zonedInstant, type BookingItem, type EventType, type PersonalDataErasure, type PersonalDataResult } from '@crove/kernel-contract';
 import { Runtime } from '@crove/kernel-runtime';
 import { crmCommands, crmQueries } from '@crove/mod-crm';
-import { bookingRequest, bookingStatus, bookingView } from '../src/booking-page.ts';
+import { bookingManageAsk, bookingManageView, bookingRequest, bookingStatus, bookingView } from '../src/booking-page.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -157,7 +157,8 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     expect(event).toMatchObject({ user_id: o.host, kind: 'booking', title: 'Tư vấn thuế: Nguyễn Văn Khách' });
     const party = (await admin((c) => c.query('SELECT name, email, phone, kind, source_trust FROM crove_kernel.party WHERE org_id = $1 AND id = $2', [o.orgId, booking?.party_id]))).rows[0];
     expect(party).toMatchObject({ name: 'Nguyễn Văn Khách', email: 'khach@example.test', phone: '0901234567', kind: 'person', source_trust: 'external' });
-    const activity = (await admin((c) => c.query<{ kind: string; summary: string }>("SELECT kind, summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 ORDER BY occurred_at, id", [o.orgId, booking?.party_id]))).rows;
+    // A confirmation writes the party's creation and the booking at the same instant: the creation sorts first.
+    const activity = (await admin((c) => c.query<{ kind: string; summary: string }>("SELECT kind, summary FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 ORDER BY occurred_at, kind <> 'party.created', id", [o.orgId, booking?.party_id]))).rows;
     expect(activity.map((a) => a.kind)).toEqual(['party.created', 'crm.booking.confirmed']);
     expect(activity[1]?.summary).toContain('Tư vấn thuế lúc 09:00');
     // The slot is gone from the page.
@@ -214,6 +215,175 @@ suite('the public booking page on PostgreSQL (#1318)', () => {
     // A token of one page reads nothing on another.
     expect(await bookingStatus(app, p.slug, 'tu-van', first)).toBeNull();
     expect(await p.bookings()).toEqual([]);
+  });
+
+  it('mails the visitor and the host, and a manage link moves or cancels the booking once (#1319)', async () => {
+    const o = await org();
+    const day = bookableDay();
+    await bookingRequest(app, o.slug, 'tu-van', visitor(at(day, 540)));
+    const id = (await o.bookings())[0]?.id as string;
+    await o.confirm(id);
+    const [booking] = await o.bookings();
+    const mails = async () =>
+      (
+        await admin((c) =>
+          c.query<{ source: string; to_address: string; template_key: string; status: string; subject: string; payload: Record<string, unknown> }>(
+            'SELECT source, to_address, template_key, status, subject, payload FROM crove_kernel.mail_message WHERE org_id = $1 AND source_id = $2 ORDER BY created_at, id',
+            [o.orgId, id],
+          ),
+        )
+      ).rows;
+    const confirmed = await mails();
+    expect(confirmed.map((m) => [m.source, m.template_key, m.status, m.payload.recipient])).toEqual([
+      ['crm.booking.confirmed', 'crm.booking', 'queued', 'visitor'],
+      ['crm.booking.confirmed', 'crm.booking', 'queued', 'host'],
+    ]);
+    expect(confirmed[0]?.to_address).toBe('khach@example.test');
+    expect(confirmed[1]?.to_address).toMatch(/^host-.*@book\.test$/);
+    // No mail's merge data or subject holds a token or a detail of the visitor: the template reads them at send time.
+    expect(JSON.stringify(confirmed)).not.toMatch(/[0-9a-f]{32}\.[0-9]+\.[0-9a-f]{32}|Nguyễn|0901234567|Hỏi về/);
+    const data = await worker.execute<{ token: string | null; visitor: unknown }>('crm.booking.mail_data', { bookingId: id, revision: 0 }, { actor: SYSTEM, orgId: o.orgId });
+    expect(data.visitor).toEqual({ name: 'Nguyễn Văn Khách', email: 'khach@example.test', phone: '0901234567', note: 'Hỏi về thuế' });
+    const scheduled = await admin((c) => c.query("SELECT payload FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'crm.booking.scheduled'", [o.orgId]));
+    expect(scheduled.rows.map((r) => r.payload)).toEqual([{ booking_id: id, starts_at: at(day, 540) }]);
+
+    // The link a mail of this revision carries.
+    const link = async (revision: number) =>
+      (await worker.execute<{ token: string | null }>('crm.booking.mail_data', { bookingId: id, revision }, { actor: SYSTEM, orgId: o.orgId })).token as string;
+    const first = await link(0);
+    expect(first).toMatch(/^[0-9a-f]{32}\.0\.[0-9a-f]{32}$/);
+    expect(await bookingManageView(app, o.slug, 'tu-van', { manage: first })).toMatchObject({ status: 'confirmed', usable: true, startsAt: at(day, 540), outcome: null });
+    // A forged MAC, another revision or another page's slugs read nothing.
+    const forged = `${first.slice(0, -1)}${first.endsWith('0') ? '1' : '0'}`;
+    expect(await bookingManageView(app, o.slug, 'tu-van', { manage: forged })).toBeNull();
+    expect(await bookingManageView(app, o.slug, 'tu-van', { manage: first.replace('.0.', '.1.') })).toBeNull();
+    const p = await org();
+    expect(await bookingManageView(app, p.slug, 'tu-van', { manage: first })).toBeNull();
+
+    // A move to a taken time is refused and the link keeps working.
+    await app.execute('kernel.calendar.event.add', { startsAt: at(day, 600), endsAt: at(day, 660), timeZone: VN, title: 'Bận', kind: 'manual' }, { actor: asUser(o.host), orgId: o.orgId });
+    const taken = await bookingManageAsk(app, o.slug, 'tu-van', { manage: first, action: 'move', startsAt: at(day, 600) });
+    expect(await bookingManageView(app, o.slug, 'tu-van', { manage: first })).toMatchObject({ requestId: taken?.requestId, outcome: null });
+    const manage = (requestId: string) => worker.execute<{ outcome: string }>('crm.booking.manage', { bookingId: id, requestId }, { actor: SYSTEM, orgId: o.orgId });
+    expect(await manage(taken?.requestId as string)).toEqual({ bookingId: id, outcome: 'taken' });
+    expect(await bookingManageView(app, o.slug, 'tu-van', { manage: first })).toMatchObject({ usable: true, outcome: 'taken', startsAt: at(day, 540) });
+
+    // A move to a free time holds it, frees the old one, and ends the link.
+    const moved = await bookingManageAsk(app, o.slug, 'tu-van', { manage: first, action: 'move', startsAt: at(day, 720) });
+    expect(await manage(moved?.requestId as string)).toEqual({ bookingId: id, outcome: 'moved' });
+    // The same ask again changes nothing.
+    expect(await manage(moved?.requestId as string)).toEqual({ bookingId: id, outcome: 'none' });
+    expect(await bookingManageView(app, o.slug, 'tu-van', { manage: first })).toMatchObject({ usable: false, outcome: 'moved', startsAt: at(day, 720), endsAt: at(day, 750) });
+    expect(await bookingManageAsk(app, o.slug, 'tu-van', { manage: first, action: 'cancel' })).toBeNull();
+    const event = (await admin((c) => c.query('SELECT starts_at, status FROM crove_kernel.calendar_event WHERE org_id = $1 AND id = $2', [o.orgId, booking?.calendar_event_id]))).rows[0];
+    expect(event).toMatchObject({ status: 'active' });
+    expect(new Date(event?.starts_at).toISOString()).toBe(at(day, 720));
+    const slots = async () => (await bookingView(app, o.slug, 'tu-van', dayRange(day)))?.slots.map((x) => x.start) ?? [];
+    expect(await slots()).toContain(at(day, 540));
+    expect(await slots()).not.toContain(at(day, 720));
+    expect((await mails()).filter((m) => m.source === 'crm.booking.moved').map((m) => m.payload.recipient)).toEqual(['visitor', 'host']);
+
+    // Reminders: only for the time the booking still starts at, and once per lead.
+    const remind = (startsAt: string, lead: '24h' | '1h') => worker.execute<{ sent: boolean }>('crm.booking.remind', { bookingId: id, startsAt, lead }, { actor: SYSTEM, orgId: o.orgId });
+    expect(await remind(at(day, 540), '24h')).toEqual({ sent: false });
+    expect(await remind(at(day, 720), '24h')).toEqual({ sent: true });
+    expect(await remind(at(day, 720), '24h')).toEqual({ sent: false });
+    expect(await remind(at(day, 720), '1h')).toEqual({ sent: true });
+
+    // A cancel with the new link frees the slot, ends the link, and no reminder goes out after it.
+    // A mail of the first revision sent only now carries no link; one of the new revision does.
+    expect(await link(0)).toBeNull();
+    const second = await link(1);
+    expect(second).toMatch(/\.1\./);
+    const cancel = await bookingManageAsk(app, o.slug, 'tu-van', { manage: second, action: 'cancel' });
+    expect(await manage(cancel?.requestId as string)).toEqual({ bookingId: id, outcome: 'cancelled' });
+    expect(await bookingManageView(app, o.slug, 'tu-van', { manage: second })).toMatchObject({ status: 'cancelled', usable: false, outcome: 'cancelled' });
+    expect(await bookingManageAsk(app, o.slug, 'tu-van', { manage: second, action: 'cancel' })).toBeNull();
+    expect((await admin((c) => c.query('SELECT status FROM crove_kernel.calendar_event WHERE org_id = $1 AND id = $2', [o.orgId, booking?.calendar_event_id]))).rows[0]).toMatchObject({ status: 'cancelled' });
+    expect(await slots()).toContain(at(day, 720));
+    expect(await link(2)).toBeNull();
+    const before = (await mails()).length;
+    await admin((c) => c.query("DELETE FROM crove_kernel.mail_message WHERE org_id = $1 AND source = 'crm.booking.remind_1h'", [o.orgId]));
+    expect(await remind(at(day, 720), '1h')).toEqual({ sent: false });
+    expect((await mails()).length).toBe(before - 1);
+    expect((await mails()).filter((m) => m.source === 'crm.booking.cancelled').map((m) => m.payload.recipient)).toEqual(['visitor', 'host']);
+    // Same instant for the party's creation and the confirmation: the creation sorts first.
+    const activity = (await admin((c) => c.query<{ kind: string }>('SELECT kind FROM crove_kernel.activity WHERE org_id = $1 AND record_id = $2 ORDER BY occurred_at, kind <> \'party.created\', id', [o.orgId, booking?.party_id]))).rows;
+    expect(activity.map((a) => a.kind)).toEqual(['party.created', 'crm.booking.confirmed', 'crm.booking.moved', 'crm.booking.cancelled']);
+    // Bad asks are turned away before anything is recorded.
+    await expect(bookingManageAsk(app, o.slug, 'tu-van', { manage: second, action: 'drop' })).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(bookingManageAsk(app, o.slug, 'tu-van', { manage: second, action: 'move' })).rejects.toMatchObject({ code: 'VALIDATION' });
+  });
+
+  it('takes no cancel or move once the booking has started (#1319)', async () => {
+    const o = await org();
+    const day = bookableDay();
+    await bookingRequest(app, o.slug, 'tu-van', visitor(at(day, 540)));
+    const id = (await o.bookings())[0]?.id as string;
+    await o.confirm(id);
+    const { token } = await worker.execute<{ token: string }>('crm.booking.mail_data', { bookingId: id, revision: 0 }, { actor: SYSTEM, orgId: o.orgId });
+    // An ask recorded before the start, which the worker reaches after it.
+    const late = await bookingManageAsk(app, o.slug, 'tu-van', { manage: token, action: 'cancel' });
+    await admin((c) =>
+      c.query("UPDATE crove_crm.booking SET starts_at = now() - interval '10 minutes', ends_at = now() + interval '20 minutes' WHERE org_id = $1 AND id = $2", [o.orgId, id]),
+    );
+    expect(await worker.execute('crm.booking.manage', { bookingId: id, requestId: late?.requestId }, { actor: SYSTEM, orgId: o.orgId })).toEqual({ bookingId: id, outcome: 'unavailable' });
+    expect(await bookingManageView(app, o.slug, 'tu-van', { manage: token })).toMatchObject({ status: 'confirmed', usable: false, outcome: 'unavailable' });
+    expect(await bookingManageAsk(app, o.slug, 'tu-van', { manage: token, action: 'cancel' })).toBeNull();
+  });
+
+  it('lists bookings for their host and for owners, and the host cancels or moves one (#1320)', async () => {
+    const o = await org();
+    const day = bookableDay();
+    await bookingRequest(app, o.slug, 'tu-van', visitor(at(day, 540)));
+    await bookingRequest(app, o.slug, 'tu-van', visitor(at(day, 600), { email: 'hai@example.test', name: 'Trần Thị Hai' }));
+    for (const b of await o.bookings()) await o.confirm(b.id);
+    const [first, second] = await o.bookings();
+    const list = (actor: string, scope: 'mine' | 'org', period: 'upcoming' | 'past' = 'upcoming') =>
+      app.query<BookingItem[]>('crm.booking.list', { scope, period }, { actor: asUser(actor), orgId: o.orgId });
+
+    const mine = await list(o.host, 'mine');
+    expect(mine.map((b) => [b.startsAt, b.status, b.visitor.name])).toEqual([
+      [at(day, 540), 'confirmed', 'Nguyễn Văn Khách'],
+      [at(day, 600), 'confirmed', 'Trần Thị Hai'],
+    ]);
+    expect(mine[0]).toMatchObject({ eventType: { slug: 'tu-van', title: 'Tư vấn thuế' }, hostUserId: o.host, partyId: first?.party_id });
+    // The owner hosts nothing but sees the org's; the host may not ask for the org's.
+    expect(await list(o.owner, 'mine')).toEqual([]);
+    expect(await list(o.owner, 'org')).toHaveLength(2);
+    await expect(list(o.host, 'org')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await list(o.host, 'mine', 'past')).toEqual([]);
+
+    // Another member may not touch the host's bookings; the owner may.
+    const other = await upsertIdentity(createDb(appPool), { issuer: 'test', subject: randomUUID(), email: `other-${randomUUID().slice(0, 8)}@book.test`, name: null });
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, other]));
+    await expect(app.execute('crm.booking.cancel', { bookingId: first?.id }, { actor: asUser(other), orgId: o.orgId })).rejects.toMatchObject({ code: 'BOOKING_HOST_FORBIDDEN' });
+
+    // The host moves the first to a free time; a taken one is refused and nothing changes.
+    await expect(app.execute('crm.booking.move', { bookingId: first?.id, startsAt: at(day, 600) }, { actor: asUser(o.host), orgId: o.orgId })).rejects.toMatchObject({ code: 'BOOKING_TIME_TAKEN' });
+    expect(await app.execute('crm.booking.move', { bookingId: first?.id, startsAt: at(day, 720) }, { actor: asUser(o.host), orgId: o.orgId })).toEqual({ bookingId: first?.id, startsAt: at(day, 720) });
+    // The owner cancels the second: its slot is free again.
+    await app.execute('crm.booking.cancel', { bookingId: second?.id }, { actor: asUser(o.owner), orgId: o.orgId });
+    await expect(app.execute('crm.booking.cancel', { bookingId: second?.id }, { actor: asUser(o.owner), orgId: o.orgId })).rejects.toMatchObject({ code: 'BOOKING_NOT_CHANGEABLE' });
+    const slots = (await bookingView(app, o.slug, 'tu-van', dayRange(day)))?.slots.map((x) => x.start) ?? [];
+    expect(slots).toContain(at(day, 540));
+    expect(slots).toContain(at(day, 600));
+    expect(slots).not.toContain(at(day, 720));
+    expect((await list(o.host, 'mine')).map((b) => [b.startsAt, b.status])).toEqual([
+      [at(day, 600), 'cancelled'],
+      [at(day, 720), 'confirmed'],
+    ]);
+
+    // The visitor is mailed and the host is not (they acted); the party's timeline says the host did it.
+    const mails = await admin((c) =>
+      c.query<{ source: string; recipient: string }>("SELECT source, payload->>'recipient' AS recipient FROM crove_kernel.mail_message WHERE org_id = $1 AND source IN ('crm.booking.moved', 'crm.booking.cancelled') ORDER BY created_at, id", [o.orgId]),
+    );
+    expect(mails.rows).toEqual([
+      { source: 'crm.booking.moved', recipient: 'visitor' },
+      { source: 'crm.booking.cancelled', recipient: 'visitor' },
+    ]);
+    const activity = await admin((c) => c.query<{ summary: string }>("SELECT summary FROM crove_kernel.activity WHERE org_id = $1 AND kind IN ('crm.booking.moved', 'crm.booking.cancelled') ORDER BY occurred_at, id", [o.orgId]));
+    expect(activity.rows.map((a) => a.summary.split(' ').slice(0, 5).join(' '))).toEqual(['Người chủ trì đổi lịch', 'Người chủ trì hủy lịch']);
   });
 
   it('caps requests per event type at 30 an hour', async () => {

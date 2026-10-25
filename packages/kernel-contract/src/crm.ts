@@ -6,6 +6,12 @@ import { zId } from './schemas.ts';
 export const EVENT_TYPE_LOCATION_KINDS = ['in_person', 'phone', 'video'] as const;
 export type EventTypeLocationKind = (typeof EVENT_TYPE_LOCATION_KINDS)[number];
 
+// Who hosts a booking (#1373): the lead host alone; one free host of the team (round-robin); or every host together
+// (collective). A team type names 1 to EVENT_TYPE_CO_HOSTS_MAX co-hosts beside its lead host.
+export const EVENT_TYPE_ASSIGNMENTS = ['single', 'round_robin', 'collective'] as const;
+export type EventTypeAssignment = (typeof EVENT_TYPE_ASSIGNMENTS)[number];
+export const EVENT_TYPE_CO_HOSTS_MAX = 9;
+
 export const EVENT_TYPE_SLUG_MAX = 60;
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
@@ -36,6 +42,8 @@ export const zEventTypeInput = z.strictObject({
   locationKind: z.enum(EVENT_TYPE_LOCATION_KINDS),
   locationValue: z.string().trim().max(500).nullable(),
   hostUserId: zId,
+  assignment: z.enum(EVENT_TYPE_ASSIGNMENTS).default('single'),
+  coHostUserIds: z.array(zId).max(EVENT_TYPE_CO_HOSTS_MAX).default([]),
 });
 export type EventTypeInput = z.infer<typeof zEventTypeInput>;
 
@@ -85,3 +93,57 @@ export const zBookingStatus = z.strictObject({
   timeZone: z.string(),
 });
 export type BookingStatus = z.infer<typeof zBookingStatus>;
+
+// A booking seen from its manage link (#1319): the visitor cancels it or moves it while `usable`; each cancel or move
+// ends the link. `outcome` answers the ask `requestId` names (null while the worker has not decided).
+export const BOOKING_MANAGE_OUTCOMES = ['cancelled', 'moved', 'taken', 'unavailable'] as const;
+export const zBookingManage = z.strictObject({
+  orgName: z.string(),
+  eventType: z.strictObject({
+    slug: z.string(),
+    title: z.string(),
+    durationMin: z.number().int(),
+    locationKind: z.enum(EVENT_TYPE_LOCATION_KINDS),
+    active: z.boolean(),
+  }),
+  status: z.enum(BOOKING_STATUSES),
+  startsAt: z.string(),
+  endsAt: z.string(),
+  timeZone: z.string(),
+  usable: z.boolean(),
+  requestId: z.string().nullable(),
+  outcome: z.enum(BOOKING_MANAGE_OUTCOMES).nullable(),
+});
+export type BookingManage = z.infer<typeof zBookingManage>;
+
+// What the manage page posts: the token alone reads the booking; with an action it asks for a cancel or a move.
+export const BOOKING_MANAGE_TOKEN = /^[0-9a-f]{32}\.[0-9]{1,9}\.[0-9a-f]{32}$/;
+export const zBookingManageAsk = z.discriminatedUnion('action', [
+  z.strictObject({ manage: z.string().regex(BOOKING_MANAGE_TOKEN), action: z.literal('cancel') }),
+  z.strictObject({ manage: z.string().regex(BOOKING_MANAGE_TOKEN), action: z.literal('move'), startsAt: z.iso.datetime({ offset: true }) }),
+]);
+export type BookingManageAsk = z.infer<typeof zBookingManageAsk>;
+
+// The bookings screen of the app (#1320): a member's own bookings (those of the types they host), or the org's for
+// owners and admins; upcoming ones first to last, past ones last to first.
+export const zBookingListQuery = z.strictObject({ scope: z.enum(['mine', 'org']), period: z.enum(['upcoming', 'past']) });
+export type BookingListQuery = z.infer<typeof zBookingListQuery>;
+export const zBookingItem = z.strictObject({
+  id: z.string(),
+  eventType: z.strictObject({ id: z.string(), slug: z.string(), title: z.string(), active: z.boolean() }),
+  // The host whose calendar holds the booking (for a round-robin type, the one it landed on).
+  hostUserId: z.string(),
+  // Every host it holds, that one first (a collective booking holds each host of its type).
+  hostUserIds: z.array(z.string()),
+  status: z.enum(BOOKING_STATUSES),
+  startsAt: z.string(),
+  endsAt: z.string(),
+  // The visitor's own zone, which their mails use.
+  timeZone: z.string(),
+  // Null once a personal-data erasure cleared them.
+  visitor: z.strictObject({ name: z.string().nullable(), email: z.string().nullable(), phone: z.string().nullable(), note: z.string().nullable() }),
+  partyId: z.string().nullable(),
+});
+export type BookingItem = z.infer<typeof zBookingItem>;
+export const zBookingCancel = z.strictObject({ bookingId: zId });
+export const zBookingMove = z.strictObject({ bookingId: zId, startsAt: z.iso.datetime({ offset: true }) });

@@ -415,6 +415,10 @@ const schema = z.object({
   // Inbound email: <token>@INBOUND_DOMAIN, delivered by a mail worker to POST /api/inbound/email.
   INBOUND_DOMAIN: optional,
   INBOUND_SECRET: optional,
+  // Cloudflare Turnstile on the public booking form (#1353, CAL-2, plan docs/plan/calendar.md §3.4): both or neither.
+  // With them, the page shows the widget and the kernel checks its token with Cloudflare before recording a request.
+  TURNSTILE_SITE_KEY: optional.pipe(z.string().regex(/^[0-9A-Za-z_-]{1,100}$/, 'TURNSTILE_SITE_KEY is a Turnstile site key').optional()),
+  TURNSTILE_SECRET: optional,
   // Role passwords applied by `migrate` (self-host).
   CROVE_APP_DB_PASSWORD: optional,
   CROVE_WORKER_DB_PASSWORD: optional,
@@ -455,6 +459,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   if (config.INBOUND_SECRET && config.INBOUND_SECRET.length < 32) {
     throw new Error('INBOUND_SECRET must be at least 32 characters');
+  }
+  // A widget without the secret could not be checked, and a secret without the widget would refuse every booking.
+  if (Boolean(config.TURNSTILE_SITE_KEY) !== Boolean(config.TURNSTILE_SECRET)) {
+    throw new Error('set both TURNSTILE_SITE_KEY and TURNSTILE_SECRET, or neither');
   }
   // A sign-up policy the deployment cannot enforce, or one set only halfway, stops the boot instead of leaving
   // sign-up more open than the operator meant (#350).
@@ -516,6 +524,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (config.AUTH_JWT_SECRET && SAMPLE_SECRETS.has(config.AUTH_JWT_SECRET)) {
       throw new Error('AUTH_JWT_SECRET is a sample value; generate a random secret before exposing Crove');
     }
+    if ([config.TURNSTILE_SITE_KEY, config.TURNSTILE_SECRET].some((key) => key !== undefined && TURNSTILE_TEST_KEY.test(key))) {
+      throw new Error("TURNSTILE_SITE_KEY or TURNSTILE_SECRET is one of Cloudflare's test keys; use the widget's real keys before exposing Crove");
+    }
     if (config.AUTH_AUTOCONFIRM === 'true') {
       throw new Error('AUTH_AUTOCONFIRM=true lets anyone claim any email address; set it to false and configure SMTP');
     }
@@ -563,6 +574,10 @@ export const EMAIL_BUDGET_MIN_CLIENTS = 10;
 
 // Values shipped in docker-compose.yml and .env.example. Fine on localhost, never on a public URL.
 const SAMPLE_SECRETS = new Set(['local-only-jwt-secret-change-me-0123456789', 'change-me-to-a-long-random-string-0123456789']);
+
+// Cloudflare's published Turnstile test site keys and secrets (1x00000000000000000000AA, 1x0000000000000000000000000000000AA
+// and their 2x and 3x siblings): siteverify passes any token for the always-pass pair, so they are refused on a public URL.
+const TURNSTILE_TEST_KEY = /^[123]x0+[A-F]{2}$/;
 
 // Cloudflare R2's S3 API: https://<account>.r2.cloudflarestorage.com (and jurisdiction hosts such as <account>.eu.).
 export function isR2Endpoint(url: string | undefined): boolean {

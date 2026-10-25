@@ -1,7 +1,7 @@
 // The public booking page's helpers (issue #1318): slots grouped by the visitor's day, times in the visitor's zone, and
 // the week one page read covers.
 import { describe, expect, it } from 'vitest';
-import { dayLabel, slotsByDay, timeIn, weekRange } from '../src/lib/booking.ts';
+import { dayLabel, manageTokenOf, slotsByDay, timeIn, weekRange } from '../src/lib/booking.ts';
 
 const slot = (start: string, end: string) => ({ start, end });
 
@@ -29,5 +29,14 @@ describe('booking page helpers', () => {
     expect(weekRange(now, 2, 'Asia/Ho_Chi_Minh').from).toBe('2026-11-06T17:00:00.000Z');
     // Berlin leaves summer time on 25 October: the week starts at +2 and ends at +1.
     expect(weekRange(now, 0, 'Europe/Berlin')).toEqual({ from: '2026-10-23T22:00:00.000Z', to: '2026-10-30T23:00:00.000Z' });
+  });
+
+  it('reads the manage token from the link fragment only when it is well formed (#1319)', () => {
+    const token = `${'a'.repeat(32)}.3.${'0'.repeat(32)}`;
+    expect(manageTokenOf(`#m=${token}`)).toBe(token);
+    expect(manageTokenOf(`m=${token}`)).toBe(token);
+    expect(manageTokenOf('')).toBeNull();
+    expect(manageTokenOf('#m=abc')).toBeNull();
+    expect(manageTokenOf(`#m=${token}x`)).toBeNull();
   });
 });

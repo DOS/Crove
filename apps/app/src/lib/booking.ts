@@ -1,6 +1,6 @@
 // Helpers for the public booking page (issue #1318): the free slots grouped by day and shown in the visitor's own time
 // zone, the week the page reads, and the visitor's zone itself.
-import { zonedDate, zonedInstant, type BookingPage } from '@crove/kernel-contract';
+import { BOOKING_MANAGE_TOKEN, zonedDate, zonedInstant, type BookingPage } from '@crove/kernel-contract';
 import type { Locale } from '../i18n/locale.ts';
 
 export type Slot = BookingPage['slots'][number];
@@ -46,4 +46,10 @@ export function timeIn(iso: string, timeZone: string, locale: Locale): string {
 /** "Thứ Hai, 02/11/2026" for a calendar date. */
 export function dayLabel(date: string, locale: Locale): string {
   return new Intl.DateTimeFormat(LOCALE_TAG[locale], { timeZone: 'UTC', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(`${date}T00:00:00Z`));
+}
+
+/** The manage token in a link's fragment ("#m=<token>", #1319), or null when there is none or it is malformed. */
+export function manageTokenOf(hash: string): string | null {
+  const value = new URLSearchParams(hash.replace(/^#/, '')).get('m');
+  return value && BOOKING_MANAGE_TOKEN.test(value) ? value : null;
 }
