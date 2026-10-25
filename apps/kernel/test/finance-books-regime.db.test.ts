@@ -302,4 +302,26 @@ suite('finance books regime per legal entity (#1403)', () => {
       expect(await refusal(asApp(owner, (c) => c.query(sql))), sql).toMatchObject({ code: '42501', message: expect.stringMatching(PRIVILEGE_DENIED) });
     }
   });
+
+  it('checks an update on every date whose chart it may change, and on no other', async () => {
+    const books = (from: string, regime: string) =>
+      admin((a) =>
+        a.query(`INSERT INTO crove_finance.legal_entity_books (org_id, legal_entity_id, regime, chart_version, effective_from) VALUES ($1, $2, $3, '2026.1', $4)`, [
+          orgId,
+          defaultEntity,
+          regime,
+          from,
+        ]),
+      );
+    const update = (set: string) =>
+      refusal(admin((a) => a.query(`UPDATE crove_finance.legal_entity_books SET ${set} WHERE org_id = $1 AND legal_entity_id = $2 AND effective_from = '2041-01-01'`, [orgId, defaultEntity])));
+    await books('2041-01-01', 'tt99');
+    await books('2042-01-01', 'tt133');
+    await postAsOwner({ entity: defaultEntity, date: '2042-06-01', debit: '1111', credit: '5111' });
+    // 2041 has no entry, and the 2042 row keeps the chart of 2042 on: the 2041 row may change.
+    expect(await update(`regime = 'tt133'`)).toBeNull();
+    expect(await update(`regime = 'tt99'`)).toBeNull();
+    // Moved past the 2042 row, it would put the 2042 entry under TT99.
+    expect(await update(`effective_from = '2043-01-01'`)).toMatchObject({ message: 'BOOKS_REGIME_IN_USE' });
+  });
 });

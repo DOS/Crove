@@ -438,6 +438,8 @@ export type CategorizationRuleTable = Refine<
 export const BOOKS_REGIMES = ['tt133', 'tt99'] as const;
 export type BooksRegime = (typeof BOOKS_REGIMES)[number];
 export type ChartTable = Refine<G.FinanceChartTable, { regime: ColumnType<BooksRegime, never, never> }>;
+// The chart an entity's books follow from a fiscal year on (no row: TT133 2026.1). Read only for tenant roles.
+export type LegalEntityBooksTable = Refine<G.FinanceLegalEntityBooksTable, { regime: ColumnType<BooksRegime, never, never> }>;
 
 // The register of fixed assets and prepaid costs (#919). Tenant roles update only the end of a schedule, once.
 export const FIXED_ASSET_KINDS = ['fixed_asset', 'prepaid_cost'] as const;
@@ -714,6 +716,7 @@ type Refined = Tables<{
   'crove_finance.fixed_asset': FixedAssetTable;
   'crove_finance.categorization_rule': CategorizationRuleTable;
   'crove_finance.chart': ChartTable;
+  'crove_finance.legal_entity_books': LegalEntityBooksTable;
   'crove_finance.input_vat_check': InputVatCheckTable;
   'crove_finance.vat_return_filed': VatReturnFiledTable;
   'crove_finance.journal_voucher': JournalVoucherTable;

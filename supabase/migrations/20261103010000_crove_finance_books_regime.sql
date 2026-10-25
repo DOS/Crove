@@ -339,7 +339,8 @@ CREATE POLICY le_scope ON crove_finance.legal_entity_books AS RESTRICTIVE FOR AL
 --     without one), between the row's chart and the chart in force before it (the previous row's, else TT133 2026.1);
 --     when both are the same chart nothing changes;
 --   - an update that keeps the date and the chart changes nothing; any other update is refused once the entity has an
---     entry on or after the earlier of its two dates.
+--     entry from the earlier of its two dates up to the next other row after the later one (or on without one): the
+--     dates whose chart it may change, even when it moves past another row.
 -- Runs as the writer, through its own policies: a writer sees the rows and entries of every entity it may write books
 -- for.
 CREATE OR REPLACE FUNCTION crove_finance.legal_entity_books_guard() RETURNS trigger
@@ -370,6 +371,9 @@ BEGIN
   PERFORM 1 FROM crove_finance.period_lock p WHERE p.org_id = v_row.org_id AND p.legal_entity_id = v_row.legal_entity_id FOR UPDATE;
   IF TG_OP = 'UPDATE' THEN
     v_from := least(OLD.effective_from, NEW.effective_from);
+    SELECT min(b.effective_from) INTO v_to FROM crove_finance.legal_entity_books b
+    WHERE b.org_id = v_row.org_id AND b.legal_entity_id = v_row.legal_entity_id AND b.id <> OLD.id
+      AND b.effective_from > greatest(OLD.effective_from, NEW.effective_from);
   ELSE
     v_from := v_row.effective_from;
     SELECT b.regime, b.chart_version INTO v_regime, v_version FROM crove_finance.legal_entity_books b
