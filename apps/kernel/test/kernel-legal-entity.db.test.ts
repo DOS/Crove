@@ -16,7 +16,7 @@ import { Runtime } from '@crove/kernel-runtime';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const THIS_VERSION = '20261102220000';
+const THIS_VERSION = '20261102230000';
 const suite = ADMIN ? describe : describe.skip;
 
 suite('kernel projections per legal entity on PostgreSQL (#1280 part 3)', () => {
