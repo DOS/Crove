@@ -1721,9 +1721,14 @@ export function createRpcHandler(
         }),
       ),
     },
+    bookEntities: {
+      list: os.bookEntities.list.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.legal_entities.list', {}, { actor, orgId })),
+      ),
+    },
     periodLock: {
-      state: os.periodLock.state.handler(({ context }) =>
-        inFinance(context, (orgId, actor) => runtime.query('finance.period.lock_state', {}, { actor, orgId })),
+      state: os.periodLock.state.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.period.lock_state', input ?? {}, { actor, orgId })),
       ),
       lock: os.periodLock.lock.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => {

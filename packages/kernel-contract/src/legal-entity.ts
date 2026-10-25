@@ -33,3 +33,9 @@ export const zLegalEntityInput = z.object({
   parentId: zId.nullable(),
 });
 export type LegalEntityInput = z.infer<typeof zLegalEntityInput>;
+
+// A legal entity whose books the caller may see (#1280), for the entity picker of the finance screens: every member
+// reads the entities their legal-entity scope covers (all of them for owners, admins and unscoped members), the default
+// first, then by name. A picker is needed only when the list has more than one entity.
+export const zBookEntity = zLegalEntity.pick({ id: true, name: true, kind: true, taxCode: true, isDefault: true });
+export type BookEntity = z.infer<typeof zBookEntity>;

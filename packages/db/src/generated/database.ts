@@ -410,6 +410,7 @@ export interface FinancePeriodLockTable {
   locked_through: ColumnType<string | null, NotGranted, NotGranted>;
   updated_by: ColumnType<string | null, NotGranted, NotGranted>;
   updated_at: ColumnType<Date, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
 }
 
 /** crove_finance.portal_invoice_list */
