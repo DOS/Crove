@@ -1,9 +1,10 @@
 // What a connected channel offers to pick from in the composer (#1120): a Pinterest board's sections, and since #1131 a
-// YouTube channel's playlists and a WordPress site's categories and tags. It only reads. The worker asks for one kind
-// of list with the channel's token; the composer shows the names, and the adapter checks a chosen option again when it
-// publishes. not_found: the channel itself (the board, the YouTube channel, the site's REST API) is gone; null: no
-// answer worth keeping (a network failure, a malformed answer, a spent quota).
-export const CHANNEL_OPTION_KINDS = ['pinterest_section', 'youtube_playlist', 'wordpress_term'] as const;
+// YouTube channel's playlists and a WordPress site's categories and tags, and since #1497 a TikTok account's creator
+// options (tiktokCreatorOptions). It only reads. The worker asks for one kind of list with the channel's token; the
+// composer shows the names, and the adapter checks a chosen option again when it publishes. not_found: the channel
+// itself (the board, the YouTube channel, the site's REST API) is gone; null: no answer worth keeping (a network
+// failure, a malformed answer, a spent quota).
+export const CHANNEL_OPTION_KINDS = ['pinterest_section', 'youtube_playlist', 'wordpress_term', 'tiktok_creator'] as const;
 export type ChannelOptionKind = (typeof CHANNEL_OPTION_KINDS)[number];
 // The most options a list keeps, and the longest name kept of one.
 export const CHANNEL_OPTIONS_MAX = 500;
