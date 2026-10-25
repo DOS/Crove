@@ -37,7 +37,7 @@ import {
   type VatPeriod,
 } from './domain/vat-return.ts';
 import { needsPaymentCheck, nonCashThreshold, paymentMethodKind, type PaymentMethodKind } from './domain/non-cash-payment.ts';
-import { form01XmlValues } from './domain/vat-01gtgt-xml.ts';
+import { HtkkAmountError, form01XmlValues } from './domain/vat-01gtgt-xml.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -525,6 +525,8 @@ export const vatPaymentMark = defineCommand({
   },
 });
 
+const FILERS: readonly MemberRole[] = ['owner', 'admin'];
+
 // Marks the period's VAT return filed (#1400), with the tax calendar's done mark hung on it: one appended row of
 // crove_finance.vat_return_filed with [22], [25] and [43] as filed, and kernel.tax_obligation.done for vat_return in
 // the same transaction. With figures (the VAT screen) they are recorded as entered. Without them (the tax calendar's
@@ -536,7 +538,9 @@ export const vatReturnMark = defineCommand({
   name: 'finance.vat.return_mark',
   input: zVatReturnMark,
   risk: 'R1',
-  access: MARKERS,
+  // Owners and admins only: the record feeds the next return. The database holds an insert to this command
+  // (vat_return_filed_guard and vat_return_filed_requires_audit, 20261102070000_crove_finance_vat_return_filed.sql).
+  access: FILERS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const period = vatPeriod(input.period);
@@ -561,7 +565,15 @@ export const vatReturnMark = defineCommand({
     } else if (!current) {
       source = 'computed';
       const report = await loadVatReport(ctx, period.period);
-      const values = form01XmlValues(report.indicators, { carriedForward: report.carryForward.amount, deductible: report.paymentChecks.suggested25 });
+      let values: ReturnType<typeof form01XmlValues>;
+      try {
+        values = form01XmlValues(report.indicators, { carriedForward: report.carryForward.amount, deductible: report.paymentChecks.suggested25 });
+      } catch (error) {
+        if (error instanceof HtkkAmountError) {
+          throw new DomainError('INVALID', 422, `Chỉ tiêu [${error.code}] vượt quá 14 chữ số; hãy kiểm tra lại các hóa đơn của kỳ này`);
+        }
+        throw error;
+      }
       figures = { carriedIn: values['22'], deductible: values['25'], carriedOut: values['43'] };
     }
     // The same figures marked again add no row.

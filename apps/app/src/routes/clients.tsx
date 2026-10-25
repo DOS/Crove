@@ -82,7 +82,7 @@ function TaxCalendarRow({ row, periodLabel }: { row: TaxDueRow; periodLabel: (pe
       </TableCell>
       <TableCell className="px-4 py-3 text-muted-foreground">{periodLabel(row.period)}</TableCell>
       <TableCell className="px-4 py-3 text-right">
-        {canMarkTaxDone(row.role) && (
+        {canMarkTaxDone(row.role, row.obligation, getConfig().modules.includes('finance')) && (
           <Button size="sm" variant="outline" onClick={() => done.mutate()} disabled={done.isPending}>
             {done.isPending ? <Spinner className="text-current" /> : null}
             {tt('markDone')}

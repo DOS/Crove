@@ -12,6 +12,7 @@ import {
   HTKK_01GTGT,
   buildForm01Xml,
   buildVat01Xml,
+  xmlCarryForward,
   form01Indicators,
   form01XmlValues,
   sideTotals,
@@ -328,6 +329,37 @@ describe('buildVat01Xml', () => {
     const v = form01XmlValues(indicators, { deductible: '180000', deductInput: true });
     expect([v['24'], v['25'], v['35'], v['36']]).toEqual(['220000', '180000', '1340000', '1160000']);
     expect(form01XmlValues(indicators, { deductible: '180000.5' })['25']).toBe('180001');
+  });
+
+  it('writes [22] from the previous return and takes it off the payable VAT (#1400)', () => {
+    const indicators = declaration('2026-09', purchases, sales).report.indicators;
+    // [35] is 1340000 and [25] 0, so [36] is 1340000; 500000 carried in leaves 840000 payable.
+    const v = form01XmlValues(indicators, { carriedForward: '500000' });
+    expect([v['22'], v['36'], v['40a'], v['40'], v['41'], v['43']]).toEqual(['500000', '1340000', '840000', '840000', '0', '0']);
+    // More carried in than payable: the rest goes on to [41] and [43].
+    const more = form01XmlValues(indicators, { carriedForward: '2000000.4' });
+    expect([more['22'], more['40a'], more['41'], more['43']]).toEqual(['2000000', '0', '660000', '660000']);
+    // Not given: 0, as before.
+    expect(form01XmlValues(indicators)['22']).toBe('0');
+    expect(() => form01XmlValues(indicators, { carriedForward: '-1' })).toThrow(/negative/);
+    const xml = buildVat01Xml(declaration('2026-09', purchases, sales), '2026-10-19', { carriedForward: '500000' });
+    expect(paths(xml)).toEqual(EXPECTED_ORDER);
+    expect(['ct22', 'ct40a', 'ct43'].map((tag) => valueOf(xml, tag))).toEqual(['500000', '840000', '0']);
+  });
+
+  it('takes [22] from the previous filed return, or the amount typed, and says which (#1400)', () => {
+    const previous = { period: '2026-08', source: 'entered' as const, carriedIn: '0', deductible: '0', carriedOut: '700000', markedAt: '2026-09-20T00:00:00.000Z' };
+    const withPrevious = { carryForward: { amount: '700000', previous, lookedFor: ['2026-08'] } };
+    const none = { carryForward: { amount: '0', previous: null, lookedFor: ['2026-08'] } };
+    expect(xmlCarryForward(withPrevious, undefined)).toEqual({ amount: '700000', source: 'previous' });
+    expect(xmlCarryForward(withPrevious, '0700000')).toEqual({ amount: '700000', source: 'previous' });
+    expect(xmlCarryForward(withPrevious, '1')).toEqual({ amount: '1', source: 'edited' });
+    expect(xmlCarryForward(none, undefined)).toEqual({ amount: '0', source: 'none' });
+    expect(xmlCarryForward(none, '0')).toEqual({ amount: '0', source: 'none' });
+    expect(xmlCarryForward(none, '5')).toEqual({ amount: '5', source: 'edited' });
+    for (const typed of ['', '-1', '1.5', '1e3', ' 1', '123456789012345']) {
+      expect(() => xmlCarryForward(none, typed), typed).toThrow(expect.objectContaining({ code: 'INVALID', status: 422 }));
+    }
   });
 
   it('refuses a taxpayer without a valid tax code and a malformed date', () => {

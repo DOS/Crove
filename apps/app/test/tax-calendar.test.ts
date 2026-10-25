@@ -27,6 +27,10 @@ describe('tax calendar on the home screen', () => {
     expect(taxPeriodParts('2026-09')).toEqual({ kind: 'month', index: 9, year: 2026 });
     expect(taxPeriodParts('2026-Q3')).toEqual({ kind: 'quarter', index: 3, year: 2026 });
     expect(taxPeriodParts('x')).toBeNull();
-    expect(['owner', 'admin', 'member', 'viewer', null].map(canMarkTaxDone)).toEqual([true, true, true, false, false]);
+    expect(['owner', 'admin', 'member', 'viewer', null].map((role) => canMarkTaxDone(role))).toEqual([true, true, true, false, false]);
+    // With finance on, the VAT return's mark records it as filed (#1400): owners and admins only.
+    expect(['owner', 'admin', 'member', 'viewer'].map((role) => canMarkTaxDone(role, 'vat_return', true))).toEqual([true, true, false, false]);
+    expect(canMarkTaxDone('member', 'vat_return', false)).toBe(true);
+    expect(canMarkTaxDone('member', 'cit_provisional', true)).toBe(true);
   });
 });

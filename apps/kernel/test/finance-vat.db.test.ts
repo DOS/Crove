@@ -571,4 +571,129 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(await refusal(`UPDATE crove_finance.input_vat_check SET outcome = 'paid_by_bank' WHERE org_id = $1`, [org.orgId])).not.toBeNull();
     expect(await refusal(`DELETE FROM crove_finance.input_vat_check WHERE org_id = $1`, [org.orgId])).not.toBeNull();
   });
+
+  // [22] carried forward from the previous filed return's [43] (#1400). Runs last: it uses May (purchases, VAT
+  // 2,880,000, all suggested deductible since the clear above) and June (the two mixed-rate sales above, VAT 166,668).
+  it('records the VAT return as filed with the done mark, and carries its [43] into the next [22] (#1400)', async () => {
+    const owned = await tokenFor(owner);
+    const period = async (p: string) => (await rpc('vat/period', await tokenFor(viewer), { period: p })).body;
+    const doneMarks = () =>
+      admin(async (c) => (await c.query(`SELECT period FROM crove_kernel.tax_obligation_done WHERE org_id = $1 AND obligation = 'vat_return' ORDER BY period`, [org.orgId])).rows.map((r: { period: string }) => r.period));
+    const filedRows = () =>
+      admin(
+        async (c) =>
+          (
+            await c.query(
+              `SELECT period, status, source, carried_in_amount::text AS c22, deductible_amount::text AS c25, carried_out_amount::text AS c43, marked_by
+               FROM crove_finance.vat_return_filed WHERE org_id = $1 ORDER BY created_at, id`,
+              [org.orgId],
+            )
+          ).rows,
+      );
+    const xmlWith = (params: Record<string, string>) => app.request(`/api/export/vat-01gtgt.xml?${new URLSearchParams(params)}`, { headers: { authorization: `Bearer ${owned}`, 'x-crove-org': org.slug } });
+
+    // No return filed before May: [22] stays 0, and the report says none was found.
+    const may = await period('2026-05');
+    expect(may.carryForward).toEqual({ amount: '0', previous: null, lookedFor: ['2026-04'] });
+    expect(may.filed).toBeNull();
+
+    // Marked done from the tax calendar: Crove's own working is recorded, [25] the suggestion, [43] by the formulas.
+    expect((await rpc('org/markTaxObligation', owned, { obligation: 'vat_return', period: '2026-05', done: true })).body).toEqual({ obligation: 'vat_return', period: '2026-05', done: true });
+    expect(await doneMarks()).toEqual(['2026-05']);
+    expect((await period('2026-05')).filed).toMatchObject({ period: '2026-05', source: 'computed', carriedIn: '0', deductible: '2880000', carriedOut: '2880000' });
+
+    // June starts from May's [43], on the screen and in the XML.
+    expect((await period('2026-06')).carryForward).toMatchObject({ amount: '2880000', lookedFor: ['2026-05'], previous: { period: '2026-05', source: 'computed' } });
+    const xml = await (await xmlWith({ period: '2026-06' })).text();
+    expect(['ct22', 'ct28', 'ct36', 'ct40a', 'ct41', 'ct43'].map((tag) => valueOf(xml, tag))).toEqual(['2880000', '166668', '166668', '0', '2713332', '2713332']);
+    expect((await xmlAudits()).at(-1)?.detail).toEqual({ period: '2026-06', documents: 2, format: 'htkk_01gtgt_xml', carry_forward: 'previous' });
+    // The accountant may edit [22]; the audit says so, never the amount.
+    const editedXml = await (await xmlWith({ period: '2026-06', carried: '100000' })).text();
+    expect(['ct22', 'ct40a', 'ct43'].map((tag) => valueOf(editedXml, tag))).toEqual(['100000', '66668', '0']);
+    expect((await xmlAudits()).at(-1)?.detail).toEqual({ period: '2026-06', documents: 2, format: 'htkk_01gtgt_xml', carry_forward: 'edited' });
+    for (const carried of ['-1', '1.5', 'abc', '123456789012345']) {
+      expect((await xmlWith({ period: '2026-06', carried })).status, carried).toBe(422);
+    }
+
+    // Marked filed on the VAT screen with the figures as filed: recorded as entered, with the done mark.
+    expect((await rpc('vat/markReturn', owned, { period: '2026-06', done: true, figures: { carriedIn: '2880000', deductible: '0', carriedOut: '2713332' } })).body).toEqual({ period: '2026-06', done: true });
+    expect(await doneMarks()).toEqual(['2026-05', '2026-06']);
+    expect((await period('2026-07')).carryForward).toMatchObject({ amount: '2713332', lookedFor: ['2026-06', '2026-Q2'], previous: { period: '2026-06', source: 'entered' } });
+    // A quarter looks for the quarter before first, then its last month (an org that changed its filing period).
+    expect((await period('2026-Q3')).carryForward).toMatchObject({ amount: '2713332', lookedFor: ['2026-Q2', '2026-06'], previous: { period: '2026-06' } });
+    expect((await rpc('vat/markReturn', owned, { period: '2026-Q2', done: true, figures: { carriedIn: '0', deductible: '0', carriedOut: '5000' } })).status).toBe(200);
+    expect((await period('2026-Q3')).carryForward).toMatchObject({ amount: '5000', previous: { period: '2026-Q2' } });
+    expect((await period('2026-07')).carryForward).toMatchObject({ amount: '2713332', previous: { period: '2026-06' } });
+
+    // The same figures again add no row, nor does the calendar's button on a filed period; a correction adds one.
+    const before = (await filedRows()).length;
+    expect((await rpc('vat/markReturn', owned, { period: '2026-06', done: true, figures: { carriedIn: '2880000', deductible: '0', carriedOut: '2713332' } })).status).toBe(200);
+    expect((await rpc('org/markTaxObligation', owned, { obligation: 'vat_return', period: '2026-06', done: true })).status).toBe(200);
+    expect(await filedRows()).toHaveLength(before);
+    expect((await rpc('vat/markReturn', owned, { period: '2026-06', done: true, figures: { carriedIn: '2880000', deductible: '0', carriedOut: '2700000' } })).status).toBe(200);
+    expect((await period('2026-07')).carryForward.amount).toBe('2700000');
+
+    // Taking the mark back (from the calendar) withdraws the return and the done mark; July falls back to Q2.
+    expect((await rpc('org/markTaxObligation', owned, { obligation: 'vat_return', period: '2026-06', done: false })).body).toEqual({ obligation: 'vat_return', period: '2026-06', done: false });
+    expect(await doneMarks()).toEqual(['2026-05', '2026-Q2']);
+    expect((await period('2026-06')).filed).toBeNull();
+    expect((await period('2026-07')).carryForward).toMatchObject({ amount: '5000', previous: { period: '2026-Q2' } });
+
+    // Only owners and admins mark a return filed, from either screen; a withdrawal carries no figures; figures are
+    // whole dong of at most 14 digits; another org's member reaches nothing here.
+    expect((await rpc('vat/markReturn', await tokenFor(viewer), { period: '2026-06', done: true })).status).toBe(403);
+    expect((await rpc('org/markTaxObligation', await tokenFor(viewer), { obligation: 'vat_return', period: '2026-06', done: true })).status).toBe(403);
+    expect((await rpc('vat/markReturn', owned, { period: '2026-06', done: false, figures: { carriedIn: '0', deductible: '0', carriedOut: '0' } })).status).toBe(422);
+    expect((await rpc('vat/markReturn', owned, { period: '2026-06', done: true, figures: { carriedIn: '0', deductible: '1.5', carriedOut: '0' } })).status).toBe(400);
+    expect((await rpc('vat/markReturn', await tokenFor(outsider), { period: '2026-06', done: true })).status).toBeGreaterThanOrEqual(400);
+
+    // Every mark is a row by the user who made it; the audit rows hold no figures.
+    expect(await filedRows()).toEqual([
+      { period: '2026-05', status: 'filed', source: 'computed', c22: '0.0000', c25: '2880000.0000', c43: '2880000.0000', marked_by: owner.userId },
+      { period: '2026-06', status: 'filed', source: 'entered', c22: '2880000.0000', c25: '0.0000', c43: '2713332.0000', marked_by: owner.userId },
+      { period: '2026-Q2', status: 'filed', source: 'entered', c22: '0.0000', c25: '0.0000', c43: '5000.0000', marked_by: owner.userId },
+      { period: '2026-06', status: 'filed', source: 'entered', c22: '2880000.0000', c25: '0.0000', c43: '2700000.0000', marked_by: owner.userId },
+      { period: '2026-06', status: 'withdrawn', source: null, c22: null, c25: null, c43: null, marked_by: owner.userId },
+    ]);
+    const audits = await admin(async (c) => (await c.query(`SELECT detail FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'finance.vat.return_mark' AND outcome = 'ok' ORDER BY occurred_at`, [org.orgId])).rows);
+    expect(audits.map((a: { detail: Record<string, unknown> }) => a.detail)).toContainEqual({ period: '2026-05', done: true, source: 'computed', recorded: true });
+    expect(audits.map((a: { detail: Record<string, unknown> }) => a.detail)).toContainEqual({ period: '2026-06', done: false, withdrawn: true });
+    expect(JSON.stringify(audits)).not.toContain('2713332');
+
+    // History never changes, not even for the database owner.
+    const refusal = (sql: string, params: unknown[]) => admin((c) => c.query(sql, params).then(() => null, (error: { message: string }) => error.message));
+    expect(await refusal(`UPDATE crove_finance.vat_return_filed SET carried_out_amount = 1 WHERE org_id = $1`, [org.orgId])).not.toBeNull();
+    expect(await refusal(`DELETE FROM crove_finance.vat_return_filed WHERE org_id = $1`, [org.orgId])).not.toBeNull();
+
+    // A raw insert in a member's own context, past the command: refused for a viewer at once (and for an owner who
+    // names someone else), and for an owner at commit, with no audit row of the command. Tenant roles cannot update.
+    const raw = async (userId: string, markedBy: string, statement = 'INSERT') => {
+      const c = await pool.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, org.orgId]);
+        if (statement === 'INSERT') {
+          await c.query(
+            `INSERT INTO crove_finance.vat_return_filed (org_id, period, status, source, carried_in_amount, deductible_amount, carried_out_amount, marked_by)
+             VALUES ($1, '2026-08', 'filed', 'entered', 0, 0, 999, $2)`,
+            [org.orgId, markedBy],
+          );
+        } else {
+          await c.query(`UPDATE crove_finance.vat_return_filed SET carried_out_amount = 1`);
+        }
+        await c.query('COMMIT');
+        return null;
+      } catch (error) {
+        await c.query('ROLLBACK').catch(() => {});
+        return (error as { message: string }).message;
+      } finally {
+        c.release();
+      }
+    };
+    expect(await raw(viewer.userId, viewer.userId)).toBe('VAT_RETURN_FORBIDDEN');
+    expect(await raw(owner.userId, viewer.userId)).toBe('VAT_RETURN_FORBIDDEN');
+    expect(await raw(owner.userId, owner.userId)).toBe('VAT_RETURN_UNAUDITED');
+    expect(await raw(owner.userId, owner.userId, 'UPDATE')).toMatch(/permission denied/);
+    expect((await period('2026-09')).carryForward.previous).toBeNull();
+  });
 });
