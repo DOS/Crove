@@ -99,6 +99,20 @@ export async function refuseHiddenMedia(ctx: Pick<CommandContext, 'trx' | 'orgId
 // LIKE wildcards in a search are matched as themselves.
 export const likeTerm = (s: string) => `%${s.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
+// What a Social search box matches (#1360): the typed text folded as crove_kernel.search_fold folds it (#673: marks, đ,
+// case and punctuation aside, so "dien thoai" finds "Điện thoại" and "điện-thoại" too) inside folded text. A term with
+// nothing left once folded (emoji, another script) matches the raw texts as typed, case aside. A folded term holds only
+// a-z, 0-9 and single spaces, so it has no LIKE wildcard.
+export function searchMatch(search: string, folded: RawBuilder<unknown>, raw: ReadonlyArray<RawBuilder<unknown>>): RawBuilder<boolean> {
+  const term = sql`crove_kernel.search_fold(${search})`;
+  const typed = likeTerm(search);
+  const asTyped = sql.join(
+    raw.map((r) => sql`${r} ILIKE ${typed}`),
+    sql` OR `,
+  );
+  return sql<boolean>`(CASE WHEN ${term} = '' THEN (${asTyped}) ELSE ${folded} LIKE '%' || ${term} || '%' END)`;
+}
+
 // Newest first, 60 a page; before is the last item of the previous page. search matches the file name, tag one of
 // its tags whatever the case (#904); both together narrow the list. usable leaves out the files the caller may not use
 // (#1196), for the pickers that attach or send them.
@@ -138,7 +152,8 @@ export const mediaList = defineQuery({
       .where('f.source', '=', 'social')
       .where('f.content_type', 'in', [...LIBRARY_MEDIA_TYPES]);
     if (input.usable) q = q.where(sql<boolean>`NOT ${mediaHidden(await channelScope(ctx))}`);
-    if (input.search) q = q.where(sql<boolean>`f.filename ILIKE ${likeTerm(input.search)}`);
+    // Folded here, not stored (#1360): the list stops at a page.
+    if (input.search) q = q.where(searchMatch(input.search, sql`crove_kernel.search_fold(f.filename)`, [sql`f.filename`]));
     if (input.tag) {
       const tag = input.tag;
       q = q.where(sql<boolean>`EXISTS (SELECT 1 FROM crove_social.media_tag t WHERE t.org_id = f.org_id AND t.file_id = f.id AND lower(t.tag) = lower(${tag}))`);

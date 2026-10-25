@@ -6,9 +6,17 @@ import { useTranslations } from 'use-intl';
 import { Textarea } from '@crove/ui/components/textarea';
 import { commentParts, mentionLabels, mentionQuery } from '@crove/mod-social/contract';
 import { orpc } from '../lib/api.ts';
+import { fold } from '../lib/palette.ts';
 
 export type Picked = Array<[string, string]>;
 const SHOWN = 6;
+
+// The members the picker offers for what follows the @ (#1360): marks and case aside, as the command palette matches
+// (fold), so "@dung" finds Dũng and "@ĐỨC" finds Đức; at most SHOWN, in the org's order.
+export function mentionMatches<M extends { label: string }>(members: readonly M[], query: string): M[] {
+  const q = fold(query);
+  return members.filter((m) => fold(m.label).includes(q)).slice(0, SHOWN);
+}
 
 // The org's members as comments name them: name for showing a comment, label (unique, with the email where two
 // members share a name) for the comment box.
@@ -47,8 +55,7 @@ export function MentionBox({
   const [caret, setCaret] = useState<number | null>(null);
   const [active, setActive] = useState(0);
   const query = caret === null ? null : mentionQuery(value, caret);
-  const q = query?.query.toLowerCase() ?? '';
-  const matches = query ? members.filter((m) => m.label.toLowerCase().includes(q)).slice(0, SHOWN) : [];
+  const matches = query ? mentionMatches(members, query.query) : [];
   const pick = (m: { userId: string; label: string }) => {
     if (!query || caret === null) return;
     const inserted = `@${m.label} `;
