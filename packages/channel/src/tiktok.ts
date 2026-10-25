@@ -30,6 +30,7 @@ import type { ConnectedAccount, LateIdInput, LateIdResult, MetricName, MetricsIn
 import { videoCoverOf } from './cover.ts';
 import { platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { holdsLink } from './text.ts';
+import { optionName, type ChannelOption, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const TIKTOK_HOSTS = ['open.tiktokapis.com', 'open-upload.tiktokapis.com'] as const;
@@ -329,12 +330,35 @@ function publishResult(error: unknown, inbox = false): PublishResult {
   return { kind: 'rejected', error: 'bad_request', code, message: error.message, httpStatus: error.status };
 }
 
-interface CreatorInfo {
+export interface TikTokCreatorInfo {
+  creator_nickname?: unknown;
+  creator_username?: unknown;
   privacy_level_options?: unknown;
   comment_disabled?: unknown;
   duet_disabled?: unknown;
   stitch_disabled?: unknown;
   max_video_post_duration_sec?: unknown;
+}
+
+// creator_info's refusals that mean the account may not post now (TikTok's Content Posting API reference): the
+// composer asks to try again later, as TikTok's content sharing guidelines require.
+const CANNOT_POST = ['spam_risk_too_many_posts', 'spam_risk_user_banned_from_posting'] as const;
+
+// A creator_info answer as the composer's list keeps it (#1497), one { id, name } item each: the nickname (or the
+// username when it has none), each known privacy level the account may post with, each interaction the creator turned
+// off, and the longest video in seconds. tiktokCreatorOf in the Social contract reads the same ids.
+export function tiktokCreatorOptions(creator: TikTokCreatorInfo): ChannelOption[] {
+  const items: ChannelOption[] = [];
+  const nickname = (typeof creator.creator_nickname === 'string' ? optionName(creator.creator_nickname) : '') || (typeof creator.creator_username === 'string' ? optionName(creator.creator_username) : '');
+  if (nickname) items.push({ id: 'nickname', name: nickname });
+  const levels = Array.isArray(creator.privacy_level_options) ? creator.privacy_level_options : [];
+  for (const level of TIKTOK_PRIVACY_LEVELS) if (levels.includes(level)) items.push({ id: `privacy_${level}`, name: level });
+  if (creator.comment_disabled === true) items.push({ id: 'off_comment', name: 'off' });
+  if (creator.duet_disabled === true) items.push({ id: 'off_duet', name: 'off' });
+  if (creator.stitch_disabled === true) items.push({ id: 'off_stitch', name: 'off' });
+  const seconds = Number(creator.max_video_post_duration_sec);
+  if (Number.isFinite(seconds) && seconds >= 1) items.push({ id: 'max_video_seconds', name: String(Math.floor(Math.min(seconds, 86_400))) });
+  return items;
 }
 
 interface StatusAnswer {
@@ -442,6 +466,27 @@ export class TikTokPublisher implements Publisher {
     if (comments !== undefined) metrics.comments = comments;
     if (shares !== undefined) metrics.shares = shares;
     return { metrics };
+  }
+
+  // The composer's view of the account (#1497): creator_info as it is now, read by the worker with the account's token
+  // for the channel option cache. It only reads. An account TikTok will not let post now is a list holding only its
+  // code (cannot_post), so the composer says to try later; an expired token or a missing video.publish grant is
+  // refused; anything else (a rate limit, the client's daily cap, an outage) is no answer.
+  async options(input: ChannelOptionsInput): Promise<ChannelOptionsResult> {
+    const s = tiktokSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (input.kind !== 'tiktok_creator' || !OPEN_ID.test(input.externalAccountId)) return { refused: 'not_found' };
+    try {
+      return { options: tiktokCreatorOptions(await this.client.call<TikTokCreatorInfo>('POST', '/post/publish/creator_info/query/', s.accessToken, {})) };
+    } catch (error) {
+      if (!(error instanceof TikTokError)) return null;
+      const cannot = CANNOT_POST.find((c) => c === error.code);
+      if (cannot) return { options: [{ id: 'cannot_post', name: cannot }] };
+      // TikTok answers a missing grant with 401 too: that is the permission, never an expired token.
+      if (error.code === 'scope_not_authorized' || error.status === 403) return { refused: 'permission' };
+      if (error.status === 401 || error.code === 'access_token_invalid') return { refused: 'token_expired' };
+      return null;
+    }
   }
 
   // The account's own public videos since a date (#1476): `POST /v2/video/list/` under video.list (the Display API),
@@ -555,9 +600,9 @@ export class TikTokPublisher implements Publisher {
       const chosen = privacy as TikTokPrivacy;
       // The creator's options now: the chosen privacy level must be one of them, and an interaction the creator turned
       // off stays off whatever the post asked.
-      let creator: CreatorInfo;
+      let creator: TikTokCreatorInfo;
       try {
-        creator = await this.client.call<CreatorInfo>('POST', '/post/publish/creator_info/query/', s.accessToken, {});
+        creator = await this.client.call<TikTokCreatorInfo>('POST', '/post/publish/creator_info/query/', s.accessToken, {});
       } catch (error) {
         return refused(error);
       }
@@ -617,9 +662,9 @@ export class TikTokPublisher implements Publisher {
     const inbox = privacy === null;
     let postInfo: Record<string, unknown> = { description: captionOf(input.content, PHOTO_DESCRIPTION_MAX) };
     if (privacy !== null) {
-      let creator: CreatorInfo;
+      let creator: TikTokCreatorInfo;
       try {
-        creator = await this.client.call<CreatorInfo>('POST', '/post/publish/creator_info/query/', token, {});
+        creator = await this.client.call<TikTokCreatorInfo>('POST', '/post/publish/creator_info/query/', token, {});
       } catch (error) {
         const result = publishResult(error);
         return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
