@@ -25,9 +25,33 @@ export function GuidePage() {
       <div className="mt-3">
         <PageHeader title={t('title')} subtitle={t('subtitle')} />
       </div>
+      {/* Contents (#1422): on a phone the two guides are several screens tall; each line jumps to its card. */}
+      <nav aria-label={t('contents')} lang="vi" className="mb-6 max-w-3xl rounded-xl border bg-card p-4 text-sm">
+        <p className="font-medium text-foreground">{t('contents')}</p>
+        {/* One group per guide: both number their steps from 1. */}
+        <div className="mt-2 grid gap-4 sm:grid-cols-2">
+          {[
+            { title: t('title'), steps: quickGuide() },
+            { title: t('firmTitle'), steps: firmGuide() },
+          ].map((guide) => (
+            <div key={guide.title}>
+              <p className="text-xs text-subtle-foreground">{guide.title}</p>
+              <ul className="mt-1 grid gap-1">
+                {guide.steps.map((step) => (
+                  <li key={step.id}>
+                    <a href={`#guide-${step.id}`} className="text-link hover:underline">
+                      {step.title}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </nav>
       <div lang="vi" className="grid max-w-3xl gap-4">
         {quickGuide().map((step) => (
-          <Card key={step.id} className="block p-5">
+          <Card key={step.id} id={`guide-${step.id}`} className="block scroll-mt-20 p-5">
             <h2 className="text-base font-semibold text-foreground">{step.title}</h2>
             <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
               {step.items.map((item) => (
@@ -44,7 +68,7 @@ export function GuidePage() {
       </div>
       <div lang="vi" className="grid max-w-3xl gap-4">
         {firmGuide().map((step) => (
-          <Card key={step.id} className="block p-5">
+          <Card key={step.id} id={`guide-${step.id}`} className="block scroll-mt-20 p-5">
             <h2 className="text-base font-semibold text-foreground">{step.title}</h2>
             <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
               {step.items.map((item) => (

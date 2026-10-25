@@ -1700,6 +1700,7 @@ export const en = {
     viewInJournal: 'View in the journal',
   },
   guide: {
+    contents: 'On this page',
     title: 'Quick guide',
     subtitle: 'Three steps to record purchase invoices: upload, approve and export to Excel. The guide is in Vietnamese.',
     firmTitle: 'Guide for accounting firms',
