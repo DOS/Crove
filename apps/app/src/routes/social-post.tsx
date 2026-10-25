@@ -3400,10 +3400,12 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
 }
 
 // Whether owners and admins may correct a published channel's text from here (#1223): its adapter edits, it is not a
-// poll, a Story or a Reel (nor a Facebook video), and its channel needs one person's approval only, as the command
-// decides; the command refuses anything else all the same.
+// poll, a Story or a Reel (nor a Facebook video), it is out in public (not a WordPress draft or a post the site holds
+// for review, #1474), and its channel needs one person's approval only, as the command decides; the command refuses
+// anything else all the same.
 const canEditLive = (v: Variant) =>
   v.status === 'published' &&
+  notPublicKey(v) === null &&
   editRefusal(v.provider, v.settings, v.media.map((m) => mediaKindOf(m.mime))) === null &&
   v.review.required <= 1 &&
   !v.review.fourEyes &&
@@ -3481,7 +3483,7 @@ function LiveEditNote({ variant: v }: { variant: Variant }) {
 }
 
 // The edit answers the post page explains in words (#1223); any other failure shows its code.
-const LIVE_EDIT_CODES = ['TELEGRAM_CANNOT_EDIT', 'POST_NOT_FOUND', 'EDIT_NOT_RUN', 'PUBLISHING_HELD', 'EDIT_NEEDS_REVIEW', 'BANNED_WORDS', 'EDIT_CONTENT_CHANGED', 'EDIT_SUPERSEDED'] as const;
+const LIVE_EDIT_CODES = ['TELEGRAM_CANNOT_EDIT', 'POST_NOT_FOUND', 'EDIT_NOT_RUN', 'PUBLISHING_HELD', 'EDIT_NEEDS_REVIEW', 'BANNED_WORDS', 'EDIT_CONTENT_CHANGED', 'EDIT_SUPERSEDED', 'RECONNECT_FOR_EDIT', 'WORDPRESS_CANNOT_EDIT', 'WORDPRESS_EDITED_ON_SITE', 'EDIT_NOT_SUPPORTED', 'SNIPPET_UNREADABLE', 'POST_UNREADABLE', 'TEXT_TOO_LONG'] as const;
 
 // The removal answers the post page explains in words (#860, #1137, #1138); any other failure shows its code.
 const REMOVE_CODES = ['TELEGRAM_CANNOT_DELETE', 'FACEBOOK_CANNOT_DELETE', 'RECONNECT_FOR_REMOVE', 'REMOVE_NOT_RUN', 'WORDPRESS_TRASH_DISABLED', 'WORDPRESS_CANNOT_DELETE'] as const;

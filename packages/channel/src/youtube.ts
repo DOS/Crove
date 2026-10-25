@@ -14,12 +14,17 @@
 // variant names (settings.youtube.playlistIds, at most 5), one call each (50 quota units), with the force-ssl scope too.
 // A refused insert (a playlist deleted since) never touches the video. Removing a post (#1137): videos.delete (50 quota
 // units), with the force-ssl scope Crove already asks for. playlists() lists the channel's own playlists
-// (playlists.list mine=true, one quota unit a page) for the composer's picker, through options() (#1131).
+// (playlists.list mine=true, one quota unit a page) for the composer's picker, through options() (#1131). Correcting a
+// published video's description (#1474): videos.list reads the live snippet (one quota unit), then
+// videos.update part=snippet (50 quota units) sends it back with the new description, with the force-ssl
+// scope too.
 import { CHANNEL_OPTIONS_MAX, OptionList, optionCallSignal, optionName, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
 import type {
   CommentInput,
   CommentResult,
   ConnectedAccount,
+  EditInput,
+  EditResult,
   MetricName,
   AccountMetricsInput,
   AccountMetricsResult,
@@ -40,7 +45,7 @@ import type {
   RetrySafety,
 } from './index.ts';
 import { coverImageType, videoCoverOf } from './cover.ts';
-import { commentResult, removeResult } from './comment.ts';
+import { commentResult, editResult, removeResult } from './comment.ts';
 import { platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -50,6 +55,8 @@ export const YOUTUBE_SCOPES = ['https://www.googleapis.com/auth/youtube.upload',
 // Asked for too but not required (#791): the first comment needs it. A channel connected without it posts videos and
 // is told to reconnect when a comment is refused.
 export const YOUTUBE_COMMENT_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl';
+// What an edit answers for a connection without that scope (#1474): reconnect, nothing sent.
+export const RECONNECT_FOR_EDIT = 'RECONNECT_FOR_EDIT';
 const API = 'https://www.googleapis.com/youtube/v3';
 const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
@@ -333,6 +340,15 @@ const descriptionOf = (content: { body: string; linkUrl: string | null }) => {
 const tagsOf = (settings: Readonly<Record<string, unknown>>): string[] =>
   Array.isArray(settings.tags) ? settings.tags.filter((t): t is string => typeof t === 'string').map((t) => t.replace(/[<>]/g, '').trim()).filter(Boolean) : [];
 
+// The snippet videos.list answers, as far as an edit sends it back (#1474).
+interface LiveSnippet {
+  title?: unknown;
+  categoryId?: unknown;
+  tags?: unknown;
+  defaultLanguage?: unknown;
+  defaultAudioLanguage?: unknown;
+}
+
 interface PlaylistItems {
   items?: {
     snippet?: { title?: unknown; description?: unknown; publishedAt?: unknown; resourceId?: { videoId?: unknown } };
@@ -476,6 +492,60 @@ export class YouTubePublisher implements Publisher {
         return { kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_REMOVE', message: error.message };
       }
       return removeResult(publishResult(error));
+    }
+  }
+
+  // Corrects the channel's own video's description (#1474), with the force-ssl scope: videos.update
+  // part=snippet (PUT, 50 quota units), answered with the video. videos.update clears every snippet property a request
+  // leaves out and needs the title and the categoryId, so the live snippet is read first (videos.list part=snippet, one
+  // quota unit): its title (a rename in YouTube Studio is kept, as the edit changes the text only), categoryId, tags,
+  // defaultLanguage and defaultAudioLanguage go back as YouTube has them, and the description is built as publish
+  // builds it; the title as published stands in only for a video YouTube answers without one. A Short takes the edit
+  // as any video does. A connection whose stored grant lacks the scope (connected before #791, or one that unticked
+  // it) is told to reconnect (RECONNECT_FOR_EDIT) before any call, and a grant that lost it since gets the same from
+  // YouTube's 403.
+  // A video YouTube no longer has is POST_NOT_FOUND; a quota refusal waits for a person, as nothing asks again by itself.
+  async edit(input: EditInput): Promise<EditResult> {
+    const s = youtubeSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!VIDEO_ID.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    if (input.scopes && !input.scopes.includes(YOUTUBE_COMMENT_SCOPE)) return { kind: 'rejected', error: 'permission', code: RECONNECT_FOR_EDIT };
+    let live: LiveSnippet;
+    try {
+      const list = await this.client.call<{ items?: unknown }>('GET', `${API}/videos?part=snippet&id=${input.externalId}`, s.accessToken);
+      if (!list.body || !Array.isArray(list.body.items)) return { kind: 'rejected', error: 'transient', code: 'SNIPPET_UNREADABLE' };
+      const item = (list.body.items as ({ id?: unknown; snippet?: LiveSnippet } | null)[]).find((i) => i?.id === input.externalId);
+      if (!item) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' };
+      live = item.snippet ?? {};
+    } catch (error) {
+      if (error instanceof YouTubeError && error.status === 404) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      // Nothing was changed yet: a read that fails is a failure to edit, never an unclear one.
+      const result = publishResult(error);
+      return result.kind === 'rejected' ? editResult(result) : { kind: 'rejected', error: 'transient', code: (result.kind === 'unknown' && result.code) || 'SNIPPET_UNREADABLE' };
+    }
+    // Required with the snippet: any other than the live one would change the video's category.
+    const categoryId = typeof live.categoryId === 'string' && /^\d{1,3}$/.test(live.categoryId) ? live.categoryId : null;
+    if (!categoryId) return { kind: 'rejected', error: 'transient', code: 'SNIPPET_UNREADABLE' };
+    const title = (typeof live.title === 'string' && live.title.trim() ? live.title : '') || titleOf(input.content);
+    if (!title) return { kind: 'rejected', error: 'bad_request', code: 'TITLE_REQUIRED' };
+    const tags = Array.isArray(live.tags) ? live.tags.filter((t): t is string => typeof t === 'string') : [];
+    const snippet = {
+      title,
+      description: descriptionOf(input.content),
+      categoryId,
+      ...(tags.length > 0 ? { tags } : {}),
+      ...(typeof live.defaultLanguage === 'string' && live.defaultLanguage ? { defaultLanguage: live.defaultLanguage } : {}),
+      ...(typeof live.defaultAudioLanguage === 'string' && live.defaultAudioLanguage ? { defaultAudioLanguage: live.defaultAudioLanguage } : {}),
+    };
+    try {
+      const answer = await this.client.call<{ id?: unknown }>('PUT', `${API}/videos?part=snippet`, s.accessToken, { json: { id: input.externalId, snippet } });
+      return answer.body?.id === input.externalId ? { kind: 'edited' } : { kind: 'unknown', code: 'NOT_CONFIRMED' };
+    } catch (error) {
+      if (error instanceof YouTubeError && error.status === 404) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      if (error instanceof YouTubeError && error.status === 403 && (error.reason === 'insufficientPermissions' || error.reason === 'ACCESS_TOKEN_SCOPE_INSUFFICIENT')) {
+        return { kind: 'rejected', error: 'permission', code: RECONNECT_FOR_EDIT, message: error.message };
+      }
+      return editResult(publishResult(error));
     }
   }
 

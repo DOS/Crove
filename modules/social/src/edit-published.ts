@@ -38,7 +38,9 @@ export const EDIT_BODY_MAX = 100_000;
 
 export type EditWork =
   | { action: 'none'; reason: string }
-  | ({ action: 'call'; variantId: string; provider: string; connectionId: string; callKey: string; externalId: string; shortLink?: { code: string; target: string } } & Pick<PublishWork, 'content' | 'settings'>);
+  // scopes: what the platform granted the connection, as stored (#1474), for an adapter whose edit needs a permission
+  // connect does not require.
+  | ({ action: 'call'; variantId: string; provider: string; connectionId: string; callKey: string; externalId: string; scopes: string[]; shortLink?: { code: string; target: string } } & Pick<PublishWork, 'content' | 'settings'>);
 
 type EditVariant = Pick<VariantRow, 'id' | 'revision' | 'published_revision' | 'attempt'>;
 const editPrefix = (v: EditVariant) => publishCallKey(v.id, callRevision(v), v.attempt, EDIT_STEP);
@@ -273,7 +275,9 @@ export const editBegin = defineCommand({
       .execute();
     const sent = outgoing(post, next);
     const shortLink = await shortLinkOf(ctx, v, sent.content.linkUrl);
-    return { action: 'call', variantId: v.id, provider: v.provider, connectionId: v.channel_connection_id, callKey, externalId: v.external_post_id, ...sent, ...(shortLink ? { shortLink } : {}) };
+    const connection = await ctx.trx.selectFrom('crove_kernel.channel_connection').select('scopes').where('org_id', '=', ctx.orgId).where('id', '=', v.channel_connection_id).executeTakeFirst();
+    const scopes = connection ? [...connection.scopes] : [];
+    return { action: 'call', variantId: v.id, provider: v.provider, connectionId: v.channel_connection_id, callKey, externalId: v.external_post_id, scopes, ...sent, ...(shortLink ? { shortLink } : {}) };
   },
 });
 

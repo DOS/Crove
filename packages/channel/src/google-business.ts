@@ -12,8 +12,9 @@
 // one photo at most, which Google fetches from its URL. Product posts cannot be made through the API. The answer
 // names the post; an unclear answer is checked by listing the location's newest posts, matched by text and time.
 // Remove (#1138): DELETE https://mybusiness.googleapis.com/v4/{name} of the localPost, with the same business.manage grant.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
-import { removeResult } from './comment.ts';
+// Edit (#1474): PATCH https://mybusiness.googleapis.com/v4/{name}?updateMask=summary, the post's text alone.
+import type { ConnectedAccount, EditInput, EditResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { editResult, removeResult } from './comment.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 export const GOOGLE_BUSINESS_HOSTS = ['oauth2.googleapis.com', 'mybusinessaccountmanagement.googleapis.com', 'mybusinessbusinessinformation.googleapis.com', 'mybusiness.googleapis.com'] as const;
@@ -102,7 +103,7 @@ class GoogleBusinessClient {
     return json as TokenAnswer;
   }
 
-  async call<T>(method: 'GET' | 'POST' | 'DELETE', url: string, token: string, json?: unknown): Promise<T> {
+  async call<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, token: string, json?: unknown): Promise<T> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     if (json !== undefined) headers['content-type'] = 'application/json; charset=UTF-8';
     const response = await this.fetch(url, { method, headers, signal: AbortSignal.timeout(30_000), ...(json === undefined ? {} : { body: JSON.stringify(json) }) });
@@ -367,6 +368,27 @@ export class GoogleBusinessPublisher implements Publisher {
     } catch (error) {
       if (error instanceof GoogleBusinessError && error.status === 404) return { kind: 'removed' };
       return removeResult(publishResult(error));
+    }
+  }
+
+  // Corrects the local post's text (#1474): PATCH /v4/{accounts/*/locations/*/localPosts/*}?updateMask=summary with
+  // the new summary, answered with the LocalPost, under business.manage as publishing. Only the fields the mask names
+  // change, so the call to action, the event or offer, the photo and the language stay as published. The text is
+  // built and checked as at publish (GBP_SUMMARY_MAX). Only a post of this location; one Google no longer has (404) is
+  // POST_NOT_FOUND.
+  async edit(input: EditInput): Promise<EditResult> {
+    const s = googleBusinessSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!LOCATION.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_LOCATION' };
+    if (!POST_NAME.test(input.externalId) || !input.externalId.startsWith(`${input.externalAccountId}/localPosts/`)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const summary = input.content.body.trim();
+    if ([...summary].length > GBP_SUMMARY_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG' };
+    try {
+      const answer = await this.client.call<{ name?: unknown }>('PATCH', `https://mybusiness.googleapis.com/v4/${input.externalId}?updateMask=summary`, s.accessToken, { summary });
+      return answer.name === input.externalId ? { kind: 'edited' } : { kind: 'unknown', code: 'NOT_CONFIRMED' };
+    } catch (error) {
+      if (error instanceof GoogleBusinessError && error.status === 404) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      return editResult(publishResult(error));
     }
   }
 
