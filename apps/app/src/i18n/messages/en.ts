@@ -2729,7 +2729,7 @@ export const en = {
       summaryHint: "AI drafts it from the figures of the chosen period, channels and label, and uses those numbers only. Read and edit it before you create the link; the note is saved only when you create the link.",
       summaryUndo: 'Bring back the previous note',
       includeExternal: 'Include posts published outside {brand}',
-      includeExternalHint: "Posts the channels published straight on Facebook or Instagram count in the report's totals and best posts too.",
+      includeExternalHint: "Posts the channels published straight on Facebook, Instagram, YouTube, Threads or Zalo OA count in the report's totals and best posts too.",
       withExternal: 'includes posts published outside {brand}',
       label: 'Only posts with the label',
       labelAll: 'All posts',
@@ -2741,7 +2741,7 @@ export const en = {
     external: {
       chip: 'Outside {brand}',
       switch: 'Include posts published outside {brand}',
-      hint: 'Posts the channels published straight on Facebook or Instagram in the last 30 days. {brand} brings them in every 6 hours and counts each post once.',
+      hint: 'Posts the channels published straight on Facebook, Instagram, YouTube, Threads or Zalo OA in the last 30 days. {brand} brings them in every 6 hours and counts each post once.',
       noLabels: 'Posts published outside {brand} have no labels, so they are not counted while a label filter is on.',
       noText: '(No text)',
     },
