@@ -33,6 +33,7 @@ import { runPushJob, type PushSender } from './web-push.ts';
 import { DEFAULT_EXPORT_RETENTION_DAYS, runOrgExport } from './org-export.ts';
 import { archiveOutbox } from './outbox-retention.ts';
 import { RETENTION_CRON, RETENTION_TZ, expireExports, runRetention, sweepInboundBlobs, sweepStaging } from './retention.ts';
+import { PERIOD_BALANCE_VERIFY_CRON, runPeriodBalanceReconciliation } from './period-balance.ts';
 import { runYearArchive } from './year-archive.ts';
 import { ARCHIVE_VERIFY_CRON, ARCHIVE_WRITE_CRON, runArchiveVerification, writeArchive, type ArchiveStore } from './worm.ts';
 import type { SessionRevoker, SignOutTarget } from './sessions.ts';
@@ -650,6 +651,22 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     // An hour before pg-boss counts the run as expired (its default is 15 minutes).
     await boss.schedule(QUEUES.archiveVerify, ARCHIVE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0, expireInSeconds: 3600 });
   }
+
+  // The period balance reconciliation (#1284): nightly, the deltas the posting definer appended compared with the
+  // journal lines. A difference fails the job at once (retryLimit 0); pg-boss keeps the failed job and the prober
+  // alerts on the dead letter (docs/runbooks/incidents.md).
+  await background.add(QUEUES.periodBalanceVerify, () => boss.work(QUEUES.periodBalanceVerify, { batchSize: 1 }, async () => {
+    const started = Date.now();
+    const elapsed = () => `${Math.round((Date.now() - started) / 1000)} s`;
+    try {
+      await runPeriodBalanceReconciliation(deps.workerDb);
+      console.log(`[period-balance] deltas match the journal lines (${elapsed()})`);
+    } catch (error) {
+      console.error(`[period-balance] ALERT after ${elapsed()}: ${error instanceof Error ? error.message : 'reconciliation could not run'}`);
+      throw error;
+    }
+  }));
+  await boss.schedule(QUEUES.periodBalanceVerify, PERIOD_BALANCE_VERIFY_CRON, null, { tz: RETENTION_TZ, missed: 'once', retryLimit: 0, expireInSeconds: 3600 });
 
   // Inbox triage: tasks for the agents whose template subscribes to the event. The command reads the event from the
   // outbox; the job carries only its id.
