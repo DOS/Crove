@@ -483,7 +483,7 @@ function InviteMember({ isOwner, initialEmail, entities }: { isOwner: boolean; i
               <span>{t('inviteScoped')}</span>
             </label>
             {scoped && (
-              <fieldset className="space-y-1.5 rounded-lg border p-3" aria-describedby={`${scopeId}-hint`}>
+              <fieldset className="space-y-1.5 rounded-lg border p-3" aria-describedby={noEntity ? `${scopeId}-hint ${scopeId}-error` : `${scopeId}-hint`}>
                 <legend className="px-1 text-xs text-subtle-foreground">{t('inviteEntities')}</legend>
                 <p id={`${scopeId}-hint`} className="text-xs text-subtle-foreground">
                   {t('inviteScopedHint')}
@@ -494,7 +494,11 @@ function InviteMember({ isOwner, initialEmail, entities }: { isOwner: boolean; i
                     <span>{e.name}</span>
                   </label>
                 ))}
-                {noEntity && <p className="text-xs text-destructive">{t('inviteNoEntity')}</p>}
+                {noEntity && (
+                  <p id={`${scopeId}-error`} role="alert" className="text-xs text-destructive">
+                    {t('inviteNoEntity')}
+                  </p>
+                )}
               </fieldset>
             )}
           </div>

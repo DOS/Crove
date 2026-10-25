@@ -42,7 +42,7 @@ test('an owner invites an outside accountant for one legal entity', async ({ pag
   const created = page.getByRole('status').filter({ hasText: `Đã tạo lời mời cho ${member}` });
   const link = (await created.getByText(/\/-\/invite#/).textContent())?.trim() ?? '';
   expect(link).toMatch(/\/-\/invite#/);
-  await expect(page.getByRole('listitem').filter({ hasText: member }).getByText('Kế toán thuê ngoài cho: Chi nhánh Hà Nội')).toBeVisible();
+  await expect(page.getByRole('listitem').filter({ hasText: member }).getByText('Kế toán thuê ngoài cho: Chi nhánh Hà Nội', { exact: true })).toBeVisible();
 
   // The invitee accepts in a browser of their own.
   const memberContext = await browser.newContext({ baseURL: new URL(page.url()).origin });

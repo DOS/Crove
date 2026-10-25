@@ -1905,7 +1905,7 @@ export const en = {
     invite: 'Invite',
     inviteScoped: 'Limit to legal entities',
     inviteEntities: 'Legal entities they work with',
-    inviteScopedHint: 'For an outside accountant: the invitee gets the outside accountant role for the chosen entities, as a member or a viewer.',
+    inviteScopedHint: 'For an outside accountant: the invitee gets the outside accountant role for the chosen entities, as a member or a viewer. For now they still see the books, proposals and documents of every entity; keeping each entity apart comes later.',
     inviteNoEntity: 'Choose at least one legal entity',
     inviteScopedTo: 'Outside accountant for: {entities}',
     inviteEntityGone: 'a removed entity',
