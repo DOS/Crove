@@ -151,14 +151,14 @@ suite('social drafts from library files on PostgreSQL (#1080)', () => {
   it('reports a video on a channel that cannot take it, per file, and saves nothing', async () => {
     const o = await org();
     const sandbox = await connection(o, 'sandbox');
-    // A Zalo OA post takes images only.
+    // A Zalo OA video article takes MP4 only (#1429), not a QuickTime file.
     const zalo = await connection(o, 'zalo_oa');
     const photo = await file(o, 'anh.jpg');
-    const clip = await file(o, 'khai-truong.mp4', { contentType: 'video/mp4', durationMs: 12_500 });
+    const clip = await file(o, 'khai-truong.mov', { contentType: 'video/quicktime', durationMs: 12_500 });
     const other = await file(o, 'anh-2.png', { contentType: 'image/png' });
     const before = await postCount(o);
     const result = await fromMedia<Invalid>(o, o.member, { fileIds: [photo, clip, other], connectionIds: [sandbox, zalo] });
-    expect(result).toEqual({ status: 'invalid', files: [{ fileId: clip, issues: [{ connectionId: zalo, provider: 'zalo_oa', code: 'MEDIA_KIND_NOT_ALLOWED', field: 'media.0', limit: null, actual: null }] }] });
+    expect(result).toEqual({ status: 'invalid', files: [{ fileId: clip, issues: [{ connectionId: zalo, provider: 'zalo_oa', code: 'VIDEO_TYPE_NOT_ALLOWED', field: 'media.0', limit: null, actual: null }] }] });
     expect(await postCount(o)).toBe(before);
     expect(await audits(o, 'social.post.create')).toHaveLength(0);
     // Without that channel, the same files go through; a title Zalo would need is the writer's to add later, not a refusal.
