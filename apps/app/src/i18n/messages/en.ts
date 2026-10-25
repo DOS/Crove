@@ -77,6 +77,7 @@ export const en = {
     social: 'Social',
   },
   nav: {
+    legalEntity: 'Legal entity',
     org: 'Organization',
     allClients: 'All companies',
     addOrg: '+ Add organization',
