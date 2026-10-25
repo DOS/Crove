@@ -2,6 +2,10 @@
 // and what a member marked done. The rules are data in @crove/kernel-contract (tax-calendar.ts); this module keeps the
 // org's choices (crove_kernel.tax_profile, one row per org) and the done marks (crove_kernel.tax_obligation_done).
 //
+// Each legal entity files its own returns (#1496): a mark is one entity's, and the org's obligation for a period is done
+// only when every legal entity the reader sees has marked it. A reader limited to some entities (an external
+// accountant's assignments) sees only their entities and their marks, so its calendar is theirs.
+//
 // The home screen (overview.ts) lists, per org, the obligations due in the next TAX_DUE_WINDOW_DAYS days and the ones
 // overdue and not marked done, from the day the org first saved its profile (at most a year back): an org that just
 // set its calendar is not shown a year of overdue returns it filed elsewhere.
@@ -81,13 +85,19 @@ export async function taxDuesOf(ctx: Pick<QueryContext, 'trx' | 'orgId'>, vatFil
   const from = profile.since ? (profile.since > yearBack ? profile.since : yearBack) : today;
   const dues = taxDues(settings, from < today ? from : today, addDays(today, TAX_DUE_WINDOW_DAYS));
   if (dues.length === 0) return [];
+  // No entity in the reader's scope: nothing of the org's is the reader's to file.
+  const entities = await ctx.trx.selectFrom('crove_kernel.legal_entity').select('id').where('org_id', '=', ctx.orgId).execute();
+  if (entities.length === 0) return [];
   const done = await ctx.trx
     .selectFrom('crove_kernel.tax_obligation_done')
-    .select(['obligation', 'period'])
+    .select(['obligation', 'period', (eb) => eb.fn.count<string>('legal_entity_id').distinct().as('entities')])
     .where('org_id', '=', ctx.orgId)
     .where('period', 'in', [...new Set(dues.map((d) => d.period))])
+    .where('legal_entity_id', 'in', entities.map((e) => e.id))
+    .groupBy(['obligation', 'period'])
     .execute();
-  const marked = new Set(done.map((d) => `${d.obligation}:${d.period}`));
+  // Done when every entity the reader sees has marked it.
+  const marked = new Set(done.filter((d) => Number(d.entities) >= entities.length).map((d) => `${d.obligation}:${d.period}`));
   const day = (date: string) => Date.parse(`${date}T00:00:00Z`);
   return dues
     .filter((d) => !marked.has(`${d.obligation}:${d.period}`))
@@ -134,6 +144,16 @@ export const taxProfileSave = defineCommand({
   },
 });
 
+// The legal entity a mark is for: the one named, checked against the caller's scope (crove_kernel.legal_entity is read
+// through le_scope, so an entity outside it is not found), or the org's default entity as the caller sees it.
+async function markEntity(ctx: Pick<QueryContext, 'trx' | 'orgId'>, legalEntityId: string | undefined): Promise<string> {
+  let q = ctx.trx.selectFrom('crove_kernel.legal_entity').select('id').where('org_id', '=', ctx.orgId);
+  q = legalEntityId === undefined ? q.where('is_default', '=', true) : q.where('id', '=', legalEntityId);
+  const row = await q.executeTakeFirst();
+  if (!row) throw new DomainError('LEGAL_ENTITY_NOT_FOUND', 422, 'Không tìm thấy pháp nhân này trong tổ chức');
+  return row.id;
+}
+
 // The frequency a period key names: "2026" a year, "2026-09" a month, "2026-Q3" a quarter.
 function frequencyOf(period: string): 'year' | 'month' | 'quarter' {
   return period.length === 4 ? 'year' : period.includes('Q') ? 'quarter' : 'month';
@@ -150,15 +170,16 @@ export const taxObligationDone = defineCommand({
     if (!TAX_RULES.some((r) => r.obligation === input.obligation && r.frequency === frequencyOf(input.period))) {
       throw new DomainError('TAX_PERIOD_MISMATCH', 422, `${TAX_OBLIGATION_LABELS[input.obligation]} không có kỳ ${input.period}`);
     }
+    const legalEntityId = await markEntity(ctx, input.legalEntityId);
     const inserted = await ctx.trx
       .insertInto('crove_kernel.tax_obligation_done')
-      .values({ org_id: ctx.orgId, obligation: input.obligation, period: input.period, done_by: ctx.actor.userId })
-      .onConflict((oc) => oc.columns(['org_id', 'obligation', 'period']).doNothing())
+      .values({ org_id: ctx.orgId, legal_entity_id: legalEntityId, obligation: input.obligation, period: input.period, done_by: ctx.actor.userId })
+      .onConflict((oc) => oc.columns(['org_id', 'legal_entity_id', 'obligation', 'period']).doNothing())
       .returning('id')
       .executeTakeFirst();
-    ctx.audit({ obligation: input.obligation, period: input.period, already: inserted === undefined });
+    ctx.audit({ obligation: input.obligation, period: input.period, legalEntityId, already: inserted === undefined });
     if (inserted) await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_obligation_done', `Đã xong: ${TAX_OBLIGATION_LABELS[input.obligation]} kỳ ${input.period}`);
-    return { obligation: input.obligation, period: input.period, done: true as const };
+    return { obligation: input.obligation, period: input.period, legalEntityId, done: true as const };
   },
 });
 
@@ -169,16 +190,18 @@ export const taxObligationUndo = defineCommand({
   access: MARKERS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const legalEntityId = await markEntity(ctx, input.legalEntityId);
     const removed = await ctx.trx
       .deleteFrom('crove_kernel.tax_obligation_done')
       .where('org_id', '=', ctx.orgId)
+      .where('legal_entity_id', '=', legalEntityId)
       .where('obligation', '=', input.obligation)
       .where('period', '=', input.period)
       .executeTakeFirst();
     const found = Number(removed.numDeletedRows) > 0;
-    ctx.audit({ obligation: input.obligation, period: input.period, found });
+    ctx.audit({ obligation: input.obligation, period: input.period, legalEntityId, found });
     if (found) await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_obligation_undone', `Bỏ đánh dấu đã xong: ${TAX_OBLIGATION_LABELS[input.obligation]} kỳ ${input.period}`);
-    return { obligation: input.obligation, period: input.period, done: false as const };
+    return { obligation: input.obligation, period: input.period, legalEntityId, done: false as const };
   },
 });
 

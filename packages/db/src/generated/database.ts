@@ -1110,6 +1110,7 @@ export interface KernelTaxObligationDoneTable {
   period: string;
   done_by: string;
   done_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  legal_entity_id: string;
 }
 
 /** crove_kernel.tax_profile */
