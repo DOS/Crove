@@ -97,6 +97,10 @@ export type TaxProfileTable = Refine<
     pit_filing_period: (typeof PIT_FILING_PERIODS)[number] | null;
   }
 >;
+// The org-wide records a link to a legal entity can name (#1280 part 3b, crove_kernel.record_le).
+export const RECORD_LE_TYPES = ['kernel.party'] as const;
+export type RecordLeTable = Refine<G.KernelRecordLeTable, { record_type: ColumnType<(typeof RECORD_LE_TYPES)[number], (typeof RECORD_LE_TYPES)[number], never> }>;
+
 export type TaxObligationDoneTable = Refine<G.KernelTaxObligationDoneTable, { obligation: (typeof TAX_OBLIGATION_CODES)[number] }>;
 
 // Gapless numbering (ADR-0021 section 2, #1401): the reset policy of a document type's series in a legal entity.
@@ -702,6 +706,7 @@ type Refined = Tables<{
   'crove_kernel.file': FileTable;
   'crove_kernel.extraction': ExtractionTable;
   'crove_kernel.notification': NotificationTable;
+  'crove_kernel.record_le': RecordLeTable;
   'crove_kernel.proposal': ProposalTable;
   'crove_kernel.agent_template': AgentTemplateTable;
   'crove_kernel.agent': AgentTable;

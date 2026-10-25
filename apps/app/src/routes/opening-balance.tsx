@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { OPENING_BALANCE_MAX_ROWS, type OpeningBalanceRow } from '@crove/kernel-contract';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
@@ -12,7 +12,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
-import { DataTable, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, ErrorText, fieldErrorId, fieldHintId, Notice, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, getCurrentOrg, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { buildTemplate, canImportOpeningBalance, sheetToRows, type SheetProblem } from '../lib/opening-balance.ts';
@@ -53,6 +53,11 @@ function OpeningBalanceForm() {
   // One key per checked sheet: a retry after the step-up is the same posting.
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const allowed = canImportOpeningBalance(org.data?.role);
+  // The file's problem and the missing date are linked to their fields (#1515).
+  const fieldIds = useId();
+  const asOfId = `${fieldIds}-as-of`;
+  const fileId = `${fieldIds}-file`;
+  const needsDate = file.status === 'read' && !asOf;
 
   // Each entity has its own opening entry (#1280): checked and posted for the one chosen in the shell.
   const entity = useChosenEntity();
@@ -126,6 +131,7 @@ function OpeningBalanceForm() {
             <label className="text-xs">
               <span className="text-subtle-foreground">{t('asOf')}</span>
               <DateInput
+                aria-describedby={needsDate ? fieldHintId(asOfId) : undefined}
                 value={asOf}
                 onChange={(next) => {
                   post.reset();
@@ -138,6 +144,8 @@ function OpeningBalanceForm() {
             <label className="text-xs">
               <span className="text-subtle-foreground">{t('file')}</span>
               <Input
+                aria-invalid={file.status === 'problem' || undefined}
+                aria-describedby={file.status === 'problem' ? fieldErrorId(fileId) : undefined}
                 type="file"
                 accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 onChange={(e) => void choose(e.target.files?.[0])}
@@ -148,7 +156,7 @@ function OpeningBalanceForm() {
           {file.status === 'reading' && <p className="mt-3 text-sm text-muted-foreground">{t('reading')}</p>}
           {file.status === 'problem' && (
             <div className="mt-3">
-              <ErrorText>{t(`fileProblems.${file.problem}`, { max: OPENING_BALANCE_MAX_ROWS })}</ErrorText>
+              <ErrorText id={fieldErrorId(fileId)}>{t(`fileProblems.${file.problem}`, { max: OPENING_BALANCE_MAX_ROWS })}</ErrorText>
             </div>
           )}
           {file.status === 'read' && file.extraColumns && (
@@ -156,7 +164,11 @@ function OpeningBalanceForm() {
               <Notice>{t('extraColumns')}</Notice>
             </div>
           )}
-          {file.status === 'read' && !asOf && <p className="mt-3 text-sm text-muted-foreground">{t('chooseDate')}</p>}
+          {needsDate && (
+            <p id={fieldHintId(asOfId)} className="mt-3 text-sm text-muted-foreground">
+              {t('chooseDate')}
+            </p>
+          )}
         </Card>
 
         {input && (

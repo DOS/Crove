@@ -389,6 +389,45 @@ export const filesRecent = defineQuery({
   handler: async (ctx) => (await fileStatuses(ctx, { recent: RECENT_FILES })).map((row) => row.status),
 });
 
+// Mails forwarded to the org's inbound address (#779), newest first, for the Inbox's *Soạn bài đăng từ thư này*: who
+// sent it, its subject, when it came, whether its text was kept and how many attachments it had. Those who write posts
+// only (owners, admins, members), as the AI draft is theirs, and only in a context that sees every legal entity: a
+// mail has no entity, so a member limited to some entities (an external accountant) gets no mail and no mail's text.
+const MAIL_READERS: readonly MemberRole[] = ['owner', 'admin', 'member'];
+export const RECENT_MAILS = 20;
+// The caller's context sees every legal entity (the wildcard in enter_context's le_scope); fetched once per statement.
+const unscoped = sql<boolean>`coalesce('*' = ANY ((SELECT crove_kernel.ctx_le_scope())::text[]), false)`;
+export const inboundRecent = defineQuery({
+  name: 'kernel.inbound.recent',
+  input: z.object({}),
+  access: MAIL_READERS,
+  handler: async (ctx) => {
+    const rows = await ctx.trx
+      .selectFrom('crove_kernel.inbound_message')
+      .select(['id', 'from_address', 'subject', 'attachment_count', 'received_at', sql<boolean>`body_text IS NOT NULL`.as('has_text')])
+      .where('org_id', '=', ctx.orgId)
+      .where(unscoped)
+      .orderBy('received_at', 'desc')
+      .orderBy('id', 'desc')
+      .limit(RECENT_MAILS)
+      .execute();
+    return rows.map((r) => ({ id: r.id, from: r.from_address, subject: r.subject, attachmentCount: r.attachment_count, receivedAt: r.received_at.toISOString(), hasText: r.has_text }));
+  },
+});
+
+// One mail's subject and text (#779), for an AI draft started from it; NOT_FOUND for a mail of another org, none, or a
+// caller limited to some legal entities.
+export const inboundText = defineQuery({
+  name: 'kernel.inbound.text',
+  input: z.object({ id: zId }),
+  access: MAIL_READERS,
+  handler: async (ctx, input) => {
+    const row = await ctx.trx.selectFrom('crove_kernel.inbound_message').select(['subject', 'body_text']).where('org_id', '=', ctx.orgId).where('id', '=', input.id).where(unscoped).executeTakeFirst();
+    if (!row) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy thư này');
+    return { subject: row.subject, text: row.body_text };
+  },
+});
+
 export const fileGet = defineQuery({
   name: 'kernel.file.get',
   input: z.object({ id: zId }),
@@ -440,5 +479,5 @@ export const streamCheck = defineQuery({
 
 // overview: the home screen's figures of the modules this deployment enables (#1261), from the composition root.
 export function kernelQueries(options: OrgDetailOptions & { overview?: readonly OverviewContribution[] }) {
-  return [orgDetailQuery(options), orgOverviewQuery({ contributions: options.overview ?? [] }), streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...taxCalendarQueries, ...legalEntityQueries, ...numberingQueries, ...roleQueries, ...calendarQueries, ...timelineQueries, ...auditLogQueries, ...personalDataQueries, ...partyQueries, ...notificationQueries, ...usageQueries];
+  return [orgDetailQuery(options), orgOverviewQuery({ contributions: options.overview ?? [] }), streamCheck, inboxList, inboxGet, filesRecent, inboundRecent, inboundText, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...taxCalendarQueries, ...legalEntityQueries, ...numberingQueries, ...roleQueries, ...calendarQueries, ...timelineQueries, ...auditLogQueries, ...personalDataQueries, ...partyQueries, ...notificationQueries, ...usageQueries];
 }

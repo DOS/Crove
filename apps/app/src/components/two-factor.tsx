@@ -8,6 +8,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
+import { ConfirmDialog } from './confirm-dialog.tsx';
 import { ErrorText, Notice, Spinner } from './ui.tsx';
 
 interface Enrollment {
@@ -144,8 +145,8 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
       return null;
     });
 
+  // Asked first in a dialog (ConfirmDialog below).
   const disable = (factorId: string) => {
-    if (!window.confirm(t('confirmDisable'))) return;
     void run(async () => {
       const { error: e } = await auth().mfa.unenroll({ factorId });
       if (e) return authFailure(e);
@@ -199,9 +200,18 @@ export function TwoFactorCard({ onEnabled }: { onEnabled?: () => void }) {
           </form>
         ) : factors.isSuccess && verified.length > 0 ? (
           verified.map((f) => (
-            <Button key={f.id} variant="destructive" disabled={busy} onClick={() => disable(f.id)}>
+            <ConfirmDialog
+              key={f.id}
+              render={<Button variant="destructive" />}
+              disabled={busy}
+              title={t('disableTitle')}
+              description={t('disableDescription')}
+              confirm={t('disableConfirm')}
+              destructive
+              onConfirm={() => disable(f.id)}
+            >
               {t('disable')}
-            </Button>
+            </ConfirmDialog>
           ))
         ) : (
           factors.isSuccess && (
