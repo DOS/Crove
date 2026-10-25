@@ -496,8 +496,9 @@ export const SOCIAL_LINK_PREVIEW_ERRORS = ['invalid_url', 'blocked', 'dns', 'tim
 export type SocialLinkPreviewStatus = (typeof SOCIAL_LINK_PREVIEW_STATUSES)[number];
 export type SocialLinkPreviewError = (typeof SOCIAL_LINK_PREVIEW_ERRORS)[number];
 // A channel's options for the composer (#1120): what a list holds (a Pinterest board's sections; since #1131 a YouTube
-// channel's playlists and a WordPress site's categories and tags), where its read stands and why it failed.
-export const SOCIAL_CHANNEL_OPTION_KINDS = ['pinterest_section', 'youtube_playlist', 'wordpress_term'] as const;
+// channel's playlists and a WordPress site's categories and tags; since #1497 a TikTok account's creator options),
+// where its read stands and why it failed.
+export const SOCIAL_CHANNEL_OPTION_KINDS = ['pinterest_section', 'youtube_playlist', 'wordpress_term', 'tiktok_creator'] as const;
 export const SOCIAL_CHANNEL_OPTION_STATUSES = ['pending', 'ready', 'failed'] as const;
 export const SOCIAL_CHANNEL_OPTION_ERRORS = ['token_expired', 'permission', 'not_found', 'no_answer'] as const;
 export type SocialChannelOptionKind = (typeof SOCIAL_CHANNEL_OPTION_KINDS)[number];
