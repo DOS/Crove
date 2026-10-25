@@ -1,5 +1,5 @@
 // Role assignments (issue #1279, plan §4.6): the built-in roles a member can hold on top of their base role
-// (crove_kernel.role, role_permission, role_assignment, 20261101000000_crove_kernel_roles.sql).
+// (crove_kernel.role, role_permission, role_assignment, 20261101060000_crove_kernel_roles.sql).
 // - kernel.member.roles.list: owners and admins read the roles the deployment offers and who holds which.
 // - kernel.member.role.assign / kernel.member.role.revoke: owners only, R3 (fresh MFA, P11), like every membership
 //   change. The runtime audits each one; the detail names the member, the role, the legal entity and whether anything
