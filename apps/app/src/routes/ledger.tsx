@@ -12,11 +12,13 @@ import { Button, buttonVariants } from '@crove/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { PeriodLockPanel } from '../components/period-lock.tsx';
 import { YearArchivePanel } from '../components/year-archive.tsx';
 import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
+import { exportQuery } from '../lib/legal-entity-choice.ts';
 import { partySearch } from '../lib/parties.ts';
 import { balanceSide, defaultLedgerPeriod, ledgerPeriodKey, switchLedgerKind, type LedgerPeriodChoice, type LedgerPeriodKind } from '../lib/ledger.ts';
 import { yearOptions } from '../lib/vat.ts';
@@ -109,8 +111,9 @@ function PartyTable({ ledger, partyLabel, customers = false }: { ledger: PartyLe
 function AccountLedger({ period, accountCode }: { period: string; accountCode: string }) {
   const t = useTranslations('ledger');
   const f = useFormat();
-  const query = useQuery(orpc.ledger.account.queryOptions({ input: { period, accountCode } }));
-  if (query.isLoading) return <TableSkeleton columns={4} />;
+  const entity = useChosenEntity();
+  const query = useQuery({ ...orpc.ledger.account.queryOptions({ input: { period, accountCode, legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
+  if (query.isPending) return <TableSkeleton columns={4} />;
   if (query.error) return <ErrorText>{errorMessage(query.error)}</ErrorText>;
   const ledger = query.data;
   if (!ledger) return null;
@@ -237,10 +240,11 @@ function StatementTable({ title, lines, unmapped }: { title: string; lines: Stat
 // file is still written, the accountant decides.
 function HtkkStatements({ year }: { year: number }) {
   const t = useTranslations('ledger');
-  const check = useQuery(orpc.ledger.statementsHtkkCheck.queryOptions({ input: { year } }));
+  const entity = useChosenEntity();
+  const check = useQuery({ ...orpc.ledger.statementsHtkkCheck.queryOptions({ input: { year, legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const exportXml = useMutation({
     mutationFn: async () => {
-      const response = await apiFetch(`/api/export/statements-htkk.xml?${new URLSearchParams({ year: String(year) })}`);
+      const response = await apiFetch(`/api/export/statements-htkk.xml?${exportQuery({ year: String(year) }, entity.legalEntityId)}`);
       const url = URL.createObjectURL(await response.blob());
       const a = document.createElement('a');
       a.href = url;
@@ -257,7 +261,7 @@ function HtkkStatements({ year }: { year: number }) {
           <h2 className="text-sm font-semibold">{t('htkkTitle', { year: String(year) })}</h2>
           <p className="mt-1 max-w-3xl text-xs text-subtle-foreground">{t('htkkIntro')}</p>
         </div>
-        <Button variant="outline" onClick={() => exportXml.mutate()} disabled={exportXml.isPending || check.isLoading}>
+        <Button variant="outline" onClick={() => exportXml.mutate()} disabled={exportXml.isPending || check.isPending}>
           {exportXml.isPending ? <Spinner className="text-current" /> : null}
           {t('htkkExport')}
         </Button>
@@ -280,10 +284,11 @@ function HtkkStatements({ year }: { year: number }) {
 function Statements({ period }: { period: string }) {
   const t = useTranslations('ledger');
   const f = useFormat();
-  const query = useQuery(orpc.ledger.statements.queryOptions({ input: { period } }));
+  const entity = useChosenEntity();
+  const query = useQuery({ ...orpc.ledger.statements.queryOptions({ input: { period, legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const exportXlsx = useMutation({
     mutationFn: async () => {
-      const response = await apiFetch(`/api/export/statements.xlsx?${new URLSearchParams({ period })}`);
+      const response = await apiFetch(`/api/export/statements.xlsx?${exportQuery({ period }, entity.legalEntityId)}`);
       const url = URL.createObjectURL(await response.blob());
       const a = document.createElement('a');
       a.href = url;
@@ -292,7 +297,7 @@ function Statements({ period }: { period: string }) {
       URL.revokeObjectURL(url);
     },
   });
-  if (query.isLoading) return <TableSkeleton columns={4} />;
+  if (query.isPending) return <TableSkeleton columns={4} />;
   if (query.error) return <ErrorText>{errorMessage(query.error)}</ErrorText>;
   const data = query.data;
   if (!data) return null;
@@ -331,18 +336,20 @@ export function LedgerPage() {
   const [tab, setTab] = useState<Tab>('trialBalance');
   const [picked, setPicked] = useState<string | null>(null);
   const period = ledgerPeriodKey(choice);
-  const report = useQuery(orpc.ledger.period.queryOptions({ input: { period } }));
+  // Every report and download of the page is for the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
+  const report = useQuery({ ...orpc.ledger.period.queryOptions({ input: { period, legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const data = report.data;
   // The trial balance, general ledger and party tabs wait for this report. The statements tab runs its own query, so a
   // period too large for the ledger report (PERIOD_TOO_LARGE) still gets its statements.
-  const reportStatus = report.isLoading ? <TableSkeleton columns={5} rows={8} /> : report.error ? <ErrorText>{errorMessage(report.error)}</ErrorText> : null;
+  const reportStatus = report.isPending ? <TableSkeleton columns={5} rows={8} /> : report.error ? <ErrorText>{errorMessage(report.error)}</ErrorText> : null;
   const rows = data?.trialBalance.rows ?? [];
   // The account the general ledger shows: the one picked if the period has it, else the first one.
   const account = rows.find((r) => r.accountCode === picked)?.accountCode ?? rows[0]?.accountCode ?? null;
 
   const exportXlsx = useMutation({
     mutationFn: async () => {
-      const response = await apiFetch(`/api/export/ledger.xlsx?${new URLSearchParams({ period })}`);
+      const response = await apiFetch(`/api/export/ledger.xlsx?${exportQuery({ period }, entity.legalEntityId)}`);
       const url = URL.createObjectURL(await response.blob());
       const a = document.createElement('a');
       a.href = url;

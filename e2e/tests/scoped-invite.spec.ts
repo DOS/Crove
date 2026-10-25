@@ -24,7 +24,8 @@ test('an owner invites an outside accountant for one legal entity', async ({ pag
   const add = page.getByRole('form', { name: 'Thêm pháp nhân' });
   await add.getByLabel('Tên pháp nhân').fill('Chi nhánh Hà Nội');
   await add.getByRole('button', { name: 'Thêm', exact: true }).click();
-  await expect(page.getByText('Chi nhánh Hà Nội').first()).toBeVisible();
+  // In the page, not the sidebar switcher, whose options carry the same name.
+  await expect(page.getByRole('main').getByText('Chi nhánh Hà Nội').first()).toBeVisible();
 
   const member = newEmail('scoped-member');
   await page.getByPlaceholder('email@congty.vn').fill(member);

@@ -576,6 +576,8 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
         return;
       }
       const captureKeyOf = story === 'final' ? STORY_FINAL_KEY : key;
+      // The connection's version before its token is read, for the expiry below (#1546).
+      const { version } = await deps.runtime.query<{ version: string | null }>('social.account.connection_version', { connectionId: target.connectionId }, options);
       const sealed = await deps.runtime.query<SealedChannelCredential>('kernel.channel.credential', { connectionId: target.connectionId }, options);
       const secret = deps.broker.open({ keyId: sealed.keyId, envelope: Buffer.from(sealed.envelope, 'base64') }, { orgId: row.org_id, provider: sealed.provider, externalAccountId: sealed.externalAccountId });
       const asked = { externalAccountId: sealed.externalAccountId, secret, externalId: target.externalPostId };
@@ -583,6 +585,11 @@ export async function sweepMetrics(deps: MetricsDeps): Promise<{ recorded: numbe
       if (story === 'final' && !result) {
         out.skipped += 1;
         return;
+      }
+      // A token the platform refuses marks the connection expired, as the account sweep does (#1546), unless a reconnect
+      // changed it since it was read.
+      if (result && 'refused' in result && result.refused === 'token_expired' && version) {
+        await deps.runtime.execute('kernel.channel.mark_expired', { connectionId: target.connectionId, reason: 'token_expired', ifVersion: version }, options);
       }
       // A failed try is kept as an empty snapshot of this capture, so the variant waits for the next capture like the
       // others instead of being asked again every pass; the summary shows the last real answer.

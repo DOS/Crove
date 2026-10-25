@@ -15,7 +15,9 @@ import { ErrorText, Spinner } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { parentChoices, parentName } from '../lib/legal-entities.ts';
 
-const refresh = () => queryClient.invalidateQueries({ queryKey: orpc.legalEntities.list.key() });
+// The shell's switcher lists the entities with books (bookEntities.list), so an added or renamed one shows there too.
+const refresh = () =>
+  Promise.all([queryClient.invalidateQueries({ queryKey: orpc.legalEntities.list.key() }), queryClient.invalidateQueries({ queryKey: orpc.bookEntities.list.key() })]);
 
 interface Draft {
   name: string;
