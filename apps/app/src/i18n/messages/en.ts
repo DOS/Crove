@@ -1410,6 +1410,7 @@ export const en = {
     },
   },
   inbox: {
+    listShortcuts: 'Shortcuts: J or N next proposal · K or P previous one · Enter opens the selected one',
     addressCopied: 'Address copied',
     copyRefused: 'The browser refused to copy. Select the address on screen and copy it by hand.',
     socialAttention: {

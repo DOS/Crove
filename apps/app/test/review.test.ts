@@ -1,6 +1,6 @@
 // Bulk approval batches and review shortcuts (issue #315).
 import { describe, expect, it } from 'vitest';
-import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextAfterDecision, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, showMatched, type BulkBatch } from '../src/lib/review.ts';
+import { BULK_LIMIT, bulkSelectable, canApproveProposals, chunks, nextAfterDecision, nextPendingId, planBatches, previousPendingId, proposalName, reviewShortcut, sendBatches, showMatched, steppedIndex, type BulkBatch } from '../src/lib/review.ts';
 
 const REVERSAL = 'finance.reversal';
 
@@ -165,5 +165,16 @@ describe('matched badge (#435)', () => {
     expect(showMatched({ ...row, requestedByAgent: agent, extracted: false }, REVERSAL, VOUCHER)).toBe(false);
     // A human-checked extraction of an agent's request would still show it.
     expect(showMatched({ ...row, requestedByAgent: agent, extracted: true }, REVERSAL, VOUCHER)).toBe(true);
+  });
+});
+
+describe('list focus steps (#1405)', () => {
+  it('moves one step, stops at the ends, and enters the list at its first or last item', () => {
+    expect(steppedIndex(0, 3, 1)).toBe(1);
+    expect(steppedIndex(2, 3, 1)).toBe(2);
+    expect(steppedIndex(0, 3, -1)).toBe(0);
+    expect(steppedIndex(-1, 3, 1)).toBe(0);
+    expect(steppedIndex(-1, 3, -1)).toBe(2);
+    expect(steppedIndex(-1, 0, 1)).toBeNull();
   });
 });
