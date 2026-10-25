@@ -1,6 +1,6 @@
 // The tax calendar on the home screen (#921): the list across clients by due date, period parts, who may mark done.
 import { describe, expect, it } from 'vitest';
-import { canMarkTaxDone, dueAcrossClients, taxPeriodParts } from '../src/lib/tax-calendar.ts';
+import { canMarkTaxDone, dueAcrossClients, entityToMark, taxPeriodParts } from '../src/lib/tax-calendar.ts';
 
 const due = (obligation: 'vat_return' | 'cit_provisional', period: string, dueDate: string) => ({ obligation, period, dueDate, daysLeft: 0, legalBasis: 'x', confirmed: false, openEntities: [] });
 
@@ -32,5 +32,18 @@ describe('tax calendar on the home screen', () => {
     expect(['owner', 'admin', 'member', 'viewer'].map((role) => canMarkTaxDone(role, 'vat_return', true))).toEqual([true, true, false, false]);
     expect(canMarkTaxDone('member', 'vat_return', false)).toBe(true);
     expect(canMarkTaxDone('member', 'cit_provisional', true)).toBe(true);
+  });
+
+  it('marks the one open entity, or the chosen one while it is open, and none without a choice (#1553)', () => {
+    const a = { id: 'a' };
+    const b = { id: 'b' };
+    expect(entityToMark([a], undefined)).toBe('a');
+    expect(entityToMark([a], 'b')).toBe('a');
+    expect(entityToMark([a, b], 'b')).toBe('b');
+    // The chosen entity already marked it: the others must, from their own choice.
+    expect(entityToMark([a, b], 'c')).toBeNull();
+    // The multi-client home has no choice: it sends the user to the org instead.
+    expect(entityToMark([a, b], undefined)).toBeNull();
+    expect(entityToMark([], 'a')).toBeNull();
   });
 });

@@ -302,6 +302,10 @@ export const en = {
     daysLeft: '{days, plural, =0 {due today} one {# day left} other {# days left}}',
     overdue: '{days, plural, one {# day overdue} other {# days overdue}}',
     markDone: 'Done',
+    // Each legal entity marks its own dues (#1553).
+    markDoneFor: 'Done for {entity}',
+    openEntities: 'Still open: {names}',
+    openCount: '{count, plural, one {# entity still open} other {# entities still open}}',
     nothingDue: 'Nothing due in 30 days',
     empty: 'No tax obligation due in the next 30 days',
     emptyHint: "Choose the company's VAT filing period and the obligations that apply to it in Settings to see its calendar here.",
