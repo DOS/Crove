@@ -177,6 +177,8 @@ suite('WORM fact stream: archive and tamper detection on PostgreSQL (#891)', () 
     const refs = batches.flatMap((b: { rows: Array<[string, string]> }) => b.rows.map(([ref]) => ref));
     expect(refs.filter((r) => r.startsWith('audit:'))).toHaveLength(counts.audit);
     expect(refs.filter((r) => r.startsWith('journal:'))).toHaveLength(counts.journal);
+    // Version 3 batches (#1489): each journal entry's legal entity, once.
+    expect(refs.filter((r) => r.startsWith('entity:journal:'))).toHaveLength(counts.journal);
     // Each batch's rows span at most 5 minutes of their window, and each window starts where the last one ended.
     batches.forEach((b: { window: { from: string; to: string }; seq: number }, i: number) => {
       if (i > 0) expect(b.window.from).toBe(batches[i - 1].window.to);
