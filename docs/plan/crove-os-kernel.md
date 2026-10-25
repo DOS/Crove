@@ -888,7 +888,7 @@ wake: LISTEN crove_outbox (per-statement NOTIFY) + poll every 500 ms
 
 - **Three streams, linked by `command_id`, `correlation_id`, `causation_id`:**
   - `audit_event` (security and compliance):
-    - Written via the definer `audit_write()`, which stamps from the context and checks `approved_by` against `proposal`.
+    - First planned as a definer `audit_write()` stamping from the context and checking `approved_by` against `proposal`; superseded by the trigger below, which stamps but checks no approval.
     - On `main` (#1482): stamping is done by the BEFORE INSERT trigger `audit_event_stamp` instead of an `audit_write()` function. Why: a trigger stamps every insert at the table boundary, whatever path writes it, while a function stamps only the callers that choose it; and a definer could not authenticate the command name either. A user context gives the row its user, a system context the system with no actor id, an agent context keeps `agent_write_guard`'s rule, and `occurred_at` is always the transaction's `now()`; no context, or another org's, writes nothing. A row forged for someone else becomes the session's own, so a `*_requires_audit` trigger is satisfied only by a row written in that user's own context. Staff writes are not stamped.
     - Still unproven: a session can write a row in its own name with any command name, outcome and detail (the runtime and any statement on its connection are one session, so the database cannot tell the command ran); `approved_by` is not checked against the proposal (`audit_event` has no such column; approvals carry `proposal_id`, which nothing checks).
     - Success and pending are written in the command's transaction; denied/failed in a new transaction.
