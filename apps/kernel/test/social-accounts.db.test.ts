@@ -141,7 +141,7 @@ suite('social account growth on PostgreSQL (#645)', () => {
       cl.query('INSERT INTO crove_social.account_snapshot (org_id, channel_connection_id, captured_on, followers) VALUES ($1, $2, $3, 1100), ($1, $2, $4, 1150), ($1, $2, $5, 900)', [o.orgId, a, day(5), day(2), day(40)]),
     );
     const week = await trends(o, 7);
-    expect(week).toEqual([{ connectionId: a, provider: 'sandbox', points: [{ day: day(5), followers: 1100, reach: null }, { day: day(2), followers: 1150, reach: null }, { day: day(0), followers: 1200, reach: 80 }], audience: null }]);
+    expect(week).toEqual([{ connectionId: a, provider: 'sandbox', points: [{ day: day(5), followers: 1100, reach: null }, { day: day(2), followers: 1150, reach: null }, { day: day(0), followers: 1200, reach: 80 }], audience: null, performance: [] }]);
     expect((await trends(o, 90))[0]?.points[0]).toEqual({ day: day(40), followers: 900, reach: null });
     expect((await trends(o, 1))[0]?.points).toEqual([{ day: day(0), followers: 1200, reach: 80 }]);
     // The day `days` ago is the window's baseline.

@@ -2454,6 +2454,16 @@ export const en = {
       genders: { F: 'Women', M: 'Men', U: 'Unknown' },
       share: '{percent} · {count} people',
     },
+    performance: {
+      title: 'Google Business Profile',
+      hint: 'Calls, direction requests, website clicks and profile views of each location on Google Search and Maps. Google usually reports these 3 to 4 days late, so the latest days may still change.',
+      reportHint: "Each location's figures on Google Search and Maps in the report's period. Google usually reports these 3 to 4 days late, so the last days of the period may not be complete yet.",
+      through: 'Figures up to {date}',
+      calls: 'Calls',
+      directions: 'Directions',
+      websiteClicks: 'Website clicks',
+      views: 'Profile views',
+    },
     gbp: {
       topic: 'Post type',
       topics: { STANDARD: 'Update', EVENT: 'Event', OFFER: 'Offer' },
