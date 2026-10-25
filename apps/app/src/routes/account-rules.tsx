@@ -11,6 +11,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
@@ -23,6 +24,8 @@ function AddKeywordRule() {
   const accounts = useQuery(orpc.accounts.list.queryOptions());
   const [keyword, setKeyword] = useState('');
   const [accountCode, setAccountCode] = useState('');
+  // A keyword rule is learned for the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
   const create = useMutation(
     orpc.accountRules.create.mutationOptions({
       onSuccess: () => {
@@ -34,7 +37,7 @@ function AddKeywordRule() {
   );
   function submit(event: FormEvent) {
     event.preventDefault();
-    create.mutate({ keyword: keyword.trim(), accountCode });
+    create.mutate({ keyword: keyword.trim(), accountCode, legalEntityId: entity.legalEntityId });
   }
   return (
     <form className="mt-4 space-y-2" onSubmit={submit} aria-label={t('addTitle')}>
@@ -59,7 +62,7 @@ function AddKeywordRule() {
             </NativeSelectOption>
           ))}
         </NativeSelect>
-        <Button type="submit" variant="outline" disabled={create.isPending || !keyword.trim() || !accountCode}>
+        <Button type="submit" variant="outline" disabled={create.isPending || !entity.ready || !keyword.trim() || !accountCode}>
           {t('add')}
         </Button>
       </div>
@@ -116,12 +119,14 @@ function RuleRow({ rule, canManage }: { rule: CategorizationRule; canManage: boo
 
 export function AccountRulesCard({ canManage }: { canManage: boolean }) {
   const t = useTranslations('accountRules');
-  const rules = useQuery(orpc.accountRules.list.queryOptions());
+  // The rules of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
+  const rules = useQuery({ ...orpc.accountRules.list.queryOptions({ input: { legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   return (
     <Card className="block p-4" aria-label={t('title')}>
       <p className="text-sm font-medium text-muted-foreground">{t('title')}</p>
       <p className="mt-2 text-sm text-muted-foreground">{t('intro')}</p>
-      {rules.isLoading ? (
+      {rules.isPending ? (
         <Spinner />
       ) : rules.error ? (
         <ErrorText>{errorMessage(rules.error)}</ErrorText>

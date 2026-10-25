@@ -10,6 +10,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { AmountInput } from '../components/amount-input.tsx';
 import { DateInput } from '../components/date-input.tsx';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
@@ -44,6 +45,8 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
   // One key per form: a retry of the same request returns the same proposal.
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const request = useMutation(orpc.inbox.request.mutationOptions({ onSettled: () => void queryClient.invalidateQueries() }));
+  // The voucher goes to the books of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
 
   const chart = accounts.data ?? [];
   // The first account of the chart until the user picks one.
@@ -88,7 +91,7 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
         onSubmit={(event) => {
           event.preventDefault();
           setTouched(true);
-          if (problem) return;
+          if (problem || !entity.ready) return;
           request.mutate({
             command: 'finance.journal_voucher.record',
             idempotencyKey,
@@ -102,6 +105,7 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
                 credit: journalAmount(l.credit),
                 ...(l.memo.trim() ? { memo: l.memo.trim() } : {}),
               })),
+              legalEntityId: entity.legalEntityId,
             },
           });
         }}

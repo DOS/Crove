@@ -1,6 +1,6 @@
 // The legal entity the finance screens work in (#1486): which one, and where the switcher shows.
 import { afterEach, describe, expect, it } from 'vitest';
-import { chooseEntity, isEntityPath, keepEntity, keptEntity, type VisibleEntity } from '../src/lib/legal-entity-choice.ts';
+import { chooseEntity, exportQuery, isEntityPath, keepEntity, keptEntity, type VisibleEntity } from '../src/lib/legal-entity-choice.ts';
 
 const e = (id: string, isDefault = false): VisibleEntity => ({ id, name: `Pháp nhân ${id}`, isDefault });
 
@@ -25,12 +25,19 @@ describe('legal entity choice', () => {
   });
 
   it('shows on the finance books, the Overview and Settings only', () => {
-    for (const path of ['/o/acme/journal', '/o/acme/journal/opening-balances', '/o/acme/ledger', '/o/acme/vat', '/o/acme/documents', '/o/acme/bank', '/o/acme/vouchers', '/o/acme/fixed-assets', '/o/acme/overview', '/o/acme/settings']) {
+    for (const path of ['/o/acme/journal', '/o/acme/journal/opening-balances', '/o/acme/ledger', '/o/acme/vat', '/o/acme/documents', '/o/acme/bank', '/o/acme/vouchers', '/o/acme/fixed-assets', '/o/acme/portal-invoices', '/o/acme/overview', '/o/acme/settings']) {
       expect(isEntityPath(path), path).toBe(true);
     }
     for (const path of ['/o/acme/inbox', '/o/acme/tasks', '/o/acme/social', '/clients', '/o/acme', '/journal']) {
       expect(isEntityPath(path), path).toBe(false);
     }
+  });
+
+  it('adds the chosen entity to an export download, and nothing without one', () => {
+    expect(exportQuery({ period: '2026-09' }, 'e1').toString()).toBe('period=2026-09&legalEntityId=e1');
+    // No entity seen (an empty or failed list): the server answers for the default entity.
+    expect(exportQuery({ period: '2026-09' }, undefined).toString()).toBe('period=2026-09');
+    expect(exportQuery({}, 'e1').toString()).toBe('legalEntityId=e1');
   });
 
   it('keeps one choice per org', () => {

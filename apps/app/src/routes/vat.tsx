@@ -7,11 +7,13 @@ import { Button } from '@crove/ui/components/button';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { AmountInput } from '../components/amount-input.tsx';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, client, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { periodParts } from '../lib/clients.ts';
 import { isZeroAmount } from '../lib/decimal.ts';
+import { exportQuery } from '../lib/legal-entity-choice.ts';
 import {
   DEDUCT_CHOICES,
   canMarkFiled,
@@ -88,13 +90,14 @@ type VatReport = Awaited<ReturnType<typeof client.vat.period>>;
 type PaymentCheck = VatReport['paymentChecks']['items'][number];
 
 // Input invoices that need proof of non-cash payment before their VAT is deducted (#917), with the accountant's marks.
-function PaymentChecks({ data, canMark }: { data: VatReport; canMark: boolean }) {
+function PaymentChecks({ data, canMark, legalEntityId }: { data: VatReport; canMark: boolean; legalEntityId: string | undefined }) {
   const t = useTranslations('vat.payment');
   const f = useFormat();
   const checks = data.paymentChecks;
   const byId = new Map(data.input.documents.map((d) => [d.id, d]));
-  // The org's bank payment vouchers (báo Nợ), to name the one that paid an invoice. The newest page is enough to pick from.
-  const vouchers = useQuery({ ...orpc.vouchers.list.queryOptions({ input: { type: 'bank_debit' } }), enabled: canMark && checks.items.length > 0 });
+  // The bank payment vouchers (báo Nợ) of the report's entity, to name the one that paid an invoice. The newest page is
+  // enough to pick from.
+  const vouchers = useQuery({ ...orpc.vouchers.list.queryOptions({ input: { type: 'bank_debit', legalEntityId } }), enabled: canMark && checks.items.length > 0 });
   const [voucherFor, setVoucherFor] = useState<Record<string, string>>({});
   const mark = useMutation({
     mutationFn: (v: { documentId: string; outcome: 'paid_by_bank' | 'not_deductible' | 'cleared'; voucherId?: string | null }) => client.vat.markPayment(v),
@@ -229,7 +232,19 @@ function CarryForward({ data, text, onChange }: { data: VatReport; text: string;
 
 // The period's return as filed (#1400): owners and admins mark it filed with [22], [25] and [43] as on the return, which
 // the next period's [22] starts from, and the tax calendar marks it done; or take both marks back.
-function FiledReturn({ data, carried, deduct25, canFile }: { data: VatReport; carried: string | null; deduct25: string; canFile: boolean }) {
+function FiledReturn({
+  data,
+  carried,
+  deduct25,
+  canFile,
+  legalEntityId,
+}: {
+  data: VatReport;
+  carried: string | null;
+  deduct25: string;
+  canFile: boolean;
+  legalEntityId: string | undefined;
+}) {
   const t = useTranslations('vat.filed');
   const f = useFormat();
   const period = data.period.period;
@@ -240,13 +255,17 @@ function FiledReturn({ data, carried, deduct25, canFile }: { data: VatReport; ca
     setForm(null);
     await Promise.all([queryClient.invalidateQueries({ queryKey: orpc.vat.period.key() }), queryClient.invalidateQueries({ queryKey: orpc.org.overview.key() })]);
   };
-  // The period travels with each mutation, so switching period while one is in flight never marks another period.
+  // The period and the entity (#1280) travel with each mutation, so switching either while one is in flight never marks
+  // another return.
   const save = useMutation({
-    mutationFn: (v: { period: string; figures: { carriedIn: string; deductible: string; carriedOut: string } }) =>
-      client.vat.markReturn({ period: v.period, done: true, figures: v.figures }),
+    mutationFn: (v: { period: string; legalEntityId: string | undefined; figures: { carriedIn: string; deductible: string; carriedOut: string } }) =>
+      client.vat.markReturn({ period: v.period, done: true, figures: v.figures, legalEntityId: v.legalEntityId }),
     onSuccess: done,
   });
-  const withdraw = useMutation({ mutationFn: (target: string) => client.vat.markReturn({ period: target, done: false }), onSuccess: done });
+  const withdraw = useMutation({
+    mutationFn: (v: { period: string; legalEntityId: string | undefined }) => client.vat.markReturn({ period: v.period, done: false, legalEntityId: v.legalEntityId }),
+    onSuccess: done,
+  });
   const open = () => {
     const c22 = filed?.carriedIn ?? carried ?? data.carryForward.amount;
     const c25 = filed?.deductible ?? deduct25;
@@ -286,7 +305,7 @@ function FiledReturn({ data, carried, deduct25, canFile }: { data: VatReport; ca
             {filed ? t('edit') : t('mark')}
           </Button>
           {filed && (
-            <Button size="sm" variant="ghost" disabled={withdraw.isPending} onClick={() => withdraw.mutate(period)}>
+            <Button size="sm" variant="ghost" disabled={withdraw.isPending} onClick={() => withdraw.mutate({ period, legalEntityId })}>
               {withdraw.isPending ? <Spinner className="text-current" /> : null}
               {t('withdraw')}
             </Button>
@@ -298,7 +317,7 @@ function FiledReturn({ data, carried, deduct25, canFile }: { data: VatReport; ca
           className="mt-2 space-y-2"
           onSubmit={(e) => {
             e.preventDefault();
-            if (valid) save.mutate({ period, figures: { carriedIn: figures.carriedIn as string, deductible: figures.deductible as string, carriedOut: figures.carriedOut as string } });
+            if (valid) save.mutate({ period, legalEntityId, figures: { carriedIn: figures.carriedIn as string, deductible: figures.deductible as string, carriedOut: figures.carriedOut as string } });
           }}>
           <p className="text-xs text-subtle-foreground">{t('formHint')}</p>
           <div className="flex flex-wrap gap-3">
@@ -338,7 +357,9 @@ export function VatPage() {
   const choice = picked ?? defaultPeriod(filing ?? 'month');
   const setChoice = setPicked;
   const period = periodKey(choice);
-  const report = useQuery(orpc.vat.period.queryOptions({ input: { period } }));
+  // The VAT working of the entity chosen in the shell (#1280); the downloads and the filed mark follow it.
+  const entity = useChosenEntity();
+  const report = useQuery({ ...orpc.vat.period.queryOptions({ input: { period, legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const data = report.data;
   // The XML is a filing, so the server refuses the other kind (PERIOD_KIND_MISMATCH); the button says why first.
   const wrongKind = filing !== null && filing !== choice.kind;
@@ -350,7 +371,7 @@ export function VatPage() {
   const carriedText = carriedEdit?.period === period ? carriedEdit.text : (data?.carryForward.amount ?? '0');
   const carried = wholeDong(carriedText);
   const download = async (path: string, filename: string, extra: Record<string, string> = {}) => {
-    const response = await apiFetch(`${path}?${new URLSearchParams({ period, ...extra })}`);
+    const response = await apiFetch(`${path}?${exportQuery({ period, ...extra }, entity.legalEntityId)}`);
     const url = URL.createObjectURL(await response.blob());
     const a = document.createElement('a');
     a.href = url;
@@ -439,7 +460,7 @@ export function VatPage() {
           <ErrorText>{errorMessage(exportError)}</ErrorText>
         </div>
       )}
-      {report.isLoading ? (
+      {report.isPending ? (
         <TableSkeleton columns={3} rows={8} />
       ) : report.error ? (
         <ErrorText>{errorMessage(report.error)}</ErrorText>
@@ -476,14 +497,15 @@ export function VatPage() {
           </section>
 
           <FiledReturn
-            key={data.period.period}
+            key={`${data.period.period}:${entity.legalEntityId ?? ''}`}
             data={data}
+            legalEntityId={entity.legalEntityId}
             carried={carried}
             deduct25={deductAmount(deduct, data.indicators.find((i) => i.code === '24')?.amount ?? '0', data.paymentChecks.suggested25)}
             canFile={canMarkFiled(org.data?.role)}
           />
 
-          <PaymentChecks data={data} canMark={canMarkPayment(org.data?.role)} />
+          <PaymentChecks data={data} canMark={canMarkPayment(org.data?.role)} legalEntityId={entity.legalEntityId} />
 
           <section>
             <h2 className="mb-2 text-base font-semibold text-foreground">{t('ratesTitle')}</h2>

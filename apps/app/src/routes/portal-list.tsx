@@ -9,6 +9,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { PortalSyncPanel } from '../components/portal-sync.tsx';
 import { getConfig } from '../lib/auth.ts';
@@ -127,6 +128,8 @@ function MissingInvoiceRequest({ period, missing, editor, canManage, slug }: { p
   const status = useQuery({ ...orpc.missingInvoices.status.queryOptions(), refetchInterval: (q) => pollWhileSending(q.state.data) });
   const refresh = () => void queryClient.invalidateQueries({ queryKey: orpc.missingInvoices.status.key() });
   const send = useMutation(orpc.missingInvoices.request.mutationOptions({ onSettled: refresh }));
+  // The invoices missing from the books of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
   const reminder = useMutation(orpc.missingInvoices.setReminder.mutationOptions({ onSettled: refresh }));
   const data = status.data;
   if (status.isLoading) return <Spinner />;
@@ -160,9 +163,9 @@ function MissingInvoiceRequest({ period, missing, editor, canManage, slug }: { p
             <Button
               onClick={() => {
                 send.reset();
-                send.mutate({ period });
+                send.mutate({ period, legalEntityId: entity.legalEntityId });
               }}
-              disabled={send.isPending}
+              disabled={send.isPending || !entity.ready}
             >
               {send.isPending ? <Spinner className="text-current" /> : null}
               {t('send')}
@@ -230,7 +233,13 @@ export function PortalListPage() {
   const org = useQuery(orpc.org.get.queryOptions());
   const [choice, setChoice] = useState<PeriodChoice>(() => defaultPeriod('month'));
   const period = periodKey(choice);
-  const report = useQuery({ ...orpc.portalList.reconcile.queryOptions({ input: { period } }), refetchInterval: (q) => pollWhilePending(q.state.data) });
+  // The portal's list against the books of the entity chosen in the shell (#1280); an imported list is for it too.
+  const entity = useChosenEntity();
+  const report = useQuery({
+    ...orpc.portalList.reconcile.queryOptions({ input: { period, legalEntityId: entity.legalEntityId } }),
+    enabled: entity.ready,
+    refetchInterval: (q) => pollWhilePending(q.state.data),
+  });
   const data = report.data;
   const editor = canImportPortalList(org.data?.role);
   const input = useRef<HTMLInputElement>(null);
@@ -245,7 +254,7 @@ export function PortalListPage() {
       const uploaded = await uploadFiles([file], 'import');
       const fileId = uploaded.files[0]?.fileId;
       if (!fileId) throw new Error(t('uploadFailed'));
-      return client.portalList.import({ period, fileId });
+      return client.portalList.import({ period, fileId, legalEntityId: entity.legalEntityId });
     },
     onSettled: refresh,
   });
@@ -285,7 +294,7 @@ export function PortalListPage() {
                 </Button>
               )}
               <input ref={input} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" aria-label={t('upload')} onChange={(e) => choose(e.target.files?.[0])} />
-              <Button size="lg" onClick={() => input.current?.click()} disabled={importList.isPending}>
+              <Button size="lg" onClick={() => input.current?.click()} disabled={importList.isPending || !entity.ready}>
                 {importList.isPending ? <Spinner className="text-current" /> : null}
                 {t('upload')}
               </Button>
@@ -345,7 +354,7 @@ export function PortalListPage() {
         </div>
       )}
 
-      {report.isLoading ? (
+      {report.isPending ? (
         <Spinner />
       ) : report.error ? (
         <ErrorText>{errorMessage(report.error)}</ErrorText>
@@ -452,7 +461,7 @@ export function PortalListPage() {
               <p className="text-sm text-muted-foreground">
                 {t('summaryLine', { portal: data.summary.portalInvoices, matched: data.summary.matched, inbox: data.summary.inInbox })}
               </p>
-              <MissingInvoiceRequest key={period} period={period} missing={data.summary.missing} editor={editor} canManage={org.data?.role === 'owner' || org.data?.role === 'admin'} slug={slug} />
+              <MissingInvoiceRequest key={`${period}:${entity.legalEntityId ?? ''}`} period={period} missing={data.summary.missing} editor={editor} canManage={org.data?.role === 'owner' || org.data?.role === 'admin'} slug={slug} />
               {SECTIONS.map(({ outcome, folded }) => {
                 const items = grouped.get(outcome) ?? [];
                 return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} total={outcomeTotal(data.summary, outcome)} folded={folded} slug={slug} /> : null;

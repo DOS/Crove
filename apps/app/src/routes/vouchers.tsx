@@ -21,9 +21,11 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { AmountInput } from '../components/amount-input.tsx';
 import { DateInput } from '../components/date-input.tsx';
+import { useChosenEntity } from '../components/entity-switcher.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
+import { exportQuery } from '../lib/legal-entity-choice.ts';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { isZeroAmount } from '../lib/decimal.ts';
 import { localToday } from '../lib/reversal.ts';
@@ -72,6 +74,9 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
   // One key per form: a retry of the same request returns the same proposal.
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const request = useMutation(orpc.inbox.request.mutationOptions({ onSettled: () => void queryClient.invalidateQueries() }));
+  // The voucher goes to the books of the entity chosen in the shell (#1280); one from a statement line is in the
+  // line's entity, the one its list was read in.
+  const entity = useChosenEntity();
 
   const chart = accounts.data ?? [];
   // A voucher from a statement line keeps the line's bank account, even one no longer in use.
@@ -134,7 +139,7 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
         onSubmit={(event) => {
           event.preventDefault();
           setTouched(true);
-          if (problem) return;
+          if (problem || !entity.ready) return;
           request.mutate({
             command: 'finance.voucher.record',
             idempotencyKey,
@@ -147,6 +152,7 @@ export function VoucherFormCard({ slug, onClose, fromLine }: { slug: string; onC
               description: description.trim(),
               lines: lines.map((l) => ({ account: l.account, amount: normalizeAmount(l.amount), ...(l.memo.trim() ? { memo: l.memo.trim() } : {}) })),
               ...(fromLine ? { bankLineId: fromLine.line.id } : {}),
+              legalEntityId: entity.legalEntityId,
             },
           });
         }}
@@ -329,22 +335,25 @@ export function VouchersPage() {
   const [type, setType] = useState<VoucherType | ''>('');
   const [entering, setEntering] = useState(false);
   const org = useQuery(orpc.org.get.queryOptions());
-  const filters = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(type ? { type } : {}) };
+  // The vouchers of the entity chosen in the shell (#1280).
+  const entity = useChosenEntity();
+  const filters = { ...(from ? { from } : {}), ...(to ? { to } : {}), ...(type ? { type } : {}), legalEntityId: entity.legalEntityId };
   // A page at a time (the server sends at most VOUCHER_PAGE_SIZE); Load more asks for the vouchers after the last one.
-  const vouchers = useInfiniteQuery(
-    orpc.vouchers.list.infiniteOptions({
+  const vouchers = useInfiniteQuery({
+    ...orpc.vouchers.list.infiniteOptions({
       input: (before: VoucherCursor | undefined) => ({ ...filters, ...(before ? { before } : {}) }),
       initialPageParam: undefined as VoucherCursor | undefined,
       getNextPageParam: nextVoucherCursor,
       placeholderData: keepPreviousData,
     }),
-  );
+    enabled: entity.ready,
+  });
   const rows = vouchers.data?.pages.flatMap((p) => p.items) ?? [];
   const allowed = canEnterVoucher(org.data?.role);
   // Cash receipts and payments of the chosen dates in MISA SME's import templates, one file per type (#657).
   const exportMisa = useMutation({
     mutationFn: async (kind: 'receipts' | 'payments') => {
-      const params = new URLSearchParams({ ...(from ? { from } : {}), ...(to ? { to } : {}) });
+      const params = exportQuery({ ...(from ? { from } : {}), ...(to ? { to } : {}) }, entity.legalEntityId);
       const response = await apiFetch(`/api/export/misa/${kind}.xlsx?${params}`);
       const url = URL.createObjectURL(await response.blob());
       const a = document.createElement('a');
@@ -405,7 +414,7 @@ export function VouchersPage() {
           <DateInput value={to} onChange={setTo} className="mt-1 w-44" />
         </label>
       </div>
-      {vouchers.isLoading ? (
+      {vouchers.isPending ? (
         <TableSkeleton columns={5} />
       ) : vouchers.error && rows.length === 0 ? (
         <ErrorText>{errorMessage(vouchers.error)}</ErrorText>

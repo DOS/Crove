@@ -1,6 +1,7 @@
 // The legal entity switcher of the app shell (issue #1486, the screens of #1280): under the org switch, on the screens
 // that work in one entity (the finance books, the Overview and Settings), when the caller sees more than one. The
-// screens read the same choice with useLegalEntity.
+// screens read the same choice with useChosenEntity and send it with every finance call, so their lists, reports,
+// requests and downloads follow it.
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useParams } from '@tanstack/react-router';
 import { useId } from 'react';
@@ -39,17 +40,12 @@ export function useChosenEntity(): { ready: boolean; legalEntityId: string | und
   return { ready: settled, legalEntityId: entityId ?? undefined };
 }
 
-// Hidden until #1280 part 2b: only the period lock and the bank import follow the choice so far, while the journal,
-// ledger, VAT and voucher lists still show every entity the caller sees. Showing a switcher those lists ignore would
-// mislead, so until then the screens work in the default entity (or the first one the caller sees).
-const SWITCHER_SHOWN = false;
-
 export function EntitySwitcher({ slug }: { slug: string }) {
   const t = useTranslations('nav');
   const id = useId();
   const { pathname } = useLocation();
   const { entities, entityId } = useLegalEntity(slug);
-  if (!SWITCHER_SHOWN || entities.length < 2 || !isEntityPath(pathname)) return null;
+  if (entities.length < 2 || !isEntityPath(pathname)) return null;
   return (
     <div className="mt-3">
       <Label htmlFor={id} className="text-xs font-normal text-subtle-foreground">
