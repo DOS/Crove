@@ -10,8 +10,8 @@ import { teamReportCsv, TEAM_REPORT_MAX_DAYS } from '@crove/mod-social/contract'
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
-import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
+import { DateInput } from './date-input.tsx';
 import { ErrorText, Spinner } from './ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, orpc } from '../lib/api.ts';
@@ -50,11 +50,11 @@ export function TeamReport() {
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1.5">
           <Label htmlFor="team-report-from">{t('from')}</Label>
-          <Input id="team-report-from" type="date" value={period.from} onChange={(e) => setPeriod({ ...period, from: e.target.value })} />
+          <DateInput id="team-report-from" value={period.from} onChange={(from) => setPeriod({ ...period, from })} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="team-report-to">{t('to')}</Label>
-          <Input id="team-report-to" type="date" value={period.to} onChange={(e) => setPeriod({ ...period, to: e.target.value })} />
+          <DateInput id="team-report-to" value={period.to} onChange={(to) => setPeriod({ ...period, to })} />
         </div>
         <Button size="sm" variant="outline" className="ml-auto" disabled={!data} onClick={save}>
           {t('download')}

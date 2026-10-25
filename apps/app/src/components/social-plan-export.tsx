@@ -7,8 +7,8 @@ import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
-import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
+import { DateInput } from './date-input.tsx';
 import { ErrorText } from './ui.tsx';
 import { brandFileName } from '../i18n/brand.ts';
 import { client, errorMessage, orpc } from '../lib/api.ts';
@@ -58,11 +58,11 @@ export function PlanExportPanel({ slug, month, onClose }: { slug: string; month:
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="plan-export-from">{t('from')}</Label>
-          <Input id="plan-export-from" type="date" value={period.from} onChange={(e) => setPeriod({ ...period, from: e.target.value })} />
+          <DateInput id="plan-export-from" value={period.from} onChange={(from) => setPeriod({ ...period, from })} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="plan-export-to">{t('to')}</Label>
-          <Input id="plan-export-to" type="date" value={period.to} onChange={(e) => setPeriod({ ...period, to: e.target.value })} />
+          <DateInput id="plan-export-to" value={period.to} onChange={(to) => setPeriod({ ...period, to })} />
         </div>
       </div>
       {live.length > 1 && (

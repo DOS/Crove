@@ -4,7 +4,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link, useParams } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
-import { OAUTH_CHANNEL_PROVIDERS } from '@crove/kernel-contract';
+import { OAUTH_CHANNEL_PROVIDERS, SOCIAL_QUEUE_SLOTS_MAX } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -12,6 +12,8 @@ import { Checkbox } from '@crove/ui/components/checkbox';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { DateInput } from '../components/date-input.tsx';
+import { TimeInput } from '../components/time-input.tsx';
 import { VoiceEditor } from '../components/social-brand-voice.tsx';
 import { WatermarkCard } from '../components/social-watermark.tsx';
 import { ReportBrandingCard } from '../components/social-report-branding.tsx';
@@ -24,6 +26,7 @@ import { ChannelAccessCard, useChannelScope } from '../components/social-channel
 import { ChannelSetsCard } from '../components/social-channel-sets.tsx';
 import { SignatureEditor } from '../components/social-signature.tsx';
 import { QueueCopy, QueueSuggestButton } from '../components/social-queue-tools.tsx';
+import { queueRoom, slotsToAdd } from '../lib/social-queue-slots.ts';
 import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
@@ -170,21 +173,25 @@ function QueueEditor({ channel, canEdit, copyTargets }: { channel: Channel; canE
   });
   if (queue.isLoading || !current) return <Spinner />;
   const sorted = [...current.slots].sort((a, b) => a.weekday - b.weekday || a.minute - b.minute);
+  // The server's limit (#1172): the helpers add only as many slots as the queue has room for, and say why at the limit.
+  const full = queueRoom(current.slots.length) === 0;
+  const fullHint = `queue-full-${channel.id}`;
+  const withCategory = (s: { weekday: number; minute: number }) => ({ weekday: s.weekday, minute: s.minute, ...(category ? { labelId: category } : {}) });
   const add = () => {
     const minute = parseMinute(time);
-    if (minute === null || current.slots.some((s) => s.weekday === weekday && s.minute === minute)) return;
-    setDraft({ ...current, slots: [...current.slots, { weekday, minute, ...(category ? { labelId: category } : {}) }] });
+    const fresh = minute === null ? [] : slotsToAdd(current.slots, [withCategory({ weekday, minute })]);
+    if (fresh.length > 0) setDraft({ ...current, slots: [...current.slots, ...fresh] });
   };
   const everyDay = () => {
     const minute = parseMinute(time);
-    if (minute === null) return;
-    const missing = WEEKDAYS.filter((d) => !current.slots.some((s) => s.weekday === d && s.minute === minute)).map((d) => ({ weekday: d, minute, ...(category ? { labelId: category } : {}) }));
-    setDraft({ ...current, slots: [...current.slots, ...missing] });
+    const fresh = minute === null ? [] : slotsToAdd(current.slots, WEEKDAYS.map((d) => withCategory({ weekday: d, minute })));
+    if (fresh.length > 0) setDraft({ ...current, slots: [...current.slots, ...fresh] });
   };
   // The suggestions join the draft as open slots, or kept for the category picked, like a slot added by hand.
   const suggest = (list: QueueSuggestion[]) => {
-    const fresh = list.filter((x) => !current.slots.some((s) => s.weekday === x.weekday && s.minute === x.minute));
-    setDraft({ ...current, slots: [...current.slots, ...fresh.map((x) => ({ weekday: x.weekday, minute: x.minute, ...(category ? { labelId: category } : {}) }))] });
+    const fresh = slotsToAdd(current.slots, list);
+    if (fresh.length === 0) return;
+    setDraft({ ...current, slots: [...current.slots, ...fresh.map(withCategory)] });
     setSuggested(new Map([...(draft ? suggested : []), ...fresh.map((x) => [`${x.weekday}:${x.minute}`, x] as const)]));
   };
   const keyOf = (s: { weekday: number; minute: number }) => `${s.weekday}:${s.minute}`;
@@ -295,7 +302,7 @@ function QueueEditor({ channel, canEdit, copyTargets }: { channel: Channel; canE
               </NativeSelectOption>
             ))}
           </NativeSelect>
-          <Input type="time" step={60} value={time} onChange={(e) => setTime(e.target.value)} className="h-7 w-28" aria-label={t('timeLabel')} />
+          <TimeInput value={time} onChange={setTime} className="w-28" inputClassName="h-7" aria-label={t('timeLabel')} />
           {(labels.data?.length ?? 0) > 0 && (
             <NativeSelect size="sm" value={category} onChange={(e) => setCategory(e.target.value)} aria-label={t('queueCategory')} title={t('queueCategoryHint')}>
               <NativeSelectOption value="">{t('queueCategoryOpen')}</NativeSelectOption>
@@ -306,17 +313,22 @@ function QueueEditor({ channel, canEdit, copyTargets }: { channel: Channel; canE
               ))}
             </NativeSelect>
           )}
-          <Button variant="outline" size="sm" onClick={add}>
+          <Button variant="outline" size="sm" disabled={full} aria-describedby={full ? fullHint : undefined} onClick={add}>
             {t('addSlot')}
           </Button>
-          <Button variant="ghost" size="sm" onClick={everyDay}>
+          <Button variant="ghost" size="sm" disabled={full} aria-describedby={full ? fullHint : undefined} onClick={everyDay}>
             {t('addEveryDay')}
           </Button>
-          <QueueSuggestButton connectionId={channel.id} timeZone={current.timeZone} slots={current.slots} onSuggest={suggest} />
+          <QueueSuggestButton connectionId={channel.id} timeZone={current.timeZone} slots={current.slots} full={full} fullHint={fullHint} onSuggest={suggest} />
           <Button size="sm" disabled={!draft || save.isPending} onClick={() => draft && save.mutate(draft)}>
             {t('saveQueue')}
           </Button>
         </div>
+      )}
+      {canEdit && full && (
+        <p id={fullHint} className="text-xs text-warning">
+          {t('queueFull', { max: String(SOCIAL_QUEUE_SLOTS_MAX) })}
+        </p>
       )}
       {save.error && <ErrorText>{errorMessage(save.error)}</ErrorText>}
       {!draft && (queue.data?.nextFree.length ?? 0) > 0 && (
@@ -351,13 +363,13 @@ function QueueShuffle({ connectionId, timeZone, unsaved }: { connectionId: strin
           <Label className="text-xs" htmlFor={`shuffle-from-${connectionId}`}>
             {t('shuffleFrom')}
           </Label>
-          <Input id={`shuffle-from-${connectionId}`} type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-7 w-40" />
+          <DateInput id={`shuffle-from-${connectionId}`} value={from} onChange={setFrom} className="w-40" inputClassName="h-7" />
         </div>
         <div className="space-y-1">
           <Label className="text-xs" htmlFor={`shuffle-to-${connectionId}`}>
             {t('shuffleTo')}
           </Label>
-          <Input id={`shuffle-to-${connectionId}`} type="date" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} className="h-7 w-40" />
+          <DateInput id={`shuffle-to-${connectionId}`} value={to} min={from || undefined} onChange={setTo} className="w-40" inputClassName="h-7" />
         </div>
         <Button variant="outline" size="sm" disabled={unsaved || !range || shuffle.isPending} title={unsaved ? t('saveQueueFirst') : undefined} onClick={() => shuffle.mutate()}>
           {t('shuffleQueue')}

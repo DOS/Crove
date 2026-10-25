@@ -16,6 +16,7 @@ import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { Textarea } from '@crove/ui/components/textarea';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { DateInput } from './date-input.tsx';
 import { ErrorText } from './ui.tsx';
 import { useLabels } from './social-labels.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -138,15 +139,15 @@ export function ReportLinks({ channels }: { channels: readonly { id: string; dis
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="report-from">{t('from')}</Label>
-          <Input id="report-from" type="date" value={period.from} onChange={(e) => {
-              setPeriod({ ...period, from: e.target.value });
+          <DateInput id="report-from" value={period.from} onChange={(from) => {
+              setPeriod({ ...period, from });
               setDatesFrom(null);
             }} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="report-to">{t('to')}</Label>
-          <Input id="report-to" type="date" value={period.to} onChange={(e) => {
-              setPeriod({ ...period, to: e.target.value });
+          <DateInput id="report-to" value={period.to} onChange={(to) => {
+              setPeriod({ ...period, to });
               setDatesFrom(null);
             }} />
         </div>
