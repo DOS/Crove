@@ -16,6 +16,7 @@ import { portalSyncCommands, portalSyncQueries } from './portal-sync.ts';
 import { bankImport, bankLines, bankPreview } from './bank.ts';
 import { bankLineVoucher, bankOpenLines, bankSuggestions } from './bank-match.ts';
 import { periodLock, periodLockStateQuery, periodUnlock } from './period-lock.ts';
+import { bookEntitiesList } from './legal-entity.ts';
 import { statementsExport, statementsPeriodQuery } from './statements.ts';
 import { statementsHtkkQueries } from './statements-htkk.ts';
 import { missingInvoicesReminderSet, missingInvoicesRemind, missingInvoicesRequest, missingInvoicesStatus } from './missing-invoices.ts';
@@ -39,6 +40,7 @@ export {
   type PortalListDeps,
 } from './portal-list.ts';
 export { vatPeriod } from './domain/vat-return.ts';
+export { defaultLegalEntityId, legalEntityError, resolveLegalEntity } from './legal-entity.ts';
 export {
   normalizePortalInvoices,
   parseJsonKeepingNumbers,
@@ -160,6 +162,7 @@ export const financeQueries = [
   ...portalSyncQueries,
   missingInvoicesStatus,
   periodLockStateQuery,
+  bookEntitiesList,
   bankPreview,
   bankLines,
   bankLineVoucher,
