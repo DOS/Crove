@@ -28,8 +28,9 @@
 --   crove_kernel.allocate_number(entity, doc type, date, target type, target id) -> (period_key, number, allocation_id)
 --       ctx.numbering.allocate. SECURITY DEFINER for crove_tenant: the org is the sealed context's, the entity (NULL:
 --       the org's default) must be the org's and within the context's le_scope (LEGAL_ENTITY_NOT_ALLOWED, 42501). The
---       series the voucher triggers own (finance.cash_voucher.*, finance.journal_voucher) are refused
---       (NUMBER_SERIES_RESERVED, 42501): a number of them only ever goes to its voucher. allocation_id is returned
+--       series the voucher triggers own (finance.cash_voucher.*, finance.journal_voucher), and their target types, are
+--       refused (NUMBER_SERIES_RESERVED, 42501): a number of them only ever goes to its voucher, and no other number
+--       can take a voucher's place in number_allocation_target_uq. allocation_id is returned
 --       beside the ADR's (period_key, number) so a caller can void the number later and name it in its own row.
 --   crove_kernel.void_number(allocation, reason) -> void id
 --       ctx.numbering.void, behind the R2 command kernel.number.void. Owners and admins only (NUMBER_FORBIDDEN, 42501):
@@ -238,7 +239,8 @@ BEGIN
   IF v_org IS NULL THEN
     RAISE EXCEPTION 'NO_CONTEXT' USING ERRCODE = '42501';
   END IF;
-  IF p_doc_type = 'finance.journal_voucher' OR pg_catalog.starts_with(p_doc_type, 'finance.cash_voucher.') THEN
+  IF p_doc_type = 'finance.journal_voucher' OR pg_catalog.starts_with(p_doc_type, 'finance.cash_voucher.')
+     OR p_target_type IN ('finance.cash_voucher', 'finance.journal_voucher') THEN
     RAISE EXCEPTION 'NUMBER_SERIES_RESERVED' USING ERRCODE = '42501';
   END IF;
   v_entity := coalesce(p_legal_entity_id, crove_kernel.org_default_legal_entity(v_org));

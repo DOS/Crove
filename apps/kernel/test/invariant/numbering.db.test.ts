@@ -335,6 +335,14 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
         message: 'NUMBER_SERIES_RESERVED',
       });
     }
+    // Nor a voucher's target type, which would hold a voucher's place in the one-number-per-record key.
+    expect(
+      await refusal(
+        tx({ user: owner }, orgA, (c) =>
+          c.query(`SELECT * FROM crove_kernel.allocate_number(NULL, 'test.other', '2026-10-15', 'finance.cash_voucher', $1::uuid)`, [randomUUID()]),
+        ),
+      ),
+    ).toMatchObject({ ok: false, code: '42501', message: 'NUMBER_SERIES_RESERVED' });
     expect(await series()).toBe(before);
     // The branch, for the accountant: allowed, in the branch's own series.
     const branch = await tx({ user: accountant }, orgA, async (c) => (await allocate(c, branchA)).rows[0]!);
