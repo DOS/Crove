@@ -19,7 +19,9 @@ import {
   ORG_HEADER,
   SOCIAL_IMAGE_TYPES,
   XLSX_CONTENT_TYPE,
+  accountParents,
   type FixedAsset,
+  type MisaGoodsCode,
   type UploadPurpose,
 } from '@crove/kernel-contract';
 import {
@@ -41,6 +43,7 @@ import {
   JOURNAL_EXPORT_LIMIT,
   MISA_SME_CASH_PAYMENT,
   MISA_SME_CASH_RECEIPT,
+  MISA_SME_PURCHASE_GOODS,
   MISA_SME_PURCHASE_SERVICE,
   MISA_SME_SALES,
   buildJournalWorkbook,
@@ -52,8 +55,9 @@ import {
   buildVat01Xml,
   buildVatWorkbook,
   cashRows,
-  purchaseRows,
+  goodsPurchaseRows,
   salesRows,
+  servicePurchaseRows,
   type CashVoucher,
   type JournalEntryView,
   type FinancialStatements,
@@ -1373,7 +1377,8 @@ export function createHttpApp(deps: HttpDeps) {
     });
 
     // Purchase vouchers in the MISA SME import template (issue #317), same roles, range and audit as the journal
-    // export above.
+    // export above. Lines on a stock account (152, 153, 156) are left out: they go to the goods purchase file below
+    // (#1398), and the audit row says so. `entries` counts the vouchers with a line in the file.
     app.get('/api/export/misa/purchases.xlsx', async (c) => {
       try {
         const user = c.get('user');
@@ -1384,16 +1389,53 @@ export function createHttpApp(deps: HttpDeps) {
         if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
           throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
         }
-        const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_SERVICE, vouchers.flatMap(purchaseRows), config.BRAND_NAME);
+        const perVoucher = vouchers.map(servicePurchaseRows).filter((rows) => rows.length > 0);
+        const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_SERVICE, perVoucher.flat(), config.BRAND_NAME);
         await runtime.execute(
           'finance.journal.export',
-          { from: range.from, to: range.to, entries: vouchers.length, format: 'misa_sme_purchases' },
+          { from: range.from, to: range.to, entries: perVoucher.length, format: 'misa_sme_purchases', stockLines: 'excluded' },
           { actor: actorOf(user), orgId },
         );
         return new Response(body(bytes), {
           headers: {
             'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'misa-mua-dich-vu', ORG_SLUG], 'xlsx'),
+            'cache-control': 'private, no-store',
+          },
+        });
+      } catch (error) {
+        return problem(c, error);
+      }
+    });
+
+    // Purchase lines on a stock account (152, 153, 156) in MISA SME's goods purchase template (#1398), with the org's
+    // MISA item and warehouse codes (Settings), same roles, range and audit as the purchase export. An invoice that
+    // also has other lines has those in the services file above, under another voucher number.
+    app.get('/api/export/misa/goods-purchases.xlsx', async (c) => {
+      try {
+        const user = c.get('user');
+        const orgSlug = c.req.header(ORG_HEADER) ?? null;
+        const orgId = await resolveOrg(runtime, user, orgSlug);
+        const range = { from: c.req.query('from') || undefined, to: c.req.query('to') || undefined, limit: JOURNAL_EXPORT_LIMIT };
+        const vouchers = await runtime.query<PurchaseVoucher[]>('finance.vouchers.purchases', range, { actor: actorOf(user), orgId });
+        if (vouchers.length >= JOURNAL_EXPORT_LIMIT) {
+          throw new DomainError('EXPORT_TOO_LARGE', 422, 'Quá nhiều chứng từ để xuất một lần; hãy chọn khoảng ngày ngắn hơn');
+        }
+        const codes = await runtime.query<MisaGoodsCode[]>('finance.misa_goods_codes.list', {}, { actor: actorOf(user), orgId });
+        // The chart's parent chain, along which a sub-account without codes takes its parent's.
+        const chart = await runtime.query<Array<{ code: string; parentCode: string | null }>>('finance.accounts.list', {}, { actor: actorOf(user), orgId });
+        const parents = accountParents(chart);
+        const perVoucher = vouchers.map((v) => goodsPurchaseRows(v, codes, parents)).filter((rows) => rows.length > 0);
+        const bytes = await buildMisaWorkbook(MISA_SME_PURCHASE_GOODS, perVoucher.flat(), config.BRAND_NAME);
+        await runtime.execute(
+          'finance.journal.export',
+          { from: range.from, to: range.to, entries: perVoucher.length, format: 'misa_sme_goods_purchases' },
+          { actor: actorOf(user), orgId },
+        );
+        return new Response(body(bytes), {
+          headers: {
+            'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'content-disposition': attachmentDisposition(orgSlug, [brandSlug(config.BRAND_NAME), 'misa-mua-hang-nhap-kho', ORG_SLUG], 'xlsx'),
             'cache-control': 'private, no-store',
           },
         });

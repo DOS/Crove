@@ -2,6 +2,7 @@ export * from './schemas.ts';
 export * from './contract.ts';
 export * from './opening-balance.ts';
 export * from './accounts.ts';
+export * from './misa-goods.ts';
 export * from './tax-code.ts';
 export * from './legal-entity.ts';
 export * from './roles.ts';
