@@ -8,6 +8,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
+import { AmountInput } from '../components/amount-input.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
@@ -139,20 +140,18 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
                       </NativeSelectOption>
                     ))}
                   </NativeSelect>
-                  <Input
-                    inputMode="numeric"
+                  <AmountInput
                     aria-label={t('lineDebit', { line })}
                     placeholder={t('debit')}
                     value={l.debit}
-                    onChange={(e) => setLine(l.key, { debit: e.target.value })}
+                    onChange={(debit) => setLine(l.key, { debit })}
                     className="w-full text-right tabular-nums"
                   />
-                  <Input
-                    inputMode="numeric"
+                  <AmountInput
                     aria-label={t('lineCredit', { line })}
                     placeholder={t('credit')}
                     value={l.credit}
-                    onChange={(e) => setLine(l.key, { credit: e.target.value })}
+                    onChange={(credit) => setLine(l.key, { credit })}
                     className="w-full text-right tabular-nums"
                   />
                   <Input
