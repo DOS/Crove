@@ -42,7 +42,11 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
-  // 'crove_schema.table_name',
+  // Gapless numbering (ADR-0021 §2, #1401): the factories land first, the tables with the next migration.
+  'crove_kernel.number_allocation',
+  'crove_kernel.number_series',
+  'crove_kernel.number_series_policy',
+  'crove_kernel.number_void',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -130,6 +134,18 @@ const mailMessageRow = (o: { id: string }) => ({
 const ZERO_HASH = `sha256:${'0'.repeat(64)}`;
 const MUTE_KINDS = ['review_requested', 'decided', 'failed', 'comment'] as const;
 const muteRows = new Map<string, number>();
+// Gapless numbering (ADR-0021 §2, #1401): a series counter, of the org's default legal entity (filled by the table's
+// trigger), for a document type of its own, so each row is a new series.
+const numberSeriesRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), doc_type: `rls_${tag()}`, period_key: '2026', next_number: 2 });
+const numberAllocationRow = (o: { id: string; owner: string }, seriesId: string) => ({
+  org_id: o.id,
+  id: randomUUID(),
+  series_id: seriesId,
+  number: 1,
+  document_type: 'rls.matrix',
+  document_id: randomUUID(),
+  allocated_by: o.owner,
+});
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
 const socialLabelRow = (o: { id: string; owner: string }) => ({ org_id: o.id, id: randomUUID(), name: `rls-${tag()}`, color: 'blue', created_by: o.owner });
 const socialReportScheduleRow = (o: { id: string; owner: string }) => ({
@@ -643,6 +659,31 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   'crove_kernel.notification_mute': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, kind: `kernel.rls_${tag()}` } }) },
   // Definer-only machinery (Social plan §3.5, S6): one single-use OAuth state per connect attempt, holding the hash of
   // the state parameter and the PKCE verifier; only the start and callback definers touch it.
+  // Gapless numbering (ADR-0021 §2, #1401): the counter of a series, the numbers it gave out (append-only), the voids
+  // of numbers (append-only, one per number), and the reset policy of a document type.
+  'crove_kernel.number_allocation': {
+    make: (o) => {
+      const series = numberSeriesRow(o);
+      return { setup: [{ table: 'crove_kernel.number_series', values: series }], row: numberAllocationRow(o, series.id) };
+    },
+  },
+  'crove_kernel.number_series': { make: (o) => ({ row: numberSeriesRow(o) }) },
+  'crove_kernel.number_series_policy': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), doc_type: `rls_${tag()}`, reset: 'never', updated_by: o.owner } }),
+  },
+  'crove_kernel.number_void': {
+    make: (o) => {
+      const series = numberSeriesRow(o);
+      const allocation = numberAllocationRow(o, series.id);
+      return {
+        setup: [
+          { table: 'crove_kernel.number_series', values: series },
+          { table: 'crove_kernel.number_allocation', values: allocation },
+        ],
+        row: { org_id: o.id, id: randomUUID(), allocation_id: allocation.id, reason: 'RLS matrix void', voided_by: o.owner },
+      };
+    },
+  },
   'crove_kernel.oauth_state': {
     make: (o) => ({ row: { org_id: o.id, user_id: o.owner, provider: 'sandbox', state_hash: `sha256:${hex64()}`, expires_at: '2099-01-01T00:00:00Z' } }),
   },
