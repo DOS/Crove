@@ -5051,6 +5051,7 @@ export const vi = {
       PARTY_CHANGED: 'Thông tin này vừa được người khác sửa; hãy mở lại rồi sửa tiếp',
       PARTY_TAX_CODE_LOCKED: 'Mã số thuế đã có thì không sửa hay xóa được; nếu ghi nhầm, hãy gộp với đối tác đúng',
       PARTY_TAX_CODE_TAKEN: 'Mã số thuế này đã thuộc một đối tác khác; hãy gộp hai đối tác',
+      PARTY_LINK_REQUIRED: 'Chủ hoặc quản trị viên của tổ chức cần gắn đối tác này cho pháp nhân của bạn trước',
       INVALID_LEGAL_ENTITY_NAME: 'Tên pháp nhân không hợp lệ: một dòng, từ 1 đến 200 ký tự',
       LEGAL_ENTITY_NOT_FOUND: 'Không tìm thấy pháp nhân này',
       LEGAL_ENTITY_PARENT_NOT_FOUND: 'Không tìm thấy pháp nhân cấp trên',

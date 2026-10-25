@@ -147,8 +147,11 @@ suite('kernel projections per legal entity on PostgreSQL (#1280 part 3)', () => 
     await expect(admin((c) => c.query('UPDATE crove_kernel.extraction SET legal_entity_id = $3 WHERE org_id = $1 AND id = $2', [orgId, ids.extraction, defaultEntity]))).rejects.toThrow(
       /LEGAL_ENTITY_IMMUTABLE/,
     );
-    // Proposals are not scoped yet (#1538).
-    expect((await admin((c) => c.query("SELECT 1 FROM information_schema.columns WHERE table_schema = 'crove_kernel' AND table_name = 'proposal' AND column_name = 'legal_entity_id'"))).rowCount).toBe(0);
+    // Proposals carry a nullable stamp (#1280 part 3b) but no le_scope policy until #1538.
+    const proposalPolicies = await admin((c) =>
+      c.query("SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid = 'crove_kernel.proposal'::regclass AND polname = 'le_scope'"),
+    );
+    expect(proposalPolicies.rowCount).toBe(0);
   });
 
   it('shows a member limited to one entity only that entity in the notification list', async () => {
