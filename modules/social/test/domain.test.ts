@@ -10,6 +10,8 @@ import {
   countLinks,
   countText,
   COVER_IMAGE_MAX_BYTES,
+  COVER_RULES,
+  videoTitleRule,
   DISCORD_TAGS_MAX,
   DISCORD_THREAD_NAME_MAX,
   discordOptionsOf,
@@ -415,6 +417,36 @@ describe('validateVariant', () => {
     expect(long).toEqual([{ code: 'TITLE_TOO_LONG', field: 'title', limit: 150, actual: 151 }]);
     const fb = validateVariant({ provider: 'facebook_page', body: 'x', title: 'Tiêu đề', media: [] }).map((i) => i.code);
     expect(fb).toEqual(['TITLE_NOT_SUPPORTED']);
+  });
+
+  it('gives a Facebook Page video and Reel a title of up to 255 characters and a feed video a cover image (#1499)', () => {
+    const fb = (media: MediaItem[], settings: Record<string, unknown> = {}, title: string | null = 'Khai trương chi nhánh Quận 3') =>
+      validateVariant({ provider: 'facebook_page', body: 'x', title, media, settings }).map((i) => i.code);
+    // A title on a video or a Reel, optional, at most 255 UTF-16 code units; none on a text, photo or Story post.
+    expect(fb([mp4()])).toEqual([]);
+    expect(fb([mp4()], { postType: 'reel' })).toEqual([]);
+    expect(fb([mp4()], {}, null)).toEqual([]);
+    expect(validateVariant({ provider: 'facebook_page', body: 'x', title: 'a'.repeat(256), media: [mp4()] })).toEqual([{ code: 'TITLE_TOO_LONG', field: 'title', limit: 255, actual: 256 }]);
+    expect(fb([mp4()], {}, 'a'.repeat(255))).toEqual([]);
+    expect(fb([])).toEqual(['TITLE_NOT_SUPPORTED']);
+    expect(fb([jpeg()])).toEqual(['TITLE_NOT_SUPPORTED']);
+    expect(fb([mp4()], { postType: 'story' })).toEqual([]);
+    expect(videoTitleRule('facebook_page', { postType: 'story' }, [mp4()])).toBeNull();
+    expect(videoTitleRule('facebook_page', {}, [jpeg()])).toBeNull();
+    expect(videoTitleRule('instagram', {}, [mp4()])).toBeNull();
+    // A cover image on a feed video, up to 10 MB; no frame; none on a Reel, said apart, or a Story.
+    expect(COVER_RULES.facebook_page).toEqual(['image']);
+    expect(COVER_IMAGE_MAX_BYTES.facebook_page).toBe(10 * 1024 * 1024);
+    expect(fb([mp4()], { cover: { fileId: 'c-1' } })).toEqual([]);
+    expect(fb([mp4()], { cover: { atMs: 1000 } })).toEqual(['COVER_NOT_SUPPORTED']);
+    expect(fb([mp4()], { postType: 'reel', cover: { fileId: 'c-1' } })).toEqual(['REEL_COVER_NOT_SUPPORTED']);
+    expect(fb([mp4()], { postType: 'reel', cover: { atMs: 1000 } })).toEqual(['REEL_COVER_NOT_SUPPORTED']);
+    expect(fb([mp4()], { postType: 'story', cover: { fileId: 'c-1' } }, null)).toEqual(['COVER_NOT_SUPPORTED']);
+    expect(fb([jpeg()], { cover: { fileId: 'c-1' } }, null)).toEqual(['COVER_NEEDS_VIDEO']);
+    // An Instagram Reel still takes a cover.
+    expect(validateVariant({ provider: 'instagram', body: 'x', title: null, media: [mp4()], settings: { postType: 'reel', cover: { fileId: 'c-1' } } })).toEqual([]);
+    // Facebook uploads the cover's bytes, so no public link is needed.
+    expect(needsPublicUrls('facebook_page', [mp4()], { cover: { fileId: 'c-1' } })).toBe(false);
   });
 
   it("holds Facebook photos to Meta's types and 4 MB", () => {
