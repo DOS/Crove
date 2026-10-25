@@ -158,3 +158,14 @@ export function previousPendingId(items: ReadonlyArray<{ id: string }>, current:
 export function proposalName(item: { direction: string | null; sellerName: string | null; buyerName: string | null; title: string }): string {
   return (item.direction === 'sale' ? item.buyerName : item.sellerName) || item.title;
 }
+
+// The checks in the order a reviewer needs them (DESIGN.md §5.1, #1409): failed first, then warnings, then passes,
+// each group in its stored order.
+const CONCERN: Readonly<Record<string, number>> = { fail: 0, warn: 1, pass: 2 };
+export function checksByConcern<T extends { status: string }>(checks: readonly T[]): T[] {
+  return checks
+    .map((check, at) => ({ check, at }))
+    .sort((a, b) => (CONCERN[a.check.status] ?? 3) - (CONCERN[b.check.status] ?? 3) || a.at - b.at)
+    .map(({ check }) => check);
+}
+
