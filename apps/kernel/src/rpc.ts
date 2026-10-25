@@ -381,6 +381,9 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
       setVatFilingPeriod: os.org.setVatFilingPeriod.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_vat_filing_period', input, { actor, orgId })),
       ),
+      setApprovalPreset: os.org.setApprovalPreset.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_approval_preset', input, { actor, orgId })),
+      ),
       setAddress: os.org.setAddress.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => runtime.execute('kernel.org.set_address', input, { actor, orgId })),
       ),
