@@ -317,6 +317,8 @@ export function createKernel(config: Config, adapters: KernelAdapters): Kernel {
     const runtime = new Runtime(singleCell(db), {
       // ctx.query into one of them answers not_installed; any other unknown query is QUERY_NOT_FOUND.
       absentModules,
+      // Approval audit rows name the build their policy ran under (plan §4.7, #1402).
+      build: config.CROVE_BUILD ?? 'dev',
       // Every user request is checked against its session (ADR-0028); the identity port never resolves to "no check".
       sessions: resolved.identity.sessions,
       stepUp: config.AUTH_STEP_UP,
