@@ -596,7 +596,7 @@ export const vi = {
       },
       accountant: {
         title: 'Chỉ kế toán trưởng duyệt',
-        body: 'Chỉ người giữ vai trò kế toán trưởng duyệt được; chủ sở hữu và quản trị viên không duyệt nữa. Hợp với doanh nghiệp có kế toán trưởng hoặc thuê công ty kế toán.',
+        body: 'Chỉ người giữ vai trò kế toán trưởng duyệt được; chủ sở hữu và quản trị viên không duyệt nữa, người soạn không tự duyệt đề xuất của mình, và tổ chức phải luôn còn ít nhất một kế toán trưởng. Hợp với doanh nghiệp có kế toán trưởng hoặc thuê công ty kế toán.',
       },
     },
     current: 'Đang áp dụng',

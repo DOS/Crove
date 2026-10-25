@@ -598,7 +598,7 @@ export const en = {
       },
       accountant: {
         title: 'Only the chief accountant approves',
-        body: 'Only a member with the chief accountant role can approve; owners and admins no longer do. Suits a business with a chief accountant or an accounting firm.',
+        body: 'Only a member with the chief accountant role can approve; owners and admins no longer do, nobody approves their own proposal, and the organization must always keep a chief accountant. Suits a business with a chief accountant or an accounting firm.',
       },
     },
     current: 'In force',
