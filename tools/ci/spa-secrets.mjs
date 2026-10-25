@@ -3,10 +3,11 @@
 // bundle (a config module imported by mistake, an env var inlined by the bundler) is public. gitleaks scans the source;
 // this scans what ships.
 //
-// Two checks over every file of the build:
-// - kernel secret names used as code: `env.NAME`, `"NAME":`, `NAME=` or the bare string "NAME". The names are read
-//   from the kernel's config schema (apps/kernel/src/config.ts), so a new secret is covered without a list to keep.
-//   A name in a sentence for the operator ("no key to seal credentials (CREDENTIAL_KEY)") is not code and passes.
+// Two checks over every text file of the build (images and fonts skipped):
+// - kernel secret names used as code: `env.NAME`, `"NAME":`, `NAME=`, `{ NAME }` or the bare string "NAME". The names are read
+//   from the kernel's config schema (apps/kernel/src/config.ts), so a new secret is covered without a list to keep;
+//   reading fewer than MIN_NAMES fails the step. A name in a sentence for the operator ("no key to seal credentials
+//   (CREDENTIAL_KEY)") is not code and passes.
 // - secret-shaped values: a JWT, a PEM private key, an AWS access key id, a Resend or Stripe live key, a webhook
 //   signing secret, and the sample secrets the kernel refuses to boot with.
 //
@@ -19,21 +20,26 @@ import { pathToFileURL } from 'node:url';
 
 // A config key is a secret when its name says so. PUBLIC_* keys and Turnstile's site key are meant for browsers, and
 // VAPID's public key is published to push services.
-const SECRET_NAME = /(SECRET|PASSWORD|_KEY$|_KEY_|KEY_ID|TOKEN|DATABASE_URL)/;
+const SECRET_NAME = /(SECRET|PASSWORD|_PASS$|_KEY$|_KEY_|KEY_ID|TOKEN|DATABASE_URL)/;
 const PUBLIC_NAME = /^PUBLIC_|_SITE_KEY$|^VAPID_PUBLIC_KEY$/;
 // Never in the kernel's config, but named by the plan: Supabase's service role key bypasses row-level security.
 const ALWAYS = ['SUPABASE_SERVICE_ROLE', 'SUPABASE_SERVICE_ROLE_KEY'];
 
+// Any indentation, so reformatting the schema keeps the names.
 export function secretNames(configSource) {
-  const keys = [...configSource.matchAll(/^ {2}([A-Z][A-Z0-9_]+):/gm)].map((m) => m[1]);
+  const keys = [...configSource.matchAll(/^\s+([A-Z][A-Z0-9_]+):/gm)].map((m) => m[1]);
   return [...new Set([...keys.filter((k) => SECRET_NAME.test(k) && !PUBLIC_NAME.test(k)), ...ALWAYS])].sort();
 }
 
-// The sample values the kernel refuses (SAMPLE_SECRETS in config.ts), read from the same file.
+// The sample values the kernel refuses (SAMPLE_SECRETS in config.ts), read from the same file, in either quote style.
 export function sampleSecrets(configSource) {
   const set = /const SAMPLE_SECRETS = new Set\(\[([^\]]*)\]\)/.exec(configSource)?.[1] ?? '';
-  return [...set.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  return [...set.matchAll(/'([^']+)'|"([^"]+)"/g)].map((m) => m[1] ?? m[2]);
 }
+
+// A parse that finds fewer names than this means the config file changed shape: the scan would check almost nothing,
+// so it fails instead of passing quietly.
+export const MIN_NAMES = 10;
 
 const SHAPES = [
   { kind: 'JWT', pattern: /eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
@@ -52,7 +58,8 @@ export function scanText(text, names, samples) {
   const mask = (s) => (s.length <= 8 ? '***' : `${s.slice(0, 4)}***`);
   for (const name of names) {
     const n = escape(name);
-    const asCode = new RegExp(`(?:\\.${n}\\b|["'\`]${n}["'\`]|\\b${n}\\s*[:=])`, 'g');
+    // A property (.NAME), a string ("NAME"), a key or assignment (NAME: / NAME=), or shorthand ({ NAME } / { a, NAME }).
+    const asCode = new RegExp(`(?:\\.${n}\\b|["'\`]${n}["'\`]|\\b${n}\\s*[:=]|[{,]\\s*${n}\\s*[,}])`, 'g');
     for (const m of text.matchAll(asCode)) findings.push({ kind: `secret name ${name}`, excerpt: m[0] });
   }
   for (const value of samples) {
@@ -63,6 +70,9 @@ export function scanText(text, names, samples) {
   }
   return findings;
 }
+
+// The text files of a build: code, styles, markup, data and source maps. Images and fonts are skipped.
+const TEXT_FILE = /\.(?:html?|m?js|cjs|css|json|map|svg|txt|xml|webmanifest)$/i;
 
 function filesOf(dir) {
   return readdirSync(dir).flatMap((entry) => {
@@ -75,12 +85,19 @@ function filesOf(dir) {
 export function scanDir(dir, configSource) {
   const names = secretNames(configSource);
   const samples = sampleSecrets(configSource);
-  return filesOf(dir).flatMap((file) => scanText(readFileSync(file, 'latin1'), names, samples).map((f) => ({ file: relative(dir, file), ...f })));
+  return filesOf(dir)
+    .filter((file) => TEXT_FILE.test(file))
+    .flatMap((file) => scanText(readFileSync(file, 'utf8'), names, samples).map((f) => ({ file: relative(dir, file), ...f })));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const dir = process.argv[2] ?? 'apps/app/dist';
   const config = readFileSync(process.argv[3] ?? 'apps/kernel/src/config.ts', 'utf8');
+  const parsed = secretNames(config).length - ALWAYS.length;
+  if (parsed < MIN_NAMES) {
+    console.error(`spa-secrets: only ${parsed} secret name(s) read from the config; its shape changed, so update this script`);
+    process.exit(1);
+  }
   const findings = scanDir(dir, config);
   if (findings.length > 0) {
     for (const f of findings) console.error(`spa-secrets: ${f.file}: ${f.kind} (${f.excerpt})`);

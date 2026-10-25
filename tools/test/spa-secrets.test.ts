@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { sampleSecrets, scanDir, scanText, secretNames } from '../ci/spa-secrets.mjs';
+import { MIN_NAMES, sampleSecrets, scanDir, scanText, secretNames } from '../ci/spa-secrets.mjs';
 
 const config = readFileSync(new URL('../../apps/kernel/src/config.ts', import.meta.url), 'utf8');
 const names = secretNames(config);
@@ -18,9 +18,16 @@ describe('SPA secret scan', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   it('reads the secret names from the kernel config, not the public ones', () => {
-    expect(names).toEqual(expect.arrayContaining(['AUTH_JWT_SECRET', 'DATABASE_URL', 'CREDENTIAL_KEY', 'S3_SECRET_ACCESS_KEY', 'SUPABASE_SERVICE_ROLE']));
+    expect(names).toEqual(expect.arrayContaining(['AUTH_JWT_SECRET', 'DATABASE_URL', 'CREDENTIAL_KEY', 'S3_SECRET_ACCESS_KEY', 'SMTP_PASS', 'SUPABASE_SERVICE_ROLE']));
     for (const pub of ['PUBLIC_AUTH_ANON_KEY', 'PUBLIC_AUTH_URL', 'TURNSTILE_SITE_KEY', 'VAPID_PUBLIC_KEY', 'PORT']) expect(names).not.toContain(pub);
+    expect(names.length).toBeGreaterThan(MIN_NAMES);
     expect(samples.length).toBeGreaterThan(0);
+  });
+
+  it('keeps reading the config after a reformat (indentation, quote style)', () => {
+    const reformatted = 'const schema = z.object({\n\tAUTH_JWT_SECRET: optional,\n    SMTP_PASS: optional,\n});\nconst SAMPLE_SECRETS = new Set(["a-sample", \'b-sample\']);';
+    expect(secretNames(reformatted)).toEqual(expect.arrayContaining(['AUTH_JWT_SECRET', 'SMTP_PASS']));
+    expect(sampleSecrets(reformatted)).toEqual(['a-sample', 'b-sample']);
   });
 
   it('passes a name in a sentence for the operator', () => {
@@ -28,7 +35,7 @@ describe('SPA secret scan', () => {
   });
 
   it('fails a secret name used as code', () => {
-    for (const code of ['const k = env.AUTH_JWT_SECRET;', '{"CREDENTIAL_KEY":"x"}', 'SUPABASE_SERVICE_ROLE_KEY=abc', 'read("DATABASE_URL")']) {
+    for (const code of ['const k = env.AUTH_JWT_SECRET;', '{"CREDENTIAL_KEY":"x"}', 'SUPABASE_SERVICE_ROLE_KEY=abc', 'read("DATABASE_URL")', 'const { AUTH_JWT_SECRET } = cfg', 'f({a, SMTP_PASS})']) {
       expect(scanText(code, names, samples).length, code).toBeGreaterThan(0);
     }
   });
@@ -43,6 +50,9 @@ describe('SPA secret scan', () => {
     mkdirSync(join(dir, 'assets'), { recursive: true });
     writeFileSync(join(dir, 'index.html'), '<script src="/assets/index.js"></script>');
     writeFileSync(join(dir, 'assets', 'index.js'), 'console.log("ok")');
+    expect(scanDir(dir, config)).toEqual([]);
+    // Images and fonts are not text: skipped, whatever bytes they hold.
+    writeFileSync(join(dir, 'assets', 'logo.png'), `binary ${jwt}`);
     expect(scanDir(dir, config)).toEqual([]);
     writeFileSync(join(dir, 'assets', 'chunk.js'), `const t = "${jwt}";`);
     expect(scanDir(dir, config)).toEqual([{ file: join('assets', 'chunk.js'), kind: 'JWT', excerpt: 'eyJh***' }]);
