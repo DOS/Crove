@@ -211,6 +211,9 @@ export interface CommandContext extends QueryContext {
   commandId: string;
   proposalId: string | null;
   now: Date;
+  // The build this runtime runs (RuntimeOptions.build), for audit rows that record the code they ran under (plan §4.7:
+  // an approval names the git SHA of its policy).
+  build: string;
   emit(type: string, payload: Record<string, unknown>): Promise<string>;
   activity(recordType: string, recordId: string, kind: string, summary: string): Promise<void>;
   // Adds fields to this command's own audit row (for example the policy outcome of an approval).
@@ -328,6 +331,8 @@ export interface RuntimeOptions {
   // never mistaken for a module that is off. Unset (tests and tools that register only some modules): every module
   // without a registered command or query answers not_installed.
   absentModules?: readonly string[];
+  // The build this runtime runs: the git SHA of the image (CROVE_BUILD). Default 'dev' (a local build, tests).
+  build?: string;
 }
 
 // Policy P11 (ADR-0028 section 5): a second factor used within the last 5 minutes.
@@ -587,6 +592,7 @@ export class Runtime {
   private readonly refusalAudit: Required<RefusalAuditLimits> | 'unbounded';
   // null: absentModules not given, so every unregistered module counts as absent.
   private readonly absentModules: ReadonlySet<string> | null;
+  private readonly build: string;
   // Numbers the savepoints of ctx.tryRun, so each call has its own.
   private savepointSeq = 0;
 
@@ -598,6 +604,7 @@ export class Runtime {
     const refusalAudit = options.refusalAudit ?? DEFAULT_REFUSAL_AUDIT_LIMITS;
     this.refusalAudit = refusalAudit === 'unbounded' ? 'unbounded' : validateRefusalAuditLimits(refusalAudit);
     this.absentModules = options.absentModules ? new Set(options.absentModules) : null;
+    this.build = options.build ?? 'dev';
   }
 
   // How sessions are checked (see BootstrapEnv), for org-less reads that apply the same upstream checks as a command.
@@ -997,6 +1004,7 @@ export class Runtime {
       commandId,
       proposalId: base.proposalId,
       now: new Date(),
+      build: this.build,
       emit: async (type, payload) => {
         refuseClosed('ctx.emit');
         if (!type.startsWith(`${def.name.split('.')[0]}.`)) throw new Error(`command ${def.name} cannot emit ${type}`);
