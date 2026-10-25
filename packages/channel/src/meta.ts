@@ -31,7 +31,7 @@ import type {
 } from './index.ts';
 import { commentResult, EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { graphTime, pagingCursor, platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
-import { videoCoverOf } from './cover.ts';
+import { coverImageType, videoCoverOf } from './cover.ts';
 import { postTypeOf } from './post-type.ts';
 import { holdsLink, POSSIBLE_DUPLICATE } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -352,6 +352,8 @@ const feedMessage = (content: { body: string; linkUrl: string | null; media: rea
   return content.linkUrl && content.media.length > 0 && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
 };
 const postUrl = (id: string) => `https://www.facebook.com/${encodeURIComponent(id)}`;
+// A Page video's or Reel's title (#1499): the post's own, trimmed; none when it has none.
+const videoTitle = (content: { title: string | null }) => content.title?.trim() ?? '';
 
 export function graphPublishResult(error: unknown): PublishResult {
   if (!(error instanceof GraphError)) return { kind: 'unknown', code: 'NETWORK' };
@@ -387,11 +389,13 @@ export class FacebookPagePublisher implements Publisher {
     if (!token) return { kind: 'rejected', error: 'token_expired', code: 'NO_PAGE_TOKEN' };
     if (!/^\d{1,32}$/.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_PAGE_ID' };
     const media = input.content.media;
-    // A Page post or video takes no cover from Crove (#642): refused before anything is posted.
-    if (videoCoverOf(input.settings)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
     // The post type (#644): a Story (one image or video, no text) or a Reel (one video), each through its own endpoint.
     const type = postTypeOf(input.settings);
     if (type === null) return { kind: 'rejected', error: 'bad_request', code: 'POST_TYPE_NOT_SUPPORTED' };
+    // A cover (#642, #1499) is an image sent with a feed video as its thumbnail. Graph takes no frame, and Reels and
+    // Stories take no cover through the API: refused before anything is posted.
+    const cover = videoCoverOf(input.settings);
+    if (cover && (!('fileId' in cover) || type !== 'feed' || !media.some((m) => m.mime.startsWith('video/')))) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
     if (type === 'story') return this.publishStory(input, token);
     if (type === 'reel') return this.publishReel(input, token);
     if (media.some((m) => m.mime.startsWith('video/'))) return this.publishVideo(input, token);
@@ -417,19 +421,31 @@ export class FacebookPagePublisher implements Publisher {
   // description. The post goes live once Meta takes the upload, so an unclear answer is unknown and reconciled from
   // the Page's posts by text, like a feed post. Meta names the video; its post on the Page is "{page id}_{video id}"
   // (an inference from how Page post ids are formed, which the metrics read relies on).
+  // The post's title and a cover image (#1499) go in the same request as `title` and `thumb`, the cover read before
+  // anything is sent, like the video; without them the request is what it always was. Meta documents no limit for
+  // either: the Social module holds the title to 255 characters and the image to 10 MB, both Crove's caps [unverified].
   private async publishVideo(input: PublishInput, token: string): Promise<PublishResult> {
     const media = input.content.media;
     const video = media[0];
     if (!video || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
+    const cover = videoCoverOf(input.settings);
     let bytes: Uint8Array;
+    let thumb: Uint8Array | null = null;
     try {
       bytes = await input.readMedia(video.fileId);
+      if (cover && 'fileId' in cover) thumb = await input.readMedia(cover.fileId);
     } catch {
       return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
     }
+    const title = videoTitle(input.content);
     const body = new FormData();
+    if (title) body.set('title', title);
     body.set('description', feedMessage(input.content));
     body.set('published', 'true');
+    if (thumb) {
+      const type = coverImageType(thumb);
+      body.set('thumb', new Blob([new Uint8Array(thumb)], { type }), type === 'image/png' ? 'cover.png' : 'cover.jpg');
+    }
     body.set('source', new Blob([new Uint8Array(bytes)], { type: video.mime }), video.mime === 'video/quicktime' ? 'video.mov' : 'video.mp4');
     try {
       const answer = await this.graph.call<FeedAnswer>('POST', `${input.externalAccountId}/videos`, { token, multipart: body, video: true, timeoutMs: VIDEO_UPLOAD_TIMEOUT_MS });
@@ -470,8 +486,8 @@ export class FacebookPagePublisher implements Publisher {
   }
 
   // A Page Reel (#644): started on video_reels, its bytes sent to the upload host, then finished with
-  // video_state=PUBLISHED and the post text as its description. Meta processes it after the answer; the Reel is named
-  // by its video id.
+  // video_state=PUBLISHED and the post text as its description, and the post's title when it has one (#1499). Meta
+  // processes it after the answer; the Reel is named by its video id.
   private async publishReel(input: PublishInput, token: string): Promise<PublishResult> {
     const media = input.content.media;
     const video = media[0];
@@ -479,10 +495,11 @@ export class FacebookPagePublisher implements Publisher {
     const page = input.externalAccountId;
     const started = await this.startVideo(input, token, `${page}/video_reels`, video);
     if ('rejected' in started) return started.rejected;
+    const title = videoTitle(input.content);
     try {
       const answer = await this.graph.call<{ success?: unknown }>('POST', `${page}/video_reels`, {
         token,
-        form: { upload_phase: 'finish', video_id: started.videoId, video_state: 'PUBLISHED', description: feedMessage(input.content) },
+        form: { upload_phase: 'finish', video_id: started.videoId, video_state: 'PUBLISHED', description: feedMessage(input.content), ...(title ? { title } : {}) },
       });
       if (answer.success !== true) return { kind: 'unknown', code: 'REEL_NOT_CONFIRMED' };
       // Named like a Page video post, <page>_<video>, which the metrics read takes (#443).

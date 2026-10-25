@@ -1263,7 +1263,9 @@ function CoverField({ provider, media, settings, onChange, disabled }: { provide
   // A draft sent to the TikTok app (#903) takes no cover: the creator picks it in TikTok.
   const kinds = isProvider(provider) && !(provider === 'tiktok' && tiktokModeOf(settings) === 'inbox') ? COVER_RULES[provider] : undefined;
   const video = media.length === 1 && media[0]?.mime.startsWith('video/') ? media[0] : null;
-  if (!kinds || (!video && settings.cover === undefined)) return null;
+  // A Facebook Reel or Story (#1499) takes no cover: offered on a feed video only, shown on the others once set.
+  const fbNotFeed = provider === 'facebook_page' && postTypeOf(settings) !== 'feed';
+  if (!kinds || ((!video || fbNotFeed) && settings.cover === undefined)) return null;
   const set = (next: Cover | null) => {
     const { cover: _old, ...rest } = settings;
     onChange(next ? { ...rest, cover: next } : rest);
@@ -1271,7 +1273,7 @@ function CoverField({ provider, media, settings, onChange, disabled }: { provide
   const mode: CoverKind | 'none' = cover ? coverKind(cover) : pickingImage ? 'image' : 'none';
   // A kind the channel does not take still shows when set (through the API), so it can be changed.
   const options: (CoverKind | 'none')[] = ['none', ...kinds, ...(cover && !kinds.includes(coverKind(cover)) ? [coverKind(cover)] : [])];
-  const hint = provider === 'instagram' || provider === 'tiktok' || provider === 'youtube' || provider === 'zalo_oa' ? provider : 'other';
+  const hint = provider === 'instagram' || provider === 'tiktok' || provider === 'youtube' || provider === 'zalo_oa' || provider === 'facebook_page' ? provider : 'other';
   return (
     <div className="space-y-2 rounded-lg border p-3">
       <Label className="text-xs" htmlFor={id}>
@@ -2282,8 +2284,8 @@ function ChannelEditor({
   const setTitle = documentTitleOf(own.settings);
   const documentTitle = pdf && isProvider(provider) && DOCUMENT_PROVIDERS.has(provider) ? (typeof setTitle === 'string' && setTitle !== 'invalid' ? setTitle : content.title?.trim() || pdf.filename || null) : null;
   const previewContent = documentTitle ? { ...content, media: content.media.map((m) => (m === pdf ? { ...m, filename: documentTitle } : m)) } : content;
-  // A Discord forum post (#1103) takes the post's title as its name.
-  const titled = takesTitle(provider, own.settings);
+  // A Discord forum post (#1103) takes the post's title as its name, a Facebook video or Reel its title (#1499).
+  const titled = takesTitle(provider, own.settings, content.media);
   const issues = draftIssues(provider, { body: content.body, title: titled ? content.title : null, linkUrl: content.linkUrl, media: content.media, settings });
   // The channel's own texts against its banned words (#1055); the shared text is marked under the shared fields.
   const allWords = useBannedWords();
@@ -2751,7 +2753,7 @@ export function SocialComposePage() {
   const blocking = signatureRows.isPending || selected.some((c) => {
     const mine = own[c.id] ?? EMPTY_OWN;
     const content = { body: mine.custom ? mine.body : base.body, title: mine.custom ? mine.title : base.title };
-    return draftIssues(c.provider, { body: content.body, title: takesTitle(c.provider, mine.settings) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withChannelSignature(withUtm(mine, utm).settings, signatures.get(c.id)) }).length > 0;
+    return draftIssues(c.provider, { body: content.body, title: takesTitle(c.provider, mine.settings, mediaOfOwn(mine, base)) ? content.title : null, linkUrl: base.linkUrl, media: mediaOfOwn(mine, base), settings: withChannelSignature(withUtm(mine, utm).settings, signatures.get(c.id)) }).length > 0;
   });
   // Owners and admins may approve their own post: for one written by a person (no AI text), one action approves it and
   // schedules it (#638). A channel whose policy needs another reviewer still waits for them.
@@ -2878,7 +2880,7 @@ export function SocialComposePage() {
             onChange={setBase}
             disabled={create.isPending}
             autoFocus
-            needsTitle={selected.some((c) => takesTitle(c.provider, own[c.id]?.settings))}
+            needsTitle={selected.some((c) => takesTitle(c.provider, own[c.id]?.settings, mediaOfOwn(own[c.id] ?? EMPTY_OWN, base)))}
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={selected.map((c) => c.id)}
@@ -4222,7 +4224,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             base={base}
             onChange={setBase}
             disabled={!editable || save.isPending}
-            needsTitle={p.variants.some((v) => takesTitle(v.provider, own[v.id]?.settings ?? v.settings))}
+            needsTitle={p.variants.some((v) => takesTitle(v.provider, own[v.id]?.settings ?? v.settings, mediaOfOwn(own[v.id] ?? ownOf(v), base)))}
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={p.variants.map((v) => v.connectionId)}
