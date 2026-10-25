@@ -661,7 +661,7 @@ export const en = {
       crm: { sales: 'Adds no permission beyond the base role yet.' },
       desk: { agent: 'Adds no permission beyond the base role yet.' },
       hr: { manager: 'Adds no permission beyond the base role yet.' },
-      external_accountant: "For now this limits only the list of legal entities this person sees. The books, proposals, documents and parties of every entity stay visible until each entity has its own books (#1280). Each assignment names one entity; you can add more.",
+      external_accountant: 'This person sees the books, documents, vouchers and returns of the assigned entities only. Inbox proposals and notifications of other entities may still show until those are kept per entity too. Each assignment names one entity; you can add more.',
     },
     rolesOf: 'Job roles of {name}',
     withEntity: '{role} ({entity})',

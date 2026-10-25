@@ -659,7 +659,7 @@ export const vi = {
       crm: { sales: 'Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.' },
       desk: { agent: 'Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.' },
       hr: { manager: 'Chưa thêm quyền nào ngoài quyền của vai trò cơ bản.' },
-      external_accountant: 'Hiện chỉ giới hạn danh sách pháp nhân mà người này thấy. Sổ sách, đề xuất, chứng từ và đối tác của mọi pháp nhân vẫn xem được cho đến khi có sổ riêng cho từng pháp nhân (#1280). Mỗi lần giao là một pháp nhân; có thể giao thêm.',
+      external_accountant: 'Người này chỉ xem được sổ sách, chứng từ, thu chi và tờ khai của các pháp nhân được giao. Đề xuất trong Hộp thư và thông báo của pháp nhân khác có thể vẫn hiện, cho đến khi phần này cũng được tách theo pháp nhân. Mỗi lần giao là một pháp nhân; có thể giao thêm.',
     },
     rolesOf: 'Vai trò nghiệp vụ của {name}',
     withEntity: '{role} ({entity})',
