@@ -117,7 +117,8 @@ export function OrgChart({ dict }: { dict: Dictionary }) {
 
       <div className="min-w-0 p-5" aria-live="polite">
         <div className="text-xs text-subtle">{panel.kicker}</div>
-        <h3 className="font-display text-xl font-semibold">{panel.title}</h3>
+        {/* A panel of the product, not a section of the page: a heading here broke the page's outline (h1 then h3). */}
+        <p className="font-display text-xl font-semibold">{panel.title}</p>
         <p className="mt-1 text-sm text-muted">{panel.sub}</p>
         {byId[selected].budget ? (
           <div className="mt-4 rounded-md border border-line p-3">
