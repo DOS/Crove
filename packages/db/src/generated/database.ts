@@ -70,6 +70,9 @@ export interface CroveKernelSchema {
   'crove_kernel.position': KernelPositionTable;
   'crove_kernel.proposal': KernelProposalTable;
   'crove_kernel.proposal_policy': KernelProposalPolicyTable;
+  'crove_kernel.role': KernelRoleTable;
+  'crove_kernel.role_assignment': KernelRoleAssignmentTable;
+  'crove_kernel.role_permission': KernelRolePermissionTable;
   'crove_kernel.task': KernelTaskTable;
   'crove_kernel.task_comment': KernelTaskCommentTable;
   'crove_kernel.tax_obligation_done': KernelTaxObligationDoneTable;
@@ -943,6 +946,31 @@ export interface KernelProposalTable {
   resubmitted_from: string | null;
 }
 
+/** crove_kernel.role_assignment */
+export interface KernelRoleAssignmentTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  user_id: ColumnType<string, NotGranted, NotGranted>;
+  role_key: ColumnType<string, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string | null, NotGranted, NotGranted>;
+  scope: ColumnType<string, NotGranted, NotGranted>;
+  granted_by: ColumnType<string, NotGranted, NotGranted>;
+  granted_at: ColumnType<Date, NotGranted, NotGranted>;
+}
+
+/** crove_kernel.role_permission */
+export interface KernelRolePermissionTable {
+  role_key: ColumnType<string, NotGranted, NotGranted>;
+  permission: ColumnType<string, NotGranted, NotGranted>;
+}
+
+/** crove_kernel.role */
+export interface KernelRoleTable {
+  key: ColumnType<string, NotGranted, NotGranted>;
+  module: ColumnType<string, NotGranted, NotGranted>;
+  scope: ColumnType<string, NotGranted, NotGranted>;
+}
+
 /** crove_kernel.task_comment */
 export interface KernelTaskCommentTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -1501,6 +1529,7 @@ export interface SocialPostTable {
   archived_by: string | null;
   due_soon_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   overdue_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  search_text: ColumnType<string | null, never, never>;
 }
 
 /** crove_social.post_variant */
@@ -1552,6 +1581,7 @@ export interface SocialPostVariantTable {
   edit_state: string | null;
   published_revision: number | null;
   edit_error_code: string | null;
+  search_text: ColumnType<string | null, never, never>;
 }
 
 /** crove_social.post_version */

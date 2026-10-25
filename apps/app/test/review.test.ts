@@ -34,7 +34,11 @@ describe('bulk approval', () => {
   });
 
   it('offers bulk approval to owners and admins only', () => {
-    expect(['owner', 'admin', 'member', null, undefined].map(canApproveProposals)).toEqual([true, true, false, false, false]);
+    expect(['owner', 'admin', 'member', null, undefined].map((r) => canApproveProposals(r))).toEqual([true, true, false, false, false]);
+    // A chief accountant (#1279): a member holding the approval permission org-wide.
+    expect(canApproveProposals('member', ['finance.proposal.approve'])).toBe(true);
+    expect(canApproveProposals('member', ['finance.period.unlock'])).toBe(false);
+    expect(canApproveProposals(null, ['finance.proposal.approve'])).toBe(false);
   });
 
   it('plans batches with one fixed idempotency key each', () => {
