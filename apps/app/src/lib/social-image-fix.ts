@@ -72,8 +72,10 @@ export interface FixStep {
 // The encodes to try, in order, for a width x height image (turned the way its EXIF says): the full size at
 // FIX_QUALITY, then at FIX_LOW_QUALITY, then smaller by FIX_SCALE at a time, down to the narrowest the channels take
 // (and never a long side under FIX_MIN_SIDE), with that floor itself as the last step. Without a byte limit the first
-// encode always fits, so it is the only one. An image already narrower than the floor is never made smaller.
+// encode always fits, so it is the only one. An image already narrower than the floor is never made smaller; one with
+// no size (never a decoded image) has no step.
 export function fixSteps(width: number, height: number, target: Pick<FixTarget, 'maxBytes' | 'minWidth'>): FixStep[] {
+  if (!(width > 0 && height > 0)) return [];
   const steps: FixStep[] = [{ quality: FIX_QUALITY, width, height }];
   if (target.maxBytes === null) return steps;
   steps.push({ quality: FIX_LOW_QUALITY, width, height });

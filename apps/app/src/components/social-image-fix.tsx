@@ -8,7 +8,7 @@ import { ErrorText, Spinner } from './ui.tsx';
 import { sizeLabel, type MediaItem } from './social-media.tsx';
 import { fetchFile, errorMessage, queryClient, uploadFiles } from '../lib/api.ts';
 import { providerName } from '../lib/social.ts';
-import { FIX_TYPE, firstFit, fixName, fixSteps, imageFix, isAnimated, type FixStep } from '../lib/social-image-fix.ts';
+import { FIX_TYPE, firstFit, fixName, fixSteps, imageFix, isAnimated, type FixStep, type FixTarget } from '../lib/social-image-fix.ts';
 
 // The bytes of a stored file, from the thumbnails' cache (the bytes of a file id never change).
 const fileBytes = (fileId: string) => queryClient.fetchQuery({ queryKey: ['social-media', fileId], queryFn: () => fetchFile(fileId), staleTime: Infinity });
@@ -41,9 +41,8 @@ export function ImageFix({ item, providers, disabled, onFixed }: { item: MediaIt
     enabled: offer?.kind === 'fix' && (item.mime === 'image/webp' || item.mime === 'image/png'),
   });
   const fix = useMutation({
-    mutationFn: async (): Promise<MediaItem> => {
-      if (offer?.kind !== 'fix') throw new Error(t('failed'));
-      const { target } = offer;
+    // The image and its target as they were at the click, whatever the post's channels become while it runs.
+    mutationFn: async ({ item, target }: { item: MediaItem; target: FixTarget }): Promise<MediaItem> => {
       const bitmap = await createImageBitmap(await fileBytes(item.fileId), { imageOrientation: 'from-image' }).catch(() => {
         throw new Error(t('cannotRead'));
       });
@@ -79,7 +78,7 @@ export function ImageFix({ item, providers, disabled, onFixed }: { item: MediaIt
   return (
     <div className="space-y-1">
       {refused}
-      <Button type="button" variant="outline" size="sm" className="h-7 max-w-full px-2 text-xs" disabled={disabled || fix.isPending || moving.isLoading} onClick={() => fix.mutate()}>
+      <Button type="button" variant="outline" size="sm" className="h-7 max-w-full px-2 text-xs" disabled={disabled || fix.isPending || moving.isLoading} onClick={() => fix.mutate({ item, target: offer.target })}>
         {fix.isPending ? <Spinner className="text-current" /> : null}
         {t('fix')}
       </Button>

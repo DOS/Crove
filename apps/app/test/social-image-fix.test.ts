@@ -76,6 +76,11 @@ describe('fixing an image a channel refuses (#1500)', () => {
     ]);
   });
 
+  it('has no step for an image with no size', () => {
+    expect(fixSteps(0, 100, { maxBytes: MB, minWidth: 0 })).toEqual([]);
+    expect(fixSteps(Number.NaN, 100, { maxBytes: null, minWidth: 0 })).toEqual([]);
+  });
+
   it('keeps the first encode that fits, or none', async () => {
     const steps = fixSteps(4032, 3024, { maxBytes: MB, minWidth: 320 });
     // A fake encoder whose bytes follow the area and the quality.
