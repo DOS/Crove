@@ -520,11 +520,18 @@ suite('member role changes and removal on PostgreSQL (issue #36)', () => {
   });
 
   // The backstop has no exception for deleting an org because no deletion path exists: the cascade reaches the
-  // append-only audit. If this ever starts to pass, offboarding must decide how the backstop treats a deleted org.
+  // append-only audit, and tables that reference the org without cascading refuse it too. Which of these answers
+  // first depends on the order PostgreSQL fires the foreign-key triggers on the tenant row: their names,
+  // RI_ConstraintTrigger_a_<oid>, sort as text, so the order flips when the cluster's OID counter crosses a digit
+  // boundary during the migrations (a_100222 before a_99839). Either refusal proves the point, and the statement is
+  // atomic. If this ever starts to pass, offboarding must decide how the backstop treats a deleted org.
   it('has no org deletion the backstop would need to allow: deleting a tenant is refused', async () => {
     const { owner } = await signInAll('owner');
     const { orgId } = await orgWith(owner, []);
-    await expect(admin((c) => c.query('DELETE FROM crove_kernel.tenant WHERE org_id = $1', [orgId]))).rejects.toThrow(/append-only/);
+    await expect(admin((c) => c.query('DELETE FROM crove_kernel.tenant WHERE org_id = $1', [orgId]))).rejects.toThrow(
+      /append-only|violates foreign key constraint "[^"]+" on table "[^"]+"/,
+    );
+    expect(await admin((c) => c.query('SELECT 1 FROM crove_kernel.tenant WHERE org_id = $1', [orgId]))).toMatchObject({ rowCount: 1 });
     expect(await roles(orgId)).toEqual({ [owner.userId]: 'owner' });
   });
 
