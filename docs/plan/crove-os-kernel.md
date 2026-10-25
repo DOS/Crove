@@ -2088,7 +2088,7 @@ ADRs live in `docs/adr/`, using the MADR template. They keep the "why"; this pla
 | [0032](../adr/0032-oauth-authorization-server.md) | OAuth 2.1 authorization server for self-host and Cloud (Decision 14; issue #67): proposed 2026-10-16, embedded `oidc-provider`, fallback Ory Hydra | Accepted before Phase 3 (acceptance tests in the ADR) |
 | 0020 | Clean-room process for using the archived forks as references | Before Phase 3 |
 | 0014 / 0019 / 0016 | Freezing public names + the `com.crove` prefix / MCP grants / egress, SSRF and NAT | Phase 3, or when the first provider requires an IP allowlist |
-| 0024 | Kernel `calendar` service: events, availability, external calendar sync, double-booking prevention | Before Phase 3 |
+| [0024](../adr/0024-calendar-service.md) | Kernel `calendar` service: events, availability, external calendar sync, double-booking prevention; the booking page is a `crm` feature | Accepted 2026-10-25 (Decision 20, [calendar.md](calendar.md)); recorded after Calendar steps C1 to C5 and C8 (#1383); external calendars and meeting links wait for the owner's OAuth apps (#1374, #1375) |
 | [0025](../adr/0025-channel-layer.md) | `channel` layer: social and email connections shared by Service and Social, Cloud apps vs self-host | Accepted 2026-10-16 (owner); implemented in Social step S2 (#232) |
 
 0023 (federated identity: DOS ID via OIDC, `IdentityProvider` adapter, Crove sessions) will not be written: ADR-0027 and ADR-0028 replace it.
