@@ -1,6 +1,8 @@
 // LinkedIn Company Pages (#1077) are offered only when the deployment says its LinkedIn app has the Community
 // Management API: asking a member for a scope the app lacks fails the whole LinkedIn dialog.
 import { describe, expect, it } from 'vitest';
+import { LINKEDIN_PAGES_NAMED } from '@crove/channel';
+import { OAUTH_MAX_ACCOUNTS_PER_GRANT } from '@crove/kernel-contract';
 import { loadConfig } from '../src/config.ts';
 import { channelConnectors, channelPublishers, channelRefreshers } from '../src/kernel.ts';
 
@@ -39,5 +41,11 @@ describe('CHANNEL_LINKEDIN_ORGANIZATIONS', () => {
     expect(Object.keys(channelConnectors(both)).sort()).toEqual(['linkedin', 'linkedin_page']);
     expect(Object.keys(channelConnectors(loadConfig({ ...BASE, ...LINKEDIN, ...PAGE_APP })))).toEqual(['linkedin']);
     expect(() => loadConfig({ ...BASE, CHANNEL_LINKEDIN_PAGE_CLIENT_ID: PAGE_APP.CHANNEL_LINKEDIN_PAGE_CLIENT_ID })).toThrow(/CHANNEL_LINKEDIN_PAGE_CLIENT_SECRET/);
+  });
+});
+
+describe('LinkedIn page names (#1096)', () => {
+  it('names as many pages as a connect request keeps', () => {
+    expect(LINKEDIN_PAGES_NAMED).toBe(OAUTH_MAX_ACCOUNTS_PER_GRANT);
   });
 });

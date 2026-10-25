@@ -14,7 +14,7 @@ import { REFRESH_SWEEP_MS, refreshChannels } from './channel-refresh.ts';
 import { RESEAL_SWEEP_MS, resealCredentials } from './credential-reseal.ts';
 import type { ExtractClient } from '@crove/extract-contract';
 import { FINANCE_NOTIFYING_EVENTS, PERIOD_CLOSING_SWEEP_MS, extractAndPropose, importPortalList, recordExtractionFailure, recordPortalListFailure, sweepPeriodClosing } from '@crove/mod-finance';
-import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runEditJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepAssignmentReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, isProvider, sweepRemovals } from '@crove/mod-social';
+import { ACCOUNT_SWEEP_MS, CHAT_ALERT_TEST_EVENT, CHAT_ALERTING_EVENTS, DIGEST_SWEEP_MS, EVERGREEN_SWEEP_MS, EXTERNAL_SWEEP_MS, FEED_SWEEP_MS, METRICS_SWEEP_MS, NOTIFYING_EVENTS, PUBLISH_STALE_SECONDS, QUEUE_LOW_SWEEP_MS, RECURRING_SWEEP_MS, REMINDER_SWEEP_MS, REPORT_SCHEDULE_SWEEP_MS, runChannelOptionJob, runCommentJob, runPublishJob, runEditJob, runRemoveJob, runThreadJob, sweepAccounts, sweepDigests, sweepEvergreen, sweepExternalPosts, sweepMetrics, sweepQueueLow, sweepRecurring, sweepReminders, sweepAssignmentReminders, sweepReportSchedules, REMOVE_READY, REMOVE_SWEEP_MS, REMOVE_WATCH_AFTER_MS, isProvider, runRemoveWatch, sweepRemovals } from '@crove/mod-social';
 import { sweepFeeds } from './feeds.ts';
 import { SECURITY_SWEEP_MS, sweepSecuritySignals, type SecurityThresholds } from './security-signals.ts';
 import { BACK_PRESSURE_CHECK_MS, DEFAULT_OUTBOX_LAG_PAUSE_SECONDS, PausableWork, checkBackPressure, outboxLagSeconds } from './back-pressure.ts';
@@ -50,6 +50,9 @@ const AGENT_PROPOSAL_COMMANDS: Readonly<Record<string, string>> = {
 };
 const AGENT_RETRY_LIMIT = 3;
 const SOCIAL_NOTIFY_RETRY_LIMIT = 3;
+// The watch of a planned takedown (#937) that ran too early tries again 1, 2, 4, 8 and 16 minutes later, past the
+// stale limit of a remove job that started up to half an hour late.
+const REMOVE_WATCH_RETRY_LIMIT = 5;
 // In-app notifications of the kernel and finance (#671): the dispatch command of the module whose event it is.
 const NOTIFY_COMMANDS: ReadonlyMap<string, { module: string; command: string }> = new Map<string, { module: string; command: string }>([
   ...KERNEL_NOTIFYING_EVENTS.map((type): [string, { module: string; command: string }] => [type, { module: 'kernel', command: 'kernel.notification.dispatch' }]),
@@ -286,6 +289,9 @@ interface SocialRemoveJob {
   provider: string;
   // The last remove call the person saw when they asked (null: none was made).
   after: string | null;
+  // The watch of a planned takedown (#937), queued with its remove job to run once the ask went stale: it never calls
+  // the platform.
+  watch?: true;
 }
 
 // A person asked for a published variant's text to be corrected on its platform (#1223).
@@ -812,6 +818,13 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.work<SocialRemoveJob>(QUEUES.socialRemove, { batchSize: 1 }, async ([job]) => {
       if (!job || !channels) return;
       const { orgId, variantId, provider, after } = job.data;
+      if (job.data.watch) {
+        const watched = await runRemoveWatch({ runtime: deps.runtime }, orgId, variantId, after);
+        console.log(`[social-remove] watch of variant ${variantId.slice(0, 8)}: ${watched.told ? `told ${watched.code}` : watched.reason}`);
+        // Too early (the job started late, or clocks differ): pg-boss runs the watch again after its retry delay.
+        if (!watched.told && watched.reason === 'not_stale') throw new Error('REMOVE_WATCH_TOO_EARLY');
+        return;
+      }
       const done = await runRemoveJob({ runtime: deps.runtime, broker: channels.broker, publishers, store: deps.store }, orgId, variantId, provider, after);
       console.log(`[social-remove] ${provider.slice(0, 32)} variant ${variantId.slice(0, 8)}: ${done.action} -> ${done.state ?? done.reason}`);
     });
@@ -1279,10 +1292,24 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                 const provider = String(row.payload.provider);
                 const variantId = String(row.payload.variant_id);
                 const after = typeof row.payload.after === 'string' ? row.payload.after : null;
-                return boss.send(QUEUES.socialRemove, { orgId: row.org_id, variantId, provider, after } satisfies SocialRemoveJob, {
+                const removal = boss.send(QUEUES.socialRemove, { orgId: row.org_id, variantId, provider, after } satisfies SocialRemoveJob, {
                   singletonKey: `${row.org_id}:${variantId}:remove:${after ?? '-'}`,
                   retryLimit: 0,
                 });
+                if (row.payload.scheduled !== true) return removal;
+                // A planned takedown (#861), which nobody watches, also gets its watch (#937): once the ask is stale, it
+                // tells the owners and admins if the job never recorded an answer. It never calls the platform, so it
+                // may run again.
+                return Promise.all([
+                  removal,
+                  boss.send(QUEUES.socialRemove, { orgId: row.org_id, variantId, provider, after, watch: true } satisfies SocialRemoveJob, {
+                    singletonKey: `${row.org_id}:${variantId}:remove-watch:${after ?? '-'}`,
+                    startAfter: new Date(Date.now() + REMOVE_WATCH_AFTER_MS),
+                    retryLimit: REMOVE_WATCH_RETRY_LIMIT,
+                    retryDelay: 60,
+                    retryBackoff: true,
+                  }),
+                ]);
               }
               // A person asked for a published post's text to be corrected (#1223): one job per ask, keyed by the call it saw.
               if (social && row.type === 'social.variant.edit_requested') {

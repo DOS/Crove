@@ -227,13 +227,35 @@ export class YouTubeRefresher implements Refresher {
   }
 }
 
+// Google's refusals of a spent daily quota: the project's (quotaExceeded) or the API's daily limit (dailyLimitExceeded,
+// #1142). Both are counted per Pacific day, so the call waits for the next one.
+const DAILY_QUOTA_REASONS = ['quotaExceeded', 'dailyLimitExceeded'];
+const PACIFIC = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+// How far Pacific time is from UTC at an instant, in milliseconds (-7 or -8 hours).
+function pacificOffsetMs(at: number): number {
+  const parts = PACIFIC.formatToParts(new Date(at));
+  const part = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  const wall = Date.UTC(part('year'), part('month') - 1, part('day'), part('hour'), part('minute'), part('second'));
+  return wall - (at - (at % 1000));
+}
+// When YouTube's daily quotas reset: the next midnight Pacific time, plus a minute.
+export function youtubeQuotaResetAt(now: number = Date.now()): Date {
+  const day = 86_400_000;
+  const midnightWall = Math.floor((now + pacificOffsetMs(now)) / day) * day + day;
+  // The offset at that midnight, which differs from now's across a daylight saving change.
+  const offset = pacificOffsetMs(midnightWall - pacificOffsetMs(now));
+  return new Date(midnightWall - offset + 60_000);
+}
+
 function publishResult(error: unknown): PublishResult {
   if (!(error instanceof YouTubeError)) return { kind: 'unknown', code: 'NETWORK' };
   const code = error.reason ?? `HTTP_${error.status}`;
   if (error.status >= 500 || error.status < 400) return { kind: 'unknown', code, message: error.message };
   if (error.status === 401) return { kind: 'rejected', error: 'token_expired', code, message: error.message, httpStatus: error.status };
-  // The project's daily quota or a burst limit: try again later.
-  if (error.status === 429 || error.reason === 'quotaExceeded' || error.reason === 'rateLimitExceeded' || error.reason === 'userRateLimitExceeded' || error.reason === 'uploadLimitExceeded') {
+  // A spent daily quota: try again once it resets.
+  if (DAILY_QUOTA_REASONS.includes(error.reason ?? '')) return { kind: 'rejected', error: 'rate_limited', code, message: error.message, httpStatus: error.status, retryAt: youtubeQuotaResetAt() };
+  // A burst limit: try again later.
+  if (error.status === 429 || error.reason === 'rateLimitExceeded' || error.reason === 'userRateLimitExceeded' || error.reason === 'uploadLimitExceeded') {
     return { kind: 'rejected', error: 'rate_limited', code, message: error.message, httpStatus: error.status };
   }
   if (error.status === 403) return { kind: 'rejected', error: 'permission', code, message: error.message, httpStatus: error.status };
