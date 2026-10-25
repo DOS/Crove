@@ -12,7 +12,10 @@ const describeImage = vi.fn(async (_input: { fileId: string; language: 'vi' | 'e
 
 vi.mock('../src/lib/api.ts', () => ({
   client: { social: { posts: { describeImage } } },
-  orpc: { social: { watermark: { get: { queryOptions: () => ({ queryKey: ['social-watermark'], queryFn: () => null, enabled: false }) } } } },
+  orpc: {
+    social: { watermark: { get: { queryOptions: () => ({ queryKey: ['social-watermark'], queryFn: () => null, enabled: false }) } } },
+    channels: { list: { queryOptions: () => ({ queryKey: ['channels'], queryFn: () => [] }) } },
+  },
   queryClient: null,
   errorMessage: (e: unknown) => String(e),
   fetchFile: () => Promise.reject(new Error('not fetched')),
