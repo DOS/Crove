@@ -519,10 +519,11 @@ function InviteMember({ isOwner, initialEmail, entities }: { isOwner: boolean; i
 // Mail outcomes the inviter should act on (#539): the address bounced or is stopped, or the mail did not go out.
 const INVITE_MAIL_PROBLEMS: ReadonlySet<string> = new Set(['bounced', 'complained', 'suppressed', 'failed', 'ambiguous']);
 
-function PendingInvites({ entities }: { entities: LegalEntity[] }) {
+// `entitiesLoading`: until the org's entities are read, a scope's names are not known, so no name reads as removed.
+function PendingInvites({ entities, entitiesLoading }: { entities: LegalEntity[]; entitiesLoading: boolean }) {
   const root = useTranslations();
   const t = useTranslations('settings');
-  const entityName = (id: string) => entities.find((e) => e.id === id)?.name ?? t('inviteEntityGone');
+  const entityName = (id: string) => entities.find((e) => e.id === id)?.name ?? (entitiesLoading ? '…' : t('inviteEntityGone'));
   const f = useFormat();
   const invites = useQuery(orpc.org.listInvites.queryOptions());
   const revoke = useMutation(
@@ -545,7 +546,7 @@ function PendingInvites({ entities }: { entities: LegalEntity[] }) {
                 {i.status === 'expired' ? t('expired') : t('expiresAt', { at: f.dateTime(i.expiresAt) })}
                 {i.invitedBy ? ` · ${t('invitedBy', { name: i.invitedBy })}` : ''}
               </p>
-              {i.legalEntityIds && (
+              {i.legalEntityIds && i.legalEntityIds.length > 0 && (
                 <p className="text-xs text-muted-foreground">{t('inviteScopedTo', { entities: i.legalEntityIds.map(entityName).join(', ') })}</p>
               )}
               {i.mail && (
@@ -1109,7 +1110,7 @@ export function SettingsPage() {
           {canManage && (
             <>
               <InviteMember isOwner={isOwner} initialEmail={search.invite} entities={entities.data ?? []} />
-              <PendingInvites entities={entities.data ?? []} />
+              <PendingInvites entities={entities.data ?? []} entitiesLoading={entities.isLoading} />
             </>
           )}
         </Card>
