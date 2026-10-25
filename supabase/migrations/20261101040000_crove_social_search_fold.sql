@@ -14,8 +14,11 @@
 -- the primary key's org_id prefix already (a 5,000-post org within the DB test's budget, social-search-fold.db.test.ts).
 -- Media file names are folded in the query instead: the library list is paged by time, so it stops at a page.
 --
--- Adding a stored column rewrites the two tables once; row triggers do not fire for that. The columns are generated, so
--- no role writes them, and they hold nothing a reader of the row could not already read.
+-- Adding a stored column rewrites the two tables once under an ACCESS EXCLUSIVE lock (about 150 microseconds a row on
+-- PostgreSQL 17, so 100,000 posts hold it some 15 seconds; Social is not live yet); row triggers do not fire for that. The
+-- columns are generated, so no role writes them, and they hold nothing a reader of the row could not already read. The
+-- org export leaves them out, as the finance search columns. A later CREATE OR REPLACE of crove_kernel.search_fold leaves
+-- the stored values as they were (rewrite them with an UPDATE of title), and dropping it with CASCADE drops both columns.
 SET LOCAL lock_timeout = '2s';
 
 ALTER TABLE crove_social.post

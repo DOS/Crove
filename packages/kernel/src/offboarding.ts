@@ -15,7 +15,7 @@ const OWNERS: readonly MemberRole[] = ['owner'];
 
 // The tables an export contains, with the columns left out. Machinery (idempotency keys, outbox, session records,
 // inbound address tokens and drop counts) is not tenant data and stays out; so do secrets: the inbound token (the
-// owner sees the address in the app) and invite token hashes. The search columns (#673) are left out too: the folded
+// owner sees the address in the app) and invite token hashes. The search columns (#673, #1360) are left out too: the folded
 // words of the row's own columns. The snapshot reads as the system actor, so only tables an owner may read in full
 // belong here.
 export const EXPORT_TABLES = {
@@ -66,8 +66,8 @@ export const EXPORT_TABLES = {
   'crm.event_type': { from: 'crove_crm.event_type', omit: [] },
   // Visitors' bookings (#1318); the request token's hash is the visitor's credential and stays out.
   'crm.booking': { from: 'crove_crm.booking', omit: ['request_token_sha256'] },
-  'social.post': { from: 'crove_social.post', omit: [] },
-  'social.post_variant': { from: 'crove_social.post_variant', omit: [] },
+  'social.post': { from: 'crove_social.post', omit: ['search_text'] },
+  'social.post_variant': { from: 'crove_social.post_variant', omit: ['search_text'] },
   'social.post_approval': { from: 'crove_social.post_approval', omit: [] },
   // A post's images in order, with their descriptions (#372); the files themselves are in kernel.file.
   'social.post_media': { from: 'crove_social.post_media', omit: [] },
