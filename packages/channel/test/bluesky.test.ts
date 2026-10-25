@@ -561,3 +561,82 @@ describe('Bluesky reply and quote gates (#1102)', () => {
     for (const replySettings of [[], ['nobody'], ['following', 'following'], 'all', 1]) expect(blueskyGatesOf({ replySettings })).toBe('invalid');
   });
 });
+
+describe('Bluesky link cards (#1498)', () => {
+  const LINK = 'https://tiem.example/khai-truong?utm_source=bluesky&utm_medium=social&utm_campaign=thang-muoi';
+  const card = { title: 'Khai trương chi nhánh mới', description: 'Giảm 20% tuần đầu', thumbFileId: 'thumb-1' };
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+  const thumbBlob = { $type: 'blob', ref: { $link: 'bafythumb' }, mimeType: 'image/png', size: 10 };
+  const recordOf = (calls: { route: string; json: unknown }[]) => (calls.find((c) => c.route.endsWith('/com.atproto.repo.createRecord'))?.json as { record: Record<string, unknown> } | undefined)?.record;
+
+  it('uploads the card image as a blob, then posts app.bsky.embed.external, with a text of 300 graphemes or fewer without the link', async () => {
+    const { fetchImpl, calls } = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [session()],
+      'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.uploadBlob': [{ body: { blob: thumbBlob } }],
+      'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kcard` } }],
+    });
+    // 290 graphemes of text: with the link appended it would be over 300.
+    const body = `Mời bạn ghé chi nhánh mới ${'ư'.repeat(264)}`;
+    const read: string[] = [];
+    const result = await new BlueskyPublisher(fetchImpl).publish(input({ content: { body, title: null, linkUrl: LINK, media: [] }, settings: { linkCard: card }, readMedia: async (id) => (read.push(id), PNG) }));
+    expect(result.kind).toBe('accepted');
+    expect(read).toEqual(['thumb-1']);
+    expect(calls.find((c) => c.route.endsWith('/com.atproto.repo.uploadBlob'))?.type).toBe('image/png');
+    const record = recordOf(calls);
+    expect(record?.text).toBe(body);
+    expect([...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(String(record?.text))].length).toBeLessThanOrEqual(300);
+    expect(record?.embed).toEqual({ $type: 'app.bsky.embed.external', external: { uri: LINK, title: card.title, description: card.description, thumb: thumbBlob } });
+  });
+
+  it('sends a card without an image with an empty description when it has none, as the lexicon requires one', async () => {
+    const { fetchImpl, calls } = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [session()],
+      'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kcard2` } }],
+    });
+    await new BlueskyPublisher(fetchImpl).publish(input({ content: { body: 'Xem nhé', title: null, linkUrl: LINK, media: [] }, settings: { linkCard: { title: 'Chỉ tiêu đề' } } }));
+    expect(calls.some((c) => c.route.endsWith('/com.atproto.repo.uploadBlob'))).toBe(false);
+    expect(recordOf(calls)?.embed).toEqual({ $type: 'app.bsky.embed.external', external: { uri: LINK, title: 'Chỉ tiêu đề', description: '' } });
+  });
+
+  it('refuses a card image over 1,000,000 bytes and a card it cannot send, posting nothing', async () => {
+    const big = xrpc({ 'POST bsky.social/xrpc/com.atproto.server.createSession': [session()] });
+    const content = { body: 'Xem nhé', title: null, linkUrl: LINK, media: [] };
+    expect(await new BlueskyPublisher(big.fetchImpl).publish(input({ content, settings: { linkCard: card }, readMedia: async () => new Uint8Array(1_000_001) }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_THUMB_TOO_LARGE' });
+    expect(big.calls.some((c) => c.route.endsWith('/com.atproto.repo.uploadBlob') || c.route.endsWith('/com.atproto.repo.createRecord'))).toBe(false);
+
+    const none = xrpc({});
+    const publisher = new BlueskyPublisher(none.fetchImpl);
+    const image = { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 3, altText: null };
+    expect(await publisher.publish(input({ content: { ...content, media: [image] }, settings: { linkCard: card } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_WITH_MEDIA' });
+    expect(await publisher.publish(input({ content: { ...content, linkUrl: null }, settings: { linkCard: card } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_NEEDS_LINK' });
+    expect(await publisher.publish(input({ content, settings: { linkCard: { title: 'x'.repeat(201) } } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_INVALID' });
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('without a card sends exactly what it sent before: the link appended to the text, no embed', async () => {
+    const { fetchImpl, calls } = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [session()],
+      'POST morel.us-east.host.bsky.network/xrpc/com.atproto.repo.createRecord': [{ body: { uri: `at://${DID}/app.bsky.feed.post/3kplain` } }],
+    });
+    await new BlueskyPublisher(fetchImpl).publish(input({ content: { body: 'Xem nhé', title: null, linkUrl: LINK, media: [] } }));
+    const record = recordOf(calls);
+    expect(record?.text).toBe(`Xem nhé\n\n${LINK}`);
+    expect(record).not.toHaveProperty('embed');
+  });
+
+  it('reconciles a carded post by its text and card link', async () => {
+    const now = Date.now();
+    const at = new Date(now - 60_000).toISOString();
+    const { fetchImpl } = xrpc({
+      'POST bsky.social/xrpc/com.atproto.server.createSession': [session(), session()],
+      'GET morel.us-east.host.bsky.network/xrpc/com.atproto.repo.listRecords': [
+        { body: { records: [{ uri: `at://${DID}/app.bsky.feed.post/other`, value: { text: 'Xem nhé', createdAt: at, embed: { external: { uri: 'https://khac.example/' } } } }, { uri: `at://${DID}/app.bsky.feed.post/card`, value: { text: 'Xem nhé', createdAt: at, embed: { $type: 'app.bsky.embed.external', external: { uri: LINK } } } }] } },
+        { body: { records: [{ uri: `at://${DID}/app.bsky.feed.post/plain`, value: { text: `Xem nhé\n\n${LINK}`, createdAt: at } }] } },
+      ],
+    });
+    const publisher = new BlueskyPublisher(fetchImpl);
+    const window = { externalAccountId: DID, secret: SECRET, callKey: 'call-1', contentHash: `sha256:${'0'.repeat(64)}`, content: { body: 'Xem nhé', title: null, linkUrl: LINK, media: [] }, settings: { linkCard: card }, after: new Date(now - 600_000), before: new Date(now) };
+    expect(await publisher.reconcile(window)).toMatchObject({ found: true, externalId: `at://${DID}/app.bsky.feed.post/card` });
+    expect(await publisher.reconcile(window)).toEqual({ found: false });
+  });
+});
