@@ -168,6 +168,10 @@ export function JournalPage() {
   const exportMisa = useMutation({
     mutationFn: () => download('/api/export/misa/purchases.xlsx', t('exportMisaFile', { org: getCurrentOrg() ?? 'org' })),
   });
+  // Purchases of stock (152, 153, 156) in MISA's goods purchase template (#1398); the button above exports the rest.
+  const exportMisaGoods = useMutation({
+    mutationFn: () => download('/api/export/misa/goods-purchases.xlsx', t('exportMisaGoodsFile', { org: getCurrentOrg() ?? 'org' })),
+  });
   // Sales vouchers in MISA's sales template (#313).
   const exportMisaSales = useMutation({
     mutationFn: () => download('/api/export/misa/sales.xlsx', t('exportMisaSalesFile', { org: getCurrentOrg() ?? 'org' })),
@@ -226,6 +230,10 @@ export function JournalPage() {
               {exportMisa.isPending ? <Spinner className="text-current" /> : null}
               {t('exportMisa')}
             </Button>
+            <Button variant="outline" onClick={() => exportMisaGoods.mutate()} disabled={exportMisaGoods.isPending}>
+              {exportMisaGoods.isPending ? <Spinner className="text-current" /> : null}
+              {t('exportMisaGoods')}
+            </Button>
             <Button variant="outline" onClick={() => exportMisaSales.mutate()} disabled={exportMisaSales.isPending}>
               {exportMisaSales.isPending ? <Spinner className="text-current" /> : null}
               {t('exportMisaSales')}
@@ -237,9 +245,9 @@ export function JournalPage() {
           </div>
         )}
       </div>
-      {(exportXlsx.error || exportMisa.error || exportMisaSales.error) && (
+      {(exportXlsx.error || exportMisa.error || exportMisaGoods.error || exportMisaSales.error) && (
         <div className="mb-4">
-          <ErrorText>{errorMessage(exportXlsx.error ?? exportMisa.error ?? exportMisaSales.error)}</ErrorText>
+          <ErrorText>{errorMessage(exportXlsx.error ?? exportMisa.error ?? exportMisaGoods.error ?? exportMisaSales.error)}</ErrorText>
         </div>
       )}
       {journal.isLoading ? (

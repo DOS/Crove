@@ -641,7 +641,7 @@ export const zDuplicateHint = z.object({ keep: zPartyName, duplicate: zPartyName
 export const zDocumentExport = z.object({
   id: zId,
   at: z.string(),
-  format: z.enum(['journal', 'misa_sme_purchases', 'misa_sme_sales']),
+  format: z.enum(['journal', 'misa_sme_purchases', 'misa_sme_goods_purchases', 'misa_sme_sales']),
   from: zLocalDate.nullable(),
   to: zLocalDate.nullable(),
   actorName: z.string().nullable(),

@@ -192,6 +192,7 @@ import { MISSING_INVOICE_REMINDER_DAY_MAX, zMissingInvoiceStatus, zPortalReconci
 import { zPortalCaptcha, zPortalListResult, zPortalLoginInput, zPortalSession, zPortalXmlResult } from './portal-sync.ts';
 import { zBankImportPreview, zBankImportResult, zBankLineVoucher, zBankLines, zBankOpenLines, zBankStatementImport } from './bank-statement.ts';
 import { zTimeline } from './timeline.ts';
+import { zMisaCode, zMisaGoodsCode } from './misa-goods.ts';
 import { zAuditCursor, zAuditExport, zAuditFilter, zAuditPage } from './audit.ts';
 import { zPersonalDataErasure, zPersonalDataQuery, zPersonalDataResult } from './personal-data.ts';
 
@@ -1213,6 +1214,15 @@ export const contract = {
     update: oc
       .input(z.object({ code: zAccountCode, name: z.string().trim().min(1).max(200).optional(), active: z.boolean().optional() }))
       .output(z.object({ code: zAccountCode, name: z.string(), active: z.boolean() })),
+  },
+  // The org's MISA SME item and warehouse codes per stock account (#1398), for the goods purchase export
+  // (GET /api/export/misa/goods-purchases.xlsx). Every member lists them; owners and admins (R1, audited) set one
+  // account's codes (NOT_STOCK_ACCOUNT, UNKNOWN_ACCOUNT: 422) and remove them, so the account falls back to its
+  // parent's codes or the defaults.
+  misaGoodsCodes: {
+    list: oc.output(z.array(zMisaGoodsCode)),
+    set: oc.input(z.object({ accountCode: zAccountCode, itemCode: zMisaCode, warehouseCode: zMisaCode.nullable() })).output(zMisaGoodsCode),
+    remove: oc.input(z.object({ accountCode: zAccountCode })).output(z.object({ removed: z.boolean() })),
   },
   // VAT working for one month or quarter (issue #316); the Excel file is GET /api/export/vat.xlsx?period=<period>.
   // markPayment (owners, admins, members; R1, audited; #917): the accountant's mark on an input invoice of the period

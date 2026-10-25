@@ -1,6 +1,7 @@
 // Vouchers in the Excel import templates of MISA SME (issue #317). The firm keeps its system of record (decision
 // D10); Crove hands it purchase and sales vouchers, and cash receipts and payments (#657), in the layout MISA's
-// "Tệp > Nhập khẩu từ Excel" reads.
+// "Tệp > Nhập khẩu từ Excel" reads. Purchase lines on a stock account (152, 153, 156) go to the goods purchase
+// template with the org's MISA item and warehouse codes; the other lines to the services template (#1398).
 //
 // Every column of a template is one entry of its `columns` array below: the header exactly as MISA's template
 // spells it (MISA matches columns by header name) and the rule that fills it. To follow the partner's real
@@ -25,6 +26,7 @@ import {
   sum,
   type DecimalValue,
 } from '@crove/l10n-vn';
+import { isStockAccount, resolveMisaGoodsCodes, type MisaGoodsCode, type ResolvedMisaGoodsCodes } from '@crove/kernel-contract';
 import { canonical, roundToCurrency } from './domain/money.ts';
 import { decimalCell, textCell } from './export.ts';
 
@@ -201,6 +203,8 @@ export function misaVoucherNo(prefix: string, entryId: string): string {
 
 export const PURCHASE_VOUCHER_PREFIX = 'CRMDV';
 export const SALES_VOUCHER_PREFIX = 'CRBH';
+/** The goods purchase voucher's "Số phiếu nhập (*)" (#1398): CRMH and 12 hex digits, 16 characters. */
+export const GOODS_PURCHASE_VOUCHER_PREFIX = 'CRMH';
 
 /**
  * Purchase rows. Input VAT is split between 1331 and 1332 (fixed assets) with the rule the journal used
@@ -234,6 +238,36 @@ export function purchaseRows(voucher: PurchaseVoucher): PurchaseRow[] {
     vatAmount: vatAmounts[i] ?? '0',
     vatAccount: isFixedAssetAccount(line.debitAccount) ? VAT_INPUT_ASSETS : VAT_INPUT_GOODS,
   }));
+}
+
+/** A goods purchase row: a stock line with the MISA codes that apply to its account. */
+export type GoodsPurchaseRow = PurchaseRow & { goods: ResolvedMisaGoodsCodes };
+
+/**
+ * The services template's rows of a purchase voucher (#1398): its lines that are not on a stock account. An invoice
+ * that mixes both becomes two MISA vouchers, this one (CRMDV…) and a goods voucher (CRMH…) with the stock lines, both
+ * with the invoice's series, number and date. VAT is spread over all the invoice's lines first (purchaseRows), so the
+ * two vouchers' VAT adds up to the invoice's exactly.
+ */
+export function servicePurchaseRows(voucher: PurchaseVoucher): PurchaseRow[] {
+  return purchaseRows(voucher).filter((r) => !isStockAccount(r.line.debitAccount));
+}
+
+/**
+ * The goods template's rows of a purchase voucher (#1398): its lines on a stock account (152, 153, 156 or a
+ * sub-account of one), under the goods voucher number, each with the org's MISA item and warehouse codes for its
+ * account (`saved`, from finance.misa_goods_codes.list; resolveMisaGoodsCodes picks the account's own, its nearest
+ * parent's, or the default).
+ */
+export function goodsPurchaseRows(
+  voucher: PurchaseVoucher,
+  saved: ReadonlyArray<Pick<MisaGoodsCode, 'accountCode' | 'itemCode' | 'warehouseCode'>>,
+): GoodsPurchaseRow[] {
+  const voucherNo = misaVoucherNo(GOODS_PURCHASE_VOUCHER_PREFIX, voucher.entryId);
+  return purchaseRows(voucher).flatMap((row) => {
+    const goods = resolveMisaGoodsCodes(row.line.debitAccount, saved);
+    return goods ? [{ ...row, voucherNo, goods }] : [];
+  });
 }
 
 /** Sales rows: the output VAT is spread over the lines the same way. */
@@ -314,8 +348,8 @@ function vatCode(vat: MisaVatRate): MisaValue {
 /**
  * MISA SME "Chứng từ mua dịch vụ" (Mua hàng > Chứng từ mua dịch vụ), template
  * Chung_tu_mua_dich_vu_chua_thanh_toan_VND.xls: a purchase not paid yet, in VND. Crove posts purchases as
- * Nợ expense or asset accounts, Nợ 1331/1332, Có 331, which is this voucher. Lines are not received into a
- * warehouse (that is the goods purchase template, not used yet).
+ * Nợ expense or asset accounts, Nợ 1331/1332, Có 331, which is this voucher. Lines on a stock account (152, 153, 156)
+ * are received into a warehouse instead, in the goods purchase template below (#1398).
  */
 export const MISA_SME_PURCHASE_SERVICE: MisaTemplate<PurchaseRow> = {
   id: 'Chung_tu_mua_dich_vu_chua_thanh_toan_VND',
@@ -355,6 +389,66 @@ export const MISA_SME_PURCHASE_SERVICE: MisaTemplate<PurchaseRow> = {
     { header: 'Tên NCC', maxLength: 128, cell: (r) => text(r.voucher.vendor.name) },
     { header: 'Mã số thuế NCC', maxLength: 20, cell: (r) => text(r.voucher.vendor.taxCode) },
     { header: 'Địa chỉ NCC', maxLength: 255, cell: (r) => text(r.voucher.vendor.address) },
+  ],
+};
+
+/**
+ * MISA SME "Chứng từ mua hàng nhập kho" (Mua hàng > Chứng từ mua hàng hóa, Mua hàng trong nước nhập kho), template
+ * Mua_hang_qua_kho_VND.xls (#1398): goods bought in Vietnam, received into a warehouse, not paid yet, in VND, with
+ * their invoice. Crove posts a stock line Nợ 152/153/156, Nợ 1331, Có 331, which is this voucher. Headers and value
+ * codes come from the template file of MISA SME 2026 itself (its 44 headers in row 1 and its input note per column;
+ * source S9 in docs/integrations/misa-sme-import.md). The import tax columns are for "Mua nhập khẩu" and stay blank.
+ */
+export const MISA_SME_PURCHASE_GOODS: MisaTemplate<GoodsPurchaseRow> = {
+  id: 'Mua_hang_qua_kho_VND',
+  sheetName: 'Chứng từ mua hàng nhập kho',
+  columns: [
+    { header: 'Hiển thị trên sổ', cell: blank }, // blank: both the financial and the management books
+    { header: 'Hình thức mua hàng', cell: blank }, // blank: bought in Vietnam (1 would be an import)
+    { header: 'Phương thức thanh toán', cell: blank }, // blank: not paid yet
+    { header: 'Nhận kèm hóa đơn', cell: () => fixed('1') }, // 1: the goods came with their invoice
+    { header: 'Ngày hạch toán (*)', cell: (r) => date(r.voucher.entryDate) },
+    { header: 'Ngày chứng từ (*)', cell: (r) => date(r.voucher.entryDate) },
+    { header: 'Số phiếu nhập (*)', maxLength: 20, cell: (r) => text(r.voucherNo) },
+    { header: 'Số chứng từ thanh toán', cell: blank }, // not paid yet
+    { header: 'Mẫu số HĐ', cell: blank }, // not stored by Crove (KHMSHDon)
+    { header: 'Ký hiệu HĐ', maxLength: 20, cell: (r) => text(r.voucher.invoice.series) },
+    // Never cut (MISA allows 25 characters): a cut number could make two invoices look the same.
+    { header: 'Số hóa đơn', cell: (r) => text(r.voucher.invoice.number) },
+    { header: 'Ngày hóa đơn', cell: (r) => date(r.voucher.invoice.date) },
+    { header: 'Mã nhà cung cấp', cell: blank }, // MISA catalog code
+    { header: 'Tên nhà cung cấp', maxLength: 128, cell: (r) => text(r.voucher.vendor.name) },
+    { header: 'Người giao hàng', cell: blank },
+    { header: 'Diễn giải', maxLength: 255, cell: (r) => text(r.voucher.description) },
+    { header: 'NV mua hàng', cell: blank }, // MISA catalog code
+    // The org's MISA catalog codes (Settings), at most 25 characters by the database, so never cut.
+    { header: 'Mã hàng (*)', cell: (r) => text(r.goods.itemCode) },
+    { header: 'Tên hàng', maxLength: 255, cell: (r) => text(r.line.description) },
+    { header: 'Kho', cell: (r) => text(r.goods.warehouseCode) },
+    { header: 'Hàng hóa giữ hộ/bán hộ', cell: blank }, // blank: the firm's own goods
+    { header: 'TK kho (*)', maxLength: 20, cell: (r) => text(r.line.debitAccount) },
+    { header: 'TK công nợ/TK tiền (*)', maxLength: 20, cell: () => text(PAYABLE_ACCOUNT) },
+    { header: 'ĐVT', cell: blank }, // MISA catalog code (unit), as in the services template
+    { header: 'Số lượng', cell: (r) => decimal(r.line.quantity) },
+    { header: 'Đơn giá', cell: (r) => decimal(r.line.unitPrice) },
+    { header: 'Thành tiền', cell: (r) => fixed(r.line.amount) },
+    { header: 'Tỷ lệ CK', cell: blank },
+    { header: 'Tiền chiết khấu', cell: blank },
+    { header: 'Phí hàng về kho/Chi phí mua hàng', cell: blank },
+    { header: '% thuế GTGT', cell: (r) => vatCode(r.vat) },
+    { header: 'Tỷ lệ tính thuế (Thuế suất KHAC)', cell: (r) => decimal(r.vat.otherRate) },
+    { header: 'Tiền thuế GTGT', cell: (r) => fixed(r.vatAmount) },
+    { header: 'TKĐƯ thuế GTGT', cell: blank }, // imports only
+    { header: 'TK thuế GTGT', cell: (r) => text(r.vatAccount) },
+    { header: 'Nhóm HHDV mua vào', cell: blank }, // MISA code of the input VAT group
+    { header: 'Phí trước hải quan', cell: blank }, // this and the columns after it: imports only
+    { header: 'Giá tính thuế NK', cell: blank },
+    { header: '% thuế NK', cell: blank },
+    { header: 'Tiền thuế NK', cell: blank },
+    { header: 'TK thuế NK', cell: blank },
+    { header: '% thuế TTĐB', cell: blank },
+    { header: 'Tiền thuế TTĐB', cell: blank },
+    { header: 'TK thuế TTĐB', cell: blank },
   ],
 };
 

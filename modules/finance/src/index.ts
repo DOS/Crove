@@ -20,6 +20,7 @@ import { statementsHtkkQueries } from './statements-htkk.ts';
 import { missingInvoicesReminderSet, missingInvoicesRemind, missingInvoicesRequest, missingInvoicesStatus } from './missing-invoices.ts';
 import { searchQuery } from './search.ts';
 import { documentExports } from './document-exports.ts';
+import { misaGoodsCodeCommands, misaGoodsCodeQueries } from './misa-goods-codes.ts';
 import { customersList } from './parties.ts';
 import { financeNotificationCommands } from './notifications.ts';
 
@@ -83,12 +84,15 @@ export { buildFixedAssetsWorkbook } from './fixed-assets-export.ts';
 export {
   MISA_SME_CASH_PAYMENT,
   MISA_SME_CASH_RECEIPT,
+  MISA_SME_PURCHASE_GOODS,
   MISA_SME_PURCHASE_SERVICE,
   MISA_SME_SALES,
   buildMisaWorkbook,
   cashRows,
+  goodsPurchaseRows,
   purchaseRows,
   salesRows,
+  servicePurchaseRows,
   type CashVoucher,
   type PurchaseVoucher,
   type SalesVoucher,
@@ -125,7 +129,7 @@ export { SEARCH_LIMIT, searchAmount, type SearchResult } from './search.ts';
 export { ARCHIVE_FORMAT, type ArchiveSource, type ArchiveSourceFile, type RecordedArchive } from './year-archive.ts';
 export { type FinancialStatements, type StatementLine, type UnmappedRow } from './statements.ts';
 
-export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, vatPaymentMark, ...portalSyncCommands, ...financeNotificationCommands, ...yearArchiveCommands, ...fixedAssetCommands];
+export const financeCommands = [recordPurchase, revisePurchase, prepareReversal, reverseEntry, journalExport, vatExport, ledgerExport, statementsExport, openingBalancePost, periodLock, periodUnlock, bankImport, createAccount, updateAccount, setVendorDefaultAccount, prepareVoucher, recordVoucher, prepareJournalVoucher, recordJournalVoucher, prepareYearClosing, recordYearClosing, portalListImport, portalListRemove, portalListRecord, missingInvoicesRequest, missingInvoicesReminderSet, missingInvoicesRemind, vatPaymentMark, ...portalSyncCommands, ...financeNotificationCommands, ...yearArchiveCommands, ...fixedAssetCommands, ...misaGoodsCodeCommands];
 export const financeQueries = [
   ...fixedAssetQueries,
   ...statementsHtkkQueries,
@@ -162,4 +166,5 @@ export const financeQueries = [
   bankOpenLines,
   searchQuery,
   ...yearArchiveQueries,
+  ...misaGoodsCodeQueries,
 ];

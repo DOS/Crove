@@ -4,20 +4,24 @@ import { money, sum } from '@crove/l10n-vn';
 import {
   MISA_SME_CASH_PAYMENT,
   MISA_SME_CASH_RECEIPT,
+  MISA_SME_PURCHASE_GOODS,
   MISA_SME_PURCHASE_SERVICE,
   MISA_SME_SALES,
   allocateVat,
   buildMisaWorkbook,
   cashRows,
+  goodsPurchaseRows,
   misaVatRate,
   misaVoucherNo,
   purchaseRows,
   salesRows,
+  servicePurchaseRows,
   type CashVoucher,
   type MisaTemplate,
   type PurchaseVoucher,
   type SalesVoucher,
 } from '../src/misa.ts';
+import { MISA_GOODS_DEFAULTS, isStockAccount, resolveMisaGoodsCodes } from '@crove/kernel-contract';
 
 // Golden header rows, verbatim from the MISA SME templates (sources in docs/integrations/misa-sme-import.md).
 // A change here is a change of the import file: check it against the partner's template first.
@@ -55,6 +59,55 @@ const PURCHASE_HEADERS = [
   'Tên NCC',
   'Mã số thuế NCC',
   'Địa chỉ NCC',
+];
+
+// MISA SME 2026 Template/ImportExcel/Mua_hang_qua_kho_VND.xls, sheet "Chứng từ mua hàng nhập kho", row 1 (#1398,
+// source S9 in docs/integrations/misa-sme-import.md).
+const GOODS_HEADERS = [
+  'Hiển thị trên sổ',
+  'Hình thức mua hàng',
+  'Phương thức thanh toán',
+  'Nhận kèm hóa đơn',
+  'Ngày hạch toán (*)',
+  'Ngày chứng từ (*)',
+  'Số phiếu nhập (*)',
+  'Số chứng từ thanh toán',
+  'Mẫu số HĐ',
+  'Ký hiệu HĐ',
+  'Số hóa đơn',
+  'Ngày hóa đơn',
+  'Mã nhà cung cấp',
+  'Tên nhà cung cấp',
+  'Người giao hàng',
+  'Diễn giải',
+  'NV mua hàng',
+  'Mã hàng (*)',
+  'Tên hàng',
+  'Kho',
+  'Hàng hóa giữ hộ/bán hộ',
+  'TK kho (*)',
+  'TK công nợ/TK tiền (*)',
+  'ĐVT',
+  'Số lượng',
+  'Đơn giá',
+  'Thành tiền',
+  'Tỷ lệ CK',
+  'Tiền chiết khấu',
+  'Phí hàng về kho/Chi phí mua hàng',
+  '% thuế GTGT',
+  'Tỷ lệ tính thuế (Thuế suất KHAC)',
+  'Tiền thuế GTGT',
+  'TKĐƯ thuế GTGT',
+  'TK thuế GTGT',
+  'Nhóm HHDV mua vào',
+  'Phí trước hải quan',
+  'Giá tính thuế NK',
+  '% thuế NK',
+  'Tiền thuế NK',
+  'TK thuế NK',
+  '% thuế TTĐB',
+  'Tiền thuế TTĐB',
+  'TK thuế TTĐB',
 ];
 
 const SALES_HEADERS = [
@@ -180,8 +233,16 @@ describe('MISA SME templates: header rows (golden)', () => {
     expect((sheet.getRow(1).values as unknown[]).slice(1)).toEqual(SALES_HEADERS);
   });
 
-  it('has no duplicate header in either template', () => {
-    for (const template of [MISA_SME_PURCHASE_SERVICE.columns, MISA_SME_SALES.columns]) {
+  it('goods purchases use the 44 columns of Mua_hang_qua_kho_VND, in order (#1398)', async () => {
+    expect(MISA_SME_PURCHASE_GOODS.columns.map((c) => c.header)).toEqual(GOODS_HEADERS);
+    const sheet = await readBack(MISA_SME_PURCHASE_GOODS, []);
+    expect(sheet.name).toBe('Chứng từ mua hàng nhập kho');
+    expect((sheet.getRow(1).values as unknown[]).slice(1)).toEqual(GOODS_HEADERS);
+    expect(sheet.rowCount).toBe(1);
+  });
+
+  it('has no duplicate header in any purchase or sales template', () => {
+    for (const template of [MISA_SME_PURCHASE_SERVICE.columns, MISA_SME_PURCHASE_GOODS.columns, MISA_SME_SALES.columns]) {
       expect(new Set(template.map((c) => c.header)).size).toBe(template.length);
     }
   });
@@ -401,6 +462,110 @@ describe('buildMisaWorkbook: purchase vouchers', () => {
     expect(at('Tên nhà cung cấp').type).toBe(ExcelJS.ValueType.String);
     expect(at('Tên nhà cung cấp').numFmt).toBe('@');
     expect(at('Địa chỉ').value).toBeNull();
+  });
+});
+
+describe('MISA item and warehouse codes for stock accounts (#1398)', () => {
+  it('knows the stock accounts by their TT133 root: 152, 153, 156 and their sub-accounts', () => {
+    expect(['152', '1521', '153', '156', '1561.HN', '15610'].every(isStockAccount)).toBe(true);
+    expect(['151', '154', '155', '157', '211', '6422', '1331', '15'].some(isStockAccount)).toBe(false);
+  });
+
+  it('takes the account own codes, else its nearest parent with codes, else the default of its root', () => {
+    const saved = [
+      { accountCode: '156', itemCode: 'HANGHOA', warehouseCode: 'KHO01' },
+      { accountCode: '1561', itemCode: 'HH-HN', warehouseCode: null },
+    ];
+    expect(resolveMisaGoodsCodes('1561', saved)).toEqual({ itemCode: 'HH-HN', warehouseCode: null, from: '1561' });
+    expect(resolveMisaGoodsCodes('15611', saved)).toEqual({ itemCode: 'HH-HN', warehouseCode: null, from: '1561' });
+    expect(resolveMisaGoodsCodes('156.HCM', saved)).toEqual({ itemCode: 'HANGHOA', warehouseCode: 'KHO01', from: '156' });
+    expect(resolveMisaGoodsCodes('1521', saved)).toEqual({ ...MISA_GOODS_DEFAULTS['152'], from: null });
+    expect(resolveMisaGoodsCodes('153', [])).toEqual({ itemCode: 'CCDC', warehouseCode: 'KCCDC', from: null });
+    expect(resolveMisaGoodsCodes('6422', saved)).toBeNull();
+  });
+});
+
+describe('goods purchases: one invoice split between the goods and the services template (#1398)', () => {
+  // Goods for 10,000,000 at 8% on 156, tools for 1,000,000 at 10% on 153, and a delivery fee of 300,000 at 10%.
+  const mixed = () =>
+    purchase({
+      vatAmount: '930000',
+      lines: [
+        { ...line(1, '10000000', '8%', '156'), description: 'Thép cuộn', unit: 'Tấn', quantity: '2.5', unitPrice: '4000000' },
+        { ...line(2, '1000000', '10%', '153'), description: 'Máy khoan' },
+        { ...line(3, '300000', '10%', '6422'), description: 'Phí vận chuyển' },
+      ],
+    });
+
+  it('puts the stock lines in the goods voucher and the rest in the services voucher, VAT adding up to the invoice', () => {
+    const goods = goodsPurchaseRows(mixed(), []);
+    const services = servicePurchaseRows(mixed());
+    expect(goods.map((r) => [r.line.lineNo, r.voucherNo, r.goods.itemCode, r.goods.warehouseCode, r.vatAmount, r.vatAccount])).toEqual([
+      [1, 'CRMH6172839A4B5C', 'HH', 'KHH', '800000', '1331'],
+      [2, 'CRMH6172839A4B5C', 'CCDC', 'KCCDC', '100000', '1331'],
+    ]);
+    expect(services.map((r) => [r.line.lineNo, r.voucherNo, r.vatAmount])).toEqual([[3, 'CRMDV6172839A4B5C', '30000']]);
+    expect(sum([...goods, ...services].map((r) => r.vatAmount)).toFixed()).toBe('930000');
+  });
+
+  it('gives a goods-only invoice no services rows and a services-only invoice no goods rows', () => {
+    expect(servicePurchaseRows(purchase({ vatAmount: '80000', lines: [line(1, '1000000', '8%', '1521')] }))).toEqual([]);
+    expect(goodsPurchaseRows(purchase(), [])).toEqual([]);
+  });
+
+  it('writes the goods voucher with the org codes, warehouse and stock account, exact amounts and inert text', async () => {
+    const saved = [{ accountCode: '156', itemCode: 'THEP01', warehouseCode: 'KHO.HN' }];
+    const voucher = mixed();
+    voucher.vendor = { name: '=HYPERLINK("http://evil.example","x")', taxCode: '0101234564', address: '1 Láng Hạ' };
+    const sheet = await readBack(MISA_SME_PURCHASE_GOODS, goodsPurchaseRows(voucher, saved));
+    expect(sheet.rowCount).toBe(3);
+    const first = rowValues(sheet, 2, GOODS_HEADERS);
+    expect(first).toMatchObject({
+      'Hiển thị trên sổ': null,
+      'Hình thức mua hàng': null,
+      'Phương thức thanh toán': null,
+      'Nhận kèm hóa đơn': 1,
+      'Số phiếu nhập (*)': 'CRMH6172839A4B5C',
+      'Số chứng từ thanh toán': null,
+      'Mẫu số HĐ': null,
+      'Ký hiệu HĐ': 'C26TAA',
+      'Số hóa đơn': '123',
+      'Mã nhà cung cấp': null,
+      'Tên nhà cung cấp': '=HYPERLINK("http://evil.example","x")',
+      'Diễn giải': 'Mua dịch vụ Công ty TNHH ABC HĐ C26TAA/123',
+      'Mã hàng (*)': 'THEP01',
+      'Tên hàng': 'Thép cuộn',
+      'Kho': 'KHO.HN',
+      'TK kho (*)': '156',
+      'TK công nợ/TK tiền (*)': '331',
+      'ĐVT': null,
+      'Số lượng': 2.5,
+      'Đơn giá': 4000000,
+      'Thành tiền': 10000000,
+      '% thuế GTGT': 8,
+      'Tiền thuế GTGT': 800000,
+      'TKĐƯ thuế GTGT': null,
+      'TK thuế GTGT': '1331',
+      'Phí trước hải quan': null,
+      'TK thuế TTĐB': null,
+    });
+    expect(first['Ngày hạch toán (*)']).toEqual(new Date(Date.UTC(2026, 8, 30)));
+    expect(first['Ngày hóa đơn']).toEqual(new Date(Date.UTC(2026, 8, 29)));
+    const vendor = sheet.getRow(2).getCell(GOODS_HEADERS.indexOf('Tên nhà cung cấp') + 1);
+    expect(vendor.formula).toBeUndefined();
+    expect(vendor.numFmt).toBe('@');
+    // The tools line takes the default codes of 153: the org set codes for 156 only.
+    expect(rowValues(sheet, 3, GOODS_HEADERS)).toMatchObject({ 'Mã hàng (*)': 'CCDC', 'Kho': 'KCCDC', 'TK kho (*)': '153', '% thuế GTGT': 10, 'Tiền thuế GTGT': 100000 });
+  });
+
+  it('leaves Kho blank for an account whose codes have no warehouse, and keeps large amounts exact', async () => {
+    const voucher = purchase({ vatAmount: '0', lines: [{ ...line(1, '1234567890123456.7891', '0%', '1521'), quantity: '3', unitPrice: '411522630041152.26303333' }] });
+    const sheet = await readBack(MISA_SME_PURCHASE_GOODS, goodsPurchaseRows(voucher, [{ accountCode: '152', itemCode: 'NVL01', warehouseCode: null }]));
+    const at = (h: string) => sheet.getRow(2).getCell(GOODS_HEADERS.indexOf(h) + 1).value;
+    expect(at('Mã hàng (*)')).toBe('NVL01');
+    expect(at('Kho')).toBeNull();
+    expect(at('Thành tiền')).toBe('1234567890123456.7891');
+    expect(at('Đơn giá')).toBe('411522630041152.26303333');
   });
 });
 

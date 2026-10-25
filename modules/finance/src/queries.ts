@@ -371,20 +371,31 @@ export const journalList = defineQuery({
 // The MISA SME voucher exports (GET /api/export/misa/purchases.xlsx, #317, and /api/export/misa/sales.xlsx, #313)
 // record themselves here too, with `format`, so the usage report counts every export to the accountant; `entries` is
 // then the number of vouchers. So do the cash receipts and payments (/api/export/misa/receipts.xlsx and
-// payments.xlsx, #657).
-export const EXPORT_FORMATS = ['journal', 'misa_sme_purchases', 'misa_sme_sales', 'misa_sme_cash_receipts', 'misa_sme_cash_payments'] as const;
+// payments.xlsx, #657), and the goods purchases (/api/export/misa/goods-purchases.xlsx, #1398). Since #1398 the services
+// file leaves out lines on a stock account, which go to the goods file; its audit row carries `stockLines: 'excluded'`,
+// so a document's history (#878) tells it from an older services file, which held every line.
+export const EXPORT_FORMATS = [
+  'journal',
+  'misa_sme_purchases',
+  'misa_sme_goods_purchases',
+  'misa_sme_sales',
+  'misa_sme_cash_receipts',
+  'misa_sme_cash_payments',
+] as const;
 export const journalExport = defineCommand({
   name: 'finance.journal.export',
   input: zRange.extend({
     entries: z.number().int().nonnegative().max(JOURNAL_EXPORT_LIMIT),
     format: z.enum(EXPORT_FORMATS).optional(),
+    stockLines: z.literal('excluded').optional(),
   }),
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
     // The range too, null for an open end (#878), so a document's history can name the exports it was in.
     const range = { from: input.from ?? null, to: input.to ?? null };
-    ctx.audit(input.format ? { entries: input.entries, format: input.format, ...range } : { entries: input.entries, ...range });
+    const stock = input.stockLines ? { stockLines: input.stockLines } : {};
+    ctx.audit(input.format ? { entries: input.entries, format: input.format, ...range, ...stock } : { entries: input.entries, ...range });
     return { ok: true as const };
   },
 });
