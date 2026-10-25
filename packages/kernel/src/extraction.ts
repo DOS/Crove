@@ -47,13 +47,15 @@ export interface LatestExtraction {
   error: string | null;
   // A pending run that is not stale.
   inFlight: boolean;
+  // The legal entity whose document the file is (#1280); a re-extraction stays in it.
+  legalEntityId: string;
 }
 
 // The file's newest extraction run, or undefined if it has not been read yet.
 export async function latestExtraction(ctx: QueryContext, fileId: string): Promise<LatestExtraction | undefined> {
   const row = await ctx.trx
     .selectFrom('crove_kernel.extraction')
-    .select(['id', 'version', 'status', 'error', pendingSince.as('fresh')])
+    .select(['id', 'version', 'status', 'error', 'legal_entity_id', pendingSince.as('fresh')])
     .where('org_id', '=', ctx.orgId)
     .where('file_id', '=', fileId)
     .orderBy('version', 'desc')
@@ -62,7 +64,7 @@ export async function latestExtraction(ctx: QueryContext, fileId: string): Promi
   if (!row) return undefined;
   const inFlight = row.status === 'pending' && row.fresh;
   const error = row.status === 'pending' && !inFlight ? STALE_RUN_ERROR : row.error;
-  return { id: row.id, version: row.version, status: row.status, error, inFlight };
+  return { id: row.id, version: row.version, status: row.status, error, inFlight, legalEntityId: row.legal_entity_id };
 }
 
 // Of the given proposals, those whose recorded purchase document was voided by reversing its journal entry (#165).
@@ -173,6 +175,7 @@ export const reextractFile = defineCommand({
       .values({
         org_id: ctx.orgId,
         file_id: input.fileId,
+        legal_entity_id: latest.legalEntityId,
         method: null,
         status: 'pending',
         result: null,
