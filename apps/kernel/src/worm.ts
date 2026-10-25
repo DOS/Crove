@@ -234,7 +234,7 @@ async function rowHashes(db: Db, batch: Pick<ArchiveBatch, 'version' | 'window' 
         ).rows
       : [];
   const entities =
-    batch.version === 3
+    batch.version >= 3
       ? (
           await sql<{ ref: string; row_sha256: string }>`
             SELECT ref, row_sha256 FROM crove_kernel.archive_entity_hashes(${batch.entitiesFrom ?? from}::timestamptz, ${to}::timestamptz)`.execute(db)
@@ -245,9 +245,9 @@ async function rowHashes(db: Db, batch: Pick<ArchiveBatch, 'version' | 'window' 
 
 // Where a batch's numbers start: the epoch when it is the first batch of version 2 or above, its window's start after.
 const numbersFromAfter = (previous: ArchiveBatch | null, from: string) => ((previous?.version ?? 1) >= 2 ? from : EPOCH);
-// Where a version 3 batch's legal entity rows start: the epoch when it is the first version 3 batch, its window's start
+// Where a batch's legal entity rows start: the epoch when it is the first batch of version 3 or above, its window's start
 // after.
-const entitiesFromAfter = (previous: ArchiveBatch | null, from: string) => (previous?.version === 3 ? from : EPOCH);
+const entitiesFromAfter = (previous: ArchiveBatch | null, from: string) => ((previous?.version ?? 1) >= 3 ? from : EPOCH);
 
 function parseBatch(bytes: Uint8Array): ArchiveBatch | null {
   try {
@@ -408,7 +408,7 @@ export async function verifyArchive(db: Db, store: ArchiveStore): Promise<Archiv
     // each from where the last one stopped.
     if (batch.version < (previous?.version ?? 1)) note({ code: 'version_regressed', seq });
     if (batch.version >= 2 && batch.numbersFrom !== numbersFromAfter(previous, batch.window.from)) note({ code: 'numbers_gap', seq });
-    if (batch.version === 3 && batch.entitiesFrom !== entitiesFromAfter(previous, batch.window.from)) note({ code: 'entities_gap', seq });
+    if (batch.version >= 3 && batch.entitiesFrom !== entitiesFromAfter(previous, batch.window.from)) note({ code: 'entities_gap', seq });
     const batchHash = batchSha256(batch.rows);
     if (batchHash !== batch.batchSha256) note({ code: 'batch_hash_mismatch', seq });
     if (chainSha256(batch.prevChainSha256, seq, batch.window.from, batch.window.to, batch.batchSha256) !== batch.chainSha256) {
