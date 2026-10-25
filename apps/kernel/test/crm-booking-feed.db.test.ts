@@ -160,8 +160,9 @@ suite('crm booking feed on PostgreSQL (#1382)', () => {
     await o.book('cua-b', at(day, 660));
     const cancelled = await o.book('tu-van', at(day, 720));
     await o.exec(o.a, 'crm.booking.cancel', { bookingId: cancelled });
-    // A booking past the window (moved there directly: the type's horizon would refuse it).
-    const tooFar = await o.book('tu-van', at(bookableDay(4), 540));
+    // A booking past the window (moved there directly: the type's horizon would refuse it). At 17:00, a time no other
+    // booking here takes, since bookableDay(4) is the same date as bookableDay(3) when day 3 is a holiday.
+    const tooFar = await o.book('tu-van', at(bookableDay(4), 1020));
     await admin((cl) => cl.query("UPDATE crove_kernel.calendar_event SET starts_at = starts_at + interval '120 days', ends_at = ends_at + interval '120 days' WHERE id = (SELECT calendar_event_id FROM crove_crm.booking WHERE id = $1)", [tooFar]));
 
     const { token } = await o.exec<{ token: string }>(o.a, 'crm.booking_feed.create');
