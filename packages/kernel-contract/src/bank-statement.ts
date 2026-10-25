@@ -28,6 +28,8 @@ export const zBankStatementImport = z.object({
   bankAccount: zAccountCode,
   filename: z.string().max(200),
   rows: z.array(zBankStatementRow).min(1).max(BANK_IMPORT_MAX_ROWS),
+  // The legal entity whose books the lines go to (#1280), as in zLegalEntityChoice.
+  legalEntityId: zId.optional(),
 });
 export type BankStatementImport = z.infer<typeof zBankStatementImport>;
 

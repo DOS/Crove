@@ -308,8 +308,9 @@ suite('finance books per legal entity (#1280)', () => {
     // The owner sees both entities.
     const ownerSees = await asUser(owner, async (c) => (await c.query<{ id: string }>('SELECT DISTINCT legal_entity_id AS id FROM crove_finance.journal_entry ORDER BY 1')).rows.map((r) => r.id));
     expect(ownerSees).toEqual([defaultEntity, branch].sort());
-    // Posting without an entity books in the default entity, which the member cannot see: refused, nothing written.
-    await expect(asUser(member, (c) => post(c, '5000'))).rejects.toThrow(RLS_DENIED);
+    // Posting without an entity books in the default entity, which the member cannot see: refused, nothing written (by
+    // the posting path itself since part 2a, LEGAL_ENTITY_NOT_ALLOWED).
+    await expect(asUser(member, (c) => post(c, '5000'))).rejects.toThrow(new RegExp(`${RLS_DENIED.source}|LEGAL_ENTITY_NOT_ALLOWED`));
     // Naming the default entity on a top-level row is refused the same way.
     await expect(
       asUser(member, (c) =>
@@ -333,7 +334,7 @@ suite('finance books per legal entity (#1280)', () => {
           defaultEntry,
         ]),
       ),
-    ).rejects.toThrow(/row-level security|null value in column "legal_entity_id"/);
+    ).rejects.toThrow(/row-level security|null value in column "legal_entity_id"|LEGAL_ENTITY_NOT_ALLOWED/);
     // Nor can the member attach a row of the branch under a parent of the default entity it cannot see: a learned rule
     // naming the branch and a default-entity purchase document as its source loses its entity and is refused.
     const document = await admin(async (a) => {
