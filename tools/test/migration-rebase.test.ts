@@ -68,6 +68,8 @@ describe('migration:rebase in a repository', () => {
     run('checkout', '-q', '-b', 'feature');
     write(m('20261101233000', 'crove_kernel_feature'), 'SELECT 2;\n');
     write('docs/feature.md', 'Adds 20261101233000_crove_kernel_feature.sql.\n');
+    // A binary fixture the branch adds that happens to hold the old version: never rewritten.
+    writeFileSync(join(dir, 'fixture.bin'), Buffer.concat([Buffer.from('20261101233000'), Buffer.from([0, 1, 2])]));
     run('add', '.');
     run('commit', '-q', '-m', 'feature');
     run('checkout', '-q', 'main');
@@ -82,6 +84,7 @@ describe('migration:rebase in a repository', () => {
     expect(renames).toEqual([{ from: m('20261101233000', 'crove_kernel_feature'), to: m('20261102010000', 'crove_kernel_feature') }]);
     expect(readFileSync(join(dir, 'docs/feature.md'), 'utf8')).toBe('Adds 20261102010000_crove_kernel_feature.sql.\n');
     expect(readFileSync(join(dir, 'docs/notes.md'), 'utf8')).toBe('main notes\n');
+    expect(readFileSync(join(dir, 'fixture.bin')).subarray(0, 14).toString()).toBe('20261101233000');
     expect(run('diff', '--cached', '--name-status').trim().split('\n').sort()).toEqual(
       ['M\tdocs/feature.md', `R100\t${m('20261101233000', 'crove_kernel_feature')}\t${m('20261102010000', 'crove_kernel_feature')}`].sort(),
     );
@@ -100,6 +103,9 @@ describe('migration:rebase in a repository', () => {
     write('a.txt', 'a\n');
     run('add', '.');
     run('commit', '-q', '-m', 'base');
+    // An untracked file does not count; a change to a tracked one does.
+    write('scratch.txt', 'x\n');
+    expect(rebaseMigrations({ base: 'main', fetch: false, cwd: dir, log: () => {} })).toEqual([]);
     write('a.txt', 'b\n');
     expect(() => rebaseMigrations({ base: 'main', fetch: false, cwd: dir, log: () => {} })).toThrow(/working tree has changes/);
   }, 60_000);
