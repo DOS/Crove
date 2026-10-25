@@ -1712,6 +1712,10 @@ export const vi = {
     approvedToast: 'Đã duyệt và ghi sổ {name}',
     rejectedToast: 'Đã từ chối {name}',
     viewCustomer: 'Xem trong danh sách khách hàng',
+    // Whose books the invoice goes to, with several legal entities (#1542).
+    entity: 'Ghi vào sổ của pháp nhân',
+    entitySuggest: 'Bạn đang làm việc với {chosen}.',
+    entityMove: 'Chuyển hóa đơn sang {chosen}',
     timeline: 'Lịch sử chứng từ',
     timelineEmpty: 'Chưa có hoạt động nào được ghi lại',
     timelineMore: 'Chỉ hiện 200 hoạt động gần nhất',
