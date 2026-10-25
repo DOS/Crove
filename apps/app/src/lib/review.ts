@@ -129,6 +129,15 @@ export function reviewShortcut(event: KeyLike): ReviewAction | null {
   return Object.hasOwn(KEYS, event.key.toLowerCase()) ? (KEYS[event.key.toLowerCase()] as ReviewAction) : null;
 }
 
+// Where the focus goes in a list of `length` items when J or K moves it by `step` from `current` (-1: nothing of the
+// list has the focus yet), stopping at either end (#1405): the first or the last item from outside the list, null for
+// an empty list.
+export function steppedIndex(current: number, length: number, step: 1 | -1): number | null {
+  if (length === 0) return null;
+  if (current < 0) return step === 1 ? 0 : length - 1;
+  return Math.min(length - 1, Math.max(0, current + step));
+}
+
 // The pending proposal after `current` in the list order, or the first other one when `current` is not in the list
 // (it was just decided); null when none is left.
 export function nextPendingId(items: ReadonlyArray<{ id: string }>, current: string): string | null {
