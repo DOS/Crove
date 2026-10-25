@@ -5,6 +5,10 @@
 // superuser. A new table with org_id fails here until it has RLS in the expected shape and a row factory below.
 // Scope: tables found by an org_id column. Global tables without org_id (user_account, auth_session) and a tenant
 // column under another name are not covered; AGENTS.md requires org_id on every tenant table.
+// Legal entities (#1281, plan §4.6, T8): every table with a NOT NULL legal_entity_id column, and
+// crove_kernel.legal_entity itself (by id), must carry the RESTRICTIVE le_scope policy, and a member of org A whose
+// assignments limit it to one entity reads, inserts, updates and deletes none of another entity's rows. A nullable
+// legal_entity_id (role_assignment: the entity an assignment is limited to) is a scope, not an owner, and is left out.
 // Part of the invariant suite: CI runs this file from the base branch on protected-path PRs (AGENTS.md).
 // Set CROVE_TEST_ADMIN_URL to a superuser URL; the run creates and drops its own database.
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -45,6 +49,9 @@ const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
+// The RESTRICTIVE legal-entity policy (20261030001000, 20261102140000), as pg_get_expr prints it for column c.
+const leScopePredicate = (c: string) =>
+  `(('*'::text = ANY (( SELECT crove_kernel.ctx_le_scope() AS ctx_le_scope)::text[])) OR ((${c})::text = ANY (( SELECT crove_kernel.ctx_le_scope() AS ctx_le_scope)::text[])))`;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
 
 type Values = Record<string, string | number>;
@@ -1130,6 +1137,8 @@ interface Relation {
   kind: string;
   rls: boolean;
   owner: string;
+  // The column le_scope checks: legal_entity_id, id for crove_kernel.legal_entity, or null for an org-wide table.
+  entityColumn: string | null;
 }
 
 // Creates the database, applies the migrations and reads the catalog before the cases are collected, so every
@@ -1150,7 +1159,14 @@ async function prepare() {
     await admin.connect();
     const { rows } = await admin.query<Relation>(
       `SELECT pg_catalog.format('%I.%I', n.nspname, c.relname) AS name, c.relkind::text AS kind, c.relrowsecurity AS rls,
-              pg_catalog.pg_get_userbyid(c.relowner) AS owner
+              pg_catalog.pg_get_userbyid(c.relowner) AS owner,
+              CASE
+                WHEN c.oid = 'crove_kernel.legal_entity'::regclass THEN 'id'
+                WHEN EXISTS (
+                  SELECT 1 FROM pg_catalog.pg_attribute a
+                  WHERE a.attrelid = c.oid AND a.attname = 'legal_entity_id' AND a.attnotnull AND a.attnum > 0 AND NOT a.attisdropped)
+                THEN 'legal_entity_id'
+              END AS "entityColumn"
        FROM pg_catalog.pg_class c
        JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
        WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -1195,6 +1211,10 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     enter: (c: pg.Client) => Promise<void>;
   }
   const actors: Actor[] = [];
+  // A member of org A limited by its external_accountant assignment to one legal entity, a branch with no rows: it
+  // must see, write and change none of the rows the factories seed (all in org A's default entity).
+  let scoped: Actor;
+  let branch = '';
   // privileges[table][role] = the table privileges the role holds.
   const privileges = new Map<string, Map<string, Set<Op>>>();
 
@@ -1411,6 +1431,26 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
       { name: 'crove_app with no context', role: 'crove_app', client: app, org: null, enter: none },
       { name: 'crove_worker with no context', role: 'crove_worker', client: worker, org: null, enter: none },
     );
+
+    const accountant = freshUser();
+    branch = randomUUID();
+    await adminTx([
+      { table: 'crove_kernel.legal_entity', values: { org_id: orgs.A.id, id: branch, name: 'RLS matrix scoped branch', kind: 'branch', created_by: orgs.A.owner } },
+      { table: 'crove_kernel.tenant_member', values: { org_id: orgs.A.id, user_id: accountant, role: 'member' } },
+      {
+        table: 'crove_kernel.role_assignment',
+        values: { org_id: orgs.A.id, id: randomUUID(), user_id: accountant, role_key: 'external_accountant', legal_entity_id: branch, granted_by: orgs.A.owner },
+      },
+    ]);
+    scoped = {
+      name: 'crove_app as an external accountant of org A limited to a branch',
+      role: 'crove_app',
+      client: app,
+      org: 'A',
+      enter: async (c) => {
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [accountant, orgs.A.id]);
+      },
+    };
   });
 
   afterAll(async () => {
@@ -1436,6 +1476,15 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
     );
     const pending = [...PENDING_TABLES];
     expect(pending, 'PENDING_TABLES is kept sorted, one table per line').toEqual([...pending].sort());
+  });
+
+  it('limits the scoped member to its branch', async () => {
+    const outcome = expectRows(await probe(scoped, (c) => c.query('SELECT crove_kernel.ctx_le_scope() AS scope')), 'the scoped member');
+    expect(outcome.rows).toEqual([{ scope: [branch] }]);
+    const entityTables = relations.filter((r) => r.entityColumn).map((r) => r.name);
+    expect(entityTables, 'tables scoped by legal entity').toContain('crove_finance.journal_entry');
+    expect(entityTables).toContain('crove_kernel.legal_entity');
+    expect(entityTables).not.toContain('crove_kernel.role_assignment');
   });
 
   it('runs no runtime role as a superuser or with BYPASSRLS', async () => {
@@ -1622,6 +1671,56 @@ suite('generated cross-org RLS matrix on PostgreSQL (T8)', () => {
         const { rows } = await admin.query<{ n: number }>(`SELECT count(*)::int AS n FROM ${table} WHERE org_id = $1`, [orgs.B.id]);
         expect(rows[0]?.n, `${table} still has its org B rows`).toBeGreaterThan(0);
       });
+
+      if (relation.entityColumn) {
+        const column = relation.entityColumn;
+        it('has the RESTRICTIVE le_scope policy, and a member limited to another entity reaches none of its rows', async () => {
+          const factory = factoryFor(table);
+          const { rows: policies } = await admin.query<{ cmd: string; roles: string[]; qual: string | null; check: string | null }>(
+            `SELECT p.polcmd::text AS cmd,
+                    ARRAY(SELECT CASE WHEN o = 0 THEN 'public' ELSE pg_catalog.pg_get_userbyid(o) END FROM pg_catalog.unnest(p.polroles) o ORDER BY 1)::text[] AS roles,
+                    pg_catalog.pg_get_expr(p.polqual, p.polrelid) AS qual, pg_catalog.pg_get_expr(p.polwithcheck, p.polrelid) AS check
+             FROM pg_catalog.pg_policy p WHERE p.polrelid = $1::regclass AND NOT p.polpermissive`,
+            [table],
+          );
+          const predicate = leScopePredicate(column);
+          // le_scope (legal_entity_scope on crove_kernel.legal_entity); other RESTRICTIVE policies may sit beside it.
+          expect(policies.filter((p) => p.qual === predicate || p.check === predicate), `${table} has ${column} and needs the RESTRICTIVE le_scope policy on it`).toEqual([
+            { cmd: '*', roles: ['crove_tenant'], qual: predicate, check: predicate },
+          ]);
+
+          const where = `${scoped.name} on ${table}`;
+          // Every probe leaves out the member's own branch (only crove_kernel.legal_entity has a row there: the branch).
+          const others = `${column} <> '${branch}'::uuid`;
+          // Reads: none of the org's other rows, all in its default entity.
+          const read = expectRows(await probe(scoped, (c) => c.query(`SELECT org_id::text AS org FROM ${table} WHERE ${others}`)), `${where} (read)`);
+          expect(read.rows, `${where}: rows of another entity`).toEqual([]);
+          // Inserts: the factory's row (the default entity, named or inherited) is refused.
+          if (can(table, 'crove_app', 'INSERT')) {
+            const inserted = await probe(scoped, async (c) => {
+              const built = factory.make(orgs.A);
+              for (const row of built.setup ?? []) {
+                const q = insertSql(row);
+                await c.query(q.text, q.values);
+              }
+              const q = insertSql({ table, values: built.row });
+              return c.query(q.text, q.values);
+            });
+            expect(inserted.ok, `${where}: inserting a row of another entity succeeded`).toBe(false);
+          }
+          // Updates and deletes: nothing changes.
+          const cols = columnsToUpdate(table, 'crove_app');
+          if (cols.length > 0 && can(table, 'crove_app', 'SELECT')) {
+            const set = factory.update?.set ?? `"${cols[0]}" = "${cols[0]}"`;
+            const updated = await probe(scoped, (c) => c.query(`UPDATE ${table} SET ${set} WHERE org_id = $1 AND ${others}`, [orgs.A.id]));
+            expect(expectRows(updated, `${where} (update)`).rowCount, `${where}: rows of another entity updated`).toBe(0);
+          }
+          if (can(table, 'crove_app', 'DELETE') && can(table, 'crove_app', 'SELECT')) {
+            const deleted = await probe(scoped, (c) => c.query(`DELETE FROM ${table} WHERE org_id = $1 AND ${others}`, [orgs.A.id]));
+            expect(expectRows(deleted, `${where} (delete)`).rowCount, `${where}: rows of another entity deleted`).toBe(0);
+          }
+        });
+      }
     });
   }
 });
