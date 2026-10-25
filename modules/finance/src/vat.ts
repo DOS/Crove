@@ -36,6 +36,7 @@ import {
   type SideTotals,
   type VatPeriod,
 } from './domain/vat-return.ts';
+import { defaultLegalEntityId } from './legal-entity.ts';
 import { needsPaymentCheck, nonCashThreshold, paymentMethodKind, type PaymentMethodKind } from './domain/non-cash-payment.ts';
 import { HtkkAmountError, form01XmlValues } from './domain/vat-01gtgt-xml.ts';
 
@@ -326,15 +327,17 @@ function paymentChecks(input: PeriodInvoice[], marks: Map<string, CheckMark>, va
   };
 }
 
-// The latest mark of each of `periods` (#1400); a withdrawn one counts as none.
-async function filedReturns(ctx: QueryContext, periods: string[]): Promise<Map<string, VatFiledReturn>> {
+// The latest mark of each of `periods` (#1400) of one legal entity (#1280: each entity files its own returns, so [22]
+// comes from the same entity's previous return); a withdrawn one counts as none.
+async function filedReturns(ctx: QueryContext, legalEntityId: string | null, periods: string[]): Promise<Map<string, VatFiledReturn>> {
   const out = new Map<string, VatFiledReturn>();
-  if (periods.length === 0) return out;
+  if (periods.length === 0 || legalEntityId === null) return out;
   const rows = await ctx.trx
     .selectFrom('crove_finance.vat_return_filed')
     .select(['period', 'status', 'source', 'carried_in_amount', 'deductible_amount', 'carried_out_amount', 'created_at'])
     .distinctOn('period')
     .where('org_id', '=', ctx.orgId)
+    .where('legal_entity_id', '=', legalEntityId)
     .where('period', 'in', periods)
     .orderBy('period')
     .orderBy('created_at', 'desc')
@@ -357,7 +360,8 @@ async function filedReturns(ctx: QueryContext, periods: string[]): Promise<Map<s
 // The period's own filed return, and the [22] the return just before it carries in.
 async function returnChain(ctx: QueryContext, period: VatPeriod): Promise<{ carryForward: VatCarryForward; filed: VatFiledReturn | null }> {
   const lookedFor = previousVatPeriods(period);
-  const filed = await filedReturns(ctx, [period.period, ...lookedFor]);
+  // The books are the default entity's until the VAT screens take an entity (#1280 part 2).
+  const filed = await filedReturns(ctx, await defaultLegalEntityId(ctx), [period.period, ...lookedFor]);
   const previous = lookedFor.map((p) => filed.get(p)).find((r) => r !== undefined) ?? null;
   return { carryForward: { amount: previous?.carriedOut ?? '0', previous, lookedFor }, filed: filed.get(period.period) ?? null };
 }
@@ -544,14 +548,17 @@ export const vatReturnMark = defineCommand({
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const period = vatPeriod(input.period);
-    const current = (await filedReturns(ctx, [period.period])).get(period.period) ?? null;
+    // The default entity's return until this command takes an entity (#1280 part 2); its rows name it explicitly.
+    const legalEntityId = await defaultLegalEntityId(ctx);
+    if (legalEntityId === null) throw new DomainError('FORBIDDEN', 403, 'Bạn không có quyền với sổ của pháp nhân này');
+    const current = (await filedReturns(ctx, legalEntityId, [period.period])).get(period.period) ?? null;
     const mark = { obligation: 'vat_return' as const, period: period.period };
     if (!input.done) {
       if (input.figures) throw new DomainError('INVALID', 422, 'Bỏ đánh dấu đã nộp thì không kèm số liệu');
       if (current) {
         await ctx.trx
           .insertInto('crove_finance.vat_return_filed')
-          .values({ org_id: ctx.orgId, period: period.period, status: 'withdrawn', source: null, carried_in_amount: null, deductible_amount: null, carried_out_amount: null, marked_by: ctx.actor.userId })
+          .values({ org_id: ctx.orgId, legal_entity_id: legalEntityId, period: period.period, status: 'withdrawn', source: null, carried_in_amount: null, deductible_amount: null, carried_out_amount: null, marked_by: ctx.actor.userId })
           .execute();
       }
       await ctx.run('kernel.tax_obligation.undo', mark);
@@ -585,6 +592,7 @@ export const vatReturnMark = defineCommand({
         .insertInto('crove_finance.vat_return_filed')
         .values({
           org_id: ctx.orgId,
+          legal_entity_id: legalEntityId,
           period: period.period,
           status: 'filed',
           source,

@@ -169,6 +169,7 @@ import {
   zFinancialStatements,
   zLedgerPeriod,
   zLedgerReport,
+  zLegalEntityChoice,
   zPeriodLockInput,
   zPeriodLockState,
   zArchiveYear,
@@ -186,7 +187,7 @@ import { zDepreciationRequest, zJournalVoucherRequest, zYearClosingRequest } fro
 import { zFixedAsset, zFixedAssetCreate, zFixedAssetEnd } from './fixed-asset.ts';
 import { zStatementsHtkkCheck, zStatementsHtkkYear } from './statements-htkk.ts';
 import { zTaxObligationMark, zTaxProfile } from './tax-calendar.ts';
-import { zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
+import { zBookEntity, zLegalEntity, zLegalEntityInput } from './legal-entity.ts';
 import { zMemberRoles, zRoleAssignInput } from './roles.ts';
 import { zCalendarEventAdd, zCalendarEventCancel, zCalendarEventView, zCalendarRange, zCalendarSlot, zCalendarSlotsQuery, zMyCalendar, zWorkingHours } from './calendar.ts';
 import { zBookingCancel, zBookingItem, zBookingListQuery, zBookingMove, zBookingSuggestInput, zBookingSuggestion, zEventType, zEventTypeInput, zEventTypeSetActive, zEventTypeUpdate } from './crm.ts';
@@ -1323,8 +1324,14 @@ export const contract = {
   // Period lock (#329): every member reads it; owners and admins lock the next month once it has ended; only owners
   // unlock the last locked month (R3: fresh MFA), with a reason. A retry with the same idempotencyKey returns the first
   // result.
+  // The legal entities whose books the caller may see (#1280), default first: the finance screens show an entity picker
+  // only when there is more than one, and pass the chosen legalEntityId to the calls that take one.
+  bookEntities: {
+    list: oc.output(z.array(zBookEntity)),
+  },
+  // Each legal entity locks its own months (#1280): legalEntityId as in zLegalEntityChoice.
   periodLock: {
-    state: oc.output(zPeriodLockState),
+    state: oc.input(zLegalEntityChoice.optional()).output(zPeriodLockState),
     lock: oc.input(zPeriodLockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
     unlock: oc.input(zPeriodUnlockInput.extend({ idempotencyKey: zId })).output(zPeriodLockState),
   },

@@ -10,6 +10,7 @@
 import { sql } from 'kysely';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
 import type { Money } from '@crove/l10n-vn';
+import { legalEntityError } from './legal-entity.ts';
 import { postingGuardError, type BeforeOpeningChoice } from './period-lock.ts';
 
 export interface PostingLine {
@@ -34,6 +35,10 @@ export interface Posting {
   // How a refusal for a date on or before the opening entry tells the user to go on (period-lock.ts); a later date by
   // default.
   beforeOpening?: BeforeOpeningChoice;
+  // The legal entity the entry is booked in (#1280): resolveLegalEntity's answer for the command. Omitted: the reversed
+  // entry's entity for a reversal, else the org's default entity (the posting path decides, and refuses an entity the
+  // caller may not see).
+  legalEntityId?: string;
 }
 
 export async function postJournalEntry(ctx: CommandContext, posting: Posting): Promise<string> {
@@ -50,12 +55,12 @@ export async function postJournalEntry(ctx: CommandContext, posting: Posting): P
     ({ rows } = await sql<{ id: string }>`
       SELECT crove_finance.post_journal_entry(
         ${posting.entryDate}::date, ${posting.description}, ${posting.sourceType}, ${posting.sourceId}::uuid, ${JSON.stringify(lines)}::jsonb,
-        ${posting.reversesEntryId ?? null}::uuid, ${posting.sourceRevision ?? 1}::int
+        ${posting.reversesEntryId ?? null}::uuid, ${posting.sourceRevision ?? 1}::int, ${posting.legalEntityId ?? null}::uuid
       ) AS id`.execute(ctx.trx));
   } catch (error) {
     // An entry dated in a locked month, or on or before the opening entry (period-lock.ts), or an amount the book
     // currency cannot hold, or a source revision the ledger refuses: say so instead of a system error.
-    throw postingGuardError(error, posting.beforeOpening) ?? amountScaleError(error) ?? sourceRevisionError(error) ?? error;
+    throw postingGuardError(error, posting.beforeOpening) ?? amountScaleError(error) ?? sourceRevisionError(error) ?? legalEntityError(error) ?? error;
   }
   const id = rows[0]?.id;
   if (!id) throw new DomainError('INTERNAL', 500, 'Không ghi được bút toán');
