@@ -8,6 +8,7 @@ import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { signOut } from '../lib/session-actions.ts';
 import { StatusLink } from './status-link.tsx';
 import { SupportLink } from './support-link.tsx';
+import { EntitySwitcher } from './entity-switcher.tsx';
 import { ThemeSwitcher } from './theme-switcher.tsx';
 import { Logo } from './ui.tsx';
 
@@ -131,6 +132,8 @@ export function ShellNav({ slug, groups, badges, orgs, email, onOpenPalette, pal
             </NativeSelectOption>
           ))}
         </NativeSelect>
+        {/* The legal entity of the finance books (#1486), when the caller sees more than one. */}
+        <EntitySwitcher slug={slug} />
         {/* A firm adds its next client company from here (issue #324). */}
         <Link to="/onboarding" onClick={onNavigate} className="mt-1 inline-flex min-h-11 items-center text-xs text-link md:min-h-6">
           {t('addOrg')}
