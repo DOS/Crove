@@ -1719,6 +1719,10 @@ export const en = {
     approvedToast: 'Approved and posted {name}',
     rejectedToast: 'Rejected {name}',
     viewCustomer: 'View in customers',
+    // Whose books the invoice goes to, with several legal entities (#1542).
+    entity: 'Recorded in the books of',
+    entitySuggest: 'You are working in {chosen}.',
+    entityMove: 'Move the invoice to {chosen}',
     timeline: 'Document history',
     timelineEmpty: 'No activity recorded yet',
     timelineMore: 'Only the latest 200 entries are shown',
