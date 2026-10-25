@@ -232,6 +232,7 @@ export interface FinanceBankLineTable {
   ambiguous: ColumnType<boolean, boolean | undefined, NotGranted>;
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.cash_voucher */
@@ -250,6 +251,7 @@ export interface FinanceCashVoucherTable {
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   bank_line_id: ColumnType<string | null, string | null, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.categorization_rule */
@@ -265,6 +267,7 @@ export interface FinanceCategorizationRuleTable {
   confirmed_at: ColumnType<Date, Date | string | undefined, Date | string>;
   source_document_id: string | null;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.depreciation_line */
@@ -276,6 +279,7 @@ export interface FinanceDepreciationLineTable {
   amount: ColumnType<string, string, NotGranted>;
   entry_id: ColumnType<string, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.fixed_asset */
@@ -297,6 +301,7 @@ export interface FinanceFixedAssetTable {
   ended_by: string | null;
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.input_vat_check */
@@ -309,6 +314,7 @@ export interface FinanceInputVatCheckTable {
   note: ColumnType<string | null, string | null, NotGranted>;
   marked_by: ColumnType<string, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.journal_entry */
@@ -327,6 +333,7 @@ export interface FinanceJournalEntryTable {
   search: ColumnType<string | null, NotGranted, NotGranted>;
   source_revision: ColumnType<number, NotGranted, NotGranted>;
   payload_sha256: ColumnType<Buffer | null, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
 }
 
 /** crove_finance.journal_line */
@@ -339,6 +346,7 @@ export interface FinanceJournalLineTable {
   credit: ColumnType<string, NotGranted, NotGranted>;
   party_id: ColumnType<string | null, NotGranted, NotGranted>;
   memo: ColumnType<string | null, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
 }
 
 /** crove_finance.journal_voucher */
@@ -352,6 +360,7 @@ export interface FinanceJournalVoucherTable {
   created_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   closing_year: ColumnType<number | null, number | null, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.misa_goods_code */
@@ -390,6 +399,7 @@ export interface FinancePeriodBalanceDeltaTable {
   debit: ColumnType<string, NotGranted, NotGranted>;
   credit: ColumnType<string, NotGranted, NotGranted>;
   line_count: ColumnType<number, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
 }
 
 /** crove_finance.period_lock */
@@ -424,6 +434,7 @@ export interface FinancePortalInvoiceListTable {
   removed_by: string | null;
   own_sales_count: Generated<number>;
   other_buyer_count: Generated<number>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.portal_invoice_row */
@@ -444,6 +455,7 @@ export interface FinancePortalInvoiceRowTable {
   status: ColumnType<string, string, NotGranted>;
   status_label: ColumnType<string | null, string | null, NotGranted>;
   check_result: ColumnType<string | null, string | null, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.purchase_document */
@@ -477,6 +489,7 @@ export interface FinancePurchaseDocumentTable {
   foreign_subtotal: ColumnType<string | null, string | null, NotGranted>;
   foreign_vat_amount: ColumnType<string | null, string | null, NotGranted>;
   foreign_total: ColumnType<string | null, string | null, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.purchase_document_void */
@@ -487,6 +500,7 @@ export interface FinancePurchaseDocumentVoidTable {
   reason: ColumnType<string, string, NotGranted>;
   voided_by: ColumnType<string | null, string | null, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.purchase_line */
@@ -503,6 +517,7 @@ export interface FinancePurchaseLineTable {
   vat_amount: ColumnType<string, string | undefined, NotGranted>;
   debit_account: ColumnType<string | null, string | null, NotGranted>;
   credit_account: ColumnType<string | null, string | null, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.purchase_tax_rate */
@@ -513,6 +528,7 @@ export interface FinancePurchaseTaxRateTable {
   vat_rate: ColumnType<string, string, NotGranted>;
   taxable_amount: ColumnType<string, string, NotGranted>;
   vat_amount: ColumnType<string, string, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.vat_return_filed */
@@ -527,6 +543,7 @@ export interface FinanceVatReturnFiledTable {
   carried_out_amount: ColumnType<string | null, string | null, NotGranted>;
   marked_by: ColumnType<string, string, NotGranted>;
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
 /** crove_finance.vendor_account_rule */
