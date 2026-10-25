@@ -12,6 +12,7 @@ import {
   FileTextIcon,
   HouseIcon,
   InboxIcon,
+  InfoIcon,
   LandmarkIcon,
   ListChecksIcon,
   MegaphoneIcon,
@@ -49,6 +50,7 @@ const ICONS = {
   menu: MenuIcon,
   close: XIcon,
   expand: ChevronDownIcon,
+  info: InfoIcon,
 } as const
 
 type NavIconName = keyof typeof ICONS
