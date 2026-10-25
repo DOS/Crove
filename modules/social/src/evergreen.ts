@@ -11,6 +11,8 @@ import { effectiveContent, inheritedContent } from './domain/approval.ts';
 import { refusesDuplicates } from './domain/duplicate.ts';
 import { duplicatesOf } from './duplicates.ts';
 import { insertVariants, writePostMedia } from './posts.ts';
+import { refuseUnusableMedia } from './library.ts';
+import { coverOf } from './domain/channels.ts';
 import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, refuseArchived, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
 import { publishingHeld } from './publish-hold.ts';
@@ -309,6 +311,14 @@ export const postDuplicate = defineCommand({
           );
     const targets = variants.filter((v) => connected.has(v.channel_connection_id));
     if (targets.length === 0) throw new DomainError('NOTHING_TO_DUPLICATE', 409, 'Các kênh bạn dùng được của bài này không còn kết nối nên chưa nhân bản được');
+    // A copy attaches its source's files anew (#1273), its channels' covers among them: an archived file (#1302), or
+    // one the member may not use, is refused with 403 MEDIA_NOT_ALLOWED. Reposts, evergreen and recurring copies repeat
+    // what already went out and keep them.
+    const covers = targets.flatMap((v) => {
+      const cover = coverOf(settingsOf(v));
+      return cover && 'fileId' in cover ? [cover.fileId] : [];
+    });
+    await refuseUnusableMedia(ctx, [...[...source.media, ...targets.flatMap((v) => mediaFor(base(source), v))].map((m) => m.fileId), ...covers]);
     const { postId } = await copyPost(ctx, source, targets, { repostOf: null, submit: false, ...(at ? { scheduledAt: at } : {}) });
     const labels = await copyLabels(ctx, source.id, postId);
     ctx.audit({ scheduled_at: at ? at.toISOString() : null, labels });
