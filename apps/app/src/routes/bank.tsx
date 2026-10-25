@@ -15,7 +15,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
-import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { VoucherFormCard } from './vouchers.tsx';
@@ -349,7 +349,7 @@ export function BankPage() {
     <>
       <PageHeader title={t('title')} subtitle={t('subtitle')} />
       {accounts.isLoading ? (
-        <Spinner />
+        <TableSkeleton columns={5} />
       ) : accounts.error ? (
         <ErrorText>{errorMessage(accounts.error)}</ErrorText>
       ) : account === null ? (
@@ -388,7 +388,7 @@ export function BankPage() {
           {canImport && /^\d{4}-\d{2}$/.test(month) && <ProposeMatched key={`${account}:${month}`} bankAccount={account} month={month} />}
           {entering && <LineVoucher key={entering.id} slug={slug} line={entering} onClose={() => setEntering(null)} />}
           {lines.isLoading ? (
-            <Spinner />
+            <TableSkeleton columns={5} />
           ) : lines.error ? (
             <ErrorText>{errorMessage(lines.error)}</ErrorText>
           ) : lines.data && lines.data.lines.length === 0 ? (

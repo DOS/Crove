@@ -7,7 +7,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Checkbox } from '@crove/ui/components/checkbox';
 import { cn } from '@crove/ui/lib/utils';
-import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { Empty, ErrorText, ListSkeleton, PageHeader } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -115,7 +115,7 @@ export function NotificationsPage() {
         }
       />
       {list.isLoading ? (
-        <Spinner />
+        <ListSkeleton />
       ) : list.error ? (
         <ErrorText>{errorMessage(list.error)}</ErrorText>
       ) : items.length === 0 ? (

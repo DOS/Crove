@@ -14,7 +14,7 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { PeriodLockPanel } from '../components/period-lock.tsx';
 import { YearArchivePanel } from '../components/year-archive.tsx';
-import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
 import { partySearch } from '../lib/parties.ts';
@@ -110,7 +110,7 @@ function AccountLedger({ period, accountCode }: { period: string; accountCode: s
   const t = useTranslations('ledger');
   const f = useFormat();
   const query = useQuery(orpc.ledger.account.queryOptions({ input: { period, accountCode } }));
-  if (query.isLoading) return <Spinner />;
+  if (query.isLoading) return <TableSkeleton columns={4} />;
   if (query.error) return <ErrorText>{errorMessage(query.error)}</ErrorText>;
   const ledger = query.data;
   if (!ledger) return null;
@@ -292,7 +292,7 @@ function Statements({ period }: { period: string }) {
       URL.revokeObjectURL(url);
     },
   });
-  if (query.isLoading) return <Spinner />;
+  if (query.isLoading) return <TableSkeleton columns={4} />;
   if (query.error) return <ErrorText>{errorMessage(query.error)}</ErrorText>;
   const data = query.data;
   if (!data) return null;
@@ -335,7 +335,7 @@ export function LedgerPage() {
   const data = report.data;
   // The trial balance, general ledger and party tabs wait for this report. The statements tab runs its own query, so a
   // period too large for the ledger report (PERIOD_TOO_LARGE) still gets its statements.
-  const reportStatus = report.isLoading ? <Spinner /> : report.error ? <ErrorText>{errorMessage(report.error)}</ErrorText> : null;
+  const reportStatus = report.isLoading ? <TableSkeleton columns={5} rows={8} /> : report.error ? <ErrorText>{errorMessage(report.error)}</ErrorText> : null;
   const rows = data?.trialBalance.rows ?? [];
   // The account the general ledger shows: the one picked if the period has it, else the first one.
   const account = rows.find((r) => r.accountCode === picked)?.accountCode ?? rows[0]?.accountCode ?? null;
