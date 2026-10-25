@@ -332,4 +332,17 @@ suite('finding a person in the org (#923)', () => {
     expect(JSON.stringify(audit)).not.toContain('mau.nguyen');
     expect(audit?.detail).toMatchObject({ kind: 'email', erased: { 'crove_kernel.party.email': 1 } });
   });
+
+  it("erases a forwarded mail's text with its sender (#779), and leaves the mails of others", async () => {
+    const mail = (from: string) =>
+      admin((c) => c.query<{ id: string }>(`INSERT INTO crove_kernel.inbound_message (org_id, message_id, from_address, subject, body_text) VALUES ($1, $2, $3, 'Khuyến mãi', 'Chào chị Mẫu, ưu đãi 20%') RETURNING id`, [org.orgId, `<pdpl-${randomUUID()}@test>`, from]));
+    const theirs = String((await mail('ban.hang@shop-mau.example')).rows[0]?.id);
+    const others = String((await mail('khac@shop-khac.example')).rows[0]?.id);
+    expect(columns(await find('ban.hang@shop-mau.example'))).toContain('crove_kernel.inbound_message.from_address');
+    const erased = await erase('ban.hang@shop-mau.example');
+    expect(erased.erased).toEqual(expect.arrayContaining([expect.objectContaining({ column: 'crove_kernel.inbound_message.from_address', rows: 1 }), expect.objectContaining({ column: 'crove_kernel.inbound_message.body_text', rows: 1 })]));
+    const rows = (await admin((c) => c.query<{ id: string; from_address: string | null; body_text: string | null }>('SELECT id, from_address, body_text FROM crove_kernel.inbound_message WHERE id = ANY($1)', [[theirs, others]]))).rows;
+    expect(rows.find((r) => r.id === theirs)).toMatchObject({ from_address: null, body_text: null });
+    expect(rows.find((r) => r.id === others)).toMatchObject({ from_address: 'khac@shop-khac.example', body_text: 'Chào chị Mẫu, ưu đãi 20%' });
+  });
 });

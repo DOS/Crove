@@ -5,7 +5,7 @@ import { expect, test } from '@playwright/test';
 import { Decimal } from 'decimal.js';
 import ExcelJS from 'exceljs';
 import { sql } from '../lib/db.ts';
-import { createOrg, newEmail, signUp } from '../lib/session.ts';
+import { createOrg, newEmail, signInNewUser, signUp } from '../lib/session.ts';
 import { confirmUnverifiedSignature } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
@@ -315,5 +315,58 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
       { outcome: 'denied', code: 'STEP_UP_REQUIRED', aal: 'aal1', mfa: false },
       { outcome: 'ok', code: null, aal: 'aal2', mfa: true },
     ]);
+  });
+});
+
+// Rejecting asks for the reason in a dialog (#1512), not the browser's prompt: focus moves into it and stays there,
+// Escape cancels and gives the focus back to the button, and it fits a 360 px phone.
+test('reject a proposal with a reason through the dialog', async ({ page }) => {
+  await signInNewUser(page, newEmail('inbox-reject'));
+  const slug = await createOrg(page, 'Công ty Từ Chối');
+
+  await test.step('upload the e-invoice and open its proposal', async () => {
+    await page.locator('input[type=file]').setInputFiles(INVOICE);
+    await expect(page.getByRole('link', { name: SELLER })).toBeVisible({ timeout: 60_000 });
+    await page.getByRole('link', { name: SELLER }).click();
+    await expect(page.getByRole('heading', { name: SELLER })).toBeVisible();
+  });
+
+  const reject = page.getByRole('button', { name: 'Từ chối', exact: true });
+  const dialog = page.getByRole('dialog', { name: 'Từ chối đề xuất này?' });
+  const reason = dialog.getByLabel('Lý do từ chối (không bắt buộc)');
+
+  await test.step('Escape cancels: the proposal stays pending and the focus is back on the button', async () => {
+    await reject.click();
+    await expect(dialog).toBeVisible();
+    await expect(reason).toBeFocused();
+    for (let i = 0; i < 4; i++) {
+      await page.keyboard.press('Tab');
+      expect(await dialog.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+    }
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(reject).toBeFocused();
+  });
+
+  await test.step('on a 360 px phone, reject with a reason', async () => {
+    await page.setViewportSize({ width: 360, height: 740 });
+    await reject.click();
+    await expect(dialog).toBeVisible();
+    const box = await dialog.boundingBox();
+    expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);
+    await reason.fill('Sai nhà cung cấp');
+    await dialog.getByRole('button', { name: 'Từ chối', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/o/${slug}/inbox$`));
+    await expect(page.getByRole('status').filter({ hasText: `Đã từ chối ${SELLER}` })).toBeVisible();
+  });
+
+  await test.step('the proposal is rejected with the reason typed', async () => {
+    const rows = sql<{ status: string; decision_note: string | null }>(
+      `SELECT p.status, p.decision_note
+         FROM crove_kernel.proposal p JOIN crove_kernel.tenant t ON t.org_id = p.org_id
+        WHERE t.slug = :'slug'`,
+      { slug },
+    );
+    expect(rows).toEqual([{ status: 'rejected', decision_note: 'Sai nhà cung cấp' }]);
   });
 });

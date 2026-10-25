@@ -208,6 +208,16 @@ function mainText(html: string): string | null {
   return cut(lines.join('\n'), EXTRACT_LIMITS.maxPageTextChars).trim() || null;
 }
 
+// A mail's HTML part as plain text (#779), for a mail with no text/plain part: without its comments, scripts, styles and
+// hidden parts, one cleaned line per block, at most max characters; null when nothing is left.
+export function htmlText(html: string, max: number): string | null {
+  const lines = plainText(stripHidden(html))
+    .split('\n')
+    .map((line) => clean(line, max))
+    .filter((line): line is string => line !== null);
+  return lines.length === 0 ? null : cut(lines.join('\n'), max).trim() || null;
+}
+
 export function readHtmlMeta(bytes: Uint8Array): ExtractedPage {
   const html = stripHidden(decode(bytes));
   const end = html.search(/<\/head\s*>|<body\b/i);
