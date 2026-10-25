@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_finance.categorization_rule',
   'crove_finance.period_balance_delta',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
@@ -265,6 +266,10 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         ],
       };
     },
+  },
+  // #1399: a learned account rule. An org-wide keyword rule names no vendor and no source document.
+  'crove_finance.categorization_rule': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), match_kind: 'keyword', match_text: `rls matrix ${tag()}`, debit_account: '6422' } }),
   },
   // Monthly depreciation and allocation of the register (#919): append-only, one row per asset and month, naming the
   // journal entry that posted it. Tenant roles read and insert; nothing updates or deletes a line.
