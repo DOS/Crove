@@ -12,7 +12,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { canLockPeriods, canUnlockPeriods, monthLabel, previousMonth } from '../lib/period-lock.ts';
 import { DateInput } from './date-input.tsx';
-import { useChosenEntityId } from './entity-switcher.tsx';
+import { useChosenEntity } from './entity-switcher.tsx';
 import { StepUpPrompt } from './two-factor.tsx';
 import { ErrorText } from './ui.tsx';
 
@@ -21,8 +21,8 @@ export function PeriodLockPanel() {
   const f = useFormat();
   const org = useQuery(orpc.org.get.queryOptions());
   // Each legal entity locks its own months (#1280): the one chosen in the shell.
-  const legalEntityId = useChosenEntityId();
-  const state = useQuery(orpc.periodLock.state.queryOptions({ input: { legalEntityId } }));
+  const entity = useChosenEntity();
+  const state = useQuery({ ...orpc.periodLock.state.queryOptions({ input: { legalEntityId: entity.legalEntityId } }), enabled: entity.ready });
   const [picked, setPicked] = useState(() => previousMonth(vietnamMonth()));
   const [unlocking, setUnlocking] = useState(false);
   const [reason, setReason] = useState('');

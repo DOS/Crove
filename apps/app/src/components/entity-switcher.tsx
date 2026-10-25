@@ -15,25 +15,28 @@ const NONE: readonly VisibleEntity[] = [];
 
 // The entities whose books the caller sees (bookEntities.list, #1280), filtered by their scope on the server, the
 // default first. Without the finance module there are no books, so nothing to choose between.
-function useVisibleEntities(): readonly VisibleEntity[] {
+// settled is false while the list is still loading.
+function useVisibleEntities(): { entities: readonly VisibleEntity[]; settled: boolean } {
   const finance = getConfig().modules.includes('finance');
   const entities = useQuery({ ...orpc.bookEntities.list.queryOptions(), enabled: finance, staleTime: 60_000 });
-  return entities.data ?? NONE;
+  return { entities: entities.data ?? NONE, settled: !finance || !entities.isPending };
 }
 
 // The entity the finance screens work in, and the entities to choose from. entityId is null while the caller sees
 // none (the server then answers for the default entity, or refuses).
-export function useLegalEntity(slug: string): { entities: readonly VisibleEntity[]; entityId: string | null } {
-  const entities = useVisibleEntities();
+export function useLegalEntity(slug: string): { entities: readonly VisibleEntity[]; entityId: string | null; settled: boolean } {
+  const { entities, settled } = useVisibleEntities();
   const kept = useKeptEntity(slug);
-  return { entities, entityId: chooseEntity(entities, kept) };
+  return { entities, entityId: chooseEntity(entities, kept), settled };
 }
 
-// The entity a finance screen sends as legalEntityId, in the org of the current route; undefined while the caller's
-// entities are not known yet (the server then answers for the default entity).
-export function useChosenEntityId(): string | undefined {
+// The entity a finance screen sends as legalEntityId, in the org of the current route. Calls wait for ready, so they
+// are not made once for no entity and again when the list arrives; legalEntityId stays undefined when the list
+// failed or is empty (the server then answers for the default entity).
+export function useChosenEntity(): { ready: boolean; legalEntityId: string | undefined } {
   const { slug } = useParams({ strict: false }) as { slug?: string };
-  return useLegalEntity(slug ?? '').entityId ?? undefined;
+  const { entityId, settled } = useLegalEntity(slug ?? '');
+  return { ready: settled, legalEntityId: entityId ?? undefined };
 }
 
 // Hidden until #1280 part 2b: only the period lock and the bank import follow the choice so far, while the journal,
