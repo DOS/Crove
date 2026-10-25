@@ -36,6 +36,9 @@ const TOKEN_ERRORS = new Set([-216, -220, -124, -118]);
 const RATE_LIMITED = -32;
 // "Article is being processed": asked again later.
 const ARTICLE_PROCESSING = -214;
+// "<data_field> is invalid!" in the OA error table: for article/remove and article/getdetail, whose one parameter is the
+// article id, the sign of an id Zalo does not know.
+const INVALID_PARAM = -201;
 // Errors of the OA or the app themselves (the OA disabled or missing, the app inactive, removed or not granted the
 // API, the OA unverified or without the service package, the OA's type): the article's presence cannot be read
 // through them, so a takedown refused with one is never taken for an article already gone.
@@ -563,8 +566,8 @@ export class ZaloOaPublisher implements Publisher {
   // Takes the article down (#1430): `article/remove` with `{ id }`, answered `{ error: 0 }` at once (OA content docs,
   // "Xóa nội dung dạng bài viết"); a video article (#1429) is an article too. Zalo's error table names no code for an
   // article it no longer has, so a refusal that is not about the token, a rate limit, an article still processing or
-  // the OA or app themselves is checked with article/getdetail: refused there too counts as removed, an article still
-  // there is ZALO_CANNOT_REMOVE (a person removes it on Zalo), anything else stays unclear.
+  // the OA or app themselves is checked with article/getdetail: an id both calls call invalid (-201) counts as removed,
+  // an article still there is ZALO_CANNOT_REMOVE (a person removes it on Zalo), anything else stays unclear.
   async remove(input: RemoveInput): Promise<RemoveResult> {
     const s = zaloSecretOf(input.secret);
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
@@ -576,22 +579,24 @@ export class ZaloOaPublisher implements Publisher {
       if (error instanceof ZaloError && error.code === ARTICLE_PROCESSING) return { kind: 'rejected', error: 'transient', code: String(ARTICLE_PROCESSING), message: error.message };
       const result = zaloPublishResult(error);
       if (result.kind === 'rejected' && result.error === 'bad_request' && !(error instanceof ZaloError && error.code !== undefined && ACCESS_ERRORS.has(error.code))) {
-        return this.removedAlready(s.accessToken, input.externalId, result.message);
+        return this.removedAlready(s.accessToken, input.externalId, result.message, error instanceof ZaloError && error.code === INVALID_PARAM);
       }
       return removeResult(result);
     }
   }
 
-  // After a takedown Zalo refused for the article: whether the article is really gone.
-  private async removedAlready(accessToken: string, id: string, refused: string | undefined): Promise<RemoveResult> {
+  // After a takedown Zalo refused for the article: whether the article is really gone. Only the documented "invalid
+  // parameter" (-201) from both calls counts as gone, the id being the one parameter of each: any other refusal (the
+  // app's appsecret_proof, its quota or money, a policy, a bare 4xx) is about the app or the account and refuses both
+  // calls alike while the article is still live, so it stays unclear and a person looks (#1466 review). What Zalo
+  // answers for a deleted article is still to confirm on a live OA.
+  private async removedAlready(accessToken: string, id: string, refused: string | undefined, removeSaidInvalid: boolean): Promise<RemoveResult> {
     try {
       const answer = await this.client.api<{ id?: unknown }>('GET', 'article/getdetail', accessToken, { params: { id } });
       const found = typeof answer?.id === 'string' || typeof answer?.id === 'number' ? String(answer.id) : '';
       return found === id ? { kind: 'rejected', error: 'bad_request', code: 'ZALO_CANNOT_REMOVE', ...(refused ? { message: refused } : {}) } : { kind: 'unknown', code: 'REMOVE_UNCONFIRMED' };
     } catch (error) {
-      const result = zaloPublishResult(error);
-      const access = error instanceof ZaloError && error.code !== undefined && (ACCESS_ERRORS.has(error.code) || error.code === ARTICLE_PROCESSING);
-      return result.kind === 'rejected' && result.error === 'bad_request' && !access ? { kind: 'removed' } : { kind: 'unknown', code: 'REMOVE_UNCONFIRMED' };
+      return removeSaidInvalid && error instanceof ZaloError && error.code === INVALID_PARAM ? { kind: 'removed' } : { kind: 'unknown', code: 'REMOVE_UNCONFIRMED' };
     }
   }
 

@@ -469,8 +469,22 @@ describe('ZaloOaPublisher remove and edit', () => {
     expect(await new ZaloOaPublisher(APP, gone.fetchImpl).remove(removeInput())).toEqual({ kind: 'removed' });
     expect(gone.calls.map((c) => c.route)).toEqual([REMOVE, DETAIL]);
     expect(Object.fromEntries(gone.calls[1]?.query ?? [])).toEqual({ id: '39c07ccbe78e0ed0579f' });
-    const notFound = zalo({ [REMOVE]: [{ status: 404, body: { error: -1, message: 'Not found' } }], [DETAIL]: [{ status: 404, body: { error: -1, message: 'Not found' } }] });
-    expect(await new ZaloOaPublisher(APP, notFound.fetchImpl).remove(removeInput())).toEqual({ kind: 'removed' });
+    // Only that code: refusals of the app or the account refuse both calls alike while the article is live (#1466
+    // review), so they stay unclear, never removed.
+    for (const refusal of [
+      { body: { error: -242, message: 'Invalid appsecret_proof' } },
+      { body: { error: -321, message: 'Zalo Cloud Account is out of money' } },
+      { body: { error: -211, message: 'Out of quota' } },
+      { status: 404, body: { error: -1, message: 'Not found' } },
+    ]) {
+      const both = zalo({ [REMOVE]: [refusal], [DETAIL]: [refusal] });
+      expect(await new ZaloOaPublisher(APP, both.fetchImpl).remove(removeInput())).not.toEqual({ kind: 'removed' });
+    }
+    const bare = zalo({ [REMOVE]: [{ status: 403, body: {} }], [DETAIL]: [{ status: 403, body: {} }] });
+    expect(await new ZaloOaPublisher(APP, bare.fetchImpl).remove(removeInput())).not.toEqual({ kind: 'removed' });
+    // -201 on the takedown but another refusal on the check: still unclear.
+    const mixed = zalo({ [REMOVE]: [{ body: { error: -201, message: 'id is invalid!' } }], [DETAIL]: [{ body: { error: -242, message: 'Invalid appsecret_proof' } }] });
+    expect(await new ZaloOaPublisher(APP, mixed.fetchImpl).remove(removeInput())).toEqual({ kind: 'unknown', code: 'REMOVE_UNCONFIRMED' });
     // Still there: Zalo would not take it down.
     const kept = zalo({
       [REMOVE]: [{ body: { error: -201, message: 'Cannot remove this article' } }],
