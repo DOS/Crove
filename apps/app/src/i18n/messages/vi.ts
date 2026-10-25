@@ -4774,6 +4774,8 @@ export const vi = {
       INVITE_NOT_PENDING: 'Lời mời này đã được dùng hoặc đã bị thu hồi',
       INVITE_PENDING_BY_OWNER: 'Chủ sở hữu đã mời email này và lời mời vẫn còn hiệu lực. Hãy nhờ chủ sở hữu thu hồi hoặc gửi lại lời mời',
       INVITE_REVOKED: 'Lời mời này đã bị thu hồi',
+      INVITE_SCOPE_OWNER_ONLY: 'Chỉ chủ sở hữu mới mời được người làm việc với một số pháp nhân',
+      INVITE_SCOPE_STALE: 'Lời mời này không còn dùng được vì phạm vi pháp nhân đã thay đổi; hãy nhờ chủ sở hữu mời lại',
       INVITE_USED: 'Lời mời này đã được sử dụng',
       INVITE_RATE_LIMITED: 'Đã gửi quá nhiều lời mời; hãy thử lại sau',
       TOO_MANY_INVITES: 'Tổ chức đang có quá nhiều lời mời chờ; hãy thu hồi bớt',

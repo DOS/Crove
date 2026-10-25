@@ -341,6 +341,14 @@ export const zOrgExport = z.object({
 // Member invites (issue #35). The token is 32 random bytes in base64url; only its SHA-256 is stored.
 export const zInviteToken = z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'invite token');
 export const zInviteRole = zRole.exclude(['owner']);
+// The legal entities an invite scopes its invitee to (issue #1281): on accept, one external_accountant assignment per
+// entity, so the invitee sees only those. 1 to 20 distinct entities of the org; only an owner sends such an invite, for
+// a member or a viewer.
+export const zInviteLegalEntityIds = z
+  .array(zId)
+  .min(1)
+  .max(20)
+  .refine((ids) => new Set(ids).size === ids.length, 'legal entities must be distinct');
 export const zInviteStatus = z.enum(['pending', 'expired', 'accepted', 'revoked']);
 
 // What the inviter gets back. Never says whether the email has an account. acceptPath (a path on this server,
@@ -366,6 +374,8 @@ export const zInvite = z.object({
   createdAt: z.string(),
   expiresAt: z.string(),
   mail: zInviteMailStatus.nullable(),
+  // The legal entities the invitee will be limited to (#1281), or null for an invite to the whole org.
+  legalEntityIds: z.array(zId).nullable(),
 });
 
 // What the invitee consents to before accepting.

@@ -137,6 +137,7 @@ import {
   zInviteCreated,
   zInvitePreview,
   zInviteRole,
+  zInviteLegalEntityIds,
   zInviteToken,
   zJournalEntry,
   zJournalReversal,
@@ -259,7 +260,9 @@ export const contract = {
     personalDataErase: oc.input(zPersonalDataQuery.extend({ idempotencyKey: zId })).output(zPersonalDataErasure),
     // Owners and admins (admins cannot invite admins). R3: needs fresh MFA. Nobody becomes a member until the
     // invitee accepts (invites.accept). The answer is the same whether or not the email has an account.
-    invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole })).output(zInviteCreated),
+    // An owner may scope the invite to legal entities (#1281): the invitee joins as a member or viewer holding the
+    // external_accountant role for those entities only.
+    invite: oc.input(z.object({ email: z.email().max(320), role: zInviteRole, legalEntityIds: zInviteLegalEntityIds.optional() })).output(zInviteCreated),
     // Owners and admins: the org's invites that are still pending or expired, newest first.
     listInvites: oc.output(z.array(zInvite)),
     revokeInvite: oc.input(z.object({ inviteId: zId })).output(z.object({ ok: z.literal(true) })),
