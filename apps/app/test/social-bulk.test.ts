@@ -54,6 +54,14 @@ describe('bulk actions on the Social lists (#635)', () => {
     expect(bulkRequest(post('p2', v('x', 'published')), 'cancel', true)).toBeNull();
   });
 
+  it('publishes again only the failed and unaccounted channels, for owners and admins (#1456)', () => {
+    const p = post('p1', v('a', 'failed'), v('b', 'published'), v('c', 'needs_attention'), v('d', 'scheduled'), v('e', 'paused'));
+    expect(bulkRequest(p, 'retry', true)).toEqual({ action: 'retry', postId: 'p1', variantIds: ['a', 'c'] });
+    expect(bulkRequest(p, 'retry', false)).toBeNull();
+    // Nothing failed: the post is skipped, not sent.
+    expect(bulkRequest(post('p2', v('x', 'published'), v('y', 'scheduled')), 'retry', true)).toBeNull();
+  });
+
   it('runs every post, and a refusal does not stop the others', async () => {
     const posts = [post('ok', v('a', 'in_review')), post('no', v('b', 'in_review')), post('none', v('c', 'published')), post('ok2', v('d', 'in_review'))];
     const sent: string[] = [];

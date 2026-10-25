@@ -3328,8 +3328,9 @@ export const en = {
       selectAll: 'Select every post shown',
       selected: '{count, plural, one {# post selected} other {# posts selected}}',
       clear: 'Clear',
-      action: { approve: 'Approve', submit: 'Submit for review', queue: 'Put in the queue', cancel: 'Cancel posts', move: 'Reschedule', labels: 'Set labels', assign: 'Assign', replace: 'Find and replace', addChannel: 'Add a channel', duplicate: 'Duplicate', archive: 'Archive', restore: 'Restore' },
+      action: { approve: 'Approve', submit: 'Submit for review', queue: 'Put in the queue', retry: 'Publish again', cancel: 'Cancel posts', move: 'Reschedule', labels: 'Set labels', assign: 'Assign', replace: 'Find and replace', addChannel: 'Add a channel', duplicate: 'Duplicate', archive: 'Archive', restore: 'Restore' },
       confirmCancel: 'Cancel {count, plural, one {# post} other {# posts}} on every channel that has not gone out?',
+      confirmRetry: 'Publish {count, plural, one {# post} other {# posts}} again now on the channels that failed or need checking? Make sure they are not on those channels already, so nothing goes out twice.',
       confirmArchive: 'Archive {count, plural, one {# post} other {# posts}}? They leave the lists, the calendar and the board, and you can restore them from the Archived tab.',
       result: '{action}: {done, number} done, {skipped, number} with nothing to do, {refused, number} refused.',
       move: {
