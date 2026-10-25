@@ -15,6 +15,7 @@ import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { ReportAudiences } from '../components/social-audience.tsx';
+import { ReportPerformance } from '../components/social-performance.tsx';
 import { GoalList } from '../components/social-goals.tsx';
 import { engagementRate, engagementRateOfBases, rateBasesOf, type RateBases } from '@crove/mod-social/contract';
 import { ChangeChip, EngagementRateCard, EngagementRateCell } from '../components/social-growth.tsx';
@@ -67,6 +68,9 @@ interface ReportPage {
   // The period's Reels (#1151): how many and the median of their average watch time; absent from a server without it.
   // Read again by ReportReels.
   reels?: unknown;
+  // What each Google Business channel brought (#1477), shown after the channels whether or not anything went out; null
+  // without the channels section, absent from a server without it. Read again by ReportPerformance.
+  performance?: unknown;
 }
 
 // A channel's rate sums; from its plain sums on a server without them.
@@ -323,7 +327,10 @@ export function SocialReportPage() {
               {data.includesExternal === true && <p className="text-xs text-subtle-foreground">{t('withExternal')}</p>}
             </header>
             {blocks.map((b) => (
-              <Fragment key={b}>{section(b)}</Fragment>
+              <Fragment key={b}>
+                {section(b)}
+                {b === 'channels' && <ReportPerformance entries={data.performance} against={against} />}
+              </Fragment>
             ))}
             <p className="text-xs text-subtle-foreground">{t('footer', { until: f.date(data.expiresAt) })}</p>
             <MadeWithCrove brand={brand} />

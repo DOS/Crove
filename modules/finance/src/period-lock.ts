@@ -10,10 +10,10 @@
 // balances into a locked month all say why. The same guard keeps the opening entry first (#366): an entry dated on or
 // before it answers BEFORE_OPENING_BALANCE (openingEntryError below).
 import { sql } from 'kysely';
-import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { VIETNAM_TIME_ZONE, zPeriodLockInput, zPeriodUnlockInput, type PeriodLockState } from '@crove/kernel-contract';
+import { VIETNAM_TIME_ZONE, zLegalEntityChoice, zPeriodLockInput, zPeriodUnlockInput, type PeriodLockState } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { legalEntityError, resolveLegalEntity } from './legal-entity.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const LOCKERS: readonly MemberRole[] = ['owner', 'admin'];
@@ -39,11 +39,14 @@ export function shiftMonth(month: string, by: 1 | -1): string {
   return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, '0')}`;
 }
 
-export async function periodLockState(ctx: QueryContext): Promise<PeriodLockState> {
+// The lock of one legal entity (#1280: each entity locks its own months): the one named, else resolveLegalEntity's.
+export async function periodLockState(ctx: QueryContext, legalEntityId?: string): Promise<PeriodLockState> {
+  const entity = await resolveLegalEntity(ctx, legalEntityId);
   const row = await ctx.trx
     .selectFrom('crove_finance.period_lock')
     .select(['locked_from', 'locked_through', 'updated_by', 'updated_at'])
     .where('org_id', '=', ctx.orgId)
+    .where('legal_entity_id', '=', entity)
     .executeTakeFirst();
   const lockedThrough = row?.locked_through ?? null;
   // Who locked or unlocked last, by name while they are a member (crove_kernel.member_profiles answers only members).
@@ -54,6 +57,7 @@ export async function periodLockState(ctx: QueryContext): Promise<PeriodLockStat
     updatedBy = rows[0] ? (rows[0].display_name ?? rows[0].email) : null;
   }
   return {
+    legalEntityId: entity,
     lockedFrom: row?.locked_from ?? null,
     lockedThrough,
     // The month the next lock must name (null: any month that has ended), and the one an unlock must name.
@@ -63,15 +67,15 @@ export async function periodLockState(ctx: QueryContext): Promise<PeriodLockStat
     updatedBy,
     updatedAt: row?.updated_by ? row.updated_at.toISOString() : null,
     // The opening entry in force (#366): nothing else posts on or before it.
-    openingDate: await liveOpeningDate(ctx),
+    openingDate: await liveOpeningDate(ctx, entity),
   };
 }
 
 export const periodLockStateQuery = defineQuery({
   name: 'finance.period.lock_state',
-  input: z.object({}),
+  input: zLegalEntityChoice,
   access: ALL,
-  handler: (ctx): Promise<PeriodLockState> => periodLockState(ctx),
+  handler: (ctx, input): Promise<PeriodLockState> => periodLockState(ctx, input.legalEntityId),
 });
 
 const monthLabel = (month: string) => `${month.slice(5, 7)}/${month.slice(0, 4)}`;
@@ -98,6 +102,8 @@ const notEnded = (month: string) =>
 // The refusals of lock_period() and unlock_period() (P0001 with the current locked_through as JSON detail) as the
 // domain errors the commands answer. Anything else is rethrown for the runtime to map.
 function lockRefusal(error: unknown, month: string): never {
+  const entityError = legalEntityError(error);
+  if (entityError) throw entityError;
   const pg = error as PgError;
   if (pg?.code === 'P0001') {
     const through = lockedThroughOf(pg);
@@ -130,17 +136,18 @@ export const periodLock = defineCommand({
   risk: 'R2',
   access: LOCKERS,
   handler: async (ctx, input): Promise<PeriodLockState> => {
-    ctx.audit({ month: input.month });
+    const entity = await resolveLegalEntity(ctx, input.legalEntityId);
+    ctx.audit({ month: input.month, legalEntityId: entity });
     // A month is locked once it is over, so the entries of its last days can still be posted. lock_period() decides by
     // the database clock (databaseToday above says why that clock), after the order, so a month out of order says which
     // month comes first.
     try {
-      await sql`SELECT crove_finance.lock_period(${`${input.month}-01`}::date)`.execute(ctx.trx);
+      await sql`SELECT crove_finance.lock_period(${`${input.month}-01`}::date, ${entity}::uuid)`.execute(ctx.trx);
     } catch (error) {
       lockRefusal(error, input.month);
     }
     await ctx.activity('finance.period', ctx.orgId, 'period.locked', `Khóa sổ tháng ${monthLabel(input.month)}`);
-    return periodLockState(ctx);
+    return periodLockState(ctx, entity);
   },
 });
 
@@ -153,14 +160,15 @@ export const periodUnlock = defineCommand({
   // #1279); unlock_period() checks the same again.
   permission: 'finance.period.unlock',
   handler: async (ctx, input): Promise<PeriodLockState> => {
-    ctx.audit({ month: input.month, reason: input.reason });
+    const entity = await resolveLegalEntity(ctx, input.legalEntityId);
+    ctx.audit({ month: input.month, reason: input.reason, legalEntityId: entity });
     try {
-      await sql`SELECT crove_finance.unlock_period(${`${input.month}-01`}::date)`.execute(ctx.trx);
+      await sql`SELECT crove_finance.unlock_period(${`${input.month}-01`}::date, ${entity}::uuid)`.execute(ctx.trx);
     } catch (error) {
       lockRefusal(error, input.month);
     }
     await ctx.activity('finance.period', ctx.orgId, 'period.unlocked', `Mở khóa sổ tháng ${monthLabel(input.month)} (lý do: ${input.reason})`);
-    return periodLockState(ctx);
+    return periodLockState(ctx, entity);
   },
 });
 
@@ -260,11 +268,13 @@ export function postingGuardError(error: unknown, choice: BeforeOpeningChoice = 
 // The date of the org's opening entry in force (not reversed), or null: the same rule as the posting guard. Read after
 // a posting, it cannot move before commit: the guard holds the org's period_lock row FOR SHARE, and an opening entry
 // needs it FOR UPDATE.
-export async function liveOpeningDate(ctx: QueryContext): Promise<string | null> {
+// Of one legal entity (#1280: each entity has its own opening balances): the one named, else resolveLegalEntity's.
+export async function liveOpeningDate(ctx: QueryContext, legalEntityId?: string): Promise<string | null> {
+  const entity = await resolveLegalEntity(ctx, legalEntityId);
   const { rows } = await sql<{ opening: string | null }>`
     SELECT pg_catalog.max(o.entry_date)::text AS opening
     FROM crove_finance.journal_entry o
-    WHERE o.org_id = ${ctx.orgId}::uuid AND o.source_type = 'finance.opening_balance'
+    WHERE o.org_id = ${ctx.orgId}::uuid AND o.legal_entity_id = ${entity}::uuid AND o.source_type = 'finance.opening_balance'
       AND NOT EXISTS (SELECT 1 FROM crove_finance.journal_entry r WHERE r.org_id = o.org_id AND r.reverses_entry_id = o.id)`.execute(ctx.trx);
   return rows[0]?.opening ?? null;
 }

@@ -701,5 +701,25 @@ suite('VAT working per month or quarter (#316)', () => {
     expect(await raw(outsider.userId, outsider.userId, 'INSERT', otherOrg.orgId)).toMatch(/row-level security/);
     expect(await raw(owner.userId, owner.userId, 'INSERT', null)).toMatch(/row-level security/);
     expect((await period('2026-09')).carryForward.previous).toBeNull();
+
+    // Each legal entity files its own returns (#1280): a return another entity of the org filed for August is not the
+    // [22] of the default entity's September.
+    await admin(async (c) => {
+      const branch = (
+        await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh VAT', 'branch', $2) RETURNING id`, [
+          org.orgId,
+          owner.userId,
+        ])
+      ).rows[0]?.id;
+      await c.query('BEGIN');
+      await c.query('SET LOCAL session_replication_role = replica');
+      await c.query(
+        `INSERT INTO crove_finance.vat_return_filed (org_id, legal_entity_id, period, status, source, carried_in_amount, deductible_amount, carried_out_amount, marked_by)
+         VALUES ($1, $2, '2026-08', 'filed', 'entered', 0, 0, 777, $3)`,
+        [org.orgId, branch, owner.userId],
+      );
+      await c.query('COMMIT');
+    });
+    expect((await period('2026-09')).carryForward.previous).toBeNull();
   });
 });

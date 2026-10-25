@@ -10,7 +10,7 @@ import { createDb, createPool, type Db } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { CredentialVault, Runtime, parseVaultKey } from '@crove/kernel-runtime';
-import { ThreadsPublisher, YouTubePublisher, ZaloOaPublisher, type Fetch, type MetricsInput, type MetricsResult, type Publisher, type PublishResult, type RecentPostsInput, type RecentPostsResult } from '@crove/channel';
+import { ThreadsPublisher, TikTokPublisher, YouTubePublisher, ZaloOaPublisher, type Fetch, type MetricsInput, type MetricsResult, type Publisher, type PublishResult, type RecentPostsInput, type RecentPostsResult } from '@crove/channel';
 import { socialCommands, socialQueries, sweepExternalPosts, type ExternalPostRow, type MetricsRow } from '@crove/mod-social';
 import { reportView, type ReportPage } from '../src/report-link.ts';
 
@@ -81,11 +81,11 @@ suite('social posts published outside Crove (#1054)', () => {
     return { orgId, owner, viewer };
   }
 
-  async function connect(o: Org, account: string, provider = 'sandbox', secret: Record<string, string> = { accessToken: 'sbx_test' }) {
+  async function connect(o: Org, account: string, provider = 'sandbox', secret: Record<string, string> = { accessToken: 'sbx_test' }, scopes = ['publish']) {
     const sealed = vault.seal(JSON.stringify(secret), { orgId: o.orgId, provider, externalAccountId: account });
     const { connectionId } = await api.execute<{ connectionId: string }>(
       'kernel.channel.connect',
-      { provider, externalAccountId: account, displayName: account, scopes: ['publish'], expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } },
+      { provider, externalAccountId: account, displayName: account, scopes, expiresAt: null, credential: { keyId: sealed.keyId, envelope: sealed.envelope.toString('base64') } },
       { actor: asUser(o.owner), orgId: o.orgId },
     );
     return connectionId;
@@ -468,5 +468,83 @@ suite('social posts published outside Crove (#1054)', () => {
     const status = await admin(async (c) => (await c.query<{ id: string; status: string }>('SELECT id, status FROM crove_kernel.channel_connection WHERE org_id = $1', [o.orgId])).rows);
     expect(new Map(status.map((r) => [r.id, r.status]))).toEqual(new Map([[yt, 'active'], [th, 'active'], [za, 'expired']]));
     expect(await admin(async (c) => (await c.query('SELECT count(*)::int AS n FROM crove_social.external_post WHERE channel_connection_id = $1', [za])).rows[0])).toEqual({ n: 2 });
+  });
+
+  it("brings in TikTok videos where the channel has video.list, never Crove's own, and holds back the ones a Crove post still without its id may be (#1476)", async () => {
+    const o = await org();
+    const granted = ['user.info.basic', 'video.publish', 'video.list'];
+    const tt = await connect(o, 'tt-open-listed', 'tiktok', { accessToken: 'act.listed', refreshToken: 'rft.listed' }, granted);
+    const noList = await connect(o, 'tt-open-nolist', 'tiktok', { accessToken: 'act.nolist', refreshToken: 'rft.nolist' }, ['user.info.basic', 'video.publish']);
+    const dead = await connect(o, 'tt-open-dead', 'tiktok', { accessToken: 'act.dead', refreshToken: 'rft.dead' }, granted);
+    // A video Crove published, with the numeric id the late-id sweep recorded (#1475).
+    await published(o, tt, '7430000000000000100', 2, { views: 100, reactions: 10 });
+    // One Crove published half an hour ago, public, still known by its publish_id while TikTok moderates it.
+    const pending = await published(o, tt, 'v_pub_file~v2-1.999', 0.02, {});
+    await admin((c) => c.query(`UPDATE crove_social.post_variant SET settings = '{"privacyLevel": "PUBLIC_TO_EVERYONE"}' WHERE post_id = $1`, [pending]));
+    const before = await totals(o, { days: 30 });
+    expect(before).toMatchObject({ posts: 2, metrics: { views: 100, reactions: 10 } });
+
+    // Recorded answers in TikTok's documented shapes: video/list (ids as JSON numbers, read from the text) and
+    // video/query for the counts.
+    const seconds = (ms: number) => Math.floor((Date.now() - ms) / 1000);
+    const listedBy: string[] = [];
+    const fetchImpl: Fetch = async (input, init) => {
+      const url = new URL(input);
+      const token = new Headers(init?.headers).get('authorization');
+      const answer = (body: string, status = 200) => new Response(body, { status, headers: { 'content-type': 'application/json' } });
+      if (url.pathname === '/v2/video/list/') {
+        listedBy.push(token ?? '');
+        if (token === 'Bearer act.dead') return answer('{"data":{},"error":{"code":"access_token_invalid","message":"The access token is invalid or not found in the request.","log_id":"x"}}', 401);
+        const v = (id: string, ms: number, title: string) => `{"id":${id},"create_time":${seconds(ms)},"title":"${title}","video_description":"","share_url":"https://www.tiktok.com/@shop/video/${id}"}`;
+        const videos = [v('7430000000000000300', 20 * 60_000, 'Bài Crove đang duyệt'), v('7430000000000000202', 2 * 3_600_000, 'Đăng từ app hôm nay'), v('7430000000000000100', 2 * DAY, 'Bài Crove đã có mã'), v('7430000000000000201', 5 * DAY, 'Đăng từ app tuần này')];
+        return answer(`{"data":{"videos":[${videos.join(',')}],"cursor":1,"has_more":false},"error":{"code":"ok","message":"","log_id":"x"}}`);
+      }
+      if (url.pathname === '/v2/video/query/') {
+        const id = (JSON.parse(String(init?.body)) as { filters: { video_ids: string[] } }).filters.video_ids[0] ?? '';
+        const views = id === '7430000000000000201' ? 50 : 20;
+        return answer(`{"data":{"videos":[{"id":${id},"view_count":${views},"like_count":5,"comment_count":1,"share_count":0}]},"error":{"code":"ok"}}`);
+      }
+      return answer('{"error":{"code":"not_found"}}', 404);
+    };
+    const publishers = { tiktok: new TikTokPublisher({ clientKey: 'awtestclientkey01', clientSecret: 'test-tiktok-secret-not-real', videoList: true }, fetchImpl) };
+    const kept = async () => (await admin(async (c) => (await c.query<{ external_post_id: string }>('SELECT external_post_id FROM crove_social.external_post WHERE org_id = $1 ORDER BY 1', [o.orgId])).rows)).map((r) => r.external_post_id);
+
+    const done = await sweepExternalPosts({ runtime: worker, broker: vault, workerDb, publishers });
+    expect(done).toMatchObject({ imported: 1, expired: 1, measured: 1 });
+    // Crove's own video is dropped by its id; the one created since a day before the pending post is held back.
+    expect(await kept()).toEqual(['7430000000000000201']);
+    const outsideRow = await admin(async (c) => (await c.query('SELECT excerpt, permalink, metrics FROM crove_social.external_post WHERE external_post_id = $1', ['7430000000000000201'])).rows[0]);
+    expect(outsideRow).toEqual({ excerpt: 'Đăng từ app tuần này', permalink: 'https://www.tiktok.com/@shop/video/7430000000000000201', metrics: { views: 50, reactions: 5, comments: 1, shares: 0 } });
+    // A channel without video.list is never asked; an expired token marks that channel alone for reconnecting.
+    expect(listedBy.sort()).toEqual(['Bearer act.dead', 'Bearer act.listed']);
+    const runs = await admin(async (c) => (await c.query<{ channel_connection_id: string; found: number; error: string | null }>('SELECT channel_connection_id, found, error FROM crove_social.external_import WHERE org_id = $1', [o.orgId])).rows);
+    expect(new Map(runs.map((r) => [r.channel_connection_id, [r.found, r.error]]))).toEqual(new Map([[tt, [4, null]], [noList, [0, 'permission']], [dead, [0, 'token_expired']]]));
+    const status = await admin(async (c) => (await c.query<{ id: string; status: string }>('SELECT id, status FROM crove_kernel.channel_connection WHERE org_id = $1', [o.orgId])).rows);
+    expect(new Map(status.map((r) => [r.id, r.status]))).toEqual(new Map([[tt, 'active'], [noList, 'active'], [dead, 'expired']]));
+
+    // Off, the totals are Crove's alone; on, the outside video counts once.
+    expect(await totals(o, { days: 30 })).toEqual(before);
+    expect(await totals(o, { days: 30, includeExternal: true })).toMatchObject({ posts: 3, metrics: { views: 150, reactions: 15 } });
+
+    // The pending post gets its public id: at the next bring-in its video is Crove's, and the held-back outside one
+    // comes in.
+    await admin((c) => c.query("UPDATE crove_social.post_variant SET external_post_id = '7430000000000000300' WHERE post_id = $1", [pending]));
+    await admin((c) => c.query("UPDATE crove_social.external_import SET ran_at = now() - interval '7 hours' WHERE org_id = $1", [o.orgId]));
+    await sweepExternalPosts({ runtime: worker, broker: vault, workerDb, publishers });
+    expect(await kept()).toEqual(['7430000000000000201', '7430000000000000202']);
+    expect(await totals(o, { days: 30, includeExternal: true })).toMatchObject({ posts: 4, metrics: { views: 170, reactions: 20 } });
+    expect(await totals(o, { days: 30 })).toEqual(before);
+
+    // A post whose 7 days of asking are over, or a direct post that is not public, holds nothing back.
+    const late = await connect(o, 'tt-open-late', 'tiktok', { accessToken: 'act.late', refreshToken: 'rft.late' }, granted);
+    const old = await published(o, late, 'v_pub_file~v2-1.old', 8, {});
+    const privateNow = await published(o, late, 'v_pub_file~v2-1.private', 0.02, {});
+    await admin((c) => c.query(`UPDATE crove_social.post_variant SET settings = '{"privacyLevel": "PUBLIC_TO_EVERYONE"}' WHERE post_id = $1`, [old]));
+    await admin((c) => c.query(`UPDATE crove_social.post_variant SET settings = '{"privacyLevel": "SELF_ONLY"}' WHERE post_id = $1`, [privateNow]));
+    const brought = { externalId: '7430000000000000400', excerpt: 'Mới đăng', permalink: null, publishedAt: new Date(Date.now() - 3_600_000).toISOString() };
+    expect(await worker.execute('social.external_post.import', { connectionId: late, posts: [brought] }, { actor: system, orgId: o.orgId })).toEqual({ kept: 1, crove: 0, held: 0 });
+    // One on its way to a public post does.
+    await admin((c) => c.query(`UPDATE crove_social.post_variant SET status = 'processing', published_at = NULL, settings = '{"privacyLevel": "PUBLIC_TO_EVERYONE"}' WHERE post_id = $1`, [privateNow]));
+    expect(await worker.execute('social.external_post.import', { connectionId: late, posts: [{ ...brought, externalId: '7430000000000000401' }] }, { actor: system, orgId: o.orgId })).toEqual({ kept: 0, crove: 0, held: 1 });
   });
 });

@@ -982,9 +982,17 @@ export const zLedgerReport = z.object({
 // ended), lastMonth the only one an unlock may name. updatedBy and updatedAt describe the last lock or unlock
 // (updatedBy null once that person left the org).
 export const zPeriodMonth = z.string().regex(/^(20\d{2})-(0[1-9]|1[0-2])$/, 'YYYY-MM');
-export const zPeriodLockInput = z.object({ month: zPeriodMonth });
-export const zPeriodUnlockInput = z.object({ month: zPeriodMonth, reason: z.string().trim().min(1).max(500) });
+// The legal entity whose books a finance call is for (#1280). Omitted: the org's default entity when the caller may see
+// it, else the only entity the caller may see; LEGAL_ENTITY_REQUIRED (422) when the caller sees several and none is the
+// default, LEGAL_ENTITY_NOT_ALLOWED (403) for an entity the caller may not see or that is not the org's.
+export const zLegalEntityChoice = z.object({ legalEntityId: zId.optional() });
+export type LegalEntityChoice = z.infer<typeof zLegalEntityChoice>;
+// Each legal entity locks its own months (#1280); the books of one entity per call.
+export const zPeriodLockInput = z.object({ month: zPeriodMonth, legalEntityId: zId.optional() });
+export const zPeriodUnlockInput = z.object({ month: zPeriodMonth, reason: z.string().trim().min(1).max(500), legalEntityId: zId.optional() });
 export const zPeriodLockState = z.object({
+  // The entity the state is for.
+  legalEntityId: zId,
   lockedFrom: zLocalDate.nullable(),
   lockedThrough: zLocalDate.nullable(),
   nextMonth: zPeriodMonth.nullable(),
@@ -2382,4 +2390,7 @@ export const zSocialAccountTrend = z.object({
   provider: z.string(),
   points: z.array(z.object({ day: z.string(), followers: z.number().int().nullable(), reach: z.number().int().nullable() })),
   audience: zSocialAudience.extend({ day: z.string() }).nullable(),
+  // A Google Business location's figures per day in the window (#1477): calls, direction requests, website clicks and
+  // profile views, oldest first, each day as Google last gave it; empty on other channels.
+  performance: z.array(z.object({ day: z.string(), calls: z.number().int(), directions: z.number().int(), websiteClicks: z.number().int(), views: z.number().int() })),
 });

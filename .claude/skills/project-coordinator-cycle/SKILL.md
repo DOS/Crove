@@ -1,9 +1,9 @@
 ---
-name: crove-coordinator-cycle
-description: Run one Crove coordinator cycle - check the lock, review and verify worker PRs, keep up to 3 worker sessions busy from the board, derive issues from the plans when the board is empty, and log the cycle. Use when the session is the Crove coordinator, on a /loop wake-up, when a worker session reports back, or when the owner says to coordinate the backlog.
+name: project-coordinator-cycle
+description: Crove project coordination for the coordinator (Agent 0) and the area team leads (Agent 1-5). The coordinator runs one cycle - lock, review and verify PRs, keep the team leads busy, migration versions, derive issues, log. A team lead follows section 6 - pick work in its area, run subagents, report READY or MERGED, rename migrations at merge. Use when the session is the coordinator or a team lead, on a /loop wake-up, when a session reports back, or when the owner says to coordinate the backlog.
 ---
 
-# Crove coordinator cycle
+# Project coordinator cycle
 
 The coordinator picks work, starts worker sessions, reviews what they ship and keeps the board honest. It does not build features itself. Every cycle starts from GitHub, not from memory: a fresh coordinator session must be able to run a cycle with nothing but this file and `AGENTS.md`.
 
@@ -50,11 +50,18 @@ For each worker that ended a turn:
 
 ## 2a. Team leads and migration versions
 
-Since 2026-10-25 the owner runs long-lived area team leads, sessions named `Agent <n>: <area>` (today 1 Accounting, 2 Frontend, 3 Social Management, 4 Kernel & Security, 5 CRM & Calendar). Keep that list in each cycle comment on #1210.
+Since 2026-10-25 the owner runs long-lived area team leads, sessions numbered 1 to 5, titled `<n>: #<issue> - <title>` (section 6, item 2) (today 1 Accounting, 2 Frontend, 3 Social Management, 4 Kernel & Security, 5 CRM & Calendar). Keep that list in each cycle comment on #1210.
 
 - A team lead picks its next issue from its own area, may run up to 2 background subagents, and reports to the coordinator: `READY FOR COORDINATOR REVIEW` for protected-path PRs, `MERGED` for the rest.
 - Each cycle, check every team lead with `list_sessions` and `list_events`. One that is idle with nothing claimed gets a message to take its next issue. One whose area has no work left gets the derive step (section 3, item 2) for its area.
 - Use `SendMessage` to a session id: it works on automated turns, while `start_session` does not. Start a new team lead only on the owner's own turn, when the owner asks for one.
+- Owner decision 2026-10-25: every team lead runs in a session the coordinator started, because such a session wakes the coordinator when a turn ends; a lead the owner started does not, so check those with `list_events` each cycle. To replace a lead:
+  1. On a turn the owner typed, start the new `Agent <n>: <area>` session with `start_session`. Its brief says to wait for the handoff.
+  2. Ask the old lead to post, at its next natural stop, a `HANDOFF Agent <n>` comment on #1210. The comment lists issues and PRs (state, head, next step), branches and worktrees, running work, decisions and owner items. The old lead then messages `HANDOFF READY <url>`.
+  3. Forward the handoff to the new session with `SendMessage`, then archive the old session. These steps work on automated turns. The new session's first step is to rename itself to `<n>: #<issue> - <title>` for the issue it takes over.
+- Each cycle, compare every lead's session title (`list_sessions`) with the issue it reports or holds, and fix a stale one with `set_session_title`. The coordinator may rename the sessions it started.
+- Desktop pauses cross-session messages after 10 sends without an owner turn. Send one message per lead carrying everything, skip acknowledgement-only replies, and when paused, post the instruction as a PR or issue comment and tell the owner that any message from them resumes it.
+- Protected-path PRs need an independent review. Prefer an idle team lead as reviewer (never the PR's author); otherwise a background subagent. Give the reviewer the claims to attack, not your verdict.
 - Migration versions (#1492): nobody reserves or hands out versions. A PR names its migration above main's newest when it starts, and right before merging its lead runs `pnpm migration:rebase` (renames to whole hours after main's newest, in order, references included), pushes and waits for green. The order check and the recheck workflow still catch a PR that skipped it.
 
 ## 3. Keep the workers busy
@@ -122,6 +129,27 @@ Build issue https://github.com/DOS/Crove/issues/<n> end to end. Read the issue f
 
 Done = the PR is merged and #<n> is closed. Last message: 2-3 lines with the PR link, the merge commit and anything left open.
 ```
+
+## 6. Team lead procedure
+
+A team lead (`Agent <n>: <area>`) owns one area of Crove and works without stopping. It follows `AGENTS.md` and this section.
+
+1. **Pick work.** Take the next issue in your area by the `AGENTS.md` order: earliest milestone with work left, P0 before P1 before P2, skipping `owner-action`, Icebox and claimed issues. When nothing is left, derive issues from the plans and designs for your area, citing the plan line, with the milestone and priority the plan gives. If none can be derived, tell the coordinator in one line and stand by; do not build Icebox items.
+2. **Claim.** Set the issue to In progress and comment `Claimed by Agent <n>, branch <branch>`. Read the comments again; never take a live claim. Then rename your own session so the owner's sidebar shows what you work on: `set_session_title` with `self` and `<n>: #<issue> - <short issue title>` (for example `1: #1280 - Legal entities in the books`), or `<n>: chờ việc` when you have nothing. The coordinator is `0: Điều phối`.
+3. **Parallel work.** Run up to 2 background subagents on other issues of your area (`AGENTS.md` WIP limit). Never put two on overlapping files. Each gets a full brief and its own scratchpad subfolder. Before touching a shared file (date components, `org_purge`, the RLS matrix, `AGENTS.md`), tell the lead who owns it.
+4. **Migrations.**
+   - Name a new migration with any version above main's newest when you start; nobody reserves versions (#1492).
+   - Before merging, merge `origin/main`, run `pnpm migration:rebase` (it renames your migrations above main's newest when they fell behind, references included), commit, push and wait for green.
+   - A new tenant table lands in three PRs: the RLS-matrix row factory with a `PENDING_TABLES` entry first, then the feature, then a PR dropping the entry.
+   - If you redefine a shared function (`crove_kernel.org_purge`, report views), copy the newest body on main and add only your change.
+5. **Review and merge.**
+   - Protected-path PR: write your security review in the PR body, wait for CI green, then send `READY FOR COORDINATOR REVIEW: <PR url> head <sha>`. Merge only after `approved, merge head <sha>`. An approval covers a later delta of only a main merge or a migration rename; tell the coordinator about anything more.
+   - Other PRs: merge yourself when green with `gh pr merge <n> --squash --match-head-commit <sha>`.
+   - Report merges as `MERGED <PR url> <merge commit>`.
+6. **Messages.** Send the coordinator one message per batch (several READY or MERGED lines together); every message counts against the Desktop cap. Read the latest cycle comment on #1210 before asking for a version.
+7. **Reviews for others.** When the coordinator forwards another lead's PR, review it independently and read-only: probes on your own `postgres:17`, verdict APPROVE or CHANGES REQUESTED with evidence. Never review your own PR.
+8. **Flaky tests.** A flaky test in your area that breaks other PRs' CI is P1 for you.
+9. **Long sessions.** Use `/compact` when the context grows. State lives on GitHub: comment on your issue at each step.
 
 ## Limits learned the hard way
 
