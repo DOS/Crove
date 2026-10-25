@@ -40,6 +40,9 @@ export interface NotifyInput {
   key: string;
   // What it is about, for the link the app opens ('kernel.proposal' and its id).
   subject?: { type: string; id: string } | null;
+  // The legal entity it belongs to (#1280): a member limited to other entities never sees it. Default: the org's
+  // default entity.
+  legalEntityId?: string | null;
   // The few words the line shows (a title, a file name, a period); strings only, 2 KB at most.
   detail?: Record<string, string>;
   // The outbox event it comes from.
@@ -71,6 +74,7 @@ export async function notifyMembers(ctx: CommandContext, input: NotifyInput): Pr
         event_id: input.eventId ?? null,
         subject_type: input.subject?.type ?? null,
         subject_id: input.subject?.id ?? null,
+        ...(input.legalEntityId ? { legal_entity_id: input.legalEntityId } : {}),
         detail: JSON.stringify(input.detail ?? {}),
         created_at: ctx.now,
       })),
@@ -145,7 +149,7 @@ export const notificationDispatch = defineCommand({
         const file = await ctx.trx
           .selectFrom('crove_kernel.file as f')
           .leftJoin('crove_kernel.extraction as x', (join) => join.onRef('x.org_id', '=', 'f.org_id').onRef('x.file_id', '=', 'f.id').on('x.version', '=', e.data.version))
-          .select(['f.id', 'f.filename', 'f.created_by', 'x.requested_by'])
+          .select(['f.id', 'f.filename', 'f.created_by', 'x.requested_by', 'x.legal_entity_id'])
           .where('f.org_id', '=', ctx.orgId)
           .where('f.id', '=', e.data.fileId)
           .executeTakeFirst();
@@ -157,6 +161,7 @@ export const notificationDispatch = defineCommand({
           users: asker ? [asker] : await ownersAndAdmins(ctx),
           key: `file_unreadable:${file.id}:${e.data.version}`,
           subject: { type: 'kernel.file', id: file.id },
+          legalEntityId: file.legal_entity_id,
           detail: { filename: file.filename.slice(0, 200) },
           eventId: event.id,
         });
