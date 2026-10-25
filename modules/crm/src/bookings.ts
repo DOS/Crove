@@ -18,6 +18,7 @@
 // upcoming bookings of it, ties by member id); a collective booking holds an event on every host's calendar, the
 // lead's (or the first host's still able to host) in calendar_event_id and the others in hold_event_ids. Hosts who
 // may no longer host (they left the org, or became viewers) are skipped. A cancel or a move acts on every held event.
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { sql } from 'kysely';
 import { freeSlots, zBookingCancel, zBookingListQuery, zBookingMove, zId, zonedDate, zoneOffsetMs, type BookingItem, type Interval, type WorkingHours } from '@crove/kernel-contract';
@@ -61,11 +62,9 @@ async function partyFor(ctx: CommandContext, name: string, email: string, phone:
     .limit(1)
     .executeTakeFirst();
   if (existing) return existing.id;
-  const created = await ctx.trx
-    .insertInto('crove_kernel.party')
-    .values({ org_id: ctx.orgId, kind: 'person', name, email, phone, source_trust: 'external' })
-    .returning('id')
-    .executeTakeFirstOrThrow();
+  // The id is given here and the row inserted without RETURNING (see crove_kernel.party_link_new, #1280).
+  const created = { id: randomUUID() };
+  await ctx.trx.insertInto('crove_kernel.party').values({ id: created.id, org_id: ctx.orgId, kind: 'person', name, email, phone, source_trust: 'external' }).execute();
   await ctx.activity('kernel.party', created.id, 'party.created', `Thêm khách hàng ${name} từ trang đặt lịch`);
   return created.id;
 }

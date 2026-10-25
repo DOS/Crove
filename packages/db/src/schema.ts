@@ -97,6 +97,10 @@ export type TaxProfileTable = Refine<
     pit_filing_period: (typeof PIT_FILING_PERIODS)[number] | null;
   }
 >;
+// The org-wide records a link to a legal entity can name (#1280 part 3b, crove_kernel.record_le).
+export const RECORD_LE_TYPES = ['kernel.party'] as const;
+export type RecordLeTable = Refine<G.KernelRecordLeTable, { record_type: ColumnType<(typeof RECORD_LE_TYPES)[number], (typeof RECORD_LE_TYPES)[number], never> }>;
+
 export type TaxObligationDoneTable = Refine<G.KernelTaxObligationDoneTable, { obligation: (typeof TAX_OBLIGATION_CODES)[number] }>;
 
 // The calendar core (issue #1313): a member's weekly working hours and the events on their calendar. Holidays and the
@@ -434,6 +438,13 @@ export type CategorizationRuleTable = Refine<
   'legal_entity_id'
 >;
 
+// The charts of accounts Crove knows (#1403): a regime and its version. Read only for tenant roles.
+export const BOOKS_REGIMES = ['tt133', 'tt99'] as const;
+export type BooksRegime = (typeof BOOKS_REGIMES)[number];
+export type ChartTable = Refine<G.FinanceChartTable, { regime: ColumnType<BooksRegime, never, never> }>;
+// The chart an entity's books follow from a fiscal year on (no row: TT133 2026.1). Read only for tenant roles.
+export type LegalEntityBooksTable = Refine<G.FinanceLegalEntityBooksTable, { regime: ColumnType<BooksRegime, never, never> }>;
+
 // The register of fixed assets and prepaid costs (#919). Tenant roles update only the end of a schedule, once.
 export const FIXED_ASSET_KINDS = ['fixed_asset', 'prepaid_cost'] as const;
 export type FixedAssetKind = (typeof FIXED_ASSET_KINDS)[number];
@@ -685,6 +696,7 @@ type Refined = Tables<{
   'crove_kernel.file': FileTable;
   'crove_kernel.extraction': ExtractionTable;
   'crove_kernel.notification': NotificationTable;
+  'crove_kernel.record_le': RecordLeTable;
   'crove_kernel.proposal': ProposalTable;
   'crove_kernel.agent_template': AgentTemplateTable;
   'crove_kernel.agent': AgentTable;
@@ -708,6 +720,8 @@ type Refined = Tables<{
   'crove_finance.cash_voucher': CashVoucherTable;
   'crove_finance.fixed_asset': FixedAssetTable;
   'crove_finance.categorization_rule': CategorizationRuleTable;
+  'crove_finance.chart': ChartTable;
+  'crove_finance.legal_entity_books': LegalEntityBooksTable;
   'crove_finance.input_vat_check': InputVatCheckTable;
   'crove_finance.vat_return_filed': VatReturnFiledTable;
   'crove_finance.journal_voucher': JournalVoucherTable;

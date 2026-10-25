@@ -286,7 +286,8 @@ export function OverviewPage() {
             {canChooseVat && (
               <>
                 {' · '}
-                <Link to="/o/$slug/settings" params={{ slug }} className="text-link hover:underline">
+                {/* A link inside a sentence is underlined, so it does not stand out by its color alone (WCAG 1.4.1, #1517). */}
+                <Link to="/o/$slug/settings" params={{ slug }} className="text-link underline">
                   {tcl('chooseFilingPeriod')}
                 </Link>
               </>

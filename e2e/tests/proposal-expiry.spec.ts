@@ -69,8 +69,8 @@ test('set an expiry, find an expired proposal with its reason and ask for it aga
   });
 
   await test.step('ask for it again: a new pending proposal opens', async () => {
-    page.once('dialog', (dialog) => void dialog.accept());
     await page.getByRole('button', { name: 'Gửi lại' }).click();
+    await page.getByRole('dialog', { name: 'Gửi lại đề xuất này?' }).getByRole('button', { name: 'Gửi lại' }).click();
     await expect(page.getByText('Đề xuất này được gửi lại từ một đề xuất đã hết hạn.')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Duyệt và ghi sổ phiếu kế toán' })).toBeVisible();
     await page.getByRole('link', { name: 'Xem đề xuất cũ' }).click();

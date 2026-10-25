@@ -82,6 +82,7 @@ export const PERSONAL_DATA_COLUMNS = {
   'crove_kernel.mail_message.to_hash': { kind: 'other', handling: 'hashed', reason: 'Keyed hash of the recipient (crove_kernel.mail_address_hash), not the address' },
   'crove_kernel.mail_suppression.to_hash': { kind: 'other', handling: 'hashed', reason: 'Keyed hash; keeps a bounced or unsubscribed address suppressed after erasure' },
   'crove_kernel.inbound_message.from_address': { kind: 'email', handling: 'erase', reason: 'The sender of a forwarded mail; the stored file keeps the document itself' },
+  'crove_kernel.inbound_message.body_text': { kind: 'other', handling: 'erase', reason: 'The text of a forwarded mail (#779), which may name or describe its sender; erased with the address of its sender' },
   'crove_kernel.inbound_drop.address_id': { kind: 'other', handling: 'not_personal', reason: 'The id of an inbound address row' },
   // The org itself.
   'crove_kernel.tenant.tax_code': { kind: 'tax_code', handling: 'keep_org', reason: "The business's own tax code" },
@@ -312,10 +313,14 @@ export const personalDataErase = defineCommand({
     }
 
     if (probe.kind === 'email') {
-      const inbound = await sql`
-        UPDATE crove_kernel.inbound_message t SET from_address = NULL
-         WHERE t.org_id = ${ctx.orgId}::uuid AND ${match('email', 't.from_address') ?? never}`.execute(ctx.trx);
-      add('crove_kernel.inbound_message.from_address', Number(inbound.numAffectedRows ?? 0));
+      // A mail from the person goes with its text (#779), which may name or describe them.
+      const { rows: inbound } = await sql<{ body_text: boolean }>`
+        UPDATE crove_kernel.inbound_message t SET from_address = NULL, body_text = NULL
+          FROM crove_kernel.inbound_message o
+         WHERE o.org_id = t.org_id AND o.id = t.id AND t.org_id = ${ctx.orgId}::uuid AND ${match('email', 't.from_address') ?? never}
+         RETURNING o.body_text IS NOT NULL AS body_text`.execute(ctx.trx);
+      add('crove_kernel.inbound_message.from_address', inbound.length);
+      add('crove_kernel.inbound_message.body_text', inbound.filter((m) => m.body_text).length);
       const mails = await sql`
         UPDATE crove_kernel.mail_message t SET to_address = NULL
          WHERE t.org_id = ${ctx.orgId}::uuid AND ${match('email', 't.to_address') ?? never}`.execute(ctx.trx);

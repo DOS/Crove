@@ -155,6 +155,36 @@ function SocialReviews({ slug }: { slug: string }) {
   );
 }
 
+// Mails forwarded to the org's inbound address (#779): a member may start an AI draft of a Social post from one, in the
+// composer, where they pick the channels. The mail's text is read as untrusted data and the draft waits for review.
+// Only for those who write posts; a mail with neither subject nor text is left out.
+function SocialMails({ slug }: { slug: string }) {
+  const t = useTranslations('inbox.socialMails');
+  const f = useFormat();
+  const mails = useQuery(orpc.inbound.recent.queryOptions());
+  const items = (mails.data ?? []).filter((m) => m.hasText || m.subject?.trim()).slice(0, 5);
+  if (items.length === 0) return null;
+  return (
+    <Card className="mt-6 block p-4">
+      <p className="text-sm font-medium text-foreground">{t('title')}</p>
+      <p className="text-xs text-subtle-foreground">{t('hint')}</p>
+      <ul className="mt-2 divide-y text-sm">
+        {items.map((m) => (
+          <li key={m.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+            <div className="min-w-0">
+              <p className="truncate text-foreground">{m.subject?.trim() || t('noSubject')}</p>
+              <p className="truncate text-xs text-subtle-foreground">{[m.from, f.dateTime(m.receivedAt)].filter(Boolean).join(' · ')}</p>
+            </div>
+            <Link to="/o/$slug/social/new" params={{ slug }} search={{ mail: m.id }} className="shrink-0 text-sm text-link underline">
+              {t('draft')}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
 export function InboxPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('inbox');
@@ -398,6 +428,7 @@ export function InboxPage() {
       {config.modules.includes('finance') && <OpenBankLines slug={slug} />}
       {config.modules.includes('social') && <SocialAttention slug={slug} />}
       {config.modules.includes('social') && <SocialReviews slug={slug} />}
+      {config.modules.includes('social') && (org.data?.role === 'owner' || org.data?.role === 'admin' || org.data?.role === 'member') && <SocialMails slug={slug} />}
 
       {(files.data?.length ?? 0) > 0 && (
         <div className="mt-6">

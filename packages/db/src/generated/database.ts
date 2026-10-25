@@ -23,12 +23,15 @@ export interface CroveFinanceSchema {
   'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
   'crove_finance.categorization_rule': FinanceCategorizationRuleTable;
+  'crove_finance.chart': FinanceChartTable;
+  'crove_finance.chart_account': FinanceChartAccountTable;
   'crove_finance.depreciation_line': FinanceDepreciationLineTable;
   'crove_finance.fixed_asset': FinanceFixedAssetTable;
   'crove_finance.input_vat_check': FinanceInputVatCheckTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.journal_voucher': FinanceJournalVoucherTable;
+  'crove_finance.legal_entity_books': FinanceLegalEntityBooksTable;
   'crove_finance.misa_goods_code': FinanceMisaGoodsCodeTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
   'crove_finance.period_balance_delta': FinancePeriodBalanceDeltaTable;
@@ -76,6 +79,7 @@ export interface CroveKernelSchema {
   'crove_kernel.position': KernelPositionTable;
   'crove_kernel.proposal': KernelProposalTable;
   'crove_kernel.proposal_policy': KernelProposalPolicyTable;
+  'crove_kernel.record_le': KernelRecordLeTable;
   'crove_kernel.role': KernelRoleTable;
   'crove_kernel.role_assignment': KernelRoleAssignmentTable;
   'crove_kernel.role_permission': KernelRolePermissionTable;
@@ -270,6 +274,22 @@ export interface FinanceCategorizationRuleTable {
   legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
+/** crove_finance.chart_account */
+export interface FinanceChartAccountTable {
+  regime: ColumnType<string, NotGranted, NotGranted>;
+  version: ColumnType<string, NotGranted, NotGranted>;
+  code: ColumnType<string, NotGranted, NotGranted>;
+  name: ColumnType<string, NotGranted, NotGranted>;
+  parent_code: ColumnType<string | null, NotGranted, NotGranted>;
+}
+
+/** crove_finance.chart */
+export interface FinanceChartTable {
+  regime: ColumnType<string, NotGranted, NotGranted>;
+  version: ColumnType<string, NotGranted, NotGranted>;
+  name: ColumnType<string, NotGranted, NotGranted>;
+}
+
 /** crove_finance.depreciation_line */
 export interface FinanceDepreciationLineTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -361,6 +381,18 @@ export interface FinanceJournalVoucherTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   closing_year: ColumnType<number | null, number | null, NotGranted>;
   legal_entity_id: ColumnType<string, string, NotGranted>;
+}
+
+/** crove_finance.legal_entity_books */
+export interface FinanceLegalEntityBooksTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
+  regime: ColumnType<string, NotGranted, NotGranted>;
+  chart_version: ColumnType<string, NotGranted, NotGranted>;
+  effective_from: ColumnType<string, NotGranted, NotGranted>;
+  created_by: ColumnType<string | null, NotGranted, NotGranted>;
+  created_at: ColumnType<Date, NotGranted, NotGranted>;
 }
 
 /** crove_finance.misa_goods_code */
@@ -809,6 +841,7 @@ export interface KernelInboundMessageTable {
   subject: string | null;
   attachment_count: Generated<number>;
   received_at: ColumnType<Date, Date | string | undefined, Date | string>;
+  body_text: string | null;
 }
 
 /** crove_kernel.kill_switch */
@@ -1039,6 +1072,18 @@ export interface KernelProposalTable {
   escalated_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   request_input: ColumnType<unknown, string | null | undefined, string | null>;
   resubmitted_from: string | null;
+  legal_entity_id: string | null;
+}
+
+/** crove_kernel.record_le */
+export interface KernelRecordLeTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  record_type: ColumnType<string, string, NotGranted>;
+  record_id: ColumnType<string, string, NotGranted>;
+  legal_entity_id: ColumnType<string, string, NotGranted>;
+  created_by: ColumnType<string | null, string | null, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_kernel.role_assignment */

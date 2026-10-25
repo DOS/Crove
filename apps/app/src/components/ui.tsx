@@ -2,11 +2,13 @@
 // Card, Badge, ...) from @crove/ui directly and these composites from here.
 import { Alert } from '@crove/ui/components/alert';
 import { Empty as EmptyRoot, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from '@crove/ui/components/empty';
+import { Label } from '@crove/ui/components/label';
 import { Skeleton } from '@crove/ui/components/skeleton';
 import { Spinner as SpinnerIcon } from '@crove/ui/components/spinner';
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@crove/ui/components/table';
 import { cn } from '@crove/ui/lib/utils';
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslations } from 'use-intl';
 import { brandName } from '../i18n/brand.ts';
 import { takeOrgLeftNotice } from '../lib/api.ts';
@@ -38,12 +40,122 @@ export function Empty({ title, hint, action }: { title: string; hint?: string | 
   );
 }
 
-export function ErrorText({ children }: { children: ReactNode }) {
+// `id`: a field whose problem this text explains names it in its aria-describedby.
+export function ErrorText({ id, children }: { id?: string | undefined; children: ReactNode }) {
   return (
-    <Alert variant="destructive" className="border-destructive/30 bg-destructive/10">
+    <Alert id={id} variant="destructive" className="border-destructive/30 bg-destructive/10">
       {children}
     </Alert>
   );
+}
+
+// A form field's error sits under it and is linked to it (DESIGN.md §4.2, #1515): the control has an id, aria-invalid
+// while it shows an error, and aria-describedby naming its hint and its error, so a screen reader reads them with it.
+export interface FieldControl {
+  id: string;
+  'aria-invalid': true | undefined;
+  'aria-describedby': string | undefined;
+}
+
+export const fieldHintId = (id: string) => `${id}-hint`;
+export const fieldErrorId = (id: string) => `${id}-error`;
+
+// The attributes of a control whose hint and error are rendered with the ids above.
+export function fieldControl(id: string, { hint = false, error = false }: { hint?: boolean; error?: boolean } = {}): FieldControl {
+  const describedBy = [hint && fieldHintId(id), error && fieldErrorId(id)].filter(Boolean).join(' ');
+  return { id, 'aria-invalid': error || undefined, 'aria-describedby': describedBy || undefined };
+}
+
+// The error under a field whose layout is its own; nothing while the field is valid.
+export function FieldError({ id, className, children }: { id: string; className?: string; children?: ReactNode }) {
+  if (!children) return null;
+  return (
+    <p id={fieldErrorId(id)} className={cn('text-xs text-destructive', className)}>
+      {children}
+    </p>
+  );
+}
+
+// A label above its control, then the hint and the error under it. The control is rendered by `children` with the
+// attributes that link it to them; `label` may be left out when the control is named by aria-label.
+export function Field({
+  id: given,
+  label,
+  hint,
+  error,
+  className,
+  children,
+}: {
+  id?: string;
+  label?: ReactNode;
+  hint?: ReactNode;
+  error?: ReactNode;
+  className?: string;
+  children: (control: FieldControl) => ReactNode;
+}) {
+  const generated = useId();
+  const id = given ?? generated;
+  return (
+    <div className={cn('flex flex-col gap-1', className)}>
+      {label != null && (
+        <Label htmlFor={id} className="font-normal text-muted-foreground">
+          {label}
+        </Label>
+      )}
+      {children(fieldControl(id, { hint: Boolean(hint), error: Boolean(error) }))}
+      {hint && (
+        <p id={fieldHintId(id)} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
+      )}
+      <FieldError id={id}>{error}</FieldError>
+    </div>
+  );
+}
+
+const FOCUSABLE = ':is(input:not([type="hidden"]), select, textarea, button, [tabindex]):not([tabindex="-1"], :disabled)';
+
+// On a refused submit: the focus goes to the first field marked invalid, or into it when it is a group (a fieldset of
+// checkboxes), so the user lands on the problem and hears its error. False when no field is marked.
+export function focusFirstInvalid(form: ParentNode | null | undefined): boolean {
+  const first = form?.querySelector<HTMLElement>('[aria-invalid="true"]');
+  const target = first?.matches(FOCUSABLE) ? first : first?.querySelector<HTMLElement>(FOCUSABLE);
+  target?.focus();
+  return Boolean(target);
+}
+
+// Roughly what a browser's type="email" field accepts (the HTML standard's pattern), for forms that word their own errors.
+const EMAIL = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+export const isEmailAddress = (value: string) => EMAIL.test(value.trim());
+
+// The errors a form shows under its fields (DESIGN.md §4.2: on blur and on submit, not on every keystroke). `check`
+// words the problem of a field's current value, or returns null. Leaving a field with something in it checks it (an
+// empty required field waits for the submit); editing a field hides its error until it is checked again; checkAll, on
+// submit, checks the fields given and shows their errors at once, so focusFirstInvalid finds them right after.
+export function useFieldErrors<K extends string>(check: (field: K) => string | null) {
+  const [errors, setErrors] = useState<Partial<Record<K, string | null>>>({});
+  const show = (field: K, error: string | null) => setErrors((current) => ({ ...current, [field]: error }));
+  return {
+    of: (field: K): string | undefined => errors[field] ?? undefined,
+    check: (field: K): boolean => {
+      const error = check(field);
+      show(field, error);
+      return error === null;
+    },
+    blur: (field: K, value: string) => {
+      if (value.trim()) show(field, check(field));
+    },
+    edit: (field: K) => {
+      if (errors[field]) show(field, null);
+    },
+    reset: () => setErrors({}),
+    checkAll: (fields: readonly K[]): boolean => {
+      const next: Partial<Record<K, string | null>> = {};
+      for (const field of fields) next[field] = check(field);
+      flushSync(() => setErrors(next));
+      return fields.every((field) => !next[field]);
+    },
+  };
 }
 
 // Read from storage once per page load, so a second render (or React StrictMode's double initializer) still sees it.
@@ -130,14 +242,15 @@ export function ListSkeleton({ rows = 3 }: { rows?: number }) {
 // A table with one header row; the body rows are TableRow/TableCell from @crove/ui. `numeric` lists the columns that
 // hold amounts: their headers are right-aligned like the amounts (DESIGN.md 4.3).
 // A list's table (DESIGN.md §4.3). Its header stays in view (#1444): a table taller than the window scrolls inside its
-// card, under a pinned header, and only then becomes a tab stop, so the keyboard can scroll it too.
+// card, under a pinned header, and only then becomes a tab stop, so the keyboard can scroll it too. The same when it
+// scrolls sideways, as on a phone, where the table is wider than the screen (#1517).
 export function DataTable({ head, numeric = [], children }: { head: string[]; numeric?: number[]; children: ReactNode }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [scrolls, setScrolls] = useState(false);
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    const measure = () => setScrolls(el.scrollHeight > el.clientHeight + 1);
+    const measure = () => setScrolls(el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
