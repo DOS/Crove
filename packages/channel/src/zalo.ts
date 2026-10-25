@@ -25,6 +25,8 @@ import type { ConnectedAccount, EditInput, EditResult, MetricName, AccountMetric
 import { EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { videoCoverOf } from './cover.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
+import { platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
+import type { RecentPost, RecentPostsInput, RecentPostsResult } from './index.ts';
 
 export const ZALO_HOSTS = ['oauth.zaloapp.com', 'openapi.zalo.me'] as const;
 const TOKEN_URL = 'https://oauth.zaloapp.com/v4/oa/access_token';
@@ -282,9 +284,14 @@ interface VideoStatusAnswer {
   status_message?: unknown;
 }
 interface SliceAnswer {
-  // create_date: milliseconds since the epoch.
-  medias?: { id?: unknown; title?: unknown; create_date?: unknown }[];
+  // create_date: milliseconds since the epoch; status: show or hide; link_view: the article's page.
+  medias?: { id?: unknown; title?: unknown; create_date?: unknown; status?: unknown; link_view?: unknown }[];
+  total?: unknown;
 }
+// Articles one getslice page asks for (Zalo's docs set no maximum), and where an article's page may be: Zalo's own
+// domain or one of its subdomains (the docs show link_view only as "url").
+const RECENT_SLICE = 20;
+const ZALO_POST_HOSTS = ['zalo.me'] as const;
 
 interface DetailAnswer {
   total_view?: unknown;
@@ -524,6 +531,54 @@ export class ZaloOaPublisher implements Publisher {
     } catch {
       return { found: 'unknown' };
     }
+  }
+
+  // The OA's own articles since a date (#1431): `article/getslice` lists normal and video articles apart (#1429), each
+  // paged by offset (OA content docs, "Lấy danh sách nội dung dạng bài viết" and "... dạng video"), so both are read,
+  // RECENT_SLICE a page and at most RECENT_PAGES_MAX pages each. Zalo's list gives a title (the excerpt), a status, a
+  // creation time and a page address; a hidden article is left out, and an article counts from its creation. The docs
+  // do not give the list's order; it is taken as newest first, as reconcile takes it, so a slice is read until a page
+  // holds no article created since then. A refused
+  // token is said at once; any other failure after the first page ends that slice with what came before it.
+  async listRecentPosts(input: RecentPostsInput): Promise<RecentPostsResult> {
+    const s = zaloSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    const since = recentSince(input.since);
+    const posts: RecentPost[] = [];
+    for (const type of ['normal', 'video'] as const) {
+      for (let page = 0; page < RECENT_PAGES_MAX && posts.length < RECENT_POSTS_MAX; page++) {
+        let answer: SliceAnswer | null;
+        try {
+          answer = await this.client.api<SliceAnswer>('GET', 'article/getslice', s.accessToken, { params: { offset: String(page * RECENT_SLICE), limit: String(RECENT_SLICE), type } });
+        } catch (error) {
+          const result = zaloPublishResult(error);
+          if (result.kind === 'rejected' && result.error === 'token_expired') return { refused: 'token_expired' };
+          // Nothing listed yet: no answer worth keeping.
+          if (type === 'normal' && page === 0) return null;
+          break;
+        }
+        const medias = Array.isArray(answer?.medias) ? answer.medias : [];
+        let recent = false;
+        for (const m of medias) {
+          if (!m) continue;
+          // Zalo gives ids and times as strings or numbers.
+          const id = typeof m.id === 'string' || typeof m.id === 'number' ? String(m.id) : '';
+          const ms = typeof m.create_date === 'number' ? m.create_date : typeof m.create_date === 'string' && /^\d{1,15}$/.test(m.create_date) ? Number(m.create_date) : Number.NaN;
+          if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || !Number.isFinite(ms) || ms <= 0) continue;
+          const at = new Date(ms);
+          if (at < since) continue;
+          recent = true;
+          if (m.status !== undefined && m.status !== 'show') continue;
+          posts.push({ externalId: id, text: typeof m.title === 'string' ? m.title : '', permalink: platformLink(m.link_view, ZALO_POST_HOSTS), publishedAt: at });
+        }
+        const total = typeof answer?.total === 'number' ? answer.total : Number.POSITIVE_INFINITY;
+        if (!recent || medias.length < RECENT_SLICE || (page + 1) * RECENT_SLICE >= total) break;
+      }
+    }
+    // Newest first across both slices, an article listed twice kept once.
+    const seen = new Set<string>();
+    const unique = posts.sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime()).filter((p) => !seen.has(p.externalId) && seen.add(p.externalId));
+    return { posts: unique.slice(0, RECENT_POSTS_MAX) };
   }
 
   // The OA's followers (#645), from its profile.
