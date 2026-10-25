@@ -7,6 +7,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
+import { NavIcon } from '@crove/ui/components/nav-icon';
 import { ErrorText, Logo, OrgLeftNotice } from '../components/ui.tsx';
 import { client, clientForOrg, errorMessage, orglessClient, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -27,6 +28,8 @@ export function OnboardingPage() {
   const [address, setAddress] = useState('');
   const [contact, setContact] = useState('');
   const [invalidTaxCode, setInvalidTaxCode] = useState(false);
+  // Why the tax code matters stays behind the info button, so the form is labels and fields only.
+  const [aboutTaxCode, setAboutTaxCode] = useState(false);
 
   const lookup = useMutation({
     mutationFn: (code: string) => orglessClient.taxRegistry.lookup({ taxCode: code }),
@@ -77,13 +80,23 @@ export function OnboardingPage() {
         <OrgLeftNotice />
         <Logo />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{hasOrgs ? t('titleAnother') : t('title')}</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{t('subtitle')}</p>
         <form className="mt-6 space-y-3" onSubmit={submit}>
           {finance && (
             <div className="space-y-1">
-              <Label htmlFor="onboarding-tax-code" className="font-normal text-muted-foreground">
-                {t('taxCodeLabel')}
-              </Label>
+              <div className="flex items-center gap-1">
+                <Label htmlFor="onboarding-tax-code" className="font-normal text-muted-foreground">
+                  {t('taxCodeLabel')}
+                </Label>
+                <button
+                  type="button"
+                  className="rounded-sm p-0.5 text-subtle-foreground outline-none hover:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={t('taxCodeAbout')}
+                  aria-expanded={aboutTaxCode}
+                  aria-controls="onboarding-tax-code-about"
+                  onClick={() => setAboutTaxCode(!aboutTaxCode)}>
+                  <NavIcon name="info" />
+                </button>
+              </div>
               <div className="flex gap-2">
                 <Input
                   id="onboarding-tax-code"
@@ -104,7 +117,10 @@ export function OnboardingPage() {
                   </Button>
                 )}
               </div>
-              <p className="text-xs text-subtle-foreground">{getConfig().taxCodeLookup ? t('taxCodeHintLookup') : t('taxCodeHint')}</p>
+              {/* Always in the page, so the button's aria-controls names an element; hidden until the button opens it. */}
+              <p id="onboarding-tax-code-about" hidden={!aboutTaxCode} className="text-xs text-muted-foreground">
+                {getConfig().taxCodeLookup ? `${t('taxCodeHint')} ${t('taxCodeHintLookup')}` : t('taxCodeHint')}
+              </p>
               {invalidTaxCode && <ErrorText>{t('taxCodeInvalid')}</ErrorText>}
               {lookup.error && <ErrorText>{errorMessage(lookup.error)}</ErrorText>}
             </div>
@@ -120,7 +136,6 @@ export function OnboardingPage() {
           <Label className="flex-col items-stretch gap-1 font-normal">
             <span className="text-muted-foreground">{t('contactLabel')}</span>
             <Input type="email" maxLength={320} value={contact} onChange={(e) => setContact(e.target.value)} placeholder={t('contactPlaceholder')} />
-            <span className="text-xs text-subtle-foreground">{t('contactHint')}</span>
           </Label>
           {create.error && <ErrorText>{errorMessage(create.error)}</ErrorText>}
           <Button type="submit" size="lg" className="w-full" disabled={create.isPending}>
