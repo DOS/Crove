@@ -23,12 +23,15 @@ export interface CroveFinanceSchema {
   'crove_finance.bank_line': FinanceBankLineTable;
   'crove_finance.cash_voucher': FinanceCashVoucherTable;
   'crove_finance.categorization_rule': FinanceCategorizationRuleTable;
+  'crove_finance.chart': FinanceChartTable;
+  'crove_finance.chart_account': FinanceChartAccountTable;
   'crove_finance.depreciation_line': FinanceDepreciationLineTable;
   'crove_finance.fixed_asset': FinanceFixedAssetTable;
   'crove_finance.input_vat_check': FinanceInputVatCheckTable;
   'crove_finance.journal_entry': FinanceJournalEntryTable;
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.journal_voucher': FinanceJournalVoucherTable;
+  'crove_finance.legal_entity_books': FinanceLegalEntityBooksTable;
   'crove_finance.misa_goods_code': FinanceMisaGoodsCodeTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
   'crove_finance.period_balance_delta': FinancePeriodBalanceDeltaTable;
@@ -270,6 +273,22 @@ export interface FinanceCategorizationRuleTable {
   legal_entity_id: ColumnType<string, string, NotGranted>;
 }
 
+/** crove_finance.chart_account */
+export interface FinanceChartAccountTable {
+  regime: ColumnType<string, NotGranted, NotGranted>;
+  version: ColumnType<string, NotGranted, NotGranted>;
+  code: ColumnType<string, NotGranted, NotGranted>;
+  name: ColumnType<string, NotGranted, NotGranted>;
+  parent_code: ColumnType<string | null, NotGranted, NotGranted>;
+}
+
+/** crove_finance.chart */
+export interface FinanceChartTable {
+  regime: ColumnType<string, NotGranted, NotGranted>;
+  version: ColumnType<string, NotGranted, NotGranted>;
+  name: ColumnType<string, NotGranted, NotGranted>;
+}
+
 /** crove_finance.depreciation_line */
 export interface FinanceDepreciationLineTable {
   org_id: ColumnType<string, string, NotGranted>;
@@ -361,6 +380,18 @@ export interface FinanceJournalVoucherTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   closing_year: ColumnType<number | null, number | null, NotGranted>;
   legal_entity_id: ColumnType<string, string, NotGranted>;
+}
+
+/** crove_finance.legal_entity_books */
+export interface FinanceLegalEntityBooksTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  legal_entity_id: ColumnType<string, NotGranted, NotGranted>;
+  regime: ColumnType<string, NotGranted, NotGranted>;
+  chart_version: ColumnType<string, NotGranted, NotGranted>;
+  effective_from: ColumnType<string, NotGranted, NotGranted>;
+  created_by: ColumnType<string | null, NotGranted, NotGranted>;
+  created_at: ColumnType<Date, NotGranted, NotGranted>;
 }
 
 /** crove_finance.misa_goods_code */
