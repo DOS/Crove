@@ -18,6 +18,7 @@ export interface JournalForm {
 }
 
 export type JournalFormProblem = 'description' | 'lines' | 'amount' | 'side' | 'party' | 'unbalanced';
+export type JournalLineProblem = Extract<JournalFormProblem, 'amount' | 'side' | 'party'>;
 
 const WHOLE = /^\d{1,15}$/;
 
@@ -39,17 +40,24 @@ export function journalTotals(lines: readonly JournalFormLine[]): { debit: strin
   return { debit: add('debit').toString(), credit: add('credit').toString() };
 }
 
+// The problem of one line, shown under it (#1515): its amounts first, then its party.
+export function journalLineProblem(l: JournalFormLine): JournalLineProblem | null {
+  const debit = journalAmount(l.debit);
+  const credit = journalAmount(l.credit);
+  if (!WHOLE.test(debit) || !WHOLE.test(credit)) return 'amount';
+  if (positive(debit) === positive(credit)) return 'side';
+  if (!l.partyId && needsParty(l.account)) return 'party';
+  return null;
+}
+
 // The first problem of the form, in the order the user fills it in, or null.
 export function journalFormProblem(form: JournalForm): JournalFormProblem | null {
   if (!form.description.trim()) return 'description';
   if (form.lines.length < 2 || form.lines.length > JOURNAL_VOUCHER_MAX_LINES) return 'lines';
-  for (const l of form.lines) {
-    const debit = journalAmount(l.debit);
-    const credit = journalAmount(l.credit);
-    if (!WHOLE.test(debit) || !WHOLE.test(credit)) return 'amount';
-    if (positive(debit) === positive(credit)) return 'side';
-  }
-  if (form.lines.some((l) => !l.partyId && needsParty(l.account))) return 'party';
+  const problems = form.lines.map(journalLineProblem);
+  const amounts = problems.find((p) => p === 'amount' || p === 'side');
+  if (amounts) return amounts;
+  if (problems.includes('party')) return 'party';
   const totals = journalTotals(form.lines);
   if (totals.debit !== totals.credit) return 'unbalanced';
   return null;

@@ -8,7 +8,7 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import { normalizeTaxCode, zId } from '@crove/kernel-contract';
-import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
+import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 import { normalizeAddress } from './org-address.ts';
 
 export const PARTY_NAME_MAX_LENGTH = 300;
@@ -343,5 +343,93 @@ export const duplicateHintsQuery = defineQuery({
   },
 });
 
-export const partyCommands = [updateParty, markDuplicate, unmarkDuplicate];
+// Links of a party to legal entities (#1280 part 3b, crove_kernel.record_le): a member limited to some entities sees a
+// party only when it is linked to one of them. Owners and admins link and unlink (they see every party and entity); the
+// database lets only a writer with every entity in scope write links.
+const zPartyEntity = z.strictObject({ partyId: zId, legalEntityId: zId });
+
+async function partyAndEntity(ctx: CommandContext, input: z.infer<typeof zPartyEntity>) {
+  const party = await ctx.trx.selectFrom('crove_kernel.party').select(['id', 'name']).where('org_id', '=', ctx.orgId).where('id', '=', input.partyId).executeTakeFirst();
+  if (!party) throw new DomainError('PARTY_NOT_FOUND', 404, 'Không tìm thấy đối tác');
+  const entity = await ctx.trx
+    .selectFrom('crove_kernel.legal_entity')
+    .select(['id', 'name'])
+    .where('org_id', '=', ctx.orgId)
+    .where('id', '=', input.legalEntityId)
+    .executeTakeFirst();
+  if (!entity) throw new DomainError('LEGAL_ENTITY_NOT_FOUND', 422, 'Không tìm thấy pháp nhân này trong tổ chức');
+  return { party, entity };
+}
+
+export const linkPartyEntity = defineCommand({
+  name: 'kernel.party.link_entity',
+  input: zPartyEntity,
+  risk: 'R1',
+  access: ['owner', 'admin'],
+  target: (input) => ({ type: 'kernel.party', id: input.partyId }),
+  handler: async (ctx, input) => {
+    const { party, entity } = await partyAndEntity(ctx, input);
+    const added = await ctx.trx
+      .insertInto('crove_kernel.record_le')
+      .values({ org_id: ctx.orgId, record_type: 'kernel.party', record_id: party.id, legal_entity_id: entity.id, created_by: ctx.actor.type === 'user' ? ctx.actor.userId : null })
+      .onConflict((oc) => oc.constraint('record_le_once').doNothing())
+      .returning('id')
+      .executeTakeFirst();
+    ctx.audit({ partyId: party.id, legalEntityId: entity.id, already: added === undefined });
+    if (added) await ctx.activity('kernel.party', party.id, 'party.entity_linked', `Gắn ${party.name} cho pháp nhân ${entity.name}`);
+    return { partyId: party.id, legalEntityId: entity.id, linked: true as const };
+  },
+});
+
+export const unlinkPartyEntity = defineCommand({
+  name: 'kernel.party.unlink_entity',
+  input: zPartyEntity,
+  risk: 'R1',
+  access: ['owner', 'admin'],
+  target: (input) => ({ type: 'kernel.party', id: input.partyId }),
+  handler: async (ctx, input) => {
+    const { party, entity } = await partyAndEntity(ctx, input);
+    const removed = await ctx.trx
+      .deleteFrom('crove_kernel.record_le')
+      .where('org_id', '=', ctx.orgId)
+      .where('record_type', '=', 'kernel.party')
+      .where('record_id', '=', party.id)
+      .where('legal_entity_id', '=', entity.id)
+      .executeTakeFirst();
+    const found = Number(removed.numDeletedRows) > 0;
+    ctx.audit({ partyId: party.id, legalEntityId: entity.id, found });
+    if (found) await ctx.activity('kernel.party', party.id, 'party.entity_unlinked', `Bỏ gắn ${party.name} khỏi pháp nhân ${entity.name}`);
+    return { partyId: party.id, legalEntityId: entity.id, linked: false as const };
+  },
+});
+
+// Find or link by tax code (coordinator decision on #1280, option (b); 20261102230000): when a member limited to some
+// entities records a document of a company the org already knows, that company's party is linked to the member's
+// entities and used. Run only by the write path that records the document (finance's upsertParty), never from an RPC.
+// A person's party is not linked this way: an owner or admin links it. Returns null when no party holds the tax code or
+// the caller already sees every party.
+export const linkPartyForTaxCode = defineCommand({
+  name: 'kernel.party.link_for_tax_code',
+  input: z.strictObject({ taxCode: z.string().min(1).max(40) }),
+  risk: 'R1',
+  access: ['owner', 'admin', 'member'],
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
+    const taxCode = normalizeTaxCode(input.taxCode);
+    if (!taxCode) throw new DomainError('INVALID_TAX_CODE', 422, 'Mã số thuế không hợp lệ');
+    const found = await sql<{ party_id: string; linked: string[] }>`SELECT party_id, linked FROM crove_kernel.party_link_for_tax_code(${taxCode})`
+      .execute(ctx.trx)
+      .catch((error: unknown) => {
+        if (/PARTY_LINK_REQUIRED/.test((error as { message?: string } | null)?.message ?? '')) {
+          throw new DomainError('PARTY_LINK_REQUIRED', 403, 'Chủ hoặc quản trị viên của tổ chức cần gắn đối tác này cho pháp nhân của bạn trước');
+        }
+        throw error;
+      });
+    const row = found.rows[0];
+    ctx.audit({ taxCode, partyId: row?.party_id ?? null, linked: row?.linked ?? [] });
+    return { partyId: row?.party_id ?? null };
+  },
+});
+
+export const partyCommands = [updateParty, markDuplicate, unmarkDuplicate, linkPartyEntity, unlinkPartyEntity, linkPartyForTaxCode];
 export const partyQueries = [duplicateHintsQuery];

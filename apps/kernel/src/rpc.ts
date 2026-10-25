@@ -680,6 +680,10 @@ export function createRpcHandler(
             // the extract container): asked for if new, and waited for a few seconds. Before the budget: waiting for a page
             // costs no model call, and a page that cannot be read takes no slot.
             const source = input.sourceUrl ? await sourcePage(runtime, actor, orgId, input.sourceUrl) : undefined;
+            // A forwarded mail (#779): its subject and text as kept with the inbound message, read in the caller's org
+            // only (a mail of another org is not found). Like the page, tainted data the writer takes facts from.
+            const mail = input.inboundMessageId ? await runtime.query<{ subject: string | null; text: string | null }>('kernel.inbound.text', { id: input.inboundMessageId }, { actor, orgId }) : undefined;
+            if (mail && !mail.text && !mail.subject?.trim()) throw new DomainError('MAIL_EMPTY', 422, 'Thư này không có nội dung để soạn bài; hãy mô tả bài bằng lời');
             // The model call is paid: a member gets a few a minute and one at a time, an org a few more (#386).
             const ticket = drafts.take(orgId, actor.userId);
             if (!ticket.allowed) {
@@ -697,6 +701,7 @@ export function createRpcHandler(
                 ...(input.tone ? { tone: input.tone } : {}),
                 ...(voices?.org ? { voice: voices.org } : {}),
                 ...(source ? { source } : {}),
+                ...(mail ? { mail } : {}),
                 ...(voices ? { channelVoices: Object.fromEntries(input.connectionIds.flatMap((id) => (voices.byChannel.has(id) ? [[id, voices.byChannel.get(id) as string]] : []))) } : {}),
               };
               draft =
@@ -1538,6 +1543,9 @@ export function createRpcHandler(
           return runtime.execute('kernel.proposal.request', rest, { actor, orgId, idempotencyKey });
         }),
       ),
+    },
+    inbound: {
+      recent: os.inbound.recent.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.inbound.recent', {}, { actor, orgId }))),
     },
     files: {
       recent: os.files.recent.handler(({ context }) =>

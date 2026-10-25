@@ -1,6 +1,6 @@
 // The general journal voucher form (NVK, #888): what the SPA refuses before it asks, and the refusals it words.
 import { describe, expect, it } from 'vitest';
-import { journalAmount, journalFormProblem, journalTotals, journalVoucherProblem, type JournalFormLine } from '../src/lib/journal-voucher.ts';
+import { journalAmount, journalFormProblem, journalLineProblem, journalTotals, journalVoucherProblem, type JournalFormLine } from '../src/lib/journal-voucher.ts';
 
 const line = (account: string, debit: string, credit: string, partyId = ''): JournalFormLine => ({ account, partyId, debit, credit });
 
@@ -24,6 +24,15 @@ describe('general journal voucher form', () => {
     expect(journalFormProblem({ ...ok, lines: [line('6422', '1000', ''), line('331', '', '1000')] })).toBe('party');
     expect(journalFormProblem({ ...ok, lines: [line('6422', '1000', ''), line('3311', '', '1000', 'p1')] })).toBeNull();
     expect(journalFormProblem({ ...ok, lines: [line('6422', '1000', ''), line('334', '', '900')] })).toBe('unbalanced');
+  });
+
+  it('names the problem of one line, shown under it: its amounts first, then its party (#1515)', () => {
+    expect(journalLineProblem(line('6422', '1.000', ''))).toBeNull();
+    expect(journalLineProblem(line('331', '1x', ''))).toBe('amount');
+    expect(journalLineProblem(line('331', '1000', '1000'))).toBe('side');
+    expect(journalLineProblem(line('6422', '', ''))).toBe('side');
+    expect(journalLineProblem(line('331', '1000', ''))).toBe('party');
+    expect(journalLineProblem(line('131', '', '1000', 'p1'))).toBeNull();
   });
 
   it('names the problem of a JOURNAL_VOUCHER_INVALID refusal, and nothing for other errors', () => {

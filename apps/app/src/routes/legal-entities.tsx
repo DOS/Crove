@@ -3,15 +3,15 @@
 // the org's and changes only through the tax code field above it. Entities are never deleted. The server enforces
 // every rule; the screen only offers what can succeed and shows the server's reason otherwise.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
-import { LEGAL_ENTITY_KINDS, type LegalEntity, type LegalEntityKind } from '@crove/kernel-contract';
+import { LEGAL_ENTITY_KINDS, normalizeTaxCode, type LegalEntity, type LegalEntityKind } from '@crove/kernel-contract';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { ErrorText, Spinner } from '../components/ui.tsx';
+import { ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, Spinner, useFieldErrors } from '../components/ui.tsx';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { parentChoices, parentName } from '../lib/legal-entities.ts';
 
@@ -48,11 +48,18 @@ function EntityForm({
   const tc = useTranslations('common');
   const [draft, setDraft] = useState<Draft>(() => draftOf(entity));
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((d) => ({ ...d, [key]: value }));
-  const submit = (event: FormEvent) => {
+  const lockedTaxCode = entity?.isDefault ?? false;
+  // The tax code is checked on leaving the field and on submit, its error under it (#1515); the server checks again.
+  const taxCodeId = useId();
+  const fields = useFieldErrors<'taxCode'>(() => (!lockedTaxCode && draft.taxCode.trim() && !normalizeTaxCode(draft.taxCode) ? t('taxCodeInvalid') : null));
+  const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!fields.checkAll(['taxCode'])) {
+      focusFirstInvalid(event.currentTarget);
+      return;
+    }
     onSubmit(draft);
   };
-  const lockedTaxCode = entity?.isDefault ?? false;
   return (
     <form className="mt-2 space-y-2" onSubmit={submit} aria-label={entity ? t('editOf', { name: entity.name }) : t('addTitle')}>
       <Input required maxLength={200} placeholder={t('namePlaceholder')} aria-label={t('name')} value={draft.name} onChange={(e) => set('name', e.target.value)} />
@@ -65,6 +72,7 @@ function EntityForm({
           ))}
         </NativeSelect>
         <Input
+          {...fieldControl(taxCodeId, { hint: lockedTaxCode, error: Boolean(fields.of('taxCode')) })}
           className="w-48 font-mono"
           maxLength={20}
           placeholder={t('taxCodePlaceholder')}
@@ -72,10 +80,19 @@ function EntityForm({
           value={draft.taxCode}
           disabled={lockedTaxCode}
           title={lockedTaxCode ? t('defaultTaxCodeHint') : undefined}
-          onChange={(e) => set('taxCode', e.target.value)}
+          onChange={(e) => {
+            set('taxCode', e.target.value);
+            fields.edit('taxCode');
+          }}
+          onBlur={(e) => fields.blur('taxCode', e.target.value)}
         />
       </div>
-      {lockedTaxCode && <p className="text-xs text-subtle-foreground">{t('defaultTaxCodeHint')}</p>}
+      <FieldError id={taxCodeId}>{fields.of('taxCode')}</FieldError>
+      {lockedTaxCode && (
+        <p id={fieldHintId(taxCodeId)} className="text-xs text-subtle-foreground">
+          {t('defaultTaxCodeHint')}
+        </p>
+      )}
       <NativeSelect className="w-full" value={draft.parentId} onChange={(e) => set('parentId', e.target.value)} aria-label={t('parent')}>
         <NativeSelectOption value="">{t('noParent')}</NativeSelectOption>
         {parentChoices(entities, entity?.id ?? null).map((e) => (

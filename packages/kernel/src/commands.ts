@@ -327,12 +327,17 @@ export const claimUpload = defineCommand({
   },
 });
 
+// The most characters of a mail's text kept with it (#779), as the CHECK on crove_kernel.inbound_message.body_text.
+export const INBOUND_TEXT_MAX = 20_000;
+
 export const receiveInbound = defineCommand({
   name: 'kernel.inbound.receive',
   input: z.object({
     messageId: z.string().min(1).max(500),
     from: z.string().max(320).nullable(),
     subject: z.string().max(500).nullable(),
+    // The mail's text (#779); absent from a worker built before it.
+    text: z.string().min(1).max(INBOUND_TEXT_MAX).nullable().optional(),
     files: z.array(zIngestFile).max(20),
   }),
   risk: 'R1',
@@ -346,6 +351,7 @@ export const receiveInbound = defineCommand({
         message_id: input.messageId,
         from_address: input.from,
         subject: input.subject,
+        body_text: input.text ?? null,
         attachment_count: input.files.length,
       })
       .onConflict((oc) => oc.columns(['org_id', 'message_id']).doNothing())

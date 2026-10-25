@@ -5,8 +5,7 @@ import { MfaChallengeForm } from '../components/two-factor.tsx';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
-import { Label } from '@crove/ui/components/label';
-import { ErrorText, Logo, Spinner } from '../components/ui.tsx';
+import { ErrorText, Field, focusFirstInvalid, Logo, Spinner, useFieldErrors } from '../components/ui.tsx';
 import { auth, authErrorText, authFailure, needsSecondFactor, type AuthFailure } from '../lib/auth.ts';
 
 export function ResetPasswordPage() {
@@ -18,16 +17,24 @@ export function ResetPasswordPage() {
   const [password, setPassword] = useState('');
   const [repeat, setRepeat] = useState('');
   const [busy, setBusy] = useState(false);
-  // A Supabase Auth failure, or 'mismatch'; worded at render (issue #215).
-  const [error, setError] = useState<AuthFailure | 'mismatch' | null>(null);
+  // A Supabase Auth failure, worded at render (issue #215).
+  const [error, setError] = useState<AuthFailure | null>(null);
+  // Each field's own problem sits under it (#1515); a repeat that differs is the repeat field's.
+  const fields = useFieldErrors<'password' | 'repeat'>((field) => {
+    if (field === 'password') return !password ? t('passwordRequired') : password.length < 8 ? t('passwordShort') : null;
+    return !repeat ? t('repeatRequired') : repeat !== password ? t('mismatch') : null;
+  });
 
   useEffect(() => {
     void needsSecondFactor().then(setNeedsCode);
   }, []);
 
-  async function submit(event: FormEvent) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (password !== repeat) return setError('mismatch');
+    if (!fields.checkAll(['password', 'repeat'])) {
+      focusFirstInvalid(event.currentTarget);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -56,16 +63,42 @@ export function ResetPasswordPage() {
             </div>
           </>
         ) : (
-          <form className="mt-6 space-y-3" onSubmit={submit}>
-            <Label className="flex-col items-stretch gap-1 font-normal">
-              <span className="text-muted-foreground">{t('newPassword')}</span>
-              <Input type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-            </Label>
-            <Label className="flex-col items-stretch gap-1 font-normal">
-              <span className="text-muted-foreground">{t('repeat')}</span>
-              <Input type="password" required minLength={8} autoComplete="new-password" value={repeat} onChange={(e) => setRepeat(e.target.value)} />
-            </Label>
-            {error && <ErrorText>{error === 'mismatch' ? t('mismatch') : authErrorText(error, root)}</ErrorText>}
+          <form className="mt-6 space-y-3" noValidate onSubmit={submit}>
+            <Field label={t('newPassword')} error={fields.of('password')}>
+              {(control) => (
+                <Input
+                  {...control}
+                  type="password"
+                  required
+                  minLength={8}
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    fields.edit('password');
+                  }}
+                  onBlur={(e) => fields.blur('password', e.target.value)}
+                />
+              )}
+            </Field>
+            <Field label={t('repeat')} error={fields.of('repeat')}>
+              {(control) => (
+                <Input
+                  {...control}
+                  type="password"
+                  required
+                  minLength={8}
+                  autoComplete="new-password"
+                  value={repeat}
+                  onChange={(e) => {
+                    setRepeat(e.target.value);
+                    fields.edit('repeat');
+                  }}
+                  onBlur={(e) => fields.blur('repeat', e.target.value)}
+                />
+              )}
+            </Field>
+            {error && <ErrorText>{authErrorText(error, root)}</ErrorText>}
             <Button type="submit" size="lg" className="w-full" disabled={busy}>
               {busy ? t('saving') : t('save')}
             </Button>

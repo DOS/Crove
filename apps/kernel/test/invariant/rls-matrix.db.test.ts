@@ -46,13 +46,13 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
+  // The accounting regime per legal entity (#1403): the factory lands first, the table with the next migration.
+  'crove_finance.legal_entity_books',
   // Gapless numbering (ADR-0021 §2, #1401): the factories land first, the tables with the next migration.
   'crove_kernel.number_allocation',
   'crove_kernel.number_series',
   'crove_kernel.number_series_policy',
   'crove_kernel.number_void',
-  // Links of parties to legal entities (#1280 part 3b): the factory lands first, the table with the next migration.
-  'crove_kernel.record_le',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 // The RESTRICTIVE legal-entity policy (20261030001000, 20261102140000), as pg_get_expr prints it for column c.
@@ -198,6 +198,8 @@ const socialShortLinkRows = (o: { id: string; owner: string }) => {
 let portalListYear = 2000;
 // A tax obligation is marked done once per period (#921): each row its own year.
 let taxObligationYear = 2000;
+// A legal entity's books take a regime from the first day of a fiscal year (#1403): each row its own year.
+let legalEntityBooksYear = 2000;
 // Active bookings of one member never overlap (#1313): each calendar event row its own hour.
 let calendarHour = 0;
 // An org's weekly digest is marked sent once per ISO week (#1104): each row its own year.
@@ -352,6 +354,12 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
         ],
       };
     },
+  },
+  // The accounting regime of a legal entity's books (#1403): TT133 or TT99 and its chart version, from the first day of
+  // a fiscal year, one row per (org, entity, effective_from). The entity is filled in by b_legal_entity (the org's
+  // default entity), so each row gets its own year.
+  'crove_finance.legal_entity_books': {
+    make: (o) => ({ row: { org_id: o.id, id: randomUUID(), regime: 'tt133', chart_version: '2026.1', effective_from: `${legalEntityBooksYear++}-01-01`, created_by: o.owner } }),
   },
   // #1398: an org's MISA SME item and warehouse codes (Mã hàng, Mã kho) for purchase lines on a stock account (152, 153,
   // 156 or a sub-account of one), one row per (org, account). Owners and admins set and clear them.
