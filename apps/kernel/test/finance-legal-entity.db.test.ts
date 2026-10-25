@@ -1,5 +1,5 @@
 // The books per legal entity (issue #1280, part 1) on a real PostgreSQL 17. The database is migrated up to the file
-// before 20261102100000, given a ledger of a few thousand rows and a WORM batch over it, then migrated to the end: every
+// before 20261102140000, given a ledger of a few thousand rows and a WORM batch over it, then migrated to the end: every
 // finance row lands in its org's default entity, the archived batch still verifies, and the rewrite's cost is printed.
 // After it: new rows take their parent's entity or the default one, a mismatch or a change is refused, a member limited
 // to one entity reads and writes only that entity's books, rules are unique per entity, and the nightly comparison
@@ -21,7 +21,7 @@ import { LocalArchiveStore, verifyArchive, writeArchive } from '../src/worm.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
-const THIS_VERSION = '20261102100000';
+const THIS_VERSION = '20261102140000';
 // Entries posted before the migration, two lines and two deltas each.
 const LEGACY_ENTRIES = 1500;
 const PER_ENTITY = [
@@ -319,6 +319,51 @@ suite('finance books per legal entity (#1280)', () => {
         ]),
       ),
     ).rejects.toThrow(RLS_DENIED);
+    // Nor reverse an entry of the default entity through the posting definer: the reversed entry is unseen, so the
+    // reversal gets no entity and is refused.
+    const defaultEntry = await admin(async (a) => (await a.query<{ id: string }>('SELECT id FROM crove_finance.journal_entry WHERE org_id = $1 AND legal_entity_id = $2 LIMIT 1', [orgId, defaultEntity])).rows[0]?.id);
+    await expect(
+      asUser(member, (c) =>
+        c.query(`SELECT crove_finance.post_journal_entry('2026-09-25'::date, 'reverse', 'test.reverse', $1::uuid, $2::jsonb, $3::uuid, 1)`, [
+          randomUUID(),
+          JSON.stringify([
+            { line_no: 1, account_code: '331', debit: '1000', credit: '0' },
+            { line_no: 2, account_code: '6422', debit: '0', credit: '1000' },
+          ]),
+          defaultEntry,
+        ]),
+      ),
+    ).rejects.toThrow(/row-level security|null value in column "legal_entity_id"/);
+    // Nor can the member attach a row of the branch under a parent of the default entity it cannot see: a learned rule
+    // naming the branch and a default-entity purchase document as its source loses its entity and is refused.
+    const document = await admin(async (a) => {
+      await a.query('BEGIN');
+      const party = (await a.query<{ id: string }>(`INSERT INTO crove_kernel.party (org_id, name) VALUES ($1, 'Nhà cung cấp') RETURNING id`, [orgId])).rows[0]?.id;
+      const doc = (
+        await a.query<{ id: string }>(
+          `INSERT INTO crove_finance.purchase_document (org_id, party_id, invoice_number, invoice_date, subtotal, vat_amount, total)
+           VALUES ($1, $2, '00000042', '2026-09-10', 100, 0, 100) RETURNING id`,
+          [orgId, party],
+        )
+      ).rows[0]?.id as string;
+      const e = (
+        await a.query<{ id: string }>(
+          `INSERT INTO crove_finance.journal_entry (org_id, entry_date, description, source_type, source_id) VALUES ($1, '2026-09-10', 'mua', 'finance.purchase_document', $2) RETURNING id`,
+          [orgId, doc],
+        )
+      ).rows[0]?.id;
+      await a.query(`INSERT INTO crove_finance.journal_line (org_id, entry_id, line_no, account_code, debit, credit) VALUES ($1, $2, 1, '6422', 100, 0), ($1, $2, 2, '331', 0, 100)`, [orgId, e]);
+      await a.query('COMMIT');
+      return doc;
+    });
+    await expect(
+      asUser(member, (c) =>
+        c.query(
+          `INSERT INTO crove_finance.categorization_rule (org_id, legal_entity_id, match_kind, match_text, debit_account, source_document_id) VALUES ($1, $2, 'keyword', 'muc in', '6422', $3)`,
+          [orgId, branch, document],
+        ),
+      ),
+    ).rejects.toThrow(/row-level security|null value in column "legal_entity_id"/);
   });
 
   it('reports a balance delta whose entity is not its entry’s', async () => {

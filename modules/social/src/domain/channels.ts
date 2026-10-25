@@ -721,6 +721,13 @@ export const NOT_PUBLIC_NOTES: readonly string[] = [SENT_TO_APP, WORDPRESS_DRAFT
 // wordpressOptionsOf in @crove/channel reads the same shape.
 export const WORDPRESS_STATUSES = ['publish', 'draft', 'pending'] as const;
 export type WordPressStatus = (typeof WORDPRESS_STATUSES)[number];
+// The status a WordPress variant asks for: publish when it names none; null when it names one WordPress would not take.
+export function wordpressStatusOf(settings: Readonly<Record<string, unknown>> | undefined): WordPressStatus | null {
+  const raw = settings?.wordpress;
+  const status = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as { status?: unknown }).status : undefined;
+  if (status === undefined || status === null) return 'publish';
+  return (WORDPRESS_STATUSES as readonly unknown[]).includes(status) ? (status as WordPressStatus) : null;
+}
 export const WORDPRESS_CATEGORIES_MAX = 10;
 export const WORDPRESS_TAGS_MAX = 20;
 export const WORDPRESS_EXCERPT_MAX = 500;
@@ -762,22 +769,26 @@ export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox',
 // The channels whose Crove adapter corrects a published post's text (#1223): Facebook Pages (`POST /{page-post-id}`),
 // LinkedIn members and pages (a PARTIAL_UPDATE of the commentary), Mastodon (`PUT /api/v1/statuses/:id`), Telegram
 // (`editMessageText`, `editMessageCaption`), Discord (editing the webhook's message) and Zalo OA (`article/update`
-// with the whole article, its cover and images sent again, #1430). Instagram, Threads, Bluesky, X and TikTok have no
-// edit Crove can make and answer EDIT_NOT_SUPPORTED; WordPress, YouTube, Pinterest and Google Business take one, and
-// join here with their own issue.
-export const EDIT_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'facebook_page', 'linkedin', 'linkedin_page', 'mastodon', 'telegram', 'discord', 'zalo_oa']);
+// with the whole article, its cover and images sent again, #1430), YouTube (`videos.update` of the snippet, read first
+// and sent back whole, with the force-ssl scope), Google Business (`localPosts.patch` of the summary alone) and
+// WordPress (`POST /wp/v2/posts/:id` of the text, its title and images kept; #1474). Instagram, Threads, Bluesky, X and
+// TikTok have no edit Crove can make and answer EDIT_NOT_SUPPORTED. Pinterest stays out: it is not confirmed that its
+// pin update works without boards:write, which Crove's Pinterest connect does not ask for.
+export const EDIT_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'facebook_page', 'linkedin', 'linkedin_page', 'mastodon', 'telegram', 'discord', 'zalo_oa', 'youtube', 'google_business', 'wordpress']);
 
 // Why a published variant's text cannot be corrected (#1223), or null when it can: the channel has no edit
 // ('provider'), the post is a poll, whose question or options no edit may change without resetting its votes ('poll'),
 // or a Story or a Reel, whose text no edit reaches ('post_type'), as a Facebook video's description ('video') and a
-// Zalo video article (#1429), whose video_id Crove does not keep to send again ('video'). The adapters refuse the same
-// before any call.
-export type EditRefusal = 'provider' | 'poll' | 'post_type' | 'video';
+// Zalo video article (#1429), whose video_id Crove does not keep to send again ('video'), or a WordPress post kept on
+// the site as a draft or pending review, which has no public post to correct ('draft', #1474). Any YouTube video,
+// a Short included, takes an edit of its description. The adapters refuse the same before any call.
+export type EditRefusal = 'provider' | 'poll' | 'post_type' | 'video' | 'draft';
 export function editRefusal(provider: string, settings: Readonly<Record<string, unknown>>, mediaKinds: readonly MediaKind[]): EditRefusal | null {
   if (!isProvider(provider) || !EDIT_READY.has(provider)) return 'provider';
   if (settings.poll !== undefined && settings.poll !== null) return 'poll';
   if (postTypeOf(settings) !== 'feed') return 'post_type';
   if ((provider === 'facebook_page' || provider === 'zalo_oa') && mediaKinds.includes('video')) return 'video';
+  if (provider === 'wordpress' && wordpressStatusOf(settings) !== 'publish') return 'draft';
   return null;
 }
 

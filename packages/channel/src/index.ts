@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import type { PostType } from './post-type.ts';
 import type { ChannelOptionsInput, ChannelOptionsResult } from './options.ts';
 import type { Audience } from './audience.ts';
+import type { DailyPerformance } from './performance.ts';
 
 export * from './oauth.ts';
 export * from './text.ts';
@@ -29,6 +30,7 @@ export * from './post-type.ts';
 export * from './recent.ts';
 export * from './audience.ts';
 export * from './options.ts';
+export * from './performance.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -208,6 +210,28 @@ export interface MetricsInput {
 }
 export type MetricsResult = { metrics: Partial<Record<MetricName, number>>; extra?: Record<string, unknown> } | { refused: 'token_expired' | 'gone' } | null;
 
+// A published post the platform gives its public id only later (#1475, TikTok): a public post gets it once the
+// platform's moderation passes, and a draft sent to the account's app becomes a post once the account posts it there.
+// The worker asks again, reading the status only; it never posts. externalRef: the platform's tracking id of the post
+// (TikTok's publish_id). scopes: what the connection was granted, for a read only some grants allow (its address).
+export interface LateIdInput {
+  externalAccountId: string;
+  secret: string;
+  externalRef: string;
+  scopes: readonly string[];
+}
+// posted: out, with its public id (and its address when the platform gives one); posted_without_id: out, with no public
+// id yet (moderation still running, or a post not public); waiting: still processing, or a draft not posted yet; failed:
+// the platform says it will not be posted, or will not answer for it again; refused: the token no longer works; null:
+// no answer worth keeping (an outage, a rate limit), ask again later.
+export type LateIdResult =
+  | { kind: 'posted'; externalId: string; url: string | null }
+  | { kind: 'posted_without_id' }
+  | { kind: 'waiting' }
+  | { kind: 'failed'; code: string }
+  | { kind: 'refused' }
+  | null;
+
 // What a platform says about a connected account itself (#645): its followers (subscribers on YouTube), and the people
 // it reached over the last day where the platform gives that. null: no answer worth keeping (a network failure, a
 // malformed answer); refused: the token or the permission was refused.
@@ -219,7 +243,8 @@ export interface AccountMetricsInput {
   secret: string;
   audience?: boolean;
 }
-export type AccountMetricsResult = { followers: number | null; reach?: number | null; audience?: Audience | null } | { refused: 'token_expired' | 'permission' } | null;
+// performance (#1477): a Google Business Profile location's figures per day (performance.ts); absent elsewhere.
+export type AccountMetricsResult = { followers: number | null; reach?: number | null; audience?: Audience | null; performance?: DailyPerformance } | { refused: 'token_expired' | 'permission' } | null;
 
 // The posts an account published itself, outside Crove (#1054), so the Metrics tab and the client report can count
 // every post of the account when asked. since: how far back, clamped to RECENT_POSTS_MAX_DAYS before now. null: no
@@ -229,6 +254,10 @@ export interface RecentPostsInput {
   externalAccountId: string;
   secret: string;
   since: Date;
+  // What the platform granted the connection, as stored at connect: an adapter whose listing needs a permission connect
+  // asks for only on some deployments (TikTok's video.list, #1476) refuses before any call when it is missing. Absent
+  // in callers that do not read it.
+  scopes?: readonly string[];
 }
 export interface RecentPost {
   // The platform's id of the post, in the shape publish answers and metrics reads.
@@ -339,6 +368,10 @@ export interface EditInput {
   // and fetches its images again (Zalo's article/update, #1430); null when the storage cannot hand one out. Absent in
   // callers that have no storage.
   mediaUrl?(fileId: string): Promise<string | null>;
+  // What the platform granted the connection, as stored at connect (#1474): an adapter whose edit needs a permission
+  // connect asks for but does not require (YouTube's force-ssl) refuses before any call when it is missing. Absent in
+  // callers that do not read it.
+  scopes?: readonly string[];
   // The external_call key of this edit.
   callKey: string;
 }
@@ -367,6 +400,8 @@ export interface Publisher {
   // Providers that report how a post did: null when the platform did not answer (try again later), refused when the
   // token no longer works or the post is gone.
   metrics?(input: MetricsInput): Promise<MetricsResult>;
+  // Providers that give a published post's public id only later (#1475, TikTok): where it stands now, read only.
+  lateId?(input: LateIdInput): Promise<LateIdResult>;
   // Providers that report an account's followers (#645), read once a day.
   accountMetrics?(input: AccountMetricsInput): Promise<AccountMetricsResult>;
   // Providers that list the account's own recent posts (#1054), so posts published outside Crove can be counted.

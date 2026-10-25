@@ -12,11 +12,14 @@
 // one photo at most, which Google fetches from its URL. Product posts cannot be made through the API. The answer
 // names the post; an unclear answer is checked by listing the location's newest posts, matched by text and time.
 // Remove (#1138): DELETE https://mybusiness.googleapis.com/v4/{name} of the localPost, with the same business.manage grant.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
-import { removeResult } from './comment.ts';
+// Edit (#1474): PATCH https://mybusiness.googleapis.com/v4/{name}?updateMask=summary, the post's text alone.
+import type { ConnectedAccount, EditInput, EditResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, Refresher, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { editResult, removeResult } from './comment.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
+import type { AccountMetricsInput, AccountMetricsResult } from './index.ts';
+import { PERFORMANCE_DAYS, type DailyPerformance, type PerformanceName } from './performance.ts';
 
-export const GOOGLE_BUSINESS_HOSTS = ['oauth2.googleapis.com', 'mybusinessaccountmanagement.googleapis.com', 'mybusinessbusinessinformation.googleapis.com', 'mybusiness.googleapis.com'] as const;
+export const GOOGLE_BUSINESS_HOSTS = ['oauth2.googleapis.com', 'mybusinessaccountmanagement.googleapis.com', 'mybusinessbusinessinformation.googleapis.com', 'mybusiness.googleapis.com', 'businessprofileperformance.googleapis.com'] as const;
 export const GOOGLE_BUSINESS_SCOPES = ['https://www.googleapis.com/auth/business.manage'] as const;
 export const GBP_CTA_TYPES = ['BOOK', 'ORDER', 'SHOP', 'LEARN_MORE', 'SIGN_UP', 'CALL'] as const;
 export type GbpCtaType = (typeof GBP_CTA_TYPES)[number];
@@ -102,7 +105,7 @@ class GoogleBusinessClient {
     return json as TokenAnswer;
   }
 
-  async call<T>(method: 'GET' | 'POST' | 'DELETE', url: string, token: string, json?: unknown): Promise<T> {
+  async call<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', url: string, token: string, json?: unknown): Promise<T> {
     const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
     if (json !== undefined) headers['content-type'] = 'application/json; charset=UTF-8';
     const response = await this.fetch(url, { method, headers, signal: AbortSignal.timeout(30_000), ...(json === undefined ? {} : { body: JSON.stringify(json) }) });
@@ -370,6 +373,27 @@ export class GoogleBusinessPublisher implements Publisher {
     }
   }
 
+  // Corrects the local post's text (#1474): PATCH /v4/{accounts/*/locations/*/localPosts/*}?updateMask=summary with
+  // the new summary, answered with the LocalPost, under business.manage as publishing. Only the fields the mask names
+  // change, so the call to action, the event or offer, the photo and the language stay as published. The text is
+  // built and checked as at publish (GBP_SUMMARY_MAX). Only a post of this location; one Google no longer has (404) is
+  // POST_NOT_FOUND.
+  async edit(input: EditInput): Promise<EditResult> {
+    const s = googleBusinessSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' };
+    if (!LOCATION.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_LOCATION' };
+    if (!POST_NAME.test(input.externalId) || !input.externalId.startsWith(`${input.externalAccountId}/localPosts/`)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const summary = input.content.body.trim();
+    if ([...summary].length > GBP_SUMMARY_MAX) return { kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG' };
+    try {
+      const answer = await this.client.call<{ name?: unknown }>('PATCH', `https://mybusiness.googleapis.com/v4/${input.externalId}?updateMask=summary`, s.accessToken, { summary });
+      return answer.name === input.externalId ? { kind: 'edited' } : { kind: 'unknown', code: 'NOT_CONFIRMED' };
+    } catch (error) {
+      if (error instanceof GoogleBusinessError && error.status === 404) return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+      return editResult(publishResult(error));
+    }
+  }
+
   // The location's newest posts, matched by their text within the call's time window.
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {
     const s = googleBusinessSecretOf(input.secret);
@@ -392,4 +416,82 @@ export class GoogleBusinessPublisher implements Publisher {
       return { found: 'unknown' };
     }
   }
+
+  // The location's performance (#1477), from the Business Profile Performance API:
+  // GET https://businessprofileperformance.googleapis.com/v1/locations/{l}:fetchMultiDailyMetricsTimeSeries with the
+  // daily metrics and an inclusive date range, under business.manage as publishing. Each value is an int64 string, left
+  // out on a day it is zero. Google gives these days late (3 to 4, its Merchant Center help says) and may still change a
+  // recent day, so each read asks for the PERFORMANCE_DAYS days up to yesterday (UTC) and the caller keeps the latest
+  // read of each day. Profile views are the four BUSINESS_IMPRESSIONS_* series summed. A location has no followers.
+  // 401: the token is refused; 403: the permission is (the project or the location not allowed), unless it is a
+  // quota; a quota (429), an outage or a malformed answer is no answer, tried again the next day.
+  async accountMetrics(input: AccountMetricsInput): Promise<AccountMetricsResult> {
+    const s = googleBusinessSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!LOCATION.test(input.externalAccountId)) return null;
+    const location = input.externalAccountId.slice(input.externalAccountId.indexOf('/locations/') + 1);
+    const end = new Date(Date.now() - 86_400_000);
+    const start = new Date(end.getTime() - (PERFORMANCE_DAYS - 1) * 86_400_000);
+    const query = new URLSearchParams();
+    for (const metric of Object.keys(GBP_DAILY_METRICS)) query.append('dailyMetrics', metric);
+    for (const [key, at] of [['start_date', start], ['end_date', end]] as const) {
+      query.set(`dailyRange.${key}.year`, String(at.getUTCFullYear()));
+      query.set(`dailyRange.${key}.month`, String(at.getUTCMonth() + 1));
+      query.set(`dailyRange.${key}.day`, String(at.getUTCDate()));
+    }
+    let answer: { multiDailyMetricTimeSeries?: unknown };
+    try {
+      answer = await this.client.call('GET', `https://businessprofileperformance.googleapis.com/v1/${location}:fetchMultiDailyMetricsTimeSeries?${query.toString()}`, s.accessToken);
+    } catch (error) {
+      if (!(error instanceof GoogleBusinessError)) return null;
+      if (error.status === 401) return { refused: 'token_expired' };
+      if (error.status === 403 && !/quota|rate_?limit|resource_exhausted/i.test(error.reason ?? '')) return { refused: 'permission' };
+      return null;
+    }
+    const performance = performanceOf(answer.multiDailyMetricTimeSeries, utcDayOf(start), utcDayOf(end));
+    return performance ? { followers: null, performance } : null;
+  }
+}
+
+// The daily metrics read for a location's performance (#1477), and the figure each counts towards.
+const GBP_DAILY_METRICS: Readonly<Record<string, PerformanceName>> = {
+  CALL_CLICKS: 'calls',
+  BUSINESS_DIRECTION_REQUESTS: 'directions',
+  WEBSITE_CLICKS: 'websiteClicks',
+  BUSINESS_IMPRESSIONS_DESKTOP_MAPS: 'views',
+  BUSINESS_IMPRESSIONS_DESKTOP_SEARCH: 'views',
+  BUSINESS_IMPRESSIONS_MOBILE_MAPS: 'views',
+  BUSINESS_IMPRESSIONS_MOBILE_SEARCH: 'views',
+};
+const utcDayOf = (at: Date) => at.toISOString().slice(0, 10);
+const COUNT = /^\d{1,15}$/;
+
+// The figures per day of a fetchMultiDailyMetricsTimeSeries answer, within [first, last]; a day any series gives is
+// kept with all four figures (a value left out is zero). null when the answer is not that shape.
+function performanceOf(raw: unknown, first: string, last: string): DailyPerformance | null {
+  if (!Array.isArray(raw)) return raw === undefined ? {} : null;
+  const out: DailyPerformance = {};
+  for (const multi of raw as { dailyMetricTimeSeries?: unknown }[]) {
+    const series = multi?.dailyMetricTimeSeries;
+    if (!Array.isArray(series)) return null;
+    for (const one of series as { dailyMetric?: unknown; dailySubEntityType?: unknown; timeSeries?: { datedValues?: unknown } }[]) {
+      const name = typeof one?.dailyMetric === 'string' ? GBP_DAILY_METRICS[one.dailyMetric] : undefined;
+      // A breakdown (by day of week or hour) would count the same people twice; only the plain series counts.
+      if (!name || one.dailySubEntityType !== undefined) continue;
+      const values = one.timeSeries?.datedValues ?? [];
+      if (!Array.isArray(values)) return null;
+      for (const v of values as { date?: { year?: unknown; month?: unknown; day?: unknown }; value?: unknown }[]) {
+        const { year, month, day } = v?.date ?? {};
+        if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) continue;
+        const key = `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        if (key < first || key > last) continue;
+        // An int64 as a string, as documented; a plain number is taken too when it is a whole count.
+        const count = typeof v.value === 'number' ? (Number.isSafeInteger(v.value) && v.value >= 0 ? v.value : null) : typeof v.value === 'string' && COUNT.test(v.value) ? Number(v.value) : v.value === undefined ? 0 : null;
+        if (count === null) return null;
+        const figures = (out[key] ??= { calls: 0, directions: 0, websiteClicks: 0, views: 0 });
+        figures[name] += count;
+      }
+    }
+  }
+  return out;
 }

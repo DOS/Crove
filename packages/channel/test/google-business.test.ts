@@ -1,6 +1,6 @@
 // Google Business Profile against recorded answers (shapes from Google's Business Profile APIs docs); no live call.
 import { describe, expect, it } from 'vitest';
-import { GoogleBusinessConnector, GoogleBusinessPublisher, GoogleBusinessRefresher, gbpSettingsOf, type Fetch, type PublishInput } from '../src/index.ts';
+import { GoogleBusinessConnector, GoogleBusinessPublisher, GoogleBusinessRefresher, gbpSettingsOf, type EditInput, type Fetch, type PublishInput } from '../src/index.ts';
 
 const APP = { clientId: '123456789-testclientid0001.apps.googleusercontent.com', clientSecret: 'test-google-secret-not-real' };
 const SECRET = JSON.stringify({ accessToken: 'ya29.token-1', refreshToken: '1//refresh-1' });
@@ -182,6 +182,54 @@ describe('Google Business remove (#1138)', () => {
     expect(await remove(none.fetchImpl, 'accounts/1001/locations/9999/localPosts/abc123')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
     expect(await remove(none.fetchImpl, `${LOCATION}/localPosts/../../x`)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
     expect(await remove(none.fetchImpl, POST, '{}')).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
+    expect(none.calls).toHaveLength(0);
+  });
+});
+
+describe('Google Business edit (#1474)', () => {
+  const POST = `${LOCATION}/localPosts/abc123`;
+  const PATCH = `PATCH mybusiness.googleapis.com/v4/${POST}`;
+  // An offer post with its button: none of it is in the mask, so all of it stays as published.
+  const settings = { gbp: { topic: 'OFFER', cta: 'SHOP', event: { title: 'Giảm giá', startDate: '2026-11-01', endDate: '2026-11-30' }, offer: { couponCode: 'BANH10' } } };
+  const edit = (fetchImpl: Fetch, over: Partial<EditInput> = {}) =>
+    new GoogleBusinessPublisher(APP, fetchImpl).edit({ externalAccountId: LOCATION, secret: SECRET, externalId: POST, content: { body: '  Bánh mới giá 25.000đ, ghé tiệm nhé!  ', title: null, linkUrl: 'https://tiembanh.example/', media: [] }, settings, callKey: 'edit-1', ...over });
+  const live = { name: POST, languageCode: 'vi', summary: 'Bánh mới giá 25.000đ, ghé tiệm nhé!', topicType: 'OFFER', state: 'LIVE', searchUrl: 'https://local.google.com/place?id=1&use=posts&lpsid=abc123' };
+
+  it('patches the summary alone, with updateMask=summary and the location token', async () => {
+    const { fetchImpl, calls } = google({ [PATCH]: [{ body: live }] });
+    expect(await edit(fetchImpl)).toEqual({ kind: 'edited' });
+    expect(calls.map((c) => [c.route, c.query.get('updateMask'), c.auth])).toEqual([[PATCH, 'summary', 'Bearer ya29.token-1']]);
+    expect(calls[0]?.body).toEqual({ summary: 'Bánh mới giá 25.000đ, ghé tiệm nhé!' });
+  });
+
+  it('answers POST_NOT_FOUND for a post Google no longer has, and leaves an answer naming another post unclear', async () => {
+    const gone = google({ [PATCH]: [{ status: 404, body: { error: { code: 404, message: 'Requested entity was not found.', status: 'NOT_FOUND' } } }] });
+    expect(await edit(gone.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    const odd = google({ [PATCH]: [{ body: {} }] });
+    expect(await edit(odd.fetchImpl)).toEqual({ kind: 'unknown', code: 'NOT_CONFIRMED' });
+  });
+
+  it('maps a refusal to a code and an outage to unclear', async () => {
+    const expired = google({ [PATCH]: [{ status: 401, body: { error: { code: 401, message: 'Request had invalid authentication credentials.', status: 'UNAUTHENTICATED' } } }] });
+    const refused = await edit(expired.fetchImpl);
+    expect(refused).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'UNAUTHENTICATED' });
+    expect(JSON.stringify(refused)).not.toContain('ya29.token-1');
+    const denied = google({ [PATCH]: [{ status: 403, body: { error: { code: 403, message: 'The caller does not have permission', status: 'PERMISSION_DENIED' } } }] });
+    expect(await edit(denied.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'PERMISSION_DENIED' });
+    const invalid = google({ [PATCH]: [{ status: 400, body: { error: { code: 400, message: 'Request contains an invalid argument.', status: 'INVALID_ARGUMENT' } } }] });
+    expect(await edit(invalid.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'INVALID_ARGUMENT' });
+    const limited = google({ [PATCH]: [{ status: 429, body: { error: { code: 429, message: 'Quota exceeded', status: 'RESOURCE_EXHAUSTED' } } }] });
+    expect(await edit(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+    const down = google({ [PATCH]: [{ status: 503, body: { error: { code: 503, message: 'The service is currently unavailable.', status: 'UNAVAILABLE' } } }] });
+    expect(await edit(down.fetchImpl)).toEqual({ kind: 'unknown', code: 'UNAVAILABLE' });
+  });
+
+  it('calls nothing for a text over the limit, a post of another location or a missing token', async () => {
+    const none = google({});
+    expect(await edit(none.fetchImpl, { content: { body: 'a'.repeat(1501), title: null, linkUrl: null, media: [] } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'TEXT_TOO_LONG' });
+    expect(await edit(none.fetchImpl, { externalId: 'accounts/1001/locations/9999/localPosts/abc123' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await edit(none.fetchImpl, { externalId: `${LOCATION}/localPosts/../../x` })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await edit(none.fetchImpl, { secret: '{}' })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
     expect(none.calls).toHaveLength(0);
   });
 });

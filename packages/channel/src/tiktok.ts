@@ -20,8 +20,15 @@
 // the draft is in the app, not public, with no post id yet. Photos go through content/init with post_mode
 // MEDIA_UPLOAD and their description. It needs the video.upload scope, which Crove asks for only when the deployment
 // sets CHANNEL_TIKTOK_INBOX (its TikTok app must be approved for it), and which connections made before then lack.
-import type { ConnectedAccount, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, Refresher, RetrySafety, StatusInput } from './index.ts';
+// Late ids (#1475): TikTok gives a public post's id (publicaly_available_post_id) only once its moderation passes, which
+// may come after PUBLISH_COMPLETE, and an inbox draft moves on to PUBLISH_COMPLETE once the creator posts it in TikTok.
+// lateId asks status/fetch again for such a post (a read, never a post), and reads its address from video/query where
+// the connection has video.list.
+// Outside posts (#1476): listRecentPosts reads the account's own public videos from video/list where the connection
+// has video.list, so the ones posted straight from the TikTok app count in the Metrics tab and the client report.
+import type { ConnectedAccount, LateIdInput, LateIdResult, MetricName, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, RecentPost, RecentPostsInput, RecentPostsResult, Refresher, RetrySafety, StatusInput } from './index.ts';
 import { videoCoverOf } from './cover.ts';
+import { platformLink, RECENT_PAGES_MAX, RECENT_POSTS_MAX, recentSince } from './recent.ts';
 import { holdsLink } from './text.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
@@ -336,6 +343,50 @@ interface StatusAnswer {
   publicaly_available_post_id?: unknown;
 }
 
+// The first public post id of a status answer, as written in its text (a 64-bit integer, or a string of digits), never
+// through a JS number. A draft the creator turned into several posts gives several; the first is the post's.
+const postIdOf = (raw: string) => /"publicaly_available_post_id"\s*:\s*\[\s*"?(\d{1,32})/.exec(raw)?.[1];
+// A video's address as video/query gives it: https on tiktok.com only.
+const SHARE_URL = /^https:\/\/(?:[a-z0-9-]+\.)*tiktok\.com\/\S{1,1900}$/i;
+// Where a listed video's share_url may point (#1476): tiktok.com or a subdomain of it.
+const TIKTOK_POST_HOSTS = ['tiktok.com'] as const;
+// TikTok's public video ids: a 64-bit integer as digits.
+const VIDEO_ID = /^\d{1,32}$/;
+// video/list (#1476): the fields asked for, all on the Video Object's documented list, and the page size (TikTok's
+// max_count is 20 at most).
+const VIDEO_LIST_FIELDS = 'id,create_time,title,video_description,share_url';
+const VIDEO_LIST_PAGE = 20;
+
+interface ListedVideo {
+  id?: unknown;
+  create_time?: unknown;
+  title?: unknown;
+  video_description?: unknown;
+  share_url?: unknown;
+}
+interface VideoListAnswer {
+  videos?: unknown;
+  cursor?: unknown;
+  has_more?: unknown;
+}
+
+// A video/list answer's data with every "id" as written: TikTok documents ids as strings, but a 64-bit integer sent as
+// a number would be rounded by a JS number. A runtime without JSON.parse's source text gives the number, which the
+// caller takes only when it is a safe integer.
+function videoListOf(raw: string): VideoListAnswer {
+  const body = JSON.parse(raw, (key: string, value: unknown, context?: { source?: string }) => (key === 'id' && typeof value === 'number' && typeof context?.source === 'string' ? context.source : value)) as { data?: unknown } | null;
+  return body?.data && typeof body.data === 'object' ? (body.data as VideoListAnswer) : {};
+}
+
+// A video's create_time (UTC seconds), or null.
+function createTimeOf(value: unknown): Date | null {
+  const seconds = typeof value === 'number' ? value : typeof value === 'string' && /^\d{1,12}$/.test(value) ? Number(value) : Number.NaN;
+  if (!Number.isSafeInteger(seconds) || seconds <= 0) return null;
+  // A safe integer can still be past what a Date holds (about 8.64e15 ms): such a time is no time.
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 const captionOf = (content: { body: string; linkUrl: string | null }, max = TITLE_MAX) => {
   const body = content.body.trim();
   return (content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body).slice(0, max);
@@ -391,6 +442,59 @@ export class TikTokPublisher implements Publisher {
     if (comments !== undefined) metrics.comments = comments;
     if (shares !== undefined) metrics.shares = shares;
     return { metrics };
+  }
+
+  // The account's own public videos since a date (#1476): `POST /v2/video/list/` under video.list (the Display API),
+  // which lists the user's public videos newest first by create_time, at most 20 a page (max_count), paged by a cursor
+  // (a create time in milliseconds) sent back while has_more is true. Only fields of the documented Video Object are
+  // asked for. A connection without video.list (Crove asks for it only where CHANNEL_TIKTOK_VIDEO_LIST is set) is not
+  // asked at all: the answer is the missing permission. Ids are the numeric video ids publish stores once TikTok gives
+  // them (#1475), so external_post_is_crove drops Crove's own posts; the excerpt is the longer of the title and the
+  // description, the time create_time, and the permalink share_url on tiktok.com only. A refused token is said on the
+  // first page (a missing scope, which TikTok also answers with 401, is the permission, never an expired token); any
+  // failure after it ends the listing with what came before it.
+  async listRecentPosts(input: RecentPostsInput): Promise<RecentPostsResult> {
+    const s = tiktokSecretOf(input.secret);
+    if (!s) return { refused: 'token_expired' };
+    if (!input.scopes?.includes(TIKTOK_METRICS_SCOPE)) return { refused: 'permission' };
+    const since = recentSince(input.since);
+    const posts: RecentPost[] = [];
+    let cursor: number | null = null;
+    for (let page = 0; page < RECENT_PAGES_MAX && posts.length < RECENT_POSTS_MAX; page++) {
+      let answer: VideoListAnswer;
+      try {
+        const { raw } = await this.client.callRaw('POST', `/video/list/?fields=${VIDEO_LIST_FIELDS}`, s.accessToken, { max_count: VIDEO_LIST_PAGE, ...(cursor === null ? {} : { cursor }) });
+        answer = videoListOf(raw);
+      } catch (error) {
+        if (page > 0) break;
+        if (!(error instanceof TikTokError)) return null;
+        if (error.code === 'scope_not_authorized' || error.code === 'scope_permission_missed' || error.status === 403) return { refused: 'permission' };
+        if (error.status === 401 || error.code === 'access_token_invalid') return { refused: 'token_expired' };
+        return null;
+      }
+      const videos: unknown[] = Array.isArray(answer.videos) ? answer.videos : [];
+      for (const item of videos) {
+        if (!item || typeof item !== 'object') continue;
+        const v = item as ListedVideo;
+        const id = typeof v.id === 'string' ? v.id : typeof v.id === 'number' && Number.isSafeInteger(v.id) ? String(v.id) : '';
+        const at = createTimeOf(v.create_time);
+        // Outside the window, or a time from the future no video can have yet (a day of clock skew allowed).
+        if (!VIDEO_ID.test(id) || !at || at < since || at.getTime() > Date.now() + 86_400_000) continue;
+        const title = typeof v.title === 'string' ? v.title.trim() : '';
+        const description = typeof v.video_description === 'string' ? v.video_description.trim() : '';
+        posts.push({ externalId: id, text: description.length > title.length ? description : title, permalink: platformLink(v.share_url, TIKTOK_POST_HOSTS), publishedAt: at });
+      }
+      // The next page only while TikTok says there is one, with a cursor (the create time, in ms, the list has reached)
+      // that moves back in time and is still inside the window: one older video on a page (a pinned one) does not end
+      // the listing, the cursor passing the window does (#1487 review).
+      const next = typeof answer.cursor === 'number' && Number.isSafeInteger(answer.cursor) && answer.cursor > 0 ? answer.cursor : null;
+      if (answer.has_more !== true || next === null || (cursor !== null && next >= cursor) || next < since.getTime()) break;
+      cursor = next;
+    }
+    // Newest first, a video listed twice kept once.
+    const seen = new Set<string>();
+    const unique = posts.sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime()).filter((p) => !seen.has(p.externalId) && seen.add(p.externalId));
+    return { posts: unique.slice(0, RECENT_POSTS_MAX) };
   }
 
   async publish(input: PublishInput): Promise<PublishResult> {
@@ -572,19 +676,65 @@ export class TikTokPublisher implements Publisher {
     }
     switch (answer.status) {
       case 'PUBLISH_COMPLETE': {
-        // The first id as written in the answer (a 64-bit integer, or a string of digits), never through a JS number.
-        const id = /"publicaly_available_post_id"\s*:\s*\[\s*"?(\d{1,32})/.exec(raw)?.[1];
-        // A private (SELF_ONLY) post has no public id: it is known by its publish_id.
+        const id = postIdOf(raw);
+        // A private (SELF_ONLY) post has no public id: it is known by its publish_id. A public one still in moderation
+        // has none yet either; the late-id sweep asks again for it (#1475).
         return { kind: 'accepted', externalId: id ?? input.externalRef, url: null };
       }
       case 'SEND_TO_USER_INBOX':
         // Inbox mode (#903): the draft is in the creator's TikTok inbox. The check ends here; the post is not public and
-        // has no id until the creator posts it in TikTok, so it is known by its publish_id.
+        // has no id until the creator posts it in TikTok, so it is known by its publish_id. The late-id sweep asks again
+        // until they do (#1475).
         return { kind: 'accepted', externalId: input.externalRef, url: null, sentToApp: true };
       case 'FAILED':
         return { kind: 'rejected', error: 'bad_request', code: typeof answer.fail_reason === 'string' ? answer.fail_reason.slice(0, 100) : 'FAILED' };
       default:
         return { kind: 'pending', externalRef: input.externalRef, checkAfterSeconds: CHECK_AFTER_SECONDS };
+    }
+  }
+
+  // Where a published post without its public id stands now (#1475): status/fetch again, a read only. PUBLISH_COMPLETE
+  // with an id is the post out with its id (and its address from video/query, with video.list); without one, out with no
+  // public id yet (moderation, or a post not public); FAILED, never posted; any other status is still on its way (an
+  // inbox draft waits at SEND_TO_USER_INBOX until the creator posts it). A refused token is the connection's; a publish_id
+  // TikTok refuses for good (invalid_publish_id) will not answer again; a rate limit or an outage is asked again later.
+  async lateId(input: LateIdInput): Promise<LateIdResult> {
+    const s = tiktokSecretOf(input.secret);
+    if (!s) return { kind: 'refused' };
+    if (!PUBLISH_ID.test(input.externalRef)) return { kind: 'failed', code: 'BAD_PUBLISH_ID' };
+    let answer: StatusAnswer;
+    let raw = '';
+    try {
+      ({ data: answer, raw } = await this.client.callRaw<StatusAnswer>('POST', '/post/publish/status/fetch/', s.accessToken, { publish_id: input.externalRef }));
+    } catch (error) {
+      const result = publishResult(error);
+      if (result.kind === 'rejected' && result.error === 'token_expired') return { kind: 'refused' };
+      const status = result.kind === 'rejected' ? (result.httpStatus ?? 0) : 0;
+      if (result.kind === 'rejected' && (result.error === 'bad_request' || result.error === 'permission') && status >= 400 && status < 500) return { kind: 'failed', code: (result.code ?? 'STATUS_REFUSED').slice(0, 100) };
+      return null;
+    }
+    switch (answer.status) {
+      case 'PUBLISH_COMPLETE': {
+        const id = postIdOf(raw);
+        if (!id) return { kind: 'posted_without_id' };
+        return { kind: 'posted', externalId: id, url: input.scopes.includes(TIKTOK_METRICS_SCOPE) ? await this.shareUrl(s.accessToken, id) : null };
+      }
+      case 'FAILED':
+        return { kind: 'failed', code: typeof answer.fail_reason === 'string' && answer.fail_reason ? answer.fail_reason.slice(0, 100) : 'FAILED' };
+      default:
+        return { kind: 'waiting' };
+    }
+  }
+
+  // A video's address from video/query (video.list); null when TikTok does not give one, whatever the reason: the id is
+  // recorded all the same.
+  private async shareUrl(token: string, id: string): Promise<string | null> {
+    try {
+      const answer = await this.client.call<{ videos?: { share_url?: unknown }[] }>('POST', '/video/query/?fields=id,share_url', token, { filters: { video_ids: [id] } });
+      const url = answer.videos?.[0]?.share_url;
+      return typeof url === 'string' && SHARE_URL.test(url) ? url : null;
+    } catch {
+      return null;
     }
   }
 }

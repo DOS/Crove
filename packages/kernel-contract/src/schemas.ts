@@ -2382,4 +2382,7 @@ export const zSocialAccountTrend = z.object({
   provider: z.string(),
   points: z.array(z.object({ day: z.string(), followers: z.number().int().nullable(), reach: z.number().int().nullable() })),
   audience: zSocialAudience.extend({ day: z.string() }).nullable(),
+  // A Google Business location's figures per day in the window (#1477): calls, direction requests, website clicks and
+  // profile views, oldest first, each day as Google last gave it; empty on other channels.
+  performance: z.array(z.object({ day: z.string(), calls: z.number().int(), directions: z.number().int(), websiteClicks: z.number().int(), views: z.number().int() })),
 });

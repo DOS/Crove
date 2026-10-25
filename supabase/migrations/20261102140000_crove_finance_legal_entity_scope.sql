@@ -28,7 +28,8 @@
 --   - legal_entity_id never changes once written (LEGAL_ENTITY_IMMUTABLE), and a parent key that changes later (a
 --     learned rule's source document) must keep naming a parent of the same entity.
 -- The trigger runs as the writer and reads the parent and the default entity through the writer's own policies: a row
--- whose parent the writer cannot see loses its entity and is refused (tenant policy, le_scope or NOT NULL), and a writer
+-- of a writer limited to some entities whose parent it cannot see loses its entity and is refused (le_scope or NOT
+-- NULL; any other writer's row with an unseen parent meets the tenant policy or the foreign key as before), and a writer
 -- limited to other entities who names none finds no default entity and is refused by le_scope, so nothing is ever
 -- written into an entity, or under a parent, the writer cannot see. It is named to fire right after agent_write_guard
 -- and before every other BEFORE trigger (they fire in name order), so later rules that read the entity (voucher
@@ -88,13 +89,17 @@ BEGIN
     EXECUTE pg_catalog.format('SELECT p.legal_entity_id FROM %s p WHERE p.org_id = $1 AND p.id = $2', TG_ARGV[0]::regclass)
       INTO v_entity USING NEW.org_id, v_parent;
     IF v_entity IS NULL THEN
-      -- A parent the writer cannot see (another org's, another entity's, or none at all). The row loses any entity it
-      -- named, so the tenant policy, le_scope or NOT NULL refuses it: a writer never attaches a row to a parent it cannot
-      -- see under an entity it can. In replica mode (superusers only), where foreign keys are not checked, the row
-      -- takes the default entity like a row without a parent.
-      IF pg_catalog.current_setting('session_replication_role') = 'replica' AND TG_OP = 'INSERT' AND v_given IS NULL THEN
-        SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = NEW.org_id AND e.is_default;
-        NEW.legal_entity_id := v_entity;
+      -- A parent the writer cannot see. For a writer limited to some legal entities it may be another entity's parent:
+      -- the row loses any entity it named, so le_scope or NOT NULL refuses it, and such a writer never attaches a row to
+      -- a parent it cannot see under an entity it can. For any other writer (scope '*', or no context: the database
+      -- owner, replica mode) the parent is another org's or does not exist: the row is treated as having no parent, and
+      -- the tenant policy or the parent's foreign key refuses it as before (in replica mode, where foreign keys are not
+      -- checked, it keeps the default entity).
+      IF TG_OP = 'INSERT' AND (crove_kernel.ctx_le_scope() IS NULL OR '*' = ANY (crove_kernel.ctx_le_scope())) THEN
+        IF v_given IS NULL THEN
+          SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = NEW.org_id AND e.is_default;
+          NEW.legal_entity_id := v_entity;
+        END IF;
       ELSIF TG_OP = 'INSERT' THEN
         NEW.legal_entity_id := NULL;
       ELSE
