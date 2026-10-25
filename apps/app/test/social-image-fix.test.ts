@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CAPABILITIES, IMAGE_RULES, PROVIDERS } from '@crove/mod-social/contract';
 import { CROP_MAX_SIDE } from '../src/lib/social-crop.ts';
-import { FIX_LOW_QUALITY, FIX_MIN_SIDE, FIX_QUALITY, FIX_TYPE, firstFit, fixName, fixSteps, imageFix, isAnimated, refusals, replaceMedia, takesFixType, type FixStep } from '../src/lib/social-image-fix.ts';
+import { FIX_LOW_QUALITY, FIX_MIN_SIDE, FIX_QUALITY, FIX_TYPE, firstFit, fixName, fixSteps, imageFix, isAnimated, refusals, replaceInChannels, replaceMedia, takesFixType, type FixStep } from '../src/lib/social-image-fix.ts';
 
 const MB = 1024 * 1024;
 
@@ -145,5 +145,30 @@ describe('fixing an image a channel refuses (#1500)', () => {
     const fixed = { fileId: 'c', mime: 'image/jpeg' };
     expect(replaceMedia([b, a, b], 'a', fixed)).toEqual([b, fixed, b]);
     expect(replaceMedia([b], 'a', fixed)).toEqual([b]);
+  });
+});
+
+describe('a fix replaces the original in every channel of the post (#1505)', () => {
+  const photo = (fileId: string) => ({ fileId, mime: 'image/png' });
+  const fixed = { fileId: 'fixed', mime: 'image/jpeg' };
+
+  it("puts the fixed file in each channel's own images that hold the original, in place", () => {
+    const own = {
+      zalo: { customMedia: true, media: [photo('a'), photo('orig'), photo('b')] },
+      instagram: { customMedia: true, media: [photo('orig')] },
+      facebook: { customMedia: false, media: [] },
+    };
+    const next = replaceInChannels(own, 'orig', fixed);
+    expect(next.zalo?.media.map((m) => m.fileId)).toEqual(['a', 'fixed', 'b']);
+    expect(next.instagram?.media).toEqual([fixed]);
+    // A channel without the original is the same object, so the caller can tell it did not change.
+    expect(next.facebook).toBe(own.facebook);
+    // The input is not changed.
+    expect(own.zalo.media.map((m) => m.fileId)).toEqual(['a', 'orig', 'b']);
+  });
+
+  it('changes nothing when no channel holds the original', () => {
+    const own = { zalo: { media: [photo('a')] } };
+    expect(replaceInChannels(own, 'orig', fixed).zalo).toBe(own.zalo);
   });
 });

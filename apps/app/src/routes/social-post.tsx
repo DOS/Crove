@@ -18,7 +18,8 @@ import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { DateInput } from '../components/date-input.tsx';
 import { DateTimeInput } from '../components/date-time-input.tsx';
 import { TimeInput } from '../components/time-input.tsx';
-import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
+import { CoverImageField, MediaField, MediaReplace, type MediaItem } from '../components/social-media.tsx';
+import { replaceInChannels, replaceMedia } from '../lib/social-image-fix.ts';
 import { AiPhotoPicker, aiDraftInput, useAiPhotos } from '../components/social-ai-photos.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -2564,249 +2565,257 @@ export function SocialComposePage() {
     }
   };
 
+  // An image fixed for a channel that refused it (#1500) takes the original's place everywhere in the post: the shared
+  // images and every channel's own images that hold it (#1505).
+  const fixEverywhere = (fromFileId: string, next: MediaItem) => {
+    setBase((b) => ({ ...b, media: replaceMedia(b.media, fromFileId, next) }));
+    setOwn((o) => replaceInChannels(o, fromFileId, next));
+  };
   if (channels.isLoading || signatureRows.isPending) return <Spinner />;
   return (
-    <div onKeyDown={onKey}>
-      <PageHeader
-        title={t('composeTitle')}
-        subtitle={t('composeSubtitle')}
-        actions={
-          <>
-            <Button variant="outline" size="lg" disabled={chosen.length === 0 || create.isPending} onClick={() => create.mutate('draft')}>
-              {t('saveDraft')}
-            </Button>
-            <Button size="lg" variant={oneStep ? 'outline' : 'default'} disabled={chosen.length === 0 || blocking || create.isPending} onClick={() => create.mutate('submit')}>
-              {create.isPending && create.variables === 'submit' ? <Spinner className="text-current" /> : null}
-              {t('saveAndSubmit')}
-            </Button>
-            {oneStep && (
-              <Button size="lg" disabled={chosen.length === 0 || blocking || create.isPending} onClick={() => create.mutate('publish')} title={t('publishNowHint')}>
-                {create.isPending && create.variables === 'publish' ? <Spinner className="text-current" /> : null}
-                {t('publishNow')}
+    <MediaReplace.Provider value={fixEverywhere}>
+      <div onKeyDown={onKey}>
+        <PageHeader
+          title={t('composeTitle')}
+          subtitle={t('composeSubtitle')}
+          actions={
+            <>
+              <Button variant="outline" size="lg" disabled={chosen.length === 0 || create.isPending} onClick={() => create.mutate('draft')}>
+                {t('saveDraft')}
               </Button>
-            )}
-          </>
-        }
-      />
-      {restore && (
-        <Notice>
-          <div className="flex flex-wrap items-center gap-2">
-            <span>{t('draftFound', { when: f.dateTime(restore.savedAt) })}</span>
-            <Button size="sm" onClick={() => takeDraft(restore)}>
-              {t('draftRestore')}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                clearDraft(slug, 'new');
-                setRestore(null);
-              }}
-            >
-              {t('draftDiscard')}
-            </Button>
-          </div>
-        </Notice>
-      )}
-      {occasion && (
-        <Notice>
-          <span>{tOcc('composing', occasion)}</span>
-        </Notice>
-      )}
-      {idea.data && (
-        <Notice>
-          <span>{t(ideaId ? 'ideas.fromIdea' : 'ideas.fromIdeaTaken', { title: idea.data.title })}</span>
-        </Notice>
-      )}
-      {shared && (
-        <Notice>
-          <div className="space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span>{t(shared.link ? 'share.fromLink' : 'share.fromText')}</span>
-              {shared.link && aiEnabled && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={chosen.length === 0 || aiDraft.isPending}
-                  onClick={() => {
-                    const link = shared.link as string;
-                    setSourceUrl(link);
-                    setFromPhotos(false);
-                    aiDraft.mutate(link);
-                  }}
-                >
-                  {aiDraft.isPending && aiDraft.variables === shared.link ? <Spinner className="text-current" /> : null}
-                  {t('share.aiFromLink')}
+              <Button size="lg" variant={oneStep ? 'outline' : 'default'} disabled={chosen.length === 0 || blocking || create.isPending} onClick={() => create.mutate('submit')}>
+                {create.isPending && create.variables === 'submit' ? <Spinner className="text-current" /> : null}
+                {t('saveAndSubmit')}
+              </Button>
+              {oneStep && (
+                <Button size="lg" disabled={chosen.length === 0 || blocking || create.isPending} onClick={() => create.mutate('publish')} title={t('publishNowHint')}>
+                  {create.isPending && create.variables === 'publish' ? <Spinner className="text-current" /> : null}
+                  {t('publishNow')}
                 </Button>
               )}
+            </>
+          }
+        />
+        {restore && (
+          <Notice>
+            <div className="flex flex-wrap items-center gap-2">
+              <span>{t('draftFound', { when: f.dateTime(restore.savedAt) })}</span>
+              <Button size="sm" onClick={() => takeDraft(restore)}>
+                {t('draftRestore')}
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  clearDraft(slug, 'new');
+                  setRestore(null);
+                }}
+              >
+                {t('draftDiscard')}
+              </Button>
             </div>
-            {shared.link && aiEnabled && chosen.length === 0 && <p className="text-xs text-subtle-foreground">{t('share.pickChannelFirst')}</p>}
-            {shared.link && aiDraft.error && aiDraft.variables === shared.link && <ErrorText>{errorMessage(aiDraft.error)}</ErrorText>}
-          </div>
-        </Notice>
-      )}
-      {create.error && (
-        <div className="mb-4">
-          <ErrorText>{errorMessage(create.error)}</ErrorText>
-        </div>
-      )}
-      {plannedAt && (
-        <p className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          {t('plannedFor', { when: f.dateTime(plannedAt) })}
-          <Button variant="ghost" size="sm" onClick={() => setPlannedAt(null)}>
-            {t('plannedClear')}
-          </Button>
-        </p>
-      )}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="space-y-4">
-          <SharedFields
-            base={base}
-            onChange={setBase}
-            disabled={create.isPending}
-            autoFocus
-            needsTitle={selected.some((c) => takesTitle(c.provider, own[c.id]?.settings))}
-            onAiUsed={() => setAiUsed(true)}
-            slug={slug}
-            connectionIds={selected.map((c) => c.id)}
-            mediaConnectionIds={selected.filter((c) => !own[c.id]?.customMedia).map((c) => c.id)}
-            providers={selected.map((c) => c.provider)}
-          />
-          {base.linkUrl.trim() && (
-            <Card className="block p-4">
-              <UtmFields utm={utm} onChange={setUtm} disabled={create.isPending} />
-            </Card>
-          )}
-          <Card className="block p-4">
-            <p className="mb-3 text-sm font-medium text-foreground">{t('pickChannels')}</p>
-            <ChannelSetPicker live={live} onPick={setChosen} />
-            {live.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {t('noChannelsHint')}{' '}
-                <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
-                  {t('connectFirst')}
-                </Link>
-              </p>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {live.map((c) => {
-                  const on = chosen.includes(c.id);
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() => setChosen(on ? chosen.filter((id) => id !== c.id) : [...chosen, c.id])}
-                      className={cn(
-                        'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
-                        on ? 'border-primary/50 bg-primary/15 text-foreground' : 'bg-card text-muted-foreground hover:text-foreground',
-                      )}
-                    >
-                      <span className="text-xs text-subtle-foreground">{providerName(c.provider)}</span>
-                      {c.displayName}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-          <Card className="block space-y-2 p-4">
-            <Label htmlFor="social-ai-brief">{t('aiDraftTitle')}</Label>
-            {aiEnabled ? (
-              <>
-                {aiPhotos && (
+          </Notice>
+        )}
+        {occasion && (
+          <Notice>
+            <span>{tOcc('composing', occasion)}</span>
+          </Notice>
+        )}
+        {idea.data && (
+          <Notice>
+            <span>{t(ideaId ? 'ideas.fromIdea' : 'ideas.fromIdeaTaken', { title: idea.data.title })}</span>
+          </Notice>
+        )}
+        {shared && (
+          <Notice>
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span>{t(shared.link ? 'share.fromLink' : 'share.fromText')}</span>
+                {shared.link && aiEnabled && (
                   <Button
-                    variant={fromPhotos ? 'default' : 'outline'}
                     size="sm"
-                    aria-pressed={fromPhotos}
-                    disabled={aiDraft.isPending}
+                    variant="outline"
+                    disabled={chosen.length === 0 || aiDraft.isPending}
                     onClick={() => {
-                      setFromPhotos(!fromPhotos);
-                      if (aiDraft.error) aiDraft.reset();
+                      const link = shared.link as string;
+                      setSourceUrl(link);
+                      setFromPhotos(false);
+                      aiDraft.mutate(link);
                     }}
                   >
-                    {t('aiPhotos.toggle')}
+                    {aiDraft.isPending && aiDraft.variables === shared.link ? <Spinner className="text-current" /> : null}
+                    {t('share.aiFromLink')}
                   </Button>
                 )}
-                {photoMode && (
-                  <AiPhotoPicker
-                    postMedia={base.media}
-                    picked={photos}
-                    disabled={aiDraft.isPending}
-                    libraryOpen={Boolean(search.photo)}
-                    onChange={(next) => {
-                      setPhotos(next);
-                      if (aiDraft.error) aiDraft.reset();
-                    }}
-                  />
-                )}
-                <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t(photoMode ? 'aiPhotos.briefPlaceholder' : 'aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => {
-                  setBrief(e.target.value);
-                  if (aiDraft.error) aiDraft.reset();
-                }} />
-                <Label htmlFor="social-ai-source" className="text-xs">
-                  {t('aiSource')}
-                </Label>
-                <Input id="social-ai-source" type="url" value={sourceUrl} placeholder="https://" disabled={aiDraft.isPending} onChange={(e) => {
-                  setSourceUrl(e.target.value);
-                  if (aiDraft.error) aiDraft.reset();
-                }} />
-                <p className="text-xs text-subtle-foreground">{t('aiDraftHint')}</p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={(!brief.trim() && !source && sentPhotos.length === 0) || (sourceUrl.trim() !== '' && !source) || (photoMode && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
-                  onClick={() => aiDraft.mutate(undefined)}
-                >
-                  {aiDraft.isPending ? <Spinner className="text-current" /> : null}
-                  {t(photoMode ? 'aiPhotos.draft' : 'aiDraft')}
-                </Button>
-                {aiDraft.error && <ErrorText>{errorMessage(aiDraft.error)}</ErrorText>}
-              </>
-            ) : (
-              <p className="text-xs text-subtle-foreground">{t('aiOff')}</p>
+              </div>
+              {shared.link && aiEnabled && chosen.length === 0 && <p className="text-xs text-subtle-foreground">{t('share.pickChannelFirst')}</p>}
+              {shared.link && aiDraft.error && aiDraft.variables === shared.link && <ErrorText>{errorMessage(aiDraft.error)}</ErrorText>}
+            </div>
+          </Notice>
+        )}
+        {create.error && (
+          <div className="mb-4">
+            <ErrorText>{errorMessage(create.error)}</ErrorText>
+          </div>
+        )}
+        {plannedAt && (
+          <p className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            {t('plannedFor', { when: f.dateTime(plannedAt) })}
+            <Button variant="ghost" size="sm" onClick={() => setPlannedAt(null)}>
+              {t('plannedClear')}
+            </Button>
+          </p>
+        )}
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="space-y-4">
+            <SharedFields
+              base={base}
+              onChange={setBase}
+              disabled={create.isPending}
+              autoFocus
+              needsTitle={selected.some((c) => takesTitle(c.provider, own[c.id]?.settings))}
+              onAiUsed={() => setAiUsed(true)}
+              slug={slug}
+              connectionIds={selected.map((c) => c.id)}
+              mediaConnectionIds={selected.filter((c) => !own[c.id]?.customMedia).map((c) => c.id)}
+              providers={selected.map((c) => c.provider)}
+            />
+            {base.linkUrl.trim() && (
+              <Card className="block p-4">
+                <UtmFields utm={utm} onChange={setUtm} disabled={create.isPending} />
+              </Card>
             )}
-          </Card>
-          <p className="text-xs text-subtle-foreground">{t('shortcutHint')}</p>
-        </div>
-        <div className="space-y-4">
-          {selected.length === 0 ? (
-            <Card className="block p-6 text-sm text-muted-foreground">{t('pickChannelsHint')}</Card>
-          ) : (
-            selected.map((c) => (
-              <ChannelEditor
-                slug={slug}
-                key={c.id}
-                provider={c.provider}
-                channel={c.displayName}
-                base={base}
-                own={withUtm(own[c.id] ?? EMPTY_OWN, utm)}
-                channelSignature={signatures.get(c.id) ?? null}
-                signaturesLoading={signatureRows.isPending}
-                adding
-                disabled={create.isPending}
-                onChange={(next) => setOwn({ ...own, [c.id]: next })}
-                connectionId={c.id}
-                scopes={c.scopes}
-                onAiUsed={() => setAiUsed(true)}
-                onRemoveAtAll={
-                  selected.length > 1
-                    ? (removeAt) => {
-                        const next = { ...own };
-                        for (const s of selected) {
-                          const mine = own[s.id] ?? EMPTY_OWN;
-                          if (isProvider(s.provider) && REMOVE_READY.has(s.provider) && postTypeOf(mine.settings) !== 'story') next[s.id] = { ...mine, settings: { ...mine.settings, removeAt } };
+            <Card className="block p-4">
+              <p className="mb-3 text-sm font-medium text-foreground">{t('pickChannels')}</p>
+              <ChannelSetPicker live={live} onPick={setChosen} />
+              {live.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  {t('noChannelsHint')}{' '}
+                  <Link to="/o/$slug/social/channels" params={{ slug }} className="text-link hover:underline">
+                    {t('connectFirst')}
+                  </Link>
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {live.map((c) => {
+                    const on = chosen.includes(c.id);
+                    return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => setChosen(on ? chosen.filter((id) => id !== c.id) : [...chosen, c.id])}
+                        className={cn(
+                          'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none',
+                          on ? 'border-primary/50 bg-primary/15 text-foreground' : 'bg-card text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        <span className="text-xs text-subtle-foreground">{providerName(c.provider)}</span>
+                        {c.displayName}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </Card>
+            <Card className="block space-y-2 p-4">
+              <Label htmlFor="social-ai-brief">{t('aiDraftTitle')}</Label>
+              {aiEnabled ? (
+                <>
+                  {aiPhotos && (
+                    <Button
+                      variant={fromPhotos ? 'default' : 'outline'}
+                      size="sm"
+                      aria-pressed={fromPhotos}
+                      disabled={aiDraft.isPending}
+                      onClick={() => {
+                        setFromPhotos(!fromPhotos);
+                        if (aiDraft.error) aiDraft.reset();
+                      }}
+                    >
+                      {t('aiPhotos.toggle')}
+                    </Button>
+                  )}
+                  {photoMode && (
+                    <AiPhotoPicker
+                      postMedia={base.media}
+                      picked={photos}
+                      disabled={aiDraft.isPending}
+                      libraryOpen={Boolean(search.photo)}
+                      onChange={(next) => {
+                        setPhotos(next);
+                        if (aiDraft.error) aiDraft.reset();
+                      }}
+                    />
+                  )}
+                  <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t(photoMode ? 'aiPhotos.briefPlaceholder' : 'aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => {
+                    setBrief(e.target.value);
+                    if (aiDraft.error) aiDraft.reset();
+                  }} />
+                  <Label htmlFor="social-ai-source" className="text-xs">
+                    {t('aiSource')}
+                  </Label>
+                  <Input id="social-ai-source" type="url" value={sourceUrl} placeholder="https://" disabled={aiDraft.isPending} onChange={(e) => {
+                    setSourceUrl(e.target.value);
+                    if (aiDraft.error) aiDraft.reset();
+                  }} />
+                  <p className="text-xs text-subtle-foreground">{t('aiDraftHint')}</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={(!brief.trim() && !source && sentPhotos.length === 0) || (sourceUrl.trim() !== '' && !source) || (photoMode && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
+                    onClick={() => aiDraft.mutate(undefined)}
+                  >
+                    {aiDraft.isPending ? <Spinner className="text-current" /> : null}
+                    {t(photoMode ? 'aiPhotos.draft' : 'aiDraft')}
+                  </Button>
+                  {aiDraft.error && <ErrorText>{errorMessage(aiDraft.error)}</ErrorText>}
+                </>
+              ) : (
+                <p className="text-xs text-subtle-foreground">{t('aiOff')}</p>
+              )}
+            </Card>
+            <p className="text-xs text-subtle-foreground">{t('shortcutHint')}</p>
+          </div>
+          <div className="space-y-4">
+            {selected.length === 0 ? (
+              <Card className="block p-6 text-sm text-muted-foreground">{t('pickChannelsHint')}</Card>
+            ) : (
+              selected.map((c) => (
+                <ChannelEditor
+                  slug={slug}
+                  key={c.id}
+                  provider={c.provider}
+                  channel={c.displayName}
+                  base={base}
+                  own={withUtm(own[c.id] ?? EMPTY_OWN, utm)}
+                  channelSignature={signatures.get(c.id) ?? null}
+                  signaturesLoading={signatureRows.isPending}
+                  adding
+                  disabled={create.isPending}
+                  onChange={(next) => setOwn({ ...own, [c.id]: next })}
+                  connectionId={c.id}
+                  scopes={c.scopes}
+                  onAiUsed={() => setAiUsed(true)}
+                  onRemoveAtAll={
+                    selected.length > 1
+                      ? (removeAt) => {
+                          const next = { ...own };
+                          for (const s of selected) {
+                            const mine = own[s.id] ?? EMPTY_OWN;
+                            if (isProvider(s.provider) && REMOVE_READY.has(s.provider) && postTypeOf(mine.settings) !== 'story') next[s.id] = { ...mine, settings: { ...mine.settings, removeAt } };
+                          }
+                          setOwn(next);
                         }
-                        setOwn(next);
-                      }
-                    : undefined
-                }
-              />
-            ))
-          )}
+                      : undefined
+                  }
+                />
+              ))
+            )}
+          </div>
         </div>
       </div>
-    </div>
+    </MediaReplace.Provider>
   );
 }
 
@@ -3851,377 +3860,390 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   // The AI rewrite box of the text a channel sends (#1156): its own text's, or the shared text's.
   const rewriteTarget = (v: Variant): string | null =>
     getConfig().aiEnabled === true && canWrite && EDITABLE.includes(v.status) && !save.isPending ? ((own[v.id] ?? ownOf(v)).custom ? ownRewriteId(v.connectionId) : SHARED_REWRITE_ID) : null;
+  // An image fixed for a channel that refused it (#1500) takes the original's place everywhere it is still editable
+  // (#1505): the shared images and the own images of every channel yet to go out, edited or not; a channel that went
+  // out keeps what it sent.
+  const fixEverywhere = (fromFileId: string, next: MediaItem) => {
+    setBase((b) => (b ? { ...b, media: replaceMedia(b.media, fromFileId, next) } : b));
+    setOwn((o) => {
+      const editable = Object.fromEntries(p.variants.filter((v) => EDITABLE.includes(v.status)).map((v) => [v.id, o[v.id] ?? ownOf(v)]));
+      const fixed = replaceInChannels(editable, fromFileId, next);
+      return { ...o, ...Object.fromEntries(Object.entries(fixed).filter(([id, mine]) => mine !== editable[id])) };
+    });
+  };
 
   return (
-    <div onKeyDown={onKey}>
-      <p role="status" className="sr-only" data-testid="review-arrival">
-        {arrival}
-      </p>
-      <PageHeader
-        title={t('postTitle')}
-        titleId="social-post-title"
-        subtitle={t('postSubtitle', { updated: f.dateTime(p.updatedAt) })}
-        actions={
-          <>
-            <Link to="/o/$slug/social" params={{ slug }} className="inline-flex h-9 items-center px-2.5 text-sm text-muted-foreground hover:text-foreground">
-              {t('back')}
-            </Link>
-            {editable && (
-              <Button variant="outline" size="lg" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
-                {save.isPending ? <Spinner className="text-current" /> : null}
-                {t('save')}
+    <MediaReplace.Provider value={fixEverywhere}>
+      <div onKeyDown={onKey}>
+        <p role="status" className="sr-only" data-testid="review-arrival">
+          {arrival}
+        </p>
+        <PageHeader
+          title={t('postTitle')}
+          titleId="social-post-title"
+          subtitle={t('postSubtitle', { updated: f.dateTime(p.updatedAt) })}
+          actions={
+            <>
+              <Link to="/o/$slug/social" params={{ slug }} className="inline-flex h-9 items-center px-2.5 text-sm text-muted-foreground hover:text-foreground">
+                {t('back')}
+              </Link>
+              {editable && (
+                <Button variant="outline" size="lg" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+                  {save.isPending ? <Spinner className="text-current" /> : null}
+                  {t('save')}
+                </Button>
+              )}
+              {canWrite && submittable.length > 0 && (
+                <Button size="lg" disabled={dirty || submit.isPending} title={dirty ? t('saveFirst') : undefined} onClick={() => submit.mutate()}>
+                  {t('submit')}
+                </Button>
+              )}
+              {canWrite && published && (
+                <Button variant="outline" size="lg" disabled={dirty || repost.isPending} title={t('repostHint')} onClick={() => repost.mutate()}>
+                  {repost.isPending ? <Spinner className="text-current" /> : null}
+                  {t('repost')}
+                </Button>
+              )}
+              {canWrite && (
+                <Button variant="outline" size="lg" disabled={dirty || duplicate.isPending} title={dirty ? t('saveFirst') : t('duplicateHint')} onClick={() => duplicate.mutate()}>
+                  {duplicate.isPending ? <Spinner className="text-current" /> : null}
+                  {t('duplicate')}
+                </Button>
+              )}
+              {archiver && !archived && (
+                <Button
+                  variant="outline"
+                  size="lg"
+                  disabled={dirty || blocked !== null || archive.isPending}
+                  title={dirty ? t('saveFirst') : blocked ? t(`archive.blocked.${blocked}`) : t('archive.hint')}
+                  onClick={() => {
+                    if (window.confirm(t('archive.confirm'))) archive.mutate();
+                  }}
+                >
+                  {archive.isPending ? <Spinner className="text-current" /> : null}
+                  {t('archive.action')}
+                </Button>
+              )}
+            </>
+          }
+        />
+        {archived && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-foreground" role="status" data-testid="post-archived">
+            <span>{t('archive.banner', { when: f.dateTime(p.archivedAt ?? p.updatedAt) })}</span>
+            {archiver && (
+              <Button variant="outline" size="sm" disabled={unarchive.isPending} onClick={() => unarchive.mutate()}>
+                {unarchive.isPending ? <Spinner className="text-current" /> : null}
+                {t('archive.restore')}
               </Button>
             )}
-            {canWrite && submittable.length > 0 && (
-              <Button size="lg" disabled={dirty || submit.isPending} title={dirty ? t('saveFirst') : undefined} onClick={() => submit.mutate()}>
-                {t('submit')}
-              </Button>
-            )}
-            {canWrite && published && (
-              <Button variant="outline" size="lg" disabled={dirty || repost.isPending} title={t('repostHint')} onClick={() => repost.mutate()}>
-                {repost.isPending ? <Spinner className="text-current" /> : null}
-                {t('repost')}
-              </Button>
-            )}
-            {canWrite && (
-              <Button variant="outline" size="lg" disabled={dirty || duplicate.isPending} title={dirty ? t('saveFirst') : t('duplicateHint')} onClick={() => duplicate.mutate()}>
-                {duplicate.isPending ? <Spinner className="text-current" /> : null}
-                {t('duplicate')}
-              </Button>
-            )}
-            {archiver && !archived && (
+          </div>
+        )}
+        {restorePost && (
+          <Notice>
+            <div className="flex flex-wrap items-center gap-2">
+              <span>{t('draftFound', { when: f.dateTime(restorePost.savedAt) })}</span>
               <Button
-                variant="outline"
-                size="lg"
-                disabled={dirty || blocked !== null || archive.isPending}
-                title={dirty ? t('saveFirst') : blocked ? t(`archive.blocked.${blocked}`) : t('archive.hint')}
+                size="sm"
                 onClick={() => {
-                  if (window.confirm(t('archive.confirm'))) archive.mutate();
+                  setBase(restorePost.data.base);
+                  setOwn(restorePost.data.own);
+                  setRestorePost(null);
                 }}
               >
-                {archive.isPending ? <Spinner className="text-current" /> : null}
-                {t('archive.action')}
+                {t('draftRestore')}
               </Button>
-            )}
-          </>
-        }
-      />
-      {archived && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-foreground" role="status" data-testid="post-archived">
-          <span>{t('archive.banner', { when: f.dateTime(p.archivedAt ?? p.updatedAt) })}</span>
-          {archiver && (
-            <Button variant="outline" size="sm" disabled={unarchive.isPending} onClick={() => unarchive.mutate()}>
-              {unarchive.isPending ? <Spinner className="text-current" /> : null}
-              {t('archive.restore')}
-            </Button>
-          )}
-        </div>
-      )}
-      {restorePost && (
-        <Notice>
-          <div className="flex flex-wrap items-center gap-2">
-            <span>{t('draftFound', { when: f.dateTime(restorePost.savedAt) })}</span>
-            <Button
-              size="sm"
-              onClick={() => {
-                setBase(restorePost.data.base);
-                setOwn(restorePost.data.own);
-                setRestorePost(null);
-              }}
-            >
-              {t('draftRestore')}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                clearDraft(slug, postId);
-                setRestorePost(null);
-              }}
-            >
-              {t('draftDiscard')}
-            </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  clearDraft(slug, postId);
+                  setRestorePost(null);
+                }}
+              >
+                {t('draftDiscard')}
+              </Button>
+            </div>
+          </Notice>
+        )}
+        {/* Open internal comments (#1168) warn before a review, and never block it. */}
+        {canWrite && submittable.length > 0 && p.openComments > 0 && (
+          <div className="mb-4 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-foreground" role="status" data-testid="submit-open-comments">
+            {t('submitOpenComments', { count: p.openComments })}
           </div>
-        </Notice>
-      )}
-      {/* Open internal comments (#1168) warn before a review, and never block it. */}
-      {canWrite && submittable.length > 0 && p.openComments > 0 && (
-        <div className="mb-4 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-foreground" role="status" data-testid="submit-open-comments">
-          {t('submitOpenComments', { count: p.openComments })}
-        </div>
-      )}
-      {(error || flash) && (
-        <div className="mb-4">
-          <ErrorText>{error ? errorMessage(error) : flash}</ErrorText>
-        </div>
-      )}
-      {(p.origin === 'ai' || p.tainted) && (
-        <div className="mb-4 flex items-center gap-2 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
-          <Badge variant="secondary">{t(p.origin === 'ai' ? 'aiBadge' : 'aiAssistedBadge')}</Badge>
-          <span>{t(p.origin === 'ai' ? 'aiBadgeHint' : 'aiAssistedHint')}</span>
-        </div>
-      )}
-      {p.idea && (
-        <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
-          {t('ideas.madeFrom')}{' '}
-          <Link to="/o/$slug/social/ideas" params={{ slug }} className="text-link hover:underline">
-            {p.idea.title}
-          </Link>
-        </div>
-      )}
-      {p.recurrenceSourceId ? (
-        <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
-          {t('recurrence.copyOf')}{' '}
-          <Link to="/o/$slug/social/$id" params={{ slug, id: p.recurrenceSourceId }} className="text-link hover:underline">
-            {t('recurrence.copyOfLink')}
-          </Link>
-        </div>
-      ) : (
-        p.repostOf && (
+        )}
+        {(error || flash) && (
+          <div className="mb-4">
+            <ErrorText>{error ? errorMessage(error) : flash}</ErrorText>
+          </div>
+        )}
+        {(p.origin === 'ai' || p.tainted) && (
+          <div className="mb-4 flex items-center gap-2 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
+            <Badge variant="secondary">{t(p.origin === 'ai' ? 'aiBadge' : 'aiAssistedBadge')}</Badge>
+            <span>{t(p.origin === 'ai' ? 'aiBadgeHint' : 'aiAssistedHint')}</span>
+          </div>
+        )}
+        {p.idea && (
           <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
-            {t('repostOf')}{' '}
-            <Link to="/o/$slug/social/$id" params={{ slug, id: p.repostOf }} className="text-link hover:underline">
-              {t('repostOfLink')}
+            {t('ideas.madeFrom')}{' '}
+            <Link to="/o/$slug/social/ideas" params={{ slug }} className="text-link hover:underline">
+              {p.idea.title}
             </Link>
           </div>
-        )
-      )}
-      {stale && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-foreground">
-          <span>{t('changedElsewhere')}</span>
-          <Button variant="outline" size="sm" onClick={() => adopt(p)}>
-            {t('loadLatest')}
-          </Button>
-        </div>
-      )}
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="space-y-4">
-          <SharedFields
-            base={base}
-            onChange={setBase}
-            disabled={!editable || save.isPending}
-            needsTitle={p.variants.some((v) => takesTitle(v.provider, own[v.id]?.settings ?? v.settings))}
-            onAiUsed={() => setAiUsed(true)}
-            slug={slug}
-            connectionIds={p.variants.map((v) => v.connectionId)}
-            mediaConnectionIds={p.variants.filter((v) => !(own[v.id]?.customMedia ?? v.ownMedia)).map((v) => v.connectionId)}
-            providers={p.variants.map((v) => v.provider)}
-            // A member who may comment suggests an edit of words of the saved text (#1236), while a channel can still change.
-            suggest={editable ? <SuggestEdit postId={p.id} targetId="social-body" field="post" saved={origin.body} current={base.body} /> : null}
-          />
-          {base.linkUrl.trim() && editable && (
-            <Card className="block p-4">
-              <UtmFields utm={shownUtm} onChange={setUtm} disabled={save.isPending} />
-            </Card>
-          )}
-          {noneLeft && <NoneLeftToReview slug={slug} />}
-          {moveError && <ErrorText>{moveError}</ErrorText>}
-          {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} rewriteTarget={rewriteTarget} onApproved={() => void moveOn()} />}
-          {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
-          <LabelPicker
-            slug={slug}
-            postId={p.id}
-            labelIds={p.labelIds}
-            canWrite={canWrite}
-            // A campaign label fills the empty UTM fields (#1169) as an edit like any other: nothing is saved until Save,
-            // and saving changes the channels' settings, their content hash and their approval as any edit does.
-            // Each channel's own empty fields, and none while a save is on its way (it would settle over the fill).
-            onPut={(label) => {
-              if (!editable || !base.linkUrl.trim() || save.isPending) return false;
-              // Called once the label is saved: the edits made since are read from the latest state, never overwritten.
-              const fill = (from: Record<string, Own>) => {
-                const changed = { ...from };
-                let filled = false;
-                for (const v of p.variants) {
-                  if (!EDITABLE.includes(v.status)) continue;
-                  const mine = from[v.id] ?? ownOf(v);
-                  const tags = utmOf(mine.settings);
-                  const next = prefillUtm(tags ? { campaign: tags.campaign, medium: tags.medium ?? 'social' } : null, label);
-                  if (!next) continue;
-                  changed[v.id] = withUtm(mine, next);
-                  filled = true;
-                }
-                return filled ? changed : null;
-              };
-              if (!fill(own)) return false;
-              setOwn((latest) => fill(latest) ?? latest);
-              setUtmState((latest) => {
-                const shown = latest === undefined ? shownUtm : latest;
-                return prefillUtm(shown, label) ?? shown;
-              });
-              return true;
-            }}
-          />
-          <CampaignFindings
-            labelIds={p.labelIds}
-            labels={labelList.data ?? []}
-            // The channels still to go out, as edited here.
-            channels={p.variants
-              .filter((v) => EDITABLE.includes(v.status))
-              .map((v) => ({ name: names.get(v.connectionId) ?? providerName(v.provider), settings: (own[v.id] ?? ownOf(v)).settings, linkUrl: v.overrides.linkUrl ?? orNull(base.linkUrl), at: v.effectiveAt }))}
-            timeZone={p.timeZone}
-          />
-          {canWrite && !archived && p.recurrence === null && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
-          {/* One kind of repeat per post (#979); a copy of a series repeats with its series post. */}
-          {canWrite && !archived && p.evergreenDays === null && p.recurrenceSourceId === null && (
-            <RecurrencePanel key={`${JSON.stringify(p.recurrence)}:${p.recurrenceCount}`} post={p} published={published} onDone={refresh} />
-          )}
-          {/* The texts an evergreen or series post's copies rotate through (#1260); a copy of a series takes its series'. */}
-          {canWrite && p.recurrenceSourceId === null && (p.evergreenDays !== null || p.recurrence !== null) && (
-            <TextVariationsCard key={`${JSON.stringify(p.textVariations)}:${p.textVariationNext}`} post={p} onDone={refresh} />
-          )}
-            <ReviewLinks postId={p.id} canDecide={canDecide} canReply={canWrite} />
-            <AssignCard post={p} canEdit={canDecide || (canWrite && p.authorUserId !== null && p.authorUserId === userId)} />
-          <PostVersions
-            postId={p.id}
-            revision={p.revision}
-            variantRevisions={Object.fromEntries(p.variants.map((v) => [v.id, v.revision]))}
-            current={p.variants.map((v) => ({
-              variantId: v.id,
-              name: names.get(v.connectionId) ?? providerName(v.provider),
-              status: v.status,
-              content: { body: v.effective.body, title: v.effective.title, linkUrl: v.effective.linkUrl, media: v.media.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime })), settings: v.settings },
-            }))}
-            canWrite={canWrite}
-            editing={editing}
-            onRestored={() => void settle(false).finally(refresh)}
-          />
-          {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
-        </div>
-        <div className="space-y-4">
-          {p.variants.map((v) => {
-            const frozen = !EDITABLE.includes(v.status);
-            const decision = v.latestDecision;
-            return (
-              <ChannelEditor
-                slug={slug}
-                key={v.id}
-                provider={v.provider}
-                channel={names.get(v.connectionId) ?? providerName(v.provider)}
-                // A channel's own link (set on the variant) is the one its adapter sends, so its checks count that one.
-                base={frozen ? { body: v.effective.body, title: v.effective.title ?? '', linkUrl: v.effective.linkUrl ?? '', media: mediaItems(v.media) } : v.overrides.linkUrl != null ? { ...base, linkUrl: v.overrides.linkUrl } : base}
-                // A frozen channel keeps its settings (its cover, first comment, UTM) to show what went out.
-                own={frozen ? { ...EMPTY_OWN, settings: v.settings } : (own[v.id] ?? ownOf(v))}
-                connectionId={v.connectionId}
-                scopes={grants.get(v.connectionId) ?? []}
-                onAiUsed={() => setAiUsed(true)}
-                disabled={frozen || !canWrite || save.isPending}
-                status={v.status}
-                statusError={v.error}
-                onChange={(next) => setOwn({ ...own, [v.id]: next })}
-                onRemoveAtAll={!frozen && p.variants.filter((x) => EDITABLE.includes(x.status)).length > 1 ? setRemoveAtAll : undefined}
-                duplicate={v.duplicateOf ? { of: v.duplicateOf, checked: v.effective.body } : null}
-                channelSignature={signatures.get(v.connectionId) ?? null}
-                signaturesLoading={signatureRows.isPending}
-                // On the channel's own saved text (#1236), while the channel can still change.
-                suggest={
-                  !frozen && canWrite && v.overrides.body !== null && (own[v.id] ?? ownOf(v)).custom ? (
-                    <SuggestEdit
-                      postId={p.id}
-                      targetId={`social-own-${v.connectionId}`}
-                      field="channel"
-                      variantId={v.id}
-                      saved={origin.variants.find((o) => o.id === v.id)?.overrides.body ?? v.overrides.body}
-                      current={(own[v.id] ?? ownOf(v)).body}
-                    />
-                  ) : null
-                }
-                footer={
-                  <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
-                    {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (
-                      <p>{t(NOT_PUBLIC_AT[notPublicKey(v) ?? ''] ?? (v.status === 'published' ? 'publishedAt' : 'goesOutAt'), { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
-                    )}
-                    {decision && decision.comment && ['changes_requested', 'rejected'].includes(v.status) && <p className="text-warning">{t('reviewerSaid', { comment: decision.comment })}</p>}
-                    {v.status === 'in_review' && v.review.required > 1 && <p>{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</p>}
-                    {v.status === 'in_review' && v.review.client && <p>{t(v.review.clientVerdict === 'approved' ? 'clientApproved' : 'clientWaiting')}</p>}
-                    <Outcome variant={v} slug={slug} />
-                    <RemovalNote variant={v} />
-                    <LiveEditNote variant={v} />
-                    {v.externalUrl && v.status !== 'removed' && (
-                      <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
-                        {t('openPost')}
-                      </a>
-                    )}
-                    {v.commentStatus && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={v.commentStatus === 'failed' || v.commentStatus === 'reconnect' || v.commentStatus === 'unknown' ? 'text-warning' : ''}>{t(`commentStatus.${v.commentStatus}`)}</span>
-                        {canDecide && (v.commentStatus === 'failed' || v.commentStatus === 'reconnect' || v.commentStatus === 'unknown') && (
-                          <Button variant="outline" size="sm" disabled={retryComment.isPending} onClick={() => retryComment.mutate(v.id)}>
-                            {t('commentRetry')}
+        )}
+        {p.recurrenceSourceId ? (
+          <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
+            {t('recurrence.copyOf')}{' '}
+            <Link to="/o/$slug/social/$id" params={{ slug, id: p.recurrenceSourceId }} className="text-link hover:underline">
+              {t('recurrence.copyOfLink')}
+            </Link>
+          </div>
+        ) : (
+          p.repostOf && (
+            <div className="mb-4 rounded-xl border bg-muted px-4 py-3 text-sm text-foreground">
+              {t('repostOf')}{' '}
+              <Link to="/o/$slug/social/$id" params={{ slug, id: p.repostOf }} className="text-link hover:underline">
+                {t('repostOfLink')}
+              </Link>
+            </div>
+          )
+        )}
+        {stale && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-foreground">
+            <span>{t('changedElsewhere')}</span>
+            <Button variant="outline" size="sm" onClick={() => adopt(p)}>
+              {t('loadLatest')}
+            </Button>
+          </div>
+        )}
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <div className="space-y-4">
+            <SharedFields
+              base={base}
+              onChange={setBase}
+              disabled={!editable || save.isPending}
+              needsTitle={p.variants.some((v) => takesTitle(v.provider, own[v.id]?.settings ?? v.settings))}
+              onAiUsed={() => setAiUsed(true)}
+              slug={slug}
+              connectionIds={p.variants.map((v) => v.connectionId)}
+              mediaConnectionIds={p.variants.filter((v) => !(own[v.id]?.customMedia ?? v.ownMedia)).map((v) => v.connectionId)}
+              providers={p.variants.map((v) => v.provider)}
+              // A member who may comment suggests an edit of words of the saved text (#1236), while a channel can still change.
+              suggest={editable ? <SuggestEdit postId={p.id} targetId="social-body" field="post" saved={origin.body} current={base.body} /> : null}
+            />
+            {base.linkUrl.trim() && editable && (
+              <Card className="block p-4">
+                <UtmFields utm={shownUtm} onChange={setUtm} disabled={save.isPending} />
+              </Card>
+            )}
+            {noneLeft && <NoneLeftToReview slug={slug} />}
+            {moveError && <ErrorText>{moveError}</ErrorText>}
+            {canDecide && reviewable && <ReviewPanel post={p} names={names} onDone={refresh} rewriteTarget={rewriteTarget} onApproved={() => void moveOn()} />}
+            {canDecide && reviewable && <SchedulePanel post={p} names={names} onDone={refresh} />}
+            <LabelPicker
+              slug={slug}
+              postId={p.id}
+              labelIds={p.labelIds}
+              canWrite={canWrite}
+              // A campaign label fills the empty UTM fields (#1169) as an edit like any other: nothing is saved until Save,
+              // and saving changes the channels' settings, their content hash and their approval as any edit does.
+              // Each channel's own empty fields, and none while a save is on its way (it would settle over the fill).
+              onPut={(label) => {
+                if (!editable || !base.linkUrl.trim() || save.isPending) return false;
+                // Called once the label is saved: the edits made since are read from the latest state, never overwritten.
+                const fill = (from: Record<string, Own>) => {
+                  const changed = { ...from };
+                  let filled = false;
+                  for (const v of p.variants) {
+                    if (!EDITABLE.includes(v.status)) continue;
+                    const mine = from[v.id] ?? ownOf(v);
+                    const tags = utmOf(mine.settings);
+                    const next = prefillUtm(tags ? { campaign: tags.campaign, medium: tags.medium ?? 'social' } : null, label);
+                    if (!next) continue;
+                    changed[v.id] = withUtm(mine, next);
+                    filled = true;
+                  }
+                  return filled ? changed : null;
+                };
+                if (!fill(own)) return false;
+                setOwn((latest) => fill(latest) ?? latest);
+                setUtmState((latest) => {
+                  const shown = latest === undefined ? shownUtm : latest;
+                  return prefillUtm(shown, label) ?? shown;
+                });
+                return true;
+              }}
+            />
+            <CampaignFindings
+              labelIds={p.labelIds}
+              labels={labelList.data ?? []}
+              // The channels still to go out, as edited here.
+              channels={p.variants
+                .filter((v) => EDITABLE.includes(v.status))
+                .map((v) => ({ name: names.get(v.connectionId) ?? providerName(v.provider), settings: (own[v.id] ?? ownOf(v)).settings, linkUrl: v.overrides.linkUrl ?? orNull(base.linkUrl), at: v.effectiveAt }))}
+              timeZone={p.timeZone}
+            />
+            {canWrite && !archived && p.recurrence === null && (published || p.evergreenDays !== null) && <EvergreenPanel post={p} onDone={refresh} />}
+            {/* One kind of repeat per post (#979); a copy of a series repeats with its series post. */}
+            {canWrite && !archived && p.evergreenDays === null && p.recurrenceSourceId === null && (
+              <RecurrencePanel key={`${JSON.stringify(p.recurrence)}:${p.recurrenceCount}`} post={p} published={published} onDone={refresh} />
+            )}
+            {/* The texts an evergreen or series post's copies rotate through (#1260); a copy of a series takes its series'. */}
+            {canWrite && p.recurrenceSourceId === null && (p.evergreenDays !== null || p.recurrence !== null) && (
+              <TextVariationsCard key={`${JSON.stringify(p.textVariations)}:${p.textVariationNext}`} post={p} onDone={refresh} />
+            )}
+              <ReviewLinks postId={p.id} canDecide={canDecide} canReply={canWrite} />
+              <AssignCard post={p} canEdit={canDecide || (canWrite && p.authorUserId !== null && p.authorUserId === userId)} />
+            <PostVersions
+              postId={p.id}
+              revision={p.revision}
+              variantRevisions={Object.fromEntries(p.variants.map((v) => [v.id, v.revision]))}
+              current={p.variants.map((v) => ({
+                variantId: v.id,
+                name: names.get(v.connectionId) ?? providerName(v.provider),
+                status: v.status,
+                content: { body: v.effective.body, title: v.effective.title, linkUrl: v.effective.linkUrl, media: v.media.map((m) => ({ fileId: m.fileId, altText: m.altText, mime: m.mime })), settings: v.settings },
+              }))}
+              canWrite={canWrite}
+              editing={editing}
+              onRestored={() => void settle(false).finally(refresh)}
+            />
+            {dirty && <p className="text-xs text-subtle-foreground">{t('unsaved')}</p>}
+          </div>
+          <div className="space-y-4">
+            {p.variants.map((v) => {
+              const frozen = !EDITABLE.includes(v.status);
+              const decision = v.latestDecision;
+              return (
+                <ChannelEditor
+                  slug={slug}
+                  key={v.id}
+                  provider={v.provider}
+                  channel={names.get(v.connectionId) ?? providerName(v.provider)}
+                  // A channel's own link (set on the variant) is the one its adapter sends, so its checks count that one.
+                  base={frozen ? { body: v.effective.body, title: v.effective.title ?? '', linkUrl: v.effective.linkUrl ?? '', media: mediaItems(v.media) } : v.overrides.linkUrl != null ? { ...base, linkUrl: v.overrides.linkUrl } : base}
+                  // A frozen channel keeps its settings (its cover, first comment, UTM) to show what went out.
+                  own={frozen ? { ...EMPTY_OWN, settings: v.settings } : (own[v.id] ?? ownOf(v))}
+                  connectionId={v.connectionId}
+                  scopes={grants.get(v.connectionId) ?? []}
+                  onAiUsed={() => setAiUsed(true)}
+                  disabled={frozen || !canWrite || save.isPending}
+                  status={v.status}
+                  statusError={v.error}
+                  onChange={(next) => setOwn({ ...own, [v.id]: next })}
+                  onRemoveAtAll={!frozen && p.variants.filter((x) => EDITABLE.includes(x.status)).length > 1 ? setRemoveAtAll : undefined}
+                  duplicate={v.duplicateOf ? { of: v.duplicateOf, checked: v.effective.body } : null}
+                  channelSignature={signatures.get(v.connectionId) ?? null}
+                  signaturesLoading={signatureRows.isPending}
+                  // On the channel's own saved text (#1236), while the channel can still change.
+                  suggest={
+                    !frozen && canWrite && v.overrides.body !== null && (own[v.id] ?? ownOf(v)).custom ? (
+                      <SuggestEdit
+                        postId={p.id}
+                        targetId={`social-own-${v.connectionId}`}
+                        field="channel"
+                        variantId={v.id}
+                        saved={origin.variants.find((o) => o.id === v.id)?.overrides.body ?? v.overrides.body}
+                        current={(own[v.id] ?? ownOf(v)).body}
+                      />
+                    ) : null
+                  }
+                  footer={
+                    <div className="space-y-2 border-t pt-3 text-xs text-muted-foreground">
+                      {v.effectiveAt && ['scheduled', 'paused', 'publishing', 'processing', 'published'].includes(v.status) && (
+                        <p>{t(NOT_PUBLIC_AT[notPublicKey(v) ?? ''] ?? (v.status === 'published' ? 'publishedAt' : 'goesOutAt'), { when: f.dateTime(v.effectiveAt) })}{v.queueSlotAt && v.status !== 'published' ? ` · ${t('fromQueue')}` : ''}</p>
+                      )}
+                      {decision && decision.comment && ['changes_requested', 'rejected'].includes(v.status) && <p className="text-warning">{t('reviewerSaid', { comment: decision.comment })}</p>}
+                      {v.status === 'in_review' && v.review.required > 1 && <p>{t('reviewSteps', { given: String(v.review.approvedBy.length), required: String(v.review.required) })}</p>}
+                      {v.status === 'in_review' && v.review.client && <p>{t(v.review.clientVerdict === 'approved' ? 'clientApproved' : 'clientWaiting')}</p>}
+                      <Outcome variant={v} slug={slug} />
+                      <RemovalNote variant={v} />
+                      <LiveEditNote variant={v} />
+                      {v.externalUrl && v.status !== 'removed' && (
+                        <a href={v.externalUrl} target="_blank" rel="noopener noreferrer" className="text-link hover:underline">
+                          {t('openPost')}
+                        </a>
+                      )}
+                      {v.commentStatus && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={v.commentStatus === 'failed' || v.commentStatus === 'reconnect' || v.commentStatus === 'unknown' ? 'text-warning' : ''}>{t(`commentStatus.${v.commentStatus}`)}</span>
+                          {canDecide && (v.commentStatus === 'failed' || v.commentStatus === 'reconnect' || v.commentStatus === 'unknown') && (
+                            <Button variant="outline" size="sm" disabled={retryComment.isPending} onClick={() => retryComment.mutate(v.id)}>
+                              {t('commentRetry')}
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                      {v.pinStatus && <p className={v.pinStatus === 'failed' || v.pinStatus === 'not_allowed' || v.pinStatus === 'unknown' ? 'text-warning' : ''}>{t(`pinStatus.${v.pinStatus}`)}</p>}
+                      {v.gateStatus && <p className={v.gateStatus === 'failed' || v.gateStatus === 'unknown' ? 'text-warning' : ''}>{t(`gateStatus.${v.gateStatus}`)}</p>}
+                      {v.playlistStatus && (
+                        <p className={v.playlistStatus.state === 'pending' || v.playlistStatus.state === 'added' ? '' : 'text-warning'}>
+                          {t(`playlistStatus.${v.playlistStatus.state}`, { added: v.playlistStatus.added, total: v.playlistStatus.total })}
+                        </p>
+                      )}
+                      {v.threadStatus && (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown' ? 'text-warning' : ''}>
+                            {t(`threadStatus.${v.threadStatus.state}`, { posted: v.threadStatus.posted, total: v.threadStatus.total })}
+                          </span>
+                          {canDecide && (v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown') && (
+                            <Button variant="outline" size="sm" disabled={retryThread.isPending} onClick={() => retryThread.mutate(v.id)}>
+                              {t('threadRetry')}
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                      {v.status === 'published' && <VariantMetrics row={metricsOf.get(v.id)} />}
+                      <div className="flex flex-wrap gap-2">
+                        {canDecide && (v.status === 'failed' || v.status === 'needs_attention') && (
+                          <Button variant="outline" size="sm" disabled={retry.isPending} onClick={() => retry.mutate(v.id)}>
+                            {t(v.status === 'failed' ? 'retry' : 'retryUnknown')}
+                          </Button>
+                        )}
+                        {canDecide && v.status === 'needs_attention' && (
+                          <>
+                            <Button variant="outline" size="sm" disabled={resolve.isPending} onClick={() => resolve.mutate({ variantId: v.id, outcome: 'published' })}>
+                              {t('confirmPublished')}
+                            </Button>
+                            <Button variant="ghost" size="sm" disabled={resolve.isPending} onClick={() => resolve.mutate({ variantId: v.id, outcome: 'dropped' })}>
+                              {t('dropChannel')}
+                            </Button>
+                          </>
+                        )}
+                        {canDecide && v.status === 'scheduled' && !v.queuePaused && <MoveTime variantId={v.id} connectionId={v.connectionId} timeZone={p.timeZone} at={v.effectiveAt} onDone={refresh} />}
+                        {canDecide && canMoveToFront(v) && <MoveToFront variantId={v.id} queueSlotAt={v.queueSlotAt as string} onDone={refresh} />}
+                        {canDecide && ['scheduled', 'paused'].includes(v.status) && (
+                          <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
+                            {t('unschedule')}
+                          </Button>
+                        )}
+                        {canDecide && canEditLive(v) && <EditPublished variant={v} channel={names.get(v.connectionId) ?? providerName(v.provider)} names={names} onDone={refresh} />}
+                        {canDecide && v.status === 'published' && isProvider(v.provider) && REMOVE_READY.has(v.provider) && v.removal?.state !== 'pending' && (
+                          <RemoveFromChannel variantId={v.id} provider={v.provider} channel={names.get(v.connectionId) ?? providerName(v.provider)} again={v.removal !== null} onDone={refresh} />
+                        )}
+                        {canWrite && CANCELLABLE.includes(v.status) && (canDecide || !['approved', 'scheduled', 'paused'].includes(v.status)) && (
+                          <Button variant="ghost" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(v.id)}>
+                            {t('cancelChannel')}
                           </Button>
                         )}
                       </div>
-                    )}
-                    {v.pinStatus && <p className={v.pinStatus === 'failed' || v.pinStatus === 'not_allowed' || v.pinStatus === 'unknown' ? 'text-warning' : ''}>{t(`pinStatus.${v.pinStatus}`)}</p>}
-                    {v.gateStatus && <p className={v.gateStatus === 'failed' || v.gateStatus === 'unknown' ? 'text-warning' : ''}>{t(`gateStatus.${v.gateStatus}`)}</p>}
-                    {v.playlistStatus && (
-                      <p className={v.playlistStatus.state === 'pending' || v.playlistStatus.state === 'added' ? '' : 'text-warning'}>
-                        {t(`playlistStatus.${v.playlistStatus.state}`, { added: v.playlistStatus.added, total: v.playlistStatus.total })}
-                      </p>
-                    )}
-                    {v.threadStatus && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown' ? 'text-warning' : ''}>
-                          {t(`threadStatus.${v.threadStatus.state}`, { posted: v.threadStatus.posted, total: v.threadStatus.total })}
-                        </span>
-                        {canDecide && (v.threadStatus.state === 'failed' || v.threadStatus.state === 'unknown') && (
-                          <Button variant="outline" size="sm" disabled={retryThread.isPending} onClick={() => retryThread.mutate(v.id)}>
-                            {t('threadRetry')}
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                    {v.status === 'published' && <VariantMetrics row={metricsOf.get(v.id)} />}
-                    <div className="flex flex-wrap gap-2">
-                      {canDecide && (v.status === 'failed' || v.status === 'needs_attention') && (
-                        <Button variant="outline" size="sm" disabled={retry.isPending} onClick={() => retry.mutate(v.id)}>
-                          {t(v.status === 'failed' ? 'retry' : 'retryUnknown')}
-                        </Button>
-                      )}
-                      {canDecide && v.status === 'needs_attention' && (
-                        <>
-                          <Button variant="outline" size="sm" disabled={resolve.isPending} onClick={() => resolve.mutate({ variantId: v.id, outcome: 'published' })}>
-                            {t('confirmPublished')}
-                          </Button>
-                          <Button variant="ghost" size="sm" disabled={resolve.isPending} onClick={() => resolve.mutate({ variantId: v.id, outcome: 'dropped' })}>
-                            {t('dropChannel')}
-                          </Button>
-                        </>
-                      )}
-                      {canDecide && v.status === 'scheduled' && !v.queuePaused && <MoveTime variantId={v.id} connectionId={v.connectionId} timeZone={p.timeZone} at={v.effectiveAt} onDone={refresh} />}
-                      {canDecide && canMoveToFront(v) && <MoveToFront variantId={v.id} queueSlotAt={v.queueSlotAt as string} onDone={refresh} />}
-                      {canDecide && ['scheduled', 'paused'].includes(v.status) && (
-                        <Button variant="outline" size="sm" disabled={unschedule.isPending} onClick={() => unschedule.mutate(v.id)}>
-                          {t('unschedule')}
-                        </Button>
-                      )}
-                      {canDecide && canEditLive(v) && <EditPublished variant={v} channel={names.get(v.connectionId) ?? providerName(v.provider)} names={names} onDone={refresh} />}
-                      {canDecide && v.status === 'published' && isProvider(v.provider) && REMOVE_READY.has(v.provider) && v.removal?.state !== 'pending' && (
-                        <RemoveFromChannel variantId={v.id} provider={v.provider} channel={names.get(v.connectionId) ?? providerName(v.provider)} again={v.removal !== null} onDone={refresh} />
-                      )}
-                      {canWrite && CANCELLABLE.includes(v.status) && (canDecide || !['approved', 'scheduled', 'paused'].includes(v.status)) && (
-                        <Button variant="ghost" size="sm" disabled={cancel.isPending} onClick={() => cancel.mutate(v.id)}>
-                          {t('cancelChannel')}
-                        </Button>
-                      )}
                     </div>
-                  </div>
-                }
-              />
-            );
-          })}
+                  }
+                />
+              );
+            })}
+          </div>
+          <PostActivity
+            postId={p.id}
+            channels={p.variants.map((v) => ({ variantId: v.id, name: names.get(v.connectionId) ?? providerName(v.provider) }))}
+            canWrite={canWrite}
+            // An accepted suggestion (#1236) waits for the edits on this page to be saved or dropped.
+            suggestionsLocked={dirty || stale}
+            className="lg:col-span-2"
+            // The images and videos comments can be pinned to (#1180): the post's as saved, then each channel's own.
+            media={boardMedia(p.media, p.variants.map((v) => ({ variantId: v.id, channel: names.get(v.connectionId) ?? providerName(v.provider), ownMedia: v.ownMedia, media: v.media })))}
+          />
         </div>
-        <PostActivity
-          postId={p.id}
-          channels={p.variants.map((v) => ({ variantId: v.id, name: names.get(v.connectionId) ?? providerName(v.provider) }))}
-          canWrite={canWrite}
-          // An accepted suggestion (#1236) waits for the edits on this page to be saved or dropped.
-          suggestionsLocked={dirty || stale}
-          className="lg:col-span-2"
-          // The images and videos comments can be pinned to (#1180): the post's as saved, then each channel's own.
-          media={boardMedia(p.media, p.variants.map((v) => ({ variantId: v.id, channel: names.get(v.connectionId) ?? providerName(v.provider), ownMedia: v.ownMedia, media: v.media })))}
-        />
       </div>
-    </div>
+    </MediaReplace.Provider>
   );
 }

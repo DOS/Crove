@@ -134,3 +134,10 @@ export function fixName(original: string | null | undefined): string {
 
 // The post's images with the fixed file in place of the original, wherever it is; the others as they are.
 export const replaceMedia = <T extends { fileId: string }>(media: readonly T[], fromFileId: string, next: T): T[] => media.map((m) => (m.fileId === fromFileId ? next : m));
+
+// A fix made in one list, applied to every channel of the post (#1505): the fixed file in place of the original in
+// each channel's own images that hold it. A channel without the original is left as it is (the same object), so the
+// caller can tell which channels changed. The post's shared images take replaceMedia themselves.
+export function replaceInChannels<M extends { fileId: string }, O extends { media: readonly M[] }>(own: Readonly<Record<string, O>>, fromFileId: string, next: M): Record<string, O> {
+  return Object.fromEntries(Object.entries(own).map(([id, o]) => [id, o.media.some((m) => m.fileId === fromFileId) ? { ...o, media: replaceMedia(o.media, fromFileId, next) } : o]));
+}
