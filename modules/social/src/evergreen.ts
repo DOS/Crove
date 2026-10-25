@@ -12,7 +12,7 @@ import { refusesDuplicates } from './domain/duplicate.ts';
 import { duplicatesOf } from './duplicates.ts';
 import { insertVariants, writePostMedia } from './posts.ts';
 import { refuseUnusableMedia } from './library.ts';
-import { coverOf } from './domain/channels.ts';
+import { coverOf, linkCardThumbOf } from './domain/channels.ts';
 import { POST_COLUMNS, base, hashOf, issuesOf, lockPost, lockVariants, mediaFor, overrides, refreshPostStatus, refuseArchived, setVariant, settingsOf, step, type PostRow, type VariantRow } from './variants.ts';
 import { agentTaskOf } from './agent.ts';
 import { publishingHeld } from './publish-hold.ts';
@@ -316,9 +316,11 @@ export const postDuplicate = defineCommand({
     // A copy attaches its source's files anew (#1273), its channels' covers among them: an archived file (#1302), or
     // one the member may not use, is refused with 403 MEDIA_NOT_ALLOWED. Reposts, evergreen and recurring copies repeat
     // what already went out and keep them.
+    // A link card's image (#1498) the same way.
     const covers = targets.flatMap((v) => {
       const cover = coverOf(settingsOf(v));
-      return cover && 'fileId' in cover ? [cover.fileId] : [];
+      const thumb = linkCardThumbOf(settingsOf(v));
+      return [...(cover && 'fileId' in cover ? [cover.fileId] : []), ...(thumb ? [thumb] : [])];
     });
     await refuseUnusableMedia(ctx, [...[...source.media, ...targets.flatMap((v) => mediaFor(base(source), v))].map((m) => m.fileId), ...covers]);
     const { postId } = await copyPost(ctx, source, targets, { repostOf: null, submit: false, ...(at ? { scheduledAt: at } : {}) });

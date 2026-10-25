@@ -12,6 +12,8 @@
 import type { CommentInput, CommentResult, GateInput, RepostInput, ConnectedAccount, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { commentResult, removeResult } from './comment.ts';
 import { holdsLink } from './text.ts';
+import { BLUESKY_LINK_CARD_THUMB_MAX_BYTES, linkCardOf, linkCardRefusal } from './link-card.ts';
+import { coverImageType } from './cover.ts';
 import { requestSignal, type Fetch } from './oauth.ts';
 
 const ENTRYWAY = 'https://bsky.social';
@@ -461,9 +463,17 @@ export function blueskyGatesOf(settings: Readonly<Record<string, unknown>> | und
   return allow === null && quotes !== false ? null : { allow, quotes: quotes !== false };
 }
 
-const textOf = (content: { body: string; linkUrl: string | null }) => {
+// carded: the post goes out with a link card (#1498), whose embed carries the link, so the text does not repeat it (and
+// it does not eat into the 300 graphemes).
+const textOf = (content: { body: string; linkUrl: string | null }, carded = false) => {
   const body = content.body.trim();
-  return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  return content.linkUrl && !carded && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+};
+
+// Whether the post goes out with its link card: a valid card on a link post with no media.
+const isCarded = (settings: Readonly<Record<string, unknown>> | undefined, content: { linkUrl: string | null; media: readonly unknown[] }): boolean => {
+  const card = linkCardOf(settings);
+  return card !== null && linkCardRefusal(card, content) === null;
 };
 
 function blueskyResult(error: unknown): PublishResult {
@@ -482,7 +492,7 @@ interface PostsAnswer {
 }
 
 interface ListAnswer {
-  records?: { uri?: unknown; value?: { text?: unknown; createdAt?: unknown } }[];
+  records?: { uri?: unknown; value?: { text?: unknown; createdAt?: unknown; embed?: { external?: { uri?: unknown } } } }[];
 }
 
 const postUrl = (handle: string, uri: string) => `https://bsky.app/profile/${encodeURIComponent(handle)}/post/${encodeURIComponent(uri.split('/').pop() ?? '')}`;
@@ -568,6 +578,10 @@ export class BlueskyPublisher implements Publisher {
     if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' };
     // Gates the gate step could not write (#1102) are refused before any call, so the post never goes out ungated.
     if (blueskyGatesOf(input.settings) === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'GATES_INVALID' };
+    // A link card (#1498) is the post's one embed, so it goes on a link post with no images or video.
+    const card = linkCardOf(input.settings);
+    const cardRefusal = linkCardRefusal(card, input.content);
+    if (cardRefusal) return { kind: 'rejected', error: 'bad_request', code: cardRefusal };
     let session: Session;
     try {
       session = await this.xrpc.session(s.identifier, s.appPassword);
@@ -613,13 +627,38 @@ export class BlueskyPublisher implements Publisher {
         return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
       }
     }
-    const text = textOf(input.content);
-    if (!text && images.length === 0 && !videoEmbed) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    // The card's image is uploaded as a blob like a post's image (app.bsky.embed.external's thumb, 1,000,000 bytes at
+    // most), then the card goes as the post's embed with the link, its title and its description.
+    let cardEmbed: Record<string, unknown> | null = null;
+    if (card && card !== 'invalid') {
+      let thumb: unknown = null;
+      if (card.thumbFileId) {
+        let bytes: Uint8Array;
+        try {
+          bytes = await input.readMedia(card.thumbFileId);
+        } catch {
+          return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+        }
+        if (bytes.byteLength > BLUESKY_LINK_CARD_THUMB_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_THUMB_TOO_LARGE' };
+        try {
+          const blob = await this.xrpc.call<{ blob?: unknown }>(session.pds, 'POST', 'com.atproto.repo.uploadBlob', { token: session.accessJwt, bytes: { data: bytes, type: coverImageType(bytes) } });
+          if (!blob.blob) return { kind: 'rejected', error: 'transient', code: 'NO_BLOB' };
+          thumb = blob.blob;
+        } catch (error) {
+          const result = blueskyResult(error);
+          return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
+        }
+      }
+      cardEmbed = { $type: 'app.bsky.embed.external', external: { uri: (input.content.linkUrl as string).trim(), title: card.title, description: card.description, ...(thumb ? { thumb } : {}) } };
+    }
+    const text = textOf(input.content, cardEmbed !== null);
+    if (!text && images.length === 0 && !videoEmbed && !cardEmbed) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
     const record: Record<string, unknown> = { $type: POST_COLLECTION, text, createdAt: new Date().toISOString(), langs: blueskyLangs(input.settings) };
     const facets = await this.facets(text);
     if (facets.length > 0) record.facets = facets;
     if (images.length > 0) record.embed = { $type: 'app.bsky.embed.images', images };
     if (videoEmbed) record.embed = videoEmbed;
+    if (cardEmbed) record.embed = cardEmbed;
     try {
       const answer = await this.xrpc.call<{ uri?: unknown }>(session.pds, 'POST', 'com.atproto.repo.createRecord', { token: session.accessJwt, json: { repo: session.did, collection: POST_COLLECTION, record } });
       if (typeof answer.uri !== 'string' || !answer.uri.startsWith('at://')) return { kind: 'unknown', code: 'NO_URI' };
@@ -811,11 +850,13 @@ export class BlueskyPublisher implements Publisher {
     }
   }
 
-  // The account's posts in the window with the same text.
+  // The account's posts in the window with the same text; a carded post (#1498) with the same text and card link.
   async reconcile(input: ReconcileInput): Promise<ReconcileResult> {
     const s = secretOf(input.secret);
-    const text = textOf(input.content);
-    if (!s || !text) return { found: 'unknown' };
+    const carded = isCarded(input.settings, input.content);
+    const text = textOf(input.content, carded);
+    const link = input.content.linkUrl?.trim() ?? '';
+    if (!s || (!text && !carded)) return { found: 'unknown' };
     try {
       const session = await this.xrpc.session(s.identifier, s.appPassword);
       const answer = await this.xrpc.call<ListAnswer>(session.pds, 'GET', 'com.atproto.repo.listRecords', { token: session.accessJwt, params: { repo: session.did, collection: POST_COLLECTION, limit: '50' } });
@@ -823,6 +864,7 @@ export class BlueskyPublisher implements Publisher {
       const to = input.before.getTime() + 60_000;
       for (const r of answer.records ?? []) {
         const at = typeof r.value?.createdAt === 'string' ? Date.parse(r.value.createdAt) : Number.NaN;
+        if (carded && r.value?.embed?.external?.uri !== link) continue;
         if (typeof r.uri === 'string' && r.value?.text === text && at >= from && at <= to) return { found: true, externalId: r.uri, url: postUrl(session.handle, r.uri) };
       }
       return { found: false };

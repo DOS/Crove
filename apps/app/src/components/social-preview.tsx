@@ -2,7 +2,7 @@
 // text cut where the platform cuts it, images in its frame and a link card where it makes one.
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { isProvider, LINK_PLACEMENT, sentText, type Cover } from '@crove/mod-social/contract';
+import { isProvider, LINK_CARD_PROVIDERS, LINK_PLACEMENT, sentText, type Cover, type LinkCard } from '@crove/mod-social/contract';
 import { useFormatter, useTranslations } from 'use-intl';
 import { cn } from '@crove/ui/lib/utils';
 import { Thumb, type MediaItem } from './social-media.tsx';
@@ -36,6 +36,8 @@ export interface PreviewContent {
   visibility?: 'connections' | 'loggedIn';
   // The link buttons under a Telegram post (#1017), in rows.
   buttons?: readonly (readonly { text: string; url: string }[])[];
+  // The card a LinkedIn or Bluesky link post goes out with (#1498), as the member kept it; shown instead of the page's.
+  linkCard?: LinkCard | null;
 }
 
 // A poll's length as X shows it under the options: days, else hours, else minutes.
@@ -93,8 +95,9 @@ function Media({ media, layout, max, cover }: { media: readonly MediaItem[]; lay
 }
 
 // The page's own title and description for a link card (#641), read by the worker; the platform shows its card from
-// the same tags. Asked for once per link (after typing stops), then read until the worker answers.
-function useLinkPreview(url: string, enabled: boolean) {
+// the same tags. Asked for once per link (after typing stops), then read until the worker answers. The LinkedIn and
+// Bluesky link card editor (#1498) prefills from it.
+export function useLinkPreview(url: string, enabled: boolean) {
   const [settled, setSettled] = useState(url);
   useEffect(() => {
     const timer = setTimeout(() => setSettled(url), 800);
@@ -130,8 +133,13 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
   // An edit shows the cut again, as the feed would.
   useEffect(() => setOpen(false), [content.body]);
   const host = hostOf(content.linkUrl);
+  // The card a LinkedIn or Bluesky post carries (#1498): these platforms make none from the link, so without one the
+  // link stays in the text and no card shows.
+  const ownCard = isProvider(provider) && LINK_CARD_PROVIDERS.has(provider) ? (content.linkCard ?? null) : null;
   // The text as the channel sends it: some append the link to it (TikTok, YouTube, Facebook with images).
-  const sent = isProvider(provider) ? sentText(provider, content.body, content.linkUrl || null, content.media.length) : content.body;
+  const sent = isProvider(provider)
+    ? sentText(provider, content.body, content.linkUrl || null, content.media.length, ownCard ? { linkCard: { title: ownCard.title, description: ownCard.description, ...(ownCard.thumbFileId ? { thumbFileId: ownCard.thumbFileId } : {}) } } : undefined)
+    : content.body;
   const linkInText = sent !== content.body;
   // Instagram and the others whose adapter never sends the link.
   const linkDropped = Boolean(host) && isProvider(provider) && LINK_PLACEMENT[provider] === 'apart' && !rule.linkCard;
@@ -164,10 +172,12 @@ export function PlatformPreview({ channel, provider, content, readLink = false }
     </div>
   );
   const showCard = Boolean(rule.linkCard && host && !linkInText && content.media.length === 0);
-  const page = useLinkPreview(content.linkUrl, readLink && showCard);
+  const fetched = useLinkPreview(content.linkUrl, readLink && showCard && !ownCard);
+  // A kept card shows its own words and image, never the fetched page's.
+  const page = ownCard ? { siteName: null, title: ownCard.title, description: ownCard.description } : fetched;
   const card = showCard && (
     <div className="mt-3 overflow-hidden rounded-lg border bg-muted">
-      {!page?.title && <div className="aspect-[1.91/1] bg-background/40" />}
+      {ownCard?.thumbFileId ? <Thumb fileId={ownCard.thumbFileId} alt={t('linkCardImageAlt')} mime="image/jpeg" className="aspect-[1.91/1] w-full rounded-none" /> : !page?.title && <div className="aspect-[1.91/1] bg-background/40" />}
       <div className="space-y-0.5 px-3 py-2">
         <p className="truncate font-mono text-xs text-muted-foreground uppercase">{page?.siteName ?? host}</p>
         {page?.title && <p className="line-clamp-2 text-sm font-semibold text-foreground">{page.title}</p>}
