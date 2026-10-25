@@ -3,8 +3,8 @@
 // books. Cash vouchers and journal vouchers are numbered and posted in the entity named; the journal, the ledger, the
 // statements, the vouchers, search and the exports read one entity; opening balances, fixed assets and depreciation,
 // bank lines, purchase invoices (a revision moves a proposal to an entity), the VAT working and the learned rules are
-// kept per entity; the year-end closing closes one entity's year; and only the default entity's VAT return carries the
-// tax calendar's done mark. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
+// kept per entity; the year-end closing closes one entity's year; and each entity's VAT return carries its own tax
+// calendar done mark. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run creates and drops its own database.
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -349,18 +349,18 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
     await runtime.execute('finance.categorization_rule.create', { keyword: 'cuoc internet', accountCode: '6422' }, as(owner));
   });
 
-  it('marks a VAT return per entity, and only the default entity’s on the tax calendar', async () => {
+  it('marks a VAT return per entity, each with its own tax calendar mark', async () => {
     await runtime.execute('finance.vat.return_mark', { period: '2026-08', done: true, legalEntityId: branch }, as(owner));
     const marks = () =>
       admin(async (c) => ({
         filed: (await c.query<{ e: string }>(`SELECT legal_entity_id AS e FROM crove_finance.vat_return_filed WHERE org_id = $1 AND period = '2026-08' ORDER BY created_at`, [org.orgId])).rows.map(
           (r) => r.e,
         ),
-        calendar: Number((await c.query<{ n: string }>(`SELECT count(*) AS n FROM crove_kernel.tax_obligation_done WHERE org_id = $1 AND period = '2026-08'`, [org.orgId])).rows[0]?.n),
+        calendar: Number((await c.query<{ n: string }>(`SELECT count(*) AS n FROM crove_kernel.tax_obligation_done WHERE org_id = $1 AND obligation = 'vat_return' AND period = '2026-08'`, [org.orgId])).rows[0]?.n),
       }));
-    expect(await marks()).toEqual({ filed: [branch], calendar: 0 });
+    expect(await marks()).toEqual({ filed: [branch], calendar: 1 });
     await runtime.execute('finance.vat.return_mark', { period: '2026-08', done: true }, as(owner));
-    expect(await marks()).toEqual({ filed: [branch, defaultEntity], calendar: 1 });
+    expect(await marks()).toEqual({ filed: [branch, defaultEntity], calendar: 2 });
     // The default entity's [22] does not come from the branch's return.
     const next = await runtime.query<VatReport>('finance.vat.period', { period: '2026-09' }, as(member));
     expect(next.carryForward.previous?.period).toBe('2026-08');
