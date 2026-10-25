@@ -165,7 +165,7 @@ function MissingInvoiceRequest({ period, missing, editor, canManage, slug }: { p
                 send.reset();
                 send.mutate({ period, legalEntityId: entity.legalEntityId });
               }}
-              disabled={send.isPending}
+              disabled={send.isPending || !entity.ready}
             >
               {send.isPending ? <Spinner className="text-current" /> : null}
               {t('send')}
@@ -461,7 +461,7 @@ export function PortalListPage() {
               <p className="text-sm text-muted-foreground">
                 {t('summaryLine', { portal: data.summary.portalInvoices, matched: data.summary.matched, inbox: data.summary.inInbox })}
               </p>
-              <MissingInvoiceRequest key={period} period={period} missing={data.summary.missing} editor={editor} canManage={org.data?.role === 'owner' || org.data?.role === 'admin'} slug={slug} />
+              <MissingInvoiceRequest key={`${period}:${entity.legalEntityId ?? ''}`} period={period} missing={data.summary.missing} editor={editor} canManage={org.data?.role === 'owner' || org.data?.role === 'admin'} slug={slug} />
               {SECTIONS.map(({ outcome, folded }) => {
                 const items = grouped.get(outcome) ?? [];
                 return items.length > 0 ? <Section key={outcome} outcome={outcome} items={items} total={outcomeTotal(data.summary, outcome)} folded={folded} slug={slug} /> : null;

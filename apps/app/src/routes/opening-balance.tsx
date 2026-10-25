@@ -37,6 +37,12 @@ function saveBytes(bytes: Uint8Array, filename: string) {
 // Opening balances from Excel (#320): download the template, fill it, pick it with the date, read the kernel's check
 // row by row, then post it as the org's one opening entry (R3: a fresh second factor).
 export function OpeningBalancePage() {
+  // A file picked for one legal entity is not carried over to another: switching entities starts the form afresh.
+  const entity = useChosenEntity();
+  return <OpeningBalanceForm key={entity.legalEntityId ?? ''} />;
+}
+
+function OpeningBalanceForm() {
   const t = useTranslations('openingBalance');
   const f = useFormat();
   const { slug } = useParams({ strict: false }) as { slug: string };

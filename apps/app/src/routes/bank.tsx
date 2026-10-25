@@ -394,7 +394,7 @@ export function BankPage() {
             </label>
           </div>
           {canImport && current?.active && (
-            <StatementImport key={account} bankAccount={account} onImported={(_result, to) => to && setMonth(to.slice(0, 7))} />
+            <StatementImport key={`${account}:${entity.legalEntityId ?? ''}`} bankAccount={account} onImported={(_result, to) => to && setMonth(to.slice(0, 7))} />
           )}
           {canImport && /^\d{4}-\d{2}$/.test(month) && <ProposeMatched key={`${account}:${month}`} bankAccount={account} month={month} />}
           {entering && <LineVoucher key={entering.id} slug={slug} line={entering} onClose={() => setEntering(null)} />}

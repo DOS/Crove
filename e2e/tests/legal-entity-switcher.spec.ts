@@ -28,7 +28,8 @@ test('the finance screens follow the legal entity chosen in the sidebar', async 
     const add = page.getByRole('form', { name: 'Thêm pháp nhân' });
     await add.getByLabel('Tên pháp nhân').fill(BRANCH);
     await add.getByRole('button', { name: 'Thêm', exact: true }).click();
-    await expect(page.getByText(BRANCH).first()).toBeVisible();
+    // In the page, not the sidebar switcher, whose options carry the same name.
+    await expect(page.getByRole('main').getByText(BRANCH).first()).toBeVisible();
     // Settings works in one entity (its learned account rules), and the list the switcher reads was refreshed.
     await expect(switcher).toBeVisible();
     // The default entity, which is the org itself, comes first and is the one chosen.
