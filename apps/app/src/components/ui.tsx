@@ -130,14 +130,15 @@ export function ListSkeleton({ rows = 3 }: { rows?: number }) {
 // A table with one header row; the body rows are TableRow/TableCell from @crove/ui. `numeric` lists the columns that
 // hold amounts: their headers are right-aligned like the amounts (DESIGN.md 4.3).
 // A list's table (DESIGN.md §4.3). Its header stays in view (#1444): a table taller than the window scrolls inside its
-// card, under a pinned header, and only then becomes a tab stop, so the keyboard can scroll it too.
+// card, under a pinned header, and only then becomes a tab stop, so the keyboard can scroll it too. The same when it
+// scrolls sideways, as on a phone, where the table is wider than the screen (#1517).
 export function DataTable({ head, numeric = [], children }: { head: string[]; numeric?: number[]; children: ReactNode }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [scrolls, setScrolls] = useState(false);
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    const measure = () => setScrolls(el.scrollHeight > el.clientHeight + 1);
+    const measure = () => setScrolls(el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);

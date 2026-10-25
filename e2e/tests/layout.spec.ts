@@ -4,6 +4,7 @@
 // scrolling, and a deep link opens with its app selected (#1528). The same session walks every screen of every app
 // under Trusted Types (#681) and expects no CSP violation; it shares this spec's sign-up because every spec draws on
 // one sign-up budget (auth-rate-limits.spec.ts).
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 import { collectCspViolations } from '../lib/csp.ts';
 import { createOrg, newEmail, signInNewUser, signUp } from '../lib/session.ts';
@@ -53,6 +54,46 @@ test('the sidebar keeps sign-out and Settings in view on a short window, and eac
   await page.goto('/');
   await signOut.click();
   await expect(page).toHaveURL(/\/login$/);
+});
+
+// Every sidebar screen at phone width, in both themes (#1517; DESIGN.md §7 and §10): the page never scrolls sideways,
+// and axe finds no serious or critical violation of the WCAG 2.2 AA rules. The screens are the links of every app's
+// menu, gathered at desktop width where the sidebar shows; each is then opened from a fresh document. Its own user,
+// created confirmed without the sign-up form, so it draws nothing from the sign-up budget.
+test('every sidebar screen fits 360px with no horizontal scroll and passes an axe scan, in light and dark (#1517)', async ({ page }) => {
+  test.setTimeout(300_000);
+  await signInNewUser(page, newEmail('layout-a11y'));
+  await createOrg(page, 'Công ty Kiểm tra truy cập');
+  const sidebar = page.getByRole('complementary');
+  const apps = sidebar.getByRole('list', { name: 'Ứng dụng' });
+  const links = new Set<string>();
+  const appCount = await apps.getByRole('link').count();
+  expect(appCount).toBeGreaterThan(1);
+  for (let i = 0; i < appCount; i++) {
+    await apps.getByRole('link').nth(i).click();
+    await page.waitForLoadState('networkidle');
+    for (const path of await sidebar.getByRole('link').evaluateAll((anchors) => anchors.map((a) => (a as HTMLAnchorElement).pathname))) links.add(path);
+  }
+  expect(links.size).toBeGreaterThan(5);
+
+  await page.setViewportSize({ width: 360, height: 780 });
+  const problems: string[] = [];
+  for (const theme of ['light', 'dark'] as const) {
+    // The theme the app reads at load (lib/theme.ts), from this browser only.
+    await page.evaluate((value) => localStorage.setItem('crove-theme', value), theme);
+    for (const path of links) {
+      await page.goto(path);
+      await page.waitForLoadState('networkidle');
+      await expect(page.locator('html')).toHaveClass(theme === 'dark' ? /\bdark\b/ : /^(?!.*\bdark\b)/);
+      const widths = await page.evaluate(() => ({ page: document.documentElement.scrollWidth, view: document.documentElement.clientWidth }));
+      if (widths.page > widths.view) problems.push(`${theme} ${path}: scrolls sideways (${widths.page}px in ${widths.view}px)`);
+      const scan = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze();
+      for (const v of scan.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')) {
+        problems.push(`${theme} ${path}: ${v.impact} ${v.id} on ${v.nodes.map((n) => n.target.join(' ')).slice(0, 3).join(', ')}`);
+      }
+    }
+  }
+  expect(problems).toEqual([]);
 });
 
 // The Social home's nine tabs at phone width (#1043): they wrap inside the screen, and the page never scrolls sideways.

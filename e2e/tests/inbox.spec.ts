@@ -6,7 +6,7 @@ import { Decimal } from 'decimal.js';
 import ExcelJS from 'exceljs';
 import { sql } from '../lib/db.ts';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
-import { confirmUnverifiedSignature } from '../lib/inbox.ts';
+import { tabTo } from '../lib/inbox.ts';
 import { nextTotp } from '../lib/totp.ts';
 
 const INVOICE = fileURLToPath(new URL('../../apps/extract/test/fixtures/einvoice-basic.xml', import.meta.url));
@@ -65,9 +65,15 @@ test('sign up, upload an e-invoice, approve it, then find it in the lists, the e
     await expect(page.getByText('Chưa xác minh được chữ ký số của hóa đơn này')).toBeVisible();
     await expect(page.getByText('Chữ ký số không đọc được theo chuẩn XML-DSig').first()).toBeVisible();
     await expect(approve).toBeDisabled();
-    await confirmUnverifiedSignature(page);
+    // With the keyboard only (#1517; DESIGN.md §7): Tab reaches the confirmation, Space ticks it, Tab reaches the
+    // approve button and Enter presses it. J, K, A and E are walked in bulk-approve.spec.ts.
+    const confirm = page.getByRole('checkbox', { name: 'Tôi đã kiểm tra hóa đơn gốc và vẫn muốn duyệt' });
+    await tabTo(page, confirm);
+    await page.keyboard.press('Space');
+    await expect(confirm).toBeChecked();
     await expect(approve).toBeEnabled();
-    await approve.click();
+    await tabTo(page, approve);
+    await page.keyboard.press('Enter');
     // Approving is R3: without a second factor the kernel answers STEP_UP_REQUIRED and the page offers to enable one,
     // then approves again by itself.
     await expect(page.getByText('Việc này cần xác thực hai lớp.')).toBeVisible();
