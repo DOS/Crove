@@ -69,17 +69,14 @@ END $$;
 -- the document that is not a reversal answers for the entity.
 CREATE OR REPLACE FUNCTION crove_finance.check_purchase_document_entry() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v_entity uuid;
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM (
-      SELECT e.legal_entity_id
-      FROM crove_finance.journal_entry e
-      WHERE e.org_id = NEW.org_id AND e.source_type = 'finance.purchase_document' AND e.source_id = NEW.id
-        AND e.reverses_entry_id IS NULL
-      OFFSET 0
-    ) s
-    WHERE s.legal_entity_id = NEW.legal_entity_id
-  ) THEN
+  SELECT e.legal_entity_id INTO v_entity
+  FROM crove_finance.journal_entry e
+  WHERE e.org_id = NEW.org_id AND e.source_type = 'finance.purchase_document' AND e.source_id = NEW.id
+    AND e.reverses_entry_id IS NULL;
+  IF NOT FOUND OR v_entity IS DISTINCT FROM NEW.legal_entity_id THEN
     RAISE EXCEPTION 'purchase document % must be posted as a journal entry in the same transaction', NEW.id
       USING ERRCODE = '23514';
   END IF;
