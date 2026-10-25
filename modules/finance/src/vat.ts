@@ -36,7 +36,7 @@ import {
   type SideTotals,
   type VatPeriod,
 } from './domain/vat-return.ts';
-import { defaultLegalEntityId, resolveLegalEntity } from './legal-entity.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { needsPaymentCheck, nonCashThreshold, paymentMethodKind, type PaymentMethodKind } from './domain/non-cash-payment.ts';
 import { HtkkAmountError, form01XmlValues } from './domain/vat-01gtgt-xml.ts';
 
@@ -545,9 +545,8 @@ const FILERS: readonly MemberRole[] = ['owner', 'admin'];
 // the [43] the form's formulas give; a period already marked filed keeps its figures. done false takes both marks
 // back (a withdrawn row, then kernel.tax_obligation.undo). The audit row holds the period, the choice and the source,
 // never the figures.
-// Each legal entity files its own return (#1280; legalEntityId as in zLegalEntityChoice). Until the tax calendar keeps
-// its marks per entity, only the default entity's return carries the calendar's done mark (the interim rule the
-// coordinator approved): another entity's return is recorded in vat_return_filed alone.
+// Each legal entity files its own return (#1280; legalEntityId as in zLegalEntityChoice), and the tax calendar keeps its
+// done mark per entity (#1496): the mark is the entity's own.
 export const vatReturnMark = defineCommand({
   name: 'finance.vat.return_mark',
   input: zVatReturnMark,
@@ -559,9 +558,8 @@ export const vatReturnMark = defineCommand({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const period = vatPeriod(input.period);
     const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
-    const calendar = legalEntityId === (await defaultLegalEntityId(ctx));
     const current = (await filedReturns(ctx, legalEntityId, [period.period])).get(period.period) ?? null;
-    const mark = { obligation: 'vat_return' as const, period: period.period };
+    const mark = { obligation: 'vat_return' as const, period: period.period, legalEntityId };
     if (!input.done) {
       if (input.figures) throw new DomainError('INVALID', 422, 'Bỏ đánh dấu đã nộp thì không kèm số liệu');
       if (current) {
@@ -570,8 +568,8 @@ export const vatReturnMark = defineCommand({
           .values({ org_id: ctx.orgId, legal_entity_id: legalEntityId, period: period.period, status: 'withdrawn', source: null, carried_in_amount: null, deductible_amount: null, carried_out_amount: null, marked_by: ctx.actor.userId })
           .execute();
       }
-      if (calendar) await ctx.run('kernel.tax_obligation.undo', mark);
-      ctx.audit({ period: period.period, done: false, withdrawn: current !== null, legal_entity_id: legalEntityId, calendar });
+      await ctx.run('kernel.tax_obligation.undo', mark);
+      ctx.audit({ period: period.period, done: false, withdrawn: current !== null, legal_entity_id: legalEntityId });
       return { period: period.period, done: false };
     }
     let figures: { carriedIn: string; deductible: string; carriedOut: string } | null = null;
@@ -612,8 +610,8 @@ export const vatReturnMark = defineCommand({
         })
         .execute();
     }
-    if (calendar) await ctx.run('kernel.tax_obligation.done', mark);
-    ctx.audit({ period: period.period, done: true, source: recorded ? source : (current?.source ?? source), recorded, legal_entity_id: legalEntityId, calendar });
+    await ctx.run('kernel.tax_obligation.done', mark);
+    ctx.audit({ period: period.period, done: true, source: recorded ? source : (current?.source ?? source), recorded, legal_entity_id: legalEntityId });
     return { period: period.period, done: true };
   },
 });

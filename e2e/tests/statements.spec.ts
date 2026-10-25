@@ -8,6 +8,7 @@ test('shows the draft B01 and B02 of a period and exports them', async ({ page }
   await page.goto('/');
   await signInNewUser(page, newEmail('statements'));
   const slug = await createOrg(page, 'Công ty Báo cáo tài chính');
+  await page.getByRole('navigation').getByRole('link', { name: 'Kế toán', exact: true }).click();
   await page.getByRole('navigation').getByRole('link', { name: 'Sổ sách' }).click();
   await page.getByRole('tab', { name: 'Báo cáo tài chính' }).click();
   await expect(page.getByText('Bản nháp: mã chỉ tiêu và cách lấy số liệu từ tài khoản chưa được kế toán kiểm tra', { exact: false })).toBeVisible();

@@ -430,7 +430,13 @@ export function createRpcHandler(
         inOrg(context, async (orgId, actor) => {
           const { done, ...mark } = input;
           if (finance && mark.obligation === 'vat_return' && /^\d{4}-(\d{2}|Q\d)$/.test(mark.period)) {
-            await runtime.execute('finance.vat.return_mark', { period: mark.period, done }, { actor, orgId });
+            // Each legal entity files its own return (#1280 part 2b): the entity named, else the one resolved for the
+            // caller, as on the VAT screen.
+            await runtime.execute(
+              'finance.vat.return_mark',
+              { period: mark.period, done, ...(mark.legalEntityId !== undefined ? { legalEntityId: mark.legalEntityId } : {}) },
+              { actor, orgId },
+            );
             return { ...mark, done };
           }
           return runtime.execute(done ? 'kernel.tax_obligation.done' : 'kernel.tax_obligation.undo', mark, { actor, orgId });

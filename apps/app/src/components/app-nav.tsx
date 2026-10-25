@@ -3,8 +3,9 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { NavIcon } from '@crove/ui/components/nav-icon';
+import { NavIcon, type NavIconName } from '@crove/ui/components/nav-icon';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
+import { ADMIN_ITEMS, isHeadedGroup, type AppId, type InstalledApp, type NavItem, type NavLabel } from '../lib/apps.ts';
 import { signOut } from '../lib/session-actions.ts';
 import { StatusLink } from './status-link.tsx';
 import { SupportLink } from './support-link.tsx';
@@ -12,84 +13,26 @@ import { EntitySwitcher } from './entity-switcher.tsx';
 import { ThemeSwitcher } from './theme-switcher.tsx';
 import { Logo } from './ui.tsx';
 
-// The org menu (issue #1245), in groups a bookkeeper reads top to bottom: what waits for them, the books, tax, the
-// parties, Social, then the org itself. Each item belongs to a module; the shell shows only the modules this deployment
-// runs (CROVE_MODULES, ADR-0031), and a group whose items are all missing is left out.
-export const NAV_GROUPS = [
-  {
-    id: 'work',
-    items: [
-      // What waits for the user in this org today (#1249).
-      { to: '/o/$slug/overview', label: 'overview', module: 'kernel' },
-      { to: '/o/$slug/inbox', label: 'inbox', module: 'kernel' },
-      // In-app notifications of the kernel and finance (#671), with the unread count.
-      { to: '/o/$slug/notifications', label: 'alerts', module: 'kernel' },
-      { to: '/o/$slug/tasks', label: 'tasks', module: 'kernel' },
-      // Bookings of the public booking page (#1320).
-      { to: '/o/$slug/bookings', label: 'bookings', module: 'crm' },
-    ],
-  },
-  {
-    id: 'accounting',
-    items: [
-      { to: '/o/$slug/documents', label: 'documents', module: 'finance' },
-      { to: '/o/$slug/journal', label: 'journal', module: 'finance' },
-      { to: '/o/$slug/vouchers', label: 'vouchers', module: 'finance' },
-      { to: '/o/$slug/bank', label: 'bank', module: 'finance' },
-      { to: '/o/$slug/fixed-assets', label: 'fixedAssets', module: 'finance' },
-      { to: '/o/$slug/ledger', label: 'ledger', module: 'finance' },
-    ],
-  },
-  {
-    id: 'tax',
-    items: [
-      { to: '/o/$slug/vat', label: 'vat', module: 'finance' },
-      { to: '/o/$slug/portal-invoices', label: 'portalList', module: 'finance' },
-    ],
-  },
-  {
-    id: 'parties',
-    items: [
-      { to: '/o/$slug/customers', label: 'customers', module: 'finance' },
-      { to: '/o/$slug/vendors', label: 'vendors', module: 'finance' },
-    ],
-  },
-  {
-    id: 'social',
-    items: [
-      { to: '/o/$slug/social', label: 'social', module: 'social' },
-      { to: '/o/$slug/social/notifications', label: 'notifications', module: 'social' },
-    ],
-  },
-  {
-    id: 'admin',
-    items: [
-      { to: '/o/$slug/agents', label: 'agents', module: 'kernel' },
-      { to: '/o/$slug/settings', label: 'settings', module: 'kernel' },
-    ],
-  },
-] as const;
-
-export type NavItem = (typeof NAV_GROUPS)[number]['items'][number];
-export type NavLabel = NavItem['label'];
-export type NavGroupId = (typeof NAV_GROUPS)[number]['id'];
-export const ALL_NAV: readonly NavItem[] = NAV_GROUPS.flatMap((g): readonly NavItem[] => g.items);
-
-// Shorter or clearer names inside the menu: the work notifications fit the sidebar's width next to their count, and
-// Social's say what they are about, since the Social group has no heading (its first item names it). Neither may
-// contain another item's name: a link is found by its name (e2e), and a name inside another matches both.
-const IN_MENU_LABEL: Partial<Record<NavLabel, 'alertsShort' | 'socialNotifications'>> = {
+// Shorter or clearer names inside the menu: the work notifications fit the column next to their count, and Social's
+// items say what they hold, since the app itself is named "Mạng xã hội" in the switcher. None may contain another
+// item's name: a link is found by its name (e2e), and a name inside another matches both.
+const IN_MENU_LABEL: Partial<Record<NavLabel, 'alertsShort' | 'socialNotifications' | 'socialPosts'>> = {
   alerts: 'alertsShort',
   notifications: 'socialNotifications',
+  social: 'socialPosts',
 };
-// Groups that need no heading: the top of the menu (what waits for the user), and Social, whose first item already
-// reads "Mạng xã hội".
-const NO_HEADING: ReadonlySet<NavGroupId> = new Set(['work', 'social']);
+
+const APP_ICON: Record<AppId, NavIconName> = { home: 'appHome', accounting: 'appAccounting', social: 'appSocial', crm: 'appCrm' };
 
 export interface ShellNavProps {
   slug: string;
-  groups: readonly { id: NavGroupId; items: readonly NavItem[] }[];
-  // The count shown on an item (pending proposals on the inbox, unread notifications).
+  // The installed apps (#1528) and the one whose menu shows: the app of the screen, or the last one used on the org's
+  // own screens (Settings, the chart).
+  apps: readonly InstalledApp[];
+  app: AppId;
+  // Whether the screen belongs to an app; on the org's own screens no app is marked current.
+  inApp: boolean;
+  // The count shown on an item (pending proposals on the inbox, unread notifications); an app with a count gets a dot.
   badges: Partial<Record<NavLabel, string | number | null | undefined>>;
   orgs: readonly { orgId: string; slug: string; name: string }[];
   email: string | undefined;
@@ -99,97 +42,148 @@ export interface ShellNavProps {
   onNavigate?: () => void;
 }
 
-// What the sidebar and the phone drawer both hold: the org switch, the palette button, the grouped menu and the
-// account menu. Every control is at least 44px tall in the phone drawer (below md) and 24px in the sidebar.
-export function ShellNav({ slug, groups, badges, orgs, email, onOpenPalette, paletteKeys, onNavigate }: ShellNavProps) {
+// What the sidebar and the phone drawer both hold (#1245, #1528): the app switcher down the left edge, with the org's
+// own screens at its foot; beside it the org switch, the palette button, the current app's menu and the account menu.
+// Every control is at least 44px tall in the phone drawer (below md) and 24px in the sidebar.
+export function ShellNav({ slug, apps, app, inApp, badges, orgs, email, onOpenPalette, paletteKeys, onNavigate }: ShellNavProps) {
   const t = useTranslations('nav');
   const tp = useTranslations('palette');
   const navigate = useNavigate();
   const orgSelectId = useId();
+  const current = apps.find((a) => a.id === app) ?? apps[0];
+  const hasBadge = (items: readonly NavItem[]) => items.some((item) => Boolean(badges[item.label]));
   return (
-    <>
-      <div className="px-2">
-        {orgs.length > 1 && (
-          <Link to="/clients" onClick={onNavigate} className="mb-3 flex min-h-11 items-center text-sm text-link hover:underline md:min-h-6">
-            {t('allClients')}
-          </Link>
-        )}
-        <Label htmlFor={orgSelectId} className="text-xs font-normal text-subtle-foreground">
-          {t('org')}
-        </Label>
-        <NativeSelect
-          id={orgSelectId}
-          className="mt-1 w-full"
-          value={slug}
-          onChange={(e) => {
-            onNavigate?.();
-            void navigate({ to: '/o/$slug/inbox', params: { slug: e.target.value } });
-          }}
-        >
-          {orgs.map((o) => (
-            <NativeSelectOption key={o.orgId} value={o.slug}>
-              {o.name}
-            </NativeSelectOption>
+    // One landmark for the whole menu, the switcher included, so "the menu" is one place for a screen reader.
+    <nav aria-label={t('menu')} className="flex min-h-0 min-w-0 flex-1">
+      <div className="flex w-16 shrink-0 flex-col border-r py-3 md:py-4">
+        <ul aria-label={t('appsLabel')} className="flex flex-col items-center gap-1">
+          {apps.map((a) => {
+            const selected = inApp && a.id === current?.id;
+            return (
+              <li key={a.id}>
+                <Link
+                  to={a.home}
+                  params={{ slug }}
+                  // Switching apps keeps the phone drawer open, so the new app's menu is there to pick from.
+                  aria-current={selected ? 'true' : undefined}
+                  className={`relative flex min-h-14 w-14 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-center text-[11px] leading-tight hover:bg-sidebar-accent hover:text-foreground ${selected ? 'bg-primary/15 text-foreground' : 'text-muted-foreground'}`}
+                >
+                  <NavIcon name={APP_ICON[a.id]} className="size-5" />
+                  <span>{t(`apps.${a.id}`)}</span>
+                  {hasBadge(a.groups.flatMap((g) => g.items)) && <span className="absolute top-1.5 right-2.5 size-2 rounded-full bg-primary" aria-hidden="true" />}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+        <ul className="mt-auto flex flex-col items-center gap-1 pt-3">
+          {ADMIN_ITEMS.map((item) => (
+            <li key={item.to}>
+              <Link
+                to={item.to}
+                params={{ slug }}
+                onClick={onNavigate}
+                className="flex min-h-14 w-14 flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-center text-[11px] leading-tight text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+                activeProps={{ className: 'bg-primary/15 !text-foreground' }}
+              >
+                <NavIcon name={item.label} className="size-5" />
+                <span>{t(item.label)}</span>
+              </Link>
+            </li>
           ))}
-        </NativeSelect>
-        {/* The legal entity of the finance books (#1486), when the caller sees more than one. */}
-        <EntitySwitcher slug={slug} />
-        {/* A firm adds its next client company from here (issue #324). */}
-        <Link to="/onboarding" onClick={onNavigate} className="mt-1 inline-flex min-h-11 items-center text-xs text-link md:min-h-6">
-          {t('addOrg')}
-        </Link>
+        </ul>
       </div>
-      <button
-        type="button"
-        onClick={onOpenPalette}
-        className="mt-4 flex min-h-11 items-center justify-between gap-1.5 rounded-lg border bg-background px-2.5 py-1.5 text-left text-sm text-subtle-foreground hover:text-foreground md:min-h-0"
-      >
-        <span className="min-w-0 truncate">{tp('open')}</span>
-        <kbd className="shrink-0 rounded-sm border px-1 font-mono text-[11px] whitespace-nowrap">{paletteKeys}</kbd>
-      </button>
-      {/* The menu scrolls on a short window, so the account menu below it always stays on screen. */}
-      <nav aria-label={t('menu')} className="mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto">
-        {groups.map((group, index) => {
-          const labelId = `${orgSelectId}-${group.id}`;
-          return (
-            // A group without a visible heading still has a name for screen readers.
-            <section
-              key={group.id}
-              className={index === 0 ? '' : 'mt-3'}
-              {...(NO_HEADING.has(group.id) ? { 'aria-label': t(`groups.${group.id}`) } : { 'aria-labelledby': labelId })}
-            >
-              {!NO_HEADING.has(group.id) && (
-                // A label, not a heading: the page's own heading stays the only one with a screen's name ("Khách hàng").
-                <p id={labelId} className="px-3 pb-1 text-xs font-medium text-subtle-foreground">
-                  {t(`groups.${group.id}`)}
-                </p>
-              )}
-              <ul className="flex flex-col gap-0.5">
-                {group.items.map((item) => {
-                  const badge = badges[item.label];
-                  return (
-                    <li key={item.to}>
-                      <Link
-                        to={item.to}
-                        params={{ slug }}
-                        onClick={onNavigate}
-                        className="flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground md:min-h-0"
-                        activeProps={{ className: 'bg-primary/15 !text-foreground' }}
-                      >
-                        <NavIcon name={item.label} />
-                        <span className="min-w-0 flex-1 truncate">{t(IN_MENU_LABEL[item.label] ?? item.label)}</span>
-                        {badge ? <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground tabular-nums">{badge}</span> : null}
-                      </Link>
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          );
-        })}
-      </nav>
-      <AccountMenu email={email} />
-    </>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col px-3 py-0 md:py-4">
+        <div className="mb-4 hidden px-2 md:block">
+          <Logo />
+        </div>
+        <div className="px-2">
+          {orgs.length > 1 && (
+            <Link to="/clients" onClick={onNavigate} className="mb-2 flex min-h-11 items-center text-sm text-link hover:underline md:min-h-6">
+              {t('allClients')}
+            </Link>
+          )}
+          <Label htmlFor={orgSelectId} className="sr-only">
+            {t('org')}
+          </Label>
+          <NativeSelect
+            id={orgSelectId}
+            className="w-full"
+            value={slug}
+            onChange={(e) => {
+              onNavigate?.();
+              void navigate({ to: '/o/$slug/inbox', params: { slug: e.target.value } });
+            }}
+          >
+            {orgs.map((o) => (
+              <NativeSelectOption key={o.orgId} value={o.slug}>
+                {o.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          {/* The legal entity of the finance books (#1486), when the caller sees more than one. */}
+          <EntitySwitcher slug={slug} />
+          {/* A firm adds its next client company from here (issue #324). */}
+          <Link to="/onboarding" onClick={onNavigate} className="mt-1 inline-flex min-h-11 items-center text-xs text-link md:min-h-6">
+            {t('addOrg')}
+          </Link>
+        </div>
+        <button
+          type="button"
+          onClick={onOpenPalette}
+          className="mt-2 flex min-h-11 items-center justify-between gap-1.5 rounded-lg border bg-background px-2.5 py-1.5 text-left text-sm text-subtle-foreground hover:text-foreground md:min-h-0"
+        >
+          <span className="min-w-0 truncate">{tp('open')}</span>
+          <kbd className="shrink-0 rounded-sm border px-1 font-mono text-[11px] whitespace-nowrap">{paletteKeys}</kbd>
+        </button>
+        {/* The menu scrolls only on a very short window, so the account menu below it always stays on screen. */}
+        <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto">
+          {current && (
+            <p className="px-3 pb-1.5 text-sm font-semibold text-foreground">{t(`appNames.${current.id}`)}</p>
+          )}
+          {current?.groups.map((group, index) => {
+            const labelId = `${orgSelectId}-${group.id}`;
+            // The app's first group needs no heading: the app's name above it says what it holds.
+            const heading = index > 0 && isHeadedGroup(group.id) ? group.id : null;
+            return (
+              <section
+                key={group.id}
+                className={index === 0 ? '' : 'mt-3'}
+                {...(heading ? { 'aria-labelledby': labelId } : { 'aria-label': t(`appNames.${current.id}`) })}
+              >
+                {heading && (
+                  // A label, not a heading: the page's own heading stays the only one with a screen's name ("Khách hàng").
+                  <p id={labelId} className="px-3 pb-1 text-xs font-medium text-subtle-foreground">
+                    {t(`groups.${heading}`)}
+                  </p>
+                )}
+                <ul className="flex flex-col gap-0.5">
+                  {group.items.map((item) => {
+                    const badge = badges[item.label];
+                    return (
+                      <li key={item.to}>
+                        <Link
+                          to={item.to}
+                          params={{ slug }}
+                          onClick={onNavigate}
+                          className="flex min-h-11 items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-foreground md:min-h-0 md:py-1"
+                          activeProps={{ className: 'bg-primary/15 !text-foreground' }}
+                        >
+                          <NavIcon name={item.label} />
+                          <span className="min-w-0 flex-1 truncate">{t(IN_MENU_LABEL[item.label] ?? item.label)}</span>
+                          {badge ? <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground tabular-nums">{badge}</span> : null}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
+        <AccountMenu email={email} />
+      </div>
+    </nav>
   );
 }
 
@@ -247,7 +241,7 @@ export function NavDrawer({ open, onOpenChange, children }: { open: boolean; onO
       onClick={(e) => {
         if (e.target === e.currentTarget) onOpenChange(false);
       }}
-      className="m-0 h-dvh max-h-none w-[min(18rem,85vw)] max-w-none overflow-hidden bg-sidebar p-0 text-foreground backdrop:bg-foreground/30"
+      className="m-0 h-dvh max-h-none w-[min(20rem,90vw)] max-w-none overflow-hidden bg-sidebar p-0 text-foreground backdrop:bg-foreground/30"
     >
       <div className="flex h-full flex-col px-3 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
         <div className="mb-4 flex items-center justify-between px-2">

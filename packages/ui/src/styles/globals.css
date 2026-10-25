@@ -117,6 +117,7 @@
   --sidebar-accent-foreground: oklch(0.141 0.004 285.8);
   --sidebar-border: oklch(0.915 0.007 290);
   --sidebar-ring: oklch(0.55 0.2 290);
+  --scrollbar: oklch(0.72 0.012 290);
   --proposal: oklch(0.5 0.13 245);
   --image-surface: oklch(1 0 0);
   --label-red: oklch(0.52 0.19 25);
@@ -167,6 +168,7 @@
   --sidebar-accent-foreground: oklch(1 0 0);
   --sidebar-border: oklch(0.285 0.012 285);
   --sidebar-ring: oklch(0.75 0.13 293);
+  --scrollbar: oklch(0.46 0.015 285);
   --proposal: oklch(0.78 0.11 245);
   --image-surface: oklch(1 0 0);
   --label-red: oklch(0.74 0.15 25);
@@ -189,5 +191,33 @@
   }
   html {
     @apply font-sans;
+  }
+  /* Every scroll area (page, sidebar, overlays, wide tables) gets a thin scrollbar in the theme's colors, without the
+     platform's light track and arrow buttons. Chromium and Safari take the webkit rules (Chromium ignores them once
+     scrollbar-color is set, and would keep its arrow buttons); Firefox takes the standard properties. */
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar) transparent;
+    }
+  }
+  @supports selector(::-webkit-scrollbar) {
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track,
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--scrollbar);
+      border: 2px solid transparent;
+      border-radius: 9999px;
+      background-clip: padding-box;
+    }
+    ::-webkit-scrollbar-button {
+      display: none;
+    }
   }
 }
