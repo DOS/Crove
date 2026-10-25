@@ -16,7 +16,7 @@ import { Runtime } from '@crove/kernel-runtime';
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 const MIGRATION = readFileSync(new URL('../../../supabase/migrations/20261030001000_crove_kernel_legal_entity.sql', import.meta.url), 'utf8');
-const SYNC_MIGRATION = readFileSync(new URL('../../../supabase/migrations/20261101010000_crove_kernel_default_entity_tax_sync.sql', import.meta.url), 'utf8');
+const SYNC_MIGRATION = readFileSync(new URL('../../../supabase/migrations/20261101050000_crove_kernel_default_entity_tax_sync.sql', import.meta.url), 'utf8');
 const suite = ADMIN ? describe : describe.skip;
 
 suite('legal entities on PostgreSQL (#1278)', () => {
