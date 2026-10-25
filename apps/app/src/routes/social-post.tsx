@@ -14,6 +14,7 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
 import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, TIKTOK_NO_POST_ID, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, TIKTOK_PRIVACY_LEVELS, tiktokCreatorOf, type TikTokInteraction, type TikTokPrivacyLevel, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature, editRefusal } from '@crove/mod-social/contract';
+import { LINK_CARD_DESCRIPTION_MAX, LINK_CARD_PROVIDERS, LINK_CARD_THUMB_MAX_BYTES, LINK_CARD_TITLE_MAX, linkCardOf, linkCardSize, type Provider } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { DateInput } from '../components/date-input.tsx';
 import { DateTimeInput } from '../components/date-time-input.tsx';
@@ -21,7 +22,7 @@ import { TimeInput } from '../components/time-input.tsx';
 import { CoverImageField, MediaField, type MediaItem } from '../components/social-media.tsx';
 import { AiPhotoPicker, aiDraftInput, useAiPhotos } from '../components/social-ai-photos.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
-import { PlatformPreview } from '../components/social-preview.tsx';
+import { PlatformPreview, useLinkPreview } from '../components/social-preview.tsx';
 import { SnippetPicker } from '../components/social-snippets.tsx';
 import { ReviewLinks } from '../components/social-review-links.tsx';
 import { archiveBlock, mayArchive } from '../lib/social-archive.ts';
@@ -1625,8 +1626,9 @@ function IssueList({ issues }: { issues: Issue[] }) {
   );
 }
 
-function Counter({ provider, body, linkUrl, mediaCount }: { provider: string; body: string; linkUrl: string; mediaCount: number }) {
-  const { used, max } = textBudget(provider, body, { linkUrl, mediaCount });
+// settings: the channel's, whose link card (#1498) keeps the link out of the text.
+function Counter({ provider, body, linkUrl, mediaCount, settings }: { provider: string; body: string; linkUrl: string; mediaCount: number; settings?: Record<string, unknown> }) {
+  const { used, max } = textBudget(provider, body, { linkUrl, mediaCount, ...(settings ? { settings } : {}) });
   if (max === null) return null;
   const over = used > max;
   return <span className={cn('font-mono text-xs tabular-nums', over ? 'text-destructive' : used > max * 0.9 ? 'text-warning' : 'text-subtle-foreground')}>{used}/{max}</span>;
@@ -2066,6 +2068,116 @@ function DocumentTitleField({ id, settings, placeholder, disabled, onChange }: {
   );
 }
 
+// The card a LinkedIn or Bluesky link post goes out with (#1498): these platforms build no preview from a link, so the
+// member adds one, prefilled from the page's own title and description (#641) and edited here, with an image of the
+// library or an upload (never the page's image). With a card the link is not added to the text. Shown while the post
+// has a link, or while a card is set (so it can be cleared).
+function LinkCardField({ id, provider, linkUrl, settings, disabled, onChange }: { id: string; provider: Provider; linkUrl: string; settings: Record<string, unknown>; disabled: boolean; onChange: (settings: Record<string, unknown>) => void }) {
+  const t = useTranslations('social');
+  const raw = settings.linkCard !== null && typeof settings.linkCard === 'object' && !Array.isArray(settings.linkCard) ? (settings.linkCard as Record<string, unknown>) : null;
+  const page = useLinkPreview(linkUrl, Boolean(linkUrl));
+  // An image over the channel's size, refused before it is set.
+  const [tooLarge, setTooLarge] = useState(false);
+  const host = (() => {
+    try {
+      return linkUrl ? new URL(linkUrl).host : '';
+    } catch {
+      return '';
+    }
+  })();
+  const set = (next: Record<string, unknown> | null) => {
+    const { linkCard: _old, ...rest } = settings;
+    onChange(next ? { ...rest, linkCard: next } : rest);
+  };
+  // Cut in code points of the NFC form, as the limits count, never inside a surrogate pair.
+  const cut = (text: string, max: number) => [...text.normalize('NFC')].slice(0, max).join('');
+  const fromPage = () => ({ title: cut(page?.title?.trim() || host, LINK_CARD_TITLE_MAX), ...(page?.description?.trim() ? { description: cut(page.description.trim(), LINK_CARD_DESCRIPTION_MAX) } : {}) });
+  const maxThumb = LINK_CARD_THUMB_MAX_BYTES[provider];
+  if (!raw) {
+    if (!linkUrl) return null;
+    return (
+      <div className="space-y-1">
+        <Button variant="outline" size="sm" disabled={disabled} onClick={() => set(fromPage())}>
+          {t('linkCardAdd')}
+        </Button>
+        <p className="text-xs text-subtle-foreground">{t('linkCardHint')}</p>
+      </div>
+    );
+  }
+  const title = typeof raw.title === 'string' ? raw.title : '';
+  const description = typeof raw.description === 'string' ? raw.description : '';
+  const thumb = typeof raw.thumbFileId === 'string' && raw.thumbFileId ? raw.thumbFileId : null;
+  const titleSize = linkCardSize(title.trim());
+  const descriptionSize = linkCardSize(description.trim());
+  const titleInvalid = titleSize < 1 || titleSize > LINK_CARD_TITLE_MAX;
+  const edit = (patch: { title?: string; description?: string; thumbFileId?: string | null }) => {
+    const next: Record<string, unknown> = { ...raw, ...patch };
+    if (next.description === '') delete next.description;
+    if (next.thumbFileId === null) delete next.thumbFileId;
+    set(next);
+  };
+  return (
+    <div className="space-y-2 rounded-lg border p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Label className="text-xs">{t('linkCard')}</Label>
+        <div className="flex gap-1">
+          {page && (
+            <Button variant="ghost" size="sm" disabled={disabled} onClick={() => edit(fromPage())}>
+              {t('linkCardFromPage')}
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" disabled={disabled} onClick={() => set(null)}>
+            {t('linkCardRemove')}
+          </Button>
+        </div>
+      </div>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor={`${id}-title`} className="text-xs">
+            {t('linkCardTitle')}
+          </Label>
+          <span className="text-xs text-subtle-foreground tabular-nums">
+            {titleSize}/{LINK_CARD_TITLE_MAX}
+          </span>
+        </div>
+        <Input id={`${id}-title`} value={title} disabled={disabled} aria-invalid={titleInvalid || undefined} onChange={(e) => edit({ title: e.target.value })} />
+      </div>
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor={`${id}-description`} className="text-xs">
+            {t('linkCardDescription')}
+          </Label>
+          <span className={cn('text-xs tabular-nums', descriptionSize > LINK_CARD_DESCRIPTION_MAX ? 'text-destructive' : 'text-subtle-foreground')}>
+            {descriptionSize}/{LINK_CARD_DESCRIPTION_MAX}
+          </span>
+        </div>
+        <Textarea id={`${id}-description`} rows={2} value={description} disabled={disabled} aria-invalid={descriptionSize > LINK_CARD_DESCRIPTION_MAX || undefined} onChange={(e) => edit({ description: e.target.value })} />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">{t('linkCardImage')}</Label>
+        <CoverImageField
+          fileId={thumb}
+          disabled={disabled}
+          alt={t('linkCardImageAlt')}
+          uploadLabel={t('linkCardImageUpload')}
+          onChange={(fileId, sizeBytes) => {
+            const over = fileId !== null && maxThumb !== undefined && sizeBytes !== undefined && sizeBytes > maxThumb;
+            setTooLarge(over);
+            if (!over) edit({ thumbFileId: fileId });
+          }}
+        />
+        {thumb && (
+          <Button variant="ghost" size="sm" disabled={disabled} onClick={() => edit({ thumbFileId: null })}>
+            {t('linkCardImageRemove')}
+          </Button>
+        )}
+        {tooLarge && maxThumb !== undefined && <p className="text-xs text-destructive">{t('linkCardImageTooLarge', { max: Math.floor(maxThumb / 1_000_000) })}</p>}
+      </div>
+      <p className="text-xs text-subtle-foreground">{t('linkCardHint')}</p>
+    </div>
+  );
+}
+
 function ChannelEditor({
   provider,
   channel,
@@ -2138,6 +2250,8 @@ function ChannelEditor({
     (own.settings.visibility === 'connections' || own.settings.visibility === 'loggedIn') && (linkedinVisibilities(provider) as readonly string[] | null)?.includes(own.settings.visibility) ? (own.settings.visibility as 'connections' | 'loggedIn') : null;
   const tag = topicTagOf(own.settings);
   const telegramButtons = provider === 'telegram' ? telegramButtonsOf(own.settings) : null;
+  // A LinkedIn or Bluesky link card (#1498).
+  const linkCard = isProvider(provider) && LINK_CARD_PROVIDERS.has(provider) ? linkCardOf(own.settings) : null;
   const content = {
     body,
     title: own.custom ? own.title : base.title,
@@ -2159,6 +2273,7 @@ function ChannelEditor({
     ...(quotesOff ? { quotesOff } : {}),
     ...(linkedinVisibility ? { visibility: linkedinVisibility } : {}),
     ...(Array.isArray(telegramButtons) ? { buttons: telegramButtons } : {}),
+    ...(linkCard !== null && linkCard !== 'invalid' ? { linkCard } : {}),
   };
   // The PDF the channel posts as a LinkedIn document (#1119), if any, and the title it goes out with: the one set, else
   // the post's title, else the file's name. The preview's card shows that title.
@@ -2185,7 +2300,7 @@ function ChannelEditor({
           <span className="truncate text-sm font-medium text-foreground">{channel}</span>
           {status && <Badge variant={variantTone({ status, error: statusError ?? null })}>{t(`status.${variantStatusKey({ status, error: statusError ?? null })}`)}</Badge>}
         </div>
-        <Counter provider={provider} body={content.body} linkUrl={content.linkUrl} mediaCount={content.media.length} />
+        <Counter provider={provider} body={content.body} linkUrl={content.linkUrl} mediaCount={content.media.length} settings={own.settings} />
       </div>
       <PostTypeField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       <PollAndTagField provider={provider} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
@@ -2235,6 +2350,9 @@ function ChannelEditor({
           disabled={disabled}
           onChange={(settings) => onChange({ ...own, settings })}
         />
+      )}
+      {isProvider(provider) && LINK_CARD_PROVIDERS.has(provider) && (linkUrl !== '' || own.settings.linkCard !== undefined) && (
+        <LinkCardField key={connectionId ?? provider} id={`social-link-card-${connectionId ?? provider}`} provider={provider} linkUrl={linkUrl} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
       )}
       {isProvider(provider) && REPOST_PROVIDERS.has(provider) && postType !== 'story' && <RepostField settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />}
       {/* A channel Crove cannot take a post down from shows the field only to clear a time set elsewhere (its issue says why). */}

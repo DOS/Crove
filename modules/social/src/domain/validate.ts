@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_REQUIRED, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, TIKTOK_PRIVACY_LEVELS, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, pinterestSectionOf, IG_HASHTAGS_MAX, IG_MENTIONS_MAX, captionHashtags, captionMentions } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_REQUIRED, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, TIKTOK_PRIVACY_LEVELS, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, LINK_CARD_DESCRIPTION_MAX, LINK_CARD_PROVIDERS, LINK_CARD_TITLE_MAX, linkCardOf, linkCardSize,pinterestSectionOf, IG_HASHTAGS_MAX, IG_MENTIONS_MAX, captionHashtags, captionMentions } from './channels.ts';
 import { SIGNATURE_MAX, signatureOf, withSignature, withoutSignature } from './signature.ts';
 import { sentLink } from './utm.ts';
 
@@ -77,6 +77,15 @@ export type IssueCode =
   | 'LINKEDIN_NOT_SUPPORTED'
   | 'DOCUMENT_TITLE_INVALID'
   | 'DOCUMENT_TITLE_NEEDS_DOCUMENT'
+  // A link card (#1498), settings.linkCard: on a channel that builds its own preview; not { title, description?,
+  // thumbFileId? } (field settings.linkCard), a title empty or over LINK_CARD_TITLE_MAX characters (field .title) or a
+  // description over LINK_CARD_DESCRIPTION_MAX (field .description), with limit and actual; a card with images, video
+  // or a document (images win), or with a poll; a card on a post with no link.
+  | 'LINK_CARD_NOT_SUPPORTED'
+  | 'LINK_CARD_INVALID'
+  | 'LINK_CARD_WITH_MEDIA'
+  | 'LINK_CARD_WITH_POLL'
+  | 'LINK_CARD_NEEDS_LINK'
   // TikTok: the person posting picks who sees the video; there is no default. Not in inbox mode (#903), where the
   // creator picks it in TikTok.
   | 'PRIVACY_REQUIRED'
@@ -315,7 +324,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
   const supported = postType !== null && (postType === 'feed' || Boolean(POST_TYPE_RULES[variant.provider]?.includes(postType)));
   const story = supported && postType === 'story';
   const reel = supported && postType === 'reel';
-  const sent = story ? '' : sentText(variant.provider, body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, body), variant.media.length);
+  const sent = story ? '' : sentText(variant.provider, body, sentLink(variant.provider, variant.linkUrl ?? null, variant.settings, body), variant.media.length, variant.settings);
   if (!story) checkText(issues, 'body', sent, caps.body);
   if (variant.provider === 'instagram' && !story) {
     const hashtags = captionHashtags(sent);
@@ -454,6 +463,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     issues.push({ code: 'VISIBILITY_INVALID', field: 'settings.visibility', limit: null, actual: null });
   }
   checkDocumentTitle(issues, variant);
+  checkLinkCard(issues, variant);
   if (variant.provider === 'instagram') checkInstagramPeople(issues, variant);
   // Instagram Reels (#1019): in the feed too unless chosen.
   const reelOptions = instagramReelOf(variant.settings);
@@ -523,6 +533,27 @@ function checkDocumentTitle(issues: Issue[], variant: VariantDraft): void {
     return void issues.push({ code: 'DOCUMENT_TITLE_INVALID', field: 'settings.linkedin.documentTitle', limit: DOCUMENT_TITLE_MAX, actual: typeof raw === 'string' ? raw.trim().normalize('NFC').length : null });
   }
   if (!variant.media.some((m) => m.kind === 'document')) issues.push({ code: 'DOCUMENT_TITLE_NEEDS_DOCUMENT', field: 'settings.linkedin.documentTitle', limit: null, actual: null });
+}
+
+// A link card (#1498). Absent, the adapter appends the link to the text as before. Its image's file, type and size are
+// checked by the commands that write it (linkCardProblem), which read the file.
+function checkLinkCard(issues: Issue[], variant: VariantDraft): void {
+  const raw = variant.settings?.linkCard;
+  if (raw === undefined || raw === null) return;
+  const field = 'settings.linkCard';
+  if (!LINK_CARD_PROVIDERS.has(variant.provider)) return void issues.push({ code: 'LINK_CARD_NOT_SUPPORTED', field, limit: null, actual: null });
+  if (linkCardOf(variant.settings) === 'invalid') {
+    // The field that breaks a limit, when the shape is right.
+    const r = typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+    const title = typeof r.title === 'string' ? linkCardSize(r.title.trim()) : null;
+    const description = typeof r.description === 'string' ? linkCardSize(r.description.trim()) : null;
+    if (title !== null && (title < 1 || title > LINK_CARD_TITLE_MAX)) return void issues.push({ code: 'LINK_CARD_INVALID', field: `${field}.title`, limit: LINK_CARD_TITLE_MAX, actual: title });
+    if (description !== null && description > LINK_CARD_DESCRIPTION_MAX) return void issues.push({ code: 'LINK_CARD_INVALID', field: `${field}.description`, limit: LINK_CARD_DESCRIPTION_MAX, actual: description });
+    return void issues.push({ code: 'LINK_CARD_INVALID', field, limit: null, actual: null });
+  }
+  if (variant.media.length > 0) issues.push({ code: 'LINK_CARD_WITH_MEDIA', field, limit: null, actual: variant.media.length });
+  if (variant.settings?.poll !== undefined && variant.settings.poll !== null) issues.push({ code: 'LINK_CARD_WITH_POLL', field, limit: null, actual: null });
+  if (!variant.linkUrl?.trim()) issues.push({ code: 'LINK_CARD_NEEDS_LINK', field, limit: null, actual: null });
 }
 
 const DISCORD_FORUM_TITLE: TextRule = { max: null, count: 'utf16', required: false };

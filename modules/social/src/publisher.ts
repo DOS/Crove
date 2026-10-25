@@ -10,7 +10,7 @@
 // - record failing: the job throws, pg-boss retries it, and the retry's begin finds the variant in flight.
 import { withCallSignal, type Publisher, type PublishResult, type ReconcileResult } from '@crove/channel';
 import { DomainError, readVerified, type BlobStore, type CredentialBroker, type Runtime, type SystemActor } from '@crove/kernel-runtime';
-import { COVER_RULES, DOCUMENT_PROVIDERS, THREAD_PARTS_MAX, VIDEO_READY, YOUTUBE_PLAYLISTS_MAX, coverKind, coverOf, isProvider, mediaKindOf, scopeNeeded, type Provider } from './domain/channels.ts';
+import { COVER_RULES, DOCUMENT_PROVIDERS, THREAD_PARTS_MAX, VIDEO_READY, YOUTUBE_PLAYLISTS_MAX, coverKind, coverOf, isProvider, linkCardThumbOf, mediaKindOf, scopeNeeded, type Provider } from './domain/channels.ts';
 import { PUBLISH_STALE_SECONDS, type BeginResult, type PublishRecord, type PublishWork } from './publishing.ts';
 import type { CommentWork } from './comments.ts';
 import type { PinWork } from './pin.ts';
@@ -118,12 +118,13 @@ async function openCredential(deps: PublishDeps, orgId: string, connectionId: st
   }
 }
 
-// The stored file of one of the variant's own images or its video's cover image (#642), of this org; any other file
-// throws.
+// The stored file of one of the variant's own images, its video's cover image (#642) or its link card's image (#1498),
+// of this org; any other file throws.
 function mediaFileOf(deps: PublishDeps, orgId: string, work: Pick<PublishWork, 'content' | 'settings'>) {
   const cover = coverOf(work.settings);
+  const thumb = linkCardThumbOf(work.settings);
   return async (fileId: string) => {
-    if (!work.content.media.some((m) => m.fileId === fileId) && !(cover && 'fileId' in cover && cover.fileId === fileId)) throw new Error('not an image of this variant');
+    if (!work.content.media.some((m) => m.fileId === fileId) && !(cover && 'fileId' in cover && cover.fileId === fileId) && thumb !== fileId) throw new Error('not an image of this variant');
     return deps.runtime.query<{ storageKey: string; generation: string | null; sha256: string; contentType: string; filename: string }>('social.media.file', { fileId }, { actor: ACTOR, orgId });
   };
 }

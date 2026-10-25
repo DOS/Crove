@@ -1,8 +1,8 @@
-// The cover check a channel's settings edit runs (social.post.create, social.variant.update), shared with
-// social.post.bulk_replace, which leaves a post out instead of refusing the whole command.
+// The cover and link card checks a channel's settings edit runs (social.post.create, social.variant.update), shared
+// with social.post.bulk_replace, which leaves a post out instead of refusing the whole command.
 import { zId } from '@crove/kernel-contract';
 import { DomainError, type CommandContext } from '@crove/kernel-runtime';
-import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_TYPES, coverOf, isProvider } from './domain/channels.ts';
+import { COVER_IMAGE_MAX_BYTES, COVER_IMAGE_TYPES, LINK_CARD_DESCRIPTION_MAX, LINK_CARD_THUMB_MAX_BYTES, LINK_CARD_THUMB_TYPES, LINK_CARD_TITLE_MAX, coverOf, isProvider, linkCardOf } from './domain/channels.ts';
 
 // What checkCover would refuse, without throwing: social.post.bulk_replace leaves such a post out before it edits
 // anything (#1144), since a channel's settings edit checks its cover again.
@@ -24,4 +24,33 @@ export async function coverProblem(ctx: Pick<CommandContext, 'trx' | 'orgId'>, p
     return new DomainError('COVER_TOO_LARGE', 422, `Ảnh bìa cho kênh này tối đa ${Math.floor(max / 1_048_576)} MB`, { limit: max, actual: Number(file.size_bytes) });
   }
   return null;
+}
+
+// The same for a link card (#1498): its shape and limits, and its image, an image of the org uploaded for Social, JPEG
+// or PNG, within the channel's size (Bluesky's 1,000,000 bytes). Which channels take a card, and whether the variant
+// has a link and no media, are channel rules (validateVariant), checked when it goes to review.
+export async function linkCardProblem(ctx: Pick<CommandContext, 'trx' | 'orgId'>, provider: string, settings: Record<string, unknown> | undefined): Promise<DomainError | null> {
+  if (settings?.linkCard === undefined) return null;
+  const card = linkCardOf(settings);
+  if (card === 'invalid') {
+    return new DomainError('LINK_CARD_INVALID', 422, `Thẻ liên kết cần tiêu đề từ 1 đến ${LINK_CARD_TITLE_MAX} ký tự và mô tả tối đa ${LINK_CARD_DESCRIPTION_MAX} ký tự`);
+  }
+  if (!card?.thumbFileId) return null;
+  // Stored in lower case, as a cover's id is; a new card object, so the caller's nested value is never changed in place.
+  settings.linkCard = { ...(settings.linkCard as Record<string, unknown>), thumbFileId: card.thumbFileId };
+  const file = zId.safeParse(card.thumbFileId).success
+    ? await ctx.trx.selectFrom('crove_kernel.file').select(['source', 'content_type', 'size_bytes']).where('org_id', '=', ctx.orgId).where('id', '=', card.thumbFileId).executeTakeFirst()
+    : undefined;
+  if (!file || file.source !== 'social') return new DomainError('MEDIA_NOT_FOUND', 404, 'Không tìm thấy ảnh của thẻ liên kết');
+  if (!LINK_CARD_THUMB_TYPES.includes(file.content_type)) return new DomainError('LINK_CARD_THUMB_TYPE', 422, 'Ảnh của thẻ liên kết phải là ảnh JPG hoặc PNG');
+  const max = isProvider(provider) ? LINK_CARD_THUMB_MAX_BYTES[provider] : undefined;
+  if (max !== undefined && Number(file.size_bytes) > max) {
+    return new DomainError('LINK_CARD_THUMB_TOO_LARGE', 422, `Ảnh của thẻ liên kết cho kênh này tối đa ${Math.floor(max / 1_000_000)} MB`, { limit: max, actual: Number(file.size_bytes) });
+  }
+  return null;
+}
+
+// Both, the cover first.
+export async function settingsFileProblem(ctx: Pick<CommandContext, 'trx' | 'orgId'>, provider: string, settings: Record<string, unknown> | undefined): Promise<DomainError | null> {
+  return (await coverProblem(ctx, provider, settings)) ?? (await linkCardProblem(ctx, provider, settings));
 }

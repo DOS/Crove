@@ -832,3 +832,79 @@ describe('LinkedIn edit (#1223)', () => {
     expect(none.calls).toHaveLength(0);
   });
 });
+
+describe('LinkedIn link cards (#1498)', () => {
+  const LINK = 'https://tiem.example/khai-truong?utm_source=linkedin';
+  const card = { title: 'Khai trương chi nhánh mới', description: 'Giảm 20% tuần đầu', thumbFileId: 'thumb-1' };
+  const content = { body: 'Mời bạn ghé (Q1)', title: null, linkUrl: LINK, media: [] };
+
+  it('uploads the card image, then posts content.article without repeating the link in the commentary', async () => {
+    const { fetchImpl, calls } = linkedin({
+      'POST api.linkedin.com/rest/images?action=initializeUpload': [{ body: { value: { uploadUrl: UPLOAD, image: 'urn:li:image:C4E10AQT' } } }],
+      'PUT www.linkedin.com/dms-uploads/sp/v2/D4D10AQ/upload': [{ status: 201 }],
+      'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7100000000000000010' } }],
+    });
+    const read: string[] = [];
+    const result = await new LinkedInPublisher({}, fetchImpl).publish(input({ content, settings: { linkCard: card }, readMedia: async (id) => (read.push(id), new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) }));
+    expect(result).toMatchObject({ kind: 'accepted', externalId: 'urn:li:share:7100000000000000010' });
+    expect(read).toEqual(['thumb-1']);
+    expect(calls.map((c) => c.route)).toEqual(['POST api.linkedin.com/rest/images?action=initializeUpload', 'PUT www.linkedin.com/dms-uploads/sp/v2/D4D10AQ/upload', 'POST api.linkedin.com/rest/posts']);
+    expect(calls[0]?.body).toEqual({ initializeUploadRequest: { owner: `urn:li:person:${MEMBER}` } });
+    expect(calls[1]?.headers.get('content-type')).toBe('image/png');
+    const post = calls[2]?.body as Record<string, unknown>;
+    expect(post.commentary).toBe(littleText('Mời bạn ghé (Q1)'));
+    expect(post.content).toEqual({ article: { source: LINK, title: card.title, description: card.description, thumbnail: 'urn:li:image:C4E10AQT' } });
+  });
+
+  it('posts a card without an image or a description with only what it has, and as the page for a page', async () => {
+    const { fetchImpl, calls } = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7100000000000000011' } }] });
+    await new LinkedInPagePublisher({}, fetchImpl).publish(input({ externalAccountId: '2414183', content, settings: { linkCard: { title: 'Chỉ tiêu đề' } } }));
+    expect(calls.map((c) => c.route)).toEqual(['POST api.linkedin.com/rest/posts']);
+    expect(calls[0]?.body).toMatchObject({ author: 'urn:li:organization:2414183', content: { article: { source: LINK, title: 'Chỉ tiêu đề' } } });
+    expect((calls[0]?.body as { content?: { article?: Record<string, unknown> } } | undefined)?.content?.article).not.toHaveProperty('description');
+
+    const page = linkedin({
+      'POST api.linkedin.com/rest/images?action=initializeUpload': [{ body: { value: { uploadUrl: UPLOAD, image: 'urn:li:image:C4E10AQP' } } }],
+      'PUT www.linkedin.com/dms-uploads/sp/v2/D4D10AQ/upload': [{ status: 201 }],
+      'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7100000000000000012' } }],
+    });
+    await new LinkedInPagePublisher({}, page.fetchImpl).publish(input({ externalAccountId: '2414183', content, settings: { linkCard: card } }));
+    expect(page.calls[0]?.body).toEqual({ initializeUploadRequest: { owner: 'urn:li:organization:2414183' } });
+    expect(page.calls.at(-1)?.body).toMatchObject({ author: 'urn:li:organization:2414183', content: { article: { thumbnail: 'urn:li:image:C4E10AQP' } } });
+  });
+
+  it('posts nothing when the card image upload fails, and refuses a card it cannot send before any call', async () => {
+    const down = linkedin({
+      'POST api.linkedin.com/rest/images?action=initializeUpload': [{ body: { value: { uploadUrl: UPLOAD, image: 'urn:li:image:C4E10AQT' } } }],
+      'PUT www.linkedin.com/dms-uploads/sp/v2/D4D10AQ/upload': [{ status: 503 }],
+    });
+    expect(await new LinkedInPublisher({}, down.fetchImpl).publish(input({ content, settings: { linkCard: card } }))).toMatchObject({ kind: 'rejected', error: 'transient' });
+    expect(down.calls.some((c) => c.route.includes('/rest/posts'))).toBe(false);
+    const unreadable = linkedin({});
+    expect(await new LinkedInPublisher({}, unreadable.fetchImpl).publish(input({ content, settings: { linkCard: card }, readMedia: async () => Promise.reject(new Error('gone')) }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' });
+
+    const none = linkedin({});
+    const publisher = new LinkedInPublisher({}, none.fetchImpl);
+    expect(await publisher.publish(input({ content: { ...content, media: [image('f-1')] }, settings: { linkCard: card } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_WITH_MEDIA' });
+    expect(await publisher.publish(input({ content: { ...content, linkUrl: null }, settings: { linkCard: card } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_NEEDS_LINK' });
+    expect(await publisher.publish(input({ content, settings: { linkCard: { title: '' } } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_INVALID' });
+    expect(await publisher.publish(input({ content, settings: { linkCard: { ...card, extra: 1 } } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_INVALID' });
+    expect(await publisher.publish(input({ content, settings: { linkCard: card, poll: { question: 'Bạn thích?', options: ['Có', 'Không'] } } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_WITH_POLL' });
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('without a card sends exactly what it sent before: the link appended to the commentary, no content', async () => {
+    const { fetchImpl, calls } = linkedin({ 'POST api.linkedin.com/rest/posts': [{ status: 201, headers: { 'x-restli-id': 'urn:li:share:7100000000000000013' } }] });
+    await new LinkedInPublisher({}, fetchImpl).publish(input({ content }));
+    expect(calls[0]?.body).toMatchObject({ commentary: littleText(`Mời bạn ghé (Q1)\n\n${LINK}`) });
+    expect(calls[0]?.body).not.toHaveProperty('content');
+  });
+
+  it('edits a carded post with the commentary alone, without the link the card carries', async () => {
+    const URN = 'urn:li:share:7100000000000000010';
+    const route = `POST api.linkedin.com/rest/posts/${encodeURIComponent(URN)}`;
+    const { fetchImpl, calls } = linkedin({ [route]: [{ status: 204 }] });
+    expect(await new LinkedInPublisher({}, fetchImpl).edit({ externalAccountId: MEMBER, secret: SECRET, externalId: URN, content: { ...content, body: 'Sửa lời mời' }, settings: { linkCard: card }, callKey: 'edit-1' })).toEqual({ kind: 'edited' });
+    expect(calls[0]?.body).toEqual({ patch: { $set: { commentary: littleText('Sửa lời mời') } } });
+  });
+});
