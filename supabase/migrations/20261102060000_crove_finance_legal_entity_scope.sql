@@ -2,7 +2,7 @@
 -- entity. Idempotent; applied files stay untouched.
 --
 -- Every finance table that holds books or documents gets legal_entity_id NOT NULL, a foreign key to the org's legal
--- entity, an index on (org_id, legal_entity_id) (G3 fk-index) and a RESTRICTIVE policy le_scope beside the tenant policy:
+-- entity, an index on (legal_entity_id, org_id) (G3 fk-index) and a RESTRICTIVE policy le_scope beside the tenant policy:
 -- an actor reads and writes only the rows of the entities its sealed context's le_scope names ('*' every entity: owners,
 -- admins and every member without legal-entity assignments; a member limited by external_accountant assignments only
 -- those entities; no scope nothing). RESTRICTIVE, so it narrows tenant_isolation and never widens it. The scope is
@@ -27,12 +27,12 @@
 --     take an entity (#1280 part 2); that is also why the existing writers need no change.
 --   - legal_entity_id never changes once written (LEGAL_ENTITY_IMMUTABLE), and a parent key that changes later (a
 --     learned rule's source document) must keep naming a parent of the same entity.
--- The trigger is SECURITY DEFINER, owned by the table owner, so it finds the parent or the default entity whatever the
--- writer can see; the writer's own policies then decide. A writer limited to other entities who names none gets the
--- default entity and is refused by le_scope, never written into an entity it cannot see. It is named to fire right
--- after agent_write_guard and before every other BEFORE trigger (they fire in name order), so later rules that read
--- the entity (voucher numbering and the period guard, part 2) see it filled in. It is enabled ALWAYS, so it fires in
--- replica mode as well.
+-- The trigger runs as the writer and reads the parent and the default entity through the writer's own policies: a row
+-- whose parent the writer cannot see loses its entity and is refused (tenant policy, le_scope or NOT NULL), and a writer
+-- limited to other entities who names none finds no default entity and is refused by le_scope, so nothing is ever
+-- written into an entity, or under a parent, the writer cannot see. It is named to fire right after agent_write_guard
+-- and before every other BEFORE trigger (they fire in name order), so later rules that read the entity (voucher
+-- numbering and the period guard, part 2) see it filled in. It is enabled ALWAYS, so it fires in replica mode as well.
 --
 -- The backfill. Every row on main belongs to its org's default entity (no writer could name another one). The column
 -- is added nullable, then filled with ALTER COLUMN ... TYPE uuid USING (...): PostgreSQL rewrites the table with the
@@ -56,8 +56,8 @@ SET LOCAL lock_timeout = '2s';
 -- Helpers
 -- ---------------------------------------------------------------------------
 -- The org's default legal entity (exactly one per org, 20261030001000). SECURITY INVOKER and executable by no runtime
--- role: only the trigger below (a definer owned by the migration runner) and this file's backfill call it, both as the
--- runner, which owns crove_kernel.legal_entity and so reads it unfiltered.
+-- role: this file's backfill calls it as the migration runner, which owns crove_kernel.legal_entity and so reads it
+-- unfiltered; later finance migrations may use it the same way.
 CREATE OR REPLACE FUNCTION crove_finance.org_default_legal_entity(p_org_id uuid) RETURNS uuid
 LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
   SELECT e.id FROM crove_kernel.legal_entity e WHERE e.org_id = p_org_id AND e.is_default
@@ -66,8 +66,11 @@ REVOKE ALL ON FUNCTION crove_finance.org_default_legal_entity(uuid) FROM PUBLIC,
 
 -- BEFORE INSERT OR UPDATE OF legal_entity_id[, parent key]. Arguments: none for a table without a parent, or the parent
 -- table and the column of this table that holds the parent's id (the parent's key is (org_id, id)). See the header.
+-- SECURITY INVOKER: it reads the parent and the default entity as the writer, through the writer's own policies, so it
+-- learns nothing the writer could not read. (A SECURITY DEFINER trigger here also made the period guard on journal_entry
+-- re-plan its queries for every row: 20,000 entries in one statement took 82 s instead of 1.5 s.)
 CREATE OR REPLACE FUNCTION crove_finance.legal_entity_fill() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_row jsonb := pg_catalog.to_jsonb(NEW);
   v_given uuid := (v_row ->> 'legal_entity_id')::uuid;
@@ -84,20 +87,35 @@ BEGIN
   IF v_parent IS NOT NULL THEN
     EXECUTE pg_catalog.format('SELECT p.legal_entity_id FROM %s p WHERE p.org_id = $1 AND p.id = $2', TG_ARGV[0]::regclass)
       INTO v_entity USING NEW.org_id, v_parent;
-  END IF;
-  -- Without a parent (or with one that does not exist, which the parent's foreign key refuses outside replica mode), a
-  -- new row the writer names no entity for gets the org's default entity, so it is never left without one.
-  IF v_entity IS NULL THEN
-    IF TG_OP = 'INSERT' AND v_given IS NULL THEN
-      NEW.legal_entity_id := crove_finance.org_default_legal_entity(NEW.org_id);
+    IF v_entity IS NULL THEN
+      -- A parent the writer cannot see (another org's, another entity's, or none at all). The row loses any entity it
+      -- named, so the tenant policy, le_scope or NOT NULL refuses it: a writer never attaches a row to a parent it cannot
+      -- see under an entity it can. In replica mode (superusers only), where foreign keys are not checked, the row
+      -- takes the default entity like a row without a parent.
+      IF pg_catalog.current_setting('session_replication_role') = 'replica' AND TG_OP = 'INSERT' AND v_given IS NULL THEN
+        SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = NEW.org_id AND e.is_default;
+        NEW.legal_entity_id := v_entity;
+      ELSIF TG_OP = 'INSERT' THEN
+        NEW.legal_entity_id := NULL;
+      ELSE
+        RAISE EXCEPTION 'LEGAL_ENTITY_MISMATCH' USING ERRCODE = '23514',
+          DETAIL = pg_catalog.json_build_object('table', TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME, 'parent', TG_ARGV[0])::text;
+      END IF;
+      RETURN NEW;
+    END IF;
+    IF v_given IS NULL THEN
+      NEW.legal_entity_id := v_entity;
+    ELSIF v_given <> v_entity THEN
+      RAISE EXCEPTION 'LEGAL_ENTITY_MISMATCH' USING ERRCODE = '23514',
+        DETAIL = pg_catalog.json_build_object('table', TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME, 'parent', TG_ARGV[0])::text;
     END IF;
     RETURN NEW;
   END IF;
-  IF v_given IS NULL THEN
+  -- No parent: the entity the writer names, or the org's default entity as the writer sees it (none for another org's
+  -- row or for a writer whose scope leaves the default entity out, which the policies then refuse).
+  IF TG_OP = 'INSERT' AND v_given IS NULL THEN
+    SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = NEW.org_id AND e.is_default;
     NEW.legal_entity_id := v_entity;
-  ELSIF v_given <> v_entity THEN
-    RAISE EXCEPTION 'LEGAL_ENTITY_MISMATCH' USING ERRCODE = '23514',
-      DETAIL = pg_catalog.json_build_object('table', TG_TABLE_SCHEMA || '.' || TG_TABLE_NAME, 'parent', TG_ARGV[0])::text;
   END IF;
   RETURN NEW;
 END $$;
@@ -157,9 +175,12 @@ BEGIN
         'ALTER TABLE %s ADD CONSTRAINT %I FOREIGN KEY (org_id, legal_entity_id) REFERENCES crove_kernel.legal_entity (org_id, id)',
         v_table, v_name || '_legal_entity_fk');
     END IF;
-    -- period_balance_delta gets the wider balance key below, which also backs its foreign key.
+    -- The foreign key's index (G3 fk-index), entity first: led by org_id it would tempt the planner into scanning a whole
+    -- org's rows for queries that filter by org and something else, before statistics exist (the period guard on
+    -- journal_entry went quadratic on a bulk insert into a new table). period_balance_delta gets the wider balance key
+    -- below, which backs its foreign key too.
     IF v_table <> 'crove_finance.period_balance_delta' THEN
-      EXECUTE pg_catalog.format('CREATE INDEX IF NOT EXISTS %I ON %s (org_id, legal_entity_id)', v_name || '_legal_entity_idx', v_table);
+      EXECUTE pg_catalog.format('CREATE INDEX IF NOT EXISTS %I ON %s (legal_entity_id, org_id)', v_name || '_legal_entity_idx', v_table);
     END IF;
 
     EXECUTE pg_catalog.format('DROP TRIGGER IF EXISTS b_legal_entity ON %s', v_table);
@@ -184,6 +205,16 @@ BEGIN
       v_table);
   END LOOP;
 END $$;
+
+-- Fresh planner statistics for every table this file altered: the ALTER TABLE steps above leave a table that was never
+-- analyzed looking like one with unknown size (reltuples -1) instead of an empty one, and on a new database the period
+-- guard on journal_entry then plans its per-row lookups as scans of the org's whole primary key, which made a bulk
+-- insert of 20,000 entries take 45 s instead of 1 s. ANALYZE samples at most 30,000 rows per table.
+ANALYZE crove_finance.journal_entry, crove_finance.journal_line, crove_finance.period_balance_delta, crove_finance.cash_voucher,
+  crove_finance.journal_voucher, crove_finance.purchase_document, crove_finance.purchase_line, crove_finance.purchase_tax_rate,
+  crove_finance.purchase_document_void, crove_finance.input_vat_check, crove_finance.bank_line, crove_finance.fixed_asset,
+  crove_finance.depreciation_line, crove_finance.portal_invoice_list, crove_finance.portal_invoice_row,
+  crove_finance.categorization_rule;
 
 -- The balance key: a month's balance of an account in one entity is the sum of these rows.
 CREATE INDEX IF NOT EXISTS period_balance_delta_balance_idx
