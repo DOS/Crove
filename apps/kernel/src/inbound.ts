@@ -207,8 +207,10 @@ export async function processInboundEmail(deps: InboundProcessDeps, job: Inbound
       messageId: messageId.slice(0, 500),
       from: email.from,
       subject: email.subject?.slice(0, 500) ?? null,
-      // The mail's text (#779), for an AI draft of a Social post a member may start from it.
-      text: email.text,
+      // The mail's text (#779), for an AI draft of a Social post a member may start from it: kept only where the
+      // deployment runs Social, so one without it keeps no more of a mail than before; absent from an older extract
+      // container's answer.
+      text: deps.runtime.modules().includes('social') ? (email.text ?? null) : null,
       files,
     },
     { actor: { type: 'system', component: 'inbound.email' }, orgId },

@@ -177,8 +177,9 @@ export const zExtractedEmail = z.strictObject({
   messageId: zText.nullable(),
   from: zText.nullable(),
   subject: zText.nullable(),
-  // The mail's text (#779), at most maxMailTextChars; null when it has none.
-  text: z.string().min(1).max(EXTRACT_LIMITS.maxMailTextChars).nullable(),
+  // The mail's text (#779), at most maxMailTextChars; null when it has none. Optional so a worker accepts an older
+  // sandbox's answer during a rolling deploy (the worker goes first: this strict object refuses a key it does not know).
+  text: z.string().min(1).max(EXTRACT_LIMITS.maxMailTextChars).nullable().optional(),
   deliveredTo: zText.nullable(),
   to: z.array(zText).max(EXTRACT_LIMITS.maxRecipients),
   attachments: z.array(z.strictObject({ filename: zText.nullable(), content: z.base64() })).max(EXTRACT_LIMITS.maxAttachments),

@@ -1599,7 +1599,7 @@ export const en = {
       draft: 'Draft a post from this mail',
     },
     socialReviews: {
-      title:'Posts waiting for your review ({count, number})',
+      title: 'Posts waiting for your review ({count, number})',
       noText: 'Post without text',
       goesOut: 'goes out {when}',
       noTime: 'no time set',
