@@ -47,6 +47,17 @@ jobs:
         if: failure()
         run: pnpm --filter @crove/e2e stack:logs
 
+      # The trace of every failed test (trace: 'retain-on-failure'), so a flake can be read step by step (#1547). Synthetic
+      # data of a throwaway stack only.
+      - name: Traces of the failed tests
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-traces
+          path: e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Stop the stack
         if: always()
         run: pnpm --filter @crove/e2e stack:down

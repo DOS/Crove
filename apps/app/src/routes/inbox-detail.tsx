@@ -342,11 +342,13 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   const accountName = (code: string) => accounts.data?.find((a) => a.code === code)?.name ?? '';
 
   const wide = useMediaQuery(SM_UP);
-  // The decision is said on the Inbox the reviewer goes back to (#1384), in the verb of its button.
+  // The decision is said on the Inbox the reviewer goes back to (#1384), in the verb of its button. The toast is raised
+  // once the Inbox is the page, so it lives its whole time there: waiting first for this page's refetches could outlast
+  // it on a slow machine (#1547). Every query is marked stale on the way, and the Inbox refetches what it shows.
   const done = async (said: string) => {
-    toast(said);
-    await queryClient.invalidateQueries();
+    void queryClient.invalidateQueries();
     await navigate({ to: '/o/$slug/inbox', params: { slug } });
+    toast(said);
   };
   const partyName = () => (sale ? payload?.buyer.name : payload?.seller.name) || detail.data?.title || '';
   const approve = useMutation(orpc.inbox.approve.mutationOptions({ onSuccess: () => done(t('approvedToast', { name: partyName() })) }));
