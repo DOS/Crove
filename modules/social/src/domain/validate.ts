@@ -1,7 +1,7 @@
 // Checks a variant against its channel's capabilities (Social plan §3.6). Returns every issue rather than the first,
 // so the composer can show them all; an empty list means the variant fits the channel. A variant that breaks a
 // rule is flagged, never silently cut.
-import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, pinterestSectionOf, IG_HASHTAGS_MAX, IG_MENTIONS_MAX, captionHashtags, captionMentions } from './channels.ts';
+import { AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, autoReplyOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, repostRuleOf, CAPABILITIES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, COMMENT_RULES, CONTENT_WARNING_MAX, MASTODON_VISIBILITY, IG_COLLABORATORS_MAX, IG_USER_TAGS_MAX, instagramPeopleOf, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_REQUIRED, COVER_RULES, IMAGE_RULES, MEDIA_BODY_MAX, PHOTO_BODY_MAX, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, type PollRule, topicTagOf, RATIO_SLACK, REEL_MAX_VIDEO_SECONDS, STORY_IMAGE, STORY_MAX_VIDEO_SECONDS, postTypeOf, VIDEO_ONLY_ADAPTERS, coverKind, coverOf, VIDEO_READY, countLinks, countText, firstCommentOf, sentText, YOUTUBE_CATEGORIES, YOUTUBE_TAGS_MAX, youtubeTagsLength, youtubeTagsOf, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistsOf, type ChannelCapabilities, type MediaKind, type Provider, type TextRule, tiktokModeOf, tiktokDisclosureOf, REMOVE_READY, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_TERM_MAX, telegramOptionsOf, REPLY_SETTINGS, linkedinVisibilities, telegramButtonsOf, isButtonUrl, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, type TelegramButton, instagramReelOf, isInstagramReel, discordOptionsOf, discordThreadName, isDiscordForum, isDiscordId, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, blueskyRepliesOf, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, pinterestSectionOf, IG_HASHTAGS_MAX, IG_MENTIONS_MAX, captionHashtags, captionMentions } from './channels.ts';
 import { SIGNATURE_MAX, signatureOf, withSignature, withoutSignature } from './signature.ts';
 import { sentLink } from './utm.ts';
 
@@ -128,6 +128,10 @@ export type IssueCode =
   | 'COVER_NEEDS_VIDEO'
   | 'COVER_NOT_SUPPORTED'
   | 'COVER_OUT_OF_RANGE'
+  // A video on a channel that cannot post it without a cover image (#1429, a Zalo OA video article's thumbnail).
+  | 'COVER_REQUIRED'
+  // A video of a type the channel does not take (#1429, QuickTime on Zalo OA).
+  | 'VIDEO_TYPE_NOT_ALLOWED'
   // The post type (#644): one the channel does not post; a Story that is not one image or video; a Reel that is not one
   // video.
   | 'POST_TYPE_NOT_SUPPORTED'
@@ -373,6 +377,7 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
       }
     } else {
       if (!VIDEO_READY.has(variant.provider)) issues.push({ code: 'VIDEO_NOT_SUPPORTED_YET', field, limit: null, actual: null });
+      if (rule.videoTypes && !rule.videoTypes.includes(m.mime.toLowerCase())) issues.push({ code: 'VIDEO_TYPE_NOT_ALLOWED', field, limit: null, actual: null });
       if (rule.maxVideoBytes !== null && m.sizeBytes > rule.maxVideoBytes) {
         issues.push({ code: 'VIDEO_TOO_LARGE', field, limit: rule.maxVideoBytes, actual: m.sizeBytes });
       }
@@ -484,6 +489,10 @@ export function validateVariant(variant: VariantDraft, given: ChannelCapabilitie
     else checkTelegramButtons(issues, variant);
   }
   if (variant.settings?.cover !== undefined) checkCover(issues, variant);
+  // A Zalo OA video article needs its thumbnail (#1429): one video alone takes a cover image, checked above once set.
+  else if (COVER_REQUIRED.has(variant.provider) && variant.media.length === 1 && variant.media[0]?.kind === 'video') {
+    issues.push({ code: 'COVER_REQUIRED', field: 'settings.cover', limit: null, actual: null });
+  }
   checkDiscord(issues, variant, sent);
   checkPollAndTag(issues, variant, caps, sent);
   checkGbp(issues, variant);

@@ -231,6 +231,10 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_TAGGED',
   'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
+  // Learned account rules (#1399).
+  'RULE_TEXT_TOO_SHORT',
+  'RULE_EXISTS',
+  'RULE_NOT_FOUND',
   // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
   'JOURNAL_VOUCHER_INVALID',

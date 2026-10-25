@@ -8,6 +8,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { cn } from '@crove/ui/lib/utils';
+import { DateInput } from './date-input.tsx';
 import { ErrorText } from './ui.tsx';
 import { client, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { LABEL_COLORS, LABEL_SWATCH, LABEL_TONE, type LabelColor } from '../lib/social-labels.ts';
@@ -69,13 +70,13 @@ export function NoteEditor({ draft, onClose }: { draft: NoteDraft; onClose: () =
           <Label htmlFor="note-from" className="text-xs">
             {t('from')}
           </Label>
-          <Input id="note-from" type="date" value={startsOn} onChange={(e) => setStartsOn(e.target.value)} className="w-40" />
+          <DateInput id="note-from" value={startsOn} onChange={setStartsOn} className="w-40" />
         </div>
         <div className="space-y-1">
           <Label htmlFor="note-to" className="text-xs">
             {t('to')}
           </Label>
-          <Input id="note-to" type="date" value={endsOn} min={startsOn} onChange={(e) => setEndsOn(e.target.value)} className="w-40" />
+          <DateInput id="note-to" value={endsOn} min={startsOn} onChange={setEndsOn} className="w-40" />
         </div>
         <div className="flex flex-wrap items-center gap-1 sm:col-span-3" role="radiogroup" aria-label={t('color')}>
           {LABEL_COLORS.map((c) => (

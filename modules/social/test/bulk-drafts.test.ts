@@ -21,8 +21,9 @@ describe('captionFromFilename', () => {
 
 describe('fileIssues', () => {
   it("keeps the issues about the file and leaves the text and title to the draft's writer", () => {
-    const issues = validateVariant({ provider: 'zalo_oa', body: '', title: null, media: [{ kind: 'video', mime: 'video/mp4', sizeBytes: 1000, durationSeconds: 5 }] });
-    expect(issues.map((i) => i.code)).toContain('TITLE_REQUIRED');
-    expect(fileIssues(issues).map((i) => [i.code, i.field])).toEqual([['MEDIA_KIND_NOT_ALLOWED', 'media.0']]);
+    // A QuickTime video on Zalo OA (#1429): its type is the file's issue; the title and the cover are the writer's.
+    const issues = validateVariant({ provider: 'zalo_oa', body: '', title: null, media: [{ kind: 'video', mime: 'video/quicktime', sizeBytes: 1000, durationSeconds: 5 }] });
+    expect(issues.map((i) => i.code)).toEqual(expect.arrayContaining(['TITLE_REQUIRED', 'COVER_REQUIRED']));
+    expect(fileIssues(issues).map((i) => [i.code, i.field])).toEqual([['VIDEO_TYPE_NOT_ALLOWED', 'media.0']]);
   });
 });

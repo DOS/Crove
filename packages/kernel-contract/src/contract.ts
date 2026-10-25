@@ -4,6 +4,7 @@ import {
   zBulkApproveItems,
   SOCIAL_REVIEW_CHECKS_MAX,
   zAccount,
+  zCategorizationRule,
   zAgentBudget,
   zAgentRisk,
   zAgentRoleKey,
@@ -1216,6 +1217,17 @@ export const contract = {
     update: oc
       .input(z.object({ code: zAccountCode, name: z.string().trim().min(1).max(200).optional(), active: z.boolean().optional() }))
       .output(z.object({ code: zAccountCode, name: z.string(), active: z.boolean() })),
+  },
+  // Learned account rules (#1399), shown in Settings. list: every role, newest first (at most 500). create: owners and
+  // admins (R1), a keyword rule for every vendor or for one; RULE_TEXT_TOO_SHORT (422) when fewer than two letters or
+  // digits are left once normalized, RULE_EXISTS (409) for the same keyword and vendor. remove: owners and admins (R1),
+  // any rule, learned or added; RULE_NOT_FOUND (404). Approving an invoice writes the rules learned from it.
+  accountRules: {
+    list: oc.output(z.array(zCategorizationRule)),
+    create: oc
+      .input(z.object({ keyword: z.string().trim().min(1).max(500), accountCode: zAccountCode, vendorPartyId: zId.nullable().optional() }))
+      .output(z.object({ id: zId })),
+    remove: oc.input(z.object({ id: zId })).output(z.object({ id: zId })),
   },
   // VAT working for one month or quarter (issue #316); the Excel file is GET /api/export/vat.xlsx?period=<period>.
   // markPayment (owners, admins, members; R1, audited; #917): the accountant's mark on an input invoice of the period

@@ -104,6 +104,33 @@ export const zPartyRef = z.object({
   phone: z.string().max(50).nullable(),
 });
 
+export const ACCOUNT_RULE_SOURCES = ['learned', 'vendor_default', 'builtin', 'user'] as const;
+export const RULE_MATCH_KINDS = ['description', 'keyword'] as const;
+export const zRuleMatchKind = z.enum(RULE_MATCH_KINDS);
+export const zAccountRule = z.object({
+  source: z.enum(ACCOUNT_RULE_SOURCES),
+  ruleId: zId.optional(),
+  scope: z.enum(['vendor', 'org']).optional(),
+  matchKind: zRuleMatchKind.optional(),
+});
+export type AccountRule = z.infer<typeof zAccountRule>;
+
+// A learned account rule as Settings lists it (#1399): what it matches (matchText in normalized form, label as people
+// wrote it), for which vendor (null: every vendor), the account, and its provenance: who confirmed it (their name while
+// they are a member), when, and the invoice whose approval taught it (null for a rule added in Settings).
+export const zCategorizationRule = z.object({
+  id: zId,
+  vendor: z.object({ partyId: zId, name: z.string() }).nullable(),
+  matchKind: zRuleMatchKind,
+  matchText: z.string(),
+  label: z.string().nullable(),
+  accountCode: zAccountCode,
+  confirmedBy: z.string().nullable(),
+  confirmedAt: z.string(),
+  sourceDocument: z.object({ documentId: zId, series: z.string(), number: z.string(), invoiceDate: zLocalDate }).nullable(),
+});
+export type CategorizationRule = z.infer<typeof zCategorizationRule>;
+
 export const zProposedLine = z.object({
   lineNo: z.number().int().positive(),
   description: z.string().max(2000),
@@ -116,6 +143,10 @@ export const zProposedLine = z.object({
   // account of a sale line (direction 'sale', issue #313). The name predates sales.
   debitAccount: zAccountCode,
   reason: z.string().max(500),
+  // What chose debitAccount (#1399): a learned rule (crove_finance.categorization_rule, with its id and whether it is
+  // the vendor's own or every vendor's), the vendor's default account, the built-in keyword list, or a user who picked
+  // it on a revision. Absent on proposals made before #1399.
+  accountRule: zAccountRule.optional(),
 });
 
 // A purchase invoice (the org is the buyer) or a sales invoice (the org is the seller, issue #313).
@@ -1253,6 +1284,8 @@ export const zSocialSchedule = z.strictObject({
     .optional(),
 });
 
+// The most slots a channel's queue holds (#1172): social.queue.set refuses more, and the queue editor's helpers stop there.
+export const SOCIAL_QUEUE_SLOTS_MAX = 100;
 export const zSocialQueueSet = z.strictObject({
   connectionId: zId,
   timeZone: z.string().min(1).max(64),
@@ -1261,7 +1294,7 @@ export const zSocialQueueSet = z.strictObject({
   lowDays: z.number().int().min(1).max(30).nullable().optional(),
   slots: z
     .array(z.strictObject({ weekday: z.number().int().min(1).max(7), minute: z.number().int().min(0).max(1439), label: z.string().trim().max(100).optional(), labelId: zId.nullable().optional() }))
-    .max(100),
+    .max(SOCIAL_QUEUE_SLOTS_MAX),
 });
 
 // Reordering a channel's queue (#1020): the posts trade the slot times they hold. A shuffle takes the posts of the

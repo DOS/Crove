@@ -11,6 +11,7 @@ import { AiNotConfiguredError, AmountFormatError, type AiUsage, type InvoiceRead
 import { journalMemo } from './memo.ts';
 import { BOOK_CURRENCY, convertInvoice, type ForeignAmounts } from './domain/foreign-currency.ts';
 import { isOwnTaxCode } from './own-tax-code.ts';
+import { rulesForSuggestion } from './categorization.ts';
 import {
   bookableLines,
   bookableSaleLines,
@@ -24,6 +25,7 @@ import {
   Decimal,
   parseTaxCode,
   type InvoiceCheck,
+  type LearnedRule,
   type ParsedInvoice,
 } from '@crove/l10n-vn';
 
@@ -68,6 +70,8 @@ export interface InvoiceLookup {
   // 'sale' when the seller's tax code is the org's own or one of its branches (crove_kernel.tenant.tax_code, #313, #686).
   direction: DocumentDirection;
   vendorDefault: string | null;
+  // The learned account rules of the vendor and of every vendor (#1399), for a purchase; none for a sale.
+  learnedRules?: LearnedRule[];
   duplicateDocumentId: string | null;
   duplicateProposalId: string | null;
   // The document in force of the invoice a replacement or an adjustment corrects (#916), or null.
@@ -155,9 +159,23 @@ export const purchaseLookup = defineQuery({
       .orderBy('created_at')
       .limit(1)
       .executeTakeFirst();
+    // The vendor whose learned rules apply: by tax code as above, or, for an invoice without one, by name as
+    // finance.purchase.record finds or creates the party it learns for (upsertParty).
+    const ruleParty =
+      party ??
+      (!sale && !input.sellerTaxCode && input.sellerName.trim()
+        ? await ctx.trx
+            .selectFrom('crove_kernel.party')
+            .select('id')
+            .where('org_id', '=', ctx.orgId)
+            .where('tax_code', 'is', null)
+            .where((eb) => eb(eb.fn('lower', ['name']), '=', input.sellerName.trim().toLowerCase()))
+            .executeTakeFirst()
+        : undefined);
     return {
       direction: sale ? 'sale' : 'purchase',
       vendorDefault: rule?.debit_account ?? null,
+      learnedRules: sale ? [] : await rulesForSuggestion(ctx, ruleParty?.id ?? null),
       duplicateDocumentId: document?.id ?? null,
       duplicateProposalId: duplicate?.id ?? null,
       relatedDocumentId: original?.id ?? null,
@@ -458,7 +476,7 @@ export async function extractAndPropose(
   if (related) checks.push(relatedCheck(related));
   // A sale (issue #313) books every line to revenue; a purchase proposes an expense or asset account per line.
   const sale = lookup.direction === 'sale';
-  const lines = sale ? bookableSaleLines(booked) : bookableLines(booked, lookup.vendorDefault);
+  const lines = sale ? bookableSaleLines(booked) : bookableLines(booked, lookup.vendorDefault, lookup.learnedRules ?? []);
   if (lines.length === 0) return fail('Hóa đơn không có dòng hàng hóa, dịch vụ để hạch toán', checks);
 
   const seller = { ...invoice.seller, taxCode: sellerTaxCode ?? invoice.seller.taxCode };

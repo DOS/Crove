@@ -1,11 +1,17 @@
 import * as React from "react"
 import { cn } from "cn"
 
-function Table({ className, ...props }: React.ComponentProps<"table">) {
+// `container` reaches the scrolling wrapper, e.g. to bound its height so a sticky header has something to stick in.
+function Table({
+  className,
+  container,
+  ...props
+}: React.ComponentProps<"table"> & { container?: React.ComponentProps<"div"> }) {
   return (
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      {...container}
+      className={cn("relative w-full overflow-x-auto", container?.className)}
     >
       <table
         data-slot="table"

@@ -9,6 +9,7 @@ import {
   contentHash,
   countLinks,
   countText,
+  COVER_IMAGE_MAX_BYTES,
   DISCORD_TAGS_MAX,
   DISCORD_THREAD_NAME_MAX,
   discordOptionsOf,
@@ -173,8 +174,28 @@ describe('validateVariant', () => {
   });
 
   it('reports a disallowed media kind once, not also as a mix', () => {
-    const codes = validateVariant({ provider: 'zalo_oa', body: 'x', title: 'T', media: [jpeg(), mp4()] }).map((i) => i.code);
+    const codes = validateVariant({ provider: 'wordpress', body: 'x', title: 'T', media: [jpeg(), mp4()] }).map((i) => i.code);
     expect(codes).toEqual(['MEDIA_KIND_NOT_ALLOWED']);
+  });
+
+  it('takes one MP4 of up to 50 MB with a cover image as a Zalo OA video article (#1429)', () => {
+    const zalo = (media: MediaItem[], settings: Record<string, unknown> = { cover: { fileId: 'c-1' } }) => validateVariant({ provider: 'zalo_oa', body: 'x', title: 'T', media, settings });
+    expect(VIDEO_READY.has('zalo_oa')).toBe(true);
+    expect(zalo([mp4(600, 50 * 1024 * 1024)])).toEqual([]);
+    // No length limit in Zalo's docs: a video whose length was not read still goes.
+    expect(zalo([{ ...mp4(), durationSeconds: null }])).toEqual([]);
+    expect(zalo([mp4(30, 50 * 1024 * 1024 + 1)])).toEqual([{ code: 'VIDEO_TOO_LARGE', field: 'media.0', limit: 50 * 1024 * 1024, actual: 50 * 1024 * 1024 + 1 }]);
+    expect(zalo([{ ...mp4(), mime: 'video/quicktime' }])).toEqual([{ code: 'VIDEO_TYPE_NOT_ALLOWED', field: 'media.0', limit: null, actual: null }]);
+    // The thumbnail is required, and it is an uploaded image, not a frame.
+    expect(zalo([mp4()], {})).toEqual([{ code: 'COVER_REQUIRED', field: 'settings.cover', limit: null, actual: null }]);
+    expect(zalo([mp4()], { cover: { atMs: 1000 } })).toEqual([{ code: 'COVER_NOT_SUPPORTED', field: 'settings.cover', limit: null, actual: null }]);
+    expect(zalo([mp4()], { cover: { fileId: 'c-1' }, comments: false })).toEqual([]);
+    // One video alone: not two, and not beside images.
+    expect(zalo([mp4(), mp4()]).map((i) => i.code)).toContain('TOO_MANY_VIDEOS');
+    expect(zalo([jpeg(), mp4()], {}).map((i) => i.code)).toEqual(['MEDIA_MIX_NOT_ALLOWED']);
+    // Image articles need no cover setting, as before.
+    expect(zalo([jpeg()], {})).toEqual([]);
+    expect(COVER_IMAGE_MAX_BYTES.zalo_oa).toBe(1024 * 1024);
   });
 
   it('takes up to 10 images of 1 MB each on a Zalo OA article, and comments on or off (#943)', () => {
@@ -1193,6 +1214,8 @@ describe('media fetched by URL (#772)', () => {
     expect(needsPublicUrls('instagram', [video], { cover: { fileId: 'c' } })).toBe(true);
     expect(needsPublicUrls('instagram', [video], { cover: { atMs: 1000 } })).toBe(false);
     for (const p of ['threads', 'google_business', 'zalo_oa'] as const) expect(needsPublicUrls(p, [image])).toBe(true);
+    // A Zalo OA video article's cover image is fetched by URL too (#1429).
+    expect(needsPublicUrls('zalo_oa', [video], { cover: { fileId: 'c' } })).toBe(true);
     expect(needsPublicUrls('tiktok', [video])).toBe(false);
     expect(needsPublicUrls('tiktok', [image])).toBe(true);
     for (const p of ['facebook_page', 'x', 'linkedin', 'bluesky', 'telegram', 'mastodon', 'youtube'] as const) expect(needsPublicUrls(p, [image, video])).toBe(false);
