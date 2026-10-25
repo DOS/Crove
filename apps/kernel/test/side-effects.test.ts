@@ -55,6 +55,14 @@ describe('declared risk and side effects (#1563)', () => {
     for (const name of ['kernel.agent.proposal.approve', 'kernel.mail.contact.queue', 'kernel.proposal.remind', 'kernel.usage.defer']) {
       expect(byName.get(name), name).toMatchObject({ risk: 'R2', sideEffect: 'external' });
     }
+    // Three are system commands no agent may run (no agent access): the runtime gates a system actor by access, not
+    // risk, so the reminder, deferral and agent-approval jobs run as before (their database tests run them as the
+    // system: proposal-reminders, the usage limits and the T18 agents invariant). What an agent may approve is decided
+    // by the approved proposal's command (R1 or R2, within max_risk), never by kernel.agent.proposal.approve's own risk.
+    for (const name of ['kernel.agent.proposal.approve', 'kernel.proposal.remind', 'kernel.usage.defer']) {
+      expect(byName.get(name), name).toMatchObject({ access: 'system' });
+      expect(byName.get(name)?.agent, name).toBeUndefined();
+    }
   });
 
   it('keeps the membership and role commands at R3', () => {
