@@ -417,7 +417,7 @@ export const linkPartyForTaxCode = defineCommand({
     const found = await sql<{ party_id: string; linked: string[] }>`SELECT party_id, linked FROM crove_kernel.party_link_for_tax_code(${taxCode})`
       .execute(ctx.trx)
       .catch((error: unknown) => {
-        if (/PARTY_LINK_REQUIRED/.test((error as { message?: string }).message ?? '')) {
+        if (/PARTY_LINK_REQUIRED/.test((error as { message?: string } | null)?.message ?? '')) {
           throw new DomainError('PARTY_LINK_REQUIRED', 403, 'Chủ hoặc quản trị viên của tổ chức cần gắn đối tác này cho pháp nhân của bạn trước');
         }
         throw error;

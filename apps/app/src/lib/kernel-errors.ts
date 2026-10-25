@@ -150,6 +150,8 @@ export const KERNEL_ERROR_CODES = [
   'PARTY_CHANGED',
   'PARTY_TAX_CODE_LOCKED',
   'PARTY_TAX_CODE_TAKEN',
+  // A person's party a member limited to some legal entities may not link by itself (#1280).
+  'PARTY_LINK_REQUIRED',
   'SAME_PARTY',
   'PARTY_ALREADY_DUPLICATE',
   'PARTY_IS_DUPLICATE',

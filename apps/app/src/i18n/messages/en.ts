@@ -5034,6 +5034,7 @@ export const en = {
       PARTY_CHANGED: 'Someone else just changed these details; open them again and redo your edit.',
       PARTY_TAX_CODE_LOCKED: 'A tax code cannot be changed or removed once set; if it is wrong, merge the party with the right one.',
       PARTY_TAX_CODE_TAKEN: 'This tax code already belongs to another party; merge the two parties.',
+      PARTY_LINK_REQUIRED: 'An owner or admin of the organization must link this party to your legal entity first.',
       INVALID_LEGAL_ENTITY_NAME: 'Not a valid legal entity name: one line, 1 to 200 characters.',
       LEGAL_ENTITY_NOT_FOUND: 'This legal entity was not found.',
       LEGAL_ENTITY_PARENT_NOT_FOUND: 'The parent legal entity was not found.',
