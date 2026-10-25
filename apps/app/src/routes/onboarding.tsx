@@ -8,7 +8,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NavIcon } from '@crove/ui/components/nav-icon';
-import { ErrorText, Logo, OrgLeftNotice } from '../components/ui.tsx';
+import { ErrorText, Field, FieldError, fieldControl, focusFirstInvalid, isEmailAddress, Logo, OrgLeftNotice, useFieldErrors } from '../components/ui.tsx';
 import { client, clientForOrg, errorMessage, orglessClient, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { signOut } from '../lib/session-actions.ts';
@@ -27,7 +27,12 @@ export function OnboardingPage() {
   const [name, setName] = useState('');
   const [address, setAddress] = useState('');
   const [contact, setContact] = useState('');
-  const [invalidTaxCode, setInvalidTaxCode] = useState(false);
+  // Each field's problem sits under it (#1515): checked on leaving the field and on submit.
+  const fields = useFieldErrors<'taxCode' | 'name' | 'contact'>((field) => {
+    if (field === 'taxCode') return taxCode.trim() && !normalizeTaxCode(taxCode) ? t('taxCodeInvalid') : null;
+    if (field === 'name') return name.trim() ? null : t('nameRequired');
+    return contact.trim() && !isEmailAddress(contact) ? t('contactInvalid') : null;
+  });
   // Why the tax code matters stays behind the info button, so the form is labels and fields only.
   const [aboutTaxCode, setAboutTaxCode] = useState(false);
 
@@ -61,15 +66,16 @@ export function OnboardingPage() {
 
   function lookUp() {
     const code = normalizeTaxCode(taxCode);
-    setInvalidTaxCode(!code);
-    if (code) lookup.mutate(code);
+    if (fields.check('taxCode') && code) lookup.mutate(code);
   }
 
-  function submit(event: FormEvent) {
+  function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!fields.checkAll(['taxCode', 'name', 'contact'])) {
+      focusFirstInvalid(event.currentTarget);
+      return;
+    }
     const code = taxCode.trim() ? normalizeTaxCode(taxCode) : null;
-    setInvalidTaxCode(taxCode.trim() !== '' && !code);
-    if (taxCode.trim() && !code) return;
     // The server trims the name, so the key follows the trimmed name.
     create.mutate({ name: name.trim(), taxCode: code, address: address.trim() || null, contact: contact.trim() || null });
   }
@@ -80,7 +86,7 @@ export function OnboardingPage() {
         <OrgLeftNotice />
         <Logo />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{hasOrgs ? t('titleAnother') : t('title')}</h1>
-        <form className="mt-6 space-y-3" onSubmit={submit}>
+        <form className="mt-6 space-y-3" noValidate onSubmit={submit}>
           {finance && (
             <div className="space-y-1">
               <div className="flex items-center gap-1">
@@ -99,16 +105,17 @@ export function OnboardingPage() {
               </div>
               <div className="flex gap-2">
                 <Input
-                  id="onboarding-tax-code"
+                  {...fieldControl('onboarding-tax-code', { error: Boolean(fields.of('taxCode')) })}
                   className="font-mono"
                   maxLength={20}
                   inputMode="numeric"
                   value={taxCode}
                   onChange={(e) => {
                     setTaxCode(e.target.value);
-                    setInvalidTaxCode(false);
+                    fields.edit('taxCode');
                     lookup.reset();
                   }}
+                  onBlur={(e) => fields.blur('taxCode', e.target.value)}
                   placeholder="0101234567"
                 />
                 {getConfig().taxCodeLookup && (
@@ -121,22 +128,44 @@ export function OnboardingPage() {
               <p id="onboarding-tax-code-about" hidden={!aboutTaxCode} className="text-xs text-muted-foreground">
                 {getConfig().taxCodeLookup ? `${t('taxCodeHint')} ${t('taxCodeHintLookup')}` : t('taxCodeHint')}
               </p>
-              {invalidTaxCode && <ErrorText>{t('taxCodeInvalid')}</ErrorText>}
+              <FieldError id="onboarding-tax-code">{fields.of('taxCode')}</FieldError>
               {lookup.error && <ErrorText>{errorMessage(lookup.error)}</ErrorText>}
             </div>
           )}
-          <Label className="flex-col items-stretch gap-1 font-normal">
-            <span className="text-muted-foreground">{t('nameLabel')}</span>
-            <Input required maxLength={200} value={name} onChange={(e) => setName(e.target.value)} placeholder={t('namePlaceholder')} />
-          </Label>
-          <Label className="flex-col items-stretch gap-1 font-normal">
-            <span className="text-muted-foreground">{t('addressLabel')}</span>
-            <Input maxLength={500} value={address} onChange={(e) => setAddress(e.target.value)} placeholder={t('addressPlaceholder')} />
-          </Label>
-          <Label className="flex-col items-stretch gap-1 font-normal">
-            <span className="text-muted-foreground">{t('contactLabel')}</span>
-            <Input type="email" maxLength={320} value={contact} onChange={(e) => setContact(e.target.value)} placeholder={t('contactPlaceholder')} />
-          </Label>
+          <Field label={t('nameLabel')} error={fields.of('name')}>
+            {(control) => (
+              <Input
+                {...control}
+                required
+                maxLength={200}
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  fields.edit('name');
+                }}
+                placeholder={t('namePlaceholder')}
+              />
+            )}
+          </Field>
+          <Field label={t('addressLabel')}>
+            {(control) => <Input {...control} maxLength={500} value={address} onChange={(e) => setAddress(e.target.value)} placeholder={t('addressPlaceholder')} />}
+          </Field>
+          <Field label={t('contactLabel')} error={fields.of('contact')}>
+            {(control) => (
+              <Input
+                {...control}
+                type="email"
+                maxLength={320}
+                value={contact}
+                onChange={(e) => {
+                  setContact(e.target.value);
+                  fields.edit('contact');
+                }}
+                onBlur={(e) => fields.blur('contact', e.target.value)}
+                placeholder={t('contactPlaceholder')}
+              />
+            )}
+          </Field>
           {create.error && <ErrorText>{errorMessage(create.error)}</ErrorText>}
           <Button type="submit" size="lg" className="w-full" disabled={create.isPending}>
             {create.isPending ? t('creating') : t('create')}

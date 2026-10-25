@@ -4,8 +4,7 @@ import { useTranslations } from 'use-intl';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
-import { Label } from '@crove/ui/components/label';
-import { ErrorText, Logo, Notice } from '../components/ui.tsx';
+import { ErrorText, Field, focusFirstInvalid, isEmailAddress, Logo, Notice, useFieldErrors } from '../components/ui.tsx';
 import { LocaleSwitcher } from '../i18n/provider.tsx';
 import { auth, authErrorText, authFailure, callbackNoticeText, clearCallbackNotice, peekCallbackNotice, type AuthFailure, type CallbackNotice } from '../lib/auth.ts';
 import { LegalConsent } from '../components/legal-consent.tsx';
@@ -28,9 +27,22 @@ export function AuthPage() {
   // render, like the errors above.
   const [callback, setCallback] = useState<CallbackNotice | null>(peekCallbackNotice);
   useEffect(clearCallbackNotice, []);
+  // Checked by the form itself, so each error sits under its field (#1515); the server checks again.
+  const fields = useFieldErrors<'email' | 'password'>((field) => {
+    if (field === 'email') return !email.trim() ? t('emailRequired') : isEmailAddress(email) ? null : t('emailInvalid');
+    return !password ? t('passwordRequired') : password.length < 8 ? t('passwordShort') : null;
+  });
+  const switchTo = (next: Mode) => {
+    fields.reset();
+    setMode(next);
+  };
 
-  async function submit(event: FormEvent) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!fields.checkAll(mode === 'reset' ? ['email'] : ['email', 'password'])) {
+      focusFirstInvalid(event.currentTarget);
+      return;
+    }
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -66,23 +78,41 @@ export function AuthPage() {
         </div>
         <h1 className="mt-6 text-lg font-semibold text-foreground">{titles[mode]}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{t('tagline')}</p>
-        <form className="mt-6 space-y-3" onSubmit={submit}>
-          <Label className="flex-col items-stretch gap-1 font-normal">
-            <span className="text-muted-foreground">{t('email')}</span>
-            <Input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-          </Label>
-          {mode !== 'reset' && (
-            <Label className="flex-col items-stretch gap-1 font-normal">
-              <span className="text-muted-foreground">{t('password')}</span>
+        <form className="mt-6 space-y-3" noValidate onSubmit={submit}>
+          <Field label={t('email')} error={fields.of('email')}>
+            {(control) => (
               <Input
-                type="password"
+                {...control}
+                type="email"
                 required
-                minLength={8}
-                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="email"
+                value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  fields.edit('email');
+                }}
+                onBlur={(e) => fields.blur('email', e.target.value)}
               />
-            </Label>
+            )}
+          </Field>
+          {mode !== 'reset' && (
+            <Field label={t('password')} error={fields.of('password')}>
+              {(control) => (
+                <Input
+                  {...control}
+                  type="password"
+                  required
+                  minLength={8}
+                  autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    fields.edit('password');
+                  }}
+                  onBlur={(e) => fields.blur('password', e.target.value)}
+                />
+              )}
+            </Field>
           )}
           {error && <ErrorText>{authErrorText(error, root)}</ErrorText>}
           {callback?.error && <ErrorText>{callbackNoticeText(callback, root)}</ErrorText>}
@@ -96,15 +126,15 @@ export function AuthPage() {
         <div className="mt-4 flex justify-between text-sm">
           {mode === 'login' ? (
             <>
-              <button className="text-link hover:underline" onClick={() => setMode('signup')}>
+              <button className="text-link hover:underline" onClick={() => switchTo('signup')}>
                 {t('signup')}
               </button>
-              <button className="text-subtle-foreground hover:text-muted-foreground" onClick={() => setMode('reset')}>
+              <button className="text-subtle-foreground hover:text-muted-foreground" onClick={() => switchTo('reset')}>
                 {t('forgotLink')}
               </button>
             </>
           ) : (
-            <button className="text-link hover:underline" onClick={() => setMode('login')}>
+            <button className="text-link hover:underline" onClick={() => switchTo('login')}>
               {t('haveAccount')}
             </button>
           )}

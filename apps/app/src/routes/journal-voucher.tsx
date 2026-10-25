@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { Fragment, useId, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useTranslations } from 'use-intl';
 import { JOURNAL_VOUCHER_MAX_LINES, needsParty } from '@crove/kernel-contract';
 import { Alert, AlertDescription } from '@crove/ui/components/alert';
@@ -11,11 +12,11 @@ import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-se
 import { AmountInput } from '../components/amount-input.tsx';
 import { DateInput } from '../components/date-input.tsx';
 import { useChosenEntity } from '../components/entity-switcher.tsx';
-import { ErrorText, Spinner } from '../components/ui.tsx';
+import { ErrorText, FieldError, fieldControl, fieldErrorId, focusFirstInvalid, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
-import { journalAmount, journalFormProblem, journalTotals, journalVoucherProblem } from '../lib/journal-voucher.ts';
+import { journalAmount, journalFormProblem, journalLineProblem, journalTotals, journalVoucherProblem } from '../lib/journal-voucher.ts';
 import { localToday } from '../lib/reversal.ts';
 
 interface Line {
@@ -42,6 +43,9 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
   const [description, setDescription] = useState('');
   const [lines, setLines] = useState<Line[]>(() => [newLine(), newLine()]);
   const [touched, setTouched] = useState(false);
+  // Lines whose amounts the user left with something typed: their problem shows under them before the submit (#1515).
+  const [checked, setChecked] = useState<ReadonlySet<string>>(() => new Set());
+  const ids = useId();
   // One key per form: a retry of the same request returns the same proposal.
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
   const request = useMutation(orpc.inbox.request.mutationOptions({ onSettled: () => void queryClient.invalidateQueries() }));
@@ -56,6 +60,18 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
   const totals = journalTotals(form.lines);
   const refused = journalVoucherProblem(request.error);
   const setLine = (key: string, patch: Partial<Line>) => setLines((current) => current.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+  const check = (key: string, on: boolean) =>
+    setChecked((current) => {
+      if (current.has(key) === on) return current;
+      const next = new Set(current);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  // Each problem sits under the field or the line it is about; only the count of lines and the totals stay below them.
+  const descriptionId = `${ids}-description`;
+  const descriptionInvalid = touched && problem === 'description';
+  const formLevel = touched && (problem === 'lines' || problem === 'unbalanced') ? problem : null;
 
   if (request.data) {
     return (
@@ -74,6 +90,7 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
               setDescription('');
               setLines([newLine(), newLine()]);
               setTouched(false);
+              setChecked(new Set());
             }}
           >
             {t('another')}
@@ -90,7 +107,8 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
         aria-label={t('title')}
         onSubmit={(event) => {
           event.preventDefault();
-          setTouched(true);
+          flushSync(() => setTouched(true));
+          if (problem) focusFirstInvalid(event.currentTarget);
           if (problem || !entity.ready) return;
           request.mutate({
             command: 'finance.journal_voucher.record',
@@ -116,10 +134,23 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
             <span className="text-subtle-foreground">{t('date')}</span>
             <DateInput required value={date} onChange={setDate} className="mt-1 w-full" />
           </label>
-          <label className="block text-xs">
-            <span className="text-subtle-foreground">{t('description')}</span>
-            <Input required maxLength={300} value={description} onChange={(e) => setDescription(e.target.value)} placeholder={t('descriptionPlaceholder')} className="mt-1 w-full" />
-          </label>
+          <div>
+            <label className="block text-xs">
+              <span className="text-subtle-foreground">{t('description')}</span>
+              <Input
+                {...fieldControl(descriptionId, { error: descriptionInvalid })}
+                required
+                maxLength={300}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder={t('descriptionPlaceholder')}
+                className="mt-1 w-full"
+              />
+            </label>
+            <FieldError id={descriptionId} className="mt-1">
+              {descriptionInvalid ? t('formProblems.description') : null}
+            </FieldError>
+          </div>
         </div>
 
         <div>
@@ -127,55 +158,72 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
           <div className="mt-2 space-y-2">
             {lines.map((l, i) => {
               const line = String(i + 1);
+              const lineId = `${ids}-line-${l.key}`;
+              const lineProblem = touched || checked.has(l.key) ? journalLineProblem(form.lines[i] ?? l) : null;
+              const amountInvalid = lineProblem === 'amount' || lineProblem === 'side';
+              const linked = (invalid: boolean) => ({ 'aria-invalid': invalid || undefined, 'aria-describedby': invalid ? fieldErrorId(lineId) : undefined });
               return (
-                <div key={l.key} className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)_auto]">
-                  <NativeSelect aria-label={t('lineAccount', { line })} className="w-full" value={account(l)} onChange={(e) => setLine(l.key, { account: e.target.value })}>
-                    {pickableAccounts(chart, account(l)).map((a) => (
-                      <NativeSelectOption key={a.code} value={a.code}>
-                        {accountLabel(a)}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                  <NativeSelect aria-label={t('lineParty', { line })} className="w-full" value={l.partyId} onChange={(e) => setLine(l.key, { partyId: e.target.value })}>
-                    <NativeSelectOption value="">{needsParty(account(l)) ? t('chooseParty') : t('noParty')}</NativeSelectOption>
-                    {(parties.data ?? []).map((p) => (
-                      <NativeSelectOption key={p.id} value={p.id}>
-                        {p.taxCode ? `${p.name} (${p.taxCode})` : p.name}
-                      </NativeSelectOption>
-                    ))}
-                  </NativeSelect>
-                  <AmountInput
-                    aria-label={t('lineDebit', { line })}
-                    placeholder={t('debit')}
-                    value={l.debit}
-                    onChange={(debit) => setLine(l.key, { debit })}
-                    className="w-full text-right tabular-nums"
-                  />
-                  <AmountInput
-                    aria-label={t('lineCredit', { line })}
-                    placeholder={t('credit')}
-                    value={l.credit}
-                    onChange={(credit) => setLine(l.key, { credit })}
-                    className="w-full text-right tabular-nums"
-                  />
-                  <Input
-                    maxLength={300}
-                    aria-label={t('lineMemo', { line })}
-                    placeholder={t('memoPlaceholder')}
-                    value={l.memo}
-                    onChange={(e) => setLine(l.key, { memo: e.target.value })}
-                    className="w-full"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    disabled={lines.length <= 2}
-                    aria-label={t('removeLine', { line })}
-                    onClick={() => setLines((current) => current.filter((x) => x.key !== l.key))}
-                  >
-                    ✕
-                  </Button>
-                </div>
+                <Fragment key={l.key}>
+                  <div className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)_auto]">
+                    <NativeSelect aria-label={t('lineAccount', { line })} className="w-full" value={account(l)} onChange={(e) => setLine(l.key, { account: e.target.value })}>
+                      {pickableAccounts(chart, account(l)).map((a) => (
+                        <NativeSelectOption key={a.code} value={a.code}>
+                          {accountLabel(a)}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                    <NativeSelect {...linked(lineProblem === 'party')} aria-label={t('lineParty', { line })} className="w-full" value={l.partyId} onChange={(e) => setLine(l.key, { partyId: e.target.value })}>
+                      <NativeSelectOption value="">{needsParty(account(l)) ? t('chooseParty') : t('noParty')}</NativeSelectOption>
+                      {(parties.data ?? []).map((p) => (
+                        <NativeSelectOption key={p.id} value={p.id}>
+                          {p.taxCode ? `${p.name} (${p.taxCode})` : p.name}
+                        </NativeSelectOption>
+                      ))}
+                    </NativeSelect>
+                    <AmountInput
+                      {...linked(amountInvalid)}
+                      aria-label={t('lineDebit', { line })}
+                      placeholder={t('debit')}
+                      value={l.debit}
+                      onChange={(debit) => {
+                        setLine(l.key, { debit });
+                        check(l.key, false);
+                      }}
+                      onBlur={(e) => e.target.value.trim() && check(l.key, true)}
+                      className="w-full text-right tabular-nums"
+                    />
+                    <AmountInput
+                      {...linked(amountInvalid)}
+                      aria-label={t('lineCredit', { line })}
+                      placeholder={t('credit')}
+                      value={l.credit}
+                      onChange={(credit) => {
+                        setLine(l.key, { credit });
+                        check(l.key, false);
+                      }}
+                      onBlur={(e) => e.target.value.trim() && check(l.key, true)}
+                      className="w-full text-right tabular-nums"
+                    />
+                    <Input
+                      maxLength={300}
+                      aria-label={t('lineMemo', { line })}
+                      placeholder={t('memoPlaceholder')}
+                      value={l.memo}
+                      onChange={(e) => setLine(l.key, { memo: e.target.value })}
+                      className="w-full"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={lines.length <= 2}
+                      aria-label={t('removeLine', { line })}
+                      onClick={() => setLines((current) => current.filter((x) => x.key !== l.key))}
+                    >
+                      ✕
+                    </Button>
+                  </div>
+                  <FieldError id={lineId}>{lineProblem ? t(`formProblems.${lineProblem}`) : null}</FieldError>
+                </Fragment>
               );
             })}
           </div>
@@ -187,7 +235,7 @@ export function JournalVoucherFormCard({ slug, onClose }: { slug: string; onClos
           </div>
         </div>
 
-        {touched && problem && <ErrorText>{t(`formProblems.${problem}`)}</ErrorText>}
+        {formLevel && <ErrorText>{t(`formProblems.${formLevel}`)}</ErrorText>}
         {request.error && <ErrorText>{refused ? t(`problems.${refused}`) : errorMessage(request.error)}</ErrorText>}
         <div className="flex gap-2">
           <Button type="submit" disabled={request.isPending}>
