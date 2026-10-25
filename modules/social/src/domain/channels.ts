@@ -753,29 +753,31 @@ export function documentTitleOf(settings: Readonly<Record<string, unknown>> | un
 // the composer says so instead of letting a video fail at publish time. Each adapter that learns video joins here.
 export const VIDEO_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'youtube', 'tiktok', 'instagram', 'facebook_page', 'threads', 'x', 'linkedin', 'linkedin_page', 'telegram', 'mastodon', 'bluesky', 'pinterest', 'discord', 'zalo_oa']);
 
-// The channels whose Crove adapter takes a published post down (#860, #1137, #1138); the others answer
-// REMOVE_NOT_SUPPORTED until their adapter learns it. Telegram lets a bot delete a channel post only within 48 hours of
-// it. Threads stays out: its delete endpoint needs the threads_delete permission, which Crove's Threads connect does
-// not ask for.
-export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x', 'facebook_page', 'youtube', 'linkedin', 'linkedin_page', 'pinterest', 'wordpress', 'google_business']);
+// The channels whose Crove adapter takes a published post down (#860, #1137, #1138; Zalo OA's article/remove, #1430);
+// the others answer REMOVE_NOT_SUPPORTED until their adapter learns it. Telegram lets a bot delete a channel post only
+// within 48 hours of it. Threads stays out: its delete endpoint needs the threads_delete permission, which Crove's
+// Threads connect does not ask for.
+export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'bluesky', 'mastodon', 'telegram', 'discord', 'x', 'facebook_page', 'youtube', 'linkedin', 'linkedin_page', 'pinterest', 'wordpress', 'google_business', 'zalo_oa']);
 
 // The channels whose Crove adapter corrects a published post's text (#1223): Facebook Pages (`POST /{page-post-id}`),
 // LinkedIn members and pages (a PARTIAL_UPDATE of the commentary), Mastodon (`PUT /api/v1/statuses/:id`), Telegram
-// (`editMessageText`, `editMessageCaption`) and Discord (editing the webhook's message). Instagram, Threads, Bluesky,
-// X, TikTok and Zalo have no edit Crove can make and answer EDIT_NOT_SUPPORTED; WordPress, YouTube, Pinterest and
-// Google Business take one, and join here with their own issue.
-export const EDIT_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'facebook_page', 'linkedin', 'linkedin_page', 'mastodon', 'telegram', 'discord']);
+// (`editMessageText`, `editMessageCaption`), Discord (editing the webhook's message) and Zalo OA (`article/update`
+// with the whole article, its cover and images sent again, #1430). Instagram, Threads, Bluesky, X and TikTok have no
+// edit Crove can make and answer EDIT_NOT_SUPPORTED; WordPress, YouTube, Pinterest and Google Business take one, and
+// join here with their own issue.
+export const EDIT_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'facebook_page', 'linkedin', 'linkedin_page', 'mastodon', 'telegram', 'discord', 'zalo_oa']);
 
 // Why a published variant's text cannot be corrected (#1223), or null when it can: the channel has no edit
 // ('provider'), the post is a poll, whose question or options no edit may change without resetting its votes ('poll'),
-// or a Story or a Reel, whose text no edit reaches ('post_type'), as a Facebook video's description ('video'). The
-// adapters refuse the same before any call.
+// or a Story or a Reel, whose text no edit reaches ('post_type'), as a Facebook video's description ('video') and a
+// Zalo video article (#1429), whose video_id Crove does not keep to send again ('video'). The adapters refuse the same
+// before any call.
 export type EditRefusal = 'provider' | 'poll' | 'post_type' | 'video';
 export function editRefusal(provider: string, settings: Readonly<Record<string, unknown>>, mediaKinds: readonly MediaKind[]): EditRefusal | null {
   if (!isProvider(provider) || !EDIT_READY.has(provider)) return 'provider';
   if (settings.poll !== undefined && settings.poll !== null) return 'poll';
   if (postTypeOf(settings) !== 'feed') return 'post_type';
-  if (provider === 'facebook_page' && mediaKinds.includes('video')) return 'video';
+  if ((provider === 'facebook_page' || provider === 'zalo_oa') && mediaKinds.includes('video')) return 'video';
   return null;
 }
 

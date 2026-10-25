@@ -1,6 +1,6 @@
 // Zalo OA against recorded answers (shapes from Zalo's OA API docs); no live call.
 import { describe, expect, it } from 'vitest';
-import { newOAuthAttempt, ZaloOaConnector, ZaloOaPublisher, ZaloOaRefresher, type Fetch, type PublishInput } from '../src/index.ts';
+import { newOAuthAttempt, ZaloOaConnector, ZaloOaPublisher, ZaloOaRefresher, type EditInput, type Fetch, type PublishInput, type RemoveInput } from '../src/index.ts';
 
 const APP = { appId: '4318000000000000001', appSecret: 'test-zalo-secret-not-real' };
 const REDIRECT = 'https://crove.example/channels/oauth/zalo_oa/callback';
@@ -428,5 +428,160 @@ describe('ZaloOaPublisher metrics', () => {
     expect(await new ZaloOaPublisher(APP, dead.fetchImpl).metrics(metricsInput)).toEqual({ refused: 'token_expired' });
     const down = zalo({ 'GET openapi.zalo.me/v2.0/article/getdetail': [{ status: 502, body: {} }] });
     expect(await new ZaloOaPublisher(APP, down.fetchImpl).metrics(metricsInput)).toBeNull();
+  });
+});
+
+// Takedown and correction (#1430), against answers shaped like Zalo's OA content docs: article/remove answers at once,
+// article/update answers a token that article/verify turns into the article's id.
+describe('ZaloOaPublisher remove and edit', () => {
+  const REMOVE = 'POST openapi.zalo.me/v2.0/article/remove';
+  const DETAIL = 'GET openapi.zalo.me/v2.0/article/getdetail';
+  const UPDATE = 'POST openapi.zalo.me/v2.0/article/update';
+  const VERIFY = 'POST openapi.zalo.me/v2.0/article/verify';
+  const removeInput = (over: Partial<RemoveInput> = {}): RemoveInput => ({ externalAccountId: '579745863508352884', secret: SECRET, externalId: '39c07ccbe78e0ed0579f', ...over });
+  const photo = (fileId: string, altText: string | null = null) => ({ fileId, mime: 'image/jpeg', sizeBytes: 400_000, altText });
+  const editInput = (over: Partial<EditInput> = {}): EditInput => ({
+    externalAccountId: '579745863508352884',
+    secret: SECRET,
+    externalId: '39c07ccbe78e0ed0579f',
+    content: { body: 'Khai trương chi nhánh mới.\n\nGiảm 25% tuần đầu.', title: 'Khai trương', linkUrl: null, media: [photo('f-1'), photo('f-2', 'Mặt tiền')] },
+    settings: { author: 'Tiệm Bánh B' },
+    mediaUrl: async (fileId) => `https://bucket.example/${fileId}?sig=1`,
+    callKey: 'call-edit-1',
+    ...over,
+  });
+  const fast = { pollMs: 0, editWaitMs: 50 };
+  const timeout: Fetch = async () => {
+    throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+  };
+
+  it('takes the article down with one article/remove of its id', async () => {
+    const { fetchImpl, calls } = zalo({ [REMOVE]: [{ body: { error: 0, message: 'Success' } }] });
+    expect(await new ZaloOaPublisher(APP, fetchImpl).remove(removeInput())).toEqual({ kind: 'removed' });
+    expect(calls.map((c) => c.route)).toEqual([REMOVE]);
+    expect(calls[0]?.json).toEqual({ id: '39c07ccbe78e0ed0579f' });
+    expect(calls[0]?.headers.get('access_token')).toBe('zalo-access-1');
+  });
+
+  it('counts an article Zalo no longer has as removed, and one still there as refused', async () => {
+    // Zalo names no code for a missing article: the refusal is checked with article/getdetail, refused too.
+    const gone = zalo({ [REMOVE]: [{ body: { error: -201, message: 'id is invalid!' } }], [DETAIL]: [{ body: { error: -201, message: 'id is invalid!' } }] });
+    expect(await new ZaloOaPublisher(APP, gone.fetchImpl).remove(removeInput())).toEqual({ kind: 'removed' });
+    expect(gone.calls.map((c) => c.route)).toEqual([REMOVE, DETAIL]);
+    expect(Object.fromEntries(gone.calls[1]?.query ?? [])).toEqual({ id: '39c07ccbe78e0ed0579f' });
+    const notFound = zalo({ [REMOVE]: [{ status: 404, body: { error: -1, message: 'Not found' } }], [DETAIL]: [{ status: 404, body: { error: -1, message: 'Not found' } }] });
+    expect(await new ZaloOaPublisher(APP, notFound.fetchImpl).remove(removeInput())).toEqual({ kind: 'removed' });
+    // Still there: Zalo would not take it down.
+    const kept = zalo({
+      [REMOVE]: [{ body: { error: -201, message: 'Cannot remove this article' } }],
+      [DETAIL]: [{ body: { error: 0, message: 'Success', data: { id: '39c07ccbe78e0ed0579f', type: 'normal', title: 'Khai trương', status: 'show' } } }],
+    });
+    expect(await new ZaloOaPublisher(APP, kept.fetchImpl).remove(removeInput())).toEqual({ kind: 'rejected', error: 'bad_request', code: 'ZALO_CANNOT_REMOVE', message: 'Cannot remove this article' });
+    // The check itself fails, or is refused for the OA itself: neither gone nor there.
+    const down = zalo({ [REMOVE]: [{ body: { error: -201, message: 'id is invalid!' } }], [DETAIL]: [{ status: 503, body: {} }] });
+    expect(await new ZaloOaPublisher(APP, down.fetchImpl).remove(removeInput())).toEqual({ kind: 'unknown', code: 'REMOVE_UNCONFIRMED' });
+    const denied = zalo({ [REMOVE]: [{ body: { error: -201, message: 'id is invalid!' } }], [DETAIL]: [{ body: { error: -212, message: 'App has not registed this api' } }] });
+    expect(await new ZaloOaPublisher(APP, denied.fetchImpl).remove(removeInput())).toEqual({ kind: 'unknown', code: 'REMOVE_UNCONFIRMED' });
+  });
+
+  it('maps a refused token, a rate limit, an article still processing and errors of the OA itself, with no check', async () => {
+    const run = async (answer: { status?: number; body: unknown }) => {
+      const { fetchImpl, calls } = zalo({ [REMOVE]: [answer] });
+      const result = await new ZaloOaPublisher(APP, fetchImpl).remove(removeInput());
+      expect(calls.map((c) => c.route)).toEqual([REMOVE]);
+      return result;
+    };
+    expect(await run({ body: { error: -216, message: 'Access token is invalid' } })).toMatchObject({ kind: 'rejected', error: 'token_expired', code: '-216' });
+    expect(await run({ body: { error: -220, message: 'access_token is expired or removed' } })).toMatchObject({ kind: 'rejected', error: 'token_expired', code: '-220' });
+    expect(await run({ status: 401, body: {} })).toMatchObject({ kind: 'rejected', error: 'token_expired' });
+    expect(await run({ body: { error: -32, message: 'Your OA reached limit call api' } })).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: '-32' });
+    expect(await run({ body: { error: -214, message: 'Article is being processed' } })).toMatchObject({ kind: 'rejected', error: 'transient', code: '-214' });
+    expect(await run({ body: { error: -223, message: 'Official Account has not authorized this API' } })).toMatchObject({ kind: 'rejected', error: 'bad_request', code: '-223' });
+    expect(await run({ status: 500, body: {} })).toEqual({ kind: 'unknown', code: 'HTTP_500' });
+    // Nothing is sent without a token or for an id Zalo would not give.
+    const none = zalo({});
+    const publisher = new ZaloOaPublisher(APP, none.fetchImpl);
+    expect(await publisher.remove(removeInput({ secret: '{}' }))).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
+    expect(await publisher.remove(removeInput({ externalId: '../oa/getoa' }))).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(none.calls).toEqual([]);
+  });
+
+  it('answers unknown when the takedown times out, since it may have reached Zalo', async () => {
+    expect(await new ZaloOaPublisher(APP, timeout).remove(removeInput())).toEqual({ kind: 'unknown', code: 'NETWORK' });
+  });
+
+  it('sends the whole article again with the new text, the same cover and images, and confirms it through article/verify', async () => {
+    const minted: string[] = [];
+    const { fetchImpl, calls } = zalo({ [UPDATE]: [{ body: { error: 0, message: 'Success', data: { token: 'utok-1' } } }], [VERIFY]: [{ body: { error: 0, message: 'Success', data: { id: '39c07ccbe78e0ed0579f' } } }] });
+    const input = editInput({
+      mediaUrl: async (fileId) => {
+        // Asked for while nothing was sent yet, right before the call that names them: a presigned URL lives a minute.
+        expect(calls).toHaveLength(0);
+        minted.push(fileId);
+        return `https://bucket.example/${fileId}?sig=1`;
+      },
+    });
+    expect(await new ZaloOaPublisher(APP, fetchImpl, fast).edit(input)).toEqual({ kind: 'edited' });
+    expect(minted).toEqual(['f-1', 'f-2']);
+    expect(calls.map((c) => c.route)).toEqual([UPDATE, VERIFY]);
+    expect(calls[0]?.json).toEqual({
+      id: '39c07ccbe78e0ed0579f',
+      type: 'normal',
+      title: 'Khai trương',
+      author: 'Tiệm Bánh B',
+      cover: { cover_type: 'photo', photo_url: 'https://bucket.example/f-1?sig=1', status: 'show' },
+      description: 'Khai trương chi nhánh mới.',
+      body: [
+        { type: 'text', content: 'Khai trương chi nhánh mới.' },
+        { type: 'text', content: 'Giảm 25% tuần đầu.' },
+        { type: 'image', url: 'https://bucket.example/f-2?sig=1', caption: 'Mặt tiền' },
+      ],
+      status: 'show',
+      comment: 'show',
+    });
+    expect(calls[1]?.json).toEqual({ token: 'utok-1' });
+  });
+
+  it('asks article/verify again while Zalo processes the update, and leaves it unclear when the wait ends', async () => {
+    const processing = { body: { error: -214, message: 'Article is being processed' } };
+    const later = zalo({ [UPDATE]: [{ body: { error: 0, data: { token: 'utok-2' } } }], [VERIFY]: [processing, { body: { error: 0, data: {} } }, { status: 503, body: {} }, { body: { error: 0, data: { id: '39c07ccbe78e0ed0579f' } } }] });
+    expect(await new ZaloOaPublisher(APP, later.fetchImpl, { pollMs: 0, editWaitMs: 5_000 }).edit(editInput())).toEqual({ kind: 'edited' });
+    expect(later.calls.filter((c) => c.route === VERIFY)).toHaveLength(4);
+    const slow = zalo({ [UPDATE]: [{ body: { error: 0, data: { token: 'utok-3' } } }], [VERIFY]: Array.from({ length: 50 }, () => processing) });
+    expect(await new ZaloOaPublisher(APP, slow.fetchImpl, { pollMs: 5, editWaitMs: 30 }).edit(editInput())).toEqual({ kind: 'unknown', code: 'ZALO_EDIT_PROCESSING' });
+    // Nothing after the token is a rejection: a refused check or another article id goes to a person.
+    const refused = zalo({ [UPDATE]: [{ body: { error: 0, data: { token: 'utok-4' } } }], [VERIFY]: [{ body: { error: -216, message: 'Access token is invalid' } }] });
+    expect(await new ZaloOaPublisher(APP, refused.fetchImpl, fast).edit(editInput())).toEqual({ kind: 'unknown', code: '-216' });
+    const other = zalo({ [UPDATE]: [{ body: { error: 0, data: { token: 'utok-5' } } }], [VERIFY]: [{ body: { error: 0, data: { id: 'a-new-article' } } }] });
+    expect(await new ZaloOaPublisher(APP, other.fetchImpl, fast).edit(editInput())).toEqual({ kind: 'unknown', code: 'ZALO_OTHER_ARTICLE' });
+    const tokenless = zalo({ [UPDATE]: [{ body: { error: 0, data: {} } }] });
+    expect(await new ZaloOaPublisher(APP, tokenless.fetchImpl, fast).edit(editInput())).toEqual({ kind: 'unknown', code: 'NO_ARTICLE_TOKEN' });
+  });
+
+  it('maps an update Zalo refuses, and one whose answer never came', async () => {
+    const run = async (answer: { status?: number; body: unknown }) => new ZaloOaPublisher(APP, zalo({ [UPDATE]: [answer] }).fetchImpl, fast).edit(editInput());
+    expect(await run({ body: { error: -216, message: 'Access token is invalid' } })).toMatchObject({ kind: 'rejected', error: 'token_expired', code: '-216' });
+    expect(await run({ body: { error: -201, message: 'title is invalid!' } })).toMatchObject({ kind: 'rejected', error: 'bad_request', code: '-201', message: 'title is invalid!' });
+    expect(await run({ body: { error: -32, message: 'Your application reached limit call api' } })).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: '-32' });
+    expect(await run({ body: { error: -214, message: 'Article is being processed' } })).toMatchObject({ kind: 'rejected', error: 'transient', code: '-214' });
+    expect(await run({ status: 502, body: {} })).toEqual({ kind: 'unknown', code: 'HTTP_502' });
+    expect(await new ZaloOaPublisher(APP, timeout, fast).edit(editInput())).toEqual({ kind: 'unknown', code: 'NETWORK' });
+  });
+
+  it('refuses before any call a video article, a post Zalo would refuse, or images without a public URL', async () => {
+    const { fetchImpl, calls } = zalo({});
+    const publisher = new ZaloOaPublisher(APP, fetchImpl, fast);
+    const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 12_000_000, altText: null, durationSeconds: 42 };
+    const content = editInput().content;
+    expect(await publisher.edit(editInput({ content: { ...content, media: [clip] } }))).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(await publisher.edit(editInput({ secret: '{}' }))).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'NO_ACCESS_TOKEN' });
+    expect(await publisher.edit(editInput({ externalId: 'a b' }))).toMatchObject({ code: 'BAD_POST_ID' });
+    expect(await publisher.edit(editInput({ content: { ...content, title: ' ' } }))).toMatchObject({ code: 'TITLE_REQUIRED' });
+    expect(await publisher.edit(editInput({ content: { ...content, media: [] } }))).toMatchObject({ code: 'MEDIA_REQUIRED' });
+    expect(await publisher.edit(editInput({ content: { ...content, media: [{ ...photo('f-1'), sizeBytes: 2_000_000 }] } }))).toMatchObject({ code: 'IMAGE_TOO_LARGE' });
+    expect(await publisher.edit(editInput({ mediaUrl: async () => null }))).toMatchObject({ code: 'MEDIA_URL_UNAVAILABLE' });
+    const { mediaUrl: _unused, ...withoutUrls } = editInput();
+    expect(await publisher.edit(withoutUrls)).toMatchObject({ code: 'MEDIA_URL_UNAVAILABLE' });
+    expect(calls).toEqual([]);
   });
 });
