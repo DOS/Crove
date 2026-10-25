@@ -148,6 +148,20 @@ ROLLBACK;
 
 After the migration has run, the journal part can use each org's book currency instead: select `t.base_currency AS currency` in place of `'VND' AS currency`, and use `JOIN crove_kernel.tenant t ON t.org_id = l.org_id LEFT JOIN crove_kernel.currency c ON c.code = t.base_currency WHERE c.code IS NULL OR l.debit <> pg_catalog.round(l.debit, c.minor_units) OR l.credit <> pg_catalog.round(l.credit, c.minor_units)`. That post-migration form is the one `apps/kernel/test/finance-currency-scale.db.test.ts` runs.
 
+### Every org has a default legal entity (#1280, `20261102140000_crove_finance_legal_entity_scope.sql` and `20261102150000_crove_finance_legal_entity_books.sql`)
+
+These migrations put every finance row, and every org's period lock row, in its org's default legal entity, then make `legal_entity_id` NOT NULL. An org without a default entity would leave its rows NULL, `SET NOT NULL` would fail, and the deploy would stop on the old release. `20261030001000_crove_kernel_legal_entity.sql` created one for every org and `create_or_replay_org` creates one with every new org, so the check should be empty. It must return no rows:
+
+```sql
+BEGIN READ ONLY;
+SELECT t.org_id, t.slug, t.status
+FROM crove_kernel.tenant t
+WHERE NOT EXISTS (SELECT 1 FROM crove_kernel.legal_entity e WHERE e.org_id = t.org_id AND e.is_default);
+ROLLBACK;
+```
+
+Both migrations rewrite or alter the finance tables under ACCESS EXCLUSIVE locks until they commit (a few hundred milliseconds for a few thousand journal lines in testing). On a large ledger, deploy them in a quiet window.
+
 ## Deploy a release
 
 1. Merge to `main` and wait for CI. Run the [pre-deploy checks](#pre-deploy-checks) of every migration the release adds that has one.

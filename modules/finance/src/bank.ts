@@ -14,6 +14,7 @@ import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
 import { zBankStatementImport, zLedgerPeriod, type BankImportPreview, type BankImportResult, type BankLines, type BankStatementImport } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { Decimal } from '@crove/l10n-vn';
 import { chartAccounts } from './accounts.ts';
 import { bankLineStates } from './bank-match.ts';
@@ -39,7 +40,8 @@ async function bankAccount(ctx: QueryContext, code: string, active: boolean) {
 
 // What the account already has around the file: the stored keys among the file's, the date and amount of stored lines
 // on the file's days, the last stored line before its first day and the stored lines of its days, in import order.
-async function check(ctx: QueryContext, input: BankStatementImport): Promise<StatementCheck> {
+// Of one legal entity (#1280): a bank account's lines are deduplicated and chained per entity.
+async function check(ctx: QueryContext, input: BankStatementImport, legalEntityId: string): Promise<StatementCheck> {
   const { lines, keys } = readStatement(input);
   const dates = lines.map((l) => l.date).sort();
   const from = dates[0];
@@ -52,6 +54,7 @@ async function check(ctx: QueryContext, input: BankStatementImport): Promise<Sta
           .selectFrom('crove_finance.bank_line')
           .select('dedupe_key')
           .where('org_id', '=', ctx.orgId)
+          .where('legal_entity_id', '=', legalEntityId)
           .where('bank_account', '=', input.bankAccount)
           .where('dedupe_key', 'in', fileKeys)
           .execute();
@@ -62,6 +65,7 @@ async function check(ctx: QueryContext, input: BankStatementImport): Promise<Sta
       .selectFrom('crove_finance.bank_line')
       .select(['value_date as date', 'amount', 'running_balance as balance'])
       .where('org_id', '=', ctx.orgId)
+      .where('legal_entity_id', '=', legalEntityId)
       .where('bank_account', '=', input.bankAccount)
       .where('value_date', '>=', from)
       .where('value_date', '<=', to)
@@ -74,6 +78,7 @@ async function check(ctx: QueryContext, input: BankStatementImport): Promise<Sta
         .selectFrom('crove_finance.bank_line')
         .select(['value_date as date', 'amount', 'running_balance as balance'])
         .where('org_id', '=', ctx.orgId)
+        .where('legal_entity_id', '=', legalEntityId)
         .where('bank_account', '=', input.bankAccount)
         .where('value_date', '<', from)
         .orderBy('value_date', 'desc')
@@ -92,8 +97,8 @@ async function check(ctx: QueryContext, input: BankStatementImport): Promise<Sta
   );
 }
 
-const lockAccount = (ctx: QueryContext, code: string) =>
-  sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`${BANK_IMPORT_KIND}:${ctx.orgId}:${code}`}, 0))`.execute(ctx.trx);
+const lockAccount = (ctx: QueryContext, legalEntityId: string, code: string) =>
+  sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`${BANK_IMPORT_KIND}:${ctx.orgId}:${legalEntityId}:${code}`}, 0))`.execute(ctx.trx);
 
 export const bankPreview = defineQuery({
   name: 'finance.bank.preview',
@@ -101,7 +106,7 @@ export const bankPreview = defineQuery({
   access: IMPORTERS,
   handler: async (ctx, input): Promise<BankImportPreview> => {
     await bankAccount(ctx, input.bankAccount, true);
-    return (await check(ctx, input)).preview;
+    return (await check(ctx, input, await resolveLegalEntity(ctx, input.legalEntityId))).preview;
   },
 });
 
@@ -112,8 +117,9 @@ export const bankImport = defineCommand({
   access: IMPORTERS,
   handler: async (ctx, input): Promise<BankImportResult> => {
     await bankAccount(ctx, input.bankAccount, true);
-    await lockAccount(ctx, input.bankAccount);
-    const { preview, lines } = await check(ctx, input);
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    await lockAccount(ctx, legalEntityId, input.bankAccount);
+    const { preview, lines } = await check(ctx, input, legalEntityId);
     if (!preview.ok) {
       throw new DomainError('BANK_IMPORT_INVALID', 422, 'Sao kê có dòng không đọc được; hãy xem lại trước khi nhập', {
         rows: preview.rows.filter((r) => r.errors.length > 0).map((r) => r.rowNo),
@@ -133,6 +139,7 @@ export const bankImport = defineCommand({
         .values(
           chunk.map((l) => ({
             org_id: ctx.orgId,
+            legal_entity_id: legalEntityId,
             bank_account: input.bankAccount,
             import_id: importId,
             position: l.position,
@@ -146,7 +153,7 @@ export const bankImport = defineCommand({
             created_by: actor,
           })),
         )
-        .onConflict((oc) => oc.columns(['org_id', 'bank_account', 'dedupe_key']).where('dedupe_key', 'is not', null).doNothing())
+        .onConflict((oc) => oc.columns(['org_id', 'legal_entity_id', 'bank_account', 'dedupe_key']).where('dedupe_key', 'is not', null).doNothing())
         .returning('id')
         .execute();
       stored += inserted.length;
