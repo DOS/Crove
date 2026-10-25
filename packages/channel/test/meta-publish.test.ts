@@ -98,13 +98,62 @@ describe('FacebookPagePublisher.publish', () => {
     expect(none.calls).toHaveLength(0);
   });
 
-  it('refuses a video cover, which Crove does not send to a Page, with nothing posted (#642)', async () => {
+  it('sends a Page video with its title and cover image in the one upload, and the same request as before without them (#1499)', async () => {
+    const bodies: FormData[] = [];
+    const fetchImpl: Fetch = async (_url, init) => {
+      if (init?.body instanceof FormData) bodies.push(init.body);
+      return new Response(JSON.stringify({ id: '555666777' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const publisher = new FacebookPagePublisher(APP, fetchImpl);
     const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 4, altText: null };
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7]);
+    const read = async (fileId: string) => (fileId === 'c-1' ? png : new Uint8Array([0, 0, 0, 1]));
+    const video = (over: Partial<PublishInput['content']>, settings: Record<string, unknown> = {}) => input({ content: { ...input().content, media: [clip], ...over }, readMedia: read, settings });
+
+    const result = await publisher.publish(video({ title: '  Khai trương chi nhánh Quận 3  ' }, { cover: { fileId: 'c-1' } }));
+    expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_555666777`, url: `https://www.facebook.com/${PAGE}/videos/555666777` });
+    const sent = bodies[0] ?? new FormData();
+    expect([...sent.keys()]).toEqual(['title', 'description', 'published', 'thumb', 'source']);
+    expect(sent.get('title')).toBe('Khai trương chi nhánh Quận 3');
+    expect(sent.get('description')).toBe('Khai trương chi nhánh mới!\n\nhttps://example.com/khai-truong');
+    const thumb = sent.get('thumb') as File;
+    expect([thumb.type, thumb.name, thumb.size]).toEqual(['image/png', 'cover.png', png.byteLength]);
+    expect((sent.get('source') as Blob).type).toBe('video/mp4');
+
+    // No title (or a blank one) and no cover: the fields, values and order of the request before #1499.
+    await publisher.publish(video({ title: null }));
+    await publisher.publish(video({ title: '   ' }));
+    const fields = async (form: FormData | undefined) =>
+      Promise.all([...(form ?? new FormData()).entries()].map(async ([k, v]) => [k, typeof v === 'string' ? v : [v.type, (v as File).name, [...new Uint8Array(await v.arrayBuffer())]]]));
+    const before = [
+      ['description', 'Khai trương chi nhánh mới!\n\nhttps://example.com/khai-truong'],
+      ['published', 'true'],
+      ['source', ['video/mp4', 'video.mp4', [0, 0, 0, 1]]],
+    ];
+    expect(await fields(bodies[1])).toEqual(before);
+    expect(await fields(bodies[2])).toEqual(before);
+  });
+
+  it('refuses before anything is sent: a frame as a cover, a cover on a photo post, a Reel or a Story, and a cover it cannot read (#642, #1499)', async () => {
+    const clip = { fileId: 'v-1', mime: 'video/mp4', sizeBytes: 4, altText: null };
+    const photo = { fileId: 'f-1', mime: 'image/jpeg', sizeBytes: 3, altText: null };
     const none = fake({ body: { id: '555666777' } });
-    for (const cover of [{ atMs: 1000 }, { fileId: 'c-1' }]) {
-      const withCover = input({ content: { ...input().content, media: [clip] }, readMedia: async () => new Uint8Array([1]), settings: { cover } });
-      expect(await none.publisher.publish(withCover)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' });
-    }
+    const refused = { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
+    const read = async () => new Uint8Array([1]);
+    const withVideo = (settings: Record<string, unknown>) => input({ content: { ...input().content, media: [clip] }, readMedia: read, settings });
+    expect(await none.publisher.publish(withVideo({ cover: { atMs: 1000 } }))).toMatchObject(refused);
+    expect(await none.publisher.publish(withVideo({ cover: { fileId: 'c-1' }, postType: 'reel' }))).toMatchObject(refused);
+    expect(await none.publisher.publish(withVideo({ cover: { fileId: 'c-1' }, postType: 'story' }))).toMatchObject(refused);
+    expect(await none.publisher.publish(input({ content: { ...input().content, media: [photo] }, readMedia: read, settings: { cover: { fileId: 'c-1' } } }))).toMatchObject(refused);
+    const unreadable = input({
+      content: { ...input().content, media: [clip] },
+      readMedia: async (fileId) => {
+        if (fileId === 'c-1') throw new Error('gone');
+        return new Uint8Array([1]);
+      },
+      settings: { cover: { fileId: 'c-1' } },
+    });
+    expect(await none.publisher.publish(unreadable)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' });
     expect(none.calls).toHaveLength(0);
   });
 
@@ -341,6 +390,18 @@ describe('FacebookPagePublisher Stories and Reels (#644)', () => {
     const result = await publisher.publish(input({ content: { body: 'Reel khai trương', title: null, linkUrl: null, media: [clip] }, readMedia: read, settings: { postType: 'reel' } }));
     expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_4441`, url: 'https://www.facebook.com/reel/4441' });
     expect(Object.fromEntries(calls[2]?.form ?? [])).toEqual({ upload_phase: 'finish', video_id: '4441', video_state: 'PUBLISHED', description: 'Reel khai trương' });
+  });
+
+  it('sends the post title in the finish step of a Reel that has one (#1499)', async () => {
+    const { calls, publisher } = routed({
+      [`POST /${PAGE}/video_reels`]: [{ body: { video_id: '4444' } }, { body: { success: true } }],
+      'POST /video-upload/4444': [{ body: { success: true } }],
+    });
+    const result = await publisher.publish(input({ content: { body: 'Reel khai trương', title: ' Khai trương Quận 3 ', linkUrl: null, media: [clip] }, readMedia: read, settings: { postType: 'reel' } }));
+    expect(result).toEqual({ kind: 'accepted', externalId: `${PAGE}_4444`, url: 'https://www.facebook.com/reel/4444' });
+    expect(Object.fromEntries(calls[2]?.form ?? [])).toEqual({ upload_phase: 'finish', video_id: '4444', video_state: 'PUBLISHED', description: 'Reel khai trương', title: 'Khai trương Quận 3' });
+    // The start step and the upload carry no title.
+    expect(Object.fromEntries(calls[0]?.form ?? [])).toEqual({ upload_phase: 'start' });
   });
 
   it('posts nothing when a step before the last fails, and calls the last answer unclear when Meta does not confirm', async () => {

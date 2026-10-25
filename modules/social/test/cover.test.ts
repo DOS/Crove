@@ -36,7 +36,10 @@ describe('video covers (#642)', () => {
     // TikTok's direct post takes no uploaded image; YouTube's Data API cannot pick a frame.
     expect(coverIssues('tiktok', { fileId: FILE })).toEqual(['COVER_NOT_SUPPORTED']);
     expect(coverIssues('youtube', { atMs: 2000 })).toEqual(['COVER_NOT_SUPPORTED']);
-    for (const provider of ['facebook_page', 'threads', 'x', 'linkedin'] as const) {
+    // A Facebook Page video takes an uploaded image and no frame (#1499).
+    expect(coverIssues('facebook_page', { fileId: FILE })).toEqual([]);
+    expect(coverIssues('facebook_page', { atMs: 0 })).toEqual(['COVER_NOT_SUPPORTED']);
+    for (const provider of ['threads', 'x', 'linkedin'] as const) {
       expect(COVER_RULES[provider]).toBeUndefined();
       expect(coverIssues(provider, { atMs: 0 })).toEqual(['COVER_NOT_SUPPORTED']);
       expect(coverIssues(provider, { fileId: FILE })).toEqual(['COVER_NOT_SUPPORTED']);

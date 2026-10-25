@@ -43,6 +43,28 @@ describe('A WordPress draft or post pending review (#981)', () => {
   });
 });
 
+describe('A Facebook Page video (#1499)', () => {
+  const video = { mime: 'video/mp4', sizeBytes: 1_000_000, durationMs: 30_000 };
+  const photo = { mime: 'image/jpeg', sizeBytes: 100_000 };
+  it('shows the title field for a video or a Reel, not for a text, photo or Story post', () => {
+    expect(takesTitle('facebook_page', {}, [video])).toBe(true);
+    expect(takesTitle('facebook_page', { postType: 'reel' }, [video])).toBe(true);
+    expect(takesTitle('facebook_page', { postType: 'reel' })).toBe(true);
+    expect(takesTitle('facebook_page', {})).toBe(false);
+    expect(takesTitle('facebook_page', {}, [photo])).toBe(false);
+    expect(takesTitle('facebook_page', { postType: 'story' }, [video])).toBe(false);
+    expect(takesTitle('instagram', {}, [video])).toBe(false);
+  });
+
+  it('takes a cover image on a feed video and says to change a Reel cover in Facebook, in both languages', () => {
+    const codes = (settings: Record<string, unknown>) => draftIssues('facebook_page', { body: 'Khai trương', title: 'Khai trương Quận 3', media: [video], settings }).map((i) => i.code);
+    expect(codes({ cover: { fileId: 'c-1' } })).toEqual([]);
+    expect(codes({ postType: 'reel', cover: { fileId: 'c-1' } })).toEqual(['REEL_COVER_NOT_SUPPORTED']);
+    expect(vi.social.issues.REEL_COVER_NOT_SUPPORTED).toBe('Facebook chưa cho đặt ảnh bìa Reel qua API; hãy đổi ảnh bìa trong Facebook');
+    expect(en.social.issues.REEL_COVER_NOT_SUPPORTED).toMatch(/change the cover in Facebook/);
+  });
+});
+
 describe('A Discord forum post or thread (#1103)', () => {
   it('takes the post title only on a forum post, and flags a forum post with nothing to name it', () => {
     expect(takesTitle('discord', {})).toBe(false);
