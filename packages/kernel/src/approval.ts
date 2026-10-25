@@ -1,4 +1,4 @@
-// Approval policy for proposals (plan §4.7 P10 and P12, §8.3). kernel.proposal.approve enforces it and
+// Approval policy for proposals (plan §4.7 P09, P10 and P12, §8.3). kernel.proposal.approve enforces it and
 // kernel.inbox.get reports the same decision, so the Inbox shows Approve only to users the server accepts.
 import { sql, type Transaction } from 'kysely';
 import { z } from 'zod';
@@ -66,8 +66,38 @@ const POLICIES: Record<string, CommandPolicy> = {
 
 const NOBODY: CommandPolicy = { roles: [], permission: null, fourEyes: true };
 
-function policyFor(command: string): CommandPolicy {
-  return POLICIES[command] ?? NOBODY;
+// The version of the approval rules in this file (plan §4.7 recorded outcome: policy_version). Raise it with any change
+// to who may approve what, so an approval audit row says which rules it ran under, next to the org's preset and its
+// version and the build.
+export const APPROVAL_POLICY_VERSION = 2;
+
+// The org's approval policy (#1402): its preset, a data row of crove_kernel.approval_preset, and the version of the
+// org's choice, which grows by one on every change (kernel.org.set_approval_preset).
+export interface OrgApprovalPolicy {
+  preset: string;
+  version: number;
+  // P09 (the accountant preset): only a human holding the ledger's approval permission approves the ledger's proposals.
+  ledgerChiefAccountantOnly: boolean;
+}
+
+export async function orgApprovalPolicy(trx: Transaction<Database>, orgId: string): Promise<OrgApprovalPolicy> {
+  const row = await trx
+    .selectFrom('crove_kernel.tenant as t')
+    .innerJoin('crove_kernel.approval_preset as p', 'p.key', 't.approval_preset')
+    .select(['t.approval_preset', 't.approval_policy_version', 'p.ledger_chief_accountant_only'])
+    .where('t.org_id', '=', orgId)
+    .executeTakeFirst();
+  // No tenant row in context (RLS): nobody approves anything there anyway; read it as the strictest preset.
+  if (!row) return { preset: 'accountant', version: 0, ledgerChiefAccountantOnly: true };
+  return { preset: row.approval_preset, version: row.approval_policy_version, ledgerChiefAccountantOnly: row.ledger_chief_accountant_only };
+}
+
+// The command's policy under the org's preset. P09: under a preset that reserves the ledger to the chief accountant, a
+// ledger proposal is approved only through the approval permission, never by a base role alone.
+function policyFor(command: string, org: OrgApprovalPolicy): CommandPolicy {
+  const policy = POLICIES[command] ?? NOBODY;
+  if (policy === LEDGER && org.ledgerChiefAccountantOnly) return { ...LEDGER, roles: [] };
+  return policy;
 }
 
 // The members of the org, among `userIds` when given, who hold `permission` through an org-wide role assignment. No row
@@ -98,11 +128,17 @@ async function permissionHolders(
   return new Set(rows.map((r) => r.user_id));
 }
 
+// How many members may approve the ledger's proposals through the permission alone (P09's approvers): a switch to a
+// preset that reserves the ledger to them is refused while there are none.
+export async function ledgerApproverCount(trx: Transaction<Database>, orgId: string): Promise<number> {
+  return (await permissionHolders(trx, orgId, LEDGER_APPROVE_PERMISSION)).size;
+}
+
 // The humans who may approve `command` in the org in context right now (the P12 snapshot taken at creation): members
-// with an approving base role, and members holding the command's approval permission org-wide. tenant_member rows are
-// humans; agents will never be in this list.
+// with an approving base role, and members holding the command's approval permission org-wide, under the org's preset
+// (P09). tenant_member rows are humans; agents will never be in this list.
 export async function eligibleApprovers(trx: Transaction<Database>, orgId: string, command: string): Promise<string[]> {
-  const { roles, permission } = policyFor(command);
+  const { roles, permission } = policyFor(command, await orgApprovalPolicy(trx, orgId));
   if (roles.length === 0 && permission === null) return [];
   const rows = await trx
     .selectFrom('crove_kernel.tenant_member')
@@ -129,6 +165,8 @@ export interface ApprovalDecision {
   // The approver is an author (P10 outcome self_approved or owner_override).
   selfApproved: boolean;
   fourEyes: FourEyesOutcome;
+  // The org's preset and its version the decision ran under (recorded on the approval audit row).
+  orgPolicy: { preset: string; version: number };
 }
 
 export interface ProposalPolicyInput {
@@ -148,7 +186,9 @@ export async function decideApproval(
   proposal: ProposalPolicyInput,
   options: { lock: boolean },
 ): Promise<ApprovalDecision> {
-  const deny = (reason: ApproveReason, eligibleCount = 0): ApprovalDecision => ({ reason, eligibleCount, selfApproved: false, fourEyes: 'pass' });
+  const org = await orgApprovalPolicy(trx, orgId);
+  const orgPolicy = { preset: org.preset, version: org.version };
+  const deny = (reason: ApproveReason, eligibleCount = 0): ApprovalDecision => ({ reason, eligibleCount, selfApproved: false, fourEyes: 'pass', orgPolicy });
   if (proposal.status !== 'pending') return deny('not_pending');
   // R3 and anything a proposal executes needs a human approver (P12); system actors never approve.
   if (actor.type !== 'user') return deny('not_eligible');
@@ -157,7 +197,9 @@ export async function decideApproval(
   // A pending proposal without a recorded snapshot or authors cannot be judged: fail closed.
   if (snapshot.length === 0 || authors === null) return deny('not_eligible');
 
-  const policy = policyFor(proposal.command);
+  // Under the preset in force now, not the one at creation: a switch to the accountant preset stops an owner or admin
+  // in the snapshot from approving at once (fail closed); a switch back does not add anyone to the snapshot.
+  const policy = policyFor(proposal.command, org);
   if (policy.roles.length === 0 && policy.permission === null) return deny('not_eligible');
   let query = trx
     .selectFrom('crove_kernel.tenant_member')
@@ -182,10 +224,10 @@ export async function decideApproval(
   if (!eligible.has(actor.userId)) return deny('not_eligible', eligible.size);
 
   const userAuthors = new Set(authors.flatMap((a) => (a.type === 'user' ? [a.id] : [])));
-  if (!userAuthors.has(actor.userId)) return { reason: 'ok', eligibleCount: eligible.size, selfApproved: false, fourEyes: 'pass' };
+  if (!userAuthors.has(actor.userId)) return { reason: 'ok', eligibleCount: eligible.size, selfApproved: false, fourEyes: 'pass', orgPolicy };
   if (!policy.fourEyes || eligible.size < 2) {
     // P10: a sole eligible approver may approve their own work, flagged.
-    return { reason: 'ok', eligibleCount: eligible.size, selfApproved: true, fourEyes: 'self_approved' };
+    return { reason: 'ok', eligibleCount: eligible.size, selfApproved: true, fourEyes: 'self_approved', orgPolicy };
   }
   // Liveness (#88): when every eligible approver wrote part of this revision, four-eyes can never be met and the
   // proposal could only be rejected. An owner among them may approve, flagged. The owner is the trust root and could
@@ -193,7 +235,7 @@ export async function decideApproval(
   const allAuthors = [...eligible].every((id) => userAuthors.has(id));
   const actorRole = live.find((m) => m.user_id === actor.userId)?.role;
   if (allAuthors && actorRole === 'owner') {
-    return { reason: 'ok', eligibleCount: eligible.size, selfApproved: true, fourEyes: 'owner_override' };
+    return { reason: 'ok', eligibleCount: eligible.size, selfApproved: true, fourEyes: 'owner_override', orgPolicy };
   }
   return deny('four_eyes', eligible.size);
 }

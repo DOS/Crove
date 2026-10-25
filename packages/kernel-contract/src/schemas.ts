@@ -238,6 +238,10 @@ export const zOrgDetail = z.object({
   // finance.proposal.approve for a chief accountant, sorted. The screens use it to show what the server would allow;
   // the server checks again on every command.
   permissions: z.array(z.string()),
+  // The org's approval policy preset (issue #1402): founder or accountant (only the chief accountant approves the
+  // ledger's proposals), and the version of the org's choice. Only an owner changes it.
+  approvalPreset: z.string(),
+  approvalPolicyVersion: z.number().int().positive(),
 });
 
 // An org's Social figures on the multi-client home (#1261), read as the member in that org, each as the Social screen it

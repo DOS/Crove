@@ -28,7 +28,7 @@ import {
 } from '@crove/kernel-runtime';
 import { agentCommands } from './agents.ts';
 import { channelCommands } from './channels.ts';
-import { actorRef, addAuthor, decideApproval, eligibleApprovers, LEDGER_APPROVE_PERMISSION, parseAuthors } from './approval.ts';
+import { actorRef, addAuthor, APPROVAL_POLICY_VERSION, decideApproval, eligibleApprovers, LEDGER_APPROVE_PERMISSION, parseAuthors } from './approval.ts';
 import { archiveCommands } from './archives.ts';
 import { imageSizeCommands } from './image-sizes.ts';
 import { fileHoldCommands } from './evidence-holds.ts';
@@ -45,6 +45,7 @@ import { memberProfiles } from './profiles.ts';
 import { setAddress, setContactEmail } from './org-address.ts';
 import { partyCommands } from './parties.ts';
 import { setTaxCode, setVatFilingPeriod } from './tax-code.ts';
+import { setApprovalPreset } from './approval-preset.ts';
 import { legalEntityCommands } from './legal-entities.ts';
 import { roleCommands } from './roles.ts';
 import { calendarCommands } from './calendar.ts';
@@ -584,6 +585,10 @@ export const approveProposal = defineCommand({
       revision: proposal.revision,
       aal: ctx.actor.aal,
       policy: { P12: 'pass', P10: decision.fourEyes },
+      // The rules, the org's preset and its version, and the build this approval ran under (plan §4.7, #1402).
+      policy_version: APPROVAL_POLICY_VERSION,
+      org_policy: decision.orgPolicy,
+      build: ctx.build,
       eligible_approvers: decision.eligibleCount,
       self_approved: decision.selfApproved,
       accept_failed_checks: input.acceptFailedChecks ?? false,
@@ -910,6 +915,7 @@ const otherKernelCommands = [
   ...channelCommands,
   setTaxCode,
   setVatFilingPeriod,
+  setApprovalPreset,
   ...legalEntityCommands,
   ...roleCommands,
   ...calendarCommands,

@@ -45,6 +45,7 @@ export interface CroveKernelSchema {
   'crove_kernel.agent_template': KernelAgentTemplateTable;
   'crove_kernel.agent_wakeup': KernelAgentWakeupTable;
   'crove_kernel.ai_run': KernelAiRunTable;
+  'crove_kernel.approval_preset': KernelApprovalPresetTable;
   'crove_kernel.audit_event': KernelAuditEventTable;
   'crove_kernel.availability_rule': KernelAvailabilityRuleTable;
   'crove_kernel.budget_policy': KernelBudgetPolicyTable;
@@ -553,6 +554,12 @@ export interface KernelAiRunTable {
   expires_at: ColumnType<Date, Date | string, Date | string>;
   finished_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   error: string | null;
+}
+
+/** crove_kernel.approval_preset */
+export interface KernelApprovalPresetTable {
+  key: ColumnType<string, NotGranted, NotGranted>;
+  ledger_chief_accountant_only: ColumnType<boolean, NotGranted, NotGranted>;
 }
 
 /** crove_kernel.audit_event */
@@ -1068,6 +1075,8 @@ export interface KernelTenantTable {
   address: string | null;
   contact_email: string | null;
   missing_invoice_reminder_day: number | null;
+  approval_preset: Generated<string>;
+  approval_policy_version: Generated<number>;
 }
 
 /** crove_kernel.usage_deferral */
