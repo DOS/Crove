@@ -297,5 +297,7 @@ export const zTaxDueView = z.object({
   daysLeft: z.number().int(),
   legalBasis: z.string(),
   confirmed: z.boolean(),
+  // The legal entities the reader sees that have not marked it done yet (#1553), the default entity first.
+  openEntities: z.array(z.object({ id: z.uuid(), name: z.string() })),
 });
 export type TaxDueView = z.infer<typeof zTaxDueView>;
