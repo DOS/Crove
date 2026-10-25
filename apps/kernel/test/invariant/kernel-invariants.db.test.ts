@@ -902,6 +902,14 @@ suite('kernel invariants on PostgreSQL', () => {
     expect(signature).toEqual(
       Object.keys(signature).length === 0 ? {} : { accept_unverified_signature: true, signature_status: 'unverified', signature_reason: 'malformed' },
     );
+    // #1402 records the rules, the org's approval preset and its version, and the build the approval ran under; a row
+    // written before it has none of the three keys. Both are accepted here, and the keys are checked when present.
+    const policyKeys = ['policy_version', 'org_policy', 'build'];
+    const recorded = Object.fromEntries(policyKeys.filter((k) => k in approvedDetail).map((k) => [k, approvedDetail[k]]));
+    for (const key of policyKeys) delete approvedDetail[key];
+    expect(recorded).toEqual(
+      Object.keys(recorded).length === 0 ? {} : { policy_version: expect.any(Number), org_policy: { preset: 'founder', version: 1 }, build: expect.any(String) },
+    );
     expect([audits[0], { ...audits[1], detail: approvedDetail }]).toEqual([
       {
         actor_id: owner,
