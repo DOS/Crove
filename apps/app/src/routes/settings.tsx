@@ -19,7 +19,7 @@ import { LegalEntitiesCard } from './legal-entities.tsx';
 import { MemberRolesRow } from './member-roles.tsx';
 import { WorkingHoursCard } from './working-hours.tsx';
 import { EventTypesCard } from './event-types.tsx';
-import { ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { ErrorText, FieldError, fieldControl, fieldHintId, focusFirstInvalid, isEmailAddress, PageHeader, Spinner, useFieldErrors } from '../components/ui.tsx';
 import { apiFetch, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
@@ -431,6 +431,9 @@ function InviteMember({ isOwner, initialEmail, entities }: { isOwner: boolean; i
   const [noEntity, setNoEntity] = useState(false);
   const canScope = isOwner && entities.length > 1;
   const scopeId = useId();
+  // The email is checked on leaving the field and on submit, its error under the row (#1515); the server checks again.
+  const emailId = `${scopeId}-email`;
+  const fields = useFieldErrors<'email'>(() => (!email.trim() ? t('inviteEmailRequired') : isEmailAddress(email) ? null : t('inviteEmailInvalid')));
   const invite = useMutation(
     orpc.org.invite.mutationOptions({
       onSuccess: () => {
@@ -442,10 +445,13 @@ function InviteMember({ isOwner, initialEmail, entities }: { isOwner: boolean; i
     }),
   );
 
-  function submit(event: FormEvent) {
+  function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (scoped && entityIds.length === 0) {
-      setNoEntity(true);
+    const missingEntity = scoped && entityIds.length === 0;
+    setNoEntity(missingEntity);
+    // checkAll shows the email's error, and the missing entity with it, before the focus moves to the first of them.
+    if (!fields.checkAll(['email']) || missingEntity) {
+      focusFirstInvalid(event.currentTarget);
       return;
     }
     invite.mutate(scoped ? { email, role, legalEntityIds: entityIds } : { email, role });
@@ -457,10 +463,24 @@ function InviteMember({ isOwner, initialEmail, entities }: { isOwner: boolean; i
 
   return (
     <>
-      <form className="mt-4 space-y-2" onSubmit={submit}>
-        <p className="text-xs text-subtle-foreground">{t('inviteHint')}</p>
+      <form className="mt-4 space-y-2" noValidate onSubmit={submit}>
+        <p id={fieldHintId(emailId)} className="text-xs text-subtle-foreground">
+          {t('inviteHint')}
+        </p>
         <div className="flex gap-2">
-          <Input type="email" required maxLength={320} placeholder={t('emailPlaceholder')} value={email} onChange={(e) => setEmail(e.target.value)} />
+          <Input
+            {...fieldControl(emailId, { hint: true, error: Boolean(fields.of('email')) })}
+            type="email"
+            required
+            maxLength={320}
+            placeholder={t('emailPlaceholder')}
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              fields.edit('email');
+            }}
+            onBlur={(e) => fields.blur('email', e.target.value)}
+          />
           <NativeSelect className="shrink-0" value={role} onChange={(e) => setRole(e.target.value as InviteRole)} aria-label={t('role')}>
             {isOwner && !scoped && <NativeSelectOption value="admin">{root('roles.admin')}</NativeSelectOption>}
             <NativeSelectOption value="member">{root('roles.member')}</NativeSelectOption>
@@ -470,6 +490,7 @@ function InviteMember({ isOwner, initialEmail, entities }: { isOwner: boolean; i
             {t('invite')}
           </Button>
         </div>
+        <FieldError id={emailId}>{fields.of('email')}</FieldError>
         {canScope && (
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm text-foreground">
@@ -485,7 +506,10 @@ function InviteMember({ isOwner, initialEmail, entities }: { isOwner: boolean; i
               <span>{t('inviteScoped')}</span>
             </label>
             {scoped && (
-              <fieldset className="space-y-1.5 rounded-lg border p-3" aria-describedby={noEntity ? `${scopeId}-hint ${scopeId}-error` : `${scopeId}-hint`}>
+              <fieldset
+                className="space-y-1.5 rounded-lg border p-3"
+                aria-invalid={noEntity || undefined}
+                aria-describedby={noEntity ? `${scopeId}-hint ${scopeId}-error` : `${scopeId}-hint`}>
                 <legend className="px-1 text-xs text-subtle-foreground">{t('inviteEntities')}</legend>
                 <p id={`${scopeId}-hint`} className="text-xs text-subtle-foreground">
                   {t('inviteScopedHint')}
