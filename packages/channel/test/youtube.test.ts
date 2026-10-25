@@ -458,6 +458,10 @@ describe('YouTube quota reset (#1142)', () => {
     // The spring change on 14 March 2027: noon the day before waits for a standard midnight, that morning for a daylight one.
     expect(at('2027-03-13T20:00:00Z')).toBe('2027-03-14T08:01:00.000Z');
     expect(at('2027-03-14T12:00:00Z')).toBe('2027-03-15T07:01:00.000Z');
+    // Just after midnight on a change day the offset now differs from the next midnight's: 00:30 daylight time on
+    // 1 November waits for a standard midnight, and 00:30 standard time on 14 March for a daylight one.
+    expect(at('2026-11-01T07:30:00Z')).toBe('2026-11-02T08:01:00.000Z');
+    expect(at('2027-03-14T08:30:00Z')).toBe('2027-03-15T07:01:00.000Z');
   });
 
   it('sends a publish refused for a spent daily quota to wait for the reset, and a burst limit to the usual backoff', async () => {
@@ -496,7 +500,8 @@ describe('YouTube remove (#1137)', () => {
     expect(await remove(expired.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'token_expired' });
     const quota = google({ [DELETE]: [refusal(403, 'quotaExceeded', 'The request cannot be completed because you have exceeded your quota.')] });
     expect(await remove(quota.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'quotaExceeded', retryAt: youtubeQuotaResetAt() });
-    // The API's daily limit (#1142): a wait until the quota resets too, never a refusal of the delete.
+    // The API's daily limit (#1142): rate limited with the reset time, never a refusal of the delete. A takedown records
+    // it as failed and a person asks again; only publishing waits for the reset.
     const daily = google({ [DELETE]: [refusal(403, 'dailyLimitExceeded', 'Daily Limit Exceeded. The quota will be reset at midnight Pacific Time (PT).')] });
     const answer = await remove(daily.fetchImpl);
     expect(answer).toMatchObject({ kind: 'rejected', error: 'rate_limited', code: 'dailyLimitExceeded' });
