@@ -14,6 +14,8 @@
 import type { MetricName, MetricsInput, MetricsResult, CommentInput, CommentResult, ConnectedAccount, EditInput, EditResult, Publisher, PublishInput, PublishResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
 import { commentResult, EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { DUPLICATE_CONTENT, holdsLink } from './text.ts';
+import { linkCardOf, linkCardRefusal, type LinkCard } from './link-card.ts';
+import { coverImageType } from './cover.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
 
 //
@@ -322,9 +324,16 @@ function publishResult(error: unknown): PublishResult {
 const beforePost = (result: PublishResult): PublishResult =>
   result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', ...(result.kind === 'unknown' && result.code ? { code: result.code } : {}) };
 
-const textOf = (content: { body: string; linkUrl: string | null }) => {
+// carded: the post goes out with a link card (#1498), which carries the link, so the commentary does not repeat it.
+const textOf = (content: { body: string; linkUrl: string | null }, carded = false) => {
   const body = content.body.trim();
-  return content.linkUrl && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+  return content.linkUrl && !carded && !holdsLink(body, content.linkUrl) ? [body, content.linkUrl].filter(Boolean).join('\n\n') : body;
+};
+
+// Whether the post goes out with its link card: a valid card on a link post with no media.
+const isCarded = (input: { settings: Readonly<Record<string, unknown>>; content: { linkUrl: string | null; media: readonly unknown[] } }): boolean => {
+  const card = linkCardOf(input.settings);
+  return card !== null && linkCardRefusal(card, input.content) === null;
 };
 
 // Who sees a LinkedIn post (#983), in `settings.visibility` (the field Mastodon's visibility uses), with Crove's names
@@ -479,6 +488,12 @@ class LinkedInPosting {
     const poll = linkedinPollOf(input.settings);
     if (poll === 'invalid') return { kind: 'rejected', error: 'bad_request', code: 'POLL_INVALID' };
     if (poll && input.content.media.length > 0) return { kind: 'rejected', error: 'bad_request', code: 'POLL_WITH_MEDIA' };
+    // A link card (#1498) is the post's content too, on a link post with no media and no poll.
+    const card = linkCardOf(input.settings);
+    const cardRefusal = linkCardRefusal(card, input.content);
+    if (cardRefusal) return { kind: 'rejected', error: 'bad_request', code: cardRefusal };
+    if (card && poll) return { kind: 'rejected', error: 'bad_request', code: 'LINK_CARD_WITH_POLL' };
+    if (card && card !== 'invalid') return this.publishArticle(input, token, author, card, visibility);
     if (poll) {
       const text = textOf(input.content);
       if (!text) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
@@ -497,11 +512,8 @@ class LinkedInPosting {
         return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
       }
       try {
-        const init = await this.client.call<{ value?: { uploadUrl?: unknown; image?: unknown } }>('POST', '/rest/images?action=initializeUpload', token, { initializeUploadRequest: { owner: author } });
-        const uploadUrl = init.body?.value?.uploadUrl;
-        const image = init.body?.value?.image;
-        if (typeof uploadUrl !== 'string' || typeof image !== 'string' || !image.startsWith('urn:li:image:')) return { kind: 'rejected', error: 'transient', code: 'NO_UPLOAD_URL' };
-        await this.client.upload(uploadUrl, token, bytes, m.mime);
+        const image = await this.uploadImage(token, author, bytes, m.mime);
+        if (!image) return { kind: 'rejected', error: 'transient', code: 'NO_UPLOAD_URL' };
         images.push({ id: image, ...(m.altText ? { altText: m.altText.slice(0, LINKEDIN_ALT_TEXT_MAX) } : {}) });
       } catch (error) {
         return beforePost(publishResult(error));
@@ -512,6 +524,40 @@ class LinkedInPosting {
     if (images.length === 1) return this.post(token, author, text, { media: images[0] }, visibility);
     if (images.length > 1) return this.post(token, author, text, { multiImage: { images } }, visibility);
     return this.post(token, author, text, null, visibility);
+  }
+
+  // One image through the Images API (initializeUpload with the author as owner, then a PUT of the bytes); its urn, or
+  // null when LinkedIn handed out no upload URL. Nothing is visible until a post names it.
+  private async uploadImage(token: string, author: string, bytes: Uint8Array, mime: string): Promise<string | null> {
+    const init = await this.client.call<{ value?: { uploadUrl?: unknown; image?: unknown } }>('POST', '/rest/images?action=initializeUpload', token, { initializeUploadRequest: { owner: author } });
+    const uploadUrl = init.body?.value?.uploadUrl;
+    const image = init.body?.value?.image;
+    if (typeof uploadUrl !== 'string' || typeof image !== 'string' || !image.startsWith('urn:li:image:')) return null;
+    await this.client.upload(uploadUrl, token, bytes, mime);
+    return image;
+  }
+
+  // A link post with its card (#1498): the Posts API does not scrape a URL, so the post sends content.article with the
+  // link, the card's title and description and, when the card has an image, a thumbnail uploaded first through the
+  // Images API. A failed upload posted nothing. The commentary does not repeat the link.
+  private async publishArticle(input: PublishInput, token: string, author: string, card: LinkCard, visibility: Visibility): Promise<PublishResult> {
+    let thumbnail: string | null = null;
+    if (card.thumbFileId) {
+      let bytes: Uint8Array;
+      try {
+        bytes = await input.readMedia(card.thumbFileId);
+      } catch {
+        return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
+      }
+      try {
+        thumbnail = await this.uploadImage(token, author, bytes, coverImageType(bytes));
+      } catch (error) {
+        return beforePost(publishResult(error));
+      }
+      if (!thumbnail) return { kind: 'rejected', error: 'transient', code: 'NO_UPLOAD_URL' };
+    }
+    const article = { source: (input.content.linkUrl as string).trim(), title: card.title, ...(card.description ? { description: card.description } : {}), ...(thumbnail ? { thumbnail } : {}) };
+    return this.post(token, author, textOf(input.content, true), { article }, visibility);
   }
 
   // One video (#451): the Videos API's multipart upload (initialize, a PUT per part, finalize with the parts' ETags),
@@ -680,7 +726,8 @@ class LinkedInPosting {
     if (!AUTHORS[this.author].id.test(input.externalAccountId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
     if (!POST_URN.test(input.externalId)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
     if (linkedinPollOf(input.settings) !== null) return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
-    const text = textOf(input.content);
+    // A carded post (#1498) keeps its card; only the commentary changes, without the link the card carries.
+    const text = textOf(input.content, isCarded(input));
     if (!text && input.content.media.length === 0) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
     try {
       await this.client.call('POST', `/rest/posts/${encodeURIComponent(input.externalId)}`, token, { patch: { $set: { commentary: littleText(text) } } }, 'PARTIAL_UPDATE');

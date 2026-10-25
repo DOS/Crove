@@ -15,7 +15,7 @@ import { SOCIAL_IMAGE_TYPES, SOCIAL_QUEUE_SLOTS_MAX, SOCIAL_REVIEW_CHECKS_MAX, S
 import type { MemberRole, SocialDecision, SocialVariantStatus } from '@crove/db';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type QueryContext } from '@crove/kernel-runtime';
 import { approvalCovers, approvalsInRound, effectiveContent, type BaseContent, type PostMedia } from './domain/approval.ts';
-import { COMMENT_RULES, coverOf, firstCommentOf, isProvider, threadPartsOf } from './domain/channels.ts';
+import { COMMENT_RULES, coverOf, firstCommentOf, isProvider, linkCardThumbOf, threadPartsOf } from './domain/channels.ts';
 import { IMPORT_MEDIA_MAX } from './domain/plan-csv.ts';
 import { isValidTimeZone, nextFreeSlot, openSlots, placeQueued, retime, slotRefusal, type QueueSpec } from './domain/queue.ts';
 import { FROZEN, IN_FLIGHT, type VariantEvent } from './domain/state.ts';
@@ -38,7 +38,7 @@ import { assignCommands } from './assign.ts';
 import { assignReminderCommands } from './assign-reminders.ts';
 import { bulkEditCommands, bulkEditQueries } from './bulk-edit.ts';
 import { archiveCommands } from './archive.ts';
-import { coverProblem } from './cover-check.ts';
+import { settingsFileProblem } from './cover-check.ts';
 import { bulkDraftCommands } from './bulk-drafts.ts';
 import { publishingCommands } from './publishing.ts';
 import { snippetCommands, snippetQueries } from './snippets.ts';
@@ -171,12 +171,15 @@ const fileIdsOf = (media: readonly PostMedia[]): Set<string> => new Set(media.ma
 // variant shows one video, are channel rules (validateVariant), checked when it goes to review.
 // A cover image is attached like the post's media (#1273): an archived file or another channel's own media is refused,
 // unless it is the channel's cover already (kept).
+// A link card's image (#1498) is checked and attached the same way.
 async function checkCover(ctx: CommandContext, provider: string, settings: Record<string, unknown> | undefined, kept: Record<string, unknown> = {}): Promise<void> {
-  const problem = await coverProblem(ctx, provider, settings);
+  const problem = await settingsFileProblem(ctx, provider, settings);
   if (problem) throw problem;
   const cover = coverOf(settings);
   const current = coverOf(kept);
   if (cover && 'fileId' in cover && !(current && 'fileId' in current && current.fileId === cover.fileId)) await refuseUnusableMedia(ctx, [cover.fileId]);
+  const thumb = linkCardThumbOf(settings);
+  if (thumb && thumb !== linkCardThumbOf(kept)) await refuseUnusableMedia(ctx, [thumb]);
 }
 
 // Replaces a post's media rows with a list, positions from 1.
@@ -2026,7 +2029,7 @@ export const socialCommands = [
   ...outperformingCommands,
 ];
 // Where an image of a post is stored, for the publish job (system actor): only a file that a post or a variant of the
-// org shows, or a variant's video cover, so the job never reads another kind of file through it.
+// org shows, or a variant's video cover or link card image, so the job never reads another kind of file through it.
 export const mediaFile = defineQuery({
   name: 'social.media.file',
   input: z.strictObject({ fileId: zId }),
@@ -2047,7 +2050,8 @@ export const mediaFile = defineQuery({
               .whereRef('v.org_id', '=', 'f.org_id')
               .where(sql<boolean>`v.media @> jsonb_build_array(jsonb_build_object('fileId', ${input.fileId}::text))`),
           ),
-          // A video's cover image (#642): only a Social upload, whatever the write-time checks let through.
+          // A video's cover image (#642) or a link card's image (#1498): only a Social upload, whatever the write-time
+          // checks let through.
           eb.and([
             eb('f.source', '=', 'social'),
             eb.exists(
@@ -2055,7 +2059,7 @@ export const mediaFile = defineQuery({
               .selectFrom('crove_social.post_variant as v')
               .select('v.id')
               .whereRef('v.org_id', '=', 'f.org_id')
-              .where(sql<boolean>`lower(v.settings -> 'cover' ->> 'fileId') = lower(${input.fileId}::text)`),
+              .where(sql<boolean>`(lower(v.settings -> 'cover' ->> 'fileId') = lower(${input.fileId}::text) OR lower(v.settings -> 'linkCard' ->> 'thumbFileId') = lower(${input.fileId}::text))`),
             ),
           ]),
         ]),
