@@ -104,7 +104,9 @@ export const prepareVoucher = defineCommand({
       await lockBankLine(ctx, input.bankLineId);
       const voucher = { type: input.type, date: input.date, cashAccount: input.cashAccount, total: voucherTotal(input.lines) };
       const line = await checkBankLineVoucher(ctx, input.bankLineId, voucher, { pendingToo: true, legalEntityId: input.legalEntityId });
-      legalEntityId = line.legalEntityId;
+      // The line's entity, checked against the caller's scope like a named one (the line's own policy already hides
+      // another entity's lines).
+      legalEntityId = await resolveLegalEntity(ctx, line.legalEntityId);
     } else {
       legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     }
@@ -162,7 +164,9 @@ export const recordVoucher = defineCommand({
         { type: payload.type, date: payload.date, cashAccount: payload.cashAccount, total },
         { pendingToo: false, legalEntityId: payload.legalEntityId },
       );
-      legalEntityId = line.legalEntityId;
+      // The line's entity, checked against the caller's scope like a named one (the line's own policy already hides
+      // another entity's lines).
+      legalEntityId = await resolveLegalEntity(ctx, line.legalEntityId);
     } else {
       legalEntityId = await resolveLegalEntity(ctx, payload.legalEntityId);
     }
