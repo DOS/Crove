@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature, editRefusal } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, TIKTOK_NO_POST_ID, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature, editRefusal } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { DateInput } from '../components/date-input.tsx';
 import { DateTimeInput } from '../components/date-time-input.tsx';
@@ -3321,6 +3321,10 @@ function Outcome({ variant: v, slug }: { variant: Variant; slug: string }) {
       if (v.error?.code === SENT_TO_APP) return <p className="text-warning">{t('outcome.sentToApp')}</p>;
       // A draft or a post pending review on the WordPress site (#981): not public until someone publishes it there.
       if (v.error?.code === WORDPRESS_DRAFT || v.error?.code === WORDPRESS_PENDING) return <p className="text-warning">{t(v.error.code === WORDPRESS_DRAFT ? 'outcome.wordpressDraft' : 'outcome.wordpressPending')}</p>;
+      // A TikTok post that never got its public id (#1475): no link or counts will come.
+      if (v.error?.code === TIKTOK_NO_POST_ID) return <p className="text-muted-foreground">{t('outcome.tiktokNoPostId')}</p>;
+      // A draft sent to the TikTok app that the creator then posted there (#1475).
+      if (v.provider === 'tiktok' && tiktokModeOf(v.settings) === 'inbox') return <p className="text-muted-foreground">{t('outcome.postedInApp')}</p>;
       return null;
     default:
       return null;
@@ -3400,10 +3404,12 @@ function RemovalNote({ variant: v }: { variant: Variant }) {
 }
 
 // Whether owners and admins may correct a published channel's text from here (#1223): its adapter edits, it is not a
-// poll, a Story or a Reel (nor a Facebook video), and its channel needs one person's approval only, as the command
-// decides; the command refuses anything else all the same.
+// poll, a Story or a Reel (nor a Facebook video), it is out in public (not a WordPress draft or a post the site holds
+// for review, #1474), and its channel needs one person's approval only, as the command decides; the command refuses
+// anything else all the same.
 const canEditLive = (v: Variant) =>
   v.status === 'published' &&
+  notPublicKey(v) === null &&
   editRefusal(v.provider, v.settings, v.media.map((m) => mediaKindOf(m.mime))) === null &&
   v.review.required <= 1 &&
   !v.review.fourEyes &&
@@ -3481,7 +3487,7 @@ function LiveEditNote({ variant: v }: { variant: Variant }) {
 }
 
 // The edit answers the post page explains in words (#1223); any other failure shows its code.
-const LIVE_EDIT_CODES = ['TELEGRAM_CANNOT_EDIT', 'POST_NOT_FOUND', 'EDIT_NOT_RUN', 'PUBLISHING_HELD', 'EDIT_NEEDS_REVIEW', 'BANNED_WORDS', 'EDIT_CONTENT_CHANGED', 'EDIT_SUPERSEDED'] as const;
+const LIVE_EDIT_CODES = ['TELEGRAM_CANNOT_EDIT', 'POST_NOT_FOUND', 'EDIT_NOT_RUN', 'PUBLISHING_HELD', 'EDIT_NEEDS_REVIEW', 'BANNED_WORDS', 'EDIT_CONTENT_CHANGED', 'EDIT_SUPERSEDED', 'RECONNECT_FOR_EDIT', 'WORDPRESS_CANNOT_EDIT', 'WORDPRESS_EDITED_ON_SITE', 'EDIT_NOT_SUPPORTED', 'SNIPPET_UNREADABLE', 'POST_UNREADABLE', 'TEXT_TOO_LONG'] as const;
 
 // The removal answers the post page explains in words (#860, #1137, #1138); any other failure shows its code.
 const REMOVE_CODES = ['TELEGRAM_CANNOT_DELETE', 'FACEBOOK_CANNOT_DELETE', 'RECONNECT_FOR_REMOVE', 'REMOVE_NOT_RUN', 'WORDPRESS_TRASH_DISABLED', 'WORDPRESS_CANNOT_DELETE'] as const;

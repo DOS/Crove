@@ -194,6 +194,28 @@ suite('correcting a published post on PostgreSQL (#1223)', () => {
     expect(await admin(async (c) => (await c.query<{ key: string }>("SELECT key FROM crove_kernel.external_call WHERE key LIKE $1", [`social.publish:${id}:%:remove%`])).rows)).toEqual([{ key: `social.publish:${id}:1:1:remove` }]);
   });
 
+  it("hands the adapter the connection's stored scopes, and a reconnect asked for keeps the live text (#1474)", async () => {
+    const o = await org();
+    const sandbox = new SandboxPublisher();
+    const seen: (readonly string[] | undefined)[] = [];
+    // As YouTube answers for a connection whose grant lacks youtube.force-ssl, before any call.
+    const scoped: Publisher = {
+      provider: 'sandbox',
+      publishSafety: sandbox.publishSafety,
+      publish: (i) => sandbox.publish(i),
+      edit: async (i: EditInput) => {
+        seen.push(i.scopes);
+        return { kind: 'rejected', error: 'permission', code: 'RECONNECT_FOR_EDIT' };
+      },
+    };
+    const { postId, id, account } = await publishedPost(o, scoped);
+    await exec(o, 'social.variant.edit_published', { variantId: id, revision: 1, body: 'Giá đúng: 45.000đ' });
+    expect(await runEditJob(deps(scoped), o.orgId, id, 'sandbox', null)).toEqual({ action: 'call', state: 'failed' });
+    expect(seen).toEqual([['publish']]);
+    expect(await variant(o, postId)).toMatchObject({ status: 'published', revision: 1, overrides: { body: 'Phở bò giá 54.000đ' }, liveEdit: { state: 'failed', code: 'RECONNECT_FOR_EDIT', body: 'Giá đúng: 45.000đ' } });
+    expect(sandbox.posts(account).map((p) => p.body)).toEqual(['Phở bò giá 54.000đ']);
+  });
+
   it('keeps the live text when the platform refuses, leaves an unclear answer to a person, and asks once per ask', async () => {
     const o = await org();
     const sandbox = new SandboxPublisher();

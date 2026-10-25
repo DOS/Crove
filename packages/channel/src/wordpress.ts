@@ -16,8 +16,9 @@
 // call takes no idempotency key, so an unclear answer is checked by listing the user's latest posts, drafts included,
 // matched by title and time. The composer's picker lists the site's categories and tags (options(), #1131).
 // Remove (#1138): DELETE /wp/v2/posts/:id without force moves the post to the site's trash, where its owner can restore it.
-import type { ConnectedAccount, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
-import { removeResult } from './comment.ts';
+// Edit (#1474): POST /wp/v2/posts/:id with the new title and text, the post's images kept as they are.
+import type { ConnectedAccount, EditInput, EditResult, Publisher, PublishInput, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety } from './index.ts';
+import { EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { CHANNEL_OPTIONS_MAX, OptionList, optionCallSignal, optionName, type ChannelOptionsInput, type ChannelOptionsResult } from './options.ts';
 import { holdsLink } from './text.ts';
 import { ConnectorError, type Fetch } from './oauth.ts';
@@ -331,6 +332,36 @@ function beforePost(error: unknown, fallback: string): PublishResult {
   return result.kind === 'rejected' ? result : { kind: 'rejected', error: 'transient', code: (result.kind === 'unknown' && result.code) || fallback };
 }
 
+// The refusals of an edit's read or update that name why (#1474): a post the site no longer has, or a user who may not
+// edit it; null for any other answer.
+function editRefusedBy(error: unknown): EditResult | null {
+  if (!(error instanceof WordPressError)) return null;
+  if (error.status === 404 && error.code === 'rest_post_invalid_id') return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND', message: error.message };
+  if ((error.status === 401 || error.status === 403) && (error.code === 'rest_cannot_edit' || error.code === 'rest_forbidden_context')) return { kind: 'rejected', error: 'permission', code: 'WORDPRESS_CANNOT_EDIT', message: error.message };
+  return null;
+}
+
+// A line of a post's raw content that is one figure holding one image, as publish writes each image after the text.
+const FIGURE_LINE = /^<figure\b[^<>]*>\s*<img\s[^<>]*>\s*<\/figure>$/i;
+
+// A post's raw content split into the figure lines at its end, in order, and what comes before them (#1474).
+function splitFigures(raw: string): { head: string; figures: string[] } {
+  const lines = raw.replace(/\r\n?/g, '\n').trimEnd().split('\n');
+  const figures: string[] = [];
+  while (lines.length > 0 && FIGURE_LINE.test((lines.at(-1) as string).trim())) figures.unshift((lines.pop() as string).trim());
+  return { head: lines.join('\n'), figures };
+}
+
+// Whether a post's text holds only what publish writes for it: paragraphs, line breaks and links, with no HTML comment
+// (the block editor keeps its blocks as <!-- wp:... --> comments) and no other tag.
+function publishedText(head: string): boolean {
+  if (head.includes('<!--')) return false;
+  for (const m of head.matchAll(/<\/?([A-Za-z][A-Za-z0-9-]*)\b[^>]*>/g)) {
+    if (!['p', 'br', 'a'].includes((m[1] as string).toLowerCase())) return false;
+  }
+  return true;
+}
+
 // How many term lookups run at once against one site (#981).
 const TERM_LOOKUPS_AT_ONCE = 4;
 
@@ -454,6 +485,51 @@ export class WordPressPublisher implements Publisher {
         if ((error.status === 401 || error.status === 403) && (error.code === 'rest_cannot_delete' || error.code === 'rest_user_cannot_delete_post')) return { kind: 'rejected', error: 'permission', code: 'WORDPRESS_CANNOT_DELETE' };
       }
       return removeResult(wordpressResult(error));
+    }
+  }
+
+  // Corrects the post's text (#1474): POST /wp/v2/posts/:id with content alone, answered with the post. WordPress sets
+  // only the fields a request names, so the post's title (a rename on the site is kept, as the edit changes the text
+  // only), status, categories, tags, excerpt and featured image stay as they are. The images it went out with are not
+  // uploaded again: the post is read first (GET /wp/v2/posts/:id?context=edit) and the figures publish put after the
+  // text, one a line at the end of its raw content, go back as they are after the new text, built as publish builds it
+  // (paragraphs, every character escaped). The content is replaced whole, so a post that holds anything publish never
+  // writes is refused with nothing sent (WORDPRESS_EDITED_ON_SITE): a number of trailing figures other than the
+  // variant's images, or, before them, any HTML comment (the block editor's <!-- wp: --> markup) or any tag but the
+  // paragraphs, line breaks and links of publish's text (an image, a heading, a list, an embed added on the site). A draft or a post pending review has no public post to
+  // correct and is refused before any call (EDIT_NOT_SUPPORTED), as the module refuses it first. A post in the trash or
+  // no longer on the site (404 rest_post_invalid_id) is POST_NOT_FOUND; a user who may not edit it
+  // (rest_cannot_edit, rest_forbidden_context) is WORDPRESS_CANNOT_EDIT.
+  async edit(input: EditInput): Promise<EditResult> {
+    const s = wordpressSecretOf(input.secret);
+    if (!s) return { kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' };
+    if (input.externalAccountId !== siteId(s.site)) return { kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' };
+    if (!/^[1-9]\d{0,15}$/.test(input.externalId) || postId(Number(input.externalId)) === null) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
+    const options = wordpressOptionsOf(input.settings);
+    if (options && options.status !== 'publish') return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
+    const text = wordpressHtml(input.content, []);
+    let post: { status?: unknown; content?: { raw?: unknown } };
+    try {
+      post = await this.client.call<typeof post>(s, 'GET', `/wp/v2/posts/${input.externalId}?context=edit`);
+    } catch (error) {
+      const refused = editRefusedBy(error);
+      if (refused) return refused;
+      // Nothing was changed yet: a read that fails is a failure to edit, never an unclear one.
+      const result = wordpressResult(error);
+      return result.kind === 'rejected' ? editResult(result) : { kind: 'rejected', error: 'transient', code: (result.kind === 'unknown' && result.code) || 'POST_UNREADABLE' };
+    }
+    if (post.status === 'trash') return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' };
+    if (post.status !== 'publish' && post.status !== 'private') return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
+    if (typeof post.content?.raw !== 'string') return { kind: 'rejected', error: 'transient', code: 'POST_UNREADABLE' };
+    const { head, figures } = splitFigures(post.content.raw);
+    if (figures.length !== input.content.media.length || !publishedText(head)) return { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' };
+    const content = [text, ...figures].filter(Boolean).join('\n');
+    if (!content) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    try {
+      const answer = await this.client.call<{ id?: unknown }>(s, 'POST', `/wp/v2/posts/${input.externalId}`, { json: { content } });
+      return postId(answer.id) === Number(input.externalId) ? { kind: 'edited' } : { kind: 'unknown', code: 'NOT_CONFIRMED' };
+    } catch (error) {
+      return editRefusedBy(error) ?? editResult(wordpressResult(error));
     }
   }
 

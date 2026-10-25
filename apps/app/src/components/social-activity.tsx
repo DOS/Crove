@@ -10,7 +10,7 @@ import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { SENT_TO_APP, WORDPRESS_DRAFT, WORDPRESS_PENDING, mentionsForEditing, mentionsForStoring } from '@crove/mod-social/contract';
+import { POSTED_IN_APP, SENT_TO_APP, TIKTOK_NO_POST_ID, WORDPRESS_DRAFT, WORDPRESS_PENDING, mentionsForEditing, mentionsForStoring } from '@crove/mod-social/contract';
 import { cn } from '@crove/ui/lib/utils';
 import { CommentBody, MentionBox, useMemberNames, type Picked } from './social-mentions.tsx';
 import { PinBoard, boardPins, clockOf, commentAnchor, revealMarker, useMediaLabels, type DraftPin, type PinMedia } from './social-comment-pins.tsx';
@@ -83,7 +83,10 @@ function Entry({ item, channel, canWrite, pinNumber, onBoard, locked }: { item: 
           ? t('sentToApp')
           : item.kind === 'published' && (item.code === WORDPRESS_DRAFT || item.code === WORDPRESS_PENDING)
             ? t(item.code === WORDPRESS_DRAFT ? 'wordpressDraft' : 'wordpressPending')
-            : // How a queue reorder (#1020) moved it: shuffled, put first, or one place later behind a post put first.
+            : // A TikTok draft the creator posted in the app, or a TikTok post that never got its public id (#1475).
+              item.kind === 'published' && (item.code === POSTED_IN_APP || item.code === TIKTOK_NO_POST_ID)
+              ? t(item.code === POSTED_IN_APP ? 'postedInApp' : 'tiktokNoPostId')
+              : // How a queue reorder (#1020) moved it: shuffled, put first, or one place later behind a post put first.
               item.kind === 'queue_moved' && (item.code === 'shuffle' || item.code === 'front' || item.code === 'shifted')
               ? t(`queueMoved.${item.code}`)
               : t(`kind.${item.kind}`);
