@@ -12,7 +12,8 @@ SET LOCAL lock_timeout = '2s';
 
 ALTER TABLE crove_kernel.inbound_message ADD COLUMN IF NOT EXISTS body_text text;
 
--- NOT VALID: added without scanning the table under its exclusive lock; validated below (every existing row is NULL).
+-- Added in one step: ADD COLUMN above already holds the table's exclusive lock in this transaction and every row's
+-- body_text is NULL, so a NOT VALID then VALIDATE split would save nothing.
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -20,7 +21,6 @@ BEGIN
     WHERE conrelid = 'crove_kernel.inbound_message'::regclass AND conname = 'inbound_message_body_text_check'
   ) THEN
     ALTER TABLE crove_kernel.inbound_message ADD CONSTRAINT inbound_message_body_text_check
-      CHECK (body_text IS NULL OR (pg_catalog.char_length(body_text) BETWEEN 1 AND 20000)) NOT VALID;
+      CHECK (body_text IS NULL OR (pg_catalog.char_length(body_text) BETWEEN 1 AND 20000));
   END IF;
 END $$;
-ALTER TABLE crove_kernel.inbound_message VALIDATE CONSTRAINT inbound_message_body_text_check;

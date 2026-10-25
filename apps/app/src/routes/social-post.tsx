@@ -2738,6 +2738,12 @@ export function SocialComposePage() {
   // A mail of the Inbox to write from (#779), from *Soạn bài đăng từ thư này*; its subject is shown, its text is read by
   // the server as untrusted data.
   const [mailId, setMailId] = useState<string | null>(() => search.mail ?? null);
+  // Opened again from another mail of the Inbox while the composer stays mounted: that mail, not the old one.
+  const [mailParam, setMailParam] = useState<string | null>(() => search.mail ?? null);
+  if ((search.mail ?? null) !== mailParam) {
+    setMailParam(search.mail ?? null);
+    setMailId(search.mail ?? null);
+  }
   const mails = useQuery({ ...orpc.inbound.recent.queryOptions(), enabled: mailId !== null });
   const mail = mailId ? (mails.data?.find((m) => m.id === mailId) ?? null) : null;
   const aiDraft = useMutation({
@@ -2986,7 +2992,7 @@ export function SocialComposePage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={(!brief.trim() && !source && sentPhotos.length === 0 && !mailId) || (sourceUrl.trim() !== '' && !source) || (photoMode && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
+                  disabled={(!brief.trim() && !source && sentPhotos.length === 0 && !mailId) || (mailId !== null && !mail) || (sourceUrl.trim() !== '' && !source) || (photoMode && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
                   onClick={() => aiDraft.mutate(undefined)}
                 >
                   {aiDraft.isPending ? <Spinner className="text-current" /> : null}
