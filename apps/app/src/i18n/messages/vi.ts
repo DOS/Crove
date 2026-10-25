@@ -3420,8 +3420,9 @@ export const vi = {
       selectAll: 'Chọn mọi bài đang hiện',
       selected: 'Đã chọn {count, number} bài',
       clear: 'Bỏ chọn',
-      action: { approve: 'Duyệt', submit: 'Gửi duyệt', queue: 'Đưa vào hàng đợi', cancel: 'Hủy bài', move: 'Dời lịch', labels: 'Gắn nhãn', assign: 'Giao việc', replace: 'Tìm và thay', addChannel: 'Thêm kênh', duplicate: 'Nhân bản', archive: 'Lưu trữ', restore: 'Khôi phục' },
+      action: { approve: 'Duyệt', submit: 'Gửi duyệt', queue: 'Đưa vào hàng đợi', retry: 'Đăng lại', cancel: 'Hủy bài', move: 'Dời lịch', labels: 'Gắn nhãn', assign: 'Giao việc', replace: 'Tìm và thay', addChannel: 'Thêm kênh', duplicate: 'Nhân bản', archive: 'Lưu trữ', restore: 'Khôi phục' },
       confirmCancel: 'Hủy {count, number} bài trên mọi kênh chưa đăng?',
+      confirmRetry: 'Đăng lại ngay {count, number} bài trên các kênh bị lỗi hoặc cần kiểm tra? Hãy chắc là bài chưa lên các kênh đó, để không bị đăng trùng.',
       confirmArchive: 'Lưu trữ {count, number} bài? Các bài này sẽ không còn hiện trong danh sách, lịch và bảng, và bạn có thể khôi phục lại ở thẻ Đã lưu trữ.',
       result: '{action}: xong {done, number}, {skipped, number} bài không có gì để làm, {refused, number} bài bị từ chối.',
       move: {
