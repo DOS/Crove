@@ -43,6 +43,7 @@ const MACHINERY = new Set([
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
   // 'crove_schema.table_name',
+  'crove_kernel.record_le',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 const PRIVILEGE_DENIED = /permission denied for (table|relation)/;
@@ -659,6 +660,17 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // #676: per-org reminder and escalation settings for pending proposals (one row per org).
   'crove_kernel.proposal_policy': { make: (o) => ({ row: { org_id: o.id, id: randomUUID(), remind_after_days: 3, escalate_after_days: 7, updated_by: o.owner } }) },
+  // #1280 part 3b: an org-wide record (a party) linked to a legal entity, so a member limited to that entity sees it.
+  // The link names an entity of its own org, made in the same transaction.
+  'crove_kernel.record_le': {
+    make: (o) => {
+      const entity = randomUUID();
+      return {
+        setup: [{ table: 'crove_kernel.legal_entity', values: { org_id: o.id, id: entity, name: 'RLS matrix linked branch', kind: 'branch', created_by: o.owner } }],
+        row: { org_id: o.id, id: randomUUID(), record_type: 'kernel.party', record_id: o.party, legal_entity_id: entity, created_by: o.owner },
+      };
+    },
+  },
   // Refusals counted per org, window, actor and (command, code) (issue #162). Definer-only machinery: no role but
   // the owner holds a privilege on it. A random code keeps every row its own key.
   'crove_kernel.refusal_tally': {
