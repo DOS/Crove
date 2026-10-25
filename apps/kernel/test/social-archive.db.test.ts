@@ -3,9 +3,11 @@
 // is scheduled, paused, going out, waiting for a person or being taken down; out of every list, calendar, inbox, export
 // and figure, and listed on their own with archived; evergreen and the repeat turned off and the post's review links
 // revoked; the commands that would move the post on refused; the bulk commands with an outcome per post; a restore that
-// gives the post back unchanged; and published archived posts still in the metrics. Set CROVE_TEST_ADMIN_URL to a
-// superuser URL; each run makes its own database.
-import { randomUUID } from 'node:crypto';
+// gives the post back unchanged; and published archived posts still in the metrics. Also (#1361): out of the calendar
+// feed, the link in bio, the team report's assignments and the waiting count, an archived repeat copy done for its
+// source's scans with the source locked while archiving checks it, and a post restored in review reminded again. Set
+// CROVE_TEST_ADMIN_URL to a superuser URL; each run makes its own database.
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -546,5 +548,180 @@ suite('social archived posts on PostgreSQL (#1299)', () => {
     await exec(o, o.member, 'social.post.recurrence_clear', { postId: series });
     expect((await archive(o, o.member, repost)).changed).toBe(true);
     expect((await archive(o, o.member, copy)).changed).toBe(true);
+  });
+
+  it('counts an archived repeat copy as done, so turning the repeats back on is not stalled by it (#1341)', async () => {
+    const o = await org();
+    const due = (fn: string) => admin(async (c) => (await c.query<{ post_id: string }>(`SELECT post_id FROM crove_social.${fn}(500, ARRAY[]::uuid[])`)).rows.map((r) => r.post_id));
+    const evergreen = await post(o, o.member, 'Bài đăng lại mãi');
+    await publish(o, evergreen, new Date(Date.now() - 80 * DAY));
+    await exec(o, o.member, 'social.post.set_evergreen', { postId: evergreen, days: 30 });
+    const repost = (await worker.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId: evergreen }, { actor: system, orgId: o.orgId })).postId as string;
+    expect(repost).toBeTruthy();
+    // Turned off, the open repost is archived; turned on again long after, it holds nothing back.
+    await exec(o, o.member, 'social.post.set_evergreen', { postId: evergreen, days: null });
+    await archive(o, o.member, repost);
+    await exec(o, o.member, 'social.post.set_evergreen', { postId: evergreen, days: 30 });
+    await admin((c) => c.query("UPDATE crove_social.post SET created_at = now() - interval '40 days' WHERE org_id = $1 AND id = $2", [o.orgId, repost]));
+    expect(await due('evergreen_due')).toContain(evergreen);
+    const next = (await worker.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId: evergreen }, { actor: system, orgId: o.orgId })).postId;
+    expect(next).toBeTruthy();
+    expect(next).not.toBe(repost);
+    // The new repost is open and not archived: it holds the next one back, as before.
+    expect(await due('evergreen_due')).not.toContain(evergreen);
+
+    const series = await post(o, o.member, 'Bài lặp mỗi ngày');
+    await publish(o, series, new Date(Date.now() - DAY));
+    const daily = { everyWeeks: 1, weekdays: [0, 1, 2, 3, 4, 5, 6], time: '09:00', until: null, times: null };
+    await exec(o, o.member, 'social.post.recurrence_set', { postId: series, recurrence: daily });
+    const copy = (await worker.execute<{ postId: string | null }>('social.recurring.next', { postId: series }, { actor: system, orgId: o.orgId })).postId as string;
+    expect(copy).toBeTruthy();
+    await exec(o, o.member, 'social.post.recurrence_clear', { postId: series });
+    await archive(o, o.member, copy);
+    await exec(o, o.member, 'social.post.recurrence_set', { postId: series, recurrence: daily });
+    expect(await due('recurring_due')).toContain(series);
+    const following = await worker.execute<{ postId: string | null; reason?: string }>('social.recurring.next', { postId: series }, { actor: system, orgId: o.orgId });
+    expect(following.reason).toBeUndefined();
+    expect(following.postId).toBeTruthy();
+    expect(following.postId).not.toBe(copy);
+    expect(await due('recurring_due')).not.toContain(series);
+  });
+
+  it("locks the source while it checks an open repeat copy, so repeats turned on meanwhile are seen (#1341)", async () => {
+    const o = await org();
+    const evergreen = await post(o, o.member, 'Bài đăng lại mãi');
+    await publish(o, evergreen, new Date(Date.now() - 40 * DAY));
+    await exec(o, o.member, 'social.post.set_evergreen', { postId: evergreen, days: 30 });
+    const repost = (await worker.execute<{ postId: string | null }>('social.post.repost_evergreen', { postId: evergreen }, { actor: system, orgId: o.orgId })).postId as string;
+    await exec(o, o.member, 'social.post.set_evergreen', { postId: evergreen, days: null });
+    // Another transaction holds the source and turns evergreen back on while the archive runs.
+    const other = new pg.Client({ connectionString: adminUrl });
+    await other.connect();
+    try {
+      await other.query('BEGIN');
+      await other.query('SELECT id FROM crove_social.post WHERE org_id = $1 AND id = $2 FOR UPDATE', [o.orgId, evergreen]);
+      let settled = false;
+      const attempt = archive(o, o.member, repost).finally(() => {
+        settled = true;
+      });
+      attempt.catch(() => undefined);
+      // The archive waits on the source's lock (and does not read it unlocked and go on).
+      const waitingOnLock = async () =>
+        Number((await other.query<{ n: string }>("SELECT count(*) AS n FROM pg_catalog.pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> pg_backend_pid()")).rows[0]?.n);
+      let blocked = false;
+      for (let i = 0; i < 100 && !settled && !blocked; i++) {
+        blocked = (await waitingOnLock()) > 0;
+        if (!blocked) await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(settled).toBe(false);
+      expect(blocked).toBe(true);
+      await other.query('UPDATE crove_social.post SET evergreen_days = 30 WHERE org_id = $1 AND id = $2', [o.orgId, evergreen]);
+      await other.query('COMMIT');
+      await expect(attempt).rejects.toMatchObject({ code: 'POST_ARCHIVE_REPEAT_COPY' });
+    } finally {
+      await other.end();
+    }
+    expect((await row(o, repost))?.archived_at).toBeNull();
+  });
+
+  it('leaves an archived post out of the calendar feed and the link in bio, and brings it back on restore (#1327, #1331)', async () => {
+    const o = await org();
+    const sha = (id: string) => createHash('sha256').update(id).digest('hex');
+    const image = randomUUID();
+    await admin((c) =>
+      c.query("INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, generation, filename, content_type, size_bytes, source, created_by) VALUES ($1, $2, $3, $4, $5, 'anh.jpg', 'image/jpeg', 1000, 'social', $6)", [
+        o.orgId,
+        image,
+        sha(image),
+        `org/${o.orgId}/${sha(image)}`,
+        `content:${sha(image)}`,
+        o.owner,
+      ]),
+    );
+    const out = (await exec<{ postId: string }>(o, o.member, 'social.post.create', { body: 'Bánh mới ra lò', linkUrl: 'https://tiembanh.example/moi', media: [{ fileId: image }], channels: [{ connectionId: o.conn }] })).postId;
+    const kept = await post(o, o.member, 'Bài vẫn ở lại');
+    await publish(o, out, new Date(Date.now() - 3_600_000));
+    await publish(o, kept, new Date(Date.now() - 7_200_000));
+    const { token } = await exec<{ token: string }>(o, o.owner, 'social.calendar_feed.create', {});
+    await exec(o, o.owner, 'social.bio.save', { slug: `bio-${randomUUID().slice(0, 8)}`, title: 'Tiệm', buttons: [], showPosts: true, published: true });
+    const slug = await admin(async (c) => (await c.query<{ slug: string }>('SELECT slug FROM crove_social.bio_page WHERE org_id = $1', [o.orgId])).rows[0]?.slug as string);
+    // As the API login role, the one the public routes use.
+    const feed = async () => ((await pool.query<{ f: { events: { postId: string }[] } }>('SELECT crove_social.calendar_feed_events($1) AS f', [token])).rows[0]?.f.events ?? []).map((e) => e.postId);
+    const bio = async () => ((await pool.query<{ v: { posts: { postId: string }[] } }>('SELECT crove_social.bio_page_view($1) AS v', [slug])).rows[0]?.v.posts ?? []).map((p) => p.postId);
+    const go = async () => (await pool.query<{ url: string | null }>('SELECT crove_social.bio_page_go($1, $2, false) AS url', [slug, `post:${out}`])).rows[0]?.url ?? null;
+    const file = async () => (await pool.query('SELECT storage_key FROM crove_social.bio_page_file($1, $2::uuid)', [slug, image])).rows.length;
+    expect(sorted(await feed())).toEqual(sorted([out, kept]));
+    expect(await bio()).toEqual([out]);
+    expect(await go()).toBe('https://tiembanh.example/moi');
+    expect(await file()).toBe(1);
+
+    await archive(o, o.member, out);
+    expect(await feed()).toEqual([kept]);
+    expect(await bio()).toEqual([]);
+    expect(await go()).toBeNull();
+    expect(await file()).toBe(0);
+
+    await restore(o, o.member, out);
+    expect(sorted(await feed())).toEqual(sorted([out, kept]));
+    expect(await bio()).toEqual([out]);
+    expect(await go()).toBe('https://tiembanh.example/moi');
+    expect(await file()).toBe(1);
+  });
+
+  it("leaves archived posts that never went out of the team report's assignments, and archived channels out of the waiting count (#1331)", async () => {
+    const o = await org();
+    const assign = (postId: string, dueAt: Date) => admin((c) => c.query('UPDATE crove_social.post SET assignee_user_id = $3, due_at = $4 WHERE org_id = $1 AND id = $2', [o.orgId, postId, o.other, dueAt]));
+    const shelved = await post(o, o.member, 'Giao việc rồi cất đi');
+    await assign(shelved, new Date(Date.now() - DAY));
+    const late = await post(o, o.member, 'Đăng trễ rồi cất đi');
+    await assign(late, new Date(Date.now() - 2 * DAY));
+    await publish(o, late, new Date(Date.now() - DAY));
+    const open = await post(o, o.member, 'Còn đang làm');
+    await assign(open, new Date(Date.now() - DAY));
+    const report = async () => {
+      const r = await query<{ members: { userId: string; assigned: number; overdue: number }[] }>(o, o.owner, 'social.team.report', { from: new Date(Date.now() - 10 * DAY).toISOString(), to: new Date(Date.now() + DAY).toISOString() });
+      return r.members.find((m) => m.userId === o.other);
+    };
+    expect(await report()).toMatchObject({ assigned: 3, overdue: 3 });
+    await archive(o, o.member, shelved);
+    await archive(o, o.member, late);
+    // The one that never went out is set aside; the one that went out late still counts as late.
+    expect(await report()).toMatchObject({ assigned: 2, overdue: 2 });
+    await restore(o, o.member, shelved);
+    expect(await report()).toMatchObject({ assigned: 3, overdue: 3 });
+
+    // A paused channel of a post archived some other way than the command (which refuses it).
+    const paused = await post(o, o.member, 'Đang chờ kênh kết nối lại');
+    await setStatus(o, paused, 'paused', `, scheduled_at = now() + interval '1 day'`);
+    const waiting = async () => (await query<{ connectionId: string; paused: number }[]>(o, o.owner, 'social.channel.waiting', {})).find((w) => w.connectionId === o.conn)?.paused ?? 0;
+    expect(await waiting()).toBe(1);
+    await admin((c) => c.query('UPDATE crove_social.post SET archived_at = now(), archived_by = $3 WHERE org_id = $1 AND id = $2', [o.orgId, paused, o.owner]));
+    expect(await waiting()).toBe(0);
+  });
+
+  it('reminds a post restored in review again (#1331)', async () => {
+    const o = await org();
+    const reviewing = await post(o, o.member, 'Chờ duyệt, cất đi rồi khôi phục');
+    await exec(o, o.member, 'social.post.submit', { postId: reviewing });
+    // Its review clock moved back as if it went into review days ago (the trigger is skipped for this).
+    await admin(async (c) => {
+      await c.query("SET session_replication_role = 'replica'");
+      await c.query("UPDATE crove_social.post_variant SET review_since = now() - interval '3 days' WHERE org_id = $1 AND post_id = $2", [o.orgId, reviewing]);
+    });
+    const remindersDue = () => admin(async (c) => (await c.query<{ post_id: string }>('SELECT post_id FROM crove_social.review_reminders_due(1000)')).rows.map((r) => r.post_id));
+    const told = async () => Number(await admin(async (c) => (await c.query<{ n: string }>("SELECT count(*) AS n FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'social.review.reminder'", [o.orgId])).rows[0]?.n));
+    await archive(o, o.member, reviewing);
+    // Archived: marked as reminded without telling anyone.
+    await expect(worker.execute('social.review.remind', { postId: reviewing }, { actor: system, orgId: o.orgId })).resolves.toEqual({ stage: null });
+    expect(await remindersDue()).not.toContain(reviewing);
+    expect(await told()).toBe(0);
+
+    await restore(o, o.member, reviewing);
+    const variants = (await get(o, o.owner, reviewing)).variants.map((v) => v.id);
+    expect((await audits(o, 'social.post.restore')).at(-1)?.detail).toMatchObject({ post_id: reviewing, reminders_reset: sorted(variants) });
+    expect(await remindersDue()).toContain(reviewing);
+    await expect(worker.execute('social.review.remind', { postId: reviewing }, { actor: system, orgId: o.orgId })).resolves.toEqual({ stage: 'waiting' });
+    expect(await told()).toBe(1);
+    expect(await remindersDue()).not.toContain(reviewing);
   });
 });

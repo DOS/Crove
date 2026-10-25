@@ -16,11 +16,18 @@
 // is on its way to the platform (#1223); and one whose takedown from its platform is on its way (a person's ask the
 // platform has not answered yet, or a planned takedown, #861, that will still be asked for). Also an open copy of a repeat:
 // a repost of an evergreen post, or a copy of a series still running, whose open state holds the next repost or copy
-// back (the worker's scans, evergreen_due and recurring_due, wait for it); such a copy is cancelled instead.
+// back (the worker's scans, evergreen_due and recurring_due, wait for it); such a copy is cancelled instead. The source
+// is locked for that check, so its repeats turned on meanwhile are either seen or wait. A copy archived while its source
+// did not repeat counts as done for the scans and the worker's commands (#1341): turning the repeats back on later is
+// never stalled by it.
 //
 // Archiving also stops what would bring the post back on its own: its evergreen reposts and its repeat on weekdays are
 // turned off (a restore leaves them off), and its open review links, of the post alone and of plans that include it,
 // are revoked, so a client cannot answer for a post the team archived.
+//
+// A restore clears the review reminder marks of its channels in review (#703, #1331): the reminder sweep marks an
+// archived post's as sent without telling anyone, so a post restored in review would otherwise never be reminded. Its
+// review keeps its start (review_since), so one that has waited long is reminded on the next pass.
 //
 // The bulk commands take up to 100 posts, lock them in id order (as the other bulk edits do) and run the single
 // command on each as a nested command, with its checks and its audit row; a post left out is named with the reason.
@@ -114,8 +121,15 @@ async function editing(ctx: CommandContext, variants: readonly VariantRow[]): Pr
 
 // A copy whose open state holds its source's next repeat back, as the worker's scans read it: a repost of a post still
 // evergreen that has not ended (published, partly, failed or cancelled), or a copy of a series still running with a
-// channel not done (published, failed, cancelled or removed).
+// channel not done (published, failed, cancelled or removed). The copy is locked already; its source is locked here
+// too (#1341), so a social.post.set_evergreen or recurrence_set on it either committed before this read or waits for
+// the archive, and never turns the repeats on between the check and the archive.
 async function openRepeatCopy(ctx: CommandContext, postId: string): Promise<boolean> {
+  const copy = await ctx.trx.selectFrom('crove_social.post').select(['repost_of', 'recurrence_source_id']).where('org_id', '=', ctx.orgId).where('id', '=', postId).executeTakeFirstOrThrow();
+  const sources = [copy.repost_of, copy.recurrence_source_id].filter((id): id is string => id !== null);
+  if (sources.length === 0) return false;
+  // In id order, as the other locks of several posts.
+  await ctx.trx.selectFrom('crove_social.post').select('id').where('org_id', '=', ctx.orgId).where('id', 'in', sources).orderBy('id').forUpdate().execute();
   const { rows } = await sql<{ open: boolean }>`
     SELECT EXISTS (
       SELECT 1 FROM crove_social.post c
@@ -186,7 +200,17 @@ export const postRestore = defineCommand({
     if (post.archived_at === null) return { postId: post.id, archived: false, changed: false };
     // Nothing else changes: not its status, its channels, its labels, nor the time of its last change.
     await ctx.trx.updateTable('crove_social.post').set({ archived_at: null, archived_by: null }).where('org_id', '=', ctx.orgId).where('id', '=', post.id).execute();
-    ctx.audit({ post_id: post.id, archived_at: post.archived_at.toISOString() });
+    // Its channels in review are reminded again: the sweep marked them while it was archived.
+    const reminded = await ctx.trx
+      .updateTable('crove_social.post_variant')
+      .set({ reminded_waiting_at: null, reminded_due_at: null })
+      .where('org_id', '=', ctx.orgId)
+      .where('post_id', '=', post.id)
+      .where('status', '=', 'in_review')
+      .where((eb) => eb.or([eb('reminded_waiting_at', 'is not', null), eb('reminded_due_at', 'is not', null)]))
+      .returning('id')
+      .execute();
+    ctx.audit({ post_id: post.id, archived_at: post.archived_at.toISOString(), ...(reminded.length > 0 ? { reminders_reset: reminded.map((r) => r.id).sort() } : {}) });
     return { postId: post.id, archived: false, changed: true };
   },
 });
