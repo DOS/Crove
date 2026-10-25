@@ -513,6 +513,11 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         cancel: os.crm.bookings.cancel.handler(crmCommand('crm.booking.cancel')),
         move: os.crm.bookings.move.handler(crmCommand('crm.booking.move')),
       },
+      bookingFeed: {
+        get: os.crm.bookingFeed.get.handler(({ context }) => inCrm(context, (orgId, actor) => runtime.query('crm.booking_feed.get', {}, { actor, orgId }))),
+        create: os.crm.bookingFeed.create.handler(crmCommand('crm.booking_feed.create')),
+        revoke: os.crm.bookingFeed.revoke.handler(crmCommand('crm.booking_feed.revoke')),
+      },
     },
     social: {
       posts: {
