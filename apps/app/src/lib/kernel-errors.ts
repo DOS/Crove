@@ -136,6 +136,9 @@ export const KERNEL_ERROR_CODES = [
   'ROLE_REVOKE_WIDENS_SCOPE',
   'ROLE_GRANT_WIDENS_SCOPE',
   'ROLE_PRIVILEGED_FOR_VIEWER',
+  // The approval rule preset (#1402).
+  'UNKNOWN_PRESET',
+  'NO_CHIEF_ACCOUNTANT',
   // Editing a party (#887).
   'INVALID_PARTY_NAME',
   'INVALID_EMAIL',
