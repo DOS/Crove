@@ -861,14 +861,22 @@ test('draws a post on six channels as one chip, and "+9" opens every post of the
   const day = new Intl.DateTimeFormat('en-CA', { timeZone: TIME_ZONE }).format(new Date(Date.now() + 2 * 86_400_000));
   exec(`UPDATE crove_social.post SET scheduled_at = (:'day' || ' 08:00+07')::timestamptz WHERE id = :'six'`, { day, six });
   exec(`UPDATE crove_social.post SET scheduled_at = (:'day' || ' 09:00+07')::timestamptz WHERE id = :'second'`, { day, second });
+  // Every column but the generated ones (search_text, #1360), which an insert may not name.
+  const columns = (table: string) =>
+    sql<{ list: string }>(
+      `SELECT string_agg(quote_ident(column_name), ', ' ORDER BY ordinal_position) AS list FROM information_schema.columns WHERE table_schema = 'crove_social' AND table_name = :'table' AND is_generated = 'NEVER'`,
+      { table },
+    )[0]?.list as string;
+  const postColumns = columns('post');
+  const variantColumns = columns('post_variant');
   exec(
     `WITH n AS (SELECT g, gen_random_uuid() AS id FROM generate_series(3, 12) g),
           copies AS (
-            INSERT INTO crove_social.post
-            SELECT (jsonb_populate_record(p, jsonb_build_object('id', n.id, 'body', 'Bài số ' || n.g, 'scheduled_at', (:'day' || ' ' || lpad((n.g + 7)::text, 2, '0') || ':00+07')::timestamptz))).*
-              FROM crove_social.post p, n WHERE p.id = :'second' RETURNING id)
-     INSERT INTO crove_social.post_variant
-     SELECT (jsonb_populate_record(v, jsonb_build_object('id', gen_random_uuid(), 'post_id', n.id))).* FROM crove_social.post_variant v, n WHERE v.post_id = :'second'`,
+            INSERT INTO crove_social.post (${postColumns})
+            SELECT ${postColumns} FROM (SELECT (jsonb_populate_record(p, jsonb_build_object('id', n.id, 'body', 'Bài số ' || n.g, 'scheduled_at', (:'day' || ' ' || lpad((n.g + 7)::text, 2, '0') || ':00+07')::timestamptz))).*
+              FROM crove_social.post p, n WHERE p.id = :'second') r RETURNING id)
+     INSERT INTO crove_social.post_variant (${variantColumns})
+     SELECT ${variantColumns} FROM (SELECT (jsonb_populate_record(v, jsonb_build_object('id', gen_random_uuid(), 'post_id', n.id))).* FROM crove_social.post_variant v, n WHERE v.post_id = :'second') r`,
     { day, second },
   );
   const planned = (body: string) =>
