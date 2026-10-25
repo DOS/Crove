@@ -522,7 +522,14 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         {item.canReject && (
           // The reason is asked in a dialog (#1512) that stays open until the rejection is done, so a refusal is
           // shown where the reason was typed and the reviewer can try again without typing it twice.
-          <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
+          <Dialog
+            open={rejectOpen}
+            onOpenChange={(open) => {
+              setRejectOpen(open);
+              // A refusal shown in the dialog belongs to that attempt: reopening starts without it.
+              if (!open) reject.reset();
+            }}
+          >
             <DialogTrigger render={<Button variant="destructive" size="lg" />} disabled={busy}>
               {t('reject')}
             </DialogTrigger>
