@@ -162,11 +162,12 @@ export function holdsLink(text: string, link: string): boolean {
   return false;
 }
 
-// The text an adapter sends for this body and link.
-export function sentText(provider: Provider, body: string, linkUrl: string | null | undefined, mediaCount: number): string {
+// The text an adapter sends for this body and link. settings: the variant's, whose link card (#1498) carries the link
+// apart from the text on LinkedIn and Bluesky.
+export function sentText(provider: Provider, body: string, linkUrl: string | null | undefined, mediaCount: number, settings?: Readonly<Record<string, unknown>>): string {
   const link = linkUrl?.trim();
   const placement = LINK_PLACEMENT[provider];
-  if (!link || placement === 'apart' || (placement === 'text_with_media' && mediaCount === 0)) return body;
+  if (!link || placement === 'apart' || (placement === 'text_with_media' && mediaCount === 0) || carriesLinkCard(provider, settings, link, mediaCount)) return body;
   const text = body.trim();
   if (holdsLink(text, link)) return body;
   return [text, link].filter(Boolean).join('\n\n');
@@ -754,6 +755,53 @@ export function documentTitleOf(settings: Readonly<Record<string, unknown>> | un
   const trimmed = title.trim();
   const size = trimmed.normalize('NFC').length;
   return size < 1 || size > DOCUMENT_TITLE_MAX ? 'invalid' : trimmed;
+}
+
+// Link cards (#1498), in `settings.linkCard`: { title, description?, thumbFileId? }. LinkedIn (member and page) and
+// Bluesky build no preview from a link (scrapesLinkPreview false), so a link post there goes out with the card the
+// member kept: the composer prefills it from the link preview it fetched (#641) and the member edits it, and its image
+// is one of the org's Social uploads, never the fetched page image. A card goes on a link post with no media (LinkedIn's
+// content.article and Bluesky's app.bsky.embed.external are the post's one content, so images win), and then the link
+// is not added to the text. The title (1 to 200 characters) and description (at most 300) are Crove's caps, as neither
+// platform documents one [unverified]; Bluesky takes a thumbnail of at most 1,000,000 bytes. The adapters' linkCardOf
+// in @crove/channel reads the same shape and limits.
+export const LINK_CARD_PROVIDERS: ReadonlySet<Provider> = new Set<Provider>(['linkedin', 'linkedin_page', 'bluesky']);
+export const LINK_CARD_TITLE_MAX = 200;
+export const LINK_CARD_DESCRIPTION_MAX = 300;
+export const LINK_CARD_THUMB_TYPES: readonly string[] = ['image/jpeg', 'image/png'];
+export const LINK_CARD_THUMB_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { bluesky: 1_000_000 };
+export interface LinkCard {
+  title: string;
+  // '' when the card has none.
+  description: string;
+  thumbFileId: string | null;
+}
+// Counted in code points of the NFC form, a Vietnamese letter with its marks as one.
+export const linkCardSize = (text: string): number => countText(text, 'codepoints');
+// The card in a variant's settings, trimmed: null when there is none, 'invalid' when it is not an object of those keys
+// with a title of 1 to LINK_CARD_TITLE_MAX characters, a description of at most LINK_CARD_DESCRIPTION_MAX and a file id.
+export function linkCardOf(settings: Readonly<Record<string, unknown>> | undefined): LinkCard | 'invalid' | null {
+  const raw = settings?.linkCard;
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return 'invalid';
+  const r = raw as Record<string, unknown>;
+  if (Object.keys(r).some((k) => k !== 'title' && k !== 'description' && k !== 'thumbFileId')) return 'invalid';
+  if (typeof r.title !== 'string' || (r.description !== undefined && typeof r.description !== 'string') || (r.thumbFileId !== undefined && (typeof r.thumbFileId !== 'string' || r.thumbFileId === ''))) return 'invalid';
+  const title = r.title.trim();
+  const description = (r.description as string | undefined)?.trim() ?? '';
+  if (linkCardSize(title) < 1 || linkCardSize(title) > LINK_CARD_TITLE_MAX || linkCardSize(description) > LINK_CARD_DESCRIPTION_MAX) return 'invalid';
+  return { title, description, thumbFileId: (r.thumbFileId as string | undefined)?.toLowerCase() ?? null };
+}
+// The file id of a valid card's image, or null.
+export function linkCardThumbOf(settings: Readonly<Record<string, unknown>> | undefined): string | null {
+  const card = linkCardOf(settings);
+  return card && card !== 'invalid' ? card.thumbFileId : null;
+}
+// Whether a variant goes out with its link card: a channel that takes one, a valid card, a link and no media.
+export function carriesLinkCard(provider: Provider, settings: Readonly<Record<string, unknown>> | undefined, linkUrl: string | null | undefined, mediaCount: number): boolean {
+  if (!LINK_CARD_PROVIDERS.has(provider) || mediaCount > 0 || !linkUrl?.trim()) return false;
+  const card = linkCardOf(settings);
+  return card !== null && card !== 'invalid';
 }
 
 // The channels whose Crove adapter posts video today (#410). A platform may take video while its adapter does not yet:

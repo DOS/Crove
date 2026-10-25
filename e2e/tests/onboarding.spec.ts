@@ -19,6 +19,11 @@ test('a firm adds a client company by tax code, then opens the form again for th
   await test.step('fill in the client and create it', async () => {
     await expect(page.getByRole('heading', { name: 'Tạo tổ chức đầu tiên' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Tra cứu' })).toHaveCount(0);
+    // Why the tax code matters stays behind the info button (#1521).
+    const about = page.getByText('Hóa đơn ghi mã số thuế này ở phần người bán sẽ được hạch toán là hóa đơn bán ra.');
+    await expect(about).toBeHidden();
+    await page.getByRole('button', { name: 'Mã số thuế dùng để làm gì' }).click();
+    await expect(about).toBeVisible();
     // A value that is not a tax code is refused before anything is created.
     await page.getByLabel('Mã số thuế (không bắt buộc)').fill('12345');
     await page.getByLabel('Tên công ty hoặc hộ kinh doanh').fill('Công ty TNHH Khách hàng Một');
@@ -28,7 +33,7 @@ test('a firm adds a client company by tax code, then opens the form again for th
 
     await page.getByLabel('Mã số thuế (không bắt buộc)').fill('0101.234.564');
     await page.getByLabel('Địa chỉ (không bắt buộc)').fill('Số 1 Phố Huế, Hà Nội');
-    await page.getByLabel('Email người liên hệ (không bắt buộc)').fill(contact);
+    await page.getByLabel('Email người cần mời (không bắt buộc)').fill(contact);
     await page.getByRole('button', { name: 'Tạo tổ chức' }).click();
     await expect(page).toHaveURL(/\/o\/[^/]+\/settings\?invite=/);
   });
