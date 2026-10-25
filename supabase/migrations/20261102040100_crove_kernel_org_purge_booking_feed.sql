@@ -1,7 +1,7 @@
 -- Crove kernel (issue #1382): the org purge (#1024) deletes a closing org's crm booking feeds with its other working
--- rows. The function is copied verbatim from 20261101030000_crove_social_media_archive.sql (the newest definition on
--- main), with only crove_crm.booking_feed added to v_kernel_first. It lives in a kernel migration because the function
--- is the kernel's. Idempotent; applied files stay untouched.
+-- rows. The function is copied verbatim from 20261102000000_crove_finance_categorization_rule.sql (the newest definition
+-- on main), with only crove_crm.booking_feed added to v_kernel_first. It lives in a kernel migration because the
+-- function is the kernel's. Idempotent; applied files stay untouched.
 SET LOCAL lock_timeout = '2s';
 
 CREATE OR REPLACE FUNCTION crove_kernel.org_purge(p_min_days integer)
@@ -36,7 +36,7 @@ DECLARE
     'crove_kernel.proposal_policy', 'crove_kernel.refusal_tally', 'crove_kernel.tax_obligation_done',
     'crove_kernel.tax_profile', 'crove_kernel.usage_deferral', 'crove_kernel.file_upload',
     'crove_kernel.budget_policy', 'crove_kernel.kill_switch', 'crove_kernel.credential',
-    'crove_finance.vendor_account_rule', 'crove_crm.booking_feed', 'crove_crm.booking', 'crove_kernel.availability_rule',
+    'crove_finance.vendor_account_rule', 'crove_finance.categorization_rule', 'crove_crm.booking_feed', 'crove_crm.booking', 'crove_kernel.availability_rule',
     'crove_kernel.calendar_event', 'crove_crm.event_type'];
   v_social text[] := ARRAY[
     'crove_social.account_snapshot', 'crove_social.bio_click', 'crove_social.bio_page', 'crove_social.brand_voice',
