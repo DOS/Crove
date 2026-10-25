@@ -29,6 +29,7 @@ export interface CroveFinanceSchema {
   'crove_finance.journal_voucher': FinanceJournalVoucherTable;
   'crove_finance.misa_goods_code': FinanceMisaGoodsCodeTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
+  'crove_finance.period_balance_delta': FinancePeriodBalanceDeltaTable;
   'crove_finance.period_lock': FinancePeriodLockTable;
   'crove_finance.portal_invoice_list': FinancePortalInvoiceListTable;
   'crove_finance.portal_invoice_row': FinancePortalInvoiceRowTable;
@@ -348,6 +349,18 @@ export interface FinanceOrgAccountTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   updated_by: string | null;
   updated_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_finance.period_balance_delta */
+export interface FinancePeriodBalanceDeltaTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  entry_id: ColumnType<string, NotGranted, NotGranted>;
+  account_code: ColumnType<string, NotGranted, NotGranted>;
+  period_month: ColumnType<string, NotGranted, NotGranted>;
+  debit: ColumnType<string, NotGranted, NotGranted>;
+  credit: ColumnType<string, NotGranted, NotGranted>;
+  line_count: ColumnType<number, NotGranted, NotGranted>;
 }
 
 /** crove_finance.period_lock */

@@ -1428,6 +1428,7 @@ export const vi = {
     },
   },
   inbox: {
+    listShortcuts: 'Phím tắt: J hoặc N sang đề xuất tiếp theo · K hoặc P về đề xuất trước · Enter mở đề xuất đang chọn',
     addressCopied: 'Đã chép địa chỉ',
     copyRefused: 'Trình duyệt không cho chép. Hãy chọn địa chỉ trên màn hình rồi chép bằng tay.',
     socialAttention: {
@@ -1716,6 +1717,7 @@ export const vi = {
     viewInJournal: 'Xem trong sổ bút toán',
   },
   guide: {
+    contents: 'Trên trang này',
     title: 'Hướng dẫn nhanh',
     subtitle: 'Ba bước để ghi sổ hóa đơn đầu vào: tải lên, duyệt và xuất Excel.',
     firmTitle: 'Hướng dẫn cho công ty dịch vụ kế toán',

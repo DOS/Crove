@@ -17,7 +17,7 @@ const QUICK_GUIDE: readonly GuideStep[] = [
     id: 'upload',
     title: 'Bước 1. Tải hóa đơn lên',
     items: [
-      `Mở ${q(vi.nav.inbox)} ở thanh bên trái.`,
+      `Mở ${q(vi.nav.inbox)} trong menu (bên trái màn hình; trên điện thoại, bấm nút ☰ ở góc trên để mở menu).`,
       `Bấm ${q(vi.inbox.upload)}, hoặc kéo thả tệp vào ô ${q(vi.inbox.dropHere)}. Mỗi tệp tối đa 25 MB, chọn được nhiều tệp một lần (tối đa 500), hoặc một tệp ZIP tải về từ cổng thuế: {brand} mở ZIP và đọc từng hóa đơn.`,
       'Tệp XML hóa đơn điện tử luôn đọc được. Tệp PDF và ảnh chụp chỉ đọc được khi máy chủ đã cấu hình AI; nếu chưa, ô tải lên sẽ báo.',
       `Nếu máy chủ bật nhận email, bạn có thể forward thư hóa đơn tới địa chỉ trong ô ${q(vi.inbox.forwardTitle)} (bấm ${q(vi.inbox.copyAddress)} để sao chép).`,
@@ -42,7 +42,7 @@ const QUICK_GUIDE: readonly GuideStep[] = [
     id: 'export',
     title: 'Bước 3. Xuất Excel cho kế toán',
     items: [
-      `Mở ${q(vi.nav.journal)} ở thanh bên trái.`,
+      `Mở ${q(vi.nav.journal)} trong menu.`,
       `Chọn ${q(vi.journal.from)} và ${q(vi.journal.to)} nếu chỉ cần một khoảng thời gian; để trống để xuất tất cả.`,
       `Bấm ${q(vi.journal.export)}. Tệp {brandSlug}-but-toan-<mã tổ chức>.xlsx ghi từng dòng Nợ/Có, gửi thẳng cho kế toán.`,
     ],

@@ -346,21 +346,23 @@ export const policyList = defineQuery({
 });
 
 // Per connection, the variants waiting paused on it (an expired or disconnected channel, #577): they go out again
-// once the channel is reconnected.
+// once the channel is reconnected. Not those of an archived post (#1299, #1331), which is out of every count.
 export const channelWaiting = defineQuery({
   name: 'social.channel.waiting',
   input: z.object({}),
   access: ALL,
   handler: async (ctx) => {
     const rows = await ctx.trx
-      .selectFrom('crove_social.post_variant')
-      .select(['channel_connection_id', (eb) => eb.fn.countAll<string>().as('paused')])
-      .where('org_id', '=', ctx.orgId)
-      .where('status', '=', 'paused')
+      .selectFrom('crove_social.post_variant as v')
+      .innerJoin('crove_social.post as p', (j) => j.onRef('p.org_id', '=', 'v.org_id').onRef('p.id', '=', 'v.post_id'))
+      .select(['v.channel_connection_id', (eb) => eb.fn.countAll<string>().as('paused')])
+      .where('v.org_id', '=', ctx.orgId)
+      .where('v.status', '=', 'paused')
+      .where('p.archived_at', 'is', null)
       // A member limited to some channels (#1081) sees those only.
-      .where(connectionInScope(await channelScope(ctx), 'channel_connection_id'))
-      .groupBy('channel_connection_id')
-      .orderBy('channel_connection_id')
+      .where(connectionInScope(await channelScope(ctx), 'v.channel_connection_id'))
+      .groupBy('v.channel_connection_id')
+      .orderBy('v.channel_connection_id')
       .execute();
     return rows.map((r) => ({ connectionId: r.channel_connection_id, paused: Number(r.paused) }));
   },

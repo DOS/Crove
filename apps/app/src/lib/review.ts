@@ -129,6 +129,15 @@ export function reviewShortcut(event: KeyLike): ReviewAction | null {
   return Object.hasOwn(KEYS, event.key.toLowerCase()) ? (KEYS[event.key.toLowerCase()] as ReviewAction) : null;
 }
 
+// Where the focus goes in a list of `length` items when J or K moves it by `step` from `current` (-1: nothing of the
+// list has the focus yet), stopping at either end (#1405): the first or the last item from outside the list, null for
+// an empty list.
+export function steppedIndex(current: number, length: number, step: 1 | -1): number | null {
+  if (length === 0) return null;
+  if (current < 0) return step === 1 ? 0 : length - 1;
+  return Math.min(length - 1, Math.max(0, current + step));
+}
+
 // The pending proposal after `current` in the list order, or the first other one when `current` is not in the list
 // (it was just decided); null when none is left.
 export function nextPendingId(items: ReadonlyArray<{ id: string }>, current: string): string | null {
@@ -158,3 +167,14 @@ export function previousPendingId(items: ReadonlyArray<{ id: string }>, current:
 export function proposalName(item: { direction: string | null; sellerName: string | null; buyerName: string | null; title: string }): string {
   return (item.direction === 'sale' ? item.buyerName : item.sellerName) || item.title;
 }
+
+// The checks in the order a reviewer needs them (DESIGN.md §5.1, #1409): failed first, then warnings, then passes,
+// each group in its stored order.
+const CONCERN: Readonly<Record<string, number>> = { fail: 0, warn: 1, pass: 2 };
+export function checksByConcern<T extends { status: string }>(checks: readonly T[]): T[] {
+  return checks
+    .map((check, at) => ({ check, at }))
+    .sort((a, b) => (CONCERN[a.check.status] ?? 3) - (CONCERN[b.check.status] ?? 3) || a.at - b.at)
+    .map(({ check }) => check);
+}
+

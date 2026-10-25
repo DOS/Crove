@@ -35,6 +35,20 @@ test('review shortcuts, then approve several proposals under one step-up', async
 
   const slug = new URL(page.url()).pathname.split('/')[2] ?? '';
 
+  await test.step('on the list, J and K move the focus through the proposals and Enter opens one (#1405)', async () => {
+    const links = page.getByRole('link', { name: SELLER });
+    await page.keyboard.press('j');
+    await expect(links.nth(0)).toBeFocused();
+    await page.keyboard.press('j');
+    await expect(links.nth(1)).toBeFocused();
+    await page.keyboard.press('k');
+    await expect(links.nth(0)).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/\/inbox\/[^/]+$/);
+    await page.goBack();
+    await expect(links).toHaveCount(NUMBERS.length);
+  });
+
   await test.step('J and K move between pending proposals, A approves, E focuses the first account', async () => {
     await page.getByRole('link', { name: SELLER }).first().click();
     await expect(

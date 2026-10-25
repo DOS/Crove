@@ -16,13 +16,14 @@ import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { SM_UP, useMediaQuery } from '../lib/media.ts';
+import { useReviewShortcuts } from '../lib/review-shortcuts.ts';
 import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
 import { providerName } from '../lib/social.ts';
 import { toast } from '../lib/toast.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
-import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, showMatched, type BulkBatch, type BulkProgress } from '../lib/review.ts';
+import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, showMatched, steppedIndex, type BulkBatch, type BulkProgress } from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 // One bulk approval (issue #315): the batches planned when it started, how far it got, and the names to report.
@@ -242,6 +243,16 @@ export function InboxPage() {
   const bulkNotSent = bulk ? bulk.total - bulk.progress.results.length : 0;
 
   const wide = useMediaQuery(SM_UP);
+  // J and K (or N and P) move the focus through the list's proposals; Enter opens the focused one as any link does
+  // (DESIGN.md §5.2, #1405). The keys mean the same on a proposal's own screen (useReviewShortcuts there).
+  const moveFocus = (step: 1 | -1) => {
+    const links = [...document.querySelectorAll<HTMLAnchorElement>('[data-proposal-link]')];
+    const at = steppedIndex(links.indexOf(document.activeElement as HTMLAnchorElement), links.length, step);
+    if (at === null) return;
+    links[at]?.focus();
+    links[at]?.scrollIntoView({ block: 'nearest' });
+  };
+  useReviewShortcuts({ next: () => moveFocus(1), previous: () => moveFocus(-1) });
   // The bulk checkbox and the check badges of one proposal, for the table and the phone's blocks alike (#1270).
   const selectBox = (item: InboxItem) =>
     bulkSelectable(item, REVERSAL_KIND) ? (
@@ -558,7 +569,7 @@ export function InboxPage() {
                     </TableCell>
                   )}
                   <TableCell className="px-4 py-3">
-                    <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
+                    <Link data-proposal-link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="font-medium text-foreground hover:text-link">
                       {proposalName(item)}
                     </Link>
                     <p className="text-xs text-subtle-foreground">{item.title}</p>
@@ -582,7 +593,7 @@ export function InboxPage() {
                   {bulkEnabled && <div className="pt-0.5">{selectBox(item)}</div>}
                   <div className="min-w-0 flex-1 space-y-1">
                     <div className="flex items-start justify-between gap-3">
-                      <Link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="min-w-0 font-medium text-foreground hover:text-link">
+                      <Link data-proposal-link to="/o/$slug/inbox/$id" params={{ slug, id: item.id }} className="min-w-0 font-medium text-foreground hover:text-link">
                         {proposalName(item)}
                       </Link>
                       <span className="shrink-0 text-right text-foreground tabular-nums">{f.money(item.total)}</span>
@@ -599,6 +610,7 @@ export function InboxPage() {
             </ul>
           )
         )}
+        {(items.data?.length ?? 0) > 0 && <p className="mt-3 text-xs text-subtle-foreground">{t('listShortcuts')}</p>}
       </TabsContent>
       </Tabs>
     </>
