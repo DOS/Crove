@@ -36,12 +36,17 @@ export function useChosenEntityId(): string | undefined {
   return useLegalEntity(slug ?? '').entityId ?? undefined;
 }
 
+// Hidden until #1280 part 2b: only the period lock and the bank import follow the choice so far, while the journal,
+// ledger, VAT and voucher lists still show every entity the caller sees. Showing a switcher those lists ignore would
+// mislead, so until then the screens work in the default entity (or the first one the caller sees).
+const SWITCHER_SHOWN = false;
+
 export function EntitySwitcher({ slug }: { slug: string }) {
   const t = useTranslations('nav');
   const id = useId();
   const { pathname } = useLocation();
   const { entities, entityId } = useLegalEntity(slug);
-  if (entities.length < 2 || !isEntityPath(pathname)) return null;
+  if (!SWITCHER_SHOWN || entities.length < 2 || !isEntityPath(pathname)) return null;
   return (
     <div className="mt-3">
       <Label htmlFor={id} className="text-xs font-normal text-subtle-foreground">
