@@ -53,8 +53,6 @@ const PENDING_TABLES = new Set<string>([
   'crove_kernel.number_series',
   'crove_kernel.number_series_policy',
   'crove_kernel.number_void',
-  // Links of parties to legal entities (#1280 part 3b): the factory lands first, the table with the next migration.
-  'crove_kernel.record_le',
 ]);
 const RLS_DENIED = /new row violates row-level security policy/;
 // The RESTRICTIVE legal-entity policy (20261030001000, 20261102140000), as pg_get_expr prints it for column c.
