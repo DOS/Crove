@@ -319,6 +319,21 @@ suite('finance books per legal entity (#1280)', () => {
         ]),
       ),
     ).rejects.toThrow(RLS_DENIED);
+    // Nor reverse an entry of the default entity through the posting definer: the reversed entry is unseen, so the
+    // reversal gets no entity and is refused.
+    const defaultEntry = await admin(async (a) => (await a.query<{ id: string }>('SELECT id FROM crove_finance.journal_entry WHERE org_id = $1 AND legal_entity_id = $2 LIMIT 1', [orgId, defaultEntity])).rows[0]?.id);
+    await expect(
+      asUser(member, (c) =>
+        c.query(`SELECT crove_finance.post_journal_entry('2026-09-25'::date, 'reverse', 'test.reverse', $1::uuid, $2::jsonb, $3::uuid, 1)`, [
+          randomUUID(),
+          JSON.stringify([
+            { line_no: 1, account_code: '331', debit: '1000', credit: '0' },
+            { line_no: 2, account_code: '6422', debit: '0', credit: '1000' },
+          ]),
+          defaultEntry,
+        ]),
+      ),
+    ).rejects.toThrow(/row-level security|null value in column "legal_entity_id"/);
     // Nor can the member attach a row of the branch under a parent of the default entity it cannot see: a learned rule
     // naming the branch and a default-entity purchase document as its source loses its entity and is refused.
     const document = await admin(async (a) => {
