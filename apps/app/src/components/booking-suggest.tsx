@@ -6,6 +6,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { zonedInstant, type BookingSuggestion } from '@crove/kernel-contract';
+import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
@@ -39,6 +40,7 @@ export function BookingSuggestCard({ slug }: { slug: string }) {
     }),
   );
   const result = suggest.data;
+  const aiRead = result?.ai === 'used' && result.windows.length > 0;
 
   function draftOf(s: BookingSuggestion): string {
     const link = bookingLinkOf(window.location.origin, slug, s.eventType.slug);
@@ -111,7 +113,12 @@ export function BookingSuggestCard({ slug }: { slug: string }) {
       )}
       {suggest.error && <ErrorText>{errorMessage(suggest.error)}</ErrorText>}
       {result && (
-        <div className="space-y-2 rounded-lg border border-border p-3" data-testid="booking-suggestion">
+        // What the model read is an AI proposal nobody approved (DESIGN.md §3.1): the proposal badge and a dashed outline.
+        <div
+          className={aiRead ? 'space-y-2 rounded-lg border border-dashed border-proposal/60 p-3' : 'space-y-2 rounded-lg border border-border p-3'}
+          data-testid="booking-suggestion"
+        >
+          {aiRead && <Badge variant="proposal">{t('proposal')}</Badge>}
           <p className="text-xs text-muted-foreground">
             {result.ai === 'used' && result.windows.length > 0
               ? t('aiRead', {

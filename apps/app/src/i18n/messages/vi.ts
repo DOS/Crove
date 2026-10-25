@@ -570,6 +570,7 @@ export const vi = {
       reply: 'Chào anh/chị,\nBên em có thể hẹn "{title}" vào một trong các giờ sau:\n{slots}\nAnh/chị chọn giờ phù hợp và đặt lịch tại: {link}\nCảm ơn anh/chị.',
       replyNone: 'Chào anh/chị,\nHiện bên em chưa còn giờ trống cho "{title}" trong thời gian tới. Anh/chị có thể xem và đặt lịch khi có giờ mới tại: {link}\nCảm ơn anh/chị.',
       replyLabel: 'Câu trả lời gợi ý',
+      proposal: 'AI đề xuất',
       copy: 'Sao chép',
       copied: 'Đã sao chép',
       sendYourself: 'Bạn sửa nếu cần rồi tự gửi cho khách.',

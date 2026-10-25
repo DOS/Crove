@@ -572,6 +572,7 @@ export const en = {
       reply: 'Hello,\nWe can meet for "{title}" at one of these times:\n{slots}\nPlease pick one and book it here: {link}\nThank you.',
       replyNone: 'Hello,\nWe have no free time for "{title}" in the coming days. You can see new times and book here: {link}\nThank you.',
       replyLabel: 'Suggested reply',
+      proposal: 'AI proposal',
       copy: 'Copy',
       copied: 'Copied',
       sendYourself: 'Edit it if needed, then send it to the client yourself.',

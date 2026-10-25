@@ -84,12 +84,11 @@ async function typeSlots(ctx: Reader, type: EventTypeRow, from: number, to: numb
     .where('starts_at', '>=', new Date(from - DAY_MS))
     .where('starts_at', '<', new Date(to + DAY_MS))
     .execute();
-  // The lead host's zone names the times, whether or not the lead may still host.
-  let lead: WorkingHours = (await workingHoursOf(ctx, type.host_user_id)).hours;
+  // The lead host's zone names the times, whether or not the lead may still host (never a co-host's).
+  const lead: WorkingHours = (await workingHoursOf(ctx, type.host_user_id)).hours;
   const perHost: Interval[][] = [];
-  for (const [i, userId] of hosts.entries()) {
+  for (const userId of hosts) {
     const { hours } = await workingHoursOf(ctx, userId);
-    if (i === 0) lead = hours;
     const bookedPerDay = new Map<string, number>();
     for (const b of booked) {
       const day = zonedDate(hours.timeZone, new Date(b.starts_at).getTime());

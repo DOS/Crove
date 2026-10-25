@@ -9,6 +9,7 @@ import { SignJWT } from 'jose';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
+import { upsertIdentity } from '@crove/kernel';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { kernelCommands, kernelQueries } from '@crove/kernel';
 import { isVietnamHoliday, zonedDate, zonedInstant, type BookingSuggestion, type EventType } from '@crove/kernel-contract';
@@ -198,6 +199,24 @@ suite('booking suggestions from a client message (#1440)', () => {
     // A day not listed is dropped by the check after the model.
     answers.push({ asksForMeeting: true, windows: [{ date: '2030-01-01', from: '09:00', to: '10:00' }] });
     expect((await suggest('Hẹn năm 2030')).body).toMatchObject({ ai: 'used', windows: [] });
+  });
+
+  it("names times in the lead host's zone, even when only a co-host in another zone may still host", async () => {
+    const person = (who: string) => upsertIdentity(db, { issuer: 'test', subject: randomUUID(), email: `${who}-${randomUUID().slice(0, 6)}@suggest.test`, name: null });
+    const [lead, coHost] = [await person('lead'), await person('cohost')];
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member'), ($1, $3, 'member')", [org.orgId, lead, coHost]));
+    await rt.execute('kernel.calendar.hours.save', { timeZone: VN, windows: [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, start: 540, end: 720 })) }, { actor: asUser(lead), orgId: org.orgId });
+    await rt.execute('kernel.calendar.hours.save', { timeZone: 'Europe/Berlin', windows: [1, 2, 3, 4, 5, 6, 7].map((weekday) => ({ weekday, start: 540, end: 1020 })) }, { actor: asUser(coHost), orgId: org.orgId });
+    const team = await rt.execute<EventType>(
+      'crm.event_type.create',
+      { slug: 'nhom', title: 'Họp nhóm', description: null, durationMin: 60, bufferBeforeMin: 0, bufferAfterMin: 0, minNoticeMin: 0, horizonDays: 30, dailyLimit: null, locationKind: 'video', locationValue: null, hostUserId: lead, assignment: 'round_robin', coHostUserIds: [coHost] },
+      { actor: asUser(owner.userId), orgId: org.orgId },
+    );
+    // The lead becomes a viewer: only the co-host in Berlin may still host.
+    await admin((c) => c.query("UPDATE crove_kernel.tenant_member SET role = 'viewer' WHERE org_id = $1 AND user_id = $2", [org.orgId, lead]));
+    const s = (await rpc('crm/bookings/suggest', await tokenFor(owner), { eventTypeId: team.id, message: '' })).body as BookingSuggestion;
+    expect(s.timeZone).toBe(VN);
+    expect(s.slots).toHaveLength(3);
   });
 
   it('answers the next free slots without AI, without a message, or when the model fails, and refuses viewers', async () => {
