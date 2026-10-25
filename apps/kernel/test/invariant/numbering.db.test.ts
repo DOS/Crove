@@ -155,6 +155,16 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     if (!ADMIN) return;
     const root = new pg.Client({ connectionString: ADMIN });
     await root.connect();
+    // pool.end() resolves before every one of the CLIENTS connections has closed on the server; a FORCE drop would
+    // terminate the stragglers, and their 57P01 reaches the run as an unhandled error. Wait for them first.
+    for (let i = 0; i < 100; i += 1) {
+      const { rows } = await root.query<{ n: number }>(
+        'SELECT count(*)::int AS n FROM pg_catalog.pg_stat_activity WHERE datname = $1 AND pid <> pg_catalog.pg_backend_pid()',
+        [dbName],
+      );
+      if (rows[0]?.n === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     await root.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
     await root.end();
   });
