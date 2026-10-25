@@ -48,6 +48,8 @@ describe('amounts as typed', () => {
 
   it('keeps anything else as typed, so the form refuses it', () => {
     for (const bad of ['-5', '1,5đ', 'abc', '1e6']) expect(isVoucherAmount(normalizeAmount(bad)), bad).toBe(false);
+    // A decimal part or a misplaced separator is not read as a bigger whole amount (#1391 review).
+    for (const bad of ['12.34', '1,5', '1.50.000', '1.500,000', '15.00']) expect(normalizeAmount(bad), bad).toBe(bad);
     expect(isVoucherAmount('0')).toBe(false);
     expect(isVoucherAmount('1500000')).toBe(true);
   });

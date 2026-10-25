@@ -2,12 +2,13 @@
 // issued the invoice) from a purchase. Optional: an org without one records every invoice as a purchase, as before.
 // Stored normalized (normalizeTaxCode; the column's CHECK constraint holds the same shape). Owners and admins set or
 // clear it; the runtime audits every change, and the detail keeps the old and the new value (a tax code is public
-// business data, not a secret). The org's default legal entity (#1278) keeps the same tax code: it is written with the
-// tenant row, and a code another legal entity of the org holds is refused.
+// business data, not a secret). The org's default legal entity (#1278) keeps the same tax code: the database writes it
+// with the tenant row (tenant_default_entity_tax_code, #1316), and a code another legal entity of the org holds is
+// refused.
 import { z } from 'zod';
 import { VAT_FILING_PERIODS, normalizeTaxCode } from '@crove/kernel-contract';
 import { DomainError, defineCommand } from '@crove/kernel-runtime';
-import { setDefaultEntityTaxCode } from './legal-entities.ts';
+import { assertOrgTaxCodeFree, onWrite, setDefaultEntityTaxCode } from './legal-entities.ts';
 
 export const setTaxCode = defineCommand({
   name: 'kernel.org.set_tax_code',
@@ -20,12 +21,16 @@ export const setTaxCode = defineCommand({
       throw new DomainError('INVALID_TAX_CODE', 422, 'Mã số thuế không hợp lệ: 10 chữ số, 10 chữ số kèm 3 chữ số đơn vị phụ thuộc, hoặc 12 chữ số');
     }
     const before = await ctx.trx.selectFrom('crove_kernel.tenant').select('tax_code').where('org_id', '=', ctx.orgId).executeTakeFirstOrThrow();
+    await assertOrgTaxCodeFree(ctx, taxCode);
     if (before.tax_code !== taxCode) {
-      await ctx.trx.updateTable('crove_kernel.tenant').set({ tax_code: taxCode }).where('org_id', '=', ctx.orgId).execute();
+      // The database writes the new code to the default entity too (tenant_default_entity_tax_code); its unique index
+      // refuses a code another entity took after the check above.
+      await ctx.trx.updateTable('crove_kernel.tenant').set({ tax_code: taxCode }).where('org_id', '=', ctx.orgId).execute().catch(onWrite(taxCode));
       // Members see the change in the activity feed: it decides which invoices are read as sales from now on.
       await ctx.activity('kernel.tenant', ctx.orgId, 'org.tax_code_changed', taxCode ? `Đặt mã số thuế của tổ chức là ${taxCode}` : 'Xóa mã số thuế của tổ chức');
     }
-    // After the tenant row, as kernel.legal_entity.update takes them.
+    // After the tenant row, as kernel.legal_entity.update takes them. A no-op unless the default entity was left on an
+    // old code before #1316.
     await setDefaultEntityTaxCode({ trx: ctx.trx, orgId: ctx.orgId, now: ctx.now, userId: ctx.actor.type === 'user' ? ctx.actor.userId : null }, taxCode);
     ctx.audit({ previous: before.tax_code, taxCode });
     return { taxCode };
