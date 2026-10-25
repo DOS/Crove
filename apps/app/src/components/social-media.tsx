@@ -515,21 +515,23 @@ export function MediaField({
 export const COVER_IMAGE_ACCEPT: readonly string[] = ['image/jpeg', 'image/png'];
 
 // One image for a video's cover (#642): uploaded here or taken from the library, shown with a button to change it.
-export function CoverImageField({ fileId, onChange, disabled }: { fileId: string | null; onChange: (fileId: string | null) => void; disabled: boolean }) {
+// alt and uploadLabel: the image's own words where it is not a video's cover (a link card's image, #1498). onChange
+// also gets the chosen file's size in bytes, where known, for a channel that limits it.
+export function CoverImageField({ fileId, onChange, disabled, alt, uploadLabel }: { fileId: string | null; onChange: (fileId: string | null, sizeBytes?: number) => void; disabled: boolean; alt?: string; uploadLabel?: string }) {
   const t = useTranslations('social');
   const picker = useRef<HTMLInputElement>(null);
   const [browsing, setBrowsing] = useState(false);
   const upload = useMutation({
-    mutationFn: async (file: File) => (await uploadFiles([file], 'social')).files[0]?.fileId ?? null,
+    mutationFn: async (file: File) => ({ fileId: (await uploadFiles([file], 'social')).files[0]?.fileId ?? null, sizeBytes: file.size }),
     onSuccess: (added) => {
-      if (added) onChange(added);
+      if (added.fileId) onChange(added.fileId, added.sizeBytes);
       void queryClient.invalidateQueries({ queryKey: ['social-library'] });
     },
   });
   const chosen: MediaItem[] = fileId ? [{ fileId, altText: '', mime: 'image/jpeg', sizeBytes: 0 }] : [];
   return (
     <div className="space-y-2">
-      {fileId && <Thumb fileId={fileId} alt={t('coverImageAlt')} mime="image/jpeg" className="aspect-video max-w-48" />}
+      {fileId && <Thumb fileId={fileId} alt={alt ?? t('coverImageAlt')} mime="image/jpeg" className="aspect-video max-w-48" />}
       <input
         ref={picker}
         type="file"
@@ -544,7 +546,7 @@ export function CoverImageField({ fileId, onChange, disabled }: { fileId: string
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" disabled={disabled || upload.isPending} onClick={() => picker.current?.click()}>
           {upload.isPending ? <Spinner className="text-current" /> : null}
-          {t(fileId ? 'coverImageReplace' : 'coverImageUpload')}
+          {fileId ? t('coverImageReplace') : (uploadLabel ?? t('coverImageUpload'))}
         </Button>
         <Button variant="ghost" size="sm" disabled={disabled} aria-expanded={browsing} onClick={() => setBrowsing(!browsing)}>
           {t(browsing ? 'libraryClose' : 'libraryOpen')}
@@ -556,7 +558,8 @@ export function CoverImageField({ fileId, onChange, disabled }: { fileId: string
           only={COVER_IMAGE_ACCEPT}
           onChange={(next) => {
             // One image: a click on another replaces it, a click on the chosen one takes it out.
-            onChange(next.at(-1)?.fileId ?? null);
+            const picked = next.at(-1);
+            onChange(picked?.fileId ?? null, picked?.sizeBytes);
             setBrowsing(false);
           }}
         />
