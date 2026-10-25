@@ -43,6 +43,7 @@ suite('crm booking feed on PostgreSQL (#1382)', () => {
   let worker: Runtime;
   let http: (limit?: RateLimiter) => ReturnType<typeof createHttpApp>;
   const asUser = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal1' as const });
+  const asMfa = (userId: string) => ({ type: 'user' as const, userId, aal: 'aal2' as const, sessionId: randomUUID(), mfaAt: Math.floor(Date.now() / 1000) });
 
   async function admin<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
     const client = new pg.Client({ connectionString: adminUrl });
@@ -253,6 +254,47 @@ suite('crm booking feed on PostgreSQL (#1382)', () => {
     // A closed org's feeds open nothing either.
     await admin((c) => c.query("UPDATE crove_kernel.tenant SET status = 'closed' WHERE org_id = $1", [o.orgId]));
     expect(await bookingFeed(app, owner.token)).toBeNull();
+  });
+
+  it('revokes the feed of a member who leaves or becomes a viewer, so coming back does not revive it', async () => {
+    const o = await org();
+    const a = await o.exec<{ token: string }>(o.a, 'crm.booking_feed.create');
+    const b = await o.exec<{ token: string }>(o.b, 'crm.booking_feed.create');
+    const owner = await o.exec<{ token: string }>(o.owner, 'crm.booking_feed.create');
+    // What the worker does with each member event: the relay queues it, the job runs the command as the system.
+    const revokeFromEvents = async () => {
+      const events = await admin(async (c) => (await c.query<{ id: string }>("SELECT id FROM crove_kernel.outbox_event WHERE org_id = $1 AND type IN ('kernel.member.removed', 'kernel.member.role_changed') ORDER BY id", [o.orgId])).rows);
+      let revoked = 0;
+      for (const e of events) revoked += (await worker.execute<{ revoked: number }>('crm.booking_feed.revoke_for_member', { eventId: e.id }, { actor: SYSTEM, orgId: o.orgId })).revoked;
+      return revoked;
+    };
+    await app.execute('kernel.member.remove', { userId: o.a }, { actor: asMfa(o.owner), orgId: o.orgId });
+    await app.execute('kernel.member.change_role', { userId: o.b, role: 'viewer' }, { actor: asMfa(o.owner), orgId: o.orgId });
+    expect(await revokeFromEvents()).toBe(2);
+    // Added back, and made a member again: the old addresses stay dead.
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, o.a]));
+    await app.execute('kernel.member.change_role', { userId: o.b, role: 'member' }, { actor: asMfa(o.owner), orgId: o.orgId });
+    // The promotion back revokes nothing more (they host again), and a replayed event changes nothing.
+    expect(await revokeFromEvents()).toBe(0);
+    expect(await bookingFeed(app, a.token)).toBeNull();
+    expect(await bookingFeed(app, b.token)).toBeNull();
+    expect((await http().request(`/cal/${b.token}.ics`)).status).toBe(404);
+    expect(await bookingFeed(app, owner.token)).toMatchObject({ slug: o.slug });
+    // A new address works again for a member who hosts.
+    const again = await o.exec<{ token: string }>(o.b, 'crm.booking_feed.create');
+    expect(await bookingFeed(app, again.token)).toMatchObject({ slug: o.slug });
+    // An admin made admin again keeps theirs: only leaving or becoming a viewer revokes.
+    const live = await admin(async (c) => (await c.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_crm.booking_feed WHERE org_id = $1 AND user_id = $2 AND revoked_at IS NULL', [o.orgId, o.owner])).rows[0]?.n);
+    expect(live).toBe(1);
+  });
+
+  it("stops the feed of a member whose account is disabled", async () => {
+    const o = await org();
+    const { token } = await o.exec<{ token: string }>(o.a, 'crm.booking_feed.create');
+    expect(await bookingFeed(app, token)).toMatchObject({ slug: o.slug });
+    await admin((c) => c.query('UPDATE crove_kernel.user_account SET disabled_at = now() WHERE id = $1', [o.a]));
+    expect(await bookingFeed(app, token)).toBeNull();
+    expect((await http().request(`/cal/${token}.ics`)).status).toBe(404);
   });
 
   it('answers 429 past the per-client budget', async () => {

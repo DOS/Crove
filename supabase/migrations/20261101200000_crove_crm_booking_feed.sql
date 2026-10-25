@@ -5,10 +5,11 @@
 -- booking_feed  a member's subscription address: the SHA-256 of its token (the secret is only in the address the
 --               member copies), whose bookings it shows, when it was made, and its revocation. A member has at most one
 --               live feed; owners, admins and members make a new one (which revokes the old) and revoke it through
---               commands, for themselves only. Nothing else about a feed changes.
+--               commands, for themselves only; the worker revokes it when the member leaves the org or becomes a
+--               viewer. Nothing else about a feed changes.
 --
 -- booking_feed_events(token)  for a live feed of an active org whose member may still host (an owner, admin or member
---                             of the org): the org's slug and name and the member's confirmed bookings from 30 days
+--                             of the org, with an account not disabled): the org's slug and name and the member's confirmed bookings from 30 days
 --                             back to 90 days ahead, at most 1000, each with its times, revision, event type title and
 --                             location, and the visitor's name. No email, phone or note; NULL otherwise. Only crove_app
 --                             (the API login role, which serves GET /cal/<token>.ics) may execute it.
@@ -51,10 +52,12 @@ BEGIN
   IF v_tenant.org_id IS NULL THEN
     RETURN NULL;
   END IF;
-  -- A member who left the org, or became a viewer, hosts no more: their address stops working.
+  -- A member who left the org, became a viewer or whose account is disabled hosts no more: their address stops
+  -- working. (Leaving or becoming a viewer also revokes the feed, crm.booking_feed.revoke_for_member, so being added
+  -- back does not bring an old address back.)
   IF NOT EXISTS (
-    SELECT 1 FROM crove_kernel.tenant_member m
-    WHERE m.org_id = v_feed.org_id AND m.user_id = v_feed.user_id AND m.role IN ('owner', 'admin', 'member')
+    SELECT 1 FROM crove_kernel.tenant_member m JOIN crove_kernel.user_account u ON u.id = m.user_id
+    WHERE m.org_id = v_feed.org_id AND m.user_id = v_feed.user_id AND m.role IN ('owner', 'admin', 'member') AND u.disabled_at IS NULL
   ) THEN
     RETURN NULL;
   END IF;

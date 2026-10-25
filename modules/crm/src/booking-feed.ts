@@ -8,6 +8,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
+import { zId } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type CommandContext } from '@crove/kernel-runtime';
 
 // Who may have a feed: anyone who can host a booking.
@@ -60,6 +61,36 @@ export const bookingFeedRevoke = defineCommand({
   handler: async (ctx) => ({ revoked: await revokeLive(ctx, requireUser(ctx)) }),
 });
 
+// A member who left the org or became a viewer hosts no more (#1382): the worker revokes their feed from the event, so
+// adding them back, or making them a member again, does not bring an old (possibly leaked) address back. The definer
+// also refuses such a member at each fetch; this makes it last.
+export const bookingFeedRevokeForMember = defineCommand({
+  name: 'crm.booking_feed.revoke_for_member',
+  input: z.strictObject({ eventId: zId }),
+  risk: 'R1',
+  access: 'system',
+  handler: async (ctx, input) => {
+    if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình nền mới thực hiện được việc này');
+    const event = await ctx.trx.selectFrom('crove_kernel.outbox_event').select(['type', 'payload']).where('org_id', '=', ctx.orgId).where('id', '=', input.eventId).executeTakeFirst();
+    if (!event || (event.type !== 'kernel.member.removed' && event.type !== 'kernel.member.role_changed')) return { revoked: 0 };
+    const data = z.object({ userId: zId }).safeParse(event.payload);
+    if (!data.success) return { revoked: 0 };
+    const userId = data.data.userId;
+    const member = await ctx.trx.selectFrom('crove_kernel.tenant_member').select('role').where('org_id', '=', ctx.orgId).where('user_id', '=', userId).executeTakeFirst();
+    if (member && HOSTS.includes(member.role)) return { revoked: 0 };
+    const done = await ctx.trx
+      .updateTable('crove_crm.booking_feed')
+      .set({ revoked_at: ctx.now })
+      .where('org_id', '=', ctx.orgId)
+      .where('user_id', '=', userId)
+      .where('revoked_at', 'is', null)
+      .returning('id')
+      .execute();
+    ctx.audit({ member: userId, booking_feeds: done.map((r) => r.id) });
+    return { revoked: done.length };
+  },
+});
+
 export interface BookingFeedView {
   createdAt: string;
 }
@@ -82,5 +113,5 @@ export const bookingFeedGet = defineQuery({
   },
 });
 
-export const bookingFeedCommands = [bookingFeedCreate, bookingFeedRevoke];
+export const bookingFeedCommands = [bookingFeedCreate, bookingFeedRevoke, bookingFeedRevokeForMember];
 export const bookingFeedQueries = [bookingFeedGet];

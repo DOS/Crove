@@ -104,12 +104,15 @@ interface InboundRow {
   recipient: string;
 }
 
-interface BookingJob {
-  orgId: string;
-  bookingId: string;
-  // A visitor's ask from a manage link (#1319); without it, the job confirms the booking.
-  requestId?: string;
-}
+type BookingJob =
+  | {
+      orgId: string;
+      bookingId: string;
+      // A visitor's ask from a manage link (#1319); without it, the job confirms the booking.
+      requestId?: string;
+    }
+  // A member who left the org or whose role changed (#1382): their booking feed may need revoking.
+  | { orgId: string; memberEventId: string };
 
 interface BookingRemindJob {
   orgId: string;
@@ -689,7 +692,9 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
     await boss.work<BookingJob>(QUEUES.crmBooking, { batchSize: 1 }, async ([job]) => {
       if (!job) return;
       const actor = { type: 'system' as const, component: 'crm.booking' };
-      if (job.data.requestId) {
+      if ('memberEventId' in job.data) {
+        await deps.runtime.execute('crm.booking_feed.revoke_for_member', { eventId: job.data.memberEventId }, { actor, orgId: job.data.orgId });
+      } else if (job.data.requestId) {
         await deps.runtime.execute('crm.booking.manage', { bookingId: job.data.bookingId, requestId: job.data.requestId }, { actor, orgId: job.data.orgId });
       } else {
         await deps.runtime.execute('crm.booking.confirm', { bookingId: job.data.bookingId }, { actor, orgId: job.data.orgId });
@@ -1301,6 +1306,16 @@ export async function startWorker(deps: WorkerDeps): Promise<() => Promise<void>
                   singletonKey: `${row.org_id}:${optionId}`,
                   retryLimit: CHANNEL_OPTION_RETRY_LIMIT,
                   retryDelay: 10,
+                  retryBackoff: true,
+                });
+              }
+              // A member who left or changed role (#1382): their booking feed stops when they host no more. Queued
+              // beside whatever else the event starts (Social revokes its links from the same event).
+              if (crm && (row.type === 'kernel.member.removed' || row.type === 'kernel.member.role_changed')) {
+                await boss.send(QUEUES.crmBooking, { orgId: row.org_id, memberEventId: row.event_id } satisfies BookingJob, {
+                  singletonKey: `${row.org_id}:member:${row.event_id}`,
+                  retryLimit: BOOKING_RETRY_LIMIT,
+                  retryDelay: 2,
                   retryBackoff: true,
                 });
               }
