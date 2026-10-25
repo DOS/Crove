@@ -39,6 +39,7 @@ export interface CroveFinanceSchema {
   'crove_finance.purchase_document_void': FinancePurchaseDocumentVoidTable;
   'crove_finance.purchase_line': FinancePurchaseLineTable;
   'crove_finance.purchase_tax_rate': FinancePurchaseTaxRateTable;
+  'crove_finance.vat_return_filed': FinanceVatReturnFiledTable;
   'crove_finance.vendor_account_rule': FinanceVendorAccountRuleTable;
 }
 
@@ -512,6 +513,20 @@ export interface FinancePurchaseTaxRateTable {
   vat_rate: ColumnType<string, string, NotGranted>;
   taxable_amount: ColumnType<string, string, NotGranted>;
   vat_amount: ColumnType<string, string, NotGranted>;
+}
+
+/** crove_finance.vat_return_filed */
+export interface FinanceVatReturnFiledTable {
+  org_id: ColumnType<string, string, NotGranted>;
+  id: ColumnType<string, string | undefined, NotGranted>;
+  period: ColumnType<string, string, NotGranted>;
+  status: ColumnType<string, string, NotGranted>;
+  source: ColumnType<string | null, string | null, NotGranted>;
+  carried_in_amount: ColumnType<string | null, string | null, NotGranted>;
+  deductible_amount: ColumnType<string | null, string | null, NotGranted>;
+  carried_out_amount: ColumnType<string | null, string | null, NotGranted>;
+  marked_by: ColumnType<string, string, NotGranted>;
+  created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
 }
 
 /** crove_finance.vendor_account_rule */

@@ -899,12 +899,41 @@ export const zVatPaymentChecks = z.object({
   unchecked: z.number().int().nonnegative(),
   suggested25: zMoney,
 });
+// The VAT return of a period marked filed (#1400), with [22], [25] and [43] as filed, in whole dong. source: 'entered'
+// (typed or confirmed by the accountant on the VAT screen) or 'computed' (marked done from the tax calendar: Crove's
+// working, [22] carried from the return before and [25] the suggested deduction).
+export const VAT_RETURN_SOURCES = ['entered', 'computed'] as const;
+export const zVatWholeDong = z.string().regex(/^\d{1,14}$/, 'whole dong, at most 14 digits');
+export const zVatFiledReturn = z.object({
+  period: zVatPeriod,
+  source: z.enum(VAT_RETURN_SOURCES),
+  carriedIn: zVatWholeDong,
+  deductible: zVatWholeDong,
+  carriedOut: zVatWholeDong,
+  markedAt: z.string(),
+});
+// [22] of the period: the [43] of the return filed for the period just before (lookedFor, the same kind first). No
+// such return leaves [22] at 0 (previous null), and the screen warns.
+export const zVatCarryForward = z.object({
+  amount: zVatWholeDong,
+  previous: zVatFiledReturn.nullable(),
+  lookedFor: z.array(zVatPeriod),
+});
 export const zVatReport = z.object({
   period: z.object({ period: zVatPeriod, kind: z.enum(['month', 'quarter']), from: zLocalDate, to: zLocalDate }),
   input: zVatSide,
   output: zVatSide,
   indicators: z.array(z.object({ code: z.string(), label: z.string(), amount: zMoney })),
   paymentChecks: zVatPaymentChecks,
+  carryForward: zVatCarryForward,
+  // This period's return as marked filed, or null.
+  filed: zVatFiledReturn.nullable(),
+});
+// Marks the period's VAT return filed (done) with its figures, or takes the mark back (#1400).
+export const zVatReturnMark = z.strictObject({
+  period: zVatPeriod,
+  done: z.boolean(),
+  figures: z.strictObject({ carriedIn: zVatWholeDong, deductible: zVatWholeDong, carriedOut: zVatWholeDong }).optional(),
 });
 
 // Ledger reports for a month ("2026-09"), a quarter ("2026-Q3") or a year ("2026") (issue #321): the trial balance,

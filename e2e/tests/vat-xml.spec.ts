@@ -1,6 +1,7 @@
 // The HTKK XML of form 01/GTGT (issue #332), end to end: the button waits for the org's tax code -> set it in Settings
 // -> upload an e-invoice the org issued and approve the sale -> Tờ khai GTGT for September 2026 -> download the XML
-// and read the taxpayer, the period and the sales indicators back from it.
+// and read the taxpayer, the period and the sales indicators back from it -> mark September filed with its [43] and
+// see October's [22] start from it, on the screen and in the XML (#1400).
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
@@ -77,5 +78,40 @@ test('export the VAT return of a month as the HTKK XML of form 01/GTGT', async (
     expect(valueOf(xml, 'ct33')).toBe('180000');
     expect(valueOf(xml, 'ct34')).toBe('1800000');
     expect(valueOf(xml, 'ct23')).toBe('0');
+  });
+
+  // #1400: [22] of a return is the previous return's [43]. September has no filed return before it, so [22] is 0 with a
+  // warning; marking September filed with its [43] prefills October's [22], in the XML too, and it stays editable.
+  await test.step('mark September filed with its [43]', async () => {
+    await expect(page.getByText('Chưa có tờ khai tháng 8/2026 nào được đánh dấu đã nộp, nên [22] đang để 0.', { exact: false })).toBeVisible();
+    await expect(page.getByLabel('Số tiền ghi vào [22]')).toHaveValue('0');
+    await page.getByRole('button', { name: 'Đánh dấu đã nộp tờ khai' }).click();
+    // [43] is worked out from the form: 180,000 payable, so nothing carried on; the accountant enters the return as filed.
+    await expect(page.getByLabel('[43] Thuế còn được khấu trừ chuyển kỳ sau')).toHaveValue('0');
+    // An amount field shows its digits grouped until it has the focus: focus it first, then replace what it holds.
+    await page.getByLabel('[43] Thuế còn được khấu trừ chuyển kỳ sau').click();
+    await page.getByLabel('[43] Thuế còn được khấu trừ chuyển kỳ sau').fill('250000');
+    await page.getByRole('button', { name: 'Lưu và đánh dấu đã nộp' }).click();
+    await expect(page.getByText(/Đã đánh dấu nộp ngày .*: \[22\] 0\s₫, \[25\] 0\s₫, \[43\] 250\.000\s₫\./)).toBeVisible();
+  });
+
+  await test.step('October starts from September, on the screen and in the XML, and [22] stays editable', async () => {
+    await page.getByLabel('Tháng', { exact: true }).selectOption('10');
+    await expect(page.getByText(/Lấy từ chỉ tiêu \[43\] của tờ khai tháng 9\/2026 \(250\.000\s₫\)/)).toBeVisible();
+    await expect(page.getByLabel('Số tiền ghi vào [22]')).toHaveValue('250.000');
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Xuất XML cho HTKK' }).click();
+    const xml = await readFile(await (await download).path(), 'utf8');
+    expect(valueOf(xml, 'ct22')).toBe('250000');
+    expect(valueOf(xml, 'ct43')).toBe('250000');
+
+    await page.getByLabel('Số tiền ghi vào [22]').click();
+    await page.getByLabel('Số tiền ghi vào [22]').fill('100000');
+    await expect(page.getByText(/Đã sửa, khác số chuyển sang từ kỳ trước \(250\.000\s₫\)\./)).toBeVisible();
+    const edited = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Xuất XML cho HTKK' }).click();
+    expect(valueOf(await readFile(await (await edited).path(), 'utf8'), 'ct22')).toBe('100000');
+    await page.getByRole('button', { name: 'Dùng lại số kỳ trước' }).click();
+    await expect(page.getByLabel('Số tiền ghi vào [22]')).toHaveValue('250.000');
   });
 });

@@ -68,7 +68,7 @@ Root `HSoThueDTu` in GDT's namespace, `HSoKhaiThue id="ID_1"`, then:
 | Indicator | Value |
 |---|---|
 | [21] no activity in the period | `0` (not ticked); the accountant ticks it |
-| [22] VAT carried forward from the previous period | 0 |
+| [22] VAT carried forward from the previous period | The [43] of the return filed for the period before (#1400, below); 0 with a warning when none is marked filed. The accountant may edit it on the VAT screen (`?carried=<whole dong>`) |
 | [23], [24] purchases and their VAT | Crove: all purchase invoices of the period |
 | [23a], [24a] of which imports | 0 (import declarations are not in Crove) |
 | [25] deductible input VAT | **0** by default; the accountant enters it. Optionally [24] (all input VAT), chosen per download with "Ghi chỉ tiêu [25] bằng [24]" on the VAT screen (`?deductInput=1`, recorded in the export's audit row); the accountant then reduces it by what may not be deducted (#692) |
@@ -80,6 +80,31 @@ Root `HSoThueDTu` in GDT's namespace, `HSoKhaiThue id="ID_1"`, then:
 
 Amounts are whole dong: each computed indicator is rounded half up, then the sums are worked out from the rounded
 values so the file obeys the form's formulas exactly. An amount beyond HTKK's 14 digits is refused.
+
+## Indicator [22] and the filed return (#1400)
+
+[22] of a return is the previous return's [43] (VAT still deductible, carried to the next period): a rule of the form
+itself (S2, row formulas). Crove keeps what was filed, so the next return can start from it.
+
+- **The filed record:** `crove_finance.vat_return_filed`, one appended row per mark, the latest row of a period its
+  state: `filed` with [22], [25] and [43] as filed (whole dong) and their source, or `withdrawn`. `entered`: typed or
+  confirmed by the accountant on the VAT screen ("Đánh dấu đã nộp tờ khai"). `computed`: marked done from the tax
+  calendar, so Crove's own working ([22] from the return before, [25] the suggested deduction of #917, [43] by the
+  formulas of the file); the screen then says the figures were not taken from the filed return.
+- **The done mark hangs on it:** `finance.vat.return_mark` (owners and admins, R1, audited without the figures) appends
+  the row and runs `kernel.tax_obligation.done` for `vat_return` in the same transaction; done false appends a
+  `withdrawn` row and runs `kernel.tax_obligation.undo`. With the finance module on, the tax calendar's button for the
+  VAT return (`org.markTaxObligation`) goes through this command. In the database, `vat_return_filed_guard` refuses an
+  insert by anyone but an owner or admin of the org in context naming themselves, and
+  `vat_return_filed_requires_audit` lets a row commit only with the command's audit row; no role updates or deletes a
+  row. The record is kept with the books (the org purge never deletes it).
+- **Which return is the previous one:** the month, and the quarter when that month ends one, that end the day before
+  the period starts; the same kind first. So 2026-07 looks for 2026-06, then 2026-Q2; 2026-Q3 looks for 2026-Q2, then
+  2026-06 (an org that changed its filing period, #318). Crove's reading, for the accountant to confirm (question 8).
+- **Where it shows:** `finance.vat.period` returns `carryForward` (the amount, the return it came from, the periods
+  looked for) and `filed`; the VAT screen prefills [22] and says where it comes from, and the XML takes it unless the
+  accountant edited it. The export's audit row records `carry_forward` (`previous`, `edited` or `none`), never the
+  amount.
 
 ## Verification
 
@@ -105,9 +130,12 @@ values so the file obeys the form's formulas exactly. An amount beyond HTKK's 14
 4. [25] is 0 in the file by default, so the payable VAT ([36], [40]) counts no deduction until you enter it. Crove
    can already write [24] (all input VAT) in [25] when you tick the option before downloading (#692). Should that be
    the default?
-5. Which of [21], [22], [23a]/[24a], [37], [38], [39a], [40b], [42] do your clients use, and from where should Crove
-   take them later (the previous return for [22], import declarations for [23a]/[24a])?
+5. Which of [21], [23a]/[24a], [37], [38], [39a], [40b], [42] do your clients use, and from where should Crove
+   take them later (import declarations for [23a]/[24a])? [22] now comes from the previous return marked filed (#1400).
 6. Does the file need the tax office (`maCQTNoiNop`) and the signer filled before HTKK or eTax takes it? The address is
    now written from Settings as one line in `dchiNNT` (#692); do HTKK or eTax also need the ward, district and
    province codes?
 7. Do you need the reduced-rate appendix (Decree 174/2025) in the same file, or do you prepare it in HTKK?
+8. [22] (#1400): when a client changes its filing period between two returns (monthly to quarterly or back), is [22]
+   of the first return of the new kind the [43] of the last return of the old kind, as Crove assumes? And when a
+   supplementary return changes a period's [43], should the next [22] follow it?

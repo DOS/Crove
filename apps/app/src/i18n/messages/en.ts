@@ -864,7 +864,7 @@ export const en = {
     xmlDeductSuggested: 'Write the suggestion: [24] minus the VAT that may not be deducted ({amount})',
     xmlDeductUnchecked: '{count, plural, one {# invoice still needs its payment checked; the suggestion counts it as deductible.} other {# invoices still need their payment checked; the suggestion counts them as deductible.}}',
     xmlNote:
-      'The XML file for HTKK (form 01/GTGT of Circular 80/2021, XML version 2.8.3) carries the indicators above. Indicators [21], [22], [23a], [24a], [25], [37], [38], [39a], [40b] and [42] are written as 0, and the tax office and the signer are left blank; until [25] is entered, the payable VAT in the file assumes no input VAT is deducted. Your accountant completes and checks it in HTKK or on eTax before filing.',
+      'The XML file for HTKK (form 01/GTGT of Circular 80/2021, XML version 2.8.3) carries the indicators above. Indicator [22] is the amount above. Indicators [21], [23a], [24a], [25], [37], [38], [39a], [40b] and [42] are written as 0, and the tax office and the signer are left blank; until [25] is entered, the payable VAT in the file assumes no input VAT is deducted. Your accountant completes and checks it in HTKK or on eTax before filing.',
     exportXmlWrongKind:
       'Your organization files VAT {kind}, so the XML for HTKK is only available for a {kindOne}. The Excel export works for any period.',
     filingMonthly: 'monthly',
@@ -927,6 +927,39 @@ export const en = {
       vat_mismatch: 'VAT is not the value before VAT times the rate',
       declared_late: 'Invoice of an earlier period, posted and declared in this one because its own month was locked',
       check_payment: 'Check the proof of non-cash payment',
+    },
+    carry: {
+      title: 'Indicator [22]: VAT still deductible, carried forward from the previous period',
+      label: 'Amount written in [22]',
+      fromPrevious: 'Taken from indicator [43] of the {period} return ({amount}), marked filed on {date}.',
+      fromComputed:
+        'The [43] of {period} was worked out by {brand} when that period was marked done in the tax calendar, not taken from the return as filed. Check it against the filed return.',
+      missing:
+        'No return for {periods} is marked filed, so [22] is 0. If the previous period carried VAT forward, enter the amount from indicator [43] of that return.',
+      or: ' or ',
+      returnMonth: '{month}/{year}',
+      returnQuarter: 'Q{quarter} {year}',
+      edited: 'Edited: differs from the amount carried forward ({amount}).',
+      reset: 'Use the previous amount',
+      invalid: 'Enter a whole, non-negative amount of at most 14 digits.',
+      note: 'This amount goes into indicator [22] of the HTKK XML file and reduces the VAT payable for the period.',
+    },
+    filed: {
+      title: 'Filed return',
+      none: 'This period is not marked as filed. Once the return is filed on eTax, mark it and record the figures as filed, so the next period picks up indicator [22].',
+      done: 'Marked filed on {date}: [22] {c22}, [25] {c25}, [43] {c43}.',
+      computedNote: 'These figures were worked out by {brand} when the period was marked done in the tax calendar. Correct them to the return as filed.',
+      mark: 'Mark the return as filed',
+      edit: 'Edit the filed figures',
+      withdraw: 'Unmark as filed',
+      formHint: 'Enter the figures exactly as on the filed return. [43] is worked out with the form formula; change it if the filed return differs.',
+      c22: '[22] VAT carried forward from the previous period',
+      c25: '[25] Deductible input VAT for this period',
+      c43: '[43] VAT carried forward to the next period',
+      invalid: 'Each figure is a whole, non-negative amount of at most 14 digits.',
+      save: 'Save and mark as filed',
+      cancel: 'Cancel',
+      onlyAdmins: 'Only owners and admins can mark a return as filed.',
     },
     payment: {
       title: '{count, plural, one {Non-cash payment check (# invoice)} other {Non-cash payment check (# invoices)}}',
