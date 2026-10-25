@@ -41,6 +41,7 @@ Roles:
 | `background`, `card`, `popover` | Page canvas, raised panels, overlays. Three surface levels at most per screen. |
 | `foreground`, `muted-foreground`, `subtle-foreground` | Primary text, secondary text, captions. `subtle-foreground` only for text that may be skipped, and only where it still reaches 4.5:1. |
 | `border`, `input`, `ring` | Hairlines, field borders, focus ring. |
+| `scrollbar` | The thumb of every scrollbar: thin, on a transparent track, in both themes (never the platform's light default). |
 | `primary` | The one accent: the primary action, focus, current selection. Never decoration. |
 | `brand` | The logo mark only. |
 | `success`, `warning`, `destructive` | Semantic states (balanced/approved, needs review, error/reject). Separate from the accent; never used for decoration. |
