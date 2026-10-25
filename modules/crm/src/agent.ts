@@ -120,6 +120,23 @@ async function typeSlots(ctx: Reader, type: EventTypeRow, from: number, to: numb
 
 const isoSlot = (s: Interval) => ({ start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() });
 
+// The slots to propose: the earliest of each day first, so a client gets a choice of days rather than three slots of
+// one morning, then the earliest of the rest when there are fewer days; in time order.
+export function spreadSlots(slots: readonly Interval[], timeZone: string, count = SLOTS_PROPOSED): Interval[] {
+  const firsts: Interval[] = [];
+  const days = new Set<string>();
+  for (const s of slots) {
+    const day = zonedDate(timeZone, s.start);
+    if (days.has(day)) continue;
+    days.add(day);
+    firsts.push(s);
+    if (firsts.length === count) break;
+  }
+  const chosen = new Set(firsts);
+  const rest = slots.filter((s) => !chosen.has(s)).slice(0, count - firsts.length);
+  return [...firsts, ...rest].sort((a, b) => a.start - b.start);
+}
+
 // The next free slots the type's booking page offers now, for a booking of that type. Members and the crm.scheduler
 // agent read it; it changes nothing and tells nothing about the visitor.
 export const bookingNextSlots = defineQuery({
@@ -145,7 +162,7 @@ export const bookingNextSlots = defineQuery({
       eventType: { title: type.title, active: type.active },
       startsAt: new Date(booking.starts_at).toISOString(),
       timeZone,
-      slots: slots.slice(0, SLOTS_PROPOSED).map(isoSlot),
+      slots: spreadSlots(slots, timeZone).map(isoSlot),
     };
   },
 });
@@ -187,7 +204,7 @@ export const bookingSuggestSlots = defineQuery({
       today: zonedDate(timeZone, now),
       days,
       inWindows: inside.length > 0,
-      slots: chosen.slice(0, SLOTS_PROPOSED).map(isoSlot),
+      slots: spreadSlots(chosen, timeZone).map(isoSlot),
     };
   },
 });

@@ -76,7 +76,12 @@ export function BookingSuggestCard({ slug }: { slug: string }) {
       </div>
       {types.error && <ErrorText>{errorMessage(types.error)}</ErrorText>}
       {types.isSuccess && active.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{t('noTypes')}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm text-muted-foreground">{t('noTypes')}</p>
+          <Button size="sm" type="button" variant="ghost" onClick={() => setOpen(false)}>
+            {t('close')}
+          </Button>
+        </div>
       ) : (
         <form
           className="space-y-2"
