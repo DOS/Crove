@@ -477,6 +477,19 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
           return runtime.execute('kernel.member.remove', rest, { actor, orgId, idempotencyKey });
         }),
       ),
+      memberRoles: os.org.memberRoles.handler(({ context }) => inOrg(context, (orgId, actor) => runtime.query('kernel.member.roles.list', {}, { actor, orgId }))),
+      assignRole: os.org.assignRole.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.member.role.assign', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
+      revokeRole: os.org.revokeRole.handler(({ context, input }) =>
+        inOrg(context, (orgId, actor) => {
+          const { idempotencyKey, ...rest } = input;
+          return runtime.execute('kernel.member.role.revoke', rest, { actor, orgId, idempotencyKey });
+        }),
+      ),
       offboard: os.org.offboard.handler(({ context, input }) =>
         inOrg(context, (orgId, actor) => {
           const { idempotencyKey, ...rest } = input;

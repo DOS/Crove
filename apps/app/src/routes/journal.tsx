@@ -9,7 +9,7 @@ import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { Table, TableBody, TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
-import { Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc, queryClient } from '../lib/api.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { isZeroAmount } from '../lib/decimal.ts';
@@ -243,7 +243,7 @@ export function JournalPage() {
         </div>
       )}
       {journal.isLoading ? (
-        <Spinner />
+        <ListSkeleton />
       ) : journal.error ? (
         <ErrorText>{errorMessage(journal.error)}</ErrorText>
       ) : (journal.data?.length ?? 0) === 0 ? (

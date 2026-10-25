@@ -10,7 +10,7 @@ import { Input } from '@crove/ui/components/input';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { DateInput } from '../components/date-input.tsx';
-import { DataTable, Empty, ErrorText, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
 import { client, errorMessage, orpc } from '../lib/api.ts';
 import { auditFilter, nextAuditCursor, type AuditFilterForm } from '../lib/audit.ts';
@@ -133,7 +133,7 @@ export function AuditPage() {
       </div>
       {form.target.trim() !== '' && !filter.targetId && <p className="mb-3 text-xs text-warning">{t('targetInvalid')}</p>}
       {log.isLoading ? (
-        <Spinner />
+        <TableSkeleton columns={5} />
       ) : log.error && rows.length === 0 ? (
         <ErrorText>{errorMessage(log.error)}</ErrorText>
       ) : rows.length === 0 ? (

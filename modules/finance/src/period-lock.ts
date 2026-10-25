@@ -4,8 +4,8 @@
 // - finance.period.lock_state: every member reads what is locked (the ledger screen shows it).
 // - finance.period.lock: owners and admins lock the next month, once it has ended (in Vietnam time, by the database
 //   clock). R2, as ADR-0021 section 7 has the close: no step-up, and an agent may only propose it.
-// - finance.period.unlock: owners only, R3 (fresh MFA, P11) with a reason, which the audit row records together with
-//   the month. The audit rows of both commands are the history of the lock.
+// - finance.period.unlock: owners and chief accountants (#1279), R3 (fresh MFA, P11) with a reason, which the audit
+//   row records together with the month. The audit rows of both commands are the history of the lock.
 // A refused posting answers PERIOD_LOCKED (ledger.ts), so recording, approving, reversing and importing opening
 // balances into a locked month all say why. The same guard keeps the opening entry first (#366): an entry dated on or
 // before it answers BEFORE_OPENING_BALANCE (openingEntryError below).
@@ -149,6 +149,9 @@ export const periodUnlock = defineCommand({
   input: zPeriodUnlockInput,
   risk: 'R3',
   access: ['owner'],
+  // ADR-0021 section 3: the chief accountant reopens a period too (an org-wide finance.chief_accountant assignment,
+  // #1279); unlock_period() checks the same again.
+  permission: 'finance.period.unlock',
   handler: async (ctx, input): Promise<PeriodLockState> => {
     ctx.audit({ month: input.month, reason: input.reason });
     try {
@@ -177,7 +180,7 @@ export function periodLockedError(error: unknown): DomainError | null {
   return new DomainError(
     'PERIOD_LOCKED',
     409,
-    `Sổ đã khóa đến hết ngày ${through ? dateLabel(through) : ''}, nên không ghi được bút toán ngày ${entryDate ? dateLabel(entryDate) : ''}. Chủ sở hữu có thể mở khóa tháng đó nếu cần sửa.`,
+    `Sổ đã khóa đến hết ngày ${through ? dateLabel(through) : ''}, nên không ghi được bút toán ngày ${entryDate ? dateLabel(entryDate) : ''}. Chủ sở hữu hoặc kế toán trưởng có thể mở khóa tháng đó nếu cần sửa.`,
     { lockedThrough: through, entryDate },
   );
 }
