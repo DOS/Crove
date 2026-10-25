@@ -23,11 +23,15 @@ export function canEnterVoucher(role: string | null | undefined): boolean {
   return Boolean(role && REQUESTERS.includes(role));
 }
 
-// An amount as typed, as the digits the API takes: "1.500.000", "1 500 000" and "1,500,000" are 1500000. Anything else
-// (letters, a decimal part, a sign) is returned as typed, so the form refuses it.
+// An amount as typed, as the digits the API takes: "1.500.000", "1 500 000" and "1,500,000" are 1500000. Only plain
+// digits or digits grouped by three with one kind of separator are read; anything else (letters, a sign, a decimal
+// part such as "12.34" or "1,5", or a misplaced separator) is returned as typed, so the form refuses it. Stripping
+// every separator first read "12.34" as 1234 (#1391 review).
+const GROUPED = /^(?:\d{1,3}(?:\.\d{3})+|\d{1,3}(?:,\d{3})+|\d{1,3}(?: \d{3})+)$/;
 export function normalizeAmount(text: string): string {
-  const compact = text.trim().replace(/[\s.,]/g, '');
-  return /^\d+$/.test(compact) ? compact.replace(/^0+(?=\d)/, '') : text.trim();
+  const value = text.trim().replace(/\s+/g, ' ');
+  if (!/^\d+$/.test(value) && !GROUPED.test(value)) return text.trim();
+  return value.replace(/[ .,]/g, '').replace(/^0+(?=\d)/, '');
 }
 
 const WHOLE = /^\d{1,15}$/;

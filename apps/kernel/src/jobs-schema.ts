@@ -52,6 +52,8 @@ export const QUEUES = {
   crmBooking: 'crm-booking',
   // Created by the crm booking manage migration (20261031250000).
   crmBookingRemind: 'crm-booking-remind',
+  // Created by the period balance migration (20261101160000).
+  periodBalanceVerify: 'finance-period-balance-verify',
 } as const;
 type QueueName = (typeof QUEUES)[keyof typeof QUEUES];
 

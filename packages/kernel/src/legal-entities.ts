@@ -7,8 +7,9 @@
 //
 // The org's tax code lives on the tenant row too, where Finance reads it (a sale or a purchase, #313) and locks the row
 // while it posts, and only kernel.org.set_tax_code changes it (tenant_tax_code_guard, #430). The default entity's tax
-// code is the org's: kernel.org.set_tax_code writes it after the tenant row, kernel.legal_entity.update refuses to
-// change it, and the database refuses a default entity whose code is not the tenant's (legal_entity_default_tax_code).
+// code is the org's: the database writes it with every change of the tenant's code (tenant_default_entity_tax_code,
+// #1316, so a staff fix on the tenant row moves it too), kernel.legal_entity.update refuses to change it, and the
+// database refuses a default entity whose code is not the tenant's (legal_entity_default_tax_code).
 import { z } from 'zod';
 import { LEGAL_ENTITY_NAME_MAX, normalizeTaxCode, zLegalEntityInput, type LegalEntity, type LegalEntityKind } from '@crove/kernel-contract';
 import type { LegalEntityKind as StoredKind, MemberRole } from '@crove/db';
@@ -92,7 +93,7 @@ async function assertParent(ctx: Trx, parentId: string | null): Promise<void> {
 
 // Maps the database's refusals of a write: another entity took the tax code after the check (the unique index), or
 // the new parent is below the entity (crove_kernel.legal_entity_no_cycle).
-function onWrite(taxCode: string | null) {
+export function onWrite(taxCode: string | null) {
   return (error: unknown): never => {
     const pg = error as { code?: string; message?: string; constraint?: string };
     if (pg.code === '23505' && pg.constraint === 'legal_entity_tax_code_uq' && taxCode) throw taxCodeTaken(taxCode);
@@ -104,8 +105,26 @@ function onWrite(taxCode: string | null) {
 }
 
 /**
- * Sets the default entity's tax code to the org's, inside kernel.org.set_tax_code after it wrote the tenant row.
- * Refuses a code another entity of the org holds.
+ * Refuses, before kernel.org.set_tax_code writes the tenant row, a code an entity of the org other than the default
+ * holds: the database writes the tenant's new code to the default entity (tenant_default_entity_tax_code), where the
+ * unique index would refuse it.
+ */
+export async function assertOrgTaxCodeFree(ctx: Trx, taxCode: string | null): Promise<void> {
+  if (!taxCode) return;
+  const holder = await ctx.trx
+    .selectFrom('crove_kernel.legal_entity')
+    .select('id')
+    .where('org_id', '=', ctx.orgId)
+    .where('tax_code', '=', taxCode)
+    .where('is_default', '=', false)
+    .executeTakeFirst();
+  if (holder) throw taxCodeTaken(taxCode);
+}
+
+/**
+ * Sets the default entity's tax code to the org's, inside kernel.org.set_tax_code after it wrote the tenant row. The
+ * database already did when the tenant's code changed; this repairs a default entity left on an old code before
+ * #1316. Refuses a code another entity of the org holds.
  */
 export async function setDefaultEntityTaxCode(ctx: Pick<CommandContext, 'trx' | 'orgId' | 'now'> & { userId: string | null }, taxCode: string | null): Promise<void> {
   const entity = await ctx.trx
