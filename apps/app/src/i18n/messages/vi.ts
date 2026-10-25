@@ -139,6 +139,8 @@ export const vi = {
     apps: {
       title: 'Ứng dụng',
       open: 'Mở {app}',
+      failed: 'Chưa tải được số liệu.',
+      retry: 'Thử lại',
       accounting: {
         vatDue: '{days, plural, other {ngày nữa}} đến hạn tờ khai GTGT {period}',
         vatOverdue: '{days, plural, other {ngày}} quá hạn tờ khai GTGT {period}',

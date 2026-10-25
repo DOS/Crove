@@ -5,7 +5,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type { TaxDueView } from '@crove/kernel-contract';
 import { Link, useParams } from '@tanstack/react-router';
-import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import { Button, buttonVariants } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
@@ -41,7 +40,11 @@ const APP_CARD = {
   crm: { to: '/o/$slug/bookings', icon: 'appCrm' },
 } as const satisfies Record<Exclude<AppId, 'home'>, { to: string; icon: NavIconName }>;
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const WEEK_MS = 7 * 24 * HOUR_MS;
+// The lists the cards count return at most this many rows; a full page reads as "200+", not as an exact figure.
+const LIST_CAP = 200;
+const counted = (n: number, page: number) => (page >= LIST_CAP ? `${n}+` : String(n));
 
 // One card per installed app (#1528): its key figure and a way in. Home is this screen, so it has none.
 function AppCards({ slug, vat, vatLoaded }: { slug: string; vat: { period: string; daysLeft: number } | null; vatLoaded: boolean }) {
@@ -50,12 +53,17 @@ function AppCards({ slug, vat, vatLoaded }: { slug: string; vat: { period: strin
   const periodLabel = usePeriodLabel();
   const apps = installedApps(getConfig().modules).filter((a) => a.id !== 'home');
   const has = (id: AppId) => apps.some((a) => a.id === id);
-  const [week] = useState(() => ({ from: new Date().toISOString(), to: new Date(Date.now() + WEEK_MS).toISOString() }));
-  const posts = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { ...week, limit: 200 } }), enabled: has('social') });
+  // The next 7 days from the start of this hour: the query key holds within the hour and moves on with the clock, so a
+  // tab left open does not count last week's posts.
+  const hour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS;
+  const week = { from: new Date(hour).toISOString(), to: new Date(hour + WEEK_MS).toISOString() };
+  const posts = useQuery({ ...orpc.social.posts.list.queryOptions({ input: { ...week, limit: LIST_CAP } }), enabled: has('social') });
   const bookings = useQuery({ ...orpc.crm.bookings.list.queryOptions({ input: { scope: 'mine', period: 'upcoming' } }), enabled: has('crm') });
   if (apps.length === 0) return null;
 
-  const figure = (id: Exclude<AppId, 'home'>): { value: string | null; label: string } => {
+  type Figure = { value: string | null; label: string; retry?: () => void };
+  const failed = (q: { refetch: () => unknown }): Figure => ({ value: '-', label: t('failed'), retry: () => void q.refetch() });
+  const figure = (id: Exclude<AppId, 'home'>): Figure => {
     if (id === 'accounting') {
       if (!vatLoaded) return { value: null, label: '' };
       if (!vat) return { value: '-', label: t('accounting.noPeriod') };
@@ -63,8 +71,17 @@ function AppCards({ slug, vat, vatLoaded }: { slug: string; vat: { period: strin
         ? { value: String(vat.daysLeft), label: t('accounting.vatDue', { days: vat.daysLeft, period: periodLabel(vat.period) }) }
         : { value: String(-vat.daysLeft), label: t('accounting.vatOverdue', { days: -vat.daysLeft, period: periodLabel(vat.period) }) };
     }
-    if (id === 'social') return posts.data ? { value: String(posts.data.length), label: t('social.scheduled', { count: posts.data.length }) } : { value: null, label: '' };
-    return bookings.data ? { value: String(bookings.data.length), label: t('crm.upcoming', { count: bookings.data.length }) } : { value: null, label: '' };
+    if (id === 'social') {
+      if (posts.isError) return failed(posts);
+      if (!posts.data) return { value: null, label: '' };
+      // The range holds every post with a time in it; only the scheduled ones are waiting to go out.
+      const scheduled = posts.data.filter((p) => p.status === 'scheduled').length;
+      return { value: counted(scheduled, posts.data.length), label: t('social.scheduled', { count: scheduled }) };
+    }
+    if (bookings.isError) return failed(bookings);
+    if (!bookings.data) return { value: null, label: '' };
+    const upcoming = bookings.data.filter((b) => b.status === 'pending' || b.status === 'confirmed').length;
+    return { value: counted(upcoming, bookings.data.length), label: t('crm.upcoming', { count: upcoming }) };
   };
 
   return (
@@ -75,7 +92,7 @@ function AppCards({ slug, vat, vatLoaded }: { slug: string; vat: { period: strin
       <ul className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {apps.map((app) => {
           const id = app.id as Exclude<AppId, 'home'>;
-          const { value, label } = figure(id);
+          const { value, label, retry } = figure(id);
           return (
             <li key={id}>
               <Card className="flex h-full flex-col gap-2 p-4">
@@ -89,6 +106,11 @@ function AppCards({ slug, vat, vatLoaded }: { slug: string; vat: { period: strin
                   <p className="text-sm text-muted-foreground">
                     <span className="mr-1.5 font-mono text-2xl font-semibold tabular-nums text-foreground">{value}</span>
                     {label}
+                    {retry && (
+                      <button type="button" className="ml-2 text-xs text-link hover:underline" onClick={retry}>
+                        {t('retry')}
+                      </button>
+                    )}
                   </p>
                 )}
                 <Link to={APP_CARD[id].to} params={{ slug }} className="mt-auto text-xs text-link hover:underline">

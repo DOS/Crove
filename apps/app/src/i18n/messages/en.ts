@@ -141,9 +141,11 @@ export const en = {
     apps: {
       title: 'Apps',
       open: 'Open {app}',
+      failed: 'Could not load this figure.',
+      retry: 'Try again',
       accounting: {
-        vatDue: '{days, plural, one {day} other {days}} until the VAT return for {period} is due',
-        vatOverdue: '{days, plural, one {day} other {days}} overdue: the VAT return for {period}',
+        vatDue: '{days, plural, one {day until} other {days until}} the VAT return for {period} is due',
+        vatOverdue: '{days, plural, one {day overdue} other {days overdue}}: the VAT return for {period}',
         noPeriod: 'No VAT filing period chosen',
       },
       social: { scheduled: '{count, plural, one {post scheduled} other {posts scheduled}} in the next 7 days' },
