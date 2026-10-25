@@ -189,9 +189,14 @@ suite('WORM fact stream: voucher numbers and voids on PostgreSQL (#977)', () => 
     const keys = await store.list('chain/v1/');
     const batches = await Promise.all(keys.map(async (k) => JSON.parse(new TextDecoder().decode((await store.get(k)) as Uint8Array)) as ArchiveBatch));
     const [first, second] = batches;
+    // Version 2, or a later version that keeps the numbers (version 3 adds the legal entity rows, #1489).
     expect(first?.version).toBe(1);
-    expect(second).toMatchObject({ version: 2, numbersFrom: EPOCH });
-    batches.slice(2).forEach((b) => expect(b).toMatchObject({ version: 2, numbersFrom: b.window.from }));
+    expect(second?.version).toBeGreaterThanOrEqual(2);
+    expect(second).toMatchObject({ numbersFrom: EPOCH });
+    batches.slice(2).forEach((b) => {
+      expect(b.version).toBeGreaterThanOrEqual(2);
+      expect(b).toMatchObject({ numbersFrom: b.window.from });
+    });
     const refs = batches.flatMap((b) => b.rows.map(([ref]) => ref));
     // Each number and void once, the one made before the switch included.
     for (const id of vouchers) expect(refs.filter((r) => r === `cash_voucher:${orgId}:${id}`)).toHaveLength(1);
@@ -204,7 +209,10 @@ suite('WORM fact stream: voucher numbers and voids on PostgreSQL (#977)', () => 
     await age(30);
     expect(await writeArchive(worker, store, { lagSeconds: 600 })).toBeGreaterThan(0);
     const after = await Promise.all((await store.list('chain/v1/')).slice(keys.length).map(async (k) => JSON.parse(new TextDecoder().decode((await store.get(k)) as Uint8Array)) as ArchiveBatch));
-    for (const b of after) expect(b).toMatchObject({ version: 2, numbersFrom: b.window.from });
+    for (const b of after) {
+      expect(b.version).toBeGreaterThanOrEqual(2);
+      expect(b).toMatchObject({ numbersFrom: b.window.from });
+    }
     expect(after.flatMap((b) => b.rows.map(([ref]) => ref))).toContain(`cash_voucher:${orgId}:${late}`);
 
     const result = await verifyArchive(worker, store);
