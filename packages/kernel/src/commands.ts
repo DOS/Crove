@@ -758,7 +758,8 @@ export const approveProposals = defineCommand({
   // stays short; the Inbox sends a larger selection in several batches, each under the same step-up freshness rule.
   input: z.object({ items: zBulkApproveItems }),
   risk: 'R3',
-  sideEffect: 'internal',
+  // Each item runs its proposal's posting, as kernel.proposal.approve does.
+  sideEffect: 'financial',
   access: APPROVERS,
   // A chief accountant (an org-wide role assignment holding it, #1279) passes this gate too; P12 still decides.
   permission: LEDGER_APPROVE_PERMISSION,
