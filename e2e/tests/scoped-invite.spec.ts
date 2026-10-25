@@ -1,6 +1,7 @@
 // An invite for some legal entities only (issue #1447, the server's #1281): an owner of an org with a second legal
 // entity limits an outside accountant to it. The invite is for a member or a viewer, the list shows its entities, and
-// the invitee who accepts holds the outside accountant role for that entity alone.
+// the invitee who accepts holds the outside accountant role for that entity. Hiding the other entities' data comes
+// with #1280; nothing here claims it.
 import { expect, test } from '@playwright/test';
 import { createOrg, newEmail, signUp } from '../lib/session.ts';
 import { nextTotp } from '../lib/totp.ts';
@@ -19,7 +20,7 @@ test('an owner invites an outside accountant for one legal entity', async ({ pag
   await expect(page.getByText('Đang bật')).toBeVisible();
 
   // With one legal entity there is nothing to limit to.
-  await expect(page.getByRole('checkbox', { name: 'Chỉ cho làm việc với một số pháp nhân' })).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: 'Giới hạn theo pháp nhân' })).toHaveCount(0);
   const add = page.getByRole('form', { name: 'Thêm pháp nhân' });
   await add.getByLabel('Tên pháp nhân').fill('Chi nhánh Hà Nội');
   await add.getByRole('button', { name: 'Thêm', exact: true }).click();
@@ -29,7 +30,7 @@ test('an owner invites an outside accountant for one legal entity', async ({ pag
   await page.getByPlaceholder('email@congty.vn').fill(member);
   const role = page.getByLabel('Vai trò', { exact: true });
   await role.selectOption('admin');
-  await page.getByRole('checkbox', { name: 'Chỉ cho làm việc với một số pháp nhân' }).check();
+  await page.getByRole('checkbox', { name: 'Giới hạn theo pháp nhân' }).check();
   // A scoped invite is never for an admin.
   await expect(role).toHaveValue('member');
   await expect(role.getByRole('option', { name: 'Quản trị' })).toHaveCount(0);
@@ -41,7 +42,7 @@ test('an owner invites an outside accountant for one legal entity', async ({ pag
   const created = page.getByRole('status').filter({ hasText: `Đã tạo lời mời cho ${member}` });
   const link = (await created.getByText(/\/-\/invite#/).textContent())?.trim() ?? '';
   expect(link).toMatch(/\/-\/invite#/);
-  await expect(page.getByRole('listitem').filter({ hasText: member }).getByText('Chỉ làm việc với: Chi nhánh Hà Nội')).toBeVisible();
+  await expect(page.getByRole('listitem').filter({ hasText: member }).getByText('Kế toán thuê ngoài cho: Chi nhánh Hà Nội')).toBeVisible();
 
   // The invitee accepts in a browser of their own.
   const memberContext = await browser.newContext({ baseURL: new URL(page.url()).origin });
