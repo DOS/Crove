@@ -89,10 +89,17 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
 
     ({ orgId } = await createOrg(rt, asUser(owner), 'Hai pháp nhân'));
     await admin(async (c) => {
+      // The VAT return monthly, and the PIT withholding return monthly from the org's tax profile.
       await c.query(`UPDATE crove_kernel.tenant SET vat_filing_period = 'month' WHERE org_id = $1`, [orgId]);
+      await c.query(`INSERT INTO crove_kernel.tax_profile (org_id, obligations, pit_filing_period, updated_by) VALUES ($1, '{pit_withholding}', 'month', $2)`, [orgId, owner]);
       defaultEntity = (await c.query<{ id: string }>('SELECT id FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [orgId])).rows[0]?.id as string;
-      branch = (await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by) VALUES ($1, 'Chi nhánh', 'branch', $2) RETURNING id`, [orgId, owner]))
-        .rows[0]?.id as string;
+      // A branch that has existed for years, so it owes every period the calendar lists.
+      branch = (
+        await c.query<{ id: string }>(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by, created_at) VALUES ($1, 'Chi nhánh', 'branch', $2, '2020-01-01') RETURNING id`, [
+          orgId,
+          owner,
+        ])
+      ).rows[0]?.id as string;
       // The accountant keeps the branch's books only (an entity-scoped assignment narrows the context's le_scope).
       await c.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')`, [orgId, accountant]);
       await c.query(`INSERT INTO crove_kernel.role_assignment (org_id, user_id, role_key, legal_entity_id, granted_by) VALUES ($1, $2, 'external_accountant', $3, $4)`, [
@@ -126,7 +133,7 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
   });
 
   it("keeps the org's obligation due until every legal entity has marked it", async () => {
-    const [due] = await dues(owner);
+    const due = (await dues(owner)).find((d) => d.obligation === 'pit_withholding');
     expect(due).toBeDefined();
     const mark = { obligation: due!.obligation, period: due!.period };
 
@@ -156,7 +163,10 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
   });
 
   it('lets a member limited to one entity mark and see only that entity', async () => {
-    const [due] = await dues(accountant);
+    const listedForAccountant = await dues(accountant);
+    // The VAT return is the default entity's alone for now, so it is not the branch accountant's to file.
+    expect(listedForAccountant.some((d) => d.obligation === 'vat_return')).toBe(false);
+    const due = listedForAccountant.find((d) => d.obligation === 'pit_withholding');
     expect(due).toBeDefined();
     const mark = { obligation: due!.obligation, period: due!.period };
 
@@ -204,6 +214,32 @@ suite('tax obligations done per legal entity on PostgreSQL (#1496)', () => {
     } finally {
       await client.end();
     }
+  });
+
+  it("clears the VAT return with the default entity's mark alone, the one finance files for", async () => {
+    const due = (await dues(owner)).find((d) => d.obligation === 'vat_return');
+    expect(due).toBeDefined();
+    const mark = { obligation: due!.obligation, period: due!.period };
+    await exec(owner, 'kernel.tax_obligation.done', mark);
+    expect(await listed(owner, due!)).toBe(false);
+    await exec(owner, 'kernel.tax_obligation.undo', mark);
+    expect(await listed(owner, due!)).toBe(true);
+  });
+
+  it('does not reopen a period for an entity added after it', async () => {
+    const due = (await dues(owner)).find((d) => d.obligation === 'pit_withholding');
+    expect(due).toBeDefined();
+    const mark = { obligation: due!.obligation, period: due!.period };
+    await exec(owner, 'kernel.tax_obligation.done', mark);
+    await exec(owner, 'kernel.tax_obligation.done', { ...mark, legalEntityId: branch });
+    expect(await listed(owner, due!)).toBe(false);
+    // An entity whose row is younger than the period owes nothing for it; one that existed by then does.
+    const add = (createdAt: string) =>
+      admin((c) => c.query(`INSERT INTO crove_kernel.legal_entity (org_id, name, kind, created_by, created_at) VALUES ($1, $2, 'branch', $3, $4)`, [orgId, `Chi nhánh ${createdAt}`, owner, createdAt]));
+    await add('2099-01-01');
+    expect(await listed(owner, due!)).toBe(false);
+    await add('2020-01-01');
+    expect(await listed(owner, due!)).toBe(true);
   });
 
   it("refuses a write that changes a mark's entity", async () => {

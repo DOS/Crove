@@ -3,8 +3,9 @@
 // org's choices (crove_kernel.tax_profile, one row per org) and the done marks (crove_kernel.tax_obligation_done).
 //
 // Each legal entity files its own returns (#1496): a mark is one entity's, and the org's obligation for a period is done
-// only when every legal entity the reader sees has marked it. A reader limited to some entities (an external
-// accountant's assignments) sees only their entities and their marks, so its calendar is theirs.
+// once every legal entity the reader sees that owes it has marked it (taxDuesOf says which owe what). A reader limited
+// to some entities (an external accountant's assignments) sees only their entities and their marks, so its calendar is
+// theirs.
 //
 // The home screen (overview.ts) lists, per org, the obligations due in the next TAX_DUE_WINDOW_DAYS days and the ones
 // overdue and not marked done, from the day the org first saved its profile (at most a year back): an org that just
@@ -85,22 +86,31 @@ export async function taxDuesOf(ctx: Pick<QueryContext, 'trx' | 'orgId'>, vatFil
   const from = profile.since ? (profile.since > yearBack ? profile.since : yearBack) : today;
   const dues = taxDues(settings, from < today ? from : today, addDays(today, TAX_DUE_WINDOW_DAYS));
   if (dues.length === 0) return [];
-  // No entity in the reader's scope: nothing of the org's is the reader's to file.
-  const entities = await ctx.trx.selectFrom('crove_kernel.legal_entity').select('id').where('org_id', '=', ctx.orgId).execute();
+  // The entities the reader sees, and the marks they made for these periods.
+  const entities = await ctx.trx.selectFrom('crove_kernel.legal_entity').select(['id', 'is_default', 'created_at']).where('org_id', '=', ctx.orgId).execute();
   if (entities.length === 0) return [];
   const done = await ctx.trx
     .selectFrom('crove_kernel.tax_obligation_done')
-    .select(['obligation', 'period', (eb) => eb.fn.count<string>('legal_entity_id').distinct().as('entities')])
+    .select(['obligation', 'period', 'legal_entity_id'])
     .where('org_id', '=', ctx.orgId)
     .where('period', 'in', [...new Set(dues.map((d) => d.period))])
-    .where('legal_entity_id', 'in', entities.map((e) => e.id))
-    .groupBy(['obligation', 'period'])
     .execute();
-  // Done when every entity the reader sees has marked it.
-  const marked = new Set(done.filter((d) => Number(d.entities) >= entities.length).map((d) => `${d.obligation}:${d.period}`));
+  const marks = new Map<string, Set<string>>();
+  for (const m of done) marks.set(`${m.obligation}:${m.period}`, (marks.get(`${m.obligation}:${m.period}`) ?? new Set()).add(m.legal_entity_id));
+  // Who must mark an obligation for the org to be done with it:
+  // - the VAT return: the default entity alone, the one finance files for, until it files per entity (#1280 part 2);
+  // - any other: the default entity, which stands for the org however old its row is, and every other entity that
+  //   existed by the end of the period, so an entity added later does not reopen periods before it.
+  // A due no entity the reader sees must mark is not the reader's (a member limited to a branch, for the VAT return).
+  const owing = (d: (typeof dues)[number]) =>
+    entities.filter((e) => e.is_default || (d.obligation !== 'vat_return' && vietnamDay(new Date(e.created_at)) <= d.periodEnd));
   const day = (date: string) => Date.parse(`${date}T00:00:00Z`);
   return dues
-    .filter((d) => !marked.has(`${d.obligation}:${d.period}`))
+    .filter((d) => {
+      const marked = marks.get(`${d.obligation}:${d.period}`);
+      // Due while an entity that owes it has not marked it; with none owing, not the reader's.
+      return owing(d).some((e) => !marked?.has(e.id));
+    })
     .slice(0, MAX_DUES)
     .map((d) => ({
       obligation: d.obligation,
