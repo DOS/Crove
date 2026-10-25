@@ -410,7 +410,7 @@ export async function runEditJob(deps: PublishDeps, orgId: string, variantId: st
     const settings = short ? shortenedSettings(begun.settings, short) : begun.settings;
     // For a platform whose edit sends the post whole and fetches its images again (Zalo, #1430): the variant's own
     // files only, each URL asked for by the adapter right before the call that names it.
-    const mediaUrl = mediaUrlOf(deps, mediaFileOf(deps, orgId, begun));
+    const mediaUrl = mediaUrlOf(deps, mediaFileOf(deps, orgId, { content, settings }));
     try {
       const r = await withTimeout(timeout, () => publisher.edit!({ ...credential, externalId: begun.externalId, content, settings, mediaUrl, callKey: begun.callKey }));
       // What the record takes: codes and messages cut to their columns.

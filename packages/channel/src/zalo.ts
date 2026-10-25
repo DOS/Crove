@@ -21,7 +21,7 @@
 // "Kiểm tra kết quả tiến trình tạo nội dung"): `article/remove` takes `{ id }` and answers at once; `article/update`
 // takes the whole article with its id and answers a token, which `article/verify` turns into the article id once Zalo
 // has processed it, as for `article/create`.
-import type { ConnectedAccount, EditInput, EditResult, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, Refresher, PublishInput, PublishMedia, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety, StatusInput } from './index.ts';
+import type { ConnectedAccount, EditInput, EditResult, MetricName, AccountMetricsInput, AccountMetricsResult, MetricsInput, MetricsResult, Publisher, Refresher, PublishContent, PublishInput, PublishMedia, PublishResult, ReconcileInput, ReconcileResult, RemoveInput, RemoveResult, RetrySafety, StatusInput } from './index.ts';
 import { EDIT_NOT_SUPPORTED, editResult, removeResult } from './comment.ts';
 import { videoCoverOf } from './cover.ts';
 import { allowlistedFetch, ConnectorError, type AuthorizeInput, type ExchangeInput, type Fetch, type OAuthConnector } from './oauth.ts';
@@ -309,7 +309,10 @@ interface ArticleImage {
 }
 
 // What an article is built from: a post to publish, or a published one to correct (#1430).
-type ArticleInput = Pick<PublishInput, 'content' | 'settings'>;
+interface ArticleInput {
+  content: PublishContent;
+  settings: Readonly<Record<string, unknown>>;
+}
 
 // The article's description: the text's first line, cut to Zalo's 300 characters.
 function descriptionOf(input: ArticleInput): string {
