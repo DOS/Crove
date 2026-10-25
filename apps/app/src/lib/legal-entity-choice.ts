@@ -37,7 +37,8 @@ export function proposalEntity(
 ): { effective: string | null; suggest: string | null } {
   const named = proposalEntityId !== null && entities.some((e) => e.id === proposalEntityId) ? proposalEntityId : null;
   const effective = named ?? chooseEntity(entities, null);
-  const suggest = proposalEntityId === null && chosen !== null && chosen !== effective ? chosen : null;
+  const visible = chosen !== null && entities.some((e) => e.id === chosen);
+  const suggest = proposalEntityId === null && visible && chosen !== effective ? chosen : null;
   return { effective, suggest };
 }
 

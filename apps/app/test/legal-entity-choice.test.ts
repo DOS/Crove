@@ -49,6 +49,8 @@ describe('legal entity choice', () => {
     expect(proposalEntity(all, null, 'b')).toEqual({ effective: 'b', suggest: null });
     // Named but not visible to the caller: shown as the default, never suggested over.
     expect(proposalEntity(all, 'gone', 'a')).toEqual({ effective: 'b', suggest: null });
+    // A choice the caller no longer sees is never offered.
+    expect(proposalEntity(all, null, 'gone')).toEqual({ effective: 'b', suggest: null });
     expect(proposalEntity([], null, null)).toEqual({ effective: null, suggest: null });
   });
 
