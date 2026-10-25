@@ -344,16 +344,22 @@ function editRefusedBy(error: unknown): EditResult | null {
 // A line of a post's raw content that is one figure holding one image, as publish writes each image after the text.
 const FIGURE_LINE = /^<figure\b[^<>]*>\s*<img\s[^<>]*>\s*<\/figure>$/i;
 
-// The figure lines at the end of a post's raw content, in order (#1474).
-function trailingFigures(raw: string): string[] {
+// A post's raw content split into the figure lines at its end, in order, and what comes before them (#1474).
+function splitFigures(raw: string): { head: string; figures: string[] } {
   const lines = raw.replace(/\r\n?/g, '\n').trimEnd().split('\n');
-  const out: string[] = [];
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = (lines[i] as string).trim();
-    if (!FIGURE_LINE.test(line)) break;
-    out.unshift(line);
+  const figures: string[] = [];
+  while (lines.length > 0 && FIGURE_LINE.test((lines.at(-1) as string).trim())) figures.unshift((lines.pop() as string).trim());
+  return { head: lines.join('\n'), figures };
+}
+
+// Whether a post's text holds only what publish writes for it: paragraphs, line breaks and links, with no HTML comment
+// (the block editor keeps its blocks as <!-- wp:... --> comments) and no other tag.
+function publishedText(head: string): boolean {
+  if (head.includes('<!--')) return false;
+  for (const m of head.matchAll(/<\/?([A-Za-z][A-Za-z0-9-]*)\b[^>]*>/g)) {
+    if (!['p', 'br', 'a'].includes((m[1] as string).toLowerCase())) return false;
   }
-  return out;
+  return true;
 }
 
 // How many term lookups run at once against one site (#981).
@@ -482,13 +488,15 @@ export class WordPressPublisher implements Publisher {
     }
   }
 
-  // Corrects the post's title and text (#1474): POST /wp/v2/posts/:id with title and content only, answered with the
-  // post. WordPress sets only the fields a request names, so the post's status, categories, tags, excerpt and featured
-  // image stay as they are. The images it went out with are not uploaded again: the post is read first (GET
-  // /wp/v2/posts/:id?context=edit) and the figures publish put after the text, one a line at the end of its raw
-  // content, go back as they are after the new text, built as publish builds it (paragraphs, every character
-  // escaped). A post whose figures are no longer there as publish wrote them (edited on the site since) is refused,
-  // never sent without its images (WORDPRESS_EDITED_ON_SITE). A draft or a post pending review has no public post to
+  // Corrects the post's text (#1474): POST /wp/v2/posts/:id with content alone, answered with the post. WordPress sets
+  // only the fields a request names, so the post's title (a rename on the site is kept, as the edit changes the text
+  // only), status, categories, tags, excerpt and featured image stay as they are. The images it went out with are not
+  // uploaded again: the post is read first (GET /wp/v2/posts/:id?context=edit) and the figures publish put after the
+  // text, one a line at the end of its raw content, go back as they are after the new text, built as publish builds it
+  // (paragraphs, every character escaped). The content is replaced whole, so a post that holds anything publish never
+  // writes is refused with nothing sent (WORDPRESS_EDITED_ON_SITE): a number of trailing figures other than the
+  // variant's images, or, before them, any HTML comment (the block editor's <!-- wp: --> markup) or any tag but the
+  // paragraphs, line breaks and links of publish's text (an image, a heading, a list, an embed added on the site). A draft or a post pending review has no public post to
   // correct and is refused before any call (EDIT_NOT_SUPPORTED), as the module refuses it first. A post in the trash or
   // no longer on the site (404 rest_post_invalid_id) is POST_NOT_FOUND; a user who may not edit it
   // (rest_cannot_edit, rest_forbidden_context) is WORDPRESS_CANNOT_EDIT.
@@ -499,8 +507,7 @@ export class WordPressPublisher implements Publisher {
     if (!/^[1-9]\d{0,15}$/.test(input.externalId) || postId(Number(input.externalId)) === null) return { kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' };
     const options = wordpressOptionsOf(input.settings);
     if (options && options.status !== 'publish') return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
-    const title = titleOf(input.content);
-    if (!title) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
+    const text = wordpressHtml(input.content, []);
     let post: { status?: unknown; content?: { raw?: unknown } };
     try {
       post = await this.client.call<typeof post>(s, 'GET', `/wp/v2/posts/${input.externalId}?context=edit`);
@@ -514,11 +521,12 @@ export class WordPressPublisher implements Publisher {
     if (post.status === 'trash') return { kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' };
     if (post.status !== 'publish' && post.status !== 'private') return { kind: 'rejected', error: 'bad_request', code: EDIT_NOT_SUPPORTED };
     if (typeof post.content?.raw !== 'string') return { kind: 'rejected', error: 'transient', code: 'POST_UNREADABLE' };
-    const figures = trailingFigures(post.content.raw);
-    if (figures.length !== input.content.media.length) return { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' };
-    const content = [wordpressHtml(input.content, []), ...figures].filter(Boolean).join('\n');
+    const { head, figures } = splitFigures(post.content.raw);
+    if (figures.length !== input.content.media.length || !publishedText(head)) return { kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' };
+    const content = [text, ...figures].filter(Boolean).join('\n');
+    if (!content) return { kind: 'rejected', error: 'bad_request', code: 'EMPTY_POST' };
     try {
-      const answer = await this.client.call<{ id?: unknown }>(s, 'POST', `/wp/v2/posts/${input.externalId}`, { json: { title: escapeTitle(title), content } });
+      const answer = await this.client.call<{ id?: unknown }>(s, 'POST', `/wp/v2/posts/${input.externalId}`, { json: { content } });
       return postId(answer.id) === Number(input.externalId) ? { kind: 'edited' } : { kind: 'unknown', code: 'NOT_CONFIRMED' };
     } catch (error) {
       return editRefusedBy(error) ?? editResult(wordpressResult(error));

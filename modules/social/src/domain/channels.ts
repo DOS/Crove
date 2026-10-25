@@ -771,7 +771,7 @@ export const REMOVE_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox',
 // (`editMessageText`, `editMessageCaption`), Discord (editing the webhook's message) and Zalo OA (`article/update`
 // with the whole article, its cover and images sent again, #1430), YouTube (`videos.update` of the snippet, read first
 // and sent back whole, with the force-ssl scope), Google Business (`localPosts.patch` of the summary alone) and
-// WordPress (`POST /wp/v2/posts/:id` of the title and text, its images kept; #1474). Instagram, Threads, Bluesky, X and
+// WordPress (`POST /wp/v2/posts/:id` of the text, its title and images kept; #1474). Instagram, Threads, Bluesky, X and
 // TikTok have no edit Crove can make and answer EDIT_NOT_SUPPORTED. Pinterest stays out: it is not confirmed that its
 // pin update works without boards:write, which Crove's Pinterest connect does not ask for.
 export const EDIT_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', 'facebook_page', 'linkedin', 'linkedin_page', 'mastodon', 'telegram', 'discord', 'zalo_oa', 'youtube', 'google_business', 'wordpress']);
@@ -781,7 +781,7 @@ export const EDIT_READY: ReadonlySet<Provider> = new Set<Provider>(['sandbox', '
 // or a Story or a Reel, whose text no edit reaches ('post_type'), as a Facebook video's description ('video') and a
 // Zalo video article (#1429), whose video_id Crove does not keep to send again ('video'), or a WordPress post kept on
 // the site as a draft or pending review, which has no public post to correct ('draft', #1474). Any YouTube video,
-// a Short included, takes an edit of its title and description. The adapters refuse the same before any call.
+// a Short included, takes an edit of its description. The adapters refuse the same before any call.
 export type EditRefusal = 'provider' | 'poll' | 'post_type' | 'video' | 'draft';
 export function editRefusal(provider: string, settings: Readonly<Record<string, unknown>>, mediaKinds: readonly MediaKind[]): EditRefusal | null {
   if (!isProvider(provider) || !EDIT_READY.has(provider)) return 'provider';

@@ -532,7 +532,8 @@ describe('YouTube edit (#1474)', () => {
   const live = {
     publishedAt: '2026-10-20T08:00:00Z',
     channelId: CHANNEL,
-    title: 'Khai trương chi nhánh',
+    // Renamed in YouTube Studio since it went out: the edit keeps that title.
+    title: 'Khai trương chi nhánh Quận 7',
     description: 'Giá cũ',
     thumbnails: { default: { url: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/default.jpg', width: 120, height: 90 } },
     channelTitle: 'Tiệm bánh',
@@ -546,7 +547,7 @@ describe('YouTube edit (#1474)', () => {
   const listed = (snippet: Record<string, unknown> = live) => ({ body: { kind: 'youtube#videoListResponse', items: [{ kind: 'youtube#video', id: VIDEO, snippet }] } });
   const updated = { body: { kind: 'youtube#video', id: VIDEO, snippet: {} } };
 
-  it('reads the live snippet, then sends it back with the new title and description, its category, tags and language kept', async () => {
+  it('reads the live snippet, then sends it back with the new description, its title, category, tags and languages kept', async () => {
     const { fetchImpl, calls } = google({ [LIST]: [listed()], [UPDATE]: [updated] });
     expect(await edit(fetchImpl)).toEqual({ kind: 'edited' });
     expect(calls.map((c) => c.route)).toEqual([LIST, UPDATE]);
@@ -554,18 +555,30 @@ describe('YouTube edit (#1474)', () => {
     expect(calls[0]?.url.searchParams.get('id')).toBe(VIDEO);
     expect(calls[1]?.url.searchParams.get('part')).toBe('snippet');
     expect(calls[1]?.headers.get('authorization')).toBe('Bearer ya29.token-1');
-    // Only the writable snippet properties, so nothing the request leaves out is cleared; the description as publish
-    // builds it (the link after the text, angle brackets taken out).
+    // The live title, not the one stored at publish; the snippet properties that keep a value, so nothing the request
+    // leaves out is cleared, and no read-only one; the description as publish builds it (the link after the text,
+    // angle brackets taken out).
     expect(calls[1]?.body).toEqual({
       id: VIDEO,
-      snippet: { title: 'Khai trương chi nhánh', description: 'Giá mới 99.000đ ưu đãi, gọi 0901 234 567\n\nhttps://example.com/a', categoryId: '26', tags: ['bánh mì', 'khai trương'], defaultLanguage: 'vi' },
+      snippet: {
+        title: 'Khai trương chi nhánh Quận 7',
+        description: 'Giá mới 99.000đ ưu đãi, gọi 0901 234 567\n\nhttps://example.com/a',
+        categoryId: '26',
+        tags: ['bánh mì', 'khai trương'],
+        defaultLanguage: 'vi',
+        defaultAudioLanguage: 'vi',
+      },
     });
   });
 
   it('sends a video without tags or a language without them (a Short as any other video)', async () => {
     const { fetchImpl, calls } = google({ [LIST]: [listed({ title: 'Short', categoryId: '22', description: '#shorts' })], [UPDATE]: [updated] });
     expect(await edit(fetchImpl)).toEqual({ kind: 'edited' });
-    expect(calls[1]?.body).toEqual({ id: VIDEO, snippet: { title: 'Khai trương chi nhánh', description: 'Giá mới 99.000đ ưu đãi, gọi 0901 234 567\n\nhttps://example.com/a', categoryId: '22' } });
+    expect(calls[1]?.body).toEqual({ id: VIDEO, snippet: { title: 'Short', description: 'Giá mới 99.000đ ưu đãi, gọi 0901 234 567\n\nhttps://example.com/a', categoryId: '22' } });
+    // A snippet YouTube answers without a title: the one stored at publish stands in, as the update needs one.
+    const untitled = google({ [LIST]: [listed({ title: '  ', categoryId: '22' })], [UPDATE]: [updated] });
+    expect(await edit(untitled.fetchImpl)).toEqual({ kind: 'edited' });
+    expect((untitled.calls[1]?.body as { snippet?: { title?: unknown } } | undefined)?.snippet?.title).toBe('Khai trương chi nhánh');
   });
 
   it('tells a connection without the force-ssl scope to reconnect before any call, and the same from YouTube', async () => {

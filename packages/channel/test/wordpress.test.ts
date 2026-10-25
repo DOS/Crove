@@ -543,9 +543,10 @@ describe('WordPress edit (#1474)', () => {
   const edit = (fetchImpl: Fetch, over: Partial<EditInput> = {}) =>
     new WordPressPublisher(fetchImpl).edit({ externalAccountId: ACCOUNT, secret: SECRET, externalId: '42', content, settings: {}, callKey: 'edit-1', ...over });
   const post = (raw: string, status = 'publish') => ({ body: { id: 42, status, title: { raw: 'Thực đơn', rendered: 'Thực đơn' }, content: { raw, rendered: raw, protected: false }, featured_media: 7 } });
-  const published = post(['<p>Phở bò giá cũ</p>', ...FIGURES].join('\n'));
+  // As publish wrote it: paragraphs, a line break and a link, then the figures; titled differently on the site since.
+  const published = post(['<p>Phở bò giá cũ<br>Mở cửa 6h</p>', '<p>Ghé <a href="https://tiemcuaban.vn/menu">https://tiemcuaban.vn/menu</a></p>', ...FIGURES].join('\n'));
 
-  it('updates the title and the text only, the images it went out with kept after the new text', async () => {
+  it('updates the text only, the title the site shows and the images it went out with kept', async () => {
     const { fetchImpl, calls } = site({ [READ]: [published], [UPDATE]: [{ body: { id: 42, status: 'publish', link: 'https://tiemcuaban.vn/?p=42' } }] });
     expect(await edit(fetchImpl)).toEqual({ kind: 'edited' });
     expect(calls.map((c) => [c.route, c.auth, c.redirect])).toEqual([
@@ -553,9 +554,9 @@ describe('WordPress edit (#1474)', () => {
       [UPDATE, BASIC, 'manual'],
     ]);
     expect(new URL(calls[0]?.url ?? '').searchParams.get('context')).toBe('edit');
-    // Nothing else: no status, featured image, terms or excerpt, which WordPress keeps as they are; no upload either.
+    // Nothing else: no title (renamed on the site to 'Thực đơn', kept), status, featured image, terms or excerpt, which
+    // WordPress keeps as they are; no upload either.
     expect(calls[1]?.json).toEqual({
-      title: 'Thực đơn mới',
       content: ['<p>Phở bò giá mới: 55.000đ &amp; &lt;ngon&gt;</p>', '<p>Ghé <a href="https://tiemcuaban.vn/menu">https://tiemcuaban.vn/menu</a> nhé</p>', ...FIGURES].join('\n'),
     });
   });
@@ -566,7 +567,7 @@ describe('WordPress edit (#1474)', () => {
     expect(String((spaced.calls[1]?.json as { content?: unknown } | undefined)?.content).split('\n').slice(-2)).toEqual([FIGURES[0], `<figure class="wp-block-image"><img src="${SITE}/b.jpg" alt="" /></figure>`]);
     const plain = site({ [READ]: [post('<p>Cũ</p>')], [UPDATE]: [{ body: { id: 42 } }] });
     expect(await edit(plain.fetchImpl, { content: { body: 'Mới', title: null, linkUrl: 'https://tiemcuaban.vn/', media: [] } })).toEqual({ kind: 'edited' });
-    expect(plain.calls[1]?.json).toEqual({ title: 'Mới', content: '<p>Mới</p>\n<p><a href="https://tiemcuaban.vn/">https://tiemcuaban.vn/</a></p>' });
+    expect(plain.calls[1]?.json).toEqual({ content: '<p>Mới</p>\n<p><a href="https://tiemcuaban.vn/">https://tiemcuaban.vn/</a></p>' });
   });
 
   it('refuses, with nothing sent, a post whose images were changed on the site', async () => {
@@ -575,6 +576,24 @@ describe('WordPress edit (#1474)', () => {
     const added = site({ [READ]: [post(['<p>Cũ</p>', ...FIGURES].join('\n'))] });
     expect(await edit(added.fetchImpl, { content: { ...content, media: [] } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' });
     expect([...lost.calls, ...added.calls].map((c) => c.route)).toEqual([READ, READ]);
+  });
+
+  it('refuses, with nothing sent, a post holding anything publish never writes: blocks, images, headings, embeds', async () => {
+    const none = { content: { ...content, media: [] } };
+    // Published without images, then an image block added in the block editor: 0 trailing figures, but blocks.
+    const imageBlock = site({ [READ]: [post(`<p>Cũ</p>\n<!-- wp:image {"id":9} -->\n<figure class="wp-block-image"><img src="${SITE}/c.jpg" alt=""/></figure>\n<!-- /wp:image -->`)] });
+    expect(await edit(imageBlock.fetchImpl, none)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' });
+    // Converted to blocks with no image at all.
+    const blocks = site({ [READ]: [post('<!-- wp:paragraph -->\n<p>Cũ</p>\n<!-- /wp:paragraph -->')] });
+    expect(await edit(blocks.fetchImpl, none)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' });
+    // An image in the text, before the trailing figures, in the classic editor.
+    const inline = site({ [READ]: [post([`<p>Cũ <img src="${SITE}/d.jpg" alt=""></p>`, ...FIGURES].join('\n'))] });
+    expect(await edit(inline.fetchImpl)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' });
+    const heading = site({ [READ]: [post('<h2>Thực đơn</h2>\n<p>Cũ</p>')] });
+    expect(await edit(heading.fetchImpl, none)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' });
+    const embed = site({ [READ]: [post('<p>Cũ</p>\n<iframe src="https://www.youtube.com/embed/x"></iframe>')] });
+    expect(await edit(embed.fetchImpl, none)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' });
+    expect([imageBlock, blocks, inline, heading, embed].flatMap((x) => x.calls.map((c) => c.route))).toEqual([READ, READ, READ, READ, READ]);
   });
 
   it('refuses a draft or a post pending review before any call, and one the site holds back after the read', async () => {
