@@ -75,6 +75,7 @@ export const vi = {
     social: 'Mạng xã hội',
   },
   nav: {
+    legalEntity: 'Pháp nhân',
     org: 'Tổ chức',
     allClients: 'Tất cả doanh nghiệp',
     addOrg: '+ Thêm tổ chức',
