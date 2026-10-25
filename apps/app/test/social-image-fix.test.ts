@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CAPABILITIES, IMAGE_RULES, PROVIDERS } from '@crove/mod-social/contract';
 import { CROP_MAX_SIDE } from '../src/lib/social-crop.ts';
-import { FIX_LOW_QUALITY, FIX_MIN_SIDE, FIX_QUALITY, FIX_TYPE, firstFit, fixName, fixSteps, imageFix, isAnimated, refusals, replaceInChannels, replaceMedia, takesFixType, type FixStep } from '../src/lib/social-image-fix.ts';
+import { FIX_LOW_QUALITY, FIX_MIN_SIDE, FIX_QUALITY, FIX_TYPE, firstFit, fixName, fixSteps, imageFix, isAnimated, refusals, replaceInChannels, replaceInEditable, replaceMedia, takesFixType, type FixStep } from '../src/lib/social-image-fix.ts';
 
 const MB = 1024 * 1024;
 
@@ -170,5 +170,31 @@ describe('a fix replaces the original in every channel of the post (#1505)', () 
   it('changes nothing when no channel holds the original', () => {
     const own = { zalo: { media: [photo('a')] } };
     expect(replaceInChannels(own, 'orig', fixed).zalo).toBe(own.zalo);
+  });
+});
+
+describe('alt text and the post screen after a fix (#1505)', () => {
+  const fixed = { fileId: 'fixed', mime: 'image/jpeg', altText: 'shared alt, at click time' };
+
+  it('keeps each list its own alt text, as it is now', () => {
+    const zalo = { media: [{ fileId: 'orig', mime: 'image/png', altText: 'Zalo alt' }] };
+    expect(replaceInChannels({ zalo }, 'orig', fixed).zalo?.media).toEqual([{ ...fixed, altText: 'Zalo alt' }]);
+    // A list whose alt text changed while the fix ran keeps the newer text.
+    expect(replaceMedia([{ fileId: 'orig', mime: 'image/png', altText: 'typed meanwhile' }], 'orig', fixed)).toEqual([{ ...fixed, altText: 'typed meanwhile' }]);
+  });
+
+  it('fixes every editable channel that holds the original, edited or not, and marks no other channel edited', () => {
+    const own = { edited: { media: [{ fileId: 'orig', mime: 'image/png', altText: '' }] }, other: { media: [] } };
+    const editable = {
+      edited: own.edited,
+      saved: { media: [{ fileId: 'orig', mime: 'image/png', altText: 'saved alt' }] },
+      untouched: { media: [{ fileId: 'b', mime: 'image/jpeg', altText: '' }] },
+    };
+    const next = replaceInEditable(own, editable, 'orig', fixed);
+    expect(Object.keys(next).sort()).toEqual(['edited', 'other', 'saved']);
+    expect(next.edited?.media[0]?.fileId).toBe('fixed');
+    expect(next.saved?.media).toEqual([{ ...fixed, altText: 'saved alt' }]);
+    // A channel edited in the session but not editable (it went out) is not in `editable`, so it is kept as it was.
+    expect(next.other).toBe(own.other);
   });
 });

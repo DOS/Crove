@@ -132,12 +132,24 @@ export function fixName(original: string | null | undefined): string {
   return `${base}-sua.jpg`;
 }
 
-// The post's images with the fixed file in place of the original, wherever it is; the others as they are.
-export const replaceMedia = <T extends { fileId: string }>(media: readonly T[], fromFileId: string, next: T): T[] => media.map((m) => (m.fileId === fromFileId ? next : m));
+// The post's images with the fixed file in place of the original, wherever it is; the others as they are. Alt text is
+// kept per list (each channel's own images have their own, #1505), so the list keeps the original's alt text as it is
+// now, never the one the fix was started with.
+export const replaceMedia = <T extends { fileId: string; altText?: string }>(media: readonly T[], fromFileId: string, next: T): T[] =>
+  media.map((m) => (m.fileId === fromFileId ? (m.altText === undefined ? next : { ...next, altText: m.altText }) : m));
 
 // A fix made in one list, applied to every channel of the post (#1505): the fixed file in place of the original in
 // each channel's own images that hold it. A channel without the original is left as it is (the same object), so the
 // caller can tell which channels changed. The post's shared images take replaceMedia themselves.
-export function replaceInChannels<M extends { fileId: string }, O extends { media: readonly M[] }>(own: Readonly<Record<string, O>>, fromFileId: string, next: M): Record<string, O> {
+export function replaceInChannels<M extends { fileId: string; altText?: string }, O extends { media: readonly M[] }>(own: Readonly<Record<string, O>>, fromFileId: string, next: M): Record<string, O> {
   return Object.fromEntries(Object.entries(own).map(([id, o]) => [id, o.media.some((m) => m.fileId === fromFileId) ? { ...o, media: replaceMedia(o.media, fromFileId, next) } : o]));
+}
+
+// The post screen's channels after a fix (#1505): `own` holds the channels edited in this session, `editable` every
+// channel still to go out as it is now (its edit, or as saved). The fix lands in each editable channel whose own images
+// hold the original, which is then kept in `own`; the others, and every channel that went out, are left as they are,
+// so a channel the fix does not touch is never marked edited.
+export function replaceInEditable<M extends { fileId: string; altText?: string }, O extends { media: readonly M[] }>(own: Readonly<Record<string, O>>, editable: Readonly<Record<string, O>>, fromFileId: string, next: M): Record<string, O> {
+  const fixed = replaceInChannels(editable, fromFileId, next);
+  return { ...own, ...Object.fromEntries(Object.entries(fixed).filter(([id, o]) => o !== editable[id])) };
 }

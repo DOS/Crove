@@ -19,7 +19,7 @@ import { DateInput } from '../components/date-input.tsx';
 import { DateTimeInput } from '../components/date-time-input.tsx';
 import { TimeInput } from '../components/time-input.tsx';
 import { CoverImageField, MediaField, MediaReplace, type MediaItem } from '../components/social-media.tsx';
-import { replaceInChannels, replaceMedia } from '../lib/social-image-fix.ts';
+import { replaceInChannels, replaceInEditable, replaceMedia } from '../lib/social-image-fix.ts';
 import { AiPhotoPicker, aiDraftInput, useAiPhotos } from '../components/social-ai-photos.tsx';
 import { ChannelSetPicker } from '../components/social-channel-sets.tsx';
 import { PlatformPreview } from '../components/social-preview.tsx';
@@ -3865,11 +3865,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
   // out keeps what it sent.
   const fixEverywhere = (fromFileId: string, next: MediaItem) => {
     setBase((b) => (b ? { ...b, media: replaceMedia(b.media, fromFileId, next) } : b));
-    setOwn((o) => {
-      const editable = Object.fromEntries(p.variants.filter((v) => EDITABLE.includes(v.status)).map((v) => [v.id, o[v.id] ?? ownOf(v)]));
-      const fixed = replaceInChannels(editable, fromFileId, next);
-      return { ...o, ...Object.fromEntries(Object.entries(fixed).filter(([id, mine]) => mine !== editable[id])) };
-    });
+    setOwn((o) => replaceInEditable(o, Object.fromEntries(p.variants.filter((v) => EDITABLE.includes(v.status)).map((v) => [v.id, o[v.id] ?? ownOf(v)])), fromFileId, next));
   };
 
   return (
