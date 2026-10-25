@@ -475,7 +475,8 @@ export const coverKind = (cover: Cover): CoverKind => ('atMs' in cover ? 'frame'
 // What each channel's Crove adapter sends as a video's cover (#642); a channel missing here takes none. Instagram
 // Reels take a frame (thumb_offset) or an image (cover_url); TikTok's direct post takes a frame
 // (video_cover_timestamp_ms) and no uploaded image; YouTube takes an image (thumbnails.set) and no frame, since the
-// Data API has no way to pick one. Facebook Page videos and the other channels take none from Crove yet.
+// Data API has no way to pick one. A Facebook Page video takes an image (`thumb` on /{page-id}/videos, #1499), on a
+// feed video only: Meta's Reels publishing takes no cover (REEL_COVER_REFUSED). The other channels take none yet.
 // A channel's post type (#644), in the variant's settings (`settings.postType`): a feed post (the default), a Story or
 // a Reel, on the channels whose adapter posts them. The adapters' postTypeOf in @crove/channel reads the same value.
 // A Story is one image or video shown for a day: its text and link are not sent, and a video lasts at most a minute.
@@ -523,7 +524,29 @@ export const COVER_RULES: Readonly<Partial<Record<Provider, readonly CoverKind[]
   pinterest: ['frame'],
   // A Zalo OA video article's thumbnail is an image Zalo fetches by URL (#1429).
   zalo_oa: ['image'],
+  // A Page video's thumbnail, sent in the upload (#1499); feed videos only.
+  facebook_page: ['image'],
 };
+// The channels whose Reels take no cover through the API although their feed videos do (#1499): Meta's Reels
+// publishing documents no cover parameter, and setting one afterwards (/{video-id}/thumbnails) needs
+// pages_read_user_content, which Crove does not ask for. The member changes it in Facebook instead.
+export const REEL_COVER_REFUSED: ReadonlySet<Provider> = new Set<Provider>(['facebook_page']);
+// A title on the video posts of a channel that has none otherwise (#1499): a Facebook Page video (one video, a feed
+// post) and a Reel take the post's title (`title` on /{page-id}/videos and on the Reel's finish step); its text and
+// photo posts and its Stories take none. Optional. Meta documents no length: 255 is Crove's cap [unverified],
+// counted in UTF-16 as Facebook counts the post's text.
+export const VIDEO_TITLE_RULES: Readonly<Partial<Record<Provider, TextRule>>> = {
+  facebook_page: { max: 255, count: 'utf16', required: false },
+};
+// The title rule of a variant's video post (#1499), or null when the variant is not one (a text or photo post, a
+// Story) or its channel gives video posts no title of their own.
+export function videoTitleRule(provider: Provider, settings: Readonly<Record<string, unknown>> | undefined, media: readonly { kind: MediaKind }[]): TextRule | null {
+  const rule = VIDEO_TITLE_RULES[provider];
+  if (!rule) return null;
+  const type = postTypeOf(settings);
+  if (type === 'reel') return rule;
+  return type === 'feed' && media.length === 1 && media[0]?.kind === 'video' ? rule : null;
+}
 // The channels whose video post cannot go out without a cover (#1429): a Zalo OA video article needs its thumbnail.
 export const COVER_REQUIRED: ReadonlySet<Provider> = new Set<Provider>(['zalo_oa']);
 // How a TikTok variant goes out (#903), in `settings.tiktokMode`: posted at once (direct, the default, so variants
@@ -737,7 +760,9 @@ export const WORDPRESS_TERM_MAX = 200;
 
 // YouTube refuses a thumbnail over 2 MB (thumbnails.set); Zalo an article image over 1 MB, a video article's thumbnail
 // among them (#1429).
-export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024, zalo_oa: 1024 * 1024 };
+// Facebook documents no size for a video's `thumb` (#1499): 10 MB, the limit of its thumbnails edge, is the cap
+// [unverified].
+export const COVER_IMAGE_MAX_BYTES: Readonly<Partial<Record<Provider, number>>> = { youtube: 2 * 1024 * 1024, zalo_oa: 1024 * 1024, facebook_page: 10 * 1024 * 1024 };
 
 // A LinkedIn document's title (#1119), `settings.linkedin.documentTitle`: 1 to DOCUMENT_TITLE_MAX characters once
 // trimmed, counted as LinkedIn counts its text. Unsaid, the adapter sends the post's title or the file's name. The

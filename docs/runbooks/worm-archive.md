@@ -14,6 +14,7 @@ This runbook covers setting the archive up, reading its two alerts, and what to 
   - Version 1 batches (#891): `audit:<id>` and `journal:<org>:<id>` (`crove_kernel.archive_row_hashes`, migration `20261023230000`).
   - Version 2 batches (#977), written from migration `20261026230000` on: the same, plus `cash_voucher:<org>:<id>` (a PT, PC, BC or BN with its type, number, date, account and amount), `journal_voucher:<org>:<id>` (an NVK and its number) and `document_void:<org>:<document>` (a voided purchase document and its reversal entry), from `crove_kernel.archive_number_hashes`. A voucher keeps its number when its entry is reversed; the reversal is a journal entry that names the original.
   - The first version 2 batch takes in every voucher and void made before it (its `numbersFrom` is the epoch); later batches take their own window. The verifier checks each batch with the version it was written with.
+  - Version 3 batches (#1489), written from migration `20261102220000` on: the same, plus the legal entity of each finance row (#1280), from `crove_kernel.archive_entity_hashes`: `entity:journal:<org>:<id>` (an entry's entity and each of its lines'), `entity:cash_voucher:<org>:<id>`, `entity:journal_voucher:<org>:<id>` and `entity:document_void:<org>:<document>`. The first version 3 batch takes in every row made before it (its `entitiesFrom` is the epoch); later batches take their own window.
 - **Where batches go.** Each batch is written once to `chain/v1/<sequence>.json` in the archive store, then recorded in `crove_kernel.archive_batch`.
 - **The nightly check.** At 03:10 Vietnam time the verifier reads every batch back from the store, checks the chain, and recomputes every row hash from the database. The result goes to `crove_kernel.archive_verification`.
 - **How alerts reach you.** Both jobs fail loudly:
@@ -102,12 +103,12 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
 
 | Code | Meaning |
 |---|---|
-| `row_changed` | The row's columns differ from what was archived. For a journal entry, a line was edited, added or removed. For a `cash_voucher` or `journal_voucher`, its number, type, date or amount changed: a voucher was renumbered. |
+| `row_changed` | The row's columns differ from what was archived. For a journal entry, a line was edited, added or removed. For a `cash_voucher` or `journal_voucher`, its number, type, date or amount changed: a voucher was renumbered. For an `entity:` reference, the row (or one of an entry's lines) was moved to another legal entity. |
 | `row_missing` | An archived row is no longer in the database (deleted, or lost to a restore). |
 | `row_added` | A row sits in a window that was already archived: it was inserted with a backdated time. |
 | `chain_broken`, `window_gap`, `batch_hash_mismatch`, `chain_hash_mismatch`, `object_unreadable`, `object_out_of_order` | A batch in the store was changed, removed or replaced. With `s3` and Object Lock this should be impossible; check the bucket's lock and access logs. |
 | `object_missing` | The database recorded a batch the store does not have. |
-| `version_regressed`, `numbers_gap` | A version 1 batch follows a version 2 one, or a version 2 batch does not take its numbers from where the last one stopped: a worker older than #977 wrote to the archive, or a batch was replaced. Voucher numbers in that stretch are not anchored. Find the deploy that ran the old worker. |
+| `version_regressed`, `numbers_gap`, `entities_gap` | A batch of a lower version follows a higher one, or a batch does not take its numbers (version 2 and 3) or legal entities (version 3) from where the last one stopped: a worker older than #977 or #1489 wrote to the archive, or a batch was replaced. The numbers or entities in that stretch are not anchored. Find the deploy that ran the old worker. |
 | `record_mismatch` | `crove_kernel.archive_batch` disagrees with the store. The store is the authority. |
 
 **What to do**

@@ -13,17 +13,17 @@
 import { sql } from 'kysely';
 import { z } from 'zod';
 import type { MemberRole } from '@crove/db';
-import { zLedgerPeriod } from '@crove/kernel-contract';
+import { zId, zLedgerPeriod } from '@crove/kernel-contract';
 import { defineCommand, defineQuery, type QueryContext } from '@crove/kernel-runtime';
 import { chartAccounts } from './accounts.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { ledgerPeriod, type LedgerPeriod } from './domain/ledger-reports.ts';
 import { B01_LINES, B02_LINES, CLOSING_ACCOUNT, buildB01, buildB02, type ReportEntry, type ReportLine, type ReportLineDef, type UnmappedBalance } from './domain/tt133-reports.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
-// An org is one legal entity today (plan §4.6): every entry belongs to it.
-const LEGAL_ENTITY = 'org';
 
-export const zStatementsInput = z.object({ period: zLedgerPeriod });
+// The statements of one legal entity (#1280): legalEntityId as in zLegalEntityChoice.
+export const zStatementsInput = z.object({ period: zLedgerPeriod, legalEntityId: zId.optional() });
 
 export interface UnmappedRow {
   accountCode: string;
@@ -57,10 +57,10 @@ interface BalanceRow {
   credit: string | null;
 }
 
-// Each summed row as one entry dated `date` (inside the range the builder reads).
-function asEntries(rows: BalanceRow[], date: string): ReportEntry[] {
+// Each summed row as one entry of the legal entity dated `date` (inside the range the builder reads).
+function asEntries(rows: BalanceRow[], date: string, legalEntityId: string): ReportEntry[] {
   return rows.map((r) => ({
-    legalEntityId: LEGAL_ENTITY,
+    legalEntityId,
     entryDate: date,
     currency: 'VND',
     reversal: r.reversal,
@@ -68,9 +68,9 @@ function asEntries(rows: BalanceRow[], date: string): ReportEntry[] {
   }));
 }
 
-// The debits and credits of the org's entries in [from, to] (from null: since the first entry), per account, party and
-// reversal. `withoutClosing` leaves out every entry that has a line on the year-end closing account.
-function balances(ctx: QueryContext, from: string | null, to: string, withoutClosing: boolean) {
+// The debits and credits of the legal entity's entries in [from, to] (from null: since the first entry), per account,
+// party and reversal. `withoutClosing` leaves out every entry that has a line on the year-end closing account.
+function balances(ctx: QueryContext, legalEntityId: string, from: string | null, to: string, withoutClosing: boolean) {
   let query = ctx.trx
     .selectFrom('crove_finance.journal_line as l')
     .innerJoin('crove_finance.journal_entry as j', (join) => join.onRef('j.org_id', '=', 'l.org_id').onRef('j.id', '=', 'l.entry_id'))
@@ -81,6 +81,7 @@ function balances(ctx: QueryContext, from: string | null, to: string, withoutClo
       eb.fn.sum<string>('l.credit').as('credit'),
     ])
     .where('l.org_id', '=', ctx.orgId)
+    .where('l.legal_entity_id', '=', legalEntityId)
     .where('j.entry_date', '<=', to);
   if (from !== null) query = query.where('j.entry_date', '>=', from);
   if (withoutClosing) {
@@ -103,10 +104,10 @@ function balances(ctx: QueryContext, from: string | null, to: string, withoutClo
 // statement (#365), so both statements see the same entries even in the query's READ COMMITTED transaction: an entry
 // posted while they read is in both or in neither. The names of unmapped accounts and parties are read afterwards; they
 // only label rows whose amounts come from this statement.
-async function statementBalances(ctx: QueryContext, period: LedgerPeriod): Promise<{ b01: BalanceRow[]; b02: BalanceRow[] }> {
-  const rows = await balances(ctx, null, period.to, false)
+async function statementBalances(ctx: QueryContext, period: LedgerPeriod, legalEntityId: string): Promise<{ b01: BalanceRow[]; b02: BalanceRow[] }> {
+  const rows = await balances(ctx, legalEntityId, null, period.to, false)
     .select(sql.lit('b01').as('part'))
-    .unionAll(balances(ctx, period.from, period.to, true).select(sql.lit('b02').as('part')))
+    .unionAll(balances(ctx, legalEntityId, period.from, period.to, true).select(sql.lit('b02').as('part')))
     .orderBy('part')
     .orderBy('account_code')
     .execute();
@@ -133,11 +134,12 @@ async function unmappedRows(ctx: QueryContext, unmapped: UnmappedBalance[]): Pro
   }));
 }
 
-export async function financialStatements(ctx: QueryContext, periodText: string): Promise<FinancialStatements> {
+// The statements of one legal entity (#1280).
+export async function financialStatements(ctx: QueryContext, periodText: string, legalEntityId: string): Promise<FinancialStatements> {
   const period = ledgerPeriod(periodText);
-  const sums = await statementBalances(ctx, period);
-  const b01 = buildB01(asEntries(sums.b01, period.to), LEGAL_ENTITY, period.to);
-  const b02 = buildB02(asEntries(sums.b02, period.from), LEGAL_ENTITY, period.from, period.to);
+  const sums = await statementBalances(ctx, period, legalEntityId);
+  const b01 = buildB01(asEntries(sums.b01, period.to, legalEntityId), legalEntityId, period.to);
+  const b02 = buildB02(asEntries(sums.b02, period.from, legalEntityId), legalEntityId, period.from, period.to);
   return {
     period,
     b01: { asOf: period.to, lines: withTotals(b01.lines, B01_LINES), unmapped: await unmappedRows(ctx, b01.unmapped), balanced: b01.balanced },
@@ -149,7 +151,7 @@ export const statementsPeriodQuery = defineQuery({
   name: 'finance.statements.period',
   input: zStatementsInput,
   access: ALL,
-  handler: (ctx, input): Promise<FinancialStatements> => financialStatements(ctx, input.period),
+  handler: async (ctx, input): Promise<FinancialStatements> => financialStatements(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId)),
 });
 
 // Records one export of a period's financial statements after the file is built. It changes nothing: its audit row
@@ -166,7 +168,7 @@ export const statementsExport = defineCommand({
   risk: 'R0',
   access: ALL,
   handler: async (ctx, input) => {
-    ctx.audit({ period: input.period, ...(input.format ? { format: input.format } : {}), ...(input.warnings ? { warnings: input.warnings } : {}) });
+    ctx.audit({ period: input.period, ...(input.legalEntityId ? { legal_entity_id: input.legalEntityId } : {}), ...(input.format ? { format: input.format } : {}), ...(input.warnings ? { warnings: input.warnings } : {}) });
     return { ok: true as const };
   },
 });

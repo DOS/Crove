@@ -72,9 +72,13 @@ function recorded(row: { occurred_at: Date; detail: unknown }): RecordedArchive 
   };
 }
 
+// How far the books are locked. The package holds the documents of every legal entity of the org (#1280), so it is
+// the earliest lock of all of them: an entity that has posted and never locked leaves the year open. Owners see every
+// entity.
 async function lockedThrough(ctx: QueryContext): Promise<string | null> {
-  const row = await ctx.trx.selectFrom('crove_finance.period_lock').select('locked_through').where('org_id', '=', ctx.orgId).executeTakeFirst();
-  return row?.locked_through ?? null;
+  const rows = await ctx.trx.selectFrom('crove_finance.period_lock').select('locked_through').where('org_id', '=', ctx.orgId).execute();
+  if (rows.length === 0 || rows.some((r) => r.locked_through === null)) return null;
+  return rows.map((r) => r.locked_through as string).sort()[0] ?? null;
 }
 
 async function archiveOf(ctx: QueryContext, year: number): Promise<YearArchive | null> {
@@ -132,6 +136,9 @@ export interface ArchiveSource {
   recorded: RecordedArchive | null;
   // The original file of every document (purchase or sale) whose entry is dated in the year, once each.
   files: ArchiveSourceFile[];
+  // The legal entities whose books go in the package (#1280): the default entity, then every other entity with an entry
+  // dated up to the year's end. Each gets its own journal, ledger, statements and VAT working.
+  legalEntities: Array<{ id: string; isDefault: boolean }>;
 }
 
 export const yearArchiveSource = defineQuery({
@@ -156,6 +163,26 @@ export const yearArchiveSource = defineQuery({
       .where('j.entry_date', '<=', `${input.year}-12-31`)
       .orderBy('f.id')
       .execute();
+    const legalEntities = await ctx.trx
+      .selectFrom('crove_kernel.legal_entity as e')
+      .select(['e.id', 'e.is_default'])
+      .where('e.org_id', '=', ctx.orgId)
+      .where((eb) =>
+        eb.or([
+          eb('e.is_default', '=', true),
+          eb.exists(
+            eb
+              .selectFrom('crove_finance.journal_entry as j')
+              .select('j.id')
+              .whereRef('j.org_id', '=', 'e.org_id')
+              .whereRef('j.legal_entity_id', '=', 'e.id')
+              .where('j.entry_date', '<=', `${input.year}-12-31`),
+          ),
+        ]),
+      )
+      .orderBy('e.is_default', 'desc')
+      .orderBy('e.id')
+      .execute();
     return {
       orgSlug: tenant.slug,
       vatFilingPeriod: tenant.vat_filing_period,
@@ -163,6 +190,7 @@ export const yearArchiveSource = defineQuery({
       lockedThrough: await lockedThrough(ctx),
       recorded: (await auditRows(ctx, 'finance.archive.record', input.year)).map(recorded).find((r) => r !== null) ?? null,
       files: files.map((f) => ({ id: f.id, filename: f.filename, contentType: f.content_type, key: f.storage_key, generation: f.generation, sha256: f.sha256 })),
+      legalEntities: legalEntities.map((e) => ({ id: e.id, isDefault: e.is_default })),
     };
   },
 });

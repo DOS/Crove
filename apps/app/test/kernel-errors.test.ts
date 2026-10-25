@@ -40,8 +40,6 @@ const NOT_SHOWN: Record<string, string> = {
   EXTERNAL_POST_NOT_FOUND: 'worker',
   // The tax portal sync (#325): a download already made for the synced list; fetchXml skips it, the SPA never gets it.
   PORTAL_CALL_DONE: 'portal sync',
-  // A VAT return's done mark naming a legal entity (#1496): the SPA sends no entity until finance files per entity.
-  VAT_RETURN_ENTITY_UNSUPPORTED: 'legal entities',
   // The inbound mail endpoint answers the mail relay, not a browser.
   EMPTY_MESSAGE: 'inbound mail',
   UNKNOWN_RECIPIENT: 'inbound mail',

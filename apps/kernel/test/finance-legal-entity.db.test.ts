@@ -10,6 +10,7 @@ import { copyFileSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'kysely';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool, type Db } from '@crove/db';
@@ -17,7 +18,7 @@ import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
 import { Runtime } from '@crove/kernel-runtime';
 import { findPeriodBalanceDifferences } from '../src/period-balance.ts';
-import { LocalArchiveStore, verifyArchive, writeArchive } from '../src/worm.ts';
+import { GENESIS_SHA256, LocalArchiveStore, archiveKey, batchSha256, chainSha256, verifyArchive, type ArchiveBatch } from '../src/worm.ts';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
@@ -182,7 +183,33 @@ suite('finance books per legal entity (#1280)', () => {
     });
     archiveDir = mkdtempSync(join(tmpdir(), 'crove-le-archive-'));
     store = new LocalArchiveStore(archiveDir);
-    expect(await writeArchive(worker, store, { lagSeconds: 600 })).toBeGreaterThan(0);
+    // The batch the worker of that time wrote: version 2 (the version 3 entity hashes, #1489, come with a later
+    // migration).
+    const epoch = new Date(0).toISOString();
+    const to = new Date(Date.now() - 60 * 60_000).toISOString();
+    const rows = (
+      await sql<{ ref: string; row_sha256: string }>`
+        SELECT ref, row_sha256 FROM crove_kernel.archive_row_hashes(${epoch}::timestamptz, ${to}::timestamptz)
+        UNION ALL
+        SELECT ref, row_sha256 FROM crove_kernel.archive_number_hashes(${epoch}::timestamptz, ${to}::timestamptz)`.execute(worker)
+    ).rows
+      .map((r): [string, string] => [r.ref, r.row_sha256])
+      .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    expect(rows.length).toBeGreaterThan(LEGACY_ENTRIES);
+    const hash = batchSha256(rows);
+    const batch: ArchiveBatch = {
+      format: 'crove-archive',
+      version: 2,
+      seq: 1,
+      window: { from: epoch, to },
+      numbersFrom: epoch,
+      prevChainSha256: GENESIS_SHA256,
+      rows,
+      batchSha256: hash,
+      chainSha256: chainSha256(GENESIS_SHA256, 1, epoch, to, hash),
+    };
+    await store.put(archiveKey(1), new TextEncoder().encode(JSON.stringify(batch)));
+    await sql`SELECT crove_kernel.archive_record(1, ${epoch}::timestamptz, ${to}::timestamptz, ${rows.length}::int, ${hash}, ${batch.chainSha256}, ${archiveKey(1)})`.execute(worker);
 
     const started = performance.now();
     const applied = await migrate({ adminUrl, dir: MIGRATIONS });

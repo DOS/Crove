@@ -5,10 +5,11 @@
 // - finance.opening_balance.post checks it again and posts it as one opening entry through the posting path. It is a
 //   posting run by a user, so it is R3 (fresh MFA, P11) and only the roles that may post run it (owner and admin).
 //   A user's own R3 is allowed without a proposal (plan §4.7); a system import would need one (P13).
-// One opening entry per org: while one is in force (not reversed), another is refused. To replace it, reverse it like
-// any entry (finance.journal.reverse, through a proposal), on its own date (reversal.ts refuses another), then import
-// again: the old entry and its reversal cancel out at every date, so the new one stands alone. Posts for one org are serialized by a
-// transaction-level advisory lock, so two at once cannot both pass the check; this relies on READ COMMITTED (the
+// One opening entry per org and legal entity (#1280: each entity has its own opening balances): while one is in force
+// (not reversed), another is refused. To replace it, reverse it like any entry (finance.journal.reverse, through a
+// proposal), on its own date (reversal.ts refuses another), then import again: the old entry and its reversal cancel
+// out at every date, so the new one stands alone. Posts for one org and entity are serialized by a transaction-level
+// advisory lock, so two at once cannot both pass the check; this relies on READ COMMITTED (the
 // runtime's isolation for commands), so the second sees the first's entry once it gets the lock.
 // The opening balances are as at the end of the date, so every other entry must be dated later. The posting guard on
 // journal_entry holds every writer to that (#366, 20261020210000): an entry dated on or before the opening entry in
@@ -20,17 +21,20 @@ import { DomainError, defineCommand, defineQuery, type QueryContext } from '@cro
 import { chartOfAccounts } from './accounts.ts';
 import { OPENING_BALANCE_SOURCE, checkOpeningBalance, type LedgerFacts, type OpeningCheck, type OpeningParty } from './domain/opening-balance.ts';
 import { postJournalEntry } from './ledger.ts';
+import { resolveLegalEntity } from './legal-entity.ts';
 import { upsertParty } from './record.ts';
 
 const POSTERS = ['owner', 'admin'] as const;
 
 // The opening entry in force and the earliest other entry. An opening entry's reversal (source kernel.proposal,
-// reverses_entry_id set) belongs with it and does not count as another entry.
-async function ledgerFacts(ctx: QueryContext): Promise<LedgerFacts> {
+// reverses_entry_id set) belongs with it and does not count as another entry. Of one legal entity (#1280: each entity
+// has its own opening entry).
+async function ledgerFacts(ctx: QueryContext, legalEntityId: string): Promise<LedgerFacts> {
   const opening = await ctx.trx
     .selectFrom('crove_finance.journal_entry as e')
     .select(['e.id', 'e.entry_date'])
     .where('e.org_id', '=', ctx.orgId)
+    .where('e.legal_entity_id', '=', legalEntityId)
     .where('e.source_type', '=', OPENING_BALANCE_SOURCE)
     .where(({ not, exists, selectFrom }) =>
       not(
@@ -50,6 +54,7 @@ async function ledgerFacts(ctx: QueryContext): Promise<LedgerFacts> {
     .leftJoin('crove_finance.journal_entry as o', (join) => join.onRef('o.org_id', '=', 'e.org_id').onRef('o.id', '=', 'e.reverses_entry_id'))
     .select((eb) => eb.fn.min('e.entry_date').as('first'))
     .where('e.org_id', '=', ctx.orgId)
+    .where('e.legal_entity_id', '=', legalEntityId)
     .where('e.source_type', '<>', OPENING_BALANCE_SOURCE)
     .where((eb) => eb.or([eb('o.id', 'is', null), eb('o.source_type', '<>', OPENING_BALANCE_SOURCE)]))
     .executeTakeFirst();
@@ -59,15 +64,15 @@ async function ledgerFacts(ctx: QueryContext): Promise<LedgerFacts> {
   };
 }
 
-async function check(ctx: QueryContext, input: OpeningBalanceImport): Promise<OpeningCheck> {
-  return checkOpeningBalance(input, await chartOfAccounts(ctx), await ledgerFacts(ctx));
+async function check(ctx: QueryContext, input: OpeningBalanceImport, legalEntityId: string): Promise<OpeningCheck> {
+  return checkOpeningBalance(input, await chartOfAccounts(ctx), await ledgerFacts(ctx, legalEntityId));
 }
 
 export const openingBalancePreview = defineQuery({
   name: 'finance.opening_balance.preview',
   input: zOpeningBalanceImport,
   access: POSTERS,
-  handler: async (ctx, input) => (await check(ctx, input)).preview,
+  handler: async (ctx, input) => (await check(ctx, input, await resolveLegalEntity(ctx, input.legalEntityId))).preview,
 });
 
 export const openingBalancePost = defineCommand({
@@ -76,8 +81,10 @@ export const openingBalancePost = defineCommand({
   risk: 'R3',
   access: POSTERS,
   handler: async (ctx, input) => {
-    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`${OPENING_BALANCE_SOURCE}:${ctx.orgId}`}, 0))`.execute(ctx.trx);
-    const { preview, lines } = await check(ctx, input);
+    // The opening entry of one legal entity (#1280); posts of one org and entity are serialized.
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
+    await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`${OPENING_BALANCE_SOURCE}:${ctx.orgId}:${legalEntityId}`}, 0))`.execute(ctx.trx);
+    const { preview, lines } = await check(ctx, input, legalEntityId);
     if (preview.openingEntry) {
       throw new DomainError('OPENING_BALANCE_EXISTS', 409, 'Đã có bút toán số dư đầu kỳ; hãy đảo bút toán đó trước khi nhập lại', {
         entryId: preview.openingEntry.id,
@@ -124,6 +131,7 @@ export const openingBalancePost = defineCommand({
       sourceType: OPENING_BALANCE_SOURCE,
       // Unique per posting, so the (source_type, source_id) key never stops a later opening entry after a reversal.
       sourceId: ctx.commandId,
+      legalEntityId,
       lines: posted,
     });
     ctx.audit({
@@ -132,6 +140,7 @@ export const openingBalancePost = defineCommand({
       parties: partyIds.size,
       total_debit: preview.totals.debit,
       total_credit: preview.totals.credit,
+      legal_entity_id: legalEntityId,
     });
     await ctx.activity('finance.journal_entry', journalEntryId, 'opening_balance.posted', `Ghi số dư đầu kỳ tại ngày ${input.asOf}`);
     await ctx.emit('finance.opening_balance.posted', { entryId: journalEntryId, asOf: input.asOf });
