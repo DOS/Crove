@@ -1,6 +1,6 @@
 -- Crove finance (issue #1280, part 2a; plan §4.6, ADR-0021 sections 2, 3 and 7): voucher numbering, the period lock
 -- and the posting path per legal entity. Idempotent; applied files stay untouched. Builds on part 1
--- (20261102100000_crove_finance_legal_entity_scope.sql), which gave every finance book row a legal_entity_id.
+-- (20261102140000_crove_finance_legal_entity_scope.sql), which gave every finance book row a legal_entity_id.
 --
 -- Several parents. crove_finance.legal_entity_fill (trigger b_legal_entity) now takes any number of (parent table,
 -- parent key column) pairs: every parent a row names must be of the row's entity, and the first one found gives it.
@@ -316,7 +316,7 @@ BEGIN
   END IF;
 
   IF v_opening_entry THEN
-    -- One opening entry in force per org.
+    -- One opening entry in force per org and legal entity.
     SELECT o.id INTO v_in_force
     FROM crove_finance.journal_entry o
     WHERE o.org_id = NEW.org_id AND o.legal_entity_id = NEW.legal_entity_id AND o.source_type = 'finance.opening_balance'
@@ -508,12 +508,17 @@ BEGIN
   -- The legal entity (#1280): the one named, else the reversed entry's, else the org's default entity, as this caller
   -- sees them (crove_definer_tenant is a member of crove_tenant, so the context's le_scope applies to it). One the
   -- caller cannot see, or that is not the org's, is refused; nothing says whether it exists.
+  -- A reversed entry the caller cannot see (another org's, or none) gives no entity: the default one is used and the
+  -- entry's foreign key, or for a caller limited to some entities the trigger b_legal_entity, refuses the reversal.
   IF p_legal_entity_id IS NOT NULL THEN
     SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = v_org AND e.id = p_legal_entity_id;
-  ELSIF p_reverses_entry_id IS NOT NULL THEN
-    SELECT r.legal_entity_id INTO v_entity FROM crove_finance.journal_entry r WHERE r.org_id = v_org AND r.id = p_reverses_entry_id;
   ELSE
-    SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = v_org AND e.is_default;
+    IF p_reverses_entry_id IS NOT NULL THEN
+      SELECT r.legal_entity_id INTO v_entity FROM crove_finance.journal_entry r WHERE r.org_id = v_org AND r.id = p_reverses_entry_id;
+    END IF;
+    IF v_entity IS NULL THEN
+      SELECT e.id INTO v_entity FROM crove_kernel.legal_entity e WHERE e.org_id = v_org AND e.is_default;
+    END IF;
   END IF;
   IF v_entity IS NULL OR NOT crove_kernel.ctx_le_allowed(v_entity) THEN
     RAISE EXCEPTION 'LEGAL_ENTITY_NOT_ALLOWED' USING ERRCODE = '42501',
@@ -650,7 +655,7 @@ REVOKE CREATE ON SCHEMA crove_finance FROM crove_definer_tenant;
 -- ---------------------------------------------------------------------------
 -- The nightly comparison, also checking each line's entity
 -- ---------------------------------------------------------------------------
--- Same as 20261102100000, plus 'legal_entity' when one of the entry's lines on the account names another entity than
+-- Same as 20261102140000, plus 'legal_entity' when one of the entry's lines on the account names another entity than
 -- the entry. Same signature, owner and grants.
 CREATE OR REPLACE FUNCTION crove_finance.period_balance_differences(p_limit int)
 RETURNS TABLE (org_id uuid, account_code text, period_month date, entry_id uuid, mismatch text[])
