@@ -339,6 +339,10 @@ export type CorrectionKind = (typeof CORRECTION_KINDS)[number];
 export const EXCHANGE_RATE_SOURCES = ['invoice', 'entered'] as const;
 export type ExchangeRateSource = (typeof EXCHANGE_RATE_SOURCES)[number];
 
+// The legal entity of a finance row (#1280): the parent's, or the one the writer names, or the org's default entity,
+// filled in by the insert trigger b_legal_entity (crove_finance.legal_entity_fill) and never changed afterwards.
+type LegalEntityColumn = ColumnType<string, string | undefined, never>;
+
 export type PurchaseDocumentTable = Refine<
   G.FinancePurchaseDocumentTable,
   {
@@ -352,7 +356,9 @@ export type PurchaseDocumentTable = Refine<
     foreign_subtotal: ColumnType<string | null, string | null | undefined, never>;
     foreign_vat_amount: ColumnType<string | null, string | null | undefined, never>;
     foreign_total: ColumnType<string | null, string | null | undefined, never>;
-  }
+    legal_entity_id: LegalEntityColumn;
+  },
+  'legal_entity_id'
 >;
 
 // Entries are written only by crove_finance.post_journal_entry().
@@ -388,15 +394,20 @@ export type CashVoucherTable = Refine<
   {
     voucher_type: ColumnType<VoucherType, VoucherType, never>;
     number: ColumnType<number, never, never>;
+    legal_entity_id: LegalEntityColumn;
   },
-  'number'
+  'number' | 'legal_entity_id'
 >;
 
 // The accountant's marks on input invoices that need proof of non-cash payment (#917). Append-only; the latest mark
 // of a document is its state.
 export const INPUT_VAT_CHECK_OUTCOMES = ['paid_by_bank', 'not_deductible', 'cleared'] as const;
 export type InputVatCheckOutcome = (typeof INPUT_VAT_CHECK_OUTCOMES)[number];
-export type InputVatCheckTable = Refine<G.FinanceInputVatCheckTable, { outcome: ColumnType<InputVatCheckOutcome, InputVatCheckOutcome, never> }>;
+export type InputVatCheckTable = Refine<
+  G.FinanceInputVatCheckTable,
+  { outcome: ColumnType<InputVatCheckOutcome, InputVatCheckOutcome, never>; legal_entity_id: LegalEntityColumn },
+  'legal_entity_id'
+>;
 
 // Learned account rules (#1399): the line's whole item description, normalized, or a keyword in it. What a rule matches
 // never changes in place.
@@ -404,7 +415,8 @@ export const CATEGORIZATION_RULE_MATCH_KINDS = ['description', 'keyword'] as con
 export type CategorizationRuleMatchKind = (typeof CATEGORIZATION_RULE_MATCH_KINDS)[number];
 export type CategorizationRuleTable = Refine<
   G.FinanceCategorizationRuleTable,
-  { match_kind: ColumnType<CategorizationRuleMatchKind, CategorizationRuleMatchKind, never> }
+  { match_kind: ColumnType<CategorizationRuleMatchKind, CategorizationRuleMatchKind, never>; legal_entity_id: LegalEntityColumn },
+  'legal_entity_id'
 >;
 
 // The register of fixed assets and prepaid costs (#919). Tenant roles update only the end of a schedule, once.
@@ -421,12 +433,18 @@ export type FixedAssetTable = Refine<
     end_reason: ColumnType<string | null, string | null | undefined, string | null>;
     ended_by: ColumnType<string | null, string | null | undefined, string | null>;
     created_by: ColumnType<string | null, string | null | undefined, never>;
-  }
+    legal_entity_id: LegalEntityColumn;
+  },
+  'legal_entity_id'
 >;
 
 // General journal vouchers (#888): phiếu kế toán khác, NVK. The insert trigger numbers each one per org (any number
 // given is replaced), and rows never change.
-export type JournalVoucherTable = Refine<G.FinanceJournalVoucherTable, { number: ColumnType<number, never, never> }, 'number'>;
+export type JournalVoucherTable = Refine<
+  G.FinanceJournalVoucherTable,
+  { number: ColumnType<number, never, never>; legal_entity_id: LegalEntityColumn },
+  'number' | 'legal_entity_id'
+>;
 
 // The tax portal's purchase-invoice lists (#465). A list starts pending; the insert trigger stamps created_at and the
 // update trigger stamps recorded_at and removed_at with the database clock. Rows are append-only.
@@ -437,10 +455,23 @@ export type PortalInvoiceListTable = Refine<
   G.FinancePortalInvoiceListTable,
   {
     status: ColumnType<(typeof PORTAL_LIST_STATUSES)[number], (typeof PORTAL_LIST_STATUSES)[number] | undefined, (typeof PORTAL_LIST_STATUSES)[number]>;
-  }
+    legal_entity_id: LegalEntityColumn;
+  },
+  'legal_entity_id'
 >;
 
-export type PortalInvoiceRowTable = Refine<G.FinancePortalInvoiceRowTable, { status: ColumnType<(typeof PORTAL_INVOICE_STATUSES)[number], (typeof PORTAL_INVOICE_STATUSES)[number], never> }>;
+export type PortalInvoiceRowTable = Refine<
+  G.FinancePortalInvoiceRowTable,
+  { status: ColumnType<(typeof PORTAL_INVOICE_STATUSES)[number], (typeof PORTAL_INVOICE_STATUSES)[number], never>; legal_entity_id: LegalEntityColumn },
+  'legal_entity_id'
+>;
+
+// Finance tables refined only for their legal entity (#1280).
+export type BankLineTable = Refine<G.FinanceBankLineTable, { legal_entity_id: LegalEntityColumn }, 'legal_entity_id'>;
+export type DepreciationLineTable = Refine<G.FinanceDepreciationLineTable, { legal_entity_id: LegalEntityColumn }, 'legal_entity_id'>;
+export type PurchaseLineTable = Refine<G.FinancePurchaseLineTable, { legal_entity_id: LegalEntityColumn }, 'legal_entity_id'>;
+export type PurchaseTaxRateTable = Refine<G.FinancePurchaseTaxRateTable, { legal_entity_id: LegalEntityColumn }, 'legal_entity_id'>;
+export type PurchaseDocumentVoidTable = Refine<G.FinancePurchaseDocumentVoidTable, { legal_entity_id: LegalEntityColumn }, 'legal_entity_id'>;
 
 // Crove Social (Social plan §3.2, S3).
 export const SOCIAL_POST_STATUSES = ['draft', 'scheduled', 'publishing', 'published', 'partially_published', 'failed', 'cancelled'] as const;
@@ -664,6 +695,11 @@ type Refined = Tables<{
   'crove_finance.journal_voucher': JournalVoucherTable;
   'crove_finance.portal_invoice_list': PortalInvoiceListTable;
   'crove_finance.portal_invoice_row': PortalInvoiceRowTable;
+  'crove_finance.bank_line': BankLineTable;
+  'crove_finance.depreciation_line': DepreciationLineTable;
+  'crove_finance.purchase_line': PurchaseLineTable;
+  'crove_finance.purchase_tax_rate': PurchaseTaxRateTable;
+  'crove_finance.purchase_document_void': PurchaseDocumentVoidTable;
   'crove_social.post': SocialPostTable;
   'crove_social.post_variant': SocialPostVariantTable;
   'crove_social.post_approval': SocialPostApprovalTable;

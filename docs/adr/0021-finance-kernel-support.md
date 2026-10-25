@@ -229,6 +229,7 @@ Measured:
 
 - `ctx.numbering.allocate({ legalEntityId, docType, documentDate, documentId })` returns `{ periodKey, number }`. It runs in the command's transaction through the definer, after the caller has checked the legal entity with `ctx_le_allowed`. `ctx.numbering.void({ legalEntityId, docType, periodKey, number, reason })` is an R2 command.
 - `crove_finance.post_journal_entry` gains these parameters: `legal_entity_id`, `currency`, `doc_type`, `source_revision`, and `reverses_id`.
+  - As built so far (#1280 part 1): every ledger and document table carries `legal_entity_id NOT NULL` with a RESTRICTIVE `le_scope` policy, filled from the parent row or the org's default entity by a trigger, so the 7-argument posting definer books in the default entity until it takes the parameter (#1280 part 2).
   - Org and author still come from the context, never from parameters.
   - Allocation, the period guard, the scale check, the balance check and the chain queue all happen inside it.
 - `finance.period.close` (R2) and `finance.period.reopen` (R3, reason required) are commands. A trigger, not the commands, protects the ledger.
