@@ -1,11 +1,15 @@
-# MISA SME import templates (issues #317, #657)
+# MISA SME import templates (issues #317, #657, #1398)
 
 Firms keep their system of record (decision D10). For firms on MISA SME, Crove exports vouchers as Excel files in
 the layout of MISA SME's own import templates, so the accountant imports them with **Tệp > Nhập khẩu từ Excel**
 instead of typing them again.
 
-- **Purchase vouchers:** Journal screen, button "Xuất chứng từ mua vào cho MISA" (`GET /api/export/misa/purchases.xlsx?from=&to=`).
-  One file for the date range (journal entry date), one row per invoice line.
+- **Purchase vouchers (services and other costs):** Journal screen, button "Xuất chứng từ mua dịch vụ cho MISA"
+  (`GET /api/export/misa/purchases.xlsx?from=&to=`). One file for the date range (journal entry date), one row per
+  invoice line that is **not** on a stock account.
+- **Purchase vouchers (goods into stock, #1398):** Journal screen, button "Xuất chứng từ mua hàng nhập kho cho MISA"
+  (`GET /api/export/misa/goods-purchases.xlsx?from=&to=`). The invoice lines debited to 152, 153 or 156 (or a
+  sub-account of one), one row per line, with the org's MISA item and warehouse codes (Settings, below).
 - **Sales vouchers:** Journal screen, button "Xuất chứng từ bán hàng cho MISA" (`GET /api/export/misa/sales.xlsx?from=&to=`,
   #313). The recorded sales e-invoices (`finance.vouchers.sales`), one row per invoice line, posted as Crove posts
   them: Nợ 131, Có each line's revenue account, Có 3331.
@@ -17,7 +21,7 @@ instead of typing them again.
   (Tiền gửi > Thu tiền / Chi tiền), whose headers no source here gives. See the open questions.
 
 The column mapping is one array per template in `modules/finance/src/misa.ts` (`MISA_SME_PURCHASE_SERVICE.columns`,
-`MISA_SME_SALES.columns`, `MISA_SME_CASH_RECEIPT.columns`, `MISA_SME_CASH_PAYMENT.columns`): header text, order and the rule that fills each column. When the partner's real template
+`MISA_SME_PURCHASE_GOODS.columns`, `MISA_SME_SALES.columns`, `MISA_SME_CASH_RECEIPT.columns`, `MISA_SME_CASH_PAYMENT.columns`): header text, order and the rule that fills each column. When the partner's real template
 differs, edit that array and the golden header list in `modules/finance/test/misa.test.ts`; nothing else needs to change.
 
 ## Template versions and sources
@@ -36,9 +40,10 @@ against each other where possible.
 | S6 | `lib/misa-export/Ban_hang_template.xls`, `template_notes.json`, `phieu_chi_notes.json`, `phieu_thu_notes.json` in [duynguyen1105/tt-station-hub](https://github.com/duynguyen1105/tt-station-hub/tree/6cafe35bc3d7faa10137f86d8ae512f2449dd19b/lib/misa-export) | A blank MISA SME.NET "Chứng từ bán hàng" template (sheet `Chứng từ bán hàng`, 49 headers in row 1). We read the file: its cell notes are titled "MISA SME.NET" (51 notes) and give the value codes. The notes of the MISA SME.NET "Phiếu chi" template give the purchase side VAT codes. The notes of the "Phiếu thu" (sheet `Phiếu thu`, 18 columns) and "Phiếu chi" (sheet `Phiếu chi`, 32 columns) templates give their headers, in column order, with value codes and length limits (read on 2026-10-20) | Third-party copy of the MISA file |
 | S7 | `MISA-AUDIT-FULL-V12.md` in [NachaFromMars/supercitadel](https://github.com/NachaFromMars/supercitadel/blob/8f64f35186ebc90587d301fd8e92ff7f6269baa4/MISA-AUDIT-FULL-V12.md) | Header rows of the files in `Template/ImportExcel` of a **MISA SME 2026** installation, including `Ban_hang_VND.xls` and `Chung_tu_mua_dich_vu_chua_thanh_toan_VND.xls` | Third-party listing of the MISA files |
 | S8 | `converter/fixtures/templates/purchase_service.xls` in [dataiyeumenh/ez-format](https://github.com/dataiyeumenh/ez-format/tree/bb01c85f8aaac01c930f14b51bd20a9394f1bb7b/converter/fixtures/templates) | The **MISA AMIS** (not SME) "mua dịch vụ" template, with a sample row: dates `31/01/2020`, `% thuế GTGT` as the number `10` | Third-party copy, other product |
+| S9 | `modules/1ms-print/templates/misa-source/Template/ImportExcel/` in [NachaFromMars/supercitadellab](https://github.com/NachaFromMars/supercitadellab/tree/b0085ff7e25ed6fa604196d6313ca41b8b9510eb/modules/1ms-print/templates/misa-source/Template/ImportExcel), with its manifest `modules/1ms-print/templates/manifests/CHECKSUMS.sha256` | Copies of the shipped files of the same **MISA SME 2026** install as S7. We read `Mua_hang_qua_kho_VND.xls` (SHA-256 `b16d18f3…f0b`, as in the manifest): sheet `Chứng từ mua hàng nhập kho`, 44 headers in row 1, and an input note on each column (data validation prompts) with value codes and length limits. `Chung_tu_mua_dich_vu_chua_thanh_toan_VND.xls` (SHA-256 `02adf1a6…7dfd`, as in the manifest) has the 33 purchase headers below, which confirms S7 for that file (read on 2026-10-25) | Third-party copy of the MISA files |
 
-Sources read on 2026-10-17. Target version: **MISA SME 2026** (S7), with the sales headers matching an older
-MISA SME.NET copy (S6) column for column.
+Sources read on 2026-10-17 (S9 on 2026-10-25). Target version: **MISA SME 2026** (S7, S9), with the sales headers
+matching an older MISA SME.NET copy (S6) column for column.
 
 ## Purchase vouchers: `Chung_tu_mua_dich_vu_chua_thanh_toan_VND.xls`
 
@@ -46,8 +51,11 @@ Crove posts an approved purchase invoice as Nợ expense or asset accounts, Nợ
 **Chứng từ mua dịch vụ, chưa thanh toán** (a purchase not paid yet, not received into a warehouse). The `_VND`
 variant is the one without currency and exchange rate columns; Crove records VND purchases only.
 
-Sheet `Chứng từ mua dịch vụ`, headers in row 1, 33 columns. Header text is **unconfirmed** against a template file:
-it comes from one listing (S7). Headers marked "also in S6" are spelled the same in the confirmed SME templates.
+Sheet `Chứng từ mua dịch vụ`, headers in row 1, 33 columns. **Confirmed** against a copy of the template file itself
+(S9), which has the same 33 headers in the same order as the listing (S7). Headers marked "also in S6" are spelled the
+same in the older SME.NET templates.
+
+Since #1398 this file holds only the lines **not** on a stock account; the goods template below takes the others.
 
 | Header | Crove fills | Header status |
 |---|---|---|
@@ -86,6 +94,79 @@ it comes from one listing (S7). Headers marked "also in S6" are spelled the same
 | Địa chỉ NCC | vendor address (max 255) | S7 only |
 
 Left out on purpose: voided purchase documents (their entry was reversed, #165) and reversal entries.
+
+## Goods purchases: `Mua_hang_qua_kho_VND.xls` (#1398)
+
+A purchase line debited to a stock account (152 materials, 153 tools, 156 goods, or a sub-account of one) is goods
+received into a warehouse. In MISA that is a **Chứng từ mua hàng hóa**, type "Mua hàng trong nước nhập kho", not paid
+yet, with its invoice. Crove posts such a line Nợ 152/153/156, Nợ 1331, Có 331, which is this voucher.
+
+Sheet `Chứng từ mua hàng nhập kho`, headers in row 1, 44 columns. **From the template file itself** (S9); the value
+codes below are the file's own input notes.
+
+| Header | Crove fills | MISA's note (S9) |
+|---|---|---|
+| Hiển thị trên sổ | blank | blank or 2: both books |
+| Hình thức mua hàng | blank | blank or 0: bought in Vietnam; 1: import |
+| Phương thức thanh toán | blank | blank or 0: not paid yet |
+| Nhận kèm hóa đơn | 1 | 1 or blank: received with the invoice; 0: without; 2: no invoice |
+| Ngày hạch toán (*), Ngày chứng từ (*) | journal entry date | |
+| Số phiếu nhập (*) | `CRMH` + last 12 hex digits of the journal entry id (16 characters) | max 20 |
+| Số chứng từ thanh toán | blank | max 20 |
+| Mẫu số HĐ | blank (Crove does not store it) | max 25 |
+| Ký hiệu HĐ | invoice series | max 20 |
+| Số hóa đơn | invoice number, never cut (as in the services file) | max 25 |
+| Ngày hóa đơn | invoice date | |
+| Mã nhà cung cấp | blank (MISA catalog code) | |
+| Tên nhà cung cấp | vendor name | max 128 |
+| Người giao hàng | blank | max 128 |
+| Diễn giải | journal entry description | max 255 |
+| NV mua hàng | blank (MISA catalog code) | |
+| Mã hàng (*) | the org's MISA item code for the line's account (below) | |
+| Tên hàng | line description | max 255 |
+| Kho | the org's MISA warehouse code for the line's account, or blank | |
+| Hàng hóa giữ hộ/bán hộ | blank: the firm's own goods | blank or 0 |
+| TK kho (*) | line debit account (152, 153, 156 or the sub-account) | max 20 |
+| TK công nợ/TK tiền (*) | 331 | max 20 |
+| ĐVT | blank (MISA unit catalog, as in the services file) | |
+| Số lượng, Đơn giá, Thành tiền | line quantity, unit price, amount before VAT, exact; a discount line is negative | max 14 characters each |
+| Tỷ lệ CK, Tiền chiết khấu, Phí hàng về kho/Chi phí mua hàng | blank | |
+| % thuế GTGT, Tỷ lệ tính thuế (Thuế suất KHAC), Tiền thuế GTGT | as in the services file | the same codes |
+| TKĐƯ thuế GTGT | blank | imports only |
+| TK thuế GTGT | 1331 (a stock line is never a fixed asset) | |
+| Nhóm HHDV mua vào | blank (MISA group code) | |
+| Phí trước hải quan, Giá tính thuế NK, % thuế NK, Tiền thuế NK, TK thuế NK, % thuế TTĐB, Tiền thuế TTĐB, TK thuế TTĐB | blank | imports only |
+
+There is no address or tax code column for the vendor in this template: MISA takes them from its vendor catalog.
+
+**Item and warehouse codes.** `Mã hàng (*)` is required and must exist in the firm's MISA catalog; `Kho` names a
+warehouse of it. Each org keeps a small map from stock account to the two codes (`crove_finance.misa_goods_code`,
+Settings > "Mã hàng và mã kho cho MISA"; owners and admins edit it, every member sees it). For a line, Crove takes the
+codes of its own account, else those of its nearest parent that has codes (a sub-account's code starts with its
+parent's), else these defaults:
+
+| Account | Mã hàng | Kho |
+|---|---|---|
+| 152 (nguyên liệu, vật liệu) | `NVL` | `KNVL` |
+| 153 (công cụ, dụng cụ) | `CCDC` | `KCCDC` |
+| 156 (hàng hóa) | `HH` | `KHH` |
+
+The defaults are a naming convention, not MISA's: the firm creates these codes in MISA once, or sets its own in
+Settings (open question 2). A code is letters, digits and `_ . - /`, at most 25 characters; a warehouse code may be
+left out, and the `Kho` cell is then blank.
+
+**An invoice with both stock and other lines** is split, not refused: its stock lines become a goods voucher (`CRMH…`)
+in this file and its other lines a services voucher (`CRMDV…`) in the services file, both with the invoice's series,
+number and date. VAT is spread over all the invoice's lines first (the rule below), so the two vouchers' VAT adds up
+to the invoice's exactly. Reason: MISA records goods into a warehouse and services in two different voucher types,
+each with its own catalog (items with a warehouse, service codes), so one MISA voucher cannot hold both; refusing the
+invoice would leave it out of the books. MISA may warn that the invoice number is already used by the first voucher
+imported; the accountant accepts it (open question 11).
+
+The export records an audit row like the others, with `format: 'misa_sme_goods_purchases'`. The services export's row
+carries `stockLines: 'excluded'` since #1398, so a document's history names a services file only when the document had
+a line in it (a services file made before #1398 held every line). Left out on purpose: voided documents and reversal
+entries, as in the services file.
 
 ## Sales vouchers: `Ban_hang_VND.xls`
 
@@ -172,26 +253,31 @@ The exports record an audit row like the others, with `format: 'misa_sme_cash_re
 
 ## Importing in MISA SME (for the accountant)
 
-1. In Crove, Journal screen: pick the date range, click "Xuất chứng từ mua vào cho MISA".
+1. In Crove, Journal screen: pick the date range, click "Xuất chứng từ mua dịch vụ cho MISA".
 2. In the file, fill **Mã dịch vụ (*)** with the service code the firm uses in MISA (one code down the column is
    enough for most firms), and check any row whose "% thuế GTGT" is blank.
 3. In MISA SME: Tệp > Nhập khẩu từ Excel > Chứng từ > Mua hàng > Chứng từ mua dịch vụ; choose the file, sheet
    `Chứng từ mua dịch vụ`, header row 1; the columns match by name (S2); import as new vouchers.
 4. Imported vouchers are not posted yet: review and post them (Ghi sổ) in MISA.
-5. Sales: the same steps with "Xuất chứng từ bán hàng cho MISA", filling **Mã hàng (*)**, and in MISA Tệp > Nhập khẩu
+5. Goods into stock: first check the codes in Settings > "Mã hàng và mã kho cho MISA" (they must exist in MISA's item
+   and warehouse catalogs). Click "Xuất chứng từ mua hàng nhập kho cho MISA"; in MISA, Tệp > Nhập khẩu từ Excel >
+   Chứng từ > Mua hàng > Chứng từ mua hàng hóa (Mua hàng trong nước nhập kho), sheet `Chứng từ mua hàng nhập kho`,
+   header row 1. Import it before or after the services file of the same period; an invoice with both kinds of lines
+   is in both.
+6. Sales: the same steps with "Xuất chứng từ bán hàng cho MISA", filling **Mã hàng (*)**, and in MISA Tệp > Nhập khẩu
    từ Excel > Chứng từ > Bán hàng > Chứng từ bán hàng, sheet `Chứng từ bán hàng`.
-6. Cash: on the "Thu chi" screen, pick the dates, click "Xuất phiếu thu cho MISA" or "Xuất phiếu chi cho MISA"; in
+7. Cash: on the "Thu chi" screen, pick the dates, click "Xuất phiếu thu cho MISA" or "Xuất phiếu chi cho MISA"; in
    MISA, Tiền mặt > Thu tiền (or Chi tiền) > Nhập từ Excel, sheet `Phiếu thu` (or `Phiếu chi`).
 
 ## Open questions (to settle with the partner's template and one real import)
 
-1. **Template check:** compare the partner's own downloaded template (Tải tệp mẫu) with the purchase headers above,
-   which come from one listing (S7). Which purchase voucher type does the firm use for invoices of goods that go to
-   stock (152, 153, 156)? Those belong in MISA's goods purchase template with a warehouse, which Crove does not
-   produce yet.
+1. **Template check:** compare the partner's own downloaded templates (Tải tệp mẫu) with the purchase headers above
+   (services and goods, both read from copies of the MISA SME 2026 files, S9). Does the firm record goods into stock
+   (152, 153, 156) as "Mua hàng trong nước nhập kho", as Crove now exports them (#1398)?
 2. **Catalog codes:** `Mã dịch vụ (*)` and `Mã hàng (*)` are required and must exist in MISA. Is one generic
-   service code per firm acceptable, or should Crove keep a per-vendor or per-account item code? Should Crove fill
-   `Mã nhà cung cấp` / `Mã khách hàng` (for example with the tax code, if the firm codes partners that way)?
+   service code per firm acceptable? For goods, Crove keeps one item and warehouse code per stock account (Settings,
+   defaults `NVL`/`KNVL`, `CCDC`/`KCCDC`, `HH`/`KHH`): does the firm want per-vendor or per-item codes instead? Should
+   Crove fill `Mã nhà cung cấp` / `Mã khách hàng` (for example with the tax code, if the firm codes partners that way)?
 3. **Payable object:** MISA may require a vendor object on account 331 when posting. If so, vendor codes (question 2)
    become required.
 4. **Payment method:** does a blank "Phương thức thanh toán" mean "not paid" in this template, as in the sales one?
@@ -206,3 +292,6 @@ The exports record an audit row like the others, with `format: 'misa_sme_cash_re
    code (12 Thu hoàn ứng, 21 Tạm ứng nhân viên ...) instead of the default "khác"? Is `CRPT…` / `CRPC…` acceptable?
 10. **Bank vouchers:** to export giấy báo Có and giấy báo Nợ, Crove needs the headers of MISA's deposit templates
     (Tiền gửi > Thu tiền / Chi tiền > Nhập từ Excel > Tải tệp mẫu). A blank copy of each, with no data, is enough.
+11. **Mixed invoices (#1398):** an invoice with both stock and other lines becomes a goods voucher and a services
+    voucher with the same invoice number. Does MISA accept the second one (it may warn about a duplicate invoice
+    number), and does the input VAT listing (bảng kê mua vào) show the invoice correctly on two lines?

@@ -228,6 +228,9 @@ export const KERNEL_ERROR_CODES = [
   'PARENT_TAGGED',
   'PARENT_NOT_DEEPEST',
   'PARTY_NOT_FOUND',
+  // MISA item and warehouse codes of stock accounts (#1398).
+  'NOT_STOCK_ACCOUNT',
+  'MISA_CODE_CONFLICT',
   // Cash and bank vouchers (#327), and bank vouchers made from a statement line (#326).
   'VOUCHER_INVALID',
   'JOURNAL_VOUCHER_INVALID',

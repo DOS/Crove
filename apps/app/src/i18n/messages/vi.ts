@@ -4900,6 +4900,8 @@ export const vi = {
       ACCOUNT_NOT_FOUND: 'Không tìm thấy tài khoản này',
       ACCOUNT_READ_ONLY: 'Tài khoản theo TT133 không sửa hay ngừng dùng được; hãy tạo tài khoản con của nó',
       INVALID_SUB_ACCOUNT_CODE: 'Mã tài khoản con phải bắt đầu bằng mã tài khoản cha, rồi thêm chữ số hoặc dấu chấm và ký hiệu',
+      NOT_STOCK_ACCOUNT: 'Chỉ đặt mã MISA cho tài khoản hàng tồn kho: 152, 153, 156 hoặc tài khoản con của chúng',
+      MISA_CODE_CONFLICT: 'Mã MISA của tài khoản này vừa được người khác lưu; hãy tải lại trang rồi thử lại',
       PARENT_INACTIVE: 'Tài khoản cha đã ngừng sử dụng',
       PARENT_NOT_FOUND: 'Không tìm thấy tài khoản cha',
       PARENT_TAGGED: 'Tài khoản có ký hiệu (như 1121.VCB) không có tài khoản con',

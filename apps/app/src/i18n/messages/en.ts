@@ -4900,6 +4900,8 @@ export const en = {
       ACCOUNT_NOT_FOUND: 'Account not found.',
       ACCOUNT_READ_ONLY: 'TT133 accounts cannot be edited or stopped. Add a sub-account instead.',
       INVALID_SUB_ACCOUNT_CODE: "A sub-account code starts with its parent's code, then adds digits or a dot and a tag.",
+      NOT_STOCK_ACCOUNT: 'MISA codes are set only for stock accounts: 152, 153, 156 or a sub-account of one.',
+      MISA_CODE_CONFLICT: "Someone else just saved this account's MISA codes. Reload the page and try again.",
       PARENT_INACTIVE: 'The parent account is no longer in use.',
       PARENT_NOT_FOUND: 'Parent account not found.',
       PARENT_TAGGED: 'A tagged account (such as 1121.VCB) has no sub-accounts.',
