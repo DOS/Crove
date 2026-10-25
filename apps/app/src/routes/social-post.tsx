@@ -13,7 +13,7 @@ import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
 import { Textarea } from '@crove/ui/components/textarea';
 import { cn } from '@crove/ui/lib/utils';
-import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, TIKTOK_NO_POST_ID, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature, editRefusal } from '@crove/mod-social/contract';
+import { hashtagSuggestions, hashtagsOf, REPOST_HOURS_MAX, REPOST_PROVIDERS, AUTO_REPLY_LIKES_MAX, AUTO_REPLY_RULES, COMMENT_RULES, THREAD_PARTS_MAX, THREAD_RULES, threadPartsOf, COVER_RULES, GBP_CTAS, GBP_LANGUAGES, GBP_TOPICS, gbpOf, POLL_RULES, POST_TYPE_RULES, TOPIC_TAG_RULES, coverKind, coverOf, isProvider, pollDurationOf, pollFlagOf, pollOptionsOf, pollQuestionOf, postTypeOf, REMOVE_READY, sentLink, topicTagOf, utmOf, type Cover, type CoverKind, type Issue, YOUTUBE_CATEGORIES, YOUTUBE_DEFAULT_CATEGORY, YOUTUBE_TAGS_MAX, youtubeTagsLength, YOUTUBE_PLAYLISTS_MAX, youtubePlaylistIdFrom, youtubePlaylistsOf, SENT_TO_APP, TIKTOK_NO_POST_ID, tiktokModeOf, tiktokDisclosureOf, type TikTokDisclosure, TIKTOK_PRIVACY_LEVELS, tiktokCreatorOf, type TikTokInteraction, type TikTokPrivacyLevel, removeAtFit, removeAtOf, WORDPRESS_CATEGORIES_MAX, WORDPRESS_EXCERPT_MAX, WORDPRESS_STATUSES, WORDPRESS_TAGS_MAX, WORDPRESS_DRAFT, WORDPRESS_PENDING, TELEGRAM_PIN_SCOPE, telegramOptionsOf, localTime, REPLY_SETTINGS, replySettingOf, linkedinVisibilities, telegramButtonsOf, TELEGRAM_BUTTON_ROWS_MAX, TELEGRAM_BUTTONS_PER_ROW_MAX, TELEGRAM_BUTTON_TEXT_MAX, isButtonUrl, countText, type TelegramButton, IG_REEL_FEEDS, IG_TRIAL_GRADUATIONS, instagramReelOf, isInstagramReel, variantTexts, wordsForChannel, wordsForChannels, DISCORD_TAGS_MAX, DISCORD_THREAD_NAME_MAX, discordOptionsOf, discordThreadName, isDiscordId, BLUESKY_REPLY_RULES, blueskyQuotesOff, blueskyRepliesOf, type BlueskyReplyRule, DOCUMENT_PROVIDERS, DOCUMENT_TITLE_MAX, documentTitleOf, mediaKindOf, pinterestSectionOf, DUPLICATE_CONTENT, POSSIBLE_DUPLICATE, duplicateText, type DuplicateOf, prefillUtm, signatureText, withChannelSignature, withSignature, editRefusal } from '@crove/mod-social/contract';
 import { LINK_CARD_DESCRIPTION_MAX, LINK_CARD_PROVIDERS, LINK_CARD_THUMB_MAX_BYTES, LINK_CARD_TITLE_MAX, linkCardOf, linkCardSize, type Provider } from '@crove/mod-social/contract';
 import { SOCIAL_RECURRENCE_TIMES_MAX } from '@crove/kernel-contract';
 import { DateInput } from '../components/date-input.tsx';
@@ -355,14 +355,15 @@ type ChannelOptionList = NonNullable<Awaited<ReturnType<typeof client.social.cha
 type ChannelOptionError = NonNullable<ChannelOptionList['error']>;
 
 // A channel's list to pick from (#1120, #1131): asked for once the channel is known, then read while the worker is on
-// it, for about a minute. Only the worker opens the channel's token; the composer reads what it recorded.
-function useChannelOptions(connectionId: string | null) {
+// it, for about a minute. Only the worker opens the channel's token; the composer reads what it recorded. staleMs: how
+// long an answer stands before the composer asks again (a TikTok account's options for minutes, #1497).
+function useChannelOptions(connectionId: string | null, staleMs = 10 * 60_000) {
   const on = connectionId !== null;
   const asked = useQuery({
     queryKey: ['social-channel-options', 'request', connectionId],
     queryFn: () => client.social.channelOptions.request({ connectionId: connectionId as string }),
     enabled: on,
-    staleTime: 10 * 60_000,
+    staleTime: staleMs,
     retry: false,
   });
   const waiting = asked.data?.status === 'pending';
@@ -386,6 +387,14 @@ function useChannelOptions(connectionId: string | null) {
   return { on, asked, latest, ready, options, stalled, reload };
 }
 type ChannelOptions = ReturnType<typeof useChannelOptions>;
+// As long as the server keeps a TikTok account's options fresh (CHANNEL_OPTION_FRESH_MS.tiktok_creator, #1497).
+const TIKTOK_CREATOR_STALE_MS = 5 * 60_000;
+
+// The longest video among a post's files, in seconds; null when none has a known length.
+function longestVideoSeconds(media: readonly { mime: string; durationMs?: number | null | undefined }[]): number | null {
+  const lengths = media.flatMap((m) => (m.mime.startsWith('video/') && typeof m.durationMs === 'number' ? [m.durationMs / 1000] : []));
+  return lengths.length > 0 ? Math.max(...lengths) : null;
+}
 
 // Where a channel's list stands, under its picker: loading, why it failed (with a reload, or how long until one), or
 // that it is empty. The words are the channel's own.
@@ -837,7 +846,9 @@ function TikTokDisclosureField({ settings, photo, disabled, onChange }: { settin
 // TikTok's inbox mode on (CHANNEL_TIKTOK_INBOX, #903). pinAllowed: the Telegram bot may pin in the channel, as read at
 // connect (#982). reel: the post goes out as an Instagram Reel (#1019). photo: the post is photos only (TikTok's
 // disclosure label names a photo or a video, #1078). threadNameDefault: a Discord forum post's name when none is given
-// (#1103), from the post's title or its text's first line.
+// (#1103), from the post's title or its text's first line. videoSeconds: the post's longest video, for a TikTok
+// account's own length limit (#1497). readOnly: a channel that went out or that the person may not edit, whose TikTok
+// block asks TikTok for nothing.
 function ProviderSettings({
   provider,
   settings,
@@ -849,6 +860,8 @@ function ProviderSettings({
   photo = false,
   threadNameDefault = '',
   connectionId = null,
+  readOnly = false,
+  videoSeconds = null,
 }: {
   provider: string;
   settings: Record<string, unknown>;
@@ -860,6 +873,8 @@ function ProviderSettings({
   photo?: boolean;
   threadNameDefault?: string;
   connectionId?: string | null;
+  readOnly?: boolean;
+  videoSeconds?: number | null;
 }) {
   const t = useTranslations('social');
   if (provider === 'pinterest') return <PinterestSettings connectionId={connectionId} settings={settings} onChange={onChange} disabled={disabled} />;
@@ -1068,12 +1083,6 @@ function ProviderSettings({
     );
   }
   if (provider !== 'tiktok') return null;
-  const toggle = (key: 'allowComments' | 'allowDuet' | 'allowStitch') => (
-    <label className="flex items-center gap-2 text-sm text-muted-foreground">
-      <Checkbox checked={settings[key] === true} disabled={disabled} onCheckedChange={(on) => onChange({ ...settings, [key]: on === true })} />
-      {t(`ttToggle.${key}`)}
-    </label>
-  );
   // Posted now, or sent to the TikTok app as a draft (#903). The draft takes no privacy level, interactions, cover or
   // disclosure (#1078; the creator picks them in TikTok), so they are dropped on the switch; direct is the default and
   // is not stored.
@@ -1107,32 +1116,105 @@ function ProviderSettings({
       {inbox ? (
         <p className="text-xs text-subtle-foreground">{t('ttInboxHint')}</p>
       ) : (
-        <>
-          <div className="space-y-1.5">
-            <Label className="text-xs">{t('ttPrivacy')}</Label>
-            <NativeSelect size="sm" className="w-full max-w-xs" value={typeof settings.privacyLevel === 'string' ? settings.privacyLevel : ''} disabled={disabled} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
-              <NativeSelectOption value="">{t('ttPrivacyChoose')}</NativeSelectOption>
-              {(['PUBLIC_TO_EVERYONE', 'MUTUAL_FOLLOW_FRIENDS', 'FOLLOWER_OF_CREATOR', 'SELF_ONLY'] as const).map((p) => {
-                // Branded content cannot be private (TikTok's content sharing guidelines, #1078).
-                const blocked = p === 'SELF_ONLY' && branded && settings.privacyLevel !== 'SELF_ONLY';
-                return (
-                  <NativeSelectOption key={p} value={p} disabled={blocked} title={blocked ? t('ttBrandedPrivate') : undefined}>
-                    {t(`ttPrivacyOption.${p}`)}
-                  </NativeSelectOption>
-                );
-              })}
-            </NativeSelect>
-          </div>
-          {toggle('allowComments')}
-          {toggle('allowDuet')}
-          {toggle('allowStitch')}
-          <TikTokDisclosureField settings={settings} photo={photo} disabled={disabled} onChange={onChange} />
-          <p className="text-xs text-subtle-foreground">{t(branded ? 'ttConsentBranded' : 'ttConsent')}</p>
-        </>
+        <TikTokDirectSettings connectionId={readOnly ? null : connectionId} settings={settings} onChange={onChange} disabled={disabled} photo={photo} branded={branded} videoSeconds={videoSeconds} />
       )}
     </div>
   );
 }
+
+const TIKTOK_TOGGLES = { allowComments: 'comment', allowDuet: 'duet', allowStitch: 'stitch' } as const satisfies Record<string, TikTokInteraction>;
+
+// A post TikTok publishes at once (#412), laid out as TikTok's content sharing guidelines ask (#1497): the account's
+// nickname, a privacy dropdown with no default listing only the levels the account may post with, the interactions the
+// creator turned off greyed out, the account's longest video, and a note when TikTok will not let the account post
+// now. These come from creator_info as the worker read it a few minutes ago (the channel option cache); while it loads
+// or when it fails, the four levels are offered with a note. Publishing reads creator_info again and never trusts it.
+function TikTokDirectSettings({
+  connectionId,
+  settings,
+  onChange,
+  disabled,
+  photo,
+  branded,
+  videoSeconds,
+}: {
+  connectionId: string | null;
+  settings: Record<string, unknown>;
+  onChange: (settings: Record<string, unknown>) => void;
+  disabled: boolean;
+  photo: boolean;
+  branded: boolean;
+  videoSeconds: number | null;
+}) {
+  const t = useTranslations('social');
+  const id = useId();
+  const list = useChannelOptions(connectionId, TIKTOK_CREATOR_STALE_MS);
+  const creator = list.ready ? tiktokCreatorOf(list.options) : null;
+  // Only a list that names its levels narrows the choice; otherwise the four, as before.
+  const narrowed = creator !== null && creator.privacyLevels.length > 0;
+  const levels: readonly TikTokPrivacyLevel[] = narrowed ? creator.privacyLevels : TIKTOK_PRIVACY_LEVELS;
+  const chosen = typeof settings.privacyLevel === 'string' ? settings.privacyLevel : '';
+  const gone = narrowed && chosen !== '' && !(levels as readonly string[]).includes(chosen);
+  // Duet and Stitch do not apply to photos (TikTok's creator_info reference), so a photo post checks comments only.
+  const off = (key: keyof typeof TIKTOK_TOGGLES) => creator !== null && creator.off[TIKTOK_TOGGLES[key]] && (key === 'allowComments' || !photo);
+  const limit = photo ? null : (creator?.maxVideoSeconds ?? null);
+  const tooLong = limit !== null && videoSeconds !== null && videoSeconds > limit;
+  const toggle = (key: keyof typeof TIKTOK_TOGGLES) => (
+    <div className="space-y-0.5">
+      <label className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Checkbox checked={settings[key] === true && !off(key)} disabled={disabled || off(key)} onCheckedChange={(on) => onChange({ ...settings, [key]: on === true })} />
+        {t(`ttToggle.${key}`)}
+      </label>
+      {off(key) && <p className="pl-6 text-xs text-subtle-foreground">{t('ttTurnedOff')}</p>}
+    </div>
+  );
+  return (
+    <>
+      {creator?.nickname && <p className="text-sm font-medium break-words">{t('ttHeading', { nickname: creator.nickname })}</p>}
+      {/* A daily cap passes; a ban is TikTok's to lift, so it is not told to try again (creator_info reference). */}
+      {creator?.cannotPost && <p className="text-xs text-warning">{t(creator.cannotPost === 'spam_risk_user_banned_from_posting' ? 'ttBanned' : 'ttCannotPost')}</p>}
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-privacy`} className="text-xs">
+          {t('ttPrivacy')}
+        </Label>
+        <NativeSelect id={`${id}-privacy`} size="sm" className="w-full max-w-xs" value={chosen} disabled={disabled} aria-invalid={gone || undefined} onChange={(e) => onChange({ ...settings, privacyLevel: e.target.value })}>
+          <NativeSelectOption value="">{t('ttPrivacyChoose')}</NativeSelectOption>
+          {/* A level saved earlier that the account no longer offers stays listed, so the choice shows as invalid. */}
+          {gone && <NativeSelectOption value={chosen}>{isTikTokPrivacy(chosen) ? t(`ttPrivacyOption.${chosen}`) : chosen}</NativeSelectOption>}
+          {levels.map((p) => {
+            // Branded content cannot be private (TikTok's content sharing guidelines, #1078).
+            const blocked = p === 'SELF_ONLY' && branded && settings.privacyLevel !== 'SELF_ONLY';
+            return (
+              <NativeSelectOption key={p} value={p} disabled={blocked} title={blocked ? t('ttBrandedPrivate') : undefined}>
+                {t(`ttPrivacyOption.${p}`)}
+              </NativeSelectOption>
+            );
+          })}
+        </NativeSelect>
+        {gone && <p className="text-xs text-destructive">{t('ttPrivacyGone')}</p>}
+        <ChannelOptionsState
+          list={list}
+          disabled={disabled}
+          words={{
+            loading: t('ttCreatorLoading'),
+            empty: t('ttCreatorFailed'),
+            failed: () => t('ttCreatorFailed'),
+            reload: t('channelOptionsReload'),
+            retryLater: (minutes) => t('channelOptionsRetryLater', { minutes }),
+          }}
+        />
+      </div>
+      {toggle('allowComments')}
+      {toggle('allowDuet')}
+      {toggle('allowStitch')}
+      {tooLong && <p className="text-xs text-warning">{t('ttVideoTooLong', { actual: Math.ceil(videoSeconds), limit })}</p>}
+      <TikTokDisclosureField settings={settings} photo={photo} disabled={disabled} onChange={onChange} />
+      <p className="text-xs text-subtle-foreground">{t(branded ? 'ttConsentBranded' : 'ttConsent')}</p>
+    </>
+  );
+}
+
+const isTikTokPrivacy = (value: string): value is TikTokPrivacyLevel => (TIKTOK_PRIVACY_LEVELS as readonly string[]).includes(value);
 
 // The time of a video's frame, in seconds as typed; the cover keeps whole milliseconds.
 function FrameInput({ atMs, maxMs, disabled, onChange }: { atMs: number; maxMs: number | null; disabled: boolean; onChange: (atMs: number) => void }) {
@@ -2103,6 +2185,7 @@ function ChannelEditor({
   own,
   onChange,
   disabled,
+  readOnly = false,
   status,
   statusError,
   footer,
@@ -2123,6 +2206,8 @@ function ChannelEditor({
   own: Own;
   onChange: (own: Own) => void;
   disabled: boolean;
+  // A channel that went out or that the person may not edit (not a save in progress): it reads no live options.
+  readOnly?: boolean;
   status?: VariantStatus;
   // The variant's error or note (#903: SENT_TO_APP on a draft sent to the TikTok app), for its status label.
   statusError?: { code: string | null } | null;
@@ -2315,6 +2400,8 @@ function ChannelEditor({
         photo={content.media.length > 0 && content.media.every((m) => m.mime.startsWith('image/'))}
         threadNameDefault={provider === 'discord' ? discordThreadName(null, content.title || null, content.body) : ''}
         connectionId={connectionId ?? null}
+        readOnly={readOnly}
+        videoSeconds={longestVideoSeconds(content.media)}
         onChange={(settings) => onChange({ ...own, settings })}
       />
       <CoverField provider={provider} media={content.media} settings={own.settings} disabled={disabled} onChange={(settings) => onChange({ ...own, settings })} />
@@ -4224,6 +4311,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
                 scopes={grants.get(v.connectionId) ?? []}
                 onAiUsed={() => setAiUsed(true)}
                 disabled={frozen || !canWrite || save.isPending}
+                readOnly={frozen || !canWrite}
                 status={v.status}
                 statusError={v.error}
                 onChange={(next) => setOwn({ ...own, [v.id]: next })}
