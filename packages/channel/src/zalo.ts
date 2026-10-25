@@ -395,18 +395,24 @@ export class ZaloOaPublisher implements Publisher {
   // is unknown, and the job reconciles through getslice before anything is tried again.
   private async publishVideo(input: PublishInput, accessToken: string): Promise<PublishResult> {
     const { media } = input.content;
+    // One budget for the reads, the upload and the wait, ending well before the job gives up on the call
+    // (callTimeoutMs): past it nothing is visible yet, so the call stops as transient instead of creating an article
+    // after the job recorded unknown.
+    const budgetEnd = Date.now() + this.budgetMs;
     const video: PublishMedia | undefined = media[0];
     if (!video || media.length !== 1) return { kind: 'rejected', error: 'bad_request', code: 'ONE_VIDEO_REQUIRED' };
-    // Zalo takes MP4 and AVI; a QuickTime file would be refused after its upload.
-    if (video.mime !== 'video/mp4') return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TYPE' };
+    // Zalo takes MP4 and AVI; a QuickTime file would be refused after its upload. The validator compares in lower case.
+    if (video.mime.toLowerCase() !== 'video/mp4') return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TYPE' };
     if (video.sizeBytes > VIDEO_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TOO_LARGE' };
     if (!(input.content.title ?? '').trim()) return { kind: 'rejected', error: 'bad_request', code: 'TITLE_REQUIRED' };
     // The thumbnail is required: the variant's cover image (#642), fetched by Zalo from a public URL like the images.
     const cover = videoCoverOf(input.settings);
     if (!cover) return { kind: 'rejected', error: 'bad_request', code: 'ZALO_VIDEO_COVER_REQUIRED' };
     if (!('fileId' in cover)) return { kind: 'rejected', error: 'bad_request', code: 'COVER_NOT_SUPPORTED' };
-    const avatar = await input.mediaUrl(cover.fileId).catch(() => null);
-    if (!avatar) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
+    // Asked here only to learn that the storage can give one (local disk cannot) before anything is uploaded: a presigned
+    // URL lives a minute, far less than the upload and the wait, so the one Zalo fetches is asked for again right before
+    // article/create.
+    if (!(await input.mediaUrl(cover.fileId).catch(() => null))) return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_URL_UNAVAILABLE' };
     let bytes: Uint8Array;
     try {
       bytes = await input.readMedia(video.fileId);
@@ -414,15 +420,12 @@ export class ZaloOaPublisher implements Publisher {
       return { kind: 'rejected', error: 'bad_request', code: 'MEDIA_UNREADABLE' };
     }
     if (bytes.byteLength > VIDEO_MAX_BYTES) return { kind: 'rejected', error: 'bad_request', code: 'VIDEO_TOO_LARGE' };
-    // One budget for the upload and the wait, ending well before the job gives up on the call (callTimeoutMs): past it
-    // nothing is visible yet, so the call stops as transient instead of creating an article after the job recorded
-    // unknown.
-    const budgetEnd = Date.now() + this.budgetMs;
     const processing = (): PublishResult => ({ kind: 'rejected', error: 'transient', code: 'ZALO_VIDEO_PROCESSING' });
     let videoId: string;
     try {
       const form = new FormData();
-      form.set('file', new Blob([new Uint8Array(bytes)], { type: video.mime }), 'video.mp4');
+      // The bytes as they are, not another copy of up to 50 MB.
+      form.set('file', new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'video/mp4' }), 'video.mp4');
       const upload = await this.client.api<VideoTokenAnswer>('POST', 'article/upload_video/preparevideo', accessToken, { multipart: form, timeoutMs: VIDEO_UPLOAD_TIMEOUT_MS });
       if (typeof upload?.token !== 'string' || !upload.token) return { kind: 'rejected', error: 'transient', code: 'NO_VIDEO_TOKEN' };
       const uploadToken = upload.token;
@@ -445,6 +448,9 @@ export class ZaloOaPublisher implements Publisher {
       return beforeArticle(zaloPublishResult(error));
     }
     if (Date.now() >= budgetEnd) return processing();
+    // A fresh URL for the thumbnail, fetched by Zalo right after the call that names it; nothing is visible yet.
+    const avatar = await input.mediaUrl(cover.fileId).catch(() => null);
+    if (!avatar) return { kind: 'rejected', error: 'transient', code: 'MEDIA_URL_UNAVAILABLE' };
     let token: string;
     try {
       const answer = await this.client.api<CreateAnswer>('POST', 'article/create', accessToken, { json: videoArticleOf(input, videoId, avatar) });

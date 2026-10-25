@@ -294,6 +294,32 @@ describe('ZaloOaPublisher video articles', () => {
     expect(calls[4]?.json).toEqual({ token: 'tok-v1' });
   });
 
+  it('asks for the thumbnail URL again right before article/create, since a presigned URL lives a minute (#1429 review)', async () => {
+    const { fetchImpl, calls } = zalo({
+      [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-5' } } }],
+      [CHECK]: [converting, ready],
+      [CREATE]: [{ body: { error: 0, data: { token: 'tok-v5' } } }],
+      [VERIFY]: [{ body: { error: 0, data: { id: 'art-v5' } } }],
+    });
+    // Each URL names how many Zalo calls were made before it was asked for.
+    const minted: string[] = [];
+    const mediaUrl = async (fileId: string) => {
+      const url = `https://bucket.example/${fileId}?after=${calls.length}`;
+      minted.push(url);
+      return url;
+    };
+    expect(await new ZaloOaPublisher(APP, fetchImpl, fast).publish(input({ mediaUrl }))).toEqual({ kind: 'accepted', externalId: 'art-v5', url: null });
+    // One check before the upload, one after the video is ready; the article names the second.
+    expect(minted).toEqual(['https://bucket.example/c-1?after=0', 'https://bucket.example/c-1?after=3']);
+    expect(calls[3]?.json).toMatchObject({ avatar: 'https://bucket.example/c-1?after=3' });
+    // A URL the storage cannot give by then is transient: nothing is visible yet.
+    const again = zalo({ [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-6' } } }], [CHECK]: [ready] });
+    let asked = 0;
+    const gone = async (fileId: string) => (++asked === 1 ? `https://bucket.example/${fileId}` : null);
+    expect(await new ZaloOaPublisher(APP, again.fetchImpl, fast).publish(input({ mediaUrl: gone }))).toEqual({ kind: 'rejected', error: 'transient', code: 'MEDIA_URL_UNAVAILABLE' });
+    expect(again.calls.some((c) => c.route === CREATE)).toBe(false);
+  });
+
   it('cuts the description to 300 characters and turns comments off when settings.comments is false', async () => {
     const { fetchImpl, calls } = zalo({
       [UPLOAD]: [{ body: { error: 0, data: { token: 'vtok-2' } } }],
