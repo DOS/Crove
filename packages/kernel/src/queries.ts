@@ -40,6 +40,7 @@ import { proposalReminderQueries } from './proposal-reminders.ts';
 import { mayResubmit, resubmitSource } from './proposal-resubmit.ts';
 import { taxCalendarQueries } from './tax-calendar.ts';
 import { legalEntityQueries } from './legal-entities.ts';
+import { myPermissions, roleQueries } from './roles.ts';
 import { calendarQueries } from './calendar.ts';
 import { partyQueries } from './parties.ts';
 import { usageQueries } from './usage-limits.ts';
@@ -93,6 +94,8 @@ export function orgDetailQuery(options: OrgDetailOptions) {
         inboundAddress: seesInbound ? `${tenant.inbound_token}@${options.inboundDomain}` : null,
         inboundDroppedCount,
         members: members.map((m) => ({ userId: m.user_id, email: m.email, displayName: m.display_name, role: m.role })),
+        // What the signed-in member holds through org-wide role assignments (#1279).
+        permissions: await myPermissions(ctx),
       };
     },
   });
@@ -434,5 +437,5 @@ export const streamCheck = defineQuery({
 
 // overview: the home screen's figures of the modules this deployment enables (#1261), from the composition root.
 export function kernelQueries(options: OrgDetailOptions & { overview?: readonly OverviewContribution[] }) {
-  return [orgDetailQuery(options), orgOverviewQuery({ contributions: options.overview ?? [] }), streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...taxCalendarQueries, ...legalEntityQueries, ...calendarQueries, ...timelineQueries, ...auditLogQueries, ...personalDataQueries, ...partyQueries, ...notificationQueries, ...usageQueries];
+  return [orgDetailQuery(options), orgOverviewQuery({ contributions: options.overview ?? [] }), streamCheck, inboxList, inboxGet, filesRecent, fileGet, ...archiveQueries, sessionsList, ...inviteQueries, ...offboardingQueries, ...agentQueries, ...channelQueries, ...mailQueries, ...proposalReminderQueries, ...taxCalendarQueries, ...legalEntityQueries, ...roleQueries, ...calendarQueries, ...timelineQueries, ...auditLogQueries, ...personalDataQueries, ...partyQueries, ...notificationQueries, ...usageQueries];
 }

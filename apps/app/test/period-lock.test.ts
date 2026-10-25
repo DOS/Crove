@@ -7,6 +7,9 @@ describe('period lock helpers', () => {
   it('lets owners and admins lock, and only owners unlock', () => {
     expect(['owner', 'admin', 'member', 'viewer', null].map((r) => canLockPeriods(r))).toEqual([true, true, false, false, false]);
     expect(['owner', 'admin', 'member', 'viewer', undefined].map((r) => canUnlockPeriods(r))).toEqual([true, false, false, false, false]);
+    // A chief accountant (#1279, ADR-0021).
+    expect(canUnlockPeriods('member', ['finance.period.unlock'])).toBe(true);
+    expect(canUnlockPeriods('admin', ['finance.proposal.approve'])).toBe(false);
   });
 
   it('steps back a month across the year and writes it as Vietnamese accounting does', () => {
