@@ -16,7 +16,7 @@ describe('amount input', () => {
   });
 
   it('leaves what is not a whole amount as typed, and an empty field empty', () => {
-    for (const typed of ['', '12a', '-3000', '1.5e3']) expect(groupAmount(typed, 'vi'), typed).toBe(typed);
+    for (const typed of ['', '12a', '-3000', '1.5e3', '12.34', '1,5']) expect(groupAmount(typed, 'vi'), typed).toBe(typed);
   });
 
   it('groups to a value the form reads back as the same digits', () => {
