@@ -137,6 +137,18 @@ export const en = {
     loading: 'Counting what waits',
     taxSubtitle: "This organization's returns, payments and reports due in the next 30 days, and overdue ones not yet marked done.",
     vatNext: 'The VAT return for {period} is due on',
+    // One card per installed app (#1528).
+    apps: {
+      title: 'Apps',
+      open: 'Open {app}',
+      accounting: {
+        vatDue: '{days, plural, one {day} other {days}} until the VAT return for {period} is due',
+        vatOverdue: '{days, plural, one {day} other {days}} overdue: the VAT return for {period}',
+        noPeriod: 'No VAT filing period chosen',
+      },
+      social: { scheduled: '{count, plural, one {post scheduled} other {posts scheduled}} in the next 7 days' },
+      crm: { upcoming: '{count, plural, one {upcoming booking} other {upcoming bookings}} of yours' },
+    },
     waiting: {
       title: 'Waiting for you',
       empty: 'Nothing is waiting for you',
