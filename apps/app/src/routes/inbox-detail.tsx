@@ -23,6 +23,7 @@ import { invoiceCheckMessage } from '../lib/invoice-checks.ts';
 import { parseExchangeRate } from '../lib/exchange-rate.ts';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { journalVoucherProblem } from '../lib/journal-voucher.ts';
+import { toast } from '../lib/toast.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
 import { partySearch } from '../lib/parties.ts';
 import { nextPendingId, previousPendingId } from '../lib/review.ts';
@@ -339,13 +340,16 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   );
   const accountName = (code: string) => accounts.data?.find((a) => a.code === code)?.name ?? '';
 
-  const done = async () => {
+  // The decision is said on the Inbox the reviewer goes back to (#1384), in the verb of its button.
+  const done = async (said: string) => {
+    toast(said);
     await queryClient.invalidateQueries();
     await navigate({ to: '/o/$slug/inbox', params: { slug } });
   };
-  const approve = useMutation(orpc.inbox.approve.mutationOptions({ onSuccess: done }));
+  const partyName = () => (sale ? payload?.buyer.name : payload?.seller.name) || detail.data?.title || '';
+  const approve = useMutation(orpc.inbox.approve.mutationOptions({ onSuccess: () => done(t('approvedToast', { name: partyName() })) }));
   const stepUp = isStepUpRequired(approve.error);
-  const reject = useMutation(orpc.inbox.reject.mutationOptions({ onSuccess: done }));
+  const reject = useMutation(orpc.inbox.reject.mutationOptions({ onSuccess: () => done(t('rejectedToast', { name: partyName() })) }));
   // Saving an edit creates a new revision authored by this user; the page then reloads the server's decision.
   const edit = useMutation(
     orpc.inbox.edit.mutationOptions({

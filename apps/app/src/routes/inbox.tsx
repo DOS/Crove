@@ -20,6 +20,7 @@ import { getConfig } from '../lib/auth.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { REVERSAL_KIND } from '../lib/reversal.ts';
 import { providerName } from '../lib/social.ts';
+import { toast } from '../lib/toast.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
 import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, showMatched, type BulkBatch, type BulkProgress } from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
@@ -278,6 +279,12 @@ export function InboxPage() {
     </div>
   );
 
+  // The browser may refuse the clipboard: say so, and the address stays on screen to select (#1384).
+  const copyAddress = (address: string) =>
+    void navigator.clipboard.writeText(address).then(
+      () => toast(t('addressCopied')),
+      () => toast(t('copyRefused'), 'error'),
+    );
   const dropTarget = {
     onDragOver: (e: DragEvent) => {
       e.preventDefault();
@@ -331,7 +338,7 @@ export function InboxPage() {
             <div className="flex min-w-0 flex-wrap items-center gap-2 sm:ml-auto">
               <span className="text-xs text-subtle-foreground">{t('forwardTo')}</span>
               <span className="min-w-0 font-mono text-xs break-all text-foreground">{org.data.inboundAddress}</span>
-              <Button variant="outline" size="sm" onClick={() => void navigator.clipboard.writeText(org.data?.inboundAddress ?? '')}>
+              <Button variant="outline" size="sm" onClick={() => copyAddress(org.data?.inboundAddress ?? '')}>
                 {t('copyAddress')}
               </Button>
             </div>
@@ -362,7 +369,7 @@ export function InboxPage() {
             ) : org.data?.inboundAddress ? (
               <>
                 <p className="mt-2 font-mono text-sm break-all text-foreground">{org.data.inboundAddress}</p>
-                <Button variant="outline" size="lg" className="mt-3" onClick={() => void navigator.clipboard.writeText(org.data?.inboundAddress ?? '')}>
+                <Button variant="outline" size="lg" className="mt-3" onClick={() => copyAddress(org.data?.inboundAddress ?? '')}>
                   {t('copyAddress')}
                 </Button>
               </>
