@@ -13,9 +13,112 @@ export function isFixedAssetAccount(code: string): boolean {
 }
 export const FIXED_ASSET_THRESHOLD = '30000000';
 
+// What chose a line's account (#1399), shown on the line: a learned rule (crove_finance.categorization_rule), the
+// vendor's default account, the built-in keyword list, or a user who picked it on a revision.
+const ACCOUNT_RULE_SOURCES = ['learned', 'vendor_default', 'builtin', 'user'] as const;
+export type AccountRuleSource = (typeof ACCOUNT_RULE_SOURCES)[number];
+const RULE_MATCH_KINDS = ['description', 'keyword'] as const;
+export type RuleMatchKind = (typeof RULE_MATCH_KINDS)[number];
+export interface AccountRule {
+  source: AccountRuleSource;
+  // A learned rule: its id, whether it is the vendor's own or applies to every vendor, and what it matched.
+  ruleId?: string | undefined;
+  scope?: 'vendor' | 'org' | undefined;
+  matchKind?: RuleMatchKind | undefined;
+}
+
 export interface AccountSuggestion {
   account: string;
   reason: string;
+  rule: AccountRule;
+}
+
+// A learned rule as the suggestion reads it: `text` is in normalized form (normalizeRuleText), `vendor` is true for a
+// rule of this invoice's vendor and false for one that applies to every vendor.
+export interface LearnedRule {
+  id: string;
+  vendor: boolean;
+  kind: RuleMatchKind;
+  text: string;
+  label: string | null;
+  account: string;
+}
+
+// The longest text a rule matches (the database CHECK on crove_finance.categorization_rule.match_text says the same).
+export const RULE_TEXT_MAX = 200;
+
+// The form rules are matched in: lower case, Vietnamese marks stripped and đ read as d, every character other than an
+// ASCII letter or digit a separator, single spaces. Matching is plain string comparison on this form, so no pattern
+// built from user input is ever compiled.
+export function normalizeRuleText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .replace(/đ/g, 'd')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+// At most RULE_TEXT_MAX characters, cut at a word boundary when there is one.
+function cutWords(text: string): string {
+  if (text.length <= RULE_TEXT_MAX) return text;
+  const cut = text.slice(0, RULE_TEXT_MAX + 1);
+  const space = cut.lastIndexOf(' ');
+  return (space > 0 ? cut.slice(0, space) : text.slice(0, RULE_TEXT_MAX)).trim();
+}
+
+// The text a description rule learns from a line, or null when too little is left. Words with a digit are dropped
+// (a month, an invoice or contract number, a quantity), so next month's "Cước internet tháng 11/2026" is the same item
+// as this month's "Cước internet tháng 10/2026".
+export function descriptionRuleText(description: string): string | null {
+  const words = normalizeRuleText(description)
+    .split(' ')
+    .filter((w) => w.length > 0 && !/[0-9]/.test(w));
+  const text = cutWords(words.join(' '));
+  return text.length >= 2 ? text : null;
+}
+
+// The text of a keyword rule as a member typed it, or null when too little is left.
+export function keywordRuleText(keyword: string): string | null {
+  const text = cutWords(normalizeRuleText(keyword));
+  return text.length >= 2 ? text : null;
+}
+
+// The rule of one scope (the vendor's own, or every vendor's) that matches a line: a description rule for the same item
+// first, then the keyword rule whose words appear in the description as whole words, the longest keyword winning and
+// the first in `rules` order on a tie (the lookup orders them by when they were confirmed, newest first).
+export function matchLearnedRule(description: string, rules: readonly LearnedRule[], vendor: boolean): LearnedRule | null {
+  const item = descriptionRuleText(description);
+  if (item !== null) {
+    const same = rules.find((r) => r.vendor === vendor && r.kind === 'description' && r.text === item);
+    if (same) return same;
+  }
+  const words = ` ${normalizeRuleText(description)} `;
+  let best: LearnedRule | null = null;
+  for (const rule of rules) {
+    if (rule.vendor !== vendor || rule.kind !== 'keyword') continue;
+    if (best !== null && rule.text.length <= best.text.length) continue;
+    if (words.includes(` ${rule.text} `)) best = rule;
+  }
+  return best;
+}
+
+function learnedSuggestion(rule: LearnedRule): AccountSuggestion {
+  const shown = rule.label?.trim() || rule.text;
+  const reason =
+    rule.kind === 'description'
+      ? rule.vendor
+        ? 'Theo quy tắc đã học: cùng mặt hàng của nhà cung cấp này'
+        : 'Theo quy tắc đã học: cùng mặt hàng'
+      : rule.vendor
+        ? `Theo quy tắc đã học: từ khóa "${shown}" của nhà cung cấp này`
+        : `Theo quy tắc đã học: từ khóa "${shown}"`;
+  return {
+    account: rule.account,
+    reason: reason.slice(0, 500),
+    rule: { source: 'learned', ruleId: rule.id, scope: rule.vendor ? 'vendor' : 'org', matchKind: rule.kind },
+  };
 }
 
 const RULES: Array<{ account: string; pattern: RegExp; reason: string }> = [
@@ -32,15 +135,24 @@ const RULES: Array<{ account: string; pattern: RegExp; reason: string }> = [
 
 const ASSET_PATTERN = /máy|thiết bị|xe |ô tô|laptop|máy tính|server|điều hòa/i;
 
-export function suggestDebitAccount(line: InvoiceLine, vendorDefault: string | null): AccountSuggestion {
-  if (vendorDefault) return { account: vendorDefault, reason: 'Theo lần duyệt trước của nhà cung cấp này' };
+// The account proposed for a line (#1399), most specific first: a learned rule of this vendor (the same item, then a
+// keyword), the vendor's default account, a learned rule for every vendor, then the built-in keyword list. The
+// vendor's own rules come before its default: the default is one account for the whole vendor, and a vendor that sells
+// both goods and services needs its lines told apart.
+export function suggestDebitAccount(line: InvoiceLine, vendorDefault: string | null, rules: readonly LearnedRule[] = []): AccountSuggestion {
+  const own = matchLearnedRule(line.description, rules, true);
+  if (own) return learnedSuggestion(own);
+  if (vendorDefault) return { account: vendorDefault, reason: 'Theo lần duyệt trước của nhà cung cấp này', rule: { source: 'vendor_default' } };
+  const shared = matchLearnedRule(line.description, rules, false);
+  if (shared) return learnedSuggestion(shared);
+  const builtin = { source: 'builtin' } as const;
   if (ASSET_PATTERN.test(line.description) && money(line.amount).greaterThanOrEqualTo(FIXED_ASSET_THRESHOLD)) {
-    return { account: '211', reason: 'Giá trị từ 30 triệu, có thể là tài sản cố định' };
+    return { account: '211', reason: 'Giá trị từ 30 triệu, có thể là tài sản cố định', rule: builtin };
   }
   for (const rule of RULES) {
-    if (rule.pattern.test(line.description)) return { account: rule.account, reason: rule.reason };
+    if (rule.pattern.test(line.description)) return { account: rule.account, reason: rule.reason, rule: builtin };
   }
-  return { account: '6422', reason: 'Mặc định chi phí quản lý doanh nghiệp' };
+  return { account: '6422', reason: 'Mặc định chi phí quản lý doanh nghiệp', rule: builtin };
 }
 
 export interface ProposedLine {
@@ -53,6 +165,8 @@ export interface ProposedLine {
   vatRate: string | null;
   debitAccount: string;
   reason: string;
+  // What chose debitAccount (#1399); absent on proposals made before.
+  accountRule?: AccountRule | undefined;
 }
 
 export interface JournalLineDraft {
@@ -64,11 +178,11 @@ export interface JournalLineDraft {
 }
 
 // Lines that carry value for bookkeeping (notes and promotions with no amount are dropped).
-export function bookableLines(invoice: ParsedInvoice, vendorDefault: string | null): ProposedLine[] {
+export function bookableLines(invoice: ParsedInvoice, vendorDefault: string | null, rules: readonly LearnedRule[] = []): ProposedLine[] {
   return invoice.lines
     .filter((l) => !money(lineContribution(l)).isZero())
     .map((l) => {
-      const suggestion = suggestDebitAccount(l, vendorDefault);
+      const suggestion = suggestDebitAccount(l, vendorDefault, rules);
       return {
         lineNo: l.lineNo,
         description: l.description,
@@ -79,6 +193,7 @@ export function bookableLines(invoice: ParsedInvoice, vendorDefault: string | nu
         vatRate: l.vatRate,
         debitAccount: suggestion.account,
         reason: suggestion.reason,
+        accountRule: suggestion.rule,
       };
     });
 }
@@ -146,7 +261,7 @@ export const VAT_OUTPUT = '3331';
 
 // Every line of a sale is proposed to 511; the accountant may pick a sub-account (5111 goods, 5113 services) per line.
 export function bookableSaleLines(invoice: ParsedInvoice): ProposedLine[] {
-  return bookableLines(invoice, REVENUE_ACCOUNT).map((l) => ({ ...l, reason: 'Doanh thu bán hàng và cung cấp dịch vụ' }));
+  return bookableLines(invoice, REVENUE_ACCOUNT).map((l) => ({ ...l, reason: 'Doanh thu bán hàng và cung cấp dịch vụ', accountRule: { source: 'builtin' } }));
 }
 
 // Sale on credit: Cr revenue per account (a net discount becomes a debit), Cr output VAT, Dr receivable (131) for the

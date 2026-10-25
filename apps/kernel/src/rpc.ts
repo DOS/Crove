@@ -1545,6 +1545,17 @@ export function createRpcHandler(runtime: Runtime, sendInviteMail?: SendInviteMa
         inFinance(context, (orgId, actor) => runtime.execute('finance.account.update', input, { actor, orgId })),
       ),
     },
+    accountRules: {
+      list: os.accountRules.list.handler(({ context }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.categorization_rules.list', {}, { actor, orgId })),
+      ),
+      create: os.accountRules.create.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.categorization_rule.create', input, { actor, orgId })),
+      ),
+      remove: os.accountRules.remove.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.execute('finance.categorization_rule.remove', input, { actor, orgId })),
+      ),
+    },
     vat: {
       period: os.vat.period.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.vat.period', input, { actor, orgId })),

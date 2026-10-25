@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { sql, type RawBuilder } from 'kysely';
 import { z } from 'zod';
 import type { Db, MemberRole } from '@crove/db';
-import { zId, zInviteRole, zInviteToken } from '@crove/kernel-contract';
+import { zId, zInviteLegalEntityIds, zInviteRole, zInviteToken } from '@crove/kernel-contract';
 import { DomainError, defineCommand, defineQuery, type CommandContext, type SessionStatusSource } from '@crove/kernel-runtime';
 import { createMailMessage, type DirectMail } from './mail.ts';
 import { memberProfiles } from './profiles.ts';
@@ -68,6 +68,8 @@ const INVITE_ERRORS: Record<string, DomainError> = {
   INVITE_USED: new DomainError('INVITE_USED', 409, 'Lời mời này đã được sử dụng'),
   INVITE_REVOKED: new DomainError('INVITE_REVOKED', 409, 'Lời mời này đã bị thu hồi'),
   INVITE_EXPIRED: new DomainError('INVITE_EXPIRED', 409, 'Lời mời này đã hết hạn, hãy nhờ người mời gửi lại'),
+  // A scoped invite (#1281) whose inviter is no longer an owner, or one of whose legal entities was removed.
+  INVITE_SCOPE_STALE: new DomainError('INVITE_SCOPE_STALE', 409, 'Lời mời này không còn dùng được vì phạm vi pháp nhân đã thay đổi; hãy nhờ chủ sở hữu mời lại'),
 };
 
 // The JSON DETAIL of INVITE_RATE_LIMITED (crove_kernel.invite_mail_gate, #185): which limit refused. The refusal for
@@ -220,7 +222,7 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
   }
   return defineCommand({
     name: 'kernel.member.invite.create',
-    input: z.object({ email: z.email().max(320), role: zInviteRole }),
+    input: z.object({ email: z.email().max(320), role: zInviteRole, legalEntityIds: zInviteLegalEntityIds.optional() }),
     risk: 'R3',
     access: ADMINS,
     handler: async (ctx, input) => {
@@ -231,6 +233,22 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
       if (role !== 'owner' && role !== 'admin') throw new DomainError('FORBIDDEN', 403, 'Vai trò của bạn không được mời thành viên');
       // Only owners may grant admin rights.
       if (input.role === 'admin' && role !== 'owner') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới mời được quản trị viên');
+      // A scoped invite (#1281) grants role assignments on accept, which only owners give (plan §4.6); an owner or admin
+      // sees every entity whatever they hold, so a scope never goes with admin. member_invite_scope_guard checks the same.
+      const legalEntityIds = input.legalEntityIds ?? null;
+      if (legalEntityIds) {
+        if (role !== 'owner') throw new DomainError('INVITE_SCOPE_OWNER_ONLY', 403, 'Chỉ chủ sở hữu mới mời được người làm việc với một số pháp nhân');
+        if (input.role === 'admin') {
+          throw new DomainError('ROLE_SCOPE_NOT_FOR_ADMINS', 422, 'Chủ sở hữu và quản trị viên luôn xem được mọi pháp nhân, nên không giới hạn theo pháp nhân được');
+        }
+        const found = await ctx.trx
+          .selectFrom('crove_kernel.legal_entity')
+          .select('id')
+          .where('org_id', '=', ctx.orgId)
+          .where('id', 'in', legalEntityIds)
+          .execute();
+        if (found.length !== legalEntityIds.length) throw new DomainError('LEGAL_ENTITY_NOT_FOUND', 422, 'Không tìm thấy pháp nhân này trong tổ chức');
+      }
       const email = normalizeEmail(input.email);
 
       // Members of this org are visible to the inviter anyway (kernel.org.get), so this reveals nothing new. Their
@@ -285,6 +303,7 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
           role: input.role,
           token_sha256: inviteTokenHash(token),
           invited_by: actorId,
+          legal_entity_ids: legalEntityIds,
           // The database's clock, the clock of the daily window (#270), not ctx.now. The expiry stays ctx.now plus the
           // TTL; only an API clock more than the TTL behind would make it precede the database's clock, and then the
           // invite is born expired and dated just before its expiry, so the row stays valid (expires_at > created_at).
@@ -302,8 +321,15 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
         status: 'sending',
         messageIdDomain: mail.messageIdDomain,
       });
-      ctx.audit({ invite_id: invite.id, role: input.role, replaced: replaced.map((r) => r.id), mail: message.status });
-      await ctx.activity('kernel.member_invite', invite.id, 'invite.created', `Mời ${email} tham gia với vai trò ${ROLE_LABEL[input.role]}`);
+      ctx.audit({ invite_id: invite.id, role: input.role, legal_entity_ids: legalEntityIds, replaced: replaced.map((r) => r.id), mail: message.status });
+      await ctx.activity(
+        'kernel.member_invite',
+        invite.id,
+        'invite.created',
+        legalEntityIds
+          ? `Mời ${email} tham gia với vai trò ${ROLE_LABEL[input.role]}, làm kế toán bên ngoài cho ${legalEntityIds.length} pháp nhân`
+          : `Mời ${email} tham gia với vai trò ${ROLE_LABEL[input.role]}`,
+      );
       return {
         inviteId: invite.id,
         email,
@@ -386,7 +412,7 @@ export const acceptInvite = defineCommand({
     const userId = ctx.actor.userId;
     const invite = await ctx.trx
       .selectFrom('crove_kernel.member_invite')
-      .select(['id', 'email', 'role', 'invited_by', 'accepted_at'])
+      .select(['id', 'email', 'role', 'invited_by', 'accepted_at', 'legal_entity_ids'])
       .where('org_id', '=', ctx.orgId)
       .where('token_sha256', '=', inviteTokenHash(input.token))
       .where('status', '=', 'accepted')
@@ -415,6 +441,9 @@ export const acceptInvite = defineCommand({
       role: membership.role,
       previous_role: alreadyMember ? membership.role : null,
       already_member: alreadyMember,
+      // A scoped invite (#1281): the entities, and whether the definer granted them (never to an existing member).
+      legal_entity_ids: invite.legal_entity_ids,
+      scope_applied: invite.legal_entity_ids !== null && !alreadyMember,
     });
     await ctx.activity(
       'kernel.member',
@@ -466,7 +495,7 @@ export const invitesList = defineQuery({
   handler: async (ctx) => {
     const rows = await ctx.trx
       .selectFrom('crove_kernel.member_invite')
-      .select(['id', 'email', 'role', 'status', 'expires_at', 'created_at', 'invited_by'])
+      .select(['id', 'email', 'role', 'status', 'expires_at', 'created_at', 'invited_by', 'legal_entity_ids'])
       .where('org_id', '=', ctx.orgId)
       .where('status', '=', 'pending')
       .orderBy('created_at', 'desc')
@@ -499,6 +528,7 @@ export const invitesList = defineQuery({
       createdAt: r.created_at.toISOString(),
       expiresAt: r.expires_at.toISOString(),
       mail: mails.get(r.id) ?? null,
+      legalEntityIds: r.legal_entity_ids,
     }));
   },
 });
