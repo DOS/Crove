@@ -12,6 +12,7 @@ import { useFormat } from '../i18n/provider.tsx';
 import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
 import { canLockPeriods, canUnlockPeriods, monthLabel, previousMonth } from '../lib/period-lock.ts';
 import { DateInput } from './date-input.tsx';
+import { useChosenEntityId } from './entity-switcher.tsx';
 import { StepUpPrompt } from './two-factor.tsx';
 import { ErrorText } from './ui.tsx';
 
@@ -19,7 +20,9 @@ export function PeriodLockPanel() {
   const t = useTranslations('periodLock');
   const f = useFormat();
   const org = useQuery(orpc.org.get.queryOptions());
-  const state = useQuery(orpc.periodLock.state.queryOptions());
+  // Each legal entity locks its own months (#1280): the one chosen in the shell.
+  const legalEntityId = useChosenEntityId();
+  const state = useQuery(orpc.periodLock.state.queryOptions({ input: { legalEntityId } }));
   const [picked, setPicked] = useState(() => previousMonth(vietnamMonth()));
   const [unlocking, setUnlocking] = useState(false);
   const [reason, setReason] = useState('');
@@ -87,7 +90,7 @@ export function PeriodLockPanel() {
             </label>
           )}
           {canLock && (
-            <Button variant="outline" disabled={lock.isPending || !ended} onClick={() => lock.mutate({ month: next, idempotencyKey: lockKey })}>
+            <Button variant="outline" disabled={lock.isPending || !ended} onClick={() => lock.mutate({ month: next, legalEntityId: data.legalEntityId, idempotencyKey: lockKey })}>
               {t('lock', { month: monthLabel(next) })}
             </Button>
           )}
@@ -105,7 +108,7 @@ export function PeriodLockPanel() {
           className="flex flex-wrap items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault();
-            unlock.mutate({ month: last, reason, idempotencyKey: unlockKey });
+            unlock.mutate({ month: last, reason, legalEntityId: data.legalEntityId, idempotencyKey: unlockKey });
           }}>
           <label className="min-w-64 grow text-xs">
             <span className="text-subtle-foreground">{t('reason')}</span>
