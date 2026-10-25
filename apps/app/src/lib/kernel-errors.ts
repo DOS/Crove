@@ -139,6 +139,7 @@ export const KERNEL_ERROR_CODES = [
   // The approval rule preset (#1402).
   'UNKNOWN_PRESET',
   'NO_CHIEF_ACCOUNTANT',
+  'LAST_CHIEF_ACCOUNTANT',
   // Editing a party (#887).
   'INVALID_PARTY_NAME',
   'INVALID_EMAIL',

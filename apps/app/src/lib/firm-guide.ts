@@ -25,10 +25,10 @@ const FIRM_GUIDE: readonly FirmGuideStep[] = [
     id: 'client',
     title: 'Bước 1. Thêm doanh nghiệp khách hàng',
     items: [
-      `Mỗi khách hàng là một tổ chức riêng trong {brand}, với sổ sách, hộp thư chứng từ và thành viên riêng. Bấm ${q(vi.nav.addOrg)} dưới ô ${q(vi.nav.org)} ở thanh bên trái.`,
+      `Mỗi khách hàng là một tổ chức riêng trong {brand}, với sổ sách, hộp thư chứng từ và thành viên riêng. Bấm ${q(vi.nav.addOrg)} dưới ô ${q(vi.nav.org)} trong menu.`,
       `Nhập ${q(vi.onboarding.taxCodeLabel)} của khách hàng rồi bấm ${q(vi.onboarding.lookUp)}: {brand} điền tên và địa chỉ theo dữ liệu đăng ký thuế, bạn kiểm tra lại. Mã số thuế giúp {brand} nhận ra hóa đơn bán ra của khách hàng.`,
       `Nếu có ${q(vi.onboarding.contactLabel)}, nhập vào: sau khi bấm ${q(vi.onboarding.create)}, trang mời thành viên mở sẵn với email này. Chọn vai trò rồi bấm ${q(vi.settings.invite)}; người được mời phải chấp nhận lời mời thì mới vào tổ chức.`,
-      `Khi bạn phụ trách từ hai doanh nghiệp trở lên, ${q(vi.nav.allClients)} ở thanh bên trái mở màn hình ${q(vi.clients.title)}: số đề xuất ${q(vi.clients.columns.pending)}, ${q(vi.clients.columns.failed)} và ${q(vi.clients.columns.vatDeadline)} của từng doanh nghiệp. Bấm tên để mở.`,
+      `Khi bạn phụ trách từ hai doanh nghiệp trở lên, ${q(vi.nav.allClients)} trong menu mở màn hình ${q(vi.clients.title)}: số đề xuất ${q(vi.clients.columns.pending)}, ${q(vi.clients.columns.failed)} và ${q(vi.clients.columns.vatDeadline)} của từng doanh nghiệp. Bấm tên để mở.`,
     ],
   },
   {

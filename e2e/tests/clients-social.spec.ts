@@ -56,10 +56,13 @@ test('an agency sees each client’s Social figures on the overview and opens th
     await expect(page).toHaveURL(new RegExp(`/o/${first}/social/channels$`));
   });
 
-  await test.step('at 360px the overview does not scroll sideways', async () => {
+  await test.step('at 360px the overview reads as cards and does not scroll sideways', async () => {
     await page.setViewportSize({ width: 360, height: 780 });
     await page.goto('/clients');
-    await expect(page.getByRole('row').filter({ hasText: 'Công ty An Bình' })).toBeVisible();
+    // A phone reads each client as a card, Social figures included (#1424).
+    const card = page.getByRole('listitem').filter({ hasText: 'Công ty An Bình' });
+    await expect(card).toBeVisible();
+    await expect(card.getByRole('link', { name: '1 kênh cần kết nối lại' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
   });
 });

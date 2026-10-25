@@ -28,7 +28,16 @@ import {
 } from '@crove/kernel-runtime';
 import { agentCommands } from './agents.ts';
 import { channelCommands } from './channels.ts';
-import { actorRef, addAuthor, APPROVAL_POLICY_VERSION, decideApproval, eligibleApprovers, LEDGER_APPROVE_PERMISSION, parseAuthors } from './approval.ts';
+import {
+  actorRef,
+  addAuthor,
+  APPROVAL_POLICY_VERSION,
+  decideApproval,
+  eligibleApprovers,
+  keepingChiefAccountant,
+  LEDGER_APPROVE_PERMISSION,
+  parseAuthors,
+} from './approval.ts';
 import { archiveCommands } from './archives.ts';
 import { imageSizeCommands } from './image-sizes.ts';
 import { fileHoldCommands } from './evidence-holds.ts';
@@ -149,12 +158,10 @@ export const changeMemberRole = defineCommand({
     ctx.audit({ target_user: input.userId, role: input.role, previous_role: previousRole, changed: previousRole !== input.role });
     if (previousRole === input.role) return { userId: input.userId, role: input.role, previousRole };
     if (previousRole === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, input.role);
-    await ctx.trx
-      .updateTable('crove_kernel.tenant_member')
-      .set({ role: input.role })
-      .where('org_id', '=', ctx.orgId)
-      .where('user_id', '=', input.userId)
-      .execute();
+    // A demotion to viewer of the last chief accountant under the accountant preset is refused (#1402).
+    await keepingChiefAccountant(() =>
+      ctx.trx.updateTable('crove_kernel.tenant_member').set({ role: input.role }).where('org_id', '=', ctx.orgId).where('user_id', '=', input.userId).execute(),
+    );
     // Pending invites the member could no longer issue are revoked in the same transaction, after the membership locks
     // (the order every invite path uses): an admin or owner who becomes a member or viewer loses every invite, an
     // owner who becomes an admin loses their admin invites (only owners grant admin). Accepting re-checks the
@@ -192,11 +199,8 @@ export const removeMember = defineCommand({
     const { actorId, target, owners } = await lockForMemberChange(ctx, input.userId);
     if (input.userId === actorId) throw new DomainError('CANNOT_REMOVE_SELF', 422, 'Bạn không thể tự xóa mình khỏi tổ chức');
     if (target.role === 'owner' && owners <= 1) throw LAST_OWNER(input.userId, null);
-    await ctx.trx
-      .deleteFrom('crove_kernel.tenant_member')
-      .where('org_id', '=', ctx.orgId)
-      .where('user_id', '=', input.userId)
-      .execute();
+    // Removing the last chief accountant under the accountant preset is refused (#1402).
+    await keepingChiefAccountant(() => ctx.trx.deleteFrom('crove_kernel.tenant_member').where('org_id', '=', ctx.orgId).where('user_id', '=', input.userId).execute());
     // The removed member's pending invites go with them (they already stop working at acceptance while the inviter is
     // not a member; revoking them keeps them from coming back if the person is invited again later).
     const revokedInvites = await ctx.trx

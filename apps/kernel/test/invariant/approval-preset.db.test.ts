@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createDb, createPool } from '@crove/db';
 import { migrate, setRolePasswords } from '@crove/db/migrate';
 import { createOrg, kernelCommands, kernelQueries, upsertIdentity } from '@crove/kernel';
-import { Runtime } from '@crove/kernel-runtime';
+import { Runtime, type AgentActor } from '@crove/kernel-runtime';
 import { financeCommands, financeQueries } from '@crove/mod-finance';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
@@ -29,6 +29,9 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
   let appUrl = '';
   let pool: pg.Pool;
   let rt: Runtime;
+  // The worker login role's runtime, where agents run.
+  let worker: Runtime;
+  let workerPool: pg.Pool;
   const clients: pg.Client[] = [];
 
   const asUser = (userId: string): Actor => ({ type: 'user', userId, aal: 'aal1' });
@@ -86,8 +89,9 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
           (await c.query<{ preset: string; version: number }>('SELECT approval_preset AS preset, approval_policy_version AS version FROM crove_kernel.tenant WHERE org_id = $1', [orgId]))
             .rows[0],
       );
-    // An entry posted through the posting path as the API login role, and a proposal to reverse it raised by the owner.
-    const proposal = async () => {
+    // An entry posted through the posting path as the API login role, and a proposal to reverse it raised by `requester`
+    // (the owner unless given), who is then its author.
+    const proposal = async (requester: string = owner) => {
       let entryId = '';
       await committedInContext(owner, orgId, async (app) => {
         const { rows } = await app.query<{ id: string }>(
@@ -103,7 +107,7 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
         entryId = rows[0]?.id as string;
       });
       return (
-        await exec<{ proposalId: string }>(asUser(owner), 'kernel.proposal.request', {
+        await exec<{ proposalId: string }>(asUser(requester), 'kernel.proposal.request', {
           command: 'finance.journal.reverse',
           input: { entryId, entryDate: '2026-10-15', reason: 'Ghi nhầm' },
         })
@@ -145,11 +149,20 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
       commands: [...kernelCommands, ...financeCommands],
       queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
     });
+    const workerUrl = new URL(adminUrl);
+    workerUrl.username = 'crove_worker';
+    workerUrl.password = 'test-worker-pw';
+    workerPool = createPool({ connectionString: workerUrl.toString(), max: 2 });
+    worker = new Runtime(createDb(workerPool)).register({
+      commands: [...kernelCommands, ...financeCommands],
+      queries: [...kernelQueries({ inboundDomain: null }), ...financeQueries],
+    });
   }, 120_000);
 
   afterAll(async () => {
     for (const c of clients) await c.end().catch(() => {});
     await pool?.end();
+    await workerPool?.end();
     if (!ADMIN) return;
     const root = new pg.Client({ connectionString: ADMIN });
     await root.connect();
@@ -258,5 +271,80 @@ suite('approval policy presets on PostgreSQL (#1402)', () => {
     await o.setPreset(asMfa(o.owner), 'founder');
     await expect(o.approve(asMfa(o.admin), before)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
     expect(await o.audit('kernel.proposal.approve', before)).toMatchObject({ org_policy: { preset: 'founder', version: 3 } });
+  });
+
+  it('under the accountant preset, never lets an author approve a ledger proposal, even as its only eligible approver (P10)', async () => {
+    const o = await org();
+    await o.exec(asMfa(o.owner), 'kernel.member.role.assign', { userId: o.chief, roleKey: 'finance.chief_accountant', legalEntityId: null });
+    // Under founder the chief accountant's own proposal needs another approver (owner and admin are eligible).
+    const own = await o.proposal(o.chief);
+    await expect(o.approve(asMfa(o.chief), own)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED' });
+    // Under accountant the chief accountant is the only eligible approver, of this pending proposal and of a new one,
+    // and still never approves their own: no sole-approver exception.
+    await o.setPreset(asMfa(o.owner), 'accountant');
+    await expect(o.approve(asMfa(o.chief), own)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED' });
+    const fresh = await o.proposal(o.chief);
+    expect(await o.snapshot(fresh)).toEqual([o.chief]);
+    await expect(o.approve(asMfa(o.chief), fresh)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED' });
+
+    // An owner who makes themself chief accountant does not approve their own proposal either (no owner_override),
+    // and another chief accountant does.
+    await o.exec(asMfa(o.owner), 'kernel.member.role.assign', { userId: o.owner, roleKey: 'finance.chief_accountant', legalEntityId: null });
+    const owners = await o.proposal(o.owner);
+    expect(await o.snapshot(owners)).toEqual([o.owner, o.chief].sort());
+    await expect(o.approve(asMfa(o.owner), owners)).rejects.toMatchObject({ code: 'FOUR_EYES_REQUIRED' });
+    await expect(o.approve(asMfa(o.chief), owners)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
+    expect(await o.audit('kernel.proposal.approve', owners)).toMatchObject({ policy: { P10: 'pass' }, self_approved: false });
+    // The owner, now a holder, approves the chief accountant's proposal raised after the grant; the one raised before
+    // (snapshot [chief]) waits, since an approver added later never joins a snapshot.
+    const later = await o.proposal(o.chief);
+    await expect(o.approve(asMfa(o.owner), later)).resolves.toMatchObject({ journalEntryId: expect.any(String) });
+    await expect(o.approve(asMfa(o.owner), fresh)).rejects.toMatchObject({ code: 'NOT_ELIGIBLE' });
+  });
+
+  it('keeps the last chief accountant while on the accountant preset: no revoke, removal or demotion to viewer', async () => {
+    const o = await org();
+    const { assignmentId } = await o.exec<{ assignmentId: string }>(asMfa(o.owner), 'kernel.member.role.assign', {
+      userId: o.chief,
+      roleKey: 'finance.chief_accountant',
+      legalEntityId: null,
+    });
+    await o.setPreset(asMfa(o.owner), 'accountant');
+    await expect(o.exec(asMfa(o.owner), 'kernel.member.role.revoke', { assignmentId })).rejects.toMatchObject({ code: 'LAST_CHIEF_ACCOUNTANT', status: 409 });
+    await expect(o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.chief, role: 'viewer' })).rejects.toMatchObject({ code: 'LAST_CHIEF_ACCOUNTANT' });
+    await expect(o.exec(asMfa(o.owner), 'kernel.member.remove', { userId: o.chief })).rejects.toMatchObject({ code: 'LAST_CHIEF_ACCOUNTANT' });
+    expect(await withAdmin(async (c) => (await c.query('SELECT 1 FROM crove_kernel.role_assignment WHERE id = $1', [assignmentId])).rowCount)).toBe(1);
+    // Other changes of that member, and changes once someone else holds the role, go through.
+    await expect(o.exec(asMfa(o.owner), 'kernel.member.change_role', { userId: o.chief, role: 'admin' })).resolves.toMatchObject({ role: 'admin' });
+    const second = await o.exec<{ assignmentId: string }>(asMfa(o.owner), 'kernel.member.role.assign', {
+      userId: o.owner,
+      roleKey: 'finance.chief_accountant',
+      legalEntityId: null,
+    });
+    await expect(o.exec(asMfa(o.owner), 'kernel.member.remove', { userId: o.chief })).resolves.toMatchObject({ userId: o.chief });
+    await expect(o.exec(asMfa(o.owner), 'kernel.member.role.revoke', { assignmentId: second.assignmentId })).rejects.toMatchObject({ code: 'LAST_CHIEF_ACCOUNTANT' });
+    // Back on founder, the role is an ordinary one again.
+    await o.setPreset(asMfa(o.owner), 'founder');
+    await expect(o.exec(asMfa(o.owner), 'kernel.member.role.revoke', { assignmentId: second.assignmentId })).resolves.toMatchObject({ assignmentId: second.assignmentId });
+  });
+
+  it('refuses the switch to an AI agent', async () => {
+    const o = await org();
+    await o.exec(asMfa(o.owner), 'kernel.member.role.assign', { userId: o.chief, roleKey: 'finance.chief_accountant', legalEntityId: null });
+    const { agentId, positionId } = await o.exec<{ agentId: string; positionId: string }>(asMfa(o.owner), 'kernel.agent.template.install', {
+      templateKey: 'finance.chief_accountant',
+      reportsTo: null,
+    });
+    await o.exec(asUser(o.owner), 'kernel.task.create', { title: 'Việc thử', assigneePositionId: positionId });
+    const started = await worker.execute<{ runId: string | null }>(
+      'kernel.agent.run.start',
+      { agentId },
+      { actor: { type: 'system', component: 'kernel.agent' }, orgId: o.orgId },
+    );
+    const agent: AgentActor = { type: 'agent', agentId, runId: started.runId as string };
+    await expect(
+      worker.execute('kernel.org.set_approval_preset', { preset: 'accountant' }, { actor: agent, orgId: o.orgId, idempotencyKey: randomUUID() }),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    expect(await o.policy()).toEqual({ preset: 'founder', version: 1 });
   });
 });

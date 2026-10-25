@@ -3,7 +3,7 @@
 import { sql, type Transaction } from 'kysely';
 import { z } from 'zod';
 import type { Database, MemberRole } from '@crove/db';
-import type { Actor, CommandInfo, QueryContext, Risk } from '@crove/kernel-runtime';
+import { DomainError, type Actor, type CommandInfo, type QueryContext, type Risk } from '@crove/kernel-runtime';
 
 // Who produced (part of) a revision's content. Only user entries are humans; system and agent entries never count
 // as approvers or for four-eyes (ADR-0029 §6).
@@ -128,6 +128,26 @@ async function permissionHolders(
   return new Set(rows.map((r) => r.user_id));
 }
 
+// The refusal of chief_accountant_keep_guard (#1402): under a preset that reserves the ledger to the chief accountant,
+// the org keeps one member (not a viewer) holding the ledger's approval permission org-wide.
+export const lastChiefAccountant = () =>
+  new DomainError(
+    'LAST_CHIEF_ACCOUNTANT',
+    409,
+    'Tổ chức đang dùng quy tắc chỉ kế toán trưởng duyệt bút toán nên phải còn ít nhất một kế toán trưởng; hãy giao vai trò cho người khác hoặc đổi quy tắc duyệt trước',
+  );
+
+// Runs a write that may fire chief_accountant_keep_guard, answering its refusal as LAST_CHIEF_ACCOUNTANT.
+export async function keepingChiefAccountant<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (error) {
+    const pg = error as { code?: string; message?: string };
+    if (pg?.code === 'P0001' && pg.message === 'LAST_CHIEF_ACCOUNTANT') throw lastChiefAccountant();
+    throw error;
+  }
+}
+
 // How many members may approve the ledger's proposals through the permission alone (P09's approvers): a switch to a
 // preset that reserves the ledger to them is refused while there are none.
 export async function ledgerApproverCount(trx: Transaction<Database>, orgId: string): Promise<number> {
@@ -225,6 +245,10 @@ export async function decideApproval(
 
   const userAuthors = new Set(authors.flatMap((a) => (a.type === 'user' ? [a.id] : [])));
   if (!userAuthors.has(actor.userId)) return { reason: 'ok', eligibleCount: eligible.size, selfApproved: false, fourEyes: 'pass', orgPolicy };
+  // P09 with P10: under a preset that reserves the ledger to the chief accountant, an author never approves a ledger
+  // proposal, however few eligible approvers there are; neither the sole-approver exception nor owner_override applies.
+  // The proposal waits for another holder, or is rejected and raised again (#1402 review).
+  if (org.ledgerChiefAccountantOnly && POLICIES[proposal.command] === LEDGER) return deny('four_eyes', eligible.size);
   if (!policy.fourEyes || eligible.size < 2) {
     // P10: a sole eligible approver may approve their own work, flagged.
     return { reason: 'ok', eligibleCount: eligible.size, selfApproved: true, fourEyes: 'self_approved', orgPolicy };

@@ -128,3 +128,60 @@ CREATE CONSTRAINT TRIGGER tenant_approval_policy_requires_audit
 -- EXECUTE matrix: the triggers' functions are callable by nobody.
 REVOKE ALL ON FUNCTION crove_kernel.tenant_approval_policy_guard(), crove_kernel.tenant_approval_policy_requires_audit()
 FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+
+-- Liveness under the accountant preset (P09): while an active org is on a preset that reserves the ledger to the chief
+-- accountant, it keeps at least one member, not a viewer, holding finance.proposal.approve org-wide. Revoking that
+-- assignment, removing that member or demoting them to viewer is refused (LAST_CHIEF_ACCOUNTANT, P0001) when it would
+-- leave none; kernel.org.set_approval_preset refuses the switch itself without one. Each such change then locks the
+-- tenant row, as the switch does, so two of them in one org (or one and a switch) run one at a time and the second sees
+-- the first. A closed org
+-- (offboarding, the purge) and staff are not held back. Proposals raised while no other approver existed are recovered
+-- by rejecting and raising them again, or by resubmitting them once expired (kernel.proposal.resubmit): a new proposal
+-- takes a new snapshot.
+CREATE OR REPLACE FUNCTION crove_kernel.chief_accountant_keep_guard()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
+DECLARE
+  v_org uuid := OLD.org_id;
+  v_staff boolean;
+  v_only boolean;
+BEGIN
+  SELECT p.ledger_chief_accountant_only INTO v_only
+  FROM crove_kernel.tenant t JOIN crove_kernel.approval_preset p ON p.key = t.approval_preset
+  WHERE t.org_id = v_org AND t.status = 'active';
+  IF NOT COALESCE(v_only, false) THEN
+    RETURN NULL;
+  END IF;
+  SELECT r.rolsuper
+         OR pg_catalog.pg_has_role(r.oid, (SELECT c.relowner FROM pg_catalog.pg_class c WHERE c.oid = TG_RELID), 'USAGE')
+    INTO v_staff
+  FROM pg_catalog.pg_roles r WHERE r.rolname = SESSION_USER;
+  IF COALESCE(v_staff, false) THEN
+    RETURN NULL;
+  END IF;
+  -- Serialize on the org, then decide on what has committed since (each statement takes a new snapshot).
+  PERFORM 1 FROM crove_kernel.tenant t WHERE t.org_id = v_org FOR UPDATE;
+  SELECT p.ledger_chief_accountant_only INTO v_only
+  FROM crove_kernel.tenant t JOIN crove_kernel.approval_preset p ON p.key = t.approval_preset
+  WHERE t.org_id = v_org AND t.status = 'active';
+  IF COALESCE(v_only, false) AND NOT EXISTS (
+    SELECT 1 FROM crove_kernel.role_assignment a
+    JOIN crove_kernel.role_permission p ON p.role_key = a.role_key AND p.permission = 'finance.proposal.approve'
+    JOIN crove_kernel.tenant_member m ON m.org_id = a.org_id AND m.user_id = a.user_id AND m.role <> 'viewer'
+    WHERE a.org_id = v_org AND a.legal_entity_id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'LAST_CHIEF_ACCOUNTANT' USING ERRCODE = 'P0001',
+      DETAIL = 'the accountant approval preset needs a chief accountant; switch the preset first';
+  END IF;
+  RETURN NULL;
+END $$;
+DROP TRIGGER IF EXISTS chief_accountant_keep_guard ON crove_kernel.role_assignment;
+CREATE TRIGGER chief_accountant_keep_guard AFTER DELETE ON crove_kernel.role_assignment
+  FOR EACH ROW WHEN (OLD.legal_entity_id IS NULL) EXECUTE FUNCTION crove_kernel.chief_accountant_keep_guard();
+DROP TRIGGER IF EXISTS chief_accountant_keep_guard_member ON crove_kernel.tenant_member;
+CREATE TRIGGER chief_accountant_keep_guard_member AFTER DELETE ON crove_kernel.tenant_member
+  FOR EACH ROW EXECUTE FUNCTION crove_kernel.chief_accountant_keep_guard();
+DROP TRIGGER IF EXISTS chief_accountant_keep_guard_viewer ON crove_kernel.tenant_member;
+CREATE TRIGGER chief_accountant_keep_guard_viewer AFTER UPDATE OF role ON crove_kernel.tenant_member
+  FOR EACH ROW WHEN (NEW.role = 'viewer' AND OLD.role <> 'viewer') EXECUTE FUNCTION crove_kernel.chief_accountant_keep_guard();
+
+REVOKE ALL ON FUNCTION crove_kernel.chief_accountant_keep_guard() FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
