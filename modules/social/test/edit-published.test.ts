@@ -7,8 +7,9 @@ import { EDIT_STALE_MS, editState } from '../src/edit-published.ts';
 
 describe('EDIT_READY and editRefusal (#1223)', () => {
   it('names the channels whose adapter edits, and refuses the rest as the issue lists them', () => {
-    expect([...EDIT_READY].sort()).toEqual(['discord', 'facebook_page', 'linkedin', 'linkedin_page', 'mastodon', 'sandbox', 'telegram', 'zalo_oa']);
-    for (const provider of ['instagram', 'threads', 'bluesky', 'x', 'tiktok', 'wordpress', 'youtube', 'pinterest', 'google_business']) {
+    // YouTube, Google Business and WordPress joined with #1474; Pinterest stays out.
+    expect([...EDIT_READY].sort()).toEqual(['discord', 'facebook_page', 'google_business', 'linkedin', 'linkedin_page', 'mastodon', 'sandbox', 'telegram', 'wordpress', 'youtube', 'zalo_oa']);
+    for (const provider of ['instagram', 'threads', 'bluesky', 'x', 'tiktok', 'pinterest']) {
       expect(editRefusal(provider, {}, [])).toBe('provider');
     }
     expect(editRefusal('myspace', {}, [])).toBe('provider');
@@ -30,6 +31,18 @@ describe('EDIT_READY and editRefusal (#1223)', () => {
     expect(editRefusal('telegram', {}, ['video'])).toBeNull();
     expect(editRefusal('facebook_page', {}, ['image', 'image'])).toBeNull();
     expect(editRefusal('discord', { discord: { forum: true } }, [])).toBeNull();
+  });
+
+  it('takes any YouTube video, a Short included, and refuses a WordPress draft or a post pending review (#1474)', () => {
+    // No YouTube rule of its own: a Short's or any video's title and description can be edited.
+    expect(editRefusal('youtube', {}, ['video'])).toBeNull();
+    expect(editRefusal('youtube', { postType: 'feed' }, ['video'])).toBeNull();
+    expect(editRefusal('youtube', { privacy: 'unlisted', tags: ['bánh mì'], categoryId: '26' }, ['video'])).toBeNull();
+    expect(editRefusal('google_business', { gbp: { topic: 'OFFER', cta: 'SHOP' } }, ['image'])).toBeNull();
+    expect(editRefusal('wordpress', {}, ['image', 'image'])).toBeNull();
+    expect(editRefusal('wordpress', { wordpress: { status: 'publish', tags: ['phở'] } }, [])).toBeNull();
+    expect(editRefusal('wordpress', { wordpress: { status: 'draft' } }, [])).toBe('draft');
+    expect(editRefusal('wordpress', { wordpress: { status: 'pending' } }, [])).toBe('draft');
   });
 });
 

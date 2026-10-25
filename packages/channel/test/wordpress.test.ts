@@ -1,6 +1,6 @@
 // WordPress against recorded answers (shapes from developer.wordpress.org/rest-api/reference); no live call.
 import { describe, expect, it } from 'vitest';
-import { connectWordPress, wordpressHtml, wordpressLogin, wordpressOptionsOf, WordPressPublisher, wordpressSecretOf, wordpressSite, type Fetch, type PublishInput } from '../src/index.ts';
+import { connectWordPress, wordpressHtml, wordpressLogin, wordpressOptionsOf, WordPressPublisher, wordpressSecretOf, wordpressSite, type EditInput, type Fetch, type PublishInput } from '../src/index.ts';
 
 const PASSWORD = 'testtesttesttesttesttest';
 const SITE = 'https://tiemcuaban.vn';
@@ -531,6 +531,95 @@ describe('WordPress remove (#1138)', () => {
     expect(await remove(none.fetchImpl, '0')).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
     expect(await new WordPressPublisher(none.fetchImpl).remove({ externalAccountId: 'other.vn', secret: SECRET, externalId: '42' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' });
     expect(await remove(none.fetchImpl, '42', '{}')).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' });
+    expect(none.calls).toHaveLength(0);
+  });
+});
+
+describe('WordPress edit (#1474)', () => {
+  const READ = 'GET tiemcuaban.vn/wp-json/wp/v2/posts/42';
+  const UPDATE = 'POST tiemcuaban.vn/wp-json/wp/v2/posts/42';
+  const FIGURES = [`<figure><img src="${SITE}/wp-content/uploads/2026/10/image-1.jpg" alt="Phở"></figure>`, `<figure><img src="${SITE}/wp-content/uploads/2026/10/image-2.jpg" alt=""></figure>`];
+  const content = { body: 'Phở bò giá mới: 55.000đ & <ngon>\n\nGhé https://tiemcuaban.vn/menu nhé', title: 'Thực đơn mới', linkUrl: null, media: [image('f-1', 'Phở'), image('f-2', null)] };
+  const edit = (fetchImpl: Fetch, over: Partial<EditInput> = {}) =>
+    new WordPressPublisher(fetchImpl).edit({ externalAccountId: ACCOUNT, secret: SECRET, externalId: '42', content, settings: {}, callKey: 'edit-1', ...over });
+  const post = (raw: string, status = 'publish') => ({ body: { id: 42, status, title: { raw: 'Thực đơn', rendered: 'Thực đơn' }, content: { raw, rendered: raw, protected: false }, featured_media: 7 } });
+  const published = post(['<p>Phở bò giá cũ</p>', ...FIGURES].join('\n'));
+
+  it('updates the title and the text only, the images it went out with kept after the new text', async () => {
+    const { fetchImpl, calls } = site({ [READ]: [published], [UPDATE]: [{ body: { id: 42, status: 'publish', link: 'https://tiemcuaban.vn/?p=42' } }] });
+    expect(await edit(fetchImpl)).toEqual({ kind: 'edited' });
+    expect(calls.map((c) => [c.route, c.auth, c.redirect])).toEqual([
+      [READ, BASIC, 'manual'],
+      [UPDATE, BASIC, 'manual'],
+    ]);
+    expect(new URL(calls[0]?.url ?? '').searchParams.get('context')).toBe('edit');
+    // Nothing else: no status, featured image, terms or excerpt, which WordPress keeps as they are; no upload either.
+    expect(calls[1]?.json).toEqual({
+      title: 'Thực đơn mới',
+      content: ['<p>Phở bò giá mới: 55.000đ &amp; &lt;ngon&gt;</p>', '<p>Ghé <a href="https://tiemcuaban.vn/menu">https://tiemcuaban.vn/menu</a> nhé</p>', ...FIGURES].join('\n'),
+    });
+  });
+
+  it('keeps figures WordPress stored with its own spacing, and a post without images', async () => {
+    const spaced = site({ [READ]: [post(`<p>Cũ</p>\r\n${FIGURES[0]}\r\n  <figure class="wp-block-image"><img src="${SITE}/b.jpg" alt="" /></figure>\r\n`)], [UPDATE]: [{ body: { id: 42 } }] });
+    expect(await edit(spaced.fetchImpl)).toEqual({ kind: 'edited' });
+    expect(String((spaced.calls[1]?.json as { content?: unknown } | undefined)?.content).split('\n').slice(-2)).toEqual([FIGURES[0], `<figure class="wp-block-image"><img src="${SITE}/b.jpg" alt="" /></figure>`]);
+    const plain = site({ [READ]: [post('<p>Cũ</p>')], [UPDATE]: [{ body: { id: 42 } }] });
+    expect(await edit(plain.fetchImpl, { content: { body: 'Mới', title: null, linkUrl: 'https://tiemcuaban.vn/', media: [] } })).toEqual({ kind: 'edited' });
+    expect(plain.calls[1]?.json).toEqual({ title: 'Mới', content: '<p>Mới</p>\n<p><a href="https://tiemcuaban.vn/">https://tiemcuaban.vn/</a></p>' });
+  });
+
+  it('refuses, with nothing sent, a post whose images were changed on the site', async () => {
+    const lost = site({ [READ]: [post('<!-- wp:paragraph --><p>Cũ</p><!-- /wp:paragraph -->')] });
+    expect(await edit(lost.fetchImpl)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' });
+    const added = site({ [READ]: [post(['<p>Cũ</p>', ...FIGURES].join('\n'))] });
+    expect(await edit(added.fetchImpl, { content: { ...content, media: [] } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'WORDPRESS_EDITED_ON_SITE' });
+    expect([...lost.calls, ...added.calls].map((c) => c.route)).toEqual([READ, READ]);
+  });
+
+  it('refuses a draft or a post pending review before any call, and one the site holds back after the read', async () => {
+    const none = site({});
+    expect(await edit(none.fetchImpl, { settings: { wordpress: { status: 'draft' } } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(await edit(none.fetchImpl, { settings: { wordpress: { status: 'pending' } } })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    expect(none.calls).toHaveLength(0);
+    const held = site({ [READ]: [post(FIGURES.join('\n'), 'pending')] });
+    expect(await edit(held.fetchImpl)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'EDIT_NOT_SUPPORTED' });
+    const trashed = site({ [READ]: [post(FIGURES.join('\n'), 'trash')] });
+    expect(await edit(trashed.fetchImpl)).toEqual({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    expect([...held.calls, ...trashed.calls].map((c) => c.route)).toEqual([READ, READ]);
+  });
+
+  it('answers POST_NOT_FOUND and WORDPRESS_CANNOT_EDIT, read or updated', async () => {
+    const gone = site({ [READ]: [{ status: 404, body: { code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } } }] });
+    expect(await edit(gone.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'bad_request', code: 'POST_NOT_FOUND' });
+    const notHers = site({ [READ]: [{ status: 403, body: { code: 'rest_forbidden_context', message: 'Sorry, you are not allowed to edit this post.', data: { status: 403 } } }] });
+    expect(await edit(notHers.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'WORDPRESS_CANNOT_EDIT' });
+    const cannot = site({ [READ]: [published], [UPDATE]: [{ status: 403, body: { code: 'rest_cannot_edit', message: 'Sorry, you are not allowed to edit this post.', data: { status: 403 } } }] });
+    expect(await edit(cannot.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'permission', code: 'WORDPRESS_CANNOT_EDIT' });
+  });
+
+  it('changes nothing when the read fails, and leaves an outage or an odd answer of the update unclear', async () => {
+    const down = site({ [READ]: [{ status: 503, body: '<html>Service Unavailable</html>' }] });
+    expect(await edit(down.fetchImpl)).toEqual({ kind: 'rejected', error: 'transient', code: 'WORDPRESS_503' });
+    const odd = site({ [READ]: [{ body: { id: 42, status: 'publish' } }] });
+    expect(await edit(odd.fetchImpl)).toEqual({ kind: 'rejected', error: 'transient', code: 'POST_UNREADABLE' });
+    const revoked = site({ [READ]: [{ status: 401, body: { code: 'incorrect_password', message: 'The provided password is an invalid application password.', data: { status: 401 } } }] });
+    const refused = await edit(revoked.fetchImpl);
+    expect(refused).toMatchObject({ kind: 'rejected', error: 'token_expired', code: 'WORDPRESS_401' });
+    expect(JSON.stringify(refused)).not.toContain(PASSWORD);
+    const busy = site({ [READ]: [published], [UPDATE]: [{ status: 502, body: '<html>Bad Gateway</html>' }] });
+    expect(await edit(busy.fetchImpl)).toEqual({ kind: 'unknown', code: 'WORDPRESS_502' });
+    const other = site({ [READ]: [published], [UPDATE]: [{ body: { id: 43 } }] });
+    expect(await edit(other.fetchImpl)).toEqual({ kind: 'unknown', code: 'NOT_CONFIRMED' });
+    const limited = site({ [READ]: [published], [UPDATE]: [{ status: 429, body: { code: 'too_many_requests', message: 'Too many requests' } }] });
+    expect(await edit(limited.fetchImpl)).toMatchObject({ kind: 'rejected', error: 'rate_limited' });
+  });
+
+  it('calls nothing for a malformed id, another site or a missing password', async () => {
+    const none = site({});
+    expect(await edit(none.fetchImpl, { externalId: '42?status=draft' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_POST_ID' });
+    expect(await edit(none.fetchImpl, { externalAccountId: 'other.vn' })).toEqual({ kind: 'rejected', error: 'bad_request', code: 'BAD_ACCOUNT_ID' });
+    expect(await edit(none.fetchImpl, { secret: '{}' })).toEqual({ kind: 'rejected', error: 'token_expired', code: 'NO_APP_PASSWORD' });
     expect(none.calls).toHaveLength(0);
   });
 });
