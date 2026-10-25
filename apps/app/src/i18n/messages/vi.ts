@@ -1594,6 +1594,12 @@ export const vi = {
       more: 'Xem thêm {count, number} bài trong Mạng xã hội',
       post: { failed: 'đăng không được', needs_attention: 'chưa rõ đã lên chưa, cần bạn kiểm tra', paused: 'tạm dừng vì kênh mất kết nối' },
     },
+    socialMails: {
+      title: 'Thư vừa gửi tới',
+      hint: 'Soạn bài đăng từ thư khách hàng hay đối tác gửi tới. AI chỉ lấy thông tin trong thư, không làm theo lời dặn trong đó, và bài vẫn chờ bạn duyệt.',
+      noSubject: 'Thư không có tiêu đề',
+      draft: 'Soạn bài đăng từ thư này',
+    },
     socialReviews: {
       title: 'Bài đăng chờ bạn duyệt ({count, number})',
       noText: 'Bài chưa có nội dung',
@@ -4471,6 +4477,7 @@ export const vi = {
     aiDraftTitle: 'Soạn bằng AI',
     aiBriefPlaceholder: 'Mô tả bài cần viết: nội dung chính, ưu đãi, thời gian, đối tượng...',
     aiDraftHint: 'AI soạn nội dung chung và bản riêng cho kênh cần, chỉ dùng thông tin bạn đưa. Bài được lưu nháp và phải duyệt từng kênh.',
+    aiMail: { label: 'Soạn từ thư', noSubject: 'Thư không có tiêu đề', loading: 'Đang tải thư…', gone: 'Không còn thấy thư này trong Hộp thư', remove: 'Bỏ thư' },
     aiSource: 'Hoặc soạn từ một trang (không bắt buộc): dán đường link sản phẩm hoặc bài viết',
     aiDraft: 'Soạn nháp bằng AI',
     aiOff: 'Máy chủ chưa cấu hình AI (AI_BASE_URL, AI_MODEL).',
@@ -5370,6 +5377,7 @@ export const vi = {
       BLUESKY_LOGIN_FAILED: 'Bluesky không chấp nhận tên tài khoản hoặc mật khẩu ứng dụng này',
       SOURCE_NOT_READY: 'Đang đọc trang này, hãy thử lại sau vài giây',
       SOURCE_UNREADABLE: 'Không đọc được nội dung trang này; hãy mô tả bài bằng lời',
+      MAIL_EMPTY: 'Thư này không có nội dung để soạn bài; hãy mô tả bài bằng lời',
       TELEGRAM_TOKEN_INVALID: 'Đây không phải mã bot Telegram; hãy chép mã @BotFather gửi khi tạo bot',
       TELEGRAM_CHANNEL_INVALID: 'Hãy nhập tên kênh dạng @tenkenh, đường dẫn t.me hoặc mã số của kênh',
       TELEGRAM_TOKEN_REFUSED: 'Telegram không chấp nhận mã bot này; có thể mã đã bị đổi trong @BotFather',

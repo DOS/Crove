@@ -36,13 +36,15 @@ export function togglePhoto(picked: readonly string[], fileId: string): string[]
 }
 
 // What the AI draft box sends: the brief, the chosen channels, the page's language, and the page or the photos.
-export function aiDraftInput(form: { brief: string; connectionIds: readonly string[]; locale: string; source: string | null; photos: readonly string[] }) {
+export function aiDraftInput(form: { brief: string; connectionIds: readonly string[]; locale: string; source: string | null; photos: readonly string[]; mail?: string | null }) {
   return {
     brief: form.brief.trim(),
     connectionIds: [...form.connectionIds],
     language: form.locale === 'en' ? ('en' as const) : ('vi' as const),
     ...(form.source ? { sourceUrl: form.source } : {}),
     ...(form.photos.length > 0 ? { fileIds: form.photos.slice(0, AI_DRAFT_IMAGES_MAX) } : {}),
+    // A forwarded mail of the Inbox (#779).
+    ...(form.mail ? { inboundMessageId: form.mail } : {}),
   };
 }
 

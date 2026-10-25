@@ -2609,7 +2609,7 @@ export function SocialComposePage() {
   const scope = useChannelScope();
   const live = (channels.data ?? []).filter((c) => c.status === 'active' && scope.allows(c.id));
   // A planned time from the calendar (#580), kept on the draft; scheduling starts from it.
-  const search: { at?: string; idea?: string; occasion?: string; on?: string; channel?: string; photo?: string } = useSearch({ strict: false });
+  const search: { at?: string; idea?: string; occasion?: string; on?: string; channel?: string; photo?: string; mail?: string } = useSearch({ strict: false });
   // A post for an occasion of the calendar (#702): named above the form, and the AI brief starts from it.
   const tOcc = useTranslations('social.occasions');
   const occasion = search.occasion && search.on ? { name: tOcc(`names.${search.occasion as 'tet'}`), date: f.date(search.on) } : null;
@@ -2735,9 +2735,20 @@ export function SocialComposePage() {
   const aiPhotos = useAiPhotos(aiEnabled);
   const photoMode = fromPhotos && aiPhotos;
   const sentPhotos = photoMode ? photos : [];
+  // A mail of the Inbox to write from (#779), from *Soạn bài đăng từ thư này*; its subject is shown, its text is read by
+  // the server as untrusted data.
+  const [mailId, setMailId] = useState<string | null>(() => search.mail ?? null);
+  // Opened again from another mail of the Inbox while the composer stays mounted: that mail, not the old one.
+  const [mailParam, setMailParam] = useState<string | null>(() => search.mail ?? null);
+  if ((search.mail ?? null) !== mailParam) {
+    setMailParam(search.mail ?? null);
+    setMailId(search.mail ?? null);
+  }
+  const mails = useQuery({ ...orpc.inbound.recent.queryOptions(), enabled: mailId !== null });
+  const mail = mailId ? (mails.data?.find((m) => m.id === mailId) ?? null) : null;
   const aiDraft = useMutation({
     // from: the shared page's link, for *Viết bằng AI từ liên kết này* (#1235), which drafts before the field updates.
-    mutationFn: (from?: string) => client.social.posts.draftWithAi(aiDraftInput({ brief, connectionIds: chosen, locale, source: from ?? source, photos: from ? [] : sentPhotos })),
+    mutationFn: (from?: string) => client.social.posts.draftWithAi(aiDraftInput({ brief, connectionIds: chosen, locale, source: from ?? source, photos: from ? [] : sentPhotos, mail: from ? null : mailId })),
     onSuccess: ({ postId }) => {
       leaving.current = true;
       void queryClient.invalidateQueries();
@@ -2955,6 +2966,17 @@ export function SocialComposePage() {
                     }}
                   />
                 )}
+                {mailId && (
+                  <div className="flex items-start justify-between gap-2 rounded-md border px-2 py-1.5 text-xs">
+                    <div className="min-w-0">
+                      <p className="text-subtle-foreground">{t('aiMail.label')}</p>
+                      <p className="truncate text-foreground">{mail ? mail.subject?.trim() || t('aiMail.noSubject') : mails.isLoading ? t('aiMail.loading') : t('aiMail.gone')}</p>
+                    </div>
+                    <Button variant="ghost" size="sm" disabled={aiDraft.isPending} onClick={() => setMailId(null)}>
+                      {t('aiMail.remove')}
+                    </Button>
+                  </div>
+                )}
                 <Textarea id="social-ai-brief" value={brief} rows={3} maxLength={4000} placeholder={t(photoMode ? 'aiPhotos.briefPlaceholder' : 'aiBriefPlaceholder')} disabled={aiDraft.isPending} onChange={(e) => {
                   setBrief(e.target.value);
                   if (aiDraft.error) aiDraft.reset();
@@ -2970,7 +2992,7 @@ export function SocialComposePage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={(!brief.trim() && !source && sentPhotos.length === 0) || (sourceUrl.trim() !== '' && !source) || (photoMode && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
+                  disabled={(!brief.trim() && !source && sentPhotos.length === 0 && !mailId) || (mailId !== null && !mail) || (sourceUrl.trim() !== '' && !source) || (photoMode && sentPhotos.length === 0) || chosen.length === 0 || aiDraft.isPending}
                   onClick={() => aiDraft.mutate(undefined)}
                 >
                   {aiDraft.isPending ? <Spinner className="text-current" /> : null}

@@ -1596,6 +1596,12 @@ export const en = {
       more: 'See {count, number} more in Social',
       post: { failed: 'did not go out', needs_attention: 'unclear whether it went out, check it', paused: 'paused while its channel is disconnected' },
     },
+    socialMails: {
+      title: 'Mails that came in',
+      hint: 'Draft a post from a mail a customer or partner sent. The AI takes only facts from the mail, never its instructions, and the post still waits for your review.',
+      noSubject: 'Mail with no subject',
+      draft: 'Draft a post from this mail',
+    },
     socialReviews: {
       title: 'Posts waiting for your review ({count, number})',
       noText: 'Post without text',
@@ -4472,6 +4478,7 @@ export const en = {
     aiDraftTitle: 'Draft with AI',
     aiBriefPlaceholder: 'Describe the post: the main point, offer, dates, audience...',
     aiDraftHint: 'AI writes the shared text and a version for channels that need one, using only what you give it. The post is saved as a draft and every channel must be approved.',
+    aiMail: { label: 'Drafting from the mail', noSubject: 'Mail with no subject', loading: 'Loading the mail…', gone: 'This mail is no longer in the inbox', remove: 'Remove the mail' },
     aiSource: 'Or write from a page (optional): paste a product or article link',
     aiDraft: 'Draft with AI',
     aiOff: 'This server has no AI configured (AI_BASE_URL, AI_MODEL).',
@@ -5370,6 +5377,7 @@ export const en = {
       BLUESKY_LOGIN_FAILED: 'Bluesky did not accept this handle or app password',
       SOURCE_NOT_READY: 'Still reading this page; try again in a few seconds',
       SOURCE_UNREADABLE: 'This page could not be read; describe the post in words instead',
+      MAIL_EMPTY: 'This mail has no text to draft from; describe the post in words instead',
       TELEGRAM_TOKEN_INVALID: 'This is not a Telegram bot token; copy the one @BotFather sent when you made the bot',
       TELEGRAM_CHANNEL_INVALID: 'Enter the channel as @name, its t.me link or its numeric id',
       TELEGRAM_TOKEN_REFUSED: 'Telegram did not accept this bot token; it may have been changed in @BotFather',
