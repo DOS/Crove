@@ -5,6 +5,7 @@ import { randomBytes } from 'node:crypto';
 import type { PostType } from './post-type.ts';
 import type { ChannelOptionsInput, ChannelOptionsResult } from './options.ts';
 import type { Audience } from './audience.ts';
+import type { DailyPerformance } from './performance.ts';
 
 export * from './oauth.ts';
 export * from './text.ts';
@@ -29,6 +30,7 @@ export * from './post-type.ts';
 export * from './recent.ts';
 export * from './audience.ts';
 export * from './options.ts';
+export * from './performance.ts';
 
 export const CHANNEL_PROVIDERS = [
   'sandbox',
@@ -219,7 +221,8 @@ export interface AccountMetricsInput {
   secret: string;
   audience?: boolean;
 }
-export type AccountMetricsResult = { followers: number | null; reach?: number | null; audience?: Audience | null } | { refused: 'token_expired' | 'permission' } | null;
+// performance (#1477): a Google Business Profile location's figures per day (performance.ts); absent elsewhere.
+export type AccountMetricsResult = { followers: number | null; reach?: number | null; audience?: Audience | null; performance?: DailyPerformance } | { refused: 'token_expired' | 'permission' } | null;
 
 // The posts an account published itself, outside Crove (#1054), so the Metrics tab and the client report can count
 // every post of the account when asked. since: how far back, clamped to RECENT_POSTS_MAX_DAYS before now. null: no
