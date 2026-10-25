@@ -149,8 +149,8 @@ const numberAllocationRow = (o: { id: string; owner: string }, seriesId: string)
   id: randomUUID(),
   series_id: seriesId,
   number: 1,
-  document_type: 'rls.matrix',
-  document_id: randomUUID(),
+  target_type: 'rls.matrix',
+  target_id: randomUUID(),
   allocated_by: o.owner,
 });
 const socialPostRow = (o: { id: string }) => ({ org_id: o.id, id: randomUUID(), body: 'RLS matrix post' });
@@ -664,8 +664,6 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
   },
   // A kind of notification a member turned off (#671), under the same restrictive policy; a kind of its own per row.
   'crove_kernel.notification_mute': { make: (o) => ({ row: { org_id: o.id, user_id: o.owner, kind: `kernel.rls_${tag()}` } }) },
-  // Definer-only machinery (Social plan §3.5, S6): one single-use OAuth state per connect attempt, holding the hash of
-  // the state parameter and the PKCE verifier; only the start and callback definers touch it.
   // Gapless numbering (ADR-0021 §2, #1401): the counter of a series, the numbers it gave out (append-only), the voids
   // of numbers (append-only, one per number), and the reset policy of a document type.
   'crove_kernel.number_allocation': {
@@ -691,6 +689,8 @@ const ROW_FACTORIES: Record<string, RowFactory> = {
       };
     },
   },
+  // Definer-only machinery (Social plan §3.5, S6): one single-use OAuth state per connect attempt, holding the hash of
+  // the state parameter and the PKCE verifier; only the start and callback definers touch it.
   'crove_kernel.oauth_state': {
     make: (o) => ({ row: { org_id: o.id, user_id: o.owner, provider: 'sandbox', state_hash: `sha256:${hex64()}`, expires_at: '2099-01-01T00:00:00Z' } }),
   },
