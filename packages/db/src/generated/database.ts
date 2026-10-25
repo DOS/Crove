@@ -29,6 +29,7 @@ export interface CroveFinanceSchema {
   'crove_finance.journal_line': FinanceJournalLineTable;
   'crove_finance.journal_voucher': FinanceJournalVoucherTable;
   'crove_finance.org_account': FinanceOrgAccountTable;
+  'crove_finance.period_balance_delta': FinancePeriodBalanceDeltaTable;
   'crove_finance.period_lock': FinancePeriodLockTable;
   'crove_finance.portal_invoice_list': FinancePortalInvoiceListTable;
   'crove_finance.portal_invoice_row': FinancePortalInvoiceRowTable;
@@ -347,6 +348,18 @@ export interface FinanceOrgAccountTable {
   created_at: ColumnType<Date, Date | string | undefined, NotGranted>;
   updated_by: string | null;
   updated_at: ColumnType<Date, Date | string | undefined, NotGranted>;
+}
+
+/** crove_finance.period_balance_delta */
+export interface FinancePeriodBalanceDeltaTable {
+  org_id: ColumnType<string, NotGranted, NotGranted>;
+  id: ColumnType<string, NotGranted, NotGranted>;
+  entry_id: ColumnType<string, NotGranted, NotGranted>;
+  account_code: ColumnType<string, NotGranted, NotGranted>;
+  period_month: ColumnType<string, NotGranted, NotGranted>;
+  debit: ColumnType<string, NotGranted, NotGranted>;
+  credit: ColumnType<string, NotGranted, NotGranted>;
+  line_count: ColumnType<number, NotGranted, NotGranted>;
 }
 
 /** crove_finance.period_lock */
@@ -1540,6 +1553,7 @@ export interface SocialPostTable {
   archived_by: string | null;
   due_soon_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   overdue_reminded_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
+  search_text: ColumnType<string | null, never, never>;
 }
 
 /** crove_social.post_variant */
@@ -1591,6 +1605,7 @@ export interface SocialPostVariantTable {
   edit_state: string | null;
   published_revision: number | null;
   edit_error_code: string | null;
+  search_text: ColumnType<string | null, never, never>;
 }
 
 /** crove_social.post_version */

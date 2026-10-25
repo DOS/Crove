@@ -16,6 +16,7 @@ import { Runtime } from '@crove/kernel-runtime';
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
 const MIGRATION = readFileSync(new URL('../../../supabase/migrations/20261030001000_crove_kernel_legal_entity.sql', import.meta.url), 'utf8');
+const SYNC_MIGRATION = readFileSync(new URL('../../../supabase/migrations/20261101110000_crove_kernel_default_entity_tax_sync.sql', import.meta.url), 'utf8');
 const suite = ADMIN ? describe : describe.skip;
 
 suite('legal entities on PostgreSQL (#1278)', () => {
@@ -190,6 +191,106 @@ suite('legal entities on PostgreSQL (#1278)', () => {
     await expect(o.exec(o.owner, 'kernel.org.set_tax_code', { taxCode: '0101234564-001' })).rejects.toMatchObject({ status: 409, code: 'LEGAL_ENTITY_TAX_CODE_TAKEN' });
     expect(await o.tenantTaxCode()).toBeNull();
     expect((await o.list(o.owner))[0]).toMatchObject({ isDefault: true, taxCode: null });
+  });
+
+  it('moves the default entity with a staff change of the tenant tax code, so the default stays editable (#1316)', async () => {
+    const o = await org();
+    await o.exec(o.owner, 'kernel.org.set_tax_code', { taxCode: '0101234564' });
+    const [main] = await o.list(o.owner);
+    const defaultRow = async () =>
+      (
+        await admin((c) =>
+          c.query<{ tax_code: string | null; updated_by: string | null }>('SELECT tax_code, updated_by FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [
+            o.orgId,
+          ]),
+        )
+      ).rows[0];
+    // kernel.org.set_tax_code still keeps both, the database writing the default entity in the caller's name.
+    expect(await defaultRow()).toEqual({ tax_code: '0101234564', updated_by: o.owner });
+
+    // A support fix straight on the tenant row (staff, the path tenant_tax_code_guard leaves open).
+    await admin((c) => c.query(`UPDATE crove_kernel.tenant SET tax_code = '0312345670' WHERE org_id = $1`, [o.orgId]));
+    expect(await o.tenantTaxCode()).toBe('0312345670');
+    expect(await defaultRow()).toEqual({ tax_code: '0312345670', updated_by: null });
+
+    // The default entity can be renamed afterwards (before #1316 this failed: its old code was not the tenant's).
+    await expect(
+      o.exec(o.admin, 'kernel.legal_entity.update', { legalEntityId: main!.id, name: 'Tên mới', kind: 'company', taxCode: '0312345670', parentId: null }),
+    ).resolves.toMatchObject({ name: 'Tên mới', taxCode: '0312345670', isDefault: true });
+    expect(await o.tenantTaxCode()).toBe('0312345670');
+
+    // Staff clear it: the default entity follows.
+    await admin((c) => c.query('UPDATE crove_kernel.tenant SET tax_code = NULL WHERE org_id = $1', [o.orgId]));
+    expect(await defaultRow()).toMatchObject({ tax_code: null });
+
+    // A code another entity of the org holds fails the staff change itself, and nothing changes.
+    await o.exec(o.owner, 'kernel.legal_entity.create', { name: 'Chi nhánh', kind: 'branch', taxCode: '0312345670-001', parentId: main!.id });
+    await expect(admin((c) => c.query(`UPDATE crove_kernel.tenant SET tax_code = '0312345670-001' WHERE org_id = $1`, [o.orgId]))).rejects.toMatchObject({
+      code: '23505',
+      constraint: 'legal_entity_tax_code_uq',
+    });
+    await expect(o.exec(o.owner, 'kernel.org.set_tax_code', { taxCode: '0312345670-001' })).rejects.toMatchObject({ status: 409, code: 'LEGAL_ENTITY_TAX_CODE_TAKEN' });
+    expect(await o.tenantTaxCode()).toBeNull();
+    expect(await defaultRow()).toMatchObject({ tax_code: null });
+
+    // The guard's rules stand: a member's own write of the tenant code is refused before the default entity moves, and
+    // an admin's write outside kernel.org.set_tax_code (no audit row) is refused at commit with it.
+    const app = new URL(adminUrl);
+    app.username = 'crove_app';
+    app.password = 'test-app-pw';
+    const c = new pg.Client({ connectionString: app.toString() });
+    await c.connect();
+    try {
+      for (const [user, error] of [
+        [o.member, /TAX_CODE_FORBIDDEN/],
+        [o.admin, /TAX_CODE_UNAUDITED/],
+      ] as const) {
+        await c.query('BEGIN');
+        try {
+          await c.query('SELECT crove_kernel.enter_context($1, $2)', [user, o.orgId]);
+          await expect(
+            (async () => {
+              await c.query(`UPDATE crove_kernel.tenant SET tax_code = '0101234564' WHERE org_id = $1`, [o.orgId]);
+              await c.query('COMMIT');
+            })(),
+          ).rejects.toThrow(error);
+        } finally {
+          await c.query('ROLLBACK');
+        }
+      }
+    } finally {
+      await c.end();
+    }
+    expect(await o.tenantTaxCode()).toBeNull();
+    expect(await defaultRow()).toMatchObject({ tax_code: null });
+  });
+
+  it('repairs a default entity left on an old code, unless another entity holds the org code (#1316)', async () => {
+    const drifted = await org();
+    const blocked = await org();
+    const [blockedMain] = await blocked.list(blocked.owner);
+    await blocked.exec(blocked.owner, 'kernel.legal_entity.create', { name: 'Chi nhánh', kind: 'branch', taxCode: '0101234564-001', parentId: blockedMain!.id });
+    // A staff change from before this fix: the tenant row moved alone.
+    await admin(async (c) => {
+      await c.query("SET session_replication_role = 'replica'");
+      await c.query(`UPDATE crove_kernel.tenant SET tax_code = '0312345670' WHERE org_id = $1`, [drifted.orgId]);
+      await c.query(`UPDATE crove_kernel.tenant SET tax_code = '0101234564-001' WHERE org_id = $1`, [blocked.orgId]);
+    });
+    const codeOf = async (o: { orgId: string }) =>
+      (await admin((c) => c.query<{ tax_code: string | null }>('SELECT tax_code FROM crove_kernel.legal_entity WHERE org_id = $1 AND is_default', [o.orgId]))).rows[0]
+        ?.tax_code;
+    expect(await codeOf(drifted)).toBeNull();
+
+    await admin(async (c) => {
+      for (let run = 0; run < 2; run += 1) {
+        await c.query('BEGIN');
+        await c.query(SYNC_MIGRATION);
+        await c.query('COMMIT');
+      }
+    });
+    expect(await codeOf(drifted)).toBe('0312345670');
+    expect(await codeOf(blocked)).toBeNull();
+    expect(await blocked.tenantTaxCode()).toBe('0101234564-001');
   });
 
   it('holds one default per org, no delete and no change of the default flag for tenant code', async () => {
