@@ -61,7 +61,8 @@ test('import a bank statement, then an overlapping one, and find each line once'
     await expect(page.getByLabel('Loại chứng từ').first()).toHaveValue('bank_debit');
     await expect(page.getByLabel('Loại chứng từ').first()).toBeDisabled();
     await expect(page.getByLabel('Ngày chứng từ')).toHaveValue('03/09/2026');
-    await expect(page.getByLabel('Số tiền dòng 1')).toHaveValue('11000');
+    // Amount fields show Vietnamese digit grouping when not being typed in (#1391).
+    await expect(page.getByLabel('Số tiền dòng 1')).toHaveValue('11.000');
     await expect(page.getByLabel('Lý do chi')).toHaveValue('Phí SMS');
     // A bank fee settles no vendor: as an expense line it needs no party.
     await page.getByLabel('Tài khoản đối ứng dòng 1').selectOption('6422');
