@@ -430,12 +430,13 @@ export function createRpcHandler(
         inOrg(context, async (orgId, actor) => {
           const { done, ...mark } = input;
           if (finance && mark.obligation === 'vat_return' && /^\d{4}-(\d{2}|Q\d)$/.test(mark.period)) {
-            // finance.vat.return_mark records the default entity's return until finance files per entity (#1280 part 2),
-            // so a mark naming an entity is refused here rather than recorded without its figures.
-            if (mark.legalEntityId !== undefined) {
-              throw new DomainError('VAT_RETURN_ENTITY_UNSUPPORTED', 422, 'Chưa đánh dấu được tờ khai GTGT theo từng pháp nhân');
-            }
-            await runtime.execute('finance.vat.return_mark', { period: mark.period, done }, { actor, orgId });
+            // Each legal entity files its own return (#1280 part 2b): the entity named, else the one resolved for the
+            // caller, as on the VAT screen.
+            await runtime.execute(
+              'finance.vat.return_mark',
+              { period: mark.period, done, ...(mark.legalEntityId !== undefined ? { legalEntityId: mark.legalEntityId } : {}) },
+              { actor, orgId },
+            );
             return { ...mark, done };
           }
           return runtime.execute(done ? 'kernel.tax_obligation.done' : 'kernel.tax_obligation.undo', mark, { actor, orgId });
@@ -1634,8 +1635,8 @@ export function createRpcHandler(
       ),
     },
     accountRules: {
-      list: os.accountRules.list.handler(({ context }) =>
-        inFinance(context, (orgId, actor) => runtime.query('finance.categorization_rules.list', {}, { actor, orgId })),
+      list: os.accountRules.list.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.categorization_rules.list', input ?? {}, { actor, orgId })),
       ),
       create: os.accountRules.create.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.execute('finance.categorization_rule.create', input, { actor, orgId })),
@@ -1710,8 +1711,8 @@ export function createRpcHandler(
       ),
     },
     fixedAssets: {
-      list: os.fixedAssets.list.handler(({ context }) =>
-        inFinance(context, (orgId, actor) => runtime.query('finance.fixed_assets.list', {}, { actor, orgId })),
+      list: os.fixedAssets.list.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.fixed_assets.list', input ?? {}, { actor, orgId })),
       ),
       create: os.fixedAssets.create.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => {
@@ -1767,7 +1768,9 @@ export function createRpcHandler(
       suggestions: os.bank.suggestions.handler(({ context, input }) =>
         inFinance(context, (orgId, actor) => runtime.query('finance.bank.suggestions', input, { actor, orgId })),
       ),
-      openLines: os.bank.openLines.handler(({ context }) => inFinance(context, (orgId, actor) => runtime.query('finance.bank.open_lines', {}, { actor, orgId }))),
+      openLines: os.bank.openLines.handler(({ context, input }) =>
+        inFinance(context, (orgId, actor) => runtime.query('finance.bank.open_lines', input ?? {}, { actor, orgId })),
+      ),
     },
     // AI agents (ADR-0029). The kernel module owns them; a template of a module that is off answers MODULE_DISABLED.
     chart: {

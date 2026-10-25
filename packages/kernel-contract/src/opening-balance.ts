@@ -27,6 +27,8 @@ export const zOpeningBalanceImport = z.object({
   // The balances as at the end of this day; the entry is dated on it.
   asOf: zLocalDate,
   rows: z.array(zOpeningBalanceRow).max(OPENING_BALANCE_MAX_ROWS),
+  // Each legal entity has its own opening entry (#1280): legalEntityId as in zLegalEntityChoice.
+  legalEntityId: zId.optional(),
 });
 export type OpeningBalanceImport = z.infer<typeof zOpeningBalanceImport>;
 

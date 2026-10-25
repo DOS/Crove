@@ -22,6 +22,9 @@ export const zFixedAssetCreate = z.object({
   months: z.number().int().min(1).max(600),
   // The approved purchase line it comes from, when it does.
   source: z.object({ documentId: zId, lineNo: z.number().int().positive() }).nullable().optional(),
+  // The register of one legal entity (#1280), as in zLegalEntityChoice; an entry from a purchase line is in the
+  // document's entity.
+  legalEntityId: zId.optional(),
 });
 export type FixedAssetCreate = z.infer<typeof zFixedAssetCreate>;
 

@@ -82,6 +82,33 @@
   ::backdrop {
     border-color: var(--line);
   }
+  /* A thin scrollbar in the theme's colors, as in the app (packages/ui globals.css): webkit rules for Chromium and
+     Safari, the standard properties for Firefox. */
+  @supports not selector(::-webkit-scrollbar) {
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
+    }
+  }
+  @supports selector(::-webkit-scrollbar) {
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track,
+    ::-webkit-scrollbar-corner {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: var(--line-strong);
+      border: 2px solid transparent;
+      border-radius: 9999px;
+      background-clip: padding-box;
+    }
+    ::-webkit-scrollbar-button {
+      display: none;
+    }
+  }
   html {
     scroll-behavior: smooth;
     scroll-padding-top: 4.5rem;

@@ -4,12 +4,14 @@
 // word must start a word of the row (a prefix match): parties by name or tax code, documents by series and number or
 // by their party, entries by description, and entries by amount when what was typed reads as one. Each group holds at
 // most SEARCH_LIMIT rows: parties with the closest match first, documents and entries newest first. It runs as the
-// member, so row security keeps it inside the org.
+// member, so row security keeps it inside the org. Documents and entries are those of one legal entity (#1280); parties
+// are the org's.
 import { sql } from 'kysely';
 import { z } from 'zod';
-import type { DocumentDirection } from '@crove/kernel-contract';
+import { zId, type DocumentDirection } from '@crove/kernel-contract';
 import type { MemberRole } from '@crove/db';
 import { defineQuery, type QueryContext } from '@crove/kernel-runtime';
+import { resolveLegalEntity } from './legal-entity.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 
@@ -109,7 +111,7 @@ async function searchParties(ctx: QueryContext, q: string): Promise<SearchResult
 
 // Documents whose own series or number match, and documents of the parties that match, in two queries so each uses
 // its index; merged newest first.
-async function searchDocuments(ctx: QueryContext, q: string): Promise<SearchResult['documents']> {
+async function searchDocuments(ctx: QueryContext, q: string, legalEntityId: string): Promise<SearchResult['documents']> {
   const base = () =>
     ctx.trx
       .selectFrom('crove_finance.purchase_document as d')
@@ -128,6 +130,7 @@ async function searchDocuments(ctx: QueryContext, q: string): Promise<SearchResu
         'v.document_id as voided_id',
       ])
       .where('d.org_id', '=', ctx.orgId)
+      .where('d.legal_entity_id', '=', legalEntityId)
       .orderBy('d.invoice_date', 'desc')
       .orderBy('d.created_at', 'desc')
       .limit(SEARCH_LIMIT);
@@ -178,7 +181,7 @@ async function searchDocuments(ctx: QueryContext, q: string): Promise<SearchResu
     }));
 }
 
-async function searchEntries(ctx: QueryContext, q: string): Promise<SearchResult['entries']> {
+async function searchEntries(ctx: QueryContext, q: string, legalEntityId: string): Promise<SearchResult['entries']> {
   const amount = searchAmount(q);
   const base = () =>
     ctx.trx
@@ -194,6 +197,7 @@ async function searchEntries(ctx: QueryContext, q: string): Promise<SearchResult
           .as('amount'),
       )
       .where('j.org_id', '=', ctx.orgId)
+      .where('j.legal_entity_id', '=', legalEntityId)
       .orderBy('j.entry_date', 'desc')
       .orderBy('j.created_at', 'desc')
       .limit(SEARCH_LIMIT);
@@ -209,6 +213,7 @@ async function searchEntries(ctx: QueryContext, q: string): Promise<SearchResult
               .selectFrom('crove_finance.journal_line as l')
               .select('l.entry_id')
               .where('l.org_id', '=', ctx.orgId)
+              .where('l.legal_entity_id', '=', legalEntityId)
               .where(sql<boolean>`(l.debit + l.credit) = ${amount}::numeric`),
           )
           .execute();
@@ -228,15 +233,16 @@ async function searchEntries(ctx: QueryContext, q: string): Promise<SearchResult
 export const searchQuery = defineQuery({
   name: 'finance.search',
   // Two characters at least: a one-letter prefix matches nearly every row and says nothing.
-  input: z.object({ q: z.string().trim().min(2).max(100) }),
+  input: z.object({ q: z.string().trim().min(2).max(100), legalEntityId: zId.optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<SearchResult> => {
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     // Nothing left to match once folded ("!!", "--"): no query to run.
     if (!/[\p{L}\p{N}]/u.test(input.q)) return { parties: [], documents: [], entries: [] };
     return {
       parties: await searchParties(ctx, input.q),
-      documents: await searchDocuments(ctx, input.q),
-      entries: await searchEntries(ctx, input.q),
+      documents: await searchDocuments(ctx, input.q, legalEntityId),
+      entries: await searchEntries(ctx, input.q, legalEntityId),
     };
   },
 });

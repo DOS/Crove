@@ -18,7 +18,8 @@ import { zId, zVatPeriod, MAX_PORTAL_LISTS_PER_PERIOD, PORTAL_XML_PER_SYNC } fro
 import type { MemberRole } from '@crove/db';
 import { DomainError, defineCommand, defineQuery } from '@crove/kernel-runtime';
 import { parseTaxCode } from '@crove/l10n-vn';
-import { reconcilePeriod } from './portal-list.ts';
+import { portalPeriodLock, reconcilePeriod } from './portal-list.ts';
+import { defaultLegalEntityId, legalEntityNotAllowed } from './legal-entity.ts';
 import { PORTAL_SYNC_CONTENT_TYPE, XML_CHECK_RESULT } from './domain/portal-api.ts';
 import { vatPeriod } from './domain/vat-return.ts';
 
@@ -194,9 +195,6 @@ export const portalSyncCallEnd = defineCommand({
 // The synced list
 // ---------------------------------------------------------------------------------------------------------------------
 
-const periodLock = (orgId: string, period: string) =>
-  sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.portal_list:${orgId}:${period}`}, 0))`;
-
 export const portalSyncList = defineCommand({
   name: 'finance.portal_sync.list',
   input: z.object({ period: zVatPeriod, fileId: zId }),
@@ -214,11 +212,16 @@ export const portalSyncList = defineCommand({
       .where('id', '=', input.fileId)
       .executeTakeFirst();
     if (!file || file.source !== 'import' || file.content_type !== PORTAL_SYNC_CONTENT_TYPE) throw new DomainError('NOT_FOUND', 404, 'Không tìm thấy dữ liệu đã lấy từ cổng thuế');
-    await periodLock(ctx.orgId, input.period).execute(ctx.trx);
+    // The portal is logged in to with the org's tax code, so a synced list is the default legal entity's (#1280) until
+    // the sync logs in per entity.
+    const legalEntityId = await defaultLegalEntityId(ctx);
+    if (legalEntityId === null) throw legalEntityNotAllowed();
+    await portalPeriodLock(ctx.orgId, legalEntityId, input.period).execute(ctx.trx);
     const active = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')
       .select(['id', 'file_id', 'status'])
       .where('org_id', '=', ctx.orgId)
+      .where('legal_entity_id', '=', legalEntityId)
       .where('period', '=', input.period)
       .where('removed_at', 'is', null)
       .execute();
@@ -231,6 +234,7 @@ export const portalSyncList = defineCommand({
       .innerJoin('crove_kernel.file as f', (join) => join.onRef('f.org_id', '=', 'l.org_id').onRef('f.id', '=', 'l.file_id'))
       .select('l.id')
       .where('l.org_id', '=', ctx.orgId)
+      .where('l.legal_entity_id', '=', legalEntityId)
       .where('l.period', '=', input.period)
       .where('l.removed_at', 'is', null)
       .where('f.content_type', '=', PORTAL_SYNC_CONTENT_TYPE)
@@ -253,7 +257,7 @@ export const portalSyncList = defineCommand({
     }
     const list = await ctx.trx
       .insertInto('crove_finance.portal_invoice_list')
-      .values({ org_id: ctx.orgId, period: input.period, file_id: file.id, filename: `Cổng thuế ${input.period}.json`, created_by: ctx.actor.userId })
+      .values({ org_id: ctx.orgId, legal_entity_id: legalEntityId, period: input.period, file_id: file.id, filename: `Cổng thuế ${input.period}.json`, created_by: ctx.actor.userId })
       .returning('id')
       .executeTakeFirstOrThrow();
     ctx.audit({ period: input.period, file_id: file.id, source: 'portal_sync', replaced: synced.length });
@@ -286,7 +290,7 @@ export const portalSyncXmlPlan = defineQuery({
     const list = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list as l')
       .innerJoin('crove_kernel.file as f', (join) => join.onRef('f.org_id', '=', 'l.org_id').onRef('f.id', '=', 'l.file_id'))
-      .select(['l.id', 'l.period', 'l.status'])
+      .select(['l.id', 'l.period', 'l.status', 'l.legal_entity_id'])
       .where('l.org_id', '=', ctx.orgId)
       .where('l.id', '=', input.listId)
       // The list of the period the portal session was opened for, not another one of the org.
@@ -308,7 +312,7 @@ export const portalSyncXmlPlan = defineQuery({
           .execute()
       ).map((r) => r.row_no),
     );
-    const { reconciliation } = await reconcilePeriod(ctx, list.period);
+    const { reconciliation } = await reconcilePeriod(ctx, list.period, list.legal_entity_id);
     const seen = new Set<string>();
     const missing: PortalXmlItem[] = [];
     for (const item of reconciliation.items) {

@@ -38,6 +38,7 @@ import { portalStatus } from './domain/portal-status.ts';
 import { PORTAL_SYNC_CONTENT_TYPE, readSyncedList } from './domain/portal-api.ts';
 import { reconcilePortalList, type CroveInvoice, type PortalRow, type Reconciliation } from './domain/portal-reconcile.ts';
 import { vatPeriod, type VatPeriod } from './domain/vat-return.ts';
+import { defaultLegalEntityId, resolveLegalEntity } from './legal-entity.ts';
 
 const ALL: readonly MemberRole[] = ['owner', 'admin', 'member', 'viewer'];
 const EDITORS: readonly MemberRole[] = ['owner', 'admin', 'member'];
@@ -53,12 +54,14 @@ export const PORTAL_PERIOD_ROW_LIMIT = 50_000;
 export const PORTAL_RECONCILE_ITEMS_PER_OUTCOME = 500;
 const ROW_INSERT_BATCH = 500;
 const vnNumber = (n: number) => n.toLocaleString('vi-VN');
-const periodLock = (orgId: string, period: string) =>
-  sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.portal_list:${orgId}:${period}`}, 0))`;
+// The lists of one VAT period of one legal entity (#1280) are serialized; portal-sync.ts takes the same lock.
+export const portalPeriodLock = (orgId: string, legalEntityId: string, period: string) =>
+  sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`finance.portal_list:${orgId}:${legalEntityId}:${period}`}, 0))`;
 
 export const portalListImport = defineCommand({
   name: 'finance.portal_list.import',
-  input: z.object({ period: zVatPeriod, fileId: zId }),
+  // The list of one legal entity's period (#1280): legalEntityId as in zLegalEntityChoice.
+  input: z.object({ period: zVatPeriod, fileId: zId, legalEntityId: zId.optional() }),
   risk: 'R1',
   access: EDITORS,
   handler: async (ctx, input) => {
@@ -81,25 +84,28 @@ export const portalListImport = defineCommand({
     if (!tenant?.tax_code) {
       throw new DomainError('TAX_CODE_REQUIRED', 409, 'Hãy nhập mã số thuế của công ty trong Cài đặt trước khi nhập danh sách hóa đơn từ cổng thuế');
     }
+    const legalEntityId = await resolveLegalEntity(ctx, input.legalEntityId);
     // Serializes imports of one period, so the count below and the unique index agree.
-    await periodLock(ctx.orgId, input.period).execute(ctx.trx);
+    await portalPeriodLock(ctx.orgId, legalEntityId, input.period).execute(ctx.trx);
     const active = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')
-      .select(['id', 'file_id'])
+      .select(['id', 'file_id', 'legal_entity_id'])
       .where('org_id', '=', ctx.orgId)
       .where('period', '=', input.period)
       .where('removed_at', 'is', null)
       .execute();
+    // A file is one period's list once, in whichever entity it was imported (the unique index is per org and period).
     if (active.some((l) => l.file_id === input.fileId)) {
       throw new DomainError('PORTAL_LIST_EXISTS', 409, `Tệp này đã được nhập cho kỳ ${input.period}`);
     }
-    if (active.length >= MAX_PORTAL_LISTS_PER_PERIOD) {
+    if (active.filter((l) => l.legal_entity_id === legalEntityId).length >= MAX_PORTAL_LISTS_PER_PERIOD) {
       throw new DomainError('PORTAL_LIST_LIMIT', 409, `Mỗi kỳ nhập tối đa ${MAX_PORTAL_LISTS_PER_PERIOD} danh sách; hãy gỡ bớt danh sách cũ`);
     }
     const list = await ctx.trx
       .insertInto('crove_finance.portal_invoice_list')
       .values({
         org_id: ctx.orgId,
+        legal_entity_id: legalEntityId,
         period: input.period,
         file_id: file.id,
         filename: file.filename.slice(0, 255),
@@ -107,7 +113,7 @@ export const portalListImport = defineCommand({
       })
       .returning('id')
       .executeTakeFirstOrThrow();
-    ctx.audit({ period: input.period, file_id: file.id });
+    ctx.audit({ period: input.period, file_id: file.id, legal_entity_id: legalEntityId });
     await ctx.activity('finance.portal_invoice_list', list.id, 'portal_list.imported', `Nhập danh sách hóa đơn mua vào từ cổng thuế, kỳ ${input.period}`);
     await ctx.emit('finance.portal_list.import_requested', { listId: list.id });
     return { listId: list.id };
@@ -205,7 +211,7 @@ export const portalListRecord = defineCommand({
   handler: async (ctx, input) => {
     const list = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')
-      .select(['id', 'status', 'period'])
+      .select(['id', 'status', 'period', 'legal_entity_id'])
       .where('org_id', '=', ctx.orgId)
       .where('id', '=', input.listId)
       .forUpdate()
@@ -229,12 +235,14 @@ export const portalListRecord = defineCommand({
       return { listId: list.id, recorded: true };
     };
     if (input.status === 'failed') return fail(input.error);
-    // The period's rows stay within PORTAL_PERIOD_ROW_LIMIT; serialized with the period's imports and other records.
-    await periodLock(ctx.orgId, list.period).execute(ctx.trx);
+    // The period's rows (of the list's legal entity, #1280) stay within PORTAL_PERIOD_ROW_LIMIT; serialized with the
+    // period's imports and other records.
+    await portalPeriodLock(ctx.orgId, list.legal_entity_id, list.period).execute(ctx.trx);
     const held = await ctx.trx
       .selectFrom('crove_finance.portal_invoice_list')
       .select(sql<string>`coalesce(sum(row_count), 0)::text`.as('rows'))
       .where('org_id', '=', ctx.orgId)
+      .where('legal_entity_id', '=', list.legal_entity_id)
       .where('period', '=', list.period)
       .where('status', '=', 'done')
       .where('removed_at', 'is', null)
@@ -294,11 +302,12 @@ export const portalListRecord = defineCommand({
   },
 });
 
-async function periodLists(ctx: QueryContext, period: string): Promise<PortalListView[]> {
+async function periodLists(ctx: QueryContext, period: string, legalEntityId: string): Promise<PortalListView[]> {
   const lists = await ctx.trx
     .selectFrom('crove_finance.portal_invoice_list')
     .select(['id', 'period', 'file_id', 'filename', 'status', 'error', 'row_count', 'list_from', 'list_to', 'skipped_count', 'skipped', 'own_sales_count', 'other_buyer_count', 'created_at'])
     .where('org_id', '=', ctx.orgId)
+    .where('legal_entity_id', '=', legalEntityId)
     .where('period', '=', period)
     .where('removed_at', 'is', null)
     .orderBy('created_at')
@@ -340,8 +349,9 @@ function addDays(date: string, days: number): string {
 // Crove's purchases dated in [from, to]: the recorded documents that are not voided, and the purchase proposals waiting
 // in the Inbox. Also the documents dated before the period but posted in it (#478): the VAT working declares them in
 // the period of their posting date, so the reconciliation reports them there (declared_late, #560). Each document
-// carries its posting date, the date of its own journal entry (every document has one: purchase_document_entry).
-async function croveInvoices(ctx: QueryContext, from: string, to: string, period: { from: string; to: string }): Promise<CroveInvoice[]> {
+// carries its posting date, the date of its own journal entry (every document has one: purchase_document_entry). All of
+// one legal entity (#1280): its documents, and the proposals that name it (or name none, for the default entity).
+async function croveInvoices(ctx: QueryContext, from: string, to: string, period: { from: string; to: string }, legalEntityId: string): Promise<CroveInvoice[]> {
   const documents = await ctx.trx
     .selectFrom('crove_finance.purchase_document as d')
     .innerJoin('crove_kernel.party as p', (join) => join.onRef('p.org_id', '=', 'd.org_id').onRef('p.id', '=', 'd.party_id'))
@@ -364,6 +374,7 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string, period
       sql<string | null>`q.payload #>> '{invoice,template}'`.as('template'),
     ])
     .where('d.org_id', '=', ctx.orgId)
+    .where('d.legal_entity_id', '=', legalEntityId)
     .where('d.direction', '=', 'purchase')
     .where((eb) =>
       eb.or([
@@ -376,10 +387,12 @@ async function croveInvoices(ctx: QueryContext, from: string, to: string, period
     )
     .limit(PORTAL_RECONCILE_LIMIT + 1)
     .execute();
+  const isDefault = legalEntityId === (await defaultLegalEntityId(ctx));
   const proposals = await ctx.trx
     .selectFrom('crove_kernel.proposal')
     .select(['id', 'payload', 'source_file_id'])
     .where('org_id', '=', ctx.orgId)
+    .where(isDefault ? sql<boolean>`coalesce(payload ->> 'legalEntityId', ${legalEntityId}) = ${legalEntityId}` : sql<boolean>`payload ->> 'legalEntityId' = ${legalEntityId}`)
     .where('kind', '=', 'finance.purchase')
     .where('status', '=', 'pending')
     .where(sql`coalesce(payload ->> 'direction', 'purchase')`, '=', 'purchase')
@@ -441,10 +454,14 @@ export function firstPerOutcome<T extends { outcome: string }>(items: readonly T
 }
 
 // The full reconciliation of one VAT period: the period, its lists and every item (uncut). The reconcile query cuts
-// the items per outcome; the missing-invoice request (#669) reads the 'missing' ones.
-export async function reconcilePeriod(ctx: QueryContext, periodKey: string): Promise<{ period: VatPeriod; lists: PortalListView[]; reconciliation: Reconciliation }> {
+// the items per outcome; the missing-invoice request (#669) reads the 'missing' ones. Of one legal entity (#1280).
+export async function reconcilePeriod(
+  ctx: QueryContext,
+  periodKey: string,
+  legalEntityId: string,
+): Promise<{ period: VatPeriod; lists: PortalListView[]; reconciliation: Reconciliation }> {
   const period = vatPeriod(periodKey);
-  const lists = await periodLists(ctx, periodKey);
+  const lists = await periodLists(ctx, periodKey, legalEntityId);
   const done = lists.filter((l) => l.status === 'done').map((l) => l.id);
   const rows: PortalRow[] =
     done.length === 0
@@ -480,16 +497,16 @@ export async function reconcilePeriod(ctx: QueryContext, periodKey: string): Pro
   const from = addDays([period.from, dates[0] ?? period.from].sort()[0] ?? period.from, -31);
   const to = addDays([period.to, dates.at(-1) ?? period.to].sort().at(-1) ?? period.to, 31);
   // Without a list there is nothing to compare: Crove's invoices are not all reported as "not on the portal".
-  const reconciliation = done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to, period), period);
+  const reconciliation = done.length === 0 ? reconcilePortalList([], [], period) : reconcilePortalList(rows, await croveInvoices(ctx, from, to, period, legalEntityId), period);
   return { period, lists, reconciliation };
 }
 
 export const portalListReconcile = defineQuery({
   name: 'finance.portal_list.reconcile',
-  input: z.object({ period: zVatPeriod }),
+  input: z.object({ period: zVatPeriod, legalEntityId: zId.optional() }),
   access: ALL,
   handler: async (ctx, input): Promise<PortalReconciliation> => {
-    const { period, lists, reconciliation } = await reconcilePeriod(ctx, input.period);
+    const { period, lists, reconciliation } = await reconcilePeriod(ctx, input.period, await resolveLegalEntity(ctx, input.legalEntityId));
     const items = firstPerOutcome(reconciliation.items, PORTAL_RECONCILE_ITEMS_PER_OUTCOME);
     return { period, lists, summary: reconciliation.summary, items, truncated: items.length < reconciliation.items.length };
   },
