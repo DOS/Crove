@@ -1,12 +1,12 @@
-// The legal entity switcher of the app shell (issue #1486, the screens of #1280): under the org switch, on the finance
-// books' screens, when the caller sees more than one legal entity. The screens read the same choice with
-// useLegalEntity.
+// The legal entity switcher of the app shell (issue #1486, the screens of #1280): under the org switch, on the screens
+// that work in one entity (the finance books, the Overview and Settings), when the caller sees more than one. The
+// screens read the same choice with useLegalEntity.
 import { useLocation } from '@tanstack/react-router';
 import { useId } from 'react';
 import { useTranslations } from 'use-intl';
 import { Label } from '@crove/ui/components/label';
 import { NativeSelect, NativeSelectOption } from '@crove/ui/components/native-select';
-import { chooseEntity, isFinanceBookPath, keepEntity, useKeptEntity, type VisibleEntity } from '../lib/legal-entity-choice.ts';
+import { chooseEntity, isEntityPath, keepEntity, useKeptEntity, type VisibleEntity } from '../lib/legal-entity-choice.ts';
 
 const NONE: readonly VisibleEntity[] = [];
 
@@ -30,7 +30,7 @@ export function EntitySwitcher({ slug }: { slug: string }) {
   const id = useId();
   const { pathname } = useLocation();
   const { entities, entityId } = useLegalEntity(slug);
-  if (entities.length < 2 || !isFinanceBookPath(pathname)) return null;
+  if (entities.length < 2 || !isEntityPath(pathname)) return null;
   return (
     <div className="mt-3">
       <Label htmlFor={id} className="text-xs font-normal text-subtle-foreground">

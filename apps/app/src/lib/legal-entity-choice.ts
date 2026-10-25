@@ -9,13 +9,14 @@ export interface VisibleEntity {
   isDefault: boolean;
 }
 
-// The screens that keep books per entity: the switcher shows on these only.
-const FINANCE_BOOK_SCREENS: ReadonlySet<string> = new Set(['documents', 'journal', 'vouchers', 'bank', 'fixed-assets', 'ledger', 'vat']);
+// The screens that work in one entity: the finance books, the Overview (the VAT return filed per entity) and Settings
+// (the learned account rules per entity). The switcher shows on these only.
+const ENTITY_SCREENS: ReadonlySet<string> = new Set(['documents', 'journal', 'vouchers', 'bank', 'fixed-assets', 'ledger', 'vat', 'overview', 'settings']);
 
-// Whether a path (/o/<slug>/<screen>/...) is one of the finance books' screens.
-export function isFinanceBookPath(pathname: string): boolean {
+// Whether a path (/o/<slug>/<screen>/...) is one of the screens that work in one entity.
+export function isEntityPath(pathname: string): boolean {
   const [, o, , screen] = pathname.split('/');
-  return o === 'o' && screen !== undefined && FINANCE_BOOK_SCREENS.has(screen);
+  return o === 'o' && screen !== undefined && ENTITY_SCREENS.has(screen);
 }
 
 // The entity to work in: the kept one while the caller still sees it, else the default entity, else the first one

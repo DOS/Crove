@@ -1,6 +1,6 @@
 // The legal entity the finance screens work in (#1486): which one, and where the switcher shows.
 import { afterEach, describe, expect, it } from 'vitest';
-import { chooseEntity, isFinanceBookPath, keepEntity, keptEntity, type VisibleEntity } from '../src/lib/legal-entity-choice.ts';
+import { chooseEntity, isEntityPath, keepEntity, keptEntity, type VisibleEntity } from '../src/lib/legal-entity-choice.ts';
 
 const e = (id: string, isDefault = false): VisibleEntity => ({ id, name: `Pháp nhân ${id}`, isDefault });
 
@@ -24,12 +24,12 @@ describe('legal entity choice', () => {
     expect(chooseEntity([], 'a')).toBeNull();
   });
 
-  it('shows on the finance books screens only', () => {
-    for (const path of ['/o/acme/journal', '/o/acme/journal/opening-balances', '/o/acme/ledger', '/o/acme/vat', '/o/acme/documents', '/o/acme/bank', '/o/acme/vouchers', '/o/acme/fixed-assets']) {
-      expect(isFinanceBookPath(path), path).toBe(true);
+  it('shows on the finance books, the Overview and Settings only', () => {
+    for (const path of ['/o/acme/journal', '/o/acme/journal/opening-balances', '/o/acme/ledger', '/o/acme/vat', '/o/acme/documents', '/o/acme/bank', '/o/acme/vouchers', '/o/acme/fixed-assets', '/o/acme/overview', '/o/acme/settings']) {
+      expect(isEntityPath(path), path).toBe(true);
     }
-    for (const path of ['/o/acme/inbox', '/o/acme/settings', '/o/acme/social', '/clients', '/o/acme', '/journal']) {
-      expect(isFinanceBookPath(path), path).toBe(false);
+    for (const path of ['/o/acme/inbox', '/o/acme/tasks', '/o/acme/social', '/clients', '/o/acme', '/journal']) {
+      expect(isEntityPath(path), path).toBe(false);
     }
   });
 
