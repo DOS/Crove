@@ -14,6 +14,8 @@ import { getConfig } from '../lib/auth.ts';
 import { drawWatermark, watermarkName } from '../lib/social-watermark.ts';
 import { ErrorText, Spinner } from './ui.tsx';
 import { CropPanel } from './social-crop.tsx';
+import { ImageFix } from './social-image-fix.tsx';
+import { replaceMedia } from '../lib/social-image-fix.ts';
 import { StockPhotoSearch, useStockPhotosEnabled } from './social-stock-photos.tsx';
 
 export interface MediaItem {
@@ -225,6 +227,11 @@ export function LibraryPicker({ media, onChange, only }: { media: MediaItem[]; o
 // Where the previews get a file's bytes: the signed-in API, or the client review page's token-scoped route (#624).
 export const FileSource = createContext<{ key: string; fetch: (fileId: string) => Promise<Blob> }>({ key: 'social-media', fetch: fetchFile });
 
+// Where an image fixed for the post's channels (#1500) goes: without a handler, in place of the original in this
+// field's images; a composer that holds several lists of images (the shared one and the channels' own) gives one that
+// replaces the original in each of them.
+export const MediaReplace = createContext<((fromFileId: string, next: MediaItem) => void) | null>(null);
+
 // A stored image, fetched once per file while it is shown (the bytes of a file id never change). Each thumbnail makes
 // its own object URL and revokes it when it goes away. enabled false: nothing is fetched (a document shows a card).
 export function useImageUrl(fileId: string, enabled = true) {
@@ -353,6 +360,11 @@ export function MediaField({
     },
   });
   const canDescribe = getConfig().aiEnabled === true && onAiUsed !== undefined;
+  // The platforms of the channels the images go to, for the fix of an image one of them refuses (#1500); the same
+  // query as the composer's channel list, so it is read from the cache.
+  const channels = useQuery({ ...orpc.channels.list.queryOptions({ input: {} }), enabled: (connectionIds?.length ?? 0) > 0 });
+  const providers = (channels.data ?? []).filter((c) => connectionIds?.includes(c.id)).map((c) => c.provider);
+  const replaceEverywhere = useContext(MediaReplace);
   // The org's logo watermark (#834): drawn on a copy of an image, which takes the image's place; the original stays.
   const watermark = useQuery({ ...orpc.social.watermark.get.queryOptions({ input: {} }), staleTime: 5 * 60_000 });
   const stamp = useMutation({
@@ -423,6 +435,7 @@ export function MediaField({
                   onChange={(e) => onChange(media.map((x, j) => (j === i ? { ...x, altText: e.target.value } : x)))}
                 />
               )}
+              <ImageFix item={m} providers={providers} disabled={disabled} onFixed={(next) => (replaceEverywhere ? replaceEverywhere(m.fileId, next) : onChange(replaceMedia(media, m.fileId, next)))} />
               {canDescribe && m.mime.startsWith('image/') && !disabled && (
                 <Button variant="ghost" size="sm" className="h-6 px-2 text-xs" title={t('altTextAiHint')} disabled={describe.isPending} onClick={() => describe.mutate(m.fileId)}>
                   {describe.isPending && describe.variables === m.fileId ? <Spinner className="text-current" /> : null}

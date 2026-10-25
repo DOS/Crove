@@ -77,6 +77,7 @@ export const en = {
     social: 'Social',
   },
   nav: {
+    legalEntity: 'Legal entity',
     org: 'Organization',
     allClients: 'All companies',
     addOrg: '+ Add organization',
@@ -2504,6 +2505,16 @@ export const en = {
       notReady: 'The image has not loaded yet',
       failed: 'The crop could not be saved',
       cannotRead: 'This browser cannot open the image to crop it',
+    },
+    imageFix: {
+      refused: '{channels} cannot take this image',
+      fix: 'Fix for channels',
+      note: 'Saved as a new JPEG and used in the post. Camera and location details are dropped; the original stays in the library.',
+      noteSize: 'Saved as a new JPEG of at most {max} and used in the post. Camera and location details are dropped; the original stays in the library.',
+      animated: 'An animated image would lose its motion if fixed here. Turn it into a video and upload that instead.',
+      noFit: 'The image cannot get under {max} and stay wide enough for the channel. The original is kept.',
+      cannotRead: 'This browser cannot open the image to fix it',
+      failed: 'The fixed image could not be saved',
     },
     insights: {
       title: 'What works',

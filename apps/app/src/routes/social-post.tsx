@@ -2287,6 +2287,7 @@ function SharedFields({
   onAiUsed,
   slug,
   connectionIds = [],
+  mediaConnectionIds = connectionIds,
   providers = [],
   suggest = null,
 }: {
@@ -2299,6 +2300,8 @@ function SharedFields({
   slug?: string;
   // The post's channels: the shared text is checked against the banned words of any of them (#1055).
   connectionIds?: readonly string[];
+  // The channels that post the shared images (not those with their own): the image fix (#1500) and AI alt text keep to them.
+  mediaConnectionIds?: readonly string[];
   // Their platforms, for the hints on styled letters (#1179).
   providers?: readonly string[];
   // Suggesting an edit of the words selected in the text (#1236), right under it.
@@ -2342,7 +2345,7 @@ function SharedFields({
         <Label htmlFor="social-link">{t('link')}</Label>
         <Input id="social-link" type="url" inputMode="url" value={base.linkUrl} disabled={disabled} placeholder="https://" onChange={(e) => onChange({ ...base, linkUrl: e.target.value })} />
       </div>
-      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} connectionIds={connectionIds} onChange={(media) => onChange({ ...base, media })} />
+      <MediaField media={base.media} disabled={disabled} onAiUsed={onAiUsed} connectionIds={mediaConnectionIds} onChange={(media) => onChange({ ...base, media })} />
     </Card>
   );
 }
@@ -2666,6 +2669,7 @@ export function SocialComposePage() {
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={selected.map((c) => c.id)}
+            mediaConnectionIds={selected.filter((c) => !own[c.id]?.customMedia).map((c) => c.id)}
             providers={selected.map((c) => c.provider)}
           />
           {base.linkUrl.trim() && (
@@ -4000,6 +4004,7 @@ function PostScreen({ slug, postId }: { slug: string; postId: string }) {
             onAiUsed={() => setAiUsed(true)}
             slug={slug}
             connectionIds={p.variants.map((v) => v.connectionId)}
+            mediaConnectionIds={p.variants.filter((v) => !(own[v.id]?.customMedia ?? v.ownMedia)).map((v) => v.connectionId)}
             providers={p.variants.map((v) => v.provider)}
             // A member who may comment suggests an edit of words of the saved text (#1236), while a channel can still change.
             suggest={editable ? <SuggestEdit postId={p.id} targetId="social-body" field="post" saved={origin.body} current={base.body} /> : null}
