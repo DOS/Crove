@@ -426,7 +426,7 @@ describe('LinkedIn Company Pages (#1077)', () => {
     expect(calls.find((c) => c.url.pathname === '/rest/organizations')?.url.searchParams.get('ids')).toBe(`List(${ORG_A},${ORG_B})`);
   });
 
-  it('reads every page of roles and names them in batches, keeping a page under a fallback name when the lookup fails', async () => {
+  it('reads every page of roles and names the pages the connect keeps in batches, keeping a page under a fallback name when the lookup fails', async () => {
     const ids = Array.from({ length: 101 }, (_, i) => String(1000 + i));
     const rows = (slice: string[]) => slice.map((id) => ({ role: 'ADMINISTRATOR', state: 'APPROVED', organization: `urn:li:organization:${id}` }));
     const named = (slice: string[]) => ({ body: { results: Object.fromEntries(slice.map((id) => [id, { localizedName: `Trang ${id}` }])) } });
@@ -436,12 +436,15 @@ describe('LinkedIn Company Pages (#1077)', () => {
       'GET api.linkedin.com/rest/organizations': [named(ids.slice(0, 50)), { status: 500, body: { message: 'Internal Server Error' } }, named(ids.slice(100))],
     });
     const accounts = await new LinkedInPageConnector(APP, fetchImpl).exchange({ code: 'c', redirectUri: PAGE_REDIRECT, codeVerifier: null });
+    // Every page is listed, so the connect can say how many it left out.
     expect(accounts.map((a) => a.externalAccountId)).toEqual(ids);
     expect(accounts[0]?.displayName).toBe('Trang 1000');
     expect(accounts[50]?.displayName).toBe('LinkedIn Page 1050');
-    expect(accounts[100]?.displayName).toBe('Trang 1100');
+    // The 101st is past the LINKEDIN_PAGES_NAMED the connect keeps (#1096): never looked up.
+    expect(accounts[100]?.displayName).toBe('LinkedIn Page 1100');
     expect(calls.filter((c) => c.url.pathname === ACL).map((c) => c.url.searchParams.get('start'))).toEqual(['0', '100']);
-    expect(calls.filter((c) => c.url.pathname === '/rest/organizations')).toHaveLength(3);
+    const lookups = calls.filter((c) => c.url.pathname === '/rest/organizations').map((c) => c.url.searchParams.get('ids'));
+    expect(lookups).toEqual([`List(${ids.slice(0, 50).join(',')})`, `List(${ids.slice(50, 100).join(',')})`]);
   });
 
   it('asks the next page after the rows LinkedIn returned when it answers fewer than asked for', async () => {

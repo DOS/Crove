@@ -30,6 +30,7 @@ import {
   needsPublicUrls,
   limitWait,
   PUBLISH_LIMITS,
+  SHARED_LIMIT_PROVIDERS,
   nextAction,
   POST_STATUSES,
   postStatus,
@@ -1195,7 +1196,10 @@ describe('counted publishing limits (#775)', () => {
     expect(limitWait([ago(5 * 60_000), ago(10 * 60_000), ago(30 * 60_000), ago(50 * 60_000)], limit, now)).toEqual(new Date(now.getTime() + 30 * 60_000 + 1000));
   });
   it('counts the platforms without a quota endpoint', () => {
-    expect(Object.keys(PUBLISH_LIMITS).sort()).toEqual(['linkedin', 'tiktok', 'x', 'youtube']);
+    expect(Object.keys(PUBLISH_LIMITS).sort()).toEqual(['linkedin', 'linkedin_page', 'tiktok', 'x', 'youtube']);
+    // A LinkedIn page posts with its member's token, under the member's limit (#1096).
+    expect(PUBLISH_LIMITS.linkedin_page).toEqual(PUBLISH_LIMITS.linkedin);
+    expect(SHARED_LIMIT_PROVIDERS).toEqual({ linkedin: ['linkedin', 'linkedin_page'], linkedin_page: ['linkedin', 'linkedin_page'] });
     expect(PUBLISH_LIMITS.youtube).toEqual({ count: 100, windowMs: 24 * 3_600_000 });
   });
 });

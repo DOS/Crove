@@ -1,0 +1,188 @@
+// The crm.scheduler agent template's program (#1434, plan docs/plan/calendar.md §1 "Later", ADR-0029 Phase 1). A
+// booking the visitor cancelled through their manage link emits crm.booking.cancelled with an agent_task, so the kernel
+// gives the agent a task for it (the template subscribes to the event). Each run checks out its open booking tasks,
+// reads the next free slots the type's booking page offers now (crm.booking.next_slots), comments them and hands the
+// task to the nearest human up the chart, who may invite the client again. It never books, mails or changes a booking.
+// Phase 1 uses no language model; reading a client's email or chat for the times they ask for is a later phase.
+//
+// Kernel tasks are read by every member of the org, while bookings are shown to their hosts and to owners and admins
+// (#1320). So a task's comment and an escalation's title and reason carry the type, times and counts only, never the
+// visitor's name or contact; the task points at the booking (its source ref), which its host finds in Lịch hẹn.
+import { z } from 'zod';
+import { CALENDAR_RANGE_MAX_DAYS, DEFAULT_WORKING_HOURS, freeSlots, teamSlots, zId, zonedDate, zoneOffsetMs, type Interval, type WorkingHours } from '@crove/kernel-contract';
+import type { MemberRole } from '@crove/db';
+import { busyOf, workingHoursOf } from '@crove/kernel';
+import { DomainError, defineQuery, type AgentProgram } from '@crove/kernel-runtime';
+
+export const SCHEDULER_TEMPLATE = 'crm.scheduler';
+// Tasks one run handles at most; the rest wait for the next run.
+const TASKS_PER_RUN = 20;
+// Slots one comment proposes, and how far ahead it looks for them.
+const SLOTS_PROPOSED = 3;
+const LOOKAHEAD_DAYS = 14;
+const DAY_MS = 86_400_000;
+const STAFF: readonly MemberRole[] = ['owner', 'admin', 'member'];
+const HOST_ROLES = new Set(['owner', 'admin', 'member']);
+
+export interface NextSlots {
+  bookingId: string;
+  // The booking's status now: the agent proposes slots for a cancelled one only.
+  status: string;
+  eventType: { title: string; active: boolean };
+  // The cancelled time.
+  startsAt: string;
+  // The lead host's zone, in which the comment shows times.
+  timeZone: string;
+  slots: { start: string; end: string }[];
+}
+
+// "09:30 Thứ Hai 02/11/2026" on the wall clock of the zone.
+export function wallClock(timeZone: string, at: number): string {
+  const WEEKDAYS = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy'];
+  const date = zonedDate(timeZone, at);
+  const minutes = Math.round((((at + zoneOffsetMs(timeZone, at)) % DAY_MS) + DAY_MS) % DAY_MS / 60_000);
+  const [y, m, d] = date.split('-');
+  const weekday = WEEKDAYS[new Date(`${date}T00:00:00Z`).getUTCDay()] as string;
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} ${weekday} ${d}/${m}/${y}`;
+}
+
+// The task comment: the cancelled time and the slots to offer. Deterministic, without the visitor.
+export function proposalText(n: NextSlots): string {
+  const lines = [`Khách đã hủy lịch hẹn "${n.eventType.title}" lúc ${wallClock(n.timeZone, Date.parse(n.startsAt))} (${n.timeZone}).`];
+  if (!n.eventType.active) lines.push('Loại lịch hẹn này đã được lưu trữ nên không còn giờ trống để mời khách đặt lại.');
+  else if (n.slots.length === 0) lines.push(`Trong ${LOOKAHEAD_DAYS} ngày tới loại lịch hẹn này không còn giờ trống; có thể mở thêm giờ làm việc trước khi mời khách đặt lại.`);
+  else {
+    lines.push(`Các giờ trống gần nhất trên trang đặt lịch:`);
+    for (const s of n.slots) lines.push(`- ${wallClock(n.timeZone, Date.parse(s.start))}`);
+  }
+  lines.push('Người phụ trách xem thông tin khách trong mục Lịch hẹn và quyết định có mời khách đặt lại hay không.');
+  return lines.join('\n');
+}
+
+export function escalationTitle(n: NextSlots): string {
+  return `Mời khách đặt lại: ${n.eventType.title}`.slice(0, 300);
+}
+
+// The next free slots the type's booking page offers now, for a booking of that type: each host's free slots (the type's
+// daily limit counted per local day of that host), then the team's (one host for a round-robin type, every host for a
+// collective one), as bookingView() computes them. Members and the crm.scheduler agent read it; it changes nothing and
+// tells nothing about the visitor.
+export const bookingNextSlots = defineQuery({
+  name: 'crm.booking.next_slots',
+  input: z.strictObject({ bookingId: zId }),
+  access: STAFF,
+  agent: { roles: [SCHEDULER_TEMPLATE] },
+  handler: async (ctx, input): Promise<NextSlots> => {
+    const booking = await ctx.trx
+      .selectFrom('crove_crm.booking')
+      .select(['id', 'status', 'starts_at', 'event_type_id'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.bookingId)
+      .executeTakeFirst();
+    if (!booking) throw new DomainError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy lịch hẹn này');
+    const type = await ctx.trx.selectFrom('crove_crm.event_type').selectAll().where('org_id', '=', ctx.orgId).where('id', '=', booking.event_type_id).executeTakeFirstOrThrow();
+    const ids = type.assignment === 'single' ? [type.host_user_id] : [type.host_user_id, ...type.co_host_user_ids];
+    const members = await ctx.trx.selectFrom('crove_kernel.tenant_member').select(['user_id', 'role']).where('org_id', '=', ctx.orgId).where('user_id', 'in', ids).execute();
+    const able = new Set(members.filter((m) => HOST_ROLES.has(m.role)).map((m) => m.user_id));
+    const hosts = type.active ? ids.filter((id) => able.has(id)) : [];
+    const now = Date.now();
+    const from = new Date(now);
+    const to = new Date(now + Math.min(LOOKAHEAD_DAYS, type.horizon_days, CALENDAR_RANGE_MAX_DAYS) * DAY_MS);
+    const booked = await ctx.trx
+      .selectFrom('crove_crm.booking')
+      .select('starts_at')
+      .where('org_id', '=', ctx.orgId)
+      .where('event_type_id', '=', type.id)
+      .where('status', '=', 'confirmed')
+      .where('starts_at', '>=', new Date(now - DAY_MS))
+      .where('starts_at', '<', new Date(to.getTime() + DAY_MS))
+      .execute();
+    let lead: WorkingHours = DEFAULT_WORKING_HOURS;
+    const perHost: Interval[][] = [];
+    for (const [i, userId] of hosts.entries()) {
+      const { hours } = await workingHoursOf(ctx, userId);
+      if (i === 0) lead = hours;
+      const bookedPerDay = new Map<string, number>();
+      for (const b of booked) {
+        const day = zonedDate(hours.timeZone, new Date(b.starts_at).getTime());
+        bookedPerDay.set(day, (bookedPerDay.get(day) ?? 0) + 1);
+      }
+      perHost.push(
+        freeSlots({
+          hours,
+          busy: await busyOf(ctx, userId, new Date(now - DAY_MS), new Date(to.getTime() + DAY_MS)),
+          skipVietnamHolidays: true,
+          rules: {
+            durationMin: type.duration_min,
+            bufferBeforeMin: type.buffer_before_min,
+            bufferAfterMin: type.buffer_after_min,
+            minNoticeMin: type.min_notice_min,
+            horizonDays: type.horizon_days,
+            dailyLimit: type.daily_limit,
+          },
+          from: from.getTime(),
+          to: to.getTime(),
+          now,
+          bookedPerDay,
+        }),
+      );
+    }
+    const slots = teamSlots(type.assignment === 'collective' ? 'all' : 'any', perHost).slice(0, SLOTS_PROPOSED);
+    return {
+      bookingId: booking.id,
+      status: booking.status,
+      eventType: { title: type.title, active: type.active },
+      startsAt: new Date(booking.starts_at).toISOString(),
+      timeZone: lead.timeZone,
+      slots: slots.map((s) => ({ start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() })),
+    };
+  },
+});
+
+interface TaskSummary {
+  id: string;
+  kind: string;
+  status: string;
+  source: string;
+  sourceRef: unknown;
+}
+
+const zBookingRef = z.object({ type: z.literal('crm.booking'), id: zId });
+
+export const schedulerProposeSlots: AgentProgram = async (agent) => {
+  const { tasks } = await agent.query<{ tasks: TaskSummary[] }>('kernel.task.list', { status: ['todo', 'in_progress'] });
+  const mine = tasks.filter((t) => t.kind === 'general' && t.source === 'event' && zBookingRef.safeParse(t.sourceRef).success).slice(0, TASKS_PER_RUN);
+  for (const task of mine) {
+    const ref = zBookingRef.parse(task.sourceRef);
+    let fence: string;
+    try {
+      ({ fence } = await agent.execute<{ fence: string }>('kernel.task.checkout', { id: task.id }));
+    } catch (error) {
+      // Held by someone else or no longer open: not this run's work.
+      if (error instanceof DomainError && error.status === 409) continue;
+      throw error;
+    }
+    let next: NextSlots;
+    try {
+      next = await agent.query<NextSlots>('crm.booking.next_slots', { bookingId: ref.id });
+    } catch (error) {
+      // The booking is gone (the org purge, an erasure): nothing to propose.
+      if (error instanceof DomainError && error.status === 404) {
+        await agent.execute('kernel.task.set_status', { id: task.id, fence, status: 'done' });
+        continue;
+      }
+      throw error;
+    }
+    // Only a cancelled booking is worth an invitation; one that stands again needs nothing.
+    if (next.status !== 'cancelled') {
+      await agent.execute('kernel.task.set_status', { id: task.id, fence, status: 'done' });
+      continue;
+    }
+    const text = proposalText(next);
+    await agent.execute('kernel.task.comment', { id: task.id, fence, body: text });
+    await agent.execute('kernel.task.escalate', { id: task.id, fence, title: escalationTitle(next), reason: text });
+  }
+};
+
+export const crmAgentPrograms = { [SCHEDULER_TEMPLATE]: schedulerProposeSlots } as const;
+export const crmAgentQueries = [bookingNextSlots];
