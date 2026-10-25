@@ -13,7 +13,7 @@ import { cn } from '@crove/ui/lib/utils';
 import { ClientSocialFigures } from '../components/client-social.tsx';
 import { SupportLink } from '../components/support-link.tsx';
 import { DueWhen, TONE_CLASS, usePeriodLabel } from '../components/tax-due.tsx';
-import { DataTable, Empty, ErrorText, Logo, OrgLeftNotice, PageHeader, Spinner } from '../components/ui.tsx';
+import { DataTable, Empty, ErrorText, Logo, OrgLeftNotice, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { LocaleSwitcher, useFormat, useLocaleSetting } from '../i18n/provider.tsx';
 import { clientForOrg, errorMessage, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -159,7 +159,7 @@ export function ClientsPage() {
         <OrgLeftNotice />
         <PageHeader title={t('title')} subtitle={t('subtitle')} />
         {clients.isLoading ? (
-          <Spinner />
+          <TableSkeleton columns={5} />
         ) : clients.error && !clients.data ? (
           <ErrorText>{errorMessage(clients.error)}</ErrorText>
         ) : rows.length === 0 ? (
