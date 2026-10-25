@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Outlet, useLocation, useNavigate, useParams } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
@@ -41,8 +41,9 @@ export function OrgLayout() {
   // the chart) the menu keeps the app last used.
   const { pathname } = useLocation();
   const screenApp = appOfPath(pathname);
-  const lastApp = useRef<AppId>('home');
-  if (screenApp) lastApp.current = screenApp;
+  // State set during render (not a ref), so a render React discards cannot leave a menu whose route never committed.
+  const [lastApp, setLastApp] = useState<AppId>('home');
+  if (screenApp && screenApp !== lastApp) setLastApp(screenApp);
   const [menuOpen, setMenuOpen] = useState(false);
   const { slug } = useParams({ strict: false }) as { slug: string };
   const navigate = useNavigate();
@@ -188,7 +189,7 @@ export function OrgLayout() {
     <ShellNav
       slug={slug}
       apps={apps}
-      app={screenApp ?? lastApp.current}
+      app={screenApp ?? lastApp}
       inApp={screenApp !== null}
       badges={{ inbox: inboxCount > 0 ? inboxCount : null, alerts: workUnread, notifications: unread }}
       orgs={me.data?.orgs ?? []}
