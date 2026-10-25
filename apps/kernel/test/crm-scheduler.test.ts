@@ -1,6 +1,6 @@
 // The crm.scheduler agent's comment (#1434): the cancelled time and the slots to offer, on the host's wall clock.
 import { describe, expect, it } from 'vitest';
-import { escalationTitle, proposalText, wallClock, type NextSlots } from '@crove/mod-crm';
+import { escalationTitle, proposalText, spreadSlots, wallClock, type NextSlots } from '@crove/mod-crm';
 
 const base: NextSlots = {
   bookingId: '0192f0a0-0000-7000-8000-000000000001',
@@ -34,5 +34,17 @@ describe('crm.scheduler comment (#1434)', () => {
     expect(proposalText({ ...base, slots: [] })).toContain('Trong 14 ngày tới loại lịch hẹn này không còn giờ trống');
     expect(proposalText({ ...base, eventType: { title: 'Tư vấn thuế', active: false } })).toContain('đã được lưu trữ');
     expect(escalationTitle(base)).toBe('Mời khách đặt lại: Tư vấn thuế');
+  });
+
+  it('proposes the earliest slot of each day first, then the earliest of the rest, in time order', () => {
+    const hour = 3_600_000;
+    const at = (iso: string) => ({ start: Date.parse(iso), end: Date.parse(iso) + hour });
+    const monday = ['2026-11-02T01:00:00Z', '2026-11-02T02:00:00Z', '2026-11-02T03:00:00Z'].map(at);
+    const tuesday = ['2026-11-03T01:00:00Z', '2026-11-03T02:00:00Z'].map(at);
+    const days = (list: { start: number }[]) => list.map((s) => new Date(s.start).toISOString().slice(0, 13));
+    expect(days(spreadSlots([...monday, ...tuesday], 'Asia/Ho_Chi_Minh'))).toEqual(['2026-11-02T01', '2026-11-02T02', '2026-11-03T01']);
+    expect(days(spreadSlots(monday, 'Asia/Ho_Chi_Minh'))).toEqual(['2026-11-02T01', '2026-11-02T02', '2026-11-02T03']);
+    // 23:30 UTC on the 2nd is already the 3rd in Vietnam: two days.
+    expect(days(spreadSlots([at('2026-11-02T01:00:00Z'), at('2026-11-02T17:30:00Z'), at('2026-11-02T18:30:00Z')], 'Asia/Ho_Chi_Minh', 2))).toEqual(['2026-11-02T01', '2026-11-02T17']);
   });
 });
