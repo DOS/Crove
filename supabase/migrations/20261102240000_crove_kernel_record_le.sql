@@ -7,11 +7,18 @@
 --                          only a writer with every entity in scope ('*': owners, admins and members without
 --                          entity-limited assignments) may add or remove one, through the audited commands
 --                          kernel.party.link_entity and kernel.party.unlink_entity.
--- crove_kernel.party       a RESTRICTIVE policy for SELECT, UPDATE and DELETE: '*' in scope, or a link to an entity in
---                          scope. INSERT is not narrowed. A party that a member limited to some entities creates is
---                          linked to those entities by the BEFORE INSERT trigger party_link_new (a definer, since such
---                          a member may not write links itself). The link is not visible to the same statement's
---                          RETURNING check, so writers give a new party its id and insert it without RETURNING.
+-- crove_kernel.party       a party that a member limited to some entities creates is linked to those entities by the
+--                          BEFORE INSERT trigger party_link_new (a definer, since such a member may not write links).
+--                          Writers give a new party its id and insert it without RETURNING, so this keeps working once
+--                          party carries its RESTRICTIVE policy (the link is not visible to a RETURNING check).
+-- crove_kernel.proposal    gets legal_entity_id, filled by b_legal_entity: a proposal read from a file takes its
+--                          extraction's entity, any other the one its writer names, else the org's default entity.
+--
+-- Not yet (#1538, coordinator decision 2026-10-26): the RESTRICTIVE policies that would limit party (to '*' or a link
+-- in scope) and proposal (le_scope). Every agent position has an empty le_scope today, so either policy would hide all
+-- parties or proposals from every agent and fail the T18 agents invariant. Until the owner decides #1538, members limited
+-- to some entities still see every party and proposal, and proposal.legal_entity_id stays nullable (a stamp, not yet a
+-- scope: the RLS matrix requires le_scope on every NOT NULL legal_entity_id), though the trigger always fills it.
 --
 -- Find or link by tax code (coordinator decision on #1280, 2026-10-26, option (b)): party.tax_code is unique per org,
 -- so a member limited to entity B who records an invoice from a company the org already knows (unlinked, or linked to
@@ -22,7 +29,7 @@
 -- agent or system context is refused), it links only into the caller's own le_scope, and the only caller is the
 -- audited kernel command kernel.party.link_for_tax_code, which finance's upsertParty runs; no RPC exposes it.
 --
--- Existing parties get no link: a member limited to some entities sees none of them until an owner links them.
+-- Existing parties get no link; once party is limited (#1538), an owner links them for members limited to some entities.
 SET LOCAL lock_timeout = '2s';
 
 CREATE TABLE IF NOT EXISTS crove_kernel.record_le (
@@ -54,32 +61,6 @@ CREATE POLICY record_le_add ON crove_kernel.record_le AS RESTRICTIVE FOR INSERT 
 DROP POLICY IF EXISTS record_le_remove ON crove_kernel.record_le;
 CREATE POLICY record_le_remove ON crove_kernel.record_le AS RESTRICTIVE FOR DELETE TO crove_tenant
   USING ('*' = ANY ((SELECT crove_kernel.ctx_le_scope())::text[]));
-
--- ---------------------------------------------------------------------------
--- party: visible through '*' or a link
--- ---------------------------------------------------------------------------
-DROP POLICY IF EXISTS party_le_read ON crove_kernel.party;
-CREATE POLICY party_le_read ON crove_kernel.party AS RESTRICTIVE FOR SELECT TO crove_tenant
-  USING ('*' = ANY ((SELECT crove_kernel.ctx_le_scope())::text[]) OR EXISTS (
-    SELECT 1 FROM crove_kernel.record_le r
-    WHERE r.org_id = party.org_id AND r.record_type = 'kernel.party' AND r.record_id = party.id
-      AND r.legal_entity_id::text = ANY ((SELECT crove_kernel.ctx_le_scope())::text[])));
-DROP POLICY IF EXISTS party_le_update ON crove_kernel.party;
-CREATE POLICY party_le_update ON crove_kernel.party AS RESTRICTIVE FOR UPDATE TO crove_tenant
-  USING ('*' = ANY ((SELECT crove_kernel.ctx_le_scope())::text[]) OR EXISTS (
-    SELECT 1 FROM crove_kernel.record_le r
-    WHERE r.org_id = party.org_id AND r.record_type = 'kernel.party' AND r.record_id = party.id
-      AND r.legal_entity_id::text = ANY ((SELECT crove_kernel.ctx_le_scope())::text[])))
-  WITH CHECK ('*' = ANY ((SELECT crove_kernel.ctx_le_scope())::text[]) OR EXISTS (
-    SELECT 1 FROM crove_kernel.record_le r
-    WHERE r.org_id = party.org_id AND r.record_type = 'kernel.party' AND r.record_id = party.id
-      AND r.legal_entity_id::text = ANY ((SELECT crove_kernel.ctx_le_scope())::text[])));
-DROP POLICY IF EXISTS party_le_delete ON crove_kernel.party;
-CREATE POLICY party_le_delete ON crove_kernel.party AS RESTRICTIVE FOR DELETE TO crove_tenant
-  USING ('*' = ANY ((SELECT crove_kernel.ctx_le_scope())::text[]) OR EXISTS (
-    SELECT 1 FROM crove_kernel.record_le r
-    WHERE r.org_id = party.org_id AND r.record_type = 'kernel.party' AND r.record_id = party.id
-      AND r.legal_entity_id::text = ANY ((SELECT crove_kernel.ctx_le_scope())::text[])));
 
 -- A party that a member limited to some entities creates is linked to those entities. Definer: such a member may not
 -- write links. It acts only for a party of the context's own org (any other insert is refused by the tenant policy) and
@@ -141,7 +122,40 @@ END $$;
 REVOKE ALL ON FUNCTION crove_kernel.party_link_for_tax_code(text) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
 GRANT EXECUTE ON FUNCTION crove_kernel.party_link_for_tax_code(text) TO crove_tenant;
 
-ANALYZE crove_kernel.record_le;
+-- ---------------------------------------------------------------------------
+-- proposal: the legal entity stamp (no policy yet, see the header)
+-- ---------------------------------------------------------------------------
+ALTER TABLE crove_kernel.proposal ADD COLUMN IF NOT EXISTS legal_entity_id uuid;
+-- The backfill's lookup (a rewrite's USING takes no subquery), dropped below.
+CREATE OR REPLACE FUNCTION crove_kernel.proposal_backfill_entity(p_org_id uuid, p_extraction_id uuid) RETURNS uuid
+LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$
+  SELECT coalesce(
+    (SELECT x.legal_entity_id FROM crove_kernel.extraction x WHERE x.org_id = p_org_id AND x.id = p_extraction_id),
+    crove_kernel.org_default_legal_entity(p_org_id))
+$$;
+REVOKE ALL ON FUNCTION crove_kernel.proposal_backfill_entity(uuid, uuid) FROM PUBLIC, crove_tenant, crove_app, crove_worker, crove_definer_tenant;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM crove_kernel.proposal WHERE legal_entity_id IS NULL) THEN
+    -- A rewrite, not an UPDATE: no row trigger fires (as in 20261102140000). A proposal read from a file takes its
+    -- extraction's entity; any other the org's default entity, as every writer on main named none.
+    ALTER TABLE crove_kernel.proposal ALTER COLUMN legal_entity_id TYPE uuid
+      USING coalesce(legal_entity_id, crove_kernel.proposal_backfill_entity(org_id, extraction_id));
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c
+                 WHERE c.conrelid = 'crove_kernel.proposal'::regclass AND c.conname = 'proposal_legal_entity_fk') THEN
+    ALTER TABLE crove_kernel.proposal ADD CONSTRAINT proposal_legal_entity_fk
+      FOREIGN KEY (org_id, legal_entity_id) REFERENCES crove_kernel.legal_entity (org_id, id);
+  END IF;
+END $$;
+DROP FUNCTION IF EXISTS crove_kernel.proposal_backfill_entity(uuid, uuid);
+CREATE INDEX IF NOT EXISTS proposal_legal_entity_idx ON crove_kernel.proposal (legal_entity_id, org_id);
+DROP TRIGGER IF EXISTS b_legal_entity ON crove_kernel.proposal;
+CREATE TRIGGER b_legal_entity BEFORE INSERT OR UPDATE OF legal_entity_id, extraction_id ON crove_kernel.proposal
+  FOR EACH ROW EXECUTE FUNCTION crove_kernel.legal_entity_fill('crove_kernel.extraction', 'extraction_id');
+ALTER TABLE crove_kernel.proposal ENABLE ALWAYS TRIGGER b_legal_entity;
+
+ANALYZE crove_kernel.record_le, crove_kernel.proposal;
 
 -- ---------------------------------------------------------------------------
 -- The org purge deletes a closing org's links with its other working rows. Copied verbatim from

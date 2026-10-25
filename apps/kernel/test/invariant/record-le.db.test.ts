@@ -1,7 +1,8 @@
-// Parties scoped by links to legal entities (#1280 part 3b, plan §4.6, coordinator decision (b)) on PostgreSQL 17: a
-// member limited to one entity sees only the parties linked to it, gets its own new parties linked to it, writes no
-// link itself, and finds a company the org already knows by its tax code (linked into its own scope only), but never a
-// person's party; agent and system contexts may not use that lookup. Part of the invariant suite; it imports package
+// Links of parties to legal entities (#1280 part 3b, plan §4.6, coordinator decision (b)) on PostgreSQL 17: a member
+// limited to one entity gets its own new parties linked to it, writes no link itself, and finds a company the org
+// already knows by its tax code (linked into its own scope only), but never a person's party; agent and system contexts
+// may not use that lookup; a proposal carries its extraction's entity. The policies that limit what such a member sees
+// of parties and proposals wait for #1538. Part of the invariant suite; it imports package
 // code under test, never helpers from outside test/invariant/. Set CROVE_TEST_ADMIN_URL to a superuser URL; each run
 // makes its own database.
 import { randomUUID } from 'node:crypto';
@@ -65,7 +66,6 @@ suite('parties scoped by record_le on PostgreSQL (#1280)', () => {
   }
   const asMember = <T>(userId: string, fn: (c: pg.Client) => Promise<T>) =>
     inContext(appUrl, (c) => c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [userId, orgId]), fn);
-  const visibleParties = (c: pg.Client) => c.query<{ id: string }>('SELECT id FROM crove_kernel.party ORDER BY id').then((r) => r.rows.map((row) => row.id));
   const linksOf = (partyId: string) =>
     admin((c) =>
       c.query<{ legal_entity_id: string }>(`SELECT legal_entity_id FROM crove_kernel.record_le WHERE org_id = $1 AND record_type = 'kernel.party' AND record_id = $2`, [orgId, partyId]),
@@ -132,25 +132,25 @@ suite('parties scoped by record_le on PostgreSQL (#1280)', () => {
     await root.end();
   });
 
-  it('shows a member limited to a branch only the parties linked to it, and an owner every party', async () => {
-    expect(await asMember(accountant, visibleParties)).toEqual([]);
-    expect(await asMember(owner, visibleParties)).toEqual([parties.company, parties.person, parties.linkedDefault].sort());
-    // Updates and deletes reach no party it cannot see.
-    expect((await asMember(accountant, (c) => c.query(`UPDATE crove_kernel.party SET name = name WHERE org_id = $1`, [orgId]))).rowCount).toBe(0);
+  it('reads only the links of its own entities', async () => {
+    const links = await asMember(accountant, (c) => c.query<{ record_id: string }>('SELECT record_id FROM crove_kernel.record_le'));
+    expect(links.rows).toEqual([]);
+    const all = await asMember(owner, (c) => c.query<{ record_id: string }>('SELECT record_id FROM crove_kernel.record_le'));
+    expect(all.rows).toEqual([{ record_id: parties.linkedDefault }]);
   });
 
-  it('links a party the member creates to its branch, so it sees what it wrote', async () => {
+  it('links a party the member creates to its branch, and an owner creates no link', async () => {
     const id = randomUUID();
-    const seen = await asMember(accountant, async (c) => {
+    const links = await asMember(accountant, async (c) => {
       await c.query(`INSERT INTO crove_kernel.party (org_id, id, kind, name) VALUES ($1, $2, 'organization', 'Nhà cung cấp mới')`, [orgId, id]);
-      const links = await c.query<{ legal_entity_id: string }>('SELECT legal_entity_id FROM crove_kernel.record_le WHERE record_id = $1', [id]);
-      return { parties: await visibleParties(c), links: links.rows.map((r) => r.legal_entity_id) };
+      return (await c.query<{ legal_entity_id: string }>('SELECT legal_entity_id FROM crove_kernel.record_le WHERE record_id = $1', [id])).rows.map((r) => r.legal_entity_id);
     });
-    expect(seen).toEqual({ parties: [id], links: [branch] });
-    // RETURNING is checked before the link exists, so writers insert without it.
-    await expect(
-      asMember(accountant, (c) => c.query(`INSERT INTO crove_kernel.party (org_id, kind, name) VALUES ($1, 'organization', 'Trả về') RETURNING id`, [orgId])),
-    ).rejects.toThrow(/row-level security/);
+    expect(links).toEqual([branch]);
+    const ownerLinks = await asMember(owner, async (c) => {
+      await c.query(`INSERT INTO crove_kernel.party (org_id, id, kind, name) VALUES ($1, $2, 'organization', 'Nhà cung cấp của chủ')`, [orgId, id]);
+      return (await c.query('SELECT 1 FROM crove_kernel.record_le WHERE record_id = $1', [id])).rowCount;
+    });
+    expect(ownerLinks).toBe(0);
   });
 
   it('lets a member limited to a branch write no link, into its own entity or another', async () => {
@@ -164,9 +164,9 @@ suite('parties scoped by record_le on PostgreSQL (#1280)', () => {
     const result = await asMember(accountant, async (c) => {
       const found = await c.query<{ party_id: string; linked: string[] }>('SELECT party_id, linked FROM crove_kernel.party_link_for_tax_code($1)', [COMPANY_TAX]);
       const links = await c.query<{ legal_entity_id: string }>('SELECT legal_entity_id FROM crove_kernel.record_le WHERE record_id = $1', [parties.company]);
-      return { found: found.rows, parties: await visibleParties(c), links: links.rows.map((r) => r.legal_entity_id) };
+      return { found: found.rows, links: links.rows.map((r) => r.legal_entity_id) };
     });
-    expect(result).toEqual({ found: [{ party_id: parties.company, linked: [branch] }], parties: [parties.company], links: [branch] });
+    expect(result).toEqual({ found: [{ party_id: parties.company, linked: [branch] }], links: [branch] });
     // Rolled back: nothing stays linked.
     expect(await linksOf(parties.company)).toEqual([]);
     // An unknown tax code finds nothing; a caller who sees every party needs no link.
@@ -184,7 +184,6 @@ suite('parties scoped by record_le on PostgreSQL (#1280)', () => {
       code: 'PARTY_LINK_REQUIRED',
       message: expect.not.stringContaining('Nguyễn'),
     });
-    expect(await asMember(accountant, visibleParties)).not.toContain(parties.person);
   });
 
   it('refuses the lookup to system and agent contexts', async () => {
@@ -223,8 +222,39 @@ suite('parties scoped by record_le on PostgreSQL (#1280)', () => {
     const pair = { partyId: parties.person, legalEntityId: branch };
     await expect(app.execute('kernel.party.link_entity', pair, { actor: asUser(accountant), orgId })).rejects.toMatchObject({ status: 403 });
     expect(await app.execute('kernel.party.link_entity', pair, { actor: asUser(owner), orgId })).toMatchObject({ linked: true });
-    expect(await asMember(accountant, visibleParties)).toEqual([parties.company, parties.person].sort());
+    expect(await linksOf(parties.person)).toEqual([branch]);
     expect(await app.execute('kernel.party.unlink_entity', pair, { actor: asUser(owner), orgId })).toMatchObject({ linked: false });
-    expect(await asMember(accountant, visibleParties)).toEqual([parties.company]);
+    expect(await linksOf(parties.person)).toEqual([]);
+  });
+
+  it('stamps a proposal read from a file with the entity of its extraction, and refuses another', async () => {
+    const file = randomUUID();
+    const extraction = randomUUID();
+    const sha = randomUUID().replaceAll('-', '').padEnd(64, '0');
+    const proposal = (id: string, entity: string | null) =>
+      admin((c) =>
+        c.query(
+          `INSERT INTO crove_kernel.proposal (org_id, id, kind, command, title, payload, eligible_approvers, authors, source_file_id, extraction_id, legal_entity_id)
+           VALUES ($1, $2, 'finance.purchase', 'finance.purchase.record', 'Hóa đơn', '{}', ARRAY[$3::uuid], '[]', $4, $5, $6)`,
+          [orgId, id, owner, file, extraction, entity],
+        ),
+      );
+    await admin(async (c) => {
+      await c.query(
+        `INSERT INTO crove_kernel.file (org_id, id, sha256, storage_key, filename, content_type, size_bytes, source) VALUES ($1, $2, $3, $4, 'hd.pdf', 'application/pdf', 10, 'upload')`,
+        [orgId, file, sha, `org/${orgId}/${sha}`],
+      );
+      await c.query(`INSERT INTO crove_kernel.extraction (org_id, id, file_id, method, status, checks, legal_entity_id) VALUES ($1, $2, $3, 'pdf_text_ai', 'done', '[]', $4)`, [
+        orgId,
+        extraction,
+        file,
+        branch,
+      ]);
+    });
+    const id = randomUUID();
+    await proposal(id, null);
+    const stamped = await admin((c) => c.query<{ legal_entity_id: string }>('SELECT legal_entity_id FROM crove_kernel.proposal WHERE org_id = $1 AND id = $2', [orgId, id]));
+    expect(stamped.rows).toEqual([{ legal_entity_id: branch }]);
+    await expect(proposal(randomUUID(), defaultEntity)).rejects.toThrow(/LEGAL_ENTITY_MISMATCH/);
   });
 });

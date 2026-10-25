@@ -1040,6 +1040,7 @@ export interface KernelProposalTable {
   escalated_at: ColumnType<Date | null, Date | string | null, Date | string | null>;
   request_input: ColumnType<unknown, string | null | undefined, string | null>;
   resubmitted_from: string | null;
+  legal_entity_id: string | null;
 }
 
 /** crove_kernel.record_le */
