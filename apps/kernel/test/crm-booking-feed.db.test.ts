@@ -288,6 +288,31 @@ suite('crm booking feed on PostgreSQL (#1382)', () => {
     expect(live).toBe(1);
   });
 
+  it('revokes from the event even when it is handled after the member came back, and spares newer feeds', async () => {
+    const o = await org();
+    const old = await o.exec<{ token: string }>(o.a, 'crm.booking_feed.create');
+    await app.execute('kernel.member.remove', { userId: o.a }, { actor: asMfa(o.owner), orgId: o.orgId });
+    const removed = await admin(async (c) => (await c.query<{ id: string }>("SELECT id FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'kernel.member.removed'", [o.orgId])).rows[0]?.id as string);
+    // Back in the org, with a new address, before the worker reached the removal.
+    await admin((c) => c.query("INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'member')", [o.orgId, o.a]));
+    const fresh = await o.exec<{ token: string }>(o.a, 'crm.booking_feed.create');
+    expect(await worker.execute('crm.booking_feed.revoke_for_member', { eventId: removed }, { actor: SYSTEM, orgId: o.orgId })).toEqual({ revoked: 0 });
+    // The new address made the old one revoked already; one made before the event and still live is revoked by it.
+    const live = await admin(async (c) => (await c.query<{ n: number }>('SELECT count(*)::int AS n FROM crove_crm.booking_feed WHERE org_id = $1 AND user_id = $2 AND revoked_at IS NULL', [o.orgId, o.a])).rows[0]?.n);
+    expect(live).toBe(1);
+    expect(await bookingFeed(app, old.token)).toBeNull();
+    expect(await bookingFeed(app, fresh.token)).toMatchObject({ slug: o.slug });
+    // b is demoted and promoted back before the worker runs: the demotion still revokes the address made before it.
+    const b = await o.exec<{ token: string }>(o.b, 'crm.booking_feed.create');
+    await app.execute('kernel.member.change_role', { userId: o.b, role: 'viewer' }, { actor: asMfa(o.owner), orgId: o.orgId });
+    await app.execute('kernel.member.change_role', { userId: o.b, role: 'member' }, { actor: asMfa(o.owner), orgId: o.orgId });
+    const changes = await admin(async (c) => (await c.query<{ id: string }>("SELECT id FROM crove_kernel.outbox_event WHERE org_id = $1 AND type = 'kernel.member.role_changed' ORDER BY id", [o.orgId])).rows);
+    const results = [];
+    for (const e of changes) results.push(await worker.execute<{ revoked: number }>('crm.booking_feed.revoke_for_member', { eventId: e.id }, { actor: SYSTEM, orgId: o.orgId }));
+    expect(results).toEqual([{ revoked: 1 }, { revoked: 0 }]);
+    expect(await bookingFeed(app, b.token)).toBeNull();
+  });
+
   it("stops the feed of a member whose account is disabled", async () => {
     const o = await org();
     const { token } = await o.exec<{ token: string }>(o.a, 'crm.booking_feed.create');

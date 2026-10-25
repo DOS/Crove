@@ -62,8 +62,10 @@ export const bookingFeedRevoke = defineCommand({
 });
 
 // A member who left the org or became a viewer hosts no more (#1382): the worker revokes their feed from the event, so
-// adding them back, or making them a member again, does not bring an old (possibly leaked) address back. The definer
-// also refuses such a member at each fetch; this makes it last.
+// adding them back, or making them a member again, does not bring an old (possibly leaked) address back. The event
+// decides, not the member's role when the job runs: a removal or a change to viewer handled after the member came back
+// still revokes. Only feeds made before the event are revoked, so a late or replayed event leaves a newer address
+// alone. The definer also refuses a member who does not host at each fetch.
 export const bookingFeedRevokeForMember = defineCommand({
   name: 'crm.booking_feed.revoke_for_member',
   input: z.strictObject({ eventId: zId }),
@@ -71,19 +73,25 @@ export const bookingFeedRevokeForMember = defineCommand({
   access: 'system',
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình nền mới thực hiện được việc này');
-    const event = await ctx.trx.selectFrom('crove_kernel.outbox_event').select(['type', 'payload']).where('org_id', '=', ctx.orgId).where('id', '=', input.eventId).executeTakeFirst();
-    if (!event || (event.type !== 'kernel.member.removed' && event.type !== 'kernel.member.role_changed')) return { revoked: 0 };
-    const data = z.object({ userId: zId }).safeParse(event.payload);
+    const event = await ctx.trx
+      .selectFrom('crove_kernel.outbox_event')
+      .select(['type', 'payload', 'created_at'])
+      .where('org_id', '=', ctx.orgId)
+      .where('id', '=', input.eventId)
+      .executeTakeFirst();
+    if (!event) return { revoked: 0 };
+    const data = z.object({ userId: zId, newRole: z.string().optional() }).safeParse(event.payload);
     if (!data.success) return { revoked: 0 };
+    const stops = event.type === 'kernel.member.removed' || (event.type === 'kernel.member.role_changed' && data.data.newRole === 'viewer');
+    if (!stops) return { revoked: 0 };
     const userId = data.data.userId;
-    const member = await ctx.trx.selectFrom('crove_kernel.tenant_member').select('role').where('org_id', '=', ctx.orgId).where('user_id', '=', userId).executeTakeFirst();
-    if (member && HOSTS.includes(member.role)) return { revoked: 0 };
     const done = await ctx.trx
       .updateTable('crove_crm.booking_feed')
       .set({ revoked_at: ctx.now })
       .where('org_id', '=', ctx.orgId)
       .where('user_id', '=', userId)
       .where('revoked_at', 'is', null)
+      .where('created_at', '<', event.created_at)
       .returning('id')
       .execute();
     ctx.audit({ member: userId, booking_feeds: done.map((r) => r.id) });
