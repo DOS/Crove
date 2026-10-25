@@ -393,6 +393,13 @@ export const contract = {
       cancel: oc.input(zBookingCancel).output(z.object({ bookingId: z.string(), status: z.literal('cancelled') })),
       move: oc.input(zBookingMove).output(z.object({ bookingId: z.string(), startsAt: z.string() })),
     },
+    // A member's bookings as a feed for Google Calendar or Outlook (#1382): each host makes, replaces and revokes their
+    // own address; the token is in the create answer only.
+    bookingFeed: {
+      get: oc.input(z.object({})).output(z.object({ createdAt: z.string() }).nullable()),
+      create: oc.input(z.strictObject({})).output(z.object({ token: z.string() })),
+      revoke: oc.input(z.strictObject({})).output(z.object({ revoked: z.boolean() })),
+    },
   },
   // Crove Social (Social plan §3.3), when the deployment runs the social module.
   social: {
