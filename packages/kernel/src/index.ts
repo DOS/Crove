@@ -26,3 +26,4 @@ export * from './proposal-resubmit.ts';
 export { normalizeEntityName } from './legal-entities.ts';
 export { busyOf, workingHoursOf } from './calendar.ts';
 export * from './numbering.ts';
+export * from './manifest.ts';

@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useParams } from '@tanstack/react-router';
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useRef, useState, type DragEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { JOURNAL_VOUCHER_KIND } from '@crove/kernel-contract';
@@ -24,7 +24,20 @@ import { REVERSAL_KIND } from '../lib/reversal.ts';
 import { providerName } from '../lib/social.ts';
 import { toast } from '../lib/toast.ts';
 import { VOUCHER_KIND } from '../lib/vouchers.ts';
-import { bulkSelectable, canApproveProposals, planBatches, proposalName, sendBatches, showMatched, steppedIndex, type BulkBatch, type BulkProgress } from '../lib/review.ts';
+import {
+  INBOX_TABS,
+  bulkSelectable,
+  canApproveProposals,
+  planBatches,
+  proposalName,
+  sendBatches,
+  showMatched,
+  steppedIndex,
+  type BulkBatch,
+  type BulkProgress,
+  type InboxSearch,
+  type InboxTab,
+} from '../lib/review.ts';
 import { SAFETY_POLL_MS, pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 // One bulk approval (issue #315): the batches planned when it started, how far it got, and the names to report.
@@ -38,13 +51,8 @@ interface BulkRun {
   stopped: boolean;
 }
 
-// Expired proposals (#876) waited past the org's expiry; their author may ask for them again.
-type Tab = 'pending' | 'executed' | 'rejected' | 'expired';
-
 // One proposal as the Inbox lists it.
 type InboxItem = Awaited<ReturnType<typeof client.inbox.list>>[number];
-
-const TABS: Tab[] = ['pending', 'executed', 'rejected', 'expired'];
 
 const FILE_STATUS = { processing: 'brand', waiting: 'warning', proposed: 'success', duplicate: 'warning', failed: 'destructive', expanded: 'success' } as const;
 type FileStatus = keyof typeof FILE_STATUS;
@@ -189,7 +197,11 @@ export function InboxPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('inbox');
   const f = useFormat();
-  const [tab, setTab] = useState<Tab>('pending');
+  // The tab lives in the address (#1513), left out for the pending proposals.
+  const search: InboxSearch = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const tab: InboxTab = search.status ?? 'pending';
+  const setTab = (next: InboxTab) => void navigate({ to: '/o/$slug/inbox', params: { slug }, search: next === 'pending' ? {} : { status: next } });
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const config = getConfig();
@@ -471,14 +483,14 @@ export function InboxPage() {
         className="mt-8 gap-4"
         value={tab}
         onValueChange={(value) => {
-          setTab(value as Tab);
+          setTab(value as InboxTab);
           setSelected(new Set());
         }}
       >
         {/* On a narrow screen the tabs scroll inside their row (#1270), as the ledger's do (#615). */}
         <div className="-mb-1 overflow-x-auto pb-1">
           <TabsList variant="line" className="w-max min-w-full justify-start border-b">
-            {TABS.map((id) => (
+            {INBOX_TABS.map((id) => (
               <TabsTrigger key={id} value={id} className="flex-none px-3">
                 {t(`tabs.${id}`)}
               </TabsTrigger>

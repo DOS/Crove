@@ -1,8 +1,24 @@
 // Where a search result of the command palette (#673) opens, and the URL search params those screens read. No React
 // imports, so it is unit tested.
+import type { z } from 'zod';
 import { fold } from './palette.ts';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// A list screen's search params read with a zod object whose fields are all optional and caught (plan §9, #1513): a
+// param that fails its check is left out, so the screen falls back to its default instead of an error page, and so is
+// any key the schema does not name.
+export function readSearch<S extends z.ZodObject>(schema: S, search: Record<string, unknown>): Defined<z.output<S>> {
+  return Object.fromEntries(Object.entries(schema.parse(search)).filter(([, value]) => value !== undefined)) as Defined<z.output<S>>;
+}
+
+// Optional params that are absent rather than undefined, as the other screens' search types are.
+export type Defined<T> = { [K in keyof T]?: Exclude<T[K], undefined> };
+
+// The search params with some changed, a param changed to undefined left out (back to its default).
+export function withSearch<T extends object>(current: T, next: { [K in keyof T]?: T[K] | undefined }): T {
+  return Object.fromEntries(Object.entries({ ...current, ...next }).filter(([, value]) => value !== undefined)) as T;
+}
 
 // ?q= of the vendors and documents screens: the text their filter starts with. The router reads a digits-only value
 // as a number (a tax code typed in the URL), so a whole number counts as its digits.

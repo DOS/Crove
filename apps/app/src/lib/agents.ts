@@ -1,6 +1,8 @@
 // What the AI agents screens decide on their own (ADR-0029, issue #258): the chart as a tree, who may use which
 // control, and how far a budget is spent. The server enforces every rule; these only hide what can never succeed.
+import { z } from 'zod';
 import type { Role } from './members.ts';
+import { readSearch, type Defined } from './search.ts';
 
 export interface ChartNode<P> {
   position: P;
@@ -98,6 +100,15 @@ export const TASK_STATUSES = ['todo', 'in_progress', 'waiting', 'in_review', 'do
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 // Statuses a task can still move from.
 export const OPEN_TASK_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'waiting', 'in_review'];
+
+// The tasks screen's tabs; open tasks are the default.
+export const TASK_FILTERS = ['open', 'mine', 'all'] as const;
+export type TaskFilter = (typeof TASK_FILTERS)[number];
+
+// ?filter= of the tasks screen (#1513), left out for the open tasks.
+const zTasksSearch = z.object({ filter: z.enum(TASK_FILTERS).optional().catch(undefined) });
+export type TasksSearch = Defined<z.output<typeof zTasksSearch>>;
+export const parseTasksSearch = (search: Record<string, unknown>): TasksSearch => readSearch(zTasksSearch, search);
 
 // The Social post a task is about (#1193): the content agent's tasks point at their post by their source ref, and the
 // task page links to it. Anything else, or an id that is not a UUID, is none.

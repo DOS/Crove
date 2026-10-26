@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { BLOCKING_CHECK_IDS, vietnamToday, type CashVoucherProposal, type JournalVoucherProposal } from '@crove/kernel-contract';
 import { Link, useNavigate, useParams } from '@tanstack/react-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocale, useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
 import { Button } from '@crove/ui/components/button';
@@ -34,6 +34,7 @@ import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
 import { partySearch } from '../lib/parties.ts';
 import { checksByConcern, nextPendingId, previousPendingId } from '../lib/review.ts';
 import { useReviewShortcuts, type ReviewHandlers } from '../lib/review-shortcuts.ts';
+import { useScrollRoom } from '../lib/scroll-room.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
 
 const CHECK_TONE = { pass: 'success', warn: 'warning', fail: 'destructive' } as const;
@@ -1056,12 +1057,22 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         <>
           {/* Room for the bar below, so the last of the page is not hidden under it. */}
           <div aria-hidden="true" className="h-20" />
-          <div className="fixed inset-x-0 bottom-0 z-20 flex flex-wrap items-center justify-end gap-2 border-t bg-sidebar px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-            {headerActions}
-          </div>
+          <PhoneActionBar>{headerActions}</PhoneActionBar>
         </>
       )}
     </>
+  );
+}
+
+// The approval bar fixed to the foot of a phone's screen. A control the keyboard focuses stops above it, never under it
+// (#1575): its height is the page's bottom scroll padding while it shows.
+function PhoneActionBar({ children }: { children: ReactNode }) {
+  const bar = useRef<HTMLDivElement>(null);
+  useScrollRoom(bar, 'bottom');
+  return (
+    <div ref={bar} className="fixed inset-x-0 bottom-0 z-20 flex flex-wrap items-center justify-end gap-2 border-t bg-sidebar px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+      {children}
+    </div>
   );
 }
 

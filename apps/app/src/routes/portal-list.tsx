@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useParams } from '@tanstack/react-router';
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { useTranslations } from 'use-intl';
 import type { ReconcileOutcome } from '@crove/kernel-contract';
@@ -29,7 +29,7 @@ import {
   pollWhileSending,
   type ReconcileItem,
 } from '../lib/portal-list.ts';
-import { defaultPeriod, periodKey, switchKind, yearOptions, type PeriodChoice, type PeriodKind } from '../lib/vat.ts';
+import { defaultPeriod, periodChoiceOf, periodKey, periodSearch, switchKind, yearOptions, type PeriodChoice, type PeriodKind, type PeriodSearch } from '../lib/vat.ts';
 
 const SKIPPED_SHOWN = 20;
 
@@ -231,7 +231,12 @@ export function PortalListPage() {
   const f = useFormat();
   const { slug } = useParams({ strict: false }) as { slug: string };
   const org = useQuery(orpc.org.get.queryOptions());
-  const [choice, setChoice] = useState<PeriodChoice>(() => defaultPeriod('month'));
+  // The period lives in the address (#1513), left out for the default month.
+  const search: PeriodSearch = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const fallback = defaultPeriod('month');
+  const choice = (search.period ? periodChoiceOf(search.period) : null) ?? fallback;
+  const setChoice = (next: PeriodChoice) => void navigate({ to: '/o/$slug/portal-invoices', params: { slug }, search: periodSearch(periodKey(next), periodKey(fallback)) });
   const period = periodKey(choice);
   // The portal's list against the books of the entity chosen in the shell (#1280); an imported list is for it too.
   const entity = useChosenEntity();

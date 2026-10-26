@@ -6,6 +6,7 @@ import { Button } from '@crove/ui/components/button';
 import { Card } from '@crove/ui/components/card';
 import { Input } from '@crove/ui/components/input';
 import { ErrorText, Field, focusFirstInvalid, Logo, Spinner, useFieldErrors } from '../components/ui.tsx';
+import { SupportLink } from '../components/support-link.tsx';
 import { auth, authErrorText, authFailure, needsSecondFactor, type AuthFailure } from '../lib/auth.ts';
 
 export function ResetPasswordPage() {
@@ -47,7 +48,7 @@ export function ResetPasswordPage() {
   }
 
   return (
-    <main className="flex min-h-full items-center justify-center bg-background px-4 py-16">
+    <main className="flex min-h-full flex-col items-center justify-center bg-background px-4 py-16">
       <Card className="relative block w-full max-w-sm p-6">
         <Logo />
         <h1 className="mt-6 text-lg font-semibold text-foreground">{t('title')}</h1>
@@ -105,6 +106,8 @@ export function ResetPasswordPage() {
           </form>
         )}
       </Card>
+      {/* Help in the same place as on every screen of the app (DESIGN.md §7, 3.2.6; #1516). */}
+      <SupportLink className="mt-4 text-sm text-link" />
     </main>
   );
 }

@@ -12,6 +12,7 @@ import { flushSync } from 'react-dom';
 import { useTranslations } from 'use-intl';
 import { brandName } from '../i18n/brand.ts';
 import { takeOrgLeftNotice } from '../lib/api.ts';
+import { useScrollRoom } from '../lib/scroll-room.ts';
 
 // titleId: the title can take the focus by this id (a page that moves the focus there when it opens, #1230).
 export function PageHeader({ title, subtitle, actions, titleId }: { title: string; subtitle?: string | undefined; actions?: ReactNode; titleId?: string }) {
@@ -246,6 +247,9 @@ export function ListSkeleton({ rows = 3 }: { rows?: number }) {
 // scrolls sideways, as on a phone, where the table is wider than the screen (#1517).
 export function DataTable({ head, numeric = [], children }: { head: string[]; numeric?: number[]; children: ReactNode }) {
   const scroller = useRef<HTMLDivElement>(null);
+  // The header row is pinned inside the scroll box: a row the keyboard focuses stops below it (#1575).
+  const header = useRef<HTMLTableSectionElement>(null);
+  useScrollRoom(header, 'top', scroller);
   const [scrolls, setScrolls] = useState(false);
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -264,7 +268,7 @@ export function DataTable({ head, numeric = [], children }: { head: string[]; nu
         container={{ ref: scroller, className: 'max-h-[max(24rem,calc(100dvh-10rem))] overflow-y-auto', tabIndex: scrolls ? 0 : undefined }}
       >
         {/* The rule under the header is a shadow: a collapsed border does not move with a sticky row. */}
-        <TableHeader className="sticky top-0 z-10 bg-muted [&_th]:bg-muted [&_th]:shadow-[inset_0_-1px_0_var(--color-border)] [&_tr]:border-b-0">
+        <TableHeader ref={header} className="sticky top-0 z-10 bg-muted [&_th]:bg-muted [&_th]:shadow-[inset_0_-1px_0_var(--color-border)] [&_tr]:border-b-0">
           <TableRow className="hover:bg-transparent">
             {head.map((h, i) => (
               <TableHead key={i} className={cn('px-4 text-xs font-medium text-subtle-foreground', numeric.includes(i) && 'text-right')}>

@@ -92,3 +92,4 @@ export * from './outperforming.ts';
 export * from './domain/duplicate.ts';
 export * from './suggestions.ts';
 export * from './domain/suggestion.ts';
+export { socialManifest } from './manifest.ts';
