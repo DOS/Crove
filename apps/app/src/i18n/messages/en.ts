@@ -1769,7 +1769,7 @@ export const en = {
     approve: 'Approve and post',
     stepUpApprove: 'approve and post this document',
     stepUpApproveReversal: 'approve and post this reversal',
-    shortcuts: 'Shortcuts: J or N next pending proposal · K or P previous one · A approve · E edit accounts · Ctrl K command palette',
+    shortcuts: 'Shortcuts: J or N next pending proposal · K or P previous one · A approve · E edit accounts · R reject · Ctrl K command palette',
     executedAt: 'Posted {at}',
     rejected: 'Rejected',
     expired: 'Expired',

@@ -52,7 +52,7 @@ test('review shortcuts, then approve several proposals under one step-up', async
   await test.step('J and K move between pending proposals, A approves, E focuses the first account', async () => {
     await page.getByRole('link', { name: SELLER }).first().click();
     await expect(
-      page.getByText('Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · K hoặc P về đề xuất trước · A duyệt · E sửa tài khoản · Ctrl K mở bảng lệnh'),
+      page.getByText('Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · K hoặc P về đề xuất trước · A duyệt · E sửa tài khoản · R từ chối · Ctrl K mở bảng lệnh'),
     ).toBeVisible();
     const first = page.url();
     await page.keyboard.press('j');

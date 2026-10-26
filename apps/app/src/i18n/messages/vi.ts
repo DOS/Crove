@@ -1766,7 +1766,7 @@ export const vi = {
     approve: 'Duyệt và ghi sổ',
     stepUpApprove: 'duyệt và ghi sổ chứng từ này',
     stepUpApproveReversal: 'duyệt và ghi sổ bút toán đảo này',
-    shortcuts: 'Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · K hoặc P về đề xuất trước · A duyệt · E sửa tài khoản · Ctrl K mở bảng lệnh',
+    shortcuts: 'Phím tắt: J hoặc N sang đề xuất chờ duyệt tiếp theo · K hoặc P về đề xuất trước · A duyệt · E sửa tài khoản · R từ chối · Ctrl K mở bảng lệnh',
     executedAt: 'Đã ghi sổ {at}',
     rejected: 'Đã từ chối',
     expired: 'Đã hết hạn',
