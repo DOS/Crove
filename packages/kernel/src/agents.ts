@@ -1681,7 +1681,10 @@ export const createAgentProposal = defineCommand({
 export const executeAgentApproval = defineCommand({
   name: 'kernel.agent.proposal.approve',
   input: z.object({ eventId: zId }),
-  risk: 'R1',
+  // It runs the approved proposal, an R1 or R2 command, in its transaction (plan §4.7; #1563). A system command, so
+  // the worker runs it as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input) => {
     const event = await outboxEvent(ctx, input.eventId, 'kernel.agent.proposal_approved', zProposalApproved);

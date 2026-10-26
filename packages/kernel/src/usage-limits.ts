@@ -103,7 +103,9 @@ export const usageDefer = defineCommand({
     subjectId: z.string().min(1).max(100),
     retryAt: z.iso.datetime({ offset: true }),
   }),
-  risk: 'R1',
+  // It queues the next day's mail (plan §4.7: a send derives R2; #1563). A system command, so the job runs as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input) => {
     await sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${`crove.usage_deferral:${ctx.orgId}:${input.metric}`}, 0))`.execute(ctx.trx);

@@ -457,7 +457,8 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
     });
   };
 
-  // Review shortcuts (issue #315): J or N the next pending proposal, A approve, E the first account to edit. Each one
+  // Review shortcuts (issue #315): J or N the next pending proposal, A approve, E the first account to edit, R the reject
+  // dialog (#1580, DESIGN.md §5.2). Each one
   // does only what its button would do now (A never while the step-up prompt waits for a code). The handlers are
   // computed on each render and handed to the key listener Social posts share (#1230).
   const pendingList = useQuery(orpc.inbox.list.queryOptions({ input: { status: 'pending' } }));
@@ -471,6 +472,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
     ...(pending && item?.canEdit && !busy && payload
       ? { edit: () => linesRef.current?.querySelector<HTMLSelectElement>('select:not(:disabled)')?.focus() }
       : {}),
+    ...(pending && item?.canReject && !busy ? { reject: () => setRejectOpen(true) } : {}),
   };
   useReviewShortcuts(handlers);
 
@@ -759,7 +761,7 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
         </div>
       )}
       {/* A phone has no keyboard for them (#1409). */}
-      {wide && pending && (item.canApprove || item.canEdit) && <p className="mb-4 text-xs text-subtle-foreground">{t('shortcuts')}</p>}
+      {wide && pending && (item.canApprove || item.canEdit || item.canReject) && <p className="mb-4 text-xs text-subtle-foreground">{t('shortcuts')}</p>}
       {pending && dirty && (
         <p className="mb-4 text-sm text-muted-foreground">{t('dirty')}</p>
       )}
