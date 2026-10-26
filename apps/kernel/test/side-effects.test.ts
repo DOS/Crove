@@ -18,7 +18,7 @@ const UNANNOTATED_KERNEL: string[] = [];
 const POLICY_R3 = ['kernel.member.change_role', 'kernel.member.invite.create', 'kernel.member.remove', 'kernel.member.role.assign', 'kernel.member.role.revoke'];
 // The other modules' commands without a side effect, per module (follow-ups of #1563, one per lead): exact, so an
 // annotation lowers its module's number in the same PR and a new unannotated command fails.
-const UNANNOTATED_CEILING: Record<string, number> = { finance: 45, social: 158 };
+const UNANNOTATED_CEILING: Record<string, number> = { finance: 45 };
 
 const all = (): Array<CommandDef<unknown, unknown>> =>
   [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
@@ -78,6 +78,37 @@ describe('declared risk and side effects (#1563)', () => {
       'crm.event_type.update',
     ]) {
       expect(byName.get(name), name).toMatchObject({ risk: 'R2', sideEffect: 'external' });
+    }
+  });
+
+  it('declares the social commands that start a platform call, queue mail, post to a chat or change a public page as external effects, R2 (#1578)', () => {
+    const byName = new Map(all().map((c) => [c.name, c]));
+    for (const name of [
+      'social.auto_reply.begin',
+      'social.bio.save',
+      'social.chat_alert.test',
+      'social.comment.begin',
+      'social.digest.send',
+      'social.edit.begin',
+      'social.gate.begin',
+      'social.notification.dispatch',
+      'social.pin.begin',
+      'social.playlist.begin',
+      'social.publish.begin',
+      'social.remove.begin',
+      'social.report_branding.remove',
+      'social.report_branding.save',
+      'social.report_schedule.run',
+      'social.report_schedule.test',
+      'social.repost.begin',
+      'social.review.reply',
+      'social.thread.begin',
+    ]) {
+      expect(byName.get(name), name).toMatchObject({ risk: 'R2', sideEffect: 'external' });
+    }
+    // What the worker records of a platform's answer is a write inside Crove, so R1, not R0.
+    for (const name of ['social.external_post.import', 'social.external_post.record', 'social.late_id.record', 'social.metrics.record']) {
+      expect(byName.get(name), name).toMatchObject({ risk: 'R1', sideEffect: 'internal' });
     }
   });
 

@@ -1,7 +1,7 @@
 // White-label client reports (#1053), as Metricool's, Agorapulse's and Sprout's agency plans brand them: an org's report
 // branding, a display name, a logo, one accent colour and "hide Crove". The public report and review pages and the plan
 // print show it instead of Crove's logo, and the report mail uses the accent and the name. Owners and admins save and
-// remove it (social.report_branding.save, social.report_branding.remove, R1, audited without the logo's bytes); every
+// remove it (social.report_branding.save, social.report_branding.remove, R2 since the public pages show it, #1578, audited without the logo's bytes); every
 // member reads it (social.report_branding.get), for the settings and the plan print.
 //
 // The logo is a small inline data URL the browser makes from an image of the Social library (scaled to at most 256 px
@@ -49,7 +49,9 @@ async function lockBranding(ctx: CommandContext) {
 export const reportBrandingSave = defineCommand({
   name: 'social.report_branding.save',
   input: zReportBrandingSave,
-  risk: 'R1',
+  // Changes what the public page shows at once: visible to customers, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -89,7 +91,9 @@ export const reportBrandingSave = defineCommand({
 export const reportBrandingRemove = defineCommand({
   name: 'social.report_branding.remove',
   input: z.strictObject({}),
-  risk: 'R1',
+  // Changes what the public page shows at once: visible to customers, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: ADMINS,
   handler: async (ctx) => {
     requireUser(ctx);

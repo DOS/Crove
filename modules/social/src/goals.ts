@@ -63,6 +63,7 @@ export const goalSet = defineCommand({
   name: 'social.goal.set',
   input: zGoalSet,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -135,6 +136,7 @@ export const goalRemove = defineCommand({
   name: 'social.goal.remove',
   input: z.strictObject({ connectionId: zId.nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);

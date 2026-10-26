@@ -48,7 +48,9 @@ export function captureKey(at: Date): string {
 export const metricsRecord = defineCommand({
   name: 'social.metrics.record',
   input: z.strictObject({ variantId: zId, captureKey: z.string().min(1).max(100), metrics: zMetrics, extra: zExtra.optional() }),
-  risk: 'R0',
+  // Writes what the platform reported into Crove: internal, so R1 (#1578).
+  risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {
@@ -410,6 +412,7 @@ export const metricsExport = defineCommand({
   name: 'social.metrics.export',
   input: z.strictObject({ days: z.number().int().min(1).max(365), labelId: zId.optional() }),
   risk: 'R1',
+  sideEffect: 'none',
   access: ALL,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');

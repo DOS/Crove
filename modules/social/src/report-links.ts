@@ -102,6 +102,7 @@ export const reportLinkCreate = defineCommand({
     topCount: zSocialReportTopCount.optional(),
   }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -173,6 +174,7 @@ export const reportLinkRevoke = defineCommand({
   name: 'social.report_link.revoke',
   input: z.strictObject({ linkId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);

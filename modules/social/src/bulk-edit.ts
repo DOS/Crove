@@ -118,6 +118,7 @@ export const postBulkLabels = defineCommand({
   name: 'social.post.bulk_labels',
   input: zSocialBulkLabels,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input): Promise<BulkEditResult> => {
     requireUser(ctx);
@@ -172,6 +173,7 @@ export const postBulkAssign = defineCommand({
   name: 'social.post.bulk_assign',
   input: zSocialBulkAssign,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input): Promise<BulkEditResult> => {
     const userId = requireUser(ctx);
@@ -438,6 +440,7 @@ export const postBulkReplace = defineCommand({
   name: 'social.post.bulk_replace',
   input: zSocialBulkReplace,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input): Promise<BulkEditResult> => {
     requireUser(ctx);
@@ -486,6 +489,7 @@ export const postBulkAddChannel = defineCommand({
   name: 'social.post.bulk_add_channel',
   input: zSocialBulkAddChannel,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input): Promise<BulkAddChannelResult> => {
     requireUser(ctx);

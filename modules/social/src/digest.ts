@@ -248,7 +248,9 @@ function payloadOf(content: DigestContent, org: { slug: string; name: string }, 
 export const digestSend = defineCommand({
   name: 'social.digest.send',
   input: z.strictObject({}),
-  risk: 'R1',
+  // Queues mail through the kernel pipeline in its transaction: a send, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx): Promise<{ state: DigestState; week: string; mails: number; suppressed: number }> => {
     const week = await weekOf(ctx);

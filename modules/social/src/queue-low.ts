@@ -37,6 +37,7 @@ export const queueCheckLow = defineCommand({
   name: 'social.queue.check_low',
   input: z.strictObject({ queueId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.queue', id: input.queueId }),
   handler: async (ctx, input): Promise<{ state: QueueLowState; postingDays: number; filledDays: number }> => {

@@ -111,6 +111,7 @@ export const labelCreate = defineCommand({
   // A campaign's dates and tags (#1169) only from owners and admins; members create plain labels.
   input: z.strictObject({ name: zLabelName, color: zColor.optional(), ...zCampaign }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -134,6 +135,7 @@ export const labelUpdate = defineCommand({
   // The campaign's fields (#1169) are optional: absent ones stay as they are, null (or empty tags) clears one.
   input: z.strictObject({ labelId: zId, name: zLabelName, color: zColor, ...zCampaign }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -157,6 +159,7 @@ export const labelDelete = defineCommand({
   name: 'social.label.delete',
   input: z.strictObject({ labelId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -177,6 +180,7 @@ export const postSetLabels = defineCommand({
       .refine((ids) => new Set(ids).size === ids.length, 'labels repeat'),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
