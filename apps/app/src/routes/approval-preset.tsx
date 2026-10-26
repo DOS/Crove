@@ -10,6 +10,7 @@ import { Card } from '@crove/ui/components/card';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { ErrorText, Spinner } from '../components/ui.tsx';
 import { errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
+import { scrollBehavior } from '../lib/media.ts';
 import { toast } from '../lib/toast.ts';
 
 export const APPROVAL_PRESETS = ['founder', 'accountant'] as const;
@@ -21,7 +22,7 @@ export const MEMBERS_CARD_ID = 'settings-members';
 
 function showMembers() {
   const card = document.getElementById(MEMBERS_CARD_ID);
-  card?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  card?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
   card?.focus({ preventScroll: true });
 }
 
