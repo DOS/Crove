@@ -315,6 +315,11 @@ function InboxQueue({ slug, current }: { slug: string; current: string }) {
         <div className="p-3">
           <Spinner />
         </div>
+      ) : pending.error ? (
+        // A failed load is not an empty queue.
+        <div className="p-3">
+          <ErrorText>{errorMessage(pending.error)}</ErrorText>
+        </div>
       ) : items.length === 0 ? (
         <p className="px-3 py-3 text-xs text-subtle-foreground">{t('queueEmpty')}</p>
       ) : (
