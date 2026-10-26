@@ -1,36 +1,37 @@
-// The finance module's manifest (plan §5.2, #1588): the tables it owns. A migration that adds or drops a table of these
-// schemas changes this list in the same PR; apps/kernel/test/manifest.db.test.ts checks it against the catalog.
-import { defineModule } from '@crove/kernel-contract';
+// The finance module's manifest (plan §5.2, #1588, #1599): the tables it owns and the class of every column. A migration
+// that adds or drops a table or column of these schemas changes this list in the same PR; apps/kernel/test/manifest.db.test.ts
+// checks it against the catalog. A column is internal unless the second argument of columns() classifies it.
+import { columns, defineModule } from '@crove/kernel-contract';
 
 export const financeManifest = defineModule({
   id: 'finance',
   tables: {
-    crove_finance: [
-      'account',
-      'bank_line',
-      'cash_voucher',
-      'categorization_rule',
-      'chart',
-      'chart_account',
-      'depreciation_line',
-      'fixed_asset',
-      'input_vat_check',
-      'journal_entry',
-      'journal_line',
-      'journal_voucher',
-      'legal_entity_books',
-      'misa_goods_code',
-      'org_account',
-      'period_balance_delta',
-      'period_lock',
-      'portal_invoice_list',
-      'portal_invoice_row',
-      'purchase_document',
-      'purchase_document_void',
-      'purchase_line',
-      'purchase_tax_rate',
-      'vat_return_filed',
-      'vendor_account_rule',
-    ],
+    crove_finance: {
+      account: columns(['code', 'name', 'parent_code', 'standard']),
+      bank_line: columns(['org_id', 'id', 'import_id', 'position', 'value_date', 'amount', 'running_balance', 'bank_ref', 'dedupe_key', 'ambiguous', 'created_by', 'created_at', 'legal_entity_id'], { bank_account: 'payment', description: 'pii' }),
+      cash_voucher: columns(['org_id', 'id', 'voucher_type', 'number', 'voucher_date', 'cash_account', 'party_id', 'description', 'amount', 'proposal_id', 'created_by', 'created_at', 'bank_line_id', 'legal_entity_id', 'number_period', 'number_allocation_id'], { person_name: 'pii' }),
+      categorization_rule: columns(['org_id', 'id', 'vendor_party_id', 'match_kind', 'match_text', 'label', 'debit_account', 'confirmed_by', 'confirmed_at', 'source_document_id', 'created_at', 'legal_entity_id']),
+      chart: columns(['regime', 'version', 'name']),
+      chart_account: columns(['regime', 'version', 'code', 'name', 'parent_code']),
+      depreciation_line: columns(['org_id', 'id', 'asset_id', 'month', 'amount', 'entry_id', 'created_at', 'legal_entity_id']),
+      fixed_asset: columns(['org_id', 'id', 'kind', 'name', 'cost', 'asset_account', 'accumulated_account', 'expense_account', 'start_month', 'months', 'source_document_id', 'source_line_no', 'ended_month', 'end_reason', 'ended_by', 'created_by', 'created_at', 'legal_entity_id']),
+      input_vat_check: columns(['org_id', 'id', 'document_id', 'outcome', 'voucher_id', 'note', 'marked_by', 'created_at', 'legal_entity_id']),
+      journal_entry: columns(['org_id', 'id', 'entry_date', 'description', 'source_type', 'source_id', 'created_by', 'created_at', 'created_xact_id', 'created_xact_start', 'reverses_entry_id', 'search', 'source_revision', 'payload_sha256', 'legal_entity_id']),
+      journal_line: columns(['org_id', 'entry_id', 'line_no', 'account_code', 'debit', 'credit', 'party_id', 'memo', 'legal_entity_id']),
+      journal_voucher: columns(['org_id', 'id', 'number', 'voucher_date', 'description', 'proposal_id', 'created_by', 'created_at', 'closing_year', 'legal_entity_id', 'number_period', 'number_allocation_id']),
+      legal_entity_books: columns(['org_id', 'id', 'legal_entity_id', 'regime', 'chart_version', 'effective_from', 'created_by', 'created_at']),
+      misa_goods_code: columns(['org_id', 'id', 'account_code', 'item_code', 'warehouse_code', 'updated_by', 'updated_at']),
+      org_account: columns(['org_id', 'id', 'code', 'name', 'parent_code', 'root_code', 'active', 'created_by', 'created_at', 'updated_by', 'updated_at']),
+      period_balance_delta: columns(['org_id', 'id', 'entry_id', 'account_code', 'period_month', 'debit', 'credit', 'line_count', 'legal_entity_id']),
+      period_lock: columns(['org_id', 'id', 'locked_from', 'locked_through', 'updated_by', 'updated_at', 'legal_entity_id']),
+      portal_invoice_list: columns(['org_id', 'id', 'period', 'file_id', 'filename', 'status', 'error', 'row_count', 'list_from', 'list_to', 'skipped_count', 'created_by', 'created_at', 'recorded_at', 'removed_at', 'removed_by', 'own_sales_count', 'other_buyer_count', 'legal_entity_id'], { buyer_tax_code: 'national_id_if_individual', skipped: 'pii' }),
+      portal_invoice_row: columns(['org_id', 'list_id', 'row_no', 'template', 'series', 'number', 'issue_date', 'currency', 'subtotal', 'vat_amount', 'total', 'status', 'status_label', 'check_result', 'legal_entity_id'], { seller_tax_code: 'national_id_if_individual', seller_name: 'pii' }),
+      purchase_document: columns(['org_id', 'id', 'party_id', 'invoice_series', 'invoice_number', 'invoice_date', 'currency', 'subtotal', 'vat_amount', 'total', 'payment_method', 'tax_authority_code', 'source_file_id', 'proposal_id', 'created_by', 'created_at', 'replaces_document_id', 'direction', 'correction_kind', 'corrects_document_id', 'corrected_series', 'corrected_number', 'corrected_date', 'exchange_rate', 'exchange_rate_source', 'foreign_subtotal', 'foreign_vat_amount', 'foreign_total', 'legal_entity_id'], { search: 'pii' }),
+      purchase_document_void: columns(['org_id', 'document_id', 'reversal_entry_id', 'reason', 'voided_by', 'created_at', 'legal_entity_id']),
+      purchase_line: columns(['org_id', 'document_id', 'line_no', 'description', 'unit', 'quantity', 'unit_price', 'amount', 'vat_rate', 'vat_amount', 'debit_account', 'credit_account', 'legal_entity_id']),
+      purchase_tax_rate: columns(['org_id', 'document_id', 'row_no', 'vat_rate', 'taxable_amount', 'vat_amount', 'legal_entity_id']),
+      vat_return_filed: columns(['org_id', 'id', 'period', 'status', 'source', 'carried_in_amount', 'deductible_amount', 'carried_out_amount', 'marked_by', 'created_at', 'legal_entity_id']),
+      vendor_account_rule: columns(['org_id', 'party_id', 'debit_account', 'confirmed_by', 'updated_at']),
+    },
   },
 });
