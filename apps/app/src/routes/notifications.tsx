@@ -62,7 +62,7 @@ function Settings({ muted }: { muted: readonly string[] }) {
   return (
     <Card className="block space-y-3 p-4">
       <div>
-        <h3 className="text-sm font-medium text-foreground">{t('settings')}</h3>
+        <h2 className="text-sm font-medium text-foreground">{t('settings')}</h2>
         <p className="text-xs text-subtle-foreground">{t('settingsHint')}</p>
       </div>
       <div className="grid gap-2 sm:grid-cols-2">

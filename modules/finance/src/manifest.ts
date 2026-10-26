@@ -9,7 +9,7 @@ export const financeManifest = defineModule({
     crove_finance: {
       account: columns(['code', 'name', 'parent_code', 'standard']),
       bank_line: columns(['org_id', 'id', 'import_id', 'position', 'value_date', 'amount', 'running_balance', 'bank_ref', 'dedupe_key', 'ambiguous', 'created_by', 'created_at', 'legal_entity_id'], { bank_account: 'payment', description: 'pii' }),
-      cash_voucher: columns(['org_id', 'id', 'voucher_type', 'number', 'voucher_date', 'cash_account', 'party_id', 'description', 'amount', 'proposal_id', 'created_by', 'created_at', 'bank_line_id', 'legal_entity_id'], { person_name: 'pii' }),
+      cash_voucher: columns(['org_id', 'id', 'voucher_type', 'number', 'voucher_date', 'cash_account', 'party_id', 'description', 'amount', 'proposal_id', 'created_by', 'created_at', 'bank_line_id', 'legal_entity_id', 'number_period', 'number_allocation_id'], { person_name: 'pii' }),
       categorization_rule: columns(['org_id', 'id', 'vendor_party_id', 'match_kind', 'match_text', 'label', 'debit_account', 'confirmed_by', 'confirmed_at', 'source_document_id', 'created_at', 'legal_entity_id']),
       chart: columns(['regime', 'version', 'name']),
       chart_account: columns(['regime', 'version', 'code', 'name', 'parent_code']),
@@ -18,7 +18,7 @@ export const financeManifest = defineModule({
       input_vat_check: columns(['org_id', 'id', 'document_id', 'outcome', 'voucher_id', 'note', 'marked_by', 'created_at', 'legal_entity_id']),
       journal_entry: columns(['org_id', 'id', 'entry_date', 'description', 'source_type', 'source_id', 'created_by', 'created_at', 'created_xact_id', 'created_xact_start', 'reverses_entry_id', 'search', 'source_revision', 'payload_sha256', 'legal_entity_id']),
       journal_line: columns(['org_id', 'entry_id', 'line_no', 'account_code', 'debit', 'credit', 'party_id', 'memo', 'legal_entity_id']),
-      journal_voucher: columns(['org_id', 'id', 'number', 'voucher_date', 'description', 'proposal_id', 'created_by', 'created_at', 'closing_year', 'legal_entity_id']),
+      journal_voucher: columns(['org_id', 'id', 'number', 'voucher_date', 'description', 'proposal_id', 'created_by', 'created_at', 'closing_year', 'legal_entity_id', 'number_period', 'number_allocation_id']),
       legal_entity_books: columns(['org_id', 'id', 'legal_entity_id', 'regime', 'chart_version', 'effective_from', 'created_by', 'created_at']),
       misa_goods_code: columns(['org_id', 'id', 'account_code', 'item_code', 'warehouse_code', 'updated_by', 'updated_at']),
       org_account: columns(['org_id', 'id', 'code', 'name', 'parent_code', 'root_code', 'active', 'created_by', 'created_at', 'updated_by', 'updated_at']),
