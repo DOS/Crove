@@ -1,6 +1,20 @@
 // Reviewing the AI Inbox quickly (issue #315): bulk approval in batches the server accepts, and keyboard shortcuts on
 // a proposal. The server decides every approval; these only shape the requests and the keys.
 
+import { z } from 'zod';
+import { readSearch, type Defined } from './search.ts';
+
+// The Inbox tabs, by proposal status; pending is the default. Expired proposals (#876) waited past the org's expiry;
+// their author may ask for them again.
+export const INBOX_TABS = ['pending', 'executed', 'rejected', 'expired'] as const;
+export type InboxTab = (typeof INBOX_TABS)[number];
+
+// ?status= of the Inbox (#1513): the tab, left out for the pending proposals. Not ?tab=, which the Social screen's
+// search reducer types for its own tabs.
+const zInboxSearch = z.object({ status: z.enum(INBOX_TABS).optional().catch(undefined) });
+export type InboxSearch = Defined<z.output<typeof zInboxSearch>>;
+export const parseInboxSearch = (search: Record<string, unknown>): InboxSearch => readSearch(zInboxSearch, search);
+
 // The most proposals one bulk approval takes (kernel.proposal.approve_many). A larger selection goes in several
 // batches, each checked against the same step-up freshness rule (P11) when it arrives.
 export const BULK_LIMIT = 50;

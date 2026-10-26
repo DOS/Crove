@@ -18,4 +18,14 @@ test('shows the draft B01 and B02 of a period and exports them', async ({ page }
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Xuất Excel báo cáo tài chính' }).click();
   expect((await download).suggestedFilename()).toMatch(new RegExp(`^crove-bao-cao-tai-chinh-\\d{4}-\\d{2}-${slug}\\.xlsx$`));
+
+  // The period and the tab live in the address (#1513): a reload keeps them, and Back returns to the previous period.
+  await page.getByLabel('Kỳ báo cáo').selectOption('quarter');
+  await expect(page).toHaveURL(/[?&]period=\d{4}-Q[1-4]/);
+  await expect(page).toHaveURL(/[?&]report=statements/);
+  await page.reload();
+  await expect(page.getByLabel('Kỳ báo cáo')).toHaveValue('quarter');
+  await expect(page.getByRole('tab', { name: 'Báo cáo tài chính' })).toHaveAttribute('aria-selected', 'true');
+  await page.goBack();
+  await expect(page.getByLabel('Kỳ báo cáo')).toHaveValue('month');
 });

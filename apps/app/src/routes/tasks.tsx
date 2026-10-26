@@ -2,7 +2,7 @@
 // reads them; owners, admins and members give work, comment and change status. A task made from untrusted content
 // (an email, a run that read one) is marked, so nobody acts on it unchecked.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useParams } from '@tanstack/react-router';
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useState, type FormEvent } from 'react';
 import { useTranslations } from 'use-intl';
 import { Badge } from '@crove/ui/components/badge';
@@ -14,10 +14,9 @@ import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { DataTable, Empty, ErrorText, ListSkeleton, PageHeader, Spinner } from '../components/ui.tsx';
 import { useFormat } from '../i18n/provider.tsx';
-import { OPEN_TASK_STATUSES, TASK_LIST_LIMIT, TASK_STATUSES, agentPermissions, socialPostOf, type TaskStatus } from '../lib/agents.ts';
+import { OPEN_TASK_STATUSES, TASK_LIST_LIMIT, TASK_STATUSES, agentPermissions, socialPostOf, type TaskFilter, type TaskStatus, type TasksSearch } from '../lib/agents.ts';
 import { errorMessage, orpc, queryClient } from '../lib/api.ts';
 
-type Filter = 'all' | 'mine' | 'open';
 type Chart = Awaited<ReturnType<typeof orpc.chart.get.call>>;
 
 const refresh = () => void queryClient.invalidateQueries();
@@ -92,7 +91,11 @@ export function TasksPage() {
   const { slug } = useParams({ strict: false }) as { slug: string };
   const t = useTranslations('tasks');
   const f = useFormat();
-  const [filter, setFilter] = useState<Filter>('open');
+  // The tab lives in the address (#1513), left out for the open tasks.
+  const search: TasksSearch = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const filter: TaskFilter = search.filter ?? 'open';
+  const setFilter = (next: TaskFilter) => void navigate({ to: '/o/$slug/tasks', params: { slug }, search: next === 'open' ? {} : { filter: next } });
   const org = useQuery(orpc.org.get.queryOptions());
   const chart = useQuery(orpc.chart.get.queryOptions());
   const input = filter === 'mine' ? { mine: true } : filter === 'open' ? { status: [...OPEN_TASK_STATUSES] } : {};
@@ -103,7 +106,7 @@ export function TasksPage() {
     <div>
       <PageHeader title={t('title')} subtitle={t('subtitle')} />
       {perms.tasks && <NewTask chart={chart.data} />}
-      <Tabs value={filter} onValueChange={(value) => setFilter(value as Filter)} className="mb-4">
+      <Tabs value={filter} onValueChange={(value) => setFilter(value as TaskFilter)} className="mb-4">
         <TabsList>
           <TabsTrigger value="open">{t('filterOpen')}</TabsTrigger>
           <TabsTrigger value="mine">{t('filterMine')}</TabsTrigger>
