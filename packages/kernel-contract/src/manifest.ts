@@ -27,7 +27,7 @@ export function columns(internal: readonly string[], classified: Readonly<Record
   const out: Record<string, DataClass> = {};
   for (const c of internal) out[c] = 'internal';
   for (const [c, cls] of Object.entries(classified)) {
-    if (c in out) throw new Error(`manifest: column ${c} is listed as internal and as ${cls}`);
+    if (Object.hasOwn(out, c)) throw new Error(`manifest: column ${c} is listed as internal and as ${cls}`);
     out[c] = cls;
   }
   return Object.freeze(out);
