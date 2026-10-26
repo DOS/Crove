@@ -109,6 +109,32 @@ suite('crove_jobs from committed migrations', () => {
     });
   });
 
+  // `pg-boss doctor` in G3 (plan §4.9, #1603): the vendored schema carries Crove's changes (pinned search_path, no
+  // CONCURRENTLY, the version guard), so pg-boss's own drift scan, the one its doctor command runs, must still find the
+  // tables, columns, constraints, enums, indexes and function bodies the pinned version expects.
+  it('has the shape the pinned pg-boss expects (pg-boss doctor), and the scan reports a dropped index', async () => {
+    const adminUrl = await createDatabase();
+    await migrate({ adminUrl, dir: MIGRATIONS });
+    await setRolePasswords(adminUrl, { crove_app: 'test-app-pw', crove_worker: 'test-worker-pw' });
+    const drift = async () => {
+      const boss = new PgBoss({ connectionString: loginUrl(adminUrl, 'crove_worker', 'test-worker-pw'), schema: JOB_SCHEMA, migrate: false, createSchema: false, supervise: false, schedule: false });
+      boss.on('error', () => {});
+      await boss.start();
+      try {
+        return await boss.detectSchemaDrift();
+      } finally {
+        await boss.stop({ graceful: false });
+      }
+    };
+    const report = await drift();
+    expect(report, 'crove_jobs drifts from the shape the pinned pg-boss expects: fix the vendored migration (pnpm db:vendor:pgboss)').toMatchObject({ ok: true });
+
+    await withClient(adminUrl, (admin) => admin.query(`DROP INDEX ${JOB_SCHEMA}.warning_i1`));
+    const broken = await drift();
+    expect(broken.ok).toBe(false);
+    expect(broken.missing.map((i) => i.name)).toContain('warning_i1');
+  });
+
   it('leaves a schema pg-boss already created at the same version in place', async () => {
     const adminUrl = await createDatabase();
     // Before #25 the migrate role let pg-boss create crove_jobs at runtime.
