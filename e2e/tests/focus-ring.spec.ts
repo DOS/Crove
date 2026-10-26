@@ -47,7 +47,7 @@ async function missingRing(page: Page): Promise<string | null> {
     const shows = base ? look(el) !== base.self || look(el.parentElement) !== base.parent : ring(el) || ring(el.parentElement);
     if (shows) return null;
     const name = (el.getAttribute('aria-label') ?? el.textContent ?? '').trim().slice(0, 40);
-    return `${el.tagName.toLowerCase()}${el.getAttribute('role') ? `[role=${el.getAttribute('role')}]` : ''} "${name}" (${el.className.toString().slice(0, 80)})`;
+    return `${el.tagName.toLowerCase()}${el.getAttribute('role') ? `[role=${el.getAttribute('role')}]` : ''} "${name}" (${(el.getAttribute('class') ?? '').slice(0, 80)})`;
   });
 }
 
