@@ -11,10 +11,8 @@ import { socialCommands } from '@crove/mod-social';
 import { orgPurgeCommand } from '../src/org-purge.ts';
 
 // Commands without a side effect, per module. Annotating a module's commands shrinks its list; a new command must
-// declare one. These kernel commands do something whose honest side effect derives more than their declared R1, and
-// their risk is decided in one follow-up (#1563): kernel.mail.contact.queue and kernel.proposal.remind queue mail to
-// people, kernel.usage.defer queues the next day's mail, kernel.agent.proposal.approve runs an R1 or R2 proposal.
-const UNANNOTATED_KERNEL = ['kernel.agent.proposal.approve', 'kernel.mail.contact.queue', 'kernel.proposal.remind', 'kernel.usage.defer'];
+// declare one. Every kernel command declares one.
+const UNANNOTATED_KERNEL: string[] = [];
 // Commands whose R3 is policy, not side effect: who may change membership and roles (pinned so an annotation cannot
 // lower them).
 const POLICY_R3 = ['kernel.member.change_role', 'kernel.member.invite.create', 'kernel.member.remove', 'kernel.member.role.assign', 'kernel.member.role.revoke'];
@@ -50,6 +48,21 @@ describe('declared risk and side effects (#1563)', () => {
     }
     // Lower a ceiling when a module's commands are annotated; a new command without a side effect fails here.
     expect(counts).toEqual(UNANNOTATED_CEILING);
+  });
+
+  it('declares the commands that queue mail or run an approved proposal as external effects, R2 (#1563)', () => {
+    const byName = new Map(all().map((c) => [c.name, c]));
+    for (const name of ['kernel.agent.proposal.approve', 'kernel.mail.contact.queue', 'kernel.proposal.remind', 'kernel.usage.defer']) {
+      expect(byName.get(name), name).toMatchObject({ risk: 'R2', sideEffect: 'external' });
+    }
+    // Three are system commands no agent may run (no agent access): the runtime gates a system actor by access, not
+    // risk, so the reminder, deferral and agent-approval jobs run as before (their database tests run them as the
+    // system: proposal-reminders, the usage limits and the T18 agents invariant). What an agent may approve is decided
+    // by the approved proposal's command (R1 or R2, within max_risk), never by kernel.agent.proposal.approve's own risk.
+    for (const name of ['kernel.agent.proposal.approve', 'kernel.proposal.remind', 'kernel.usage.defer']) {
+      expect(byName.get(name), name).toMatchObject({ access: 'system' });
+      expect(byName.get(name)?.agent, name).toBeUndefined();
+    }
   });
 
   it('keeps the membership and role commands at R3', () => {
