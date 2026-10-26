@@ -178,6 +178,7 @@ export const createPosition = defineCommand({
     jobDescription: zJobDescription.optional(),
   }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: OWNER,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -212,6 +213,7 @@ export const updatePosition = defineCommand({
     status: z.enum(['active', 'paused', 'archived']).optional(),
   }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: OWNER,
   target: (input) => ({ type: 'kernel.position', id: input.id }),
   handler: async (ctx, input) => {
@@ -244,6 +246,7 @@ export const assignPosition = defineCommand({
   name: 'kernel.position.assign',
   input: z.object({ id: zId, holder: zHolder }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: OWNER,
   target: (input) => ({ type: 'kernel.position', id: input.id }),
   handler: async (ctx, input) => {
@@ -321,6 +324,7 @@ export const installAgentTemplate = defineCommand({
   name: 'kernel.agent.template.install',
   input: z.object({ templateKey: z.string().min(1).max(100), reportsTo: zId.nullable().optional(), displayName: z.string().trim().min(1).max(200).optional() }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: OWNER,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -374,6 +378,7 @@ export const updateAgent = defineCommand({
     dailyRunCap: z.number().int().min(1).max(10000).optional(),
   }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: OWNER,
   target: (input) => ({ type: 'kernel.agent', id: input.id }),
   handler: async (ctx, input) => {
@@ -446,6 +451,7 @@ export const setAgentBudget = defineCommand({
   name: 'kernel.agent.budget.set',
   input: z.object({ scope: zScope, target: z.string().min(1).max(100), monthlyLimit: zAmount, warnPercent: z.number().int().min(1).max(100).optional(), hardStop: z.boolean().optional() }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: OWNER,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -485,6 +491,7 @@ export const engageKillSwitch = defineCommand({
   name: 'kernel.agent.kill_switch.engage',
   input: z.object({ scope: zScope, target: z.string().min(1).max(100), reason: z.string().max(500).optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin'],
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -527,6 +534,7 @@ export const releaseKillSwitch = defineCommand({
   name: 'kernel.agent.kill_switch.release',
   input: z.object({ id: zId }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: OWNER,
   target: (input) => ({ type: 'kernel.kill_switch', id: input.id }),
   handler: async (ctx, input) => {
@@ -558,6 +566,7 @@ export const createTask = defineCommand({
   name: 'kernel.task.create',
   input: z.object({ title: zTaskTitle, description: z.string().max(10000).optional(), assigneePositionId: zId.nullable(), due: z.iso.datetime().optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -608,6 +617,7 @@ export const checkoutTask = defineCommand({
   name: 'kernel.task.checkout',
   input: z.object({ id: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
   target: (input) => ({ type: 'kernel.task', id: input.id }),
@@ -654,6 +664,7 @@ export const commentTask = defineCommand({
   name: 'kernel.task.comment',
   input: z.object({ id: zId, body: z.string().trim().min(1).max(10000), fence: zFence.optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   agent: { roles: 'any', taint: 'propagate' },
   target: (input) => ({ type: 'kernel.task', id: input.id }),
@@ -682,6 +693,7 @@ export const setTaskStatus = defineCommand({
   name: 'kernel.task.set_status',
   input: z.object({ id: zId, status: z.enum(['todo', 'in_progress', 'waiting', 'in_review', 'done', 'cancelled']), fence: zFence.optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   agent: { roles: 'any', taint: 'propagate' },
   target: (input) => ({ type: 'kernel.task', id: input.id }),
@@ -748,6 +760,7 @@ export const escalateTask = defineCommand({
   name: 'kernel.task.escalate',
   input: z.object({ id: zId, fence: zFence, title: zTaskTitle, reason: z.string().trim().min(1).max(10000) }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
   target: (input) => ({ type: 'kernel.task', id: input.id }),
@@ -789,6 +802,7 @@ export const delegateTask = defineCommand({
   name: 'kernel.task.delegate',
   input: z.object({ id: zId, fence: zFence, assigneePositionId: zId, title: zTaskTitle, description: z.string().max(10000).optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
   target: (input) => ({ type: 'kernel.task', id: input.id }),
@@ -849,6 +863,7 @@ export const dispatchAgentEvent = defineCommand({
   name: 'kernel.agent.dispatch_event',
   input: z.object({ eventId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const event = await ctx.trx
@@ -963,6 +978,7 @@ export const startAgentRun = defineCommand({
   name: 'kernel.agent.run.start',
   input: z.object({ agentId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.agent', id: input.agentId }),
   handler: async (ctx, input): Promise<RunStartResult> => {
@@ -1062,6 +1078,7 @@ export const finishAgentRun = defineCommand({
   name: 'kernel.agent.run.finish',
   input: z.object({ runId: zId, outcome: z.enum(['succeeded', 'failed']), error: z.string().max(1000).nullable().optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.ai_run', id: input.runId }),
   handler: async (ctx, input) => {
@@ -1411,6 +1428,7 @@ export const proposeFromTask = defineCommand({
   name: 'kernel.task.propose',
   input: z.object({ id: zId, fence: zFence, preparer: z.string().min(1).max(200), input: z.record(z.string(), z.unknown()) }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: [],
   agent: { roles: 'any', taint: 'propagate' },
   target: (input) => ({ type: 'kernel.task', id: input.id }),
@@ -1454,6 +1472,7 @@ export const approveFromTask = defineCommand({
   name: 'kernel.task.approve_proposal',
   input: z.object({ id: zId, fence: zFence, proposalId: zId, revision: z.number().int().positive() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: [],
   agent: { roles: 'any' },
   target: (input) => ({ type: 'kernel.proposal', id: input.proposalId }),
@@ -1566,6 +1585,7 @@ export const createAgentProposal = defineCommand({
   name: 'kernel.agent.proposal.create',
   input: z.object({ eventId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const event = await outboxEvent(ctx, input.eventId, 'kernel.agent.proposal_requested', zProposalRequested);
@@ -1661,7 +1681,10 @@ export const createAgentProposal = defineCommand({
 export const executeAgentApproval = defineCommand({
   name: 'kernel.agent.proposal.approve',
   input: z.object({ eventId: zId }),
-  risk: 'R1',
+  // It runs the approved proposal, an R1 or R2 command, in its transaction (plan §4.7; #1563). A system command, so
+  // the worker runs it as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input) => {
     const event = await outboxEvent(ctx, input.eventId, 'kernel.agent.proposal_approved', zProposalApproved);

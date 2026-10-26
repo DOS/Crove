@@ -224,6 +224,7 @@ export function inviteCreateCommand(limits: InviteLimits = DEFAULT_INVITE_LIMITS
     name: 'kernel.member.invite.create',
     input: z.object({ email: z.email().max(320), role: zInviteRole, legalEntityIds: zInviteLegalEntityIds.optional() }),
     risk: 'R3',
+    sideEffect: 'external',
     access: ADMINS,
     handler: async (ctx, input) => {
       if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới mời được thành viên');
@@ -350,6 +351,7 @@ export const revokeInvite = defineCommand({
   name: 'kernel.member.invite.revoke',
   input: z.object({ inviteId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'kernel.member_invite', id: input.inviteId }),
   handler: async (ctx, input) => {
@@ -398,6 +400,7 @@ export const acceptInvite = defineCommand({
   name: 'kernel.member.invite.accept',
   input: z.object({ token: zInviteToken }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ALL,
   bootstrap: async (trx, actor, input, _idempotencyKey, env) =>
     withInviteErrors(async () => {

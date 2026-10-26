@@ -179,6 +179,7 @@ export const assignRole = defineCommand({
   name: 'kernel.member.role.assign',
   input: zRoleAssignInput,
   risk: 'R3',
+  sideEffect: 'internal',
   access: ['owner'],
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input): Promise<{ assignmentId: string; created: boolean }> => {
@@ -218,6 +219,7 @@ export const revokeRole = defineCommand({
   name: 'kernel.member.role.revoke',
   input: z.object({ assignmentId: zId }),
   risk: 'R3',
+  sideEffect: 'internal',
   access: ['owner'],
   target: (input) => ({ type: 'kernel.role_assignment', id: input.assignmentId }),
   handler: async (ctx, input): Promise<{ assignmentId: string }> => {

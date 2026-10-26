@@ -246,6 +246,7 @@ export const personalDataErase = defineCommand({
   name: 'kernel.personal_data.erase',
   input: zPersonalDataQuery,
   risk: 'R3',
+  sideEffect: 'irreversible',
   access: OWNERS,
   handler: async (ctx, input): Promise<PersonalDataErasure> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới xóa được dữ liệu cá nhân');

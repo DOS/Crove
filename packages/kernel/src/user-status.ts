@@ -18,6 +18,7 @@ export const userStatusNote = defineCommand({
   name: 'kernel.user.status_note',
   input: zUserStatusNote,
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input) => {

@@ -152,6 +152,7 @@ export const offboardOrg = defineCommand({
   name: 'kernel.org.offboard',
   input: z.object({ confirmSlug: z.string().max(48) }),
   risk: 'R3',
+  sideEffect: 'irreversible',
   access: OWNERS,
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ chủ sở hữu mới đóng được tổ chức');
@@ -251,6 +252,7 @@ export const recordExport = defineCommand({
   name: 'kernel.org.export.record',
   input: zExportRecord,
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const keys = [{ key: input.manifestKey, sha256: input.manifestSha256 }, ...input.parts];

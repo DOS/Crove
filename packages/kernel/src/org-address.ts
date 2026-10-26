@@ -20,6 +20,7 @@ export const setAddress = defineCommand({
   name: 'kernel.org.set_address',
   input: z.object({ address: z.string().max(2000).nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin'],
   handler: async (ctx, input) => {
     const address = input.address === null ? null : normalizeAddress(input.address);
@@ -47,6 +48,7 @@ export const setContactEmail = defineCommand({
   name: 'kernel.org.set_contact_email',
   input: z.object({ email: z.email().max(CONTACT_EMAIL_MAX_LENGTH).nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ['owner', 'admin'],
   handler: async (ctx, input) => {
     const email = input.email === null ? null : input.email.trim().toLowerCase();

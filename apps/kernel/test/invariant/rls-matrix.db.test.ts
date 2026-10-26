@@ -46,8 +46,6 @@ const MACHINERY = new Set([
 // until the table exists, neither its factory nor its MACHINERY entry is stale. Remove an entry once its table is on
 // main. One table per line, sorted, with a trailing comma, so PRs adding different tables touch different lines.
 const PENDING_TABLES = new Set<string>([
-  // The accounting regime per legal entity (#1403): the factory lands first, the table with the next migration.
-  'crove_finance.legal_entity_books',
   // Gapless numbering (ADR-0021 §2, #1401): the factories land first, the tables with the next migration.
   'crove_kernel.number_allocation',
   'crove_kernel.number_series',

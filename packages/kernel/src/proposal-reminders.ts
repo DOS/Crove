@@ -92,6 +92,7 @@ export const proposalPolicySave = defineCommand({
   name: 'kernel.proposal_policy.save',
   input: zProposalPolicy,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input): Promise<ProposalPolicy> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
@@ -147,7 +148,10 @@ export interface RemindResult {
 export const proposalRemind = defineCommand({
   name: 'kernel.proposal.remind',
   input: z.strictObject({ proposalId: zId }),
-  risk: 'R1',
+  // It queues reminder mail to people (plan §4.7: a send derives R2; #1563). A system command: the runtime gates
+  // system commands by access, not risk, so the daily job runs as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   target: (input) => ({ type: 'kernel.proposal', id: input.proposalId }),
   handler: async (ctx, input): Promise<RemindResult> => {
@@ -221,6 +225,7 @@ export const proposalExpire = defineCommand({
   name: 'kernel.proposal.expire',
   input: z.strictObject({ proposalId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.proposal', id: input.proposalId }),
   handler: async (ctx, input): Promise<ExpireResult> => {

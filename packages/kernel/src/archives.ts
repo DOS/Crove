@@ -67,6 +67,7 @@ export const recordArchive = defineCommand({
     })
     .refine((input) => input.status === 'done' || input.entries.length === 0, 'a failed opening files no entry'),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input) => {

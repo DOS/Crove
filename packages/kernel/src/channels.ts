@@ -60,6 +60,7 @@ export const channelConnect = defineCommand({
   name: 'kernel.channel.connect',
   input: zChannelConnect,
   risk: 'R2',
+  sideEffect: 'external',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -111,6 +112,7 @@ export const channelDisconnect = defineCommand({
   name: 'kernel.channel.disconnect',
   input: z.strictObject({ connectionId: zId }),
   risk: 'R2',
+  sideEffect: 'external',
   access: ADMINS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -146,6 +148,7 @@ export const channelMarkExpired = defineCommand({
   // is left alone.
   input: z.strictObject({ connectionId: zId, reason: z.string().min(1).max(200), ifVersion: z.iso.datetime({ offset: true }).optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -202,6 +205,7 @@ export const channelOAuthBegin = defineCommand({
   name: 'kernel.channel.oauth_begin',
   input: z.strictObject({ provider: zProvider, stateHash: zStateHash, codeVerifier: z.string().regex(/^[A-Za-z0-9._~-]{43,128}$/).nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -221,6 +225,7 @@ export const channelOAuthConsume = defineCommand({
   name: 'kernel.channel.oauth_consume',
   input: z.strictObject({ provider: zProvider, stateHash: zStateHash }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -247,6 +252,7 @@ export const channelRefresh = defineCommand({
     credential: z.strictObject({ keyId: zKeyId, envelope: zEnvelope }),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
@@ -286,6 +292,7 @@ export const channelReseal = defineCommand({
   name: 'kernel.channel.reseal',
   input: z.strictObject({ connectionId: zId, fromKeyId: zKeyId, fromEnvelopeSha256: z.string().regex(/^[0-9a-f]{64}$/), credential: z.strictObject({ keyId: zKeyId, envelope: zEnvelope }) }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx, input) => {
