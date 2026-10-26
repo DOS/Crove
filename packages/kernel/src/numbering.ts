@@ -50,6 +50,8 @@ export const numberVoid = defineCommand({
     reason: z.string().trim().min(1).max(NUMBER_VOID_REASON_MAX),
   }),
   risk: 'R2',
+  // Internal (#1563): it records a fact in the numbering tables and changes no document, posting or outside system.
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'kernel.number_allocation', id: input.allocationId }),
   handler: async (ctx, input): Promise<NumberVoided> => {
@@ -87,6 +89,8 @@ export const numberPolicySet = defineCommand({
     reset: z.enum(NUMBER_RESETS),
   }),
   risk: 'R2',
+  // Internal (#1563): it records a fact in the numbering tables and changes no document, posting or outside system.
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input): Promise<{ legalEntityId: string; docType: string; reset: NumberReset; previous: NumberReset }> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
