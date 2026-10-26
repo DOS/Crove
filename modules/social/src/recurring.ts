@@ -61,6 +61,7 @@ export const postRecurrenceSet = defineCommand({
   name: 'social.post.recurrence_set',
   input: z.strictObject({ postId: zId, recurrence: zSocialRecurrence }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -99,6 +100,7 @@ export const postRecurrenceClear = defineCommand({
   name: 'social.post.recurrence_clear',
   input: z.strictObject({ postId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input) => {
@@ -134,6 +136,7 @@ export const recurringNext = defineCommand({
   name: 'social.recurring.next',
   input: z.strictObject({ postId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<RecurringResult> => {

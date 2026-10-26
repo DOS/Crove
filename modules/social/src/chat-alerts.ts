@@ -112,6 +112,7 @@ export const chatAlertSave = defineCommand({
   name: 'social.chat_alert.save',
   input: zChatAlertSave,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -143,6 +144,7 @@ export const chatAlertRemove = defineCommand({
   name: 'social.chat_alert.remove',
   input: z.strictObject({}),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx) => {
     requireUser(ctx);
@@ -165,7 +167,9 @@ async function alertOf(ctx: CommandContext | QueryContext) {
 export const chatAlertTest = defineCommand({
   name: 'social.chat_alert.test',
   input: z.strictObject({}),
-  risk: 'R1',
+  // The worker posts the test line to the org's chat from its event: an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: ADMINS,
   handler: async (ctx) => {
     requireUser(ctx);
@@ -182,6 +186,7 @@ export const chatAlertTested = defineCommand({
   name: 'social.chat_alert.tested',
   input: z.strictObject({ code: z.enum(CHAT_ALERT_TEST_CODES).nullable() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     const done = await ctx.trx.updateTable('crove_social.chat_alert').set({ last_test_at: ctx.now, last_test_code: input.code }).where('org_id', '=', ctx.orgId).executeTakeFirst();
@@ -230,6 +235,7 @@ export const chatAlertReseal = defineCommand({
   name: 'social.chat_alert.reseal',
   input: z.strictObject({ alertId: zId, fromKeyId: zKeyId, fromEnvelopeSha256: z.string().regex(/^[0-9a-f]{64}$/), keyId: zKeyId, envelope: zEnvelope }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.chat_alert', id: input.alertId }),
   handler: async (ctx, input) => {

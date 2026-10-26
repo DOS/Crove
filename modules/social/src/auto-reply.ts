@@ -56,7 +56,9 @@ const requireSystem = (ctx: CommandContext) => {
 export const autoReplyBegin = defineCommand({
   name: 'social.auto_reply.begin',
   input: z.strictObject({ variantId: zId, likes: z.number().int().min(0).max(1e12) }),
-  risk: 'R1',
+  // Commits the provider call as started; the worker then makes it, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<AutoReplyWork> => {
@@ -97,6 +99,7 @@ export const autoReplyRecord = defineCommand({
   name: 'social.auto_reply.record',
   input: z.strictObject({ variantId: zId, callKey: z.string().min(1).max(300), result: zReplyResult }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {

@@ -310,7 +310,9 @@ async function limitedUntil(ctx: CommandContext, v: VariantRow): Promise<Date | 
 export const publishBegin = defineCommand({
   name: 'social.publish.begin',
   input: z.strictObject({ variantId: zId, provider: z.string().min(1).max(32), safety: zSafety, staleSeconds: z.number().int().min(60).max(86_400).optional() }),
-  risk: 'R1',
+  // Commits the provider call as started; the worker then makes it, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input): Promise<BeginResult> => {
     requireSystem(ctx);
@@ -478,6 +480,7 @@ export const publishRecord = defineCommand({
     connectionVersion: z.iso.datetime({ offset: true }).nullable().optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     requireSystem(ctx);
@@ -617,6 +620,7 @@ export const variantRetry = defineCommand({
   name: 'social.variant.retry',
   input: z.strictObject({ variantIds: zVariantIds }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);
@@ -659,6 +663,7 @@ export const variantResolve = defineCommand({
     url: z.url({ protocol: /^https?$/ }).max(2000).nullable().optional(),
   }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);

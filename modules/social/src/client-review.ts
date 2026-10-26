@@ -15,6 +15,7 @@ export const clientSettle = defineCommand({
   name: 'social.review.client_settle',
   input: z.strictObject({ eventId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình hệ thống mới thực hiện được việc này');

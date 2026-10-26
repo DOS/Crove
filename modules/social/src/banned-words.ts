@@ -77,6 +77,7 @@ export const bannedWordAdd = defineCommand({
   name: 'social.banned_word.add',
   input: zBannedWordAdd,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -106,6 +107,7 @@ export const bannedWordRemove = defineCommand({
   name: 'social.banned_word.remove',
   input: z.strictObject({ wordId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     requireUser(ctx);

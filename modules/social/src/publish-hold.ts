@@ -71,6 +71,7 @@ export const publishingHold = defineCommand({
   name: 'social.publishing.hold',
   input: z.strictObject({ reason: zHoldReason }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -126,6 +127,7 @@ export const publishingRelease = defineCommand({
   name: 'social.publishing.release',
   input: z.strictObject({}),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx) => {
     const userId = requireUser(ctx);

@@ -43,6 +43,7 @@ export const postRemindDue = defineCommand({
   name: 'social.post.remind_due',
   input: z.strictObject({ postId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post', id: input.postId }),
   handler: async (ctx, input): Promise<{ stage: AssignmentReminderStage | null }> => {

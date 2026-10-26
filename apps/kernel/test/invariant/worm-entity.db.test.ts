@@ -201,8 +201,13 @@ suite('WORM fact stream: legal entities on PostgreSQL (#1489)', () => {
     const batches = await readBatches(keys);
     const [first, second] = batches;
     expect(first?.version).toBe(2);
-    expect(second).toMatchObject({ version: 3, numbersFrom: second?.window.from, entitiesFrom: EPOCH });
-    batches.slice(2).forEach((b) => expect(b).toMatchObject({ version: 3, numbersFrom: b.window.from, entitiesFrom: b.window.from }));
+    // Version 3, or a later version that keeps the legal entity rows (version 4 adds the number allocations, #1594).
+    expect(second?.version).toBeGreaterThanOrEqual(3);
+    expect(second).toMatchObject({ numbersFrom: second?.window.from, entitiesFrom: EPOCH });
+    batches.slice(2).forEach((b) => {
+      expect(b.version).toBeGreaterThanOrEqual(3);
+      expect(b).toMatchObject({ numbersFrom: b.window.from, entitiesFrom: b.window.from });
+    });
     const refs = batches.flatMap((b) => b.rows.map(([ref]) => ref));
     // Each entity row once, those of rows made before the switch included; numbers are not anchored twice.
     for (const id of entries) expect(refs.filter((r) => r === `entity:journal:${orgId}:${id}`)).toHaveLength(1);
@@ -216,7 +221,10 @@ suite('WORM fact stream: legal entities on PostgreSQL (#1489)', () => {
     await age(30);
     expect(await writeArchive(worker, store, { lagSeconds: 600 })).toBeGreaterThan(0);
     const after = await readBatches((await store.list('chain/v1/')).slice(keys.length));
-    for (const b of after) expect(b).toMatchObject({ version: 3, entitiesFrom: b.window.from });
+    for (const b of after) {
+      expect(b.version).toBeGreaterThanOrEqual(3);
+      expect(b).toMatchObject({ entitiesFrom: b.window.from });
+    }
     expect(after.flatMap((b) => b.rows.map(([ref]) => ref))).toContain(`entity:journal:${orgId}:${late}`);
 
     const result = await verifyArchive(worker, store);

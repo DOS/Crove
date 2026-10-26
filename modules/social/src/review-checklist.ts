@@ -147,6 +147,7 @@ export const reviewChecklistSet = defineCommand({
   name: 'social.review_check.set',
   input: zReviewChecklistSet,
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input): Promise<{ items: ReviewCheck[] }> => {
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');

@@ -104,6 +104,7 @@ export const channelOptionRequest = defineCommand({
   name: 'social.channel_option.request',
   input: zRequest,
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.channel_connection', id: input.connectionId }),
   handler: async (ctx: CommandContext, input): Promise<ChannelOptionList> => {
@@ -193,6 +194,7 @@ export const channelOptionRecord = defineCommand({
     result: z.discriminatedUnion('ok', [z.strictObject({ ok: z.literal(true), options: zOptions }), z.strictObject({ ok: z.literal(false), error: z.enum(SOCIAL_CHANNEL_OPTION_ERRORS) })]),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.channel_option', id: input.optionId }),
   handler: async (ctx, input) => {

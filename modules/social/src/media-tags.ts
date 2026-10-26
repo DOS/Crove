@@ -71,6 +71,7 @@ export const mediaTag = defineCommand({
   name: 'social.media.tag',
   input: z.strictObject({ fileId: zId, tags: zTags }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input): Promise<{ fileId: string; tags: string[] }> => {
@@ -108,6 +109,7 @@ export const mediaUntag = defineCommand({
   name: 'social.media.untag',
   input: z.strictObject({ fileId: zId, tags: zTags }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   target: (input) => ({ type: 'kernel.file', id: input.fileId }),
   handler: async (ctx, input): Promise<{ fileId: string; tags: string[] }> => {

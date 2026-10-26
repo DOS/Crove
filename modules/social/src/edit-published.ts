@@ -150,6 +150,7 @@ export const variantEditPublished = defineCommand({
     checks: z.array(zId).max(SOCIAL_REVIEW_CHECKS_MAX).optional(),
   }),
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {
@@ -237,7 +238,9 @@ export const editBegin = defineCommand({
   name: 'social.edit.begin',
   // after: the last edit call the ask saw (null: none was made).
   input: z.strictObject({ variantId: zId, provider: z.string().min(1).max(32), after: z.string().min(1).max(300).nullable() }),
-  risk: 'R1',
+  // Commits the provider call as started; the worker then makes it, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<EditWork> => {
@@ -341,6 +344,7 @@ export const editRecord = defineCommand({
   name: 'social.edit.record',
   input: z.strictObject({ variantId: zId, callKey: z.string().min(1).max(300), result: zEditResult }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input) => {

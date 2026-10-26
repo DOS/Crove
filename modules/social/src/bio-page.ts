@@ -45,7 +45,9 @@ function requireUser(ctx: CommandContext): string {
 export const bioSave = defineCommand({
   name: 'social.bio.save',
   input: zBioSave,
-  risk: 'R1',
+  // Changes what the public page shows at once: visible to customers, an effect outside Crove (#1578).
+  risk: 'R2',
+  sideEffect: 'external',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);

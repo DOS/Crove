@@ -60,6 +60,7 @@ export const metricsCheckOutperforming = defineCommand({
   name: 'social.metrics.check_outperforming',
   input: z.strictObject({ variantId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.post_variant', id: input.variantId }),
   handler: async (ctx, input): Promise<{ state: OutperformState; ratio: string | null }> => {
