@@ -1732,6 +1732,10 @@ export const en = {
     approvedToast: 'Approved and posted {name}',
     rejectedToast: 'Rejected {name}',
     viewCustomer: 'View in customers',
+    // The pending list beside a proposal on a wide screen (#1514).
+    queue: 'Waiting for review',
+    queueEmpty: 'Nothing else is waiting for review.',
+    queueAll: 'Open the whole inbox',
     // Whose books the invoice goes to, with several legal entities (#1542).
     entity: 'Recorded in the books of',
     entitySuggest: 'You are working in {chosen}.',
