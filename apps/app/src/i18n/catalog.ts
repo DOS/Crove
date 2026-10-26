@@ -30,11 +30,16 @@ export type ArgumentMismatches<S, T, Prefix extends string = ''> = {
 export type AssertNone<T extends never> = T;
 
 // Checks of the types above, run by the typecheck: each mismatch below must be reported, and a plural in one
-// language may stand for a number in another.
+// language may stand for a number in another. Exported, and tagged @public for knip, so neither the linter nor knip
+// reports them as unused.
+/** @public */
 // @ts-expect-error: an argument was renamed.
 export type RenamedArgumentIsReported = AssertNone<ArgumentMismatches<{ a: 'x {n}' }, { a: 'y {m}' }>>;
+/** @public */
 // @ts-expect-error: a plain argument (a string) became a plural (a number).
 export type RetypedArgumentIsReported = AssertNone<ArgumentMismatches<{ a: 'x {n}' }, { a: '{n, plural, other {#}}' }>>;
+/** @public */
 // @ts-expect-error: a rich text tag was dropped, in a nested group.
 export type DroppedTagIsReported = AssertNone<ArgumentMismatches<{ g: { a: '<b>x</b>' } }, { g: { a: 'x' } }>>;
+/** @public */
 export type PluralForNumberIsAccepted = AssertNone<ArgumentMismatches<{ g: { a: '{n, number} x' } }, { g: { a: '{n, plural, other {# x}}' } }>>;

@@ -37,7 +37,7 @@ export function clientForOrg(slug: string): ContractRouterClient<typeof contract
   return createORPCClient(new RPCLink({ url: `${window.location.origin}/api/rpc`, headers: async () => requestHeaders(await accessToken(), slug) }));
 }
 
-export { ApiError, ClientError, isMfaRequired, isOrgAccessRevoked, isStepUpRequired, isUnauthenticated } from './errors.ts';
+export { ClientError, isStepUpRequired, isUnauthenticated } from './errors.ts';
 
 function sessionStore(): Storage | undefined {
   try {

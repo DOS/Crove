@@ -36,7 +36,6 @@ const zDigest = z.object({
   }),
   review: z.object({ total: zCount, items: z.array(z.object({ text: zText, path: zPostPath })).max(5) }).nullable(),
 });
-export type DigestMailData = z.infer<typeof zDigest>;
 
 // ISO weekday of a calendar date (1 = Monday).
 const WEEKDAYS = ['Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy', 'Chủ nhật'];

@@ -152,22 +152,47 @@ jobs:
           # shellcheck disable=SC2086
           pnpm exec vitest run --project db $PART_ARGS
 
-  # The required check: it passes only when the static job and every database part passed, so a failed, cancelled or
-  # skipped part fails it.
+  # Unused files, exports and dependencies, and dependencies used but not listed (knip, G5, #1602), over every workspace
+  # package, the marketing site included: its own job, with the whole workspace installed.
+  knip:
+    name: Unused files, exports and dependencies (knip)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.34.7 --no-fund --no-audit
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: knip
+        run: pnpm knip
+
+  # The required check: it passes only when the static job, knip and every database part passed, so a failed,
+  # cancelled or skipped part fails it.
   check:
     name: Lint, typecheck, test
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [static, db]
+    needs: [static, knip, db]
     if: always()
     steps:
       - name: Every part passed
         env:
           STATIC: ${{ needs.static.result }}
+          KNIP: ${{ needs.knip.result }}
           DB: ${{ needs.db.result }}
         run: |
-          echo "static: $STATIC, database tests: $DB"
-          test "$STATIC" = success && test "$DB" = success
+          echo "static: $STATIC, knip: $KNIP, database tests: $DB"
+          test "$STATIC" = success && test "$KNIP" = success && test "$DB" = success
 
   # The migrations and the definer hardening guard (External-tenant gate T17) on the Supabase Postgres image that
   # hosted Supabase runs (issue #179): its extensions, its roles and the supautils hooks, with migrations run as

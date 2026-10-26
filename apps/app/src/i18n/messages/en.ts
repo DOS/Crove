@@ -5485,4 +5485,5 @@ export const en = {
 } as const satisfies CatalogShape<Messages>;
 
 // Names every English message whose arguments differ from the Vietnamese one.
+/** @public A compile-time check (see i18n/catalog.ts). */
 export type EnglishArgumentMismatches = AssertNone<ArgumentMismatches<Messages, typeof en>>;

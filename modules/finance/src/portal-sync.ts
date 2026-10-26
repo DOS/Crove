@@ -36,8 +36,6 @@ export const PORTAL_LOGINS_PER_HOUR = 20;
 // The call ledger
 // ---------------------------------------------------------------------------------------------------------------------
 
-export const PORTAL_STEPS = ['captcha', 'login', 'list', 'xml'] as const;
-export type PortalStep = (typeof PORTAL_STEPS)[number];
 // Outcome classes of a call (never the portal's own text, which may echo what was sent).
 export const PORTAL_CALL_ERRORS = ['WRONG_CAPTCHA', 'WRONG_PASSWORD', 'ACCOUNT_LOCKED', 'RATE_LIMITED', 'BLOCKED', 'UNAVAILABLE', 'BAD_ANSWER', 'SESSION_EXPIRED', 'TOO_LARGE', 'TOO_SLOW'] as const;
 export type PortalCallError = (typeof PORTAL_CALL_ERRORS)[number];
