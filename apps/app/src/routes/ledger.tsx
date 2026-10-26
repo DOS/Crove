@@ -3,8 +3,7 @@
 // lock (#329) sits above the reports. The financial statements tab (issue #154) shows the DRAFT B01-DNN and B02-DNN
 // of the same period, with a workbook of its own.
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useParams } from '@tanstack/react-router';
-import { useState } from 'react';
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
 import { Alert } from '@crove/ui/components/alert';
 import { Badge } from '@crove/ui/components/badge';
@@ -19,12 +18,21 @@ import { DataTable, Empty, ErrorText, Notice, PageHeader, Spinner, TableSkeleton
 import { useFormat } from '../i18n/provider.tsx';
 import { apiFetch, errorMessage, getCurrentOrg, orpc } from '../lib/api.ts';
 import { exportQuery } from '../lib/legal-entity-choice.ts';
+import { withSearch } from '../lib/search.ts';
 import { partySearch } from '../lib/parties.ts';
-import { balanceSide, defaultLedgerPeriod, ledgerPeriodKey, switchLedgerKind, type LedgerPeriodChoice, type LedgerPeriodKind } from '../lib/ledger.ts';
+import {
+  LEDGER_TABS,
+  balanceSide,
+  defaultLedgerPeriod,
+  ledgerChoiceOf,
+  ledgerPeriodKey,
+  switchLedgerKind,
+  type LedgerPeriodChoice,
+  type LedgerPeriodKind,
+  type LedgerSearch,
+  type LedgerTab,
+} from '../lib/ledger.ts';
 import { yearOptions } from '../lib/vat.ts';
-
-type Tab = 'trialBalance' | 'generalLedger' | 'parties' | 'statements';
-const TABS: Tab[] = ['trialBalance', 'generalLedger', 'parties', 'statements'];
 
 interface PartyRow {
   partyId: string | null;
@@ -332,9 +340,22 @@ function Statements({ period }: { period: string }) {
 export function LedgerPage() {
   const t = useTranslations('ledger');
   const f = useFormat();
-  const [choice, setChoice] = useState<LedgerPeriodChoice>(() => defaultLedgerPeriod());
-  const [tab, setTab] = useState<Tab>('trialBalance');
-  const [picked, setPicked] = useState<string | null>(null);
+  const { slug } = useParams({ strict: false }) as { slug: string };
+  // The period, tab and account live in the address (#1513), so a reload or a shared link keeps them and Back returns
+  // to the previous one; a default is left out.
+  const search: LedgerSearch = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const setSearch = (next: Parameters<typeof withSearch<LedgerSearch>>[1]) => void navigate({ to: '/o/$slug/ledger', params: { slug }, search: withSearch(search, next) });
+  const defaultKey = ledgerPeriodKey(defaultLedgerPeriod());
+  const choice = (search.period ? ledgerChoiceOf(search.period) : null) ?? defaultLedgerPeriod();
+  const setChoice = (next: LedgerPeriodChoice) => {
+    const key = ledgerPeriodKey(next);
+    setSearch({ period: key === defaultKey ? undefined : key });
+  };
+  const tab: LedgerTab = search.report ?? 'trialBalance';
+  const setTab = (next: LedgerTab) => setSearch({ report: next === 'trialBalance' ? undefined : next });
+  const picked = search.account ?? null;
+  const setPicked = (account: string) => setSearch({ account });
   const period = ledgerPeriodKey(choice);
   // Every report and download of the page is for the entity chosen in the shell (#1280).
   const entity = useChosenEntity();
@@ -419,12 +440,12 @@ export function LedgerPage() {
           <ErrorText>{errorMessage(exportXlsx.error)}</ErrorText>
         </div>
       )}
-      <Tabs className="gap-4" value={tab} onValueChange={(value) => setTab(value as Tab)}>
+      <Tabs className="gap-4" value={tab} onValueChange={(value) => setTab(value as LedgerTab)}>
         {/* Four tabs are wider than a phone: the row scrolls inside its own box instead of the page (issue #615), with
             room below for the active tab's underline. */}
         <div className="-mb-1 overflow-x-auto pb-1">
           <TabsList variant="line" className="w-max min-w-full justify-start border-b">
-            {TABS.map((id) => (
+            {LEDGER_TABS.map((id) => (
               <TabsTrigger key={id} value={id} className="flex-none px-3">
                 {t(`tabs.${id}`)}
               </TabsTrigger>

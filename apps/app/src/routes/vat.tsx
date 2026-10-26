@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import type { VAT_RATES, VAT_WARNINGS } from '@crove/kernel-contract';
@@ -22,13 +23,16 @@ import {
   deductAmount,
   deductParams,
   defaultPeriod,
+  periodChoiceOf,
   periodKey,
+  periodSearch,
   switchKind,
   wholeDong,
   yearOptions,
   type DeductChoice,
   type PeriodChoice,
   type PeriodKind,
+  type PeriodSearch,
 } from '../lib/vat.ts';
 
 type Rate = (typeof VAT_RATES)[number];
@@ -351,11 +355,15 @@ export function VatPage() {
   // The org's tax code goes into the HTKK file (#332); without one the server refuses it, so the button waits for it.
   const org = useQuery(orpc.org.get.queryOptions());
   const taxCode = org.data?.taxCode ?? null;
-  // The org's filing period (#318) picks the kind the screen opens on, until the user picks another one.
+  // The org's filing period (#318) picks the kind the screen opens on, until the user picks another one. The pick lives
+  // in the address (#1513), left out when it is that default.
   const filing = org.data?.vatFilingPeriod ?? null;
-  const [picked, setPicked] = useState<PeriodChoice | null>(null);
-  const choice = picked ?? defaultPeriod(filing ?? 'month');
-  const setChoice = setPicked;
+  const { slug } = useParams({ strict: false }) as { slug: string };
+  const search: PeriodSearch = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const fallback = defaultPeriod(filing ?? 'month');
+  const choice = (search.period ? periodChoiceOf(search.period) : null) ?? fallback;
+  const setChoice = (next: PeriodChoice) => void navigate({ to: '/o/$slug/vat', params: { slug }, search: periodSearch(periodKey(next), periodKey(fallback)) });
   const period = periodKey(choice);
   // The VAT working of the entity chosen in the shell (#1280); the downloads and the filed mark follow it.
   const entity = useChosenEntity();
