@@ -39,7 +39,9 @@ async function revokeLive(ctx: CommandContext, userId: string): Promise<boolean>
 export const bookingFeedCreate = defineCommand({
   name: 'crm.booking_feed.create',
   input: z.strictObject({}),
+  // A row of Crove, undone by a revoke; the token leaves only in the answer to the member (#1579).
   risk: 'R1',
+  sideEffect: 'internal',
   access: HOSTS,
   handler: async (ctx) => {
     const userId = requireUser(ctx);
@@ -57,6 +59,7 @@ export const bookingFeedRevoke = defineCommand({
   name: 'crm.booking_feed.revoke',
   input: z.strictObject({}),
   risk: 'R1',
+  sideEffect: 'internal',
   access: HOSTS,
   handler: async (ctx) => ({ revoked: await revokeLive(ctx, requireUser(ctx)) }),
 });
@@ -70,6 +73,7 @@ export const bookingFeedRevokeForMember = defineCommand({
   name: 'crm.booking_feed.revoke_for_member',
   input: z.strictObject({ eventId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   handler: async (ctx, input) => {
     if (ctx.actor.type !== 'system') throw new DomainError('FORBIDDEN', 403, 'Chỉ tiến trình nền mới thực hiện được việc này');
