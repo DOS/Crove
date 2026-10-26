@@ -1,9 +1,10 @@
 // Nothing slides, zooms, fades or pulses for a user whose system asks for reduced motion (#1605; DESIGN.md §7). A
-// recorder in every page looks at the running animations and transitions on each frame and notes the ones that last
-// longer than a frame, the spinner aside (it is the only sign that work is running) and so are scroll-linked fades,
-// which follow the user's own scroll. The walk loads every sidebar screen and hovers its controls, and opens the
-// command palette and the account menu once; then, without the setting, the same palette and hover must show motion,
-// so the recorder is known to see it. Its own user, created confirmed without the sign-up form.
+// recorder in every page looks at the running animations and transitions every few milliseconds and notes the ones
+// that last longer than a frame, the spinner aside (it is the only sign that work is running) and so are scroll-linked
+// fades, which follow the user's own scroll. The walk loads every sidebar screen and hovers its controls, and opens the
+// command palette and the account menu once. A probe, an element given a one-second transition, shows the recorder
+// works: with the setting the stylesheet cuts it short and nothing is noted, without it the recorder notes it. Its own
+// user, created confirmed without the sign-up form.
 import { expect, test, type Page } from '@playwright/test';
 import { createOrg, newEmail, signInNewUser } from '../lib/session.ts';
 
@@ -26,9 +27,26 @@ function recordMotion(frameMs: number): void {
       const what = animation instanceof CSSAnimation ? animation.animationName : animation instanceof CSSTransition ? animation.transitionProperty : 'script';
       seen.add(`${what} (${Math.round(duration)} ms) on ${target?.tagName.toLowerCase()} "${(target?.getAttribute('class') ?? '').slice(0, 60)}"`);
     }
-    requestAnimationFrame(look);
   };
-  requestAnimationFrame(look);
+  // A timer rather than animation frames, which a headless browser may produce sparingly.
+  setInterval(look, 5);
+}
+
+const PROBE = 'motion-probe';
+
+// Adds an element with a one-second opacity transition and starts it; whether the recorder then noted it.
+async function probeSeen(page: Page): Promise<boolean> {
+  await page.evaluate((name) => {
+    const el = document.createElement('div');
+    el.className = name;
+    el.style.transition = 'opacity 1s linear';
+    document.body.append(el);
+    // Laid out at full opacity first, so the change below transitions.
+    el.getBoundingClientRect();
+    el.style.opacity = '0';
+  }, PROBE);
+  await page.waitForTimeout(300);
+  return (await motion(page)).some((m) => m.includes(PROBE));
 }
 
 const motion = (page: Page) => page.evaluate(() => [...(window as unknown as { __motion: Set<string> }).__motion]);
@@ -82,17 +100,16 @@ test('nothing on the sidebar screens slides, zooms, fades or pulses when the sys
       await openPaletteAndClose(page);
       await sidebar.locator('summary').click();
       await page.waitForTimeout(300);
+      expect(await probeSeen(page), 'the stylesheet cuts the probe short').toBe(false);
     }
     await note(path);
   }
   expect([...problems]).toEqual([]);
 
-  await test.step('without the setting, the palette and the hovered controls do move, so the recorder sees motion', async () => {
+  await test.step('without the setting, the recorder notes the probe moving', async () => {
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await page.goto([...links][0]!);
     await page.waitForLoadState('networkidle');
-    await hoverControls(page);
-    await openPaletteAndClose(page);
-    expect((await motion(page)).length).toBeGreaterThan(0);
+    expect(await probeSeen(page)).toBe(true);
   });
 });
