@@ -18,7 +18,7 @@ const UNANNOTATED_KERNEL: string[] = [];
 const POLICY_R3 = ['kernel.member.change_role', 'kernel.member.invite.create', 'kernel.member.remove', 'kernel.member.role.assign', 'kernel.member.role.revoke'];
 // The other modules' commands without a side effect, per module (follow-ups of #1563, one per lead): exact, so an
 // annotation lowers its module's number in the same PR and a new unannotated command fails.
-const UNANNOTATED_CEILING: Record<string, number> = { finance: 45, social: 158, crm: 12 };
+const UNANNOTATED_CEILING: Record<string, number> = { finance: 45, social: 158 };
 
 const all = (): Array<CommandDef<unknown, unknown>> =>
   [...kernelCommands, orgPurgeCommand({ store: {} as never }), ...financeCommands, ...socialCommands, ...crmCommands] as Array<CommandDef<unknown, unknown>>;
@@ -62,6 +62,22 @@ describe('declared risk and side effects (#1563)', () => {
     for (const name of ['kernel.agent.proposal.approve', 'kernel.proposal.remind', 'kernel.usage.defer']) {
       expect(byName.get(name), name).toMatchObject({ access: 'system' });
       expect(byName.get(name)?.agent, name).toBeUndefined();
+    }
+  });
+
+  it('declares the crm commands that mail a customer or change the public booking page as external effects, R2 (#1579)', () => {
+    const byName = new Map(all().map((c) => [c.name, c]));
+    for (const name of [
+      'crm.booking.cancel',
+      'crm.booking.confirm',
+      'crm.booking.manage',
+      'crm.booking.move',
+      'crm.booking.remind',
+      'crm.event_type.create',
+      'crm.event_type.set_active',
+      'crm.event_type.update',
+    ]) {
+      expect(byName.get(name), name).toMatchObject({ risk: 'R2', sideEffect: 'external' });
     }
   });
 

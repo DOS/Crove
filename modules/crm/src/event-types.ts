@@ -177,7 +177,10 @@ export const eventTypeList = defineQuery({
 export const eventTypeCreate = defineCommand({
   name: 'crm.event_type.create',
   input: zEventTypeInput,
-  risk: 'R1',
+  // It changes what the public booking page shows customers (visible outside Crove derives R2; #1579). No agent runs
+  // it.
+  risk: 'R2',
+  sideEffect: 'external',
   access: EDITORS,
   handler: async (ctx, input): Promise<EventType> => {
     const userId = userOf(ctx.actor);
@@ -201,7 +204,10 @@ export const eventTypeCreate = defineCommand({
 export const eventTypeUpdate = defineCommand({
   name: 'crm.event_type.update',
   input: zEventTypeUpdate,
-  risk: 'R1',
+  // It changes what the public booking page shows customers (visible outside Crove derives R2; #1579). No agent runs
+  // it.
+  risk: 'R2',
+  sideEffect: 'external',
   access: EDITORS,
   handler: async (ctx, input): Promise<EventType> => {
     const userId = userOf(ctx.actor);
@@ -247,7 +253,9 @@ export const eventTypeUpdate = defineCommand({
 export const eventTypeSetActive = defineCommand({
   name: 'crm.event_type.set_active',
   input: zEventTypeSetActive,
-  risk: 'R1',
+  // It opens or closes a type on the public booking page (visible outside Crove derives R2; #1579). No agent runs it.
+  risk: 'R2',
+  sideEffect: 'external',
   access: EDITORS,
   handler: async (ctx, input): Promise<EventType> => {
     const userId = userOf(ctx.actor);
