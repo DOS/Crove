@@ -9,6 +9,7 @@ import { Input } from '@crove/ui/components/input';
 import { Label } from '@crove/ui/components/label';
 import { NavIcon } from '@crove/ui/components/nav-icon';
 import { ErrorText, Field, FieldError, fieldControl, focusFirstInvalid, isEmailAddress, Logo, OrgLeftNotice, useFieldErrors } from '../components/ui.tsx';
+import { SupportLink } from '../components/support-link.tsx';
 import { client, clientForOrg, errorMessage, orglessClient, orpc, queryClient } from '../lib/api.ts';
 import { getConfig } from '../lib/auth.ts';
 import { signOut } from '../lib/session-actions.ts';
@@ -81,7 +82,7 @@ export function OnboardingPage() {
   }
 
   return (
-    <main className="flex min-h-full items-center justify-center bg-background px-4 py-16">
+    <main className="flex min-h-full flex-col items-center justify-center bg-background px-4 py-16">
       <Card className="block w-full max-w-md p-6">
         <OrgLeftNotice />
         <Logo />
@@ -184,6 +185,8 @@ export function OnboardingPage() {
           </button>
         </div>
       </Card>
+      {/* Help in the same place as on every screen of the app (DESIGN.md §7, 3.2.6; #1516). */}
+      <SupportLink className="mt-4 text-sm text-link" />
     </main>
   );
 }

@@ -13,6 +13,8 @@ test('the confirmation link signs the new user in, and a used link shows why it 
 
   await signOut(page);
   await expect(page).toHaveURL(/\/login$/);
+  // Help is in the same place as in the app, before anyone is signed in (DESIGN.md §7, 3.2.6; #1516).
+  await expect(page.getByRole('link', { name: 'Góp ý / Hỗ trợ' })).toHaveAttribute('href', 'mailto:support@e2e.test');
   await page.goto(await authLink(email, /confirm/i));
   await expect(page).toHaveURL(/\/login$/);
   await expect(page.getByRole('alert')).toContainText('Liên kết đã hết hạn hoặc đã được dùng');

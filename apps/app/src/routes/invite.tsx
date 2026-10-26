@@ -10,6 +10,7 @@ import { signOut } from '../lib/session-actions.ts';
 import { useFormat } from '../i18n/provider.tsx';
 import { forgetInvite, pendingInvite } from '../lib/invite.ts';
 import { LegalConsent } from '../components/legal-consent.tsx';
+import { SupportLink } from '../components/support-link.tsx';
 
 function errorCode(error: unknown): string | null {
   const code = (error as { code?: unknown } | null)?.code;
@@ -18,11 +19,13 @@ function errorCode(error: unknown): string | null {
 
 function Shell({ children }: { children: ReactNode }) {
   return (
-    <main className="flex min-h-full items-center justify-center bg-background px-4 py-16">
+    <main className="flex min-h-full flex-col items-center justify-center bg-background px-4 py-16">
       <Card className="block w-full max-w-md p-6">
         <Logo />
         {children}
       </Card>
+      {/* Help in the same place as on every screen of the app (DESIGN.md §7, 3.2.6; #1516). */}
+      <SupportLink className="mt-4 text-sm text-link" />
     </main>
   );
 }
