@@ -36,8 +36,9 @@
 --       ctx.numbering.void, behind the R2 command kernel.number.void. Owners and admins only (NUMBER_FORBIDDEN, 42501):
 --       no role permission fits yet. Writes number_void; nothing is deleted and no number is reused.
 --   crove_kernel.number_series_policy_set(entity, doc type, reset) -> previous reset
---       Owners and admins set the reset policy of a doc type in an entity. A change applies to the next allocation:
---       the series of the new period key starts at 1. Switch at a year boundary, so a year's numbers stay one series.
+--       Owners and admins set the reset policy of a doc type in an entity before its first number. Once the doc type
+--       has numbers its reset stays (NUMBER_POLICY_IN_USE, 55000): a switch would number a period again from 1 beside
+--       the numbers it holds. Restating the reset in force is accepted.
 --
 -- The vouchers. crove_finance.cash_voucher and journal_voucher gain number_period (the series' period key; default '-')
 -- and number_allocation_id, a foreign key to the allocation of their number (nullable only for rows written with
@@ -55,8 +56,8 @@
 -- books, and renumbering it would break both. For every (org, legal entity, doc type) that already has vouchers, the
 -- backfill writes a number_series_policy row with reset 'never', a '-' series whose next_number is the highest
 -- existing number + 1, and one number_allocation row per existing voucher (allocated_by and allocated_at are the
--- voucher's created_by and created_at). Those series simply continue: PT 41 follows PT 40. An owner may switch such a
--- series to 'yearly' at a year boundary (number_series_policy_set). Orgs and entities without vouchers get the
+-- voucher's created_by and created_at). Those series simply continue: PT 41 follows PT 40, and keep reset 'never' (a
+-- doc type with numbers keeps its reset; a dated switch is a follow-up). Orgs and entities without vouchers get the
 -- default, yearly reset. The vouchers' new columns are filled without an UPDATE (they are append-only): number_period
 -- through its column default '-', number_allocation_id through ALTER COLUMN ... TYPE uuid USING (...), a rewrite that
 -- fires no row trigger, as in 20261102180000. lock_timeout bounds the wait for the tables' locks.
@@ -278,6 +279,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
   v_org uuid := crove_kernel.ctx_org_id();
   v_entity uuid;
+  v_target text;
   v_reason text := pg_catalog.btrim(p_reason);
   v_id uuid;
 BEGIN
@@ -285,9 +287,13 @@ BEGIN
     RAISE EXCEPTION 'NO_CONTEXT' USING ERRCODE = '42501';
   END IF;
   PERFORM crove_kernel.assert_number_admin();
-  SELECT a.legal_entity_id INTO v_entity FROM crove_kernel.number_allocation a WHERE a.org_id = v_org AND a.id = p_allocation_id;
+  SELECT a.legal_entity_id, a.target_type INTO v_entity, v_target FROM crove_kernel.number_allocation a WHERE a.org_id = v_org AND a.id = p_allocation_id;
   IF v_entity IS NULL OR NOT crove_kernel.ctx_le_allowed(v_entity) THEN
     RAISE EXCEPTION 'NUMBER_ALLOCATION_NOT_FOUND' USING ERRCODE = '23503';
+  END IF;
+  -- A voucher keeps its number for good: it is reversed, never voided by number (review of #1573).
+  IF v_target IN ('finance.cash_voucher', 'finance.journal_voucher') THEN
+    RAISE EXCEPTION 'NUMBER_SERIES_RESERVED' USING ERRCODE = '42501';
   END IF;
   IF v_reason IS NULL OR pg_catalog.char_length(v_reason) NOT BETWEEN 1 AND 500 THEN
     RAISE EXCEPTION 'NUMBER_VOID_REASON' USING ERRCODE = '22023';
@@ -327,6 +333,20 @@ BEGIN
   END IF;
   SELECT p.reset INTO v_previous FROM crove_kernel.number_series_policy p
   WHERE p.org_id = v_org AND p.legal_entity_id = v_entity AND p.doc_type = p_doc_type FOR UPDATE;
+  -- Once the document type has numbers, its reset stays (review of #1573): switching it would number a period again
+  -- from 1 beside the numbers it already holds (never to yearly mid-year, or yearly to monthly). The series rows are
+  -- locked first, so an allocation in flight finishes, and is seen, before this decides.
+  IF p_reset IS DISTINCT FROM coalesce(v_previous, 'yearly') THEN
+    PERFORM 1 FROM crove_kernel.number_series s
+    WHERE s.org_id = v_org AND s.legal_entity_id = v_entity AND s.doc_type = p_doc_type FOR UPDATE;
+    IF EXISTS (
+      SELECT 1 FROM crove_kernel.number_series s
+      JOIN crove_kernel.number_allocation a ON a.org_id = s.org_id AND a.series_id = s.id
+      WHERE s.org_id = v_org AND s.legal_entity_id = v_entity AND s.doc_type = p_doc_type
+    ) THEN
+      RAISE EXCEPTION 'NUMBER_POLICY_IN_USE' USING ERRCODE = '55000';
+    END IF;
+  END IF;
   INSERT INTO crove_kernel.number_series_policy AS p (org_id, legal_entity_id, doc_type, reset, updated_by)
   VALUES (v_org, v_entity, p_doc_type, p_reset, crove_kernel.ctx_user_id())
   ON CONFLICT (org_id, legal_entity_id, doc_type)

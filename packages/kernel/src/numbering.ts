@@ -6,8 +6,8 @@
 // - kernel.number.void (R2, owners and admins): declares one allocated number void, with a reason. The database checks
 //   the actor and the allocation again (crove_kernel.void_number), and refuses a second void of the same number.
 // - kernel.number.policy.set (R2, owners and admins): the reset policy of a document type in a legal entity: 'yearly'
-//   (the default), 'monthly' or 'never'. A change applies from the next number: the series of the new period starts at
-//   1, so switch at a year boundary.
+//   (the default), 'monthly' or 'never', chosen before the document type's first number; once it has numbers, its
+//   reset stays (CONFLICT), so no period is numbered from 1 again beside numbers it already holds.
 // - kernel.number.allocations: the numbers of one series, newest first, each with its record and its void, if any.
 import { sql } from 'kysely';
 import { z } from 'zod';
@@ -67,6 +67,10 @@ export const numberVoid = defineCommand({
     if (!allocation) throw notFound();
     const alreadyVoid = () => new DomainError('CONFLICT', 409, 'Số chứng từ này đã được hủy');
     if (allocation.void_id) throw alreadyVoid();
+    // A voucher keeps its number for good: it is reversed, never voided by number (review of #1573).
+    if (allocation.target_type === 'finance.cash_voucher' || allocation.target_type === 'finance.journal_voucher') {
+      throw new DomainError('CONFLICT', 409, 'Không hủy riêng số của phiếu; hãy đảo bút toán của phiếu, phiếu giữ nguyên số');
+    }
     const { voidId } = await ctx.numbering.void({ allocationId: allocation.id, reason: input.reason }).catch((error: { code?: string; message?: string }) => {
       // A void of the same number committed after the read above.
       if (error?.code === '23505') throw alreadyVoid();
@@ -96,7 +100,15 @@ export const numberPolicySet = defineCommand({
     if (ctx.actor.type !== 'user') throw new DomainError('FORBIDDEN', 403, 'Chỉ người dùng mới thực hiện được việc này');
     const legalEntityId = await entityOf(ctx, input.legalEntityId);
     const { rows } = await sql<{ previous: NumberReset }>`
-      SELECT crove_kernel.number_series_policy_set(${legalEntityId}::uuid, ${input.docType}::text, ${input.reset}::text) AS previous`.execute(ctx.trx);
+      SELECT crove_kernel.number_series_policy_set(${legalEntityId}::uuid, ${input.docType}::text, ${input.reset}::text) AS previous`
+      .execute(ctx.trx)
+      .catch((error: { code?: string; message?: string }) => {
+        // The document type already has numbers (review of #1573).
+        if (error?.code === '55000' && error.message === 'NUMBER_POLICY_IN_USE') {
+          throw new DomainError('CONFLICT', 409, 'Loại chứng từ này đã cấp số; không đổi được cách đánh số lại nữa');
+        }
+        throw error;
+      });
     const previous = rows[0]?.previous ?? 'yearly';
     ctx.audit({ legalEntityId, docType: input.docType, reset: input.reset, previous });
     return { legalEntityId, docType: input.docType, reset: input.reset, previous };

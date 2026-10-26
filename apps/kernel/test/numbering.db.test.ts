@@ -188,8 +188,8 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     expect(await post(owner, orgId, 'cash_receipt', '2027-01-01')).toMatchObject({ number: 1, period: '2027' });
   });
 
-  it('lets owners and admins set the reset policy, and a monthly series starts each month at 1', async () => {
-    const set = (user: string, input: unknown) => rt.execute<{ previous: string; reset: string }>('kernel.number.policy.set', input, { actor: asUser(user), orgId });
+  it('lets owners and admins set the reset policy of a series not yet used, and a monthly series starts each month at 1', async () => {
+    const set = (user: string, input: unknown, org = orgId) => rt.execute<{ previous: string; reset: string }>('kernel.number.policy.set', input, { actor: asUser(user), orgId: org });
     await expect(set(member, { docType: 'finance.cash_voucher.cash_payment', reset: 'monthly' })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
     // The definer refuses a member on its own too.
     const c = new pg.Client({ connectionString: appUrl });
@@ -206,14 +206,28 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
       await c.end();
     }
     await expect(set(adminUser, { docType: 'finance.cash_voucher.cash_payment', reset: 'weekly' })).rejects.toMatchObject({ code: 'VALIDATION', status: 422 });
-    expect(await set(adminUser, { docType: 'finance.journal_voucher', reset: 'monthly' })).toMatchObject({ previous: 'yearly', reset: 'monthly' });
-    expect(await set(owner, { docType: 'finance.journal_voucher', reset: 'monthly' })).toMatchObject({ previous: 'monthly', reset: 'monthly' });
-    expect(await post(owner, orgId, 'journal', '2027-03-31')).toMatchObject({ number: 1, period: '2027-03' });
-    expect(await post(owner, orgId, 'journal', '2027-03-31')).toMatchObject({ number: 2, period: '2027-03' });
-    expect(await post(owner, orgId, 'journal', '2027-04-01')).toMatchObject({ number: 1, period: '2027-04' });
+
+    // A series that already gave out numbers keeps its reset: switching it would number a period again from 1 next to
+    // the numbers it already holds (review of #1573). Restating the reset in force is accepted.
+    await expect(set(owner, { docType: 'finance.journal_voucher', reset: 'monthly' })).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+    await expect(set(owner, { docType: 'finance.journal_voucher', reset: 'yearly' }, legacyOrg)).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+    await expect(set(owner, { docType: 'finance.cash_voucher.cash_receipt', reset: 'yearly' }, legacyOrg)).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+    expect(await set(owner, { docType: 'finance.cash_voucher.cash_receipt', reset: 'never' }, legacyOrg)).toMatchObject({ previous: 'never', reset: 'never' });
+    // The series goes on where it was, in the same never-resetting period.
+    expect(await post(owner, legacyOrg, 'cash_receipt', '2026-10-01')).toMatchObject({ number: 5, period: '-' });
+
+    // A new org, no voucher yet: its admins choose the reset before the first number.
+    const { orgId: fresh } = await createOrg(rt, asUser(owner), 'Sổ theo tháng');
+    await admin((c2) => c2.query(`INSERT INTO crove_kernel.tenant_member (org_id, user_id, role) VALUES ($1, $2, 'admin')`, [fresh, adminUser]));
+    expect(await set(adminUser, { docType: 'finance.journal_voucher', reset: 'monthly' }, fresh)).toMatchObject({ previous: 'yearly', reset: 'monthly' });
+    expect(await set(owner, { docType: 'finance.journal_voucher', reset: 'monthly' }, fresh)).toMatchObject({ previous: 'monthly', reset: 'monthly' });
+    expect(await post(owner, fresh, 'journal', '2027-03-31')).toMatchObject({ number: 1, period: '2027-03' });
+    expect(await post(owner, fresh, 'journal', '2027-03-31')).toMatchObject({ number: 2, period: '2027-03' });
+    expect(await post(owner, fresh, 'journal', '2027-04-01')).toMatchObject({ number: 1, period: '2027-04' });
+    await expect(set(owner, { docType: 'finance.journal_voucher', reset: 'yearly' }, fresh)).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
     const audit = await admin(
       async (c2) =>
-        (await c2.query(`SELECT detail ->> 'reset' AS reset, detail ->> 'previous' AS previous FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.number.policy.set' AND outcome = 'ok' ORDER BY occurred_at`, [orgId]))
+        (await c2.query(`SELECT detail ->> 'reset' AS reset, detail ->> 'previous' AS previous FROM crove_kernel.audit_event WHERE org_id = $1 AND command = 'kernel.number.policy.set' AND outcome = 'ok' ORDER BY occurred_at`, [fresh]))
           .rows,
     );
     expect(audit).toEqual([
@@ -222,32 +236,59 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
     ]);
   });
 
-  it('voids a number through kernel.number.void (R2, owners and admins) and lists the series with its voids', async () => {
-    const voucher = await post(owner, orgId, 'journal', '2027-04-02');
+  it('voids a number through kernel.number.void (R2, owners and admins), never a voucher number, and lists the series with its voids', async () => {
+    // A number of a series of its own, as a module would take one through ctx.numbering.
+    const allocate = async () => {
+      const c = new pg.Client({ connectionString: appUrl });
+      await c.connect();
+      try {
+        await c.query('BEGIN');
+        await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]);
+        const { rows } = await c.query<{ number: string; allocation_id: string }>(
+          `SELECT number::text AS number, allocation_id FROM crove_kernel.allocate_number(NULL, 'test.doc', '2027-04-02', 'test.record', $1::uuid)`,
+          [randomUUID()],
+        );
+        await c.query('COMMIT');
+        return { number: Number(rows[0]!.number), allocation: rows[0]!.allocation_id };
+      } finally {
+        await c.end();
+      }
+    };
+    const first = await allocate();
+    const second = await allocate();
     const exec = (user: string, input: unknown) => rt.execute<{ voidId: string; number: number; periodKey: string }>('kernel.number.void', input, { actor: asUser(user), orgId });
-    await expect(exec(member, { allocationId: voucher.allocation, reason: 'nhầm' })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    await expect(exec(member, { allocationId: second.allocation, reason: 'nhầm' })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
     await expect(exec(owner, { allocationId: randomUUID(), reason: 'nhầm' })).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
-    await expect(exec(owner, { allocationId: voucher.allocation, reason: ' ' })).rejects.toMatchObject({ code: 'VALIDATION', status: 422 });
-    expect(await exec(adminUser, { allocationId: voucher.allocation, reason: 'Chứng từ lập nhầm' })).toMatchObject({
-      number: voucher.number,
-      periodKey: '2027-04',
-    });
-    await expect(exec(owner, { allocationId: voucher.allocation, reason: 'lần hai' })).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+    await expect(exec(owner, { allocationId: second.allocation, reason: ' ' })).rejects.toMatchObject({ code: 'VALIDATION', status: 422 });
+    expect(await exec(adminUser, { allocationId: second.allocation, reason: 'Chứng từ lập nhầm' })).toMatchObject({ number: second.number, periodKey: '2027' });
+    await expect(exec(owner, { allocationId: second.allocation, reason: 'lần hai' })).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+    // A voucher number is never voided on its own: the voucher is reversed and keeps its number (review of #1573).
+    const voucher = await post(owner, orgId, 'journal', '2027-04-02');
+    await expect(exec(owner, { allocationId: voucher.allocation, reason: 'hủy phiếu' })).rejects.toMatchObject({ code: 'CONFLICT', status: 409 });
+    const c = new pg.Client({ connectionString: appUrl });
+    await c.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [owner, orgId]);
+      await expect(c.query(`SELECT crove_kernel.void_number($1, 'hủy phiếu')`, [voucher.allocation])).rejects.toMatchObject({
+        code: '42501',
+        message: 'NUMBER_SERIES_RESERVED',
+      });
+      await c.query('ROLLBACK');
+    } finally {
+      await c.end();
+    }
     // Another org's allocation is not found.
     const legacyVoucher = await admin(
-      async (c) => (await c.query<{ id: string }>('SELECT number_allocation_id AS id FROM crove_finance.journal_voucher WHERE org_id = $1 LIMIT 1', [legacyOrg])).rows[0]!.id,
+      async (c2) => (await c2.query<{ id: string }>('SELECT number_allocation_id AS id FROM crove_finance.journal_voucher WHERE org_id = $1 LIMIT 1', [legacyOrg])).rows[0]!.id,
     );
     await expect(exec(owner, { allocationId: legacyVoucher, reason: 'khác tổ chức' })).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
 
-    const page = await rt.query<NumberSeriesPage>(
-      'kernel.number.allocations',
-      { docType: 'finance.journal_voucher', periodKey: '2027-04' },
-      { actor: asUser(member), orgId },
-    );
-    expect(page).toMatchObject({ docType: 'finance.journal_voucher', periodKey: '2027-04', nextNumber: 3, more: false });
+    const page = await rt.query<NumberSeriesPage>('kernel.number.allocations', { docType: 'test.doc', periodKey: '2027' }, { actor: asUser(member), orgId });
+    expect(page).toMatchObject({ docType: 'test.doc', periodKey: '2027', nextNumber: 3, more: false });
     expect(page.items.map((i) => [i.number, i.targetType, i.void?.reason ?? null])).toEqual([
-      [2, 'finance.journal_voucher', 'Chứng từ lập nhầm'],
-      [1, 'finance.journal_voucher', null],
+      [second.number, 'test.record', 'Chứng từ lập nhầm'],
+      [first.number, 'test.record', null],
     ]);
     const empty = await rt.query<NumberSeriesPage>('kernel.number.allocations', { docType: 'test.none', periodKey: '2027' }, { actor: asUser(owner), orgId });
     expect(empty).toMatchObject({ nextNumber: 1, items: [], more: false });
