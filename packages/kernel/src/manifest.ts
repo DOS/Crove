@@ -1,7 +1,8 @@
 // The kernel module's manifest (plan §5.2, #1588): the tables it owns. A migration that adds or drops a table of these
 // schemas changes this list in the same PR; apps/kernel/test/manifest.db.test.ts checks it against the catalog.
 // crove_meta is the migration runner's bookkeeping, and crove_jobs the vendored pg-boss schema (its partitions are left
-// out: pg-boss creates one per queue at runtime).
+// out: pg-boss creates one per queue at runtime). The control-plane tables of crove_kernel (plan §3.6) are not listed
+// here: no source may name them (the control-plane-reads invariant), so the manifest test declares them itself.
 import { defineModule } from '@crove/kernel-contract';
 
 export const kernelManifest = defineModule({
@@ -17,8 +18,6 @@ export const kernelManifest = defineModule({
       'archive_batch',
       'archive_verification',
       'audit_event',
-      'auth_email_send',
-      'auth_session',
       'auth_session_org',
       'availability_rule',
       'budget_policy',
@@ -32,12 +31,9 @@ export const kernelManifest = defineModule({
       'extraction',
       'file',
       'file_upload',
-      'global_kill_switch',
       'idempotency_key',
-      'inbound_address',
       'inbound_drop',
       'inbound_message',
-      'inbound_pending',
       'kill_switch',
       'legal_entity',
       'mail_event',
@@ -65,7 +61,6 @@ export const kernelManifest = defineModule({
       'role_permission',
       'security_event',
       'security_signal_seen',
-      'stream_ticket',
       'task',
       'task_comment',
       'tax_obligation_done',
@@ -73,7 +68,6 @@ export const kernelManifest = defineModule({
       'tenant',
       'tenant_member',
       'usage_deferral',
-      'user_account',
       'worker_heartbeat',
     ],
     crove_meta: [

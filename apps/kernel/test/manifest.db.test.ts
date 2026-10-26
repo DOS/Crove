@@ -13,7 +13,14 @@ import { socialManifest } from '@crove/mod-social';
 
 const ADMIN = process.env.CROVE_TEST_ADMIN_URL;
 const MIGRATIONS = fileURLToPath(new URL('../../../supabase/migrations', import.meta.url));
+// The control plane's tables in crove_kernel (plan §3.6): no app, module or package source may name them (the
+// control-plane-reads invariant), so their owner is declared here, beside the module manifests.
+const CONTROL_PLANE: ModuleManifest = {
+  id: 'control-plane',
+  tables: { crove_kernel: ['auth_email_send', 'auth_session', 'global_kill_switch', 'inbound_address', 'inbound_pending', 'stream_ticket', 'user_account'] },
+};
 const MANIFESTS: Record<string, { manifest: ModuleManifest; file: string }> = {
+  'control-plane': { manifest: CONTROL_PLANE, file: 'apps/kernel/test/manifest.db.test.ts (CONTROL_PLANE)' },
   kernel: { manifest: kernelManifest, file: 'packages/kernel/src/manifest.ts' },
   finance: { manifest: financeManifest, file: 'modules/finance/src/manifest.ts' },
   social: { manifest: socialManifest, file: 'modules/social/src/manifest.ts' },
@@ -63,7 +70,7 @@ suite('module manifests against the catalog (#1588)', () => {
       for (const [schema, tables] of Object.entries(manifest.tables)) for (const t of tables) owners.set(`${schema}.${t}`, [...(owners.get(`${schema}.${t}`) ?? []), id]);
     }
     const unowned = catalog.filter((r) => !owners.has(`${r.schema}.${r.table}`)).map((r) => `${r.schema}.${r.table}`);
-    const schemaOwner = (schema: string) => Object.entries(MANIFESTS).find(([, m]) => schema in m.manifest.tables)?.[1].file ?? 'the manifest of the module that owns the schema';
+    const schemaOwner = (schema: string) => Object.entries(MANIFESTS).find(([, m]) => schema in m.manifest.tables)?.[1]?.file ?? 'the manifest of the module that owns the schema';
     expect(
       unowned.map((t) => `${t}: add it to ${schemaOwner(t.split('.')[0] as string)}`),
       'tables no module manifest names (plan §5.2): add each to its module manifest',
