@@ -28,5 +28,5 @@ export const SPLIT_UP = '(min-width: 84rem)';
 // How a script scrolls something into view: smoothly, unless the system asks for reduced motion (DESIGN.md §7, #1605).
 // The stylesheet's reduced-motion rule cannot reach a scroll whose behavior the script names.
 export function scrollBehavior(): ScrollBehavior {
-  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+  return typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 }

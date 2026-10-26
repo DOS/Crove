@@ -193,17 +193,19 @@
     @apply font-sans;
   }
   /* When the system asks for reduced motion (DESIGN.md §7, #1605), nothing slides, zooms, fades or pulses: every
-     animation and transition ends at once. A near-zero duration rather than none, so the animationend and
-     transitionend events that overlays wait for before unmounting still fire. Important declarations in this base
-     layer win over the utilities layer. The spinner keeps turning, being the only sign that work is running (WCAG
-     2.3.3 counts that as essential); scroll-linked fades follow the user's own scroll and keep working. */
+     animation and transition ends at once, with no delay before it. A near-zero duration rather than none, so the
+     animationend and transitionend events that overlays wait for before unmounting still fire. Important declarations in
+     this base layer win over the utilities layer. The spinner keeps turning, being the only sign that work is running
+     (WCAG 2.3.3 counts that as essential); scroll-linked fades follow the user's own scroll and keep working. */
   @media (prefers-reduced-motion: reduce) {
     *,
     ::before,
     ::after {
       animation-duration: 0.01ms !important;
+      animation-delay: 0s !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
+      transition-delay: 0s !important;
       scroll-behavior: auto !important;
     }
     [data-slot='spinner'] {
