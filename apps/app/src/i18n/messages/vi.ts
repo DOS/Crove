@@ -1729,6 +1729,10 @@ export const vi = {
     approvedToast: 'Đã duyệt và ghi sổ {name}',
     rejectedToast: 'Đã từ chối {name}',
     viewCustomer: 'Xem trong danh sách khách hàng',
+    // The pending list beside a proposal on a wide screen (#1514).
+    queue: 'Đề xuất chờ duyệt',
+    queueEmpty: 'Không còn đề xuất nào chờ duyệt.',
+    queueAll: 'Xem cả Hộp thư',
     // Whose books the invoice goes to, with several legal entities (#1542).
     entity: 'Ghi vào sổ của pháp nhân',
     entitySuggest: 'Bạn đang làm việc với {chosen}.',

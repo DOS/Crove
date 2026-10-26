@@ -28,11 +28,11 @@ import { proposalEntity } from '../lib/legal-entity-choice.ts';
 import { parseExchangeRate } from '../lib/exchange-rate.ts';
 import { reversalErrorMessage } from '../lib/reversal.ts';
 import { journalVoucherProblem } from '../lib/journal-voucher.ts';
-import { SM_UP, useMediaQuery } from '../lib/media.ts';
+import { SM_UP, SPLIT_UP, useMediaQuery } from '../lib/media.ts';
 import { toast } from '../lib/toast.ts';
 import { previewVoucherJournal, voucherProblem } from '../lib/vouchers.ts';
 import { partySearch } from '../lib/parties.ts';
-import { checksByConcern, nextPendingId, previousPendingId } from '../lib/review.ts';
+import { checksByConcern, nextAfterDecision, nextPendingId, previousPendingId, proposalName } from '../lib/review.ts';
 import { useReviewShortcuts, type ReviewHandlers } from '../lib/review-shortcuts.ts';
 import { useScrollRoom } from '../lib/scroll-room.ts';
 import { pollEvery, useStreamLive } from '../lib/stream-hook.ts';
@@ -286,13 +286,70 @@ function JournalVoucherCard({ voucher, code, slug, accountName }: { voucher: Jou
 }
 
 // One page per proposal: moving to the next one (J or N) mounts a fresh page, so no unsaved account, confirmation or
-// approval idempotency key carries over from the previous proposal.
+// approval idempotency key carries over from the previous proposal. On a wide screen the pending list stays beside it
+// (DESIGN.md §3.4, #1514); it lives outside the keyed page, so it does not reload from one proposal to the next.
 export function InboxDetailPage() {
   const { slug, id } = useParams({ strict: false }) as { slug: string; id: string };
-  return <InboxDetail key={id} slug={slug} id={id} />;
+  const split = useMediaQuery(SPLIT_UP);
+  const detail = <InboxDetail key={id} slug={slug} id={id} split={split} />;
+  if (!split) return detail;
+  return (
+    <div className="grid grid-cols-[15rem_minmax(0,1fr)] items-start gap-6">
+      <InboxQueue slug={slug} current={id} />
+      <div className="min-w-0">{detail}</div>
+    </div>
+  );
 }
 
-function InboxDetail({ slug, id }: { slug: string; id: string }) {
+// The proposals waiting for review, beside the open one: the open one is marked, and a click opens another. A region,
+// not a second navigation landmark: the app's menu stays the page's one navigation.
+function InboxQueue({ slug, current }: { slug: string; current: string }) {
+  const t = useTranslations('inboxDetail');
+  const f = useFormat();
+  const pending = useQuery(orpc.inbox.list.queryOptions({ input: { status: 'pending' } }));
+  const items = pending.data ?? [];
+  return (
+    <section aria-label={t('queue')} className="sticky top-6 max-h-[calc(100dvh-3rem)] overflow-y-auto rounded-lg border bg-card">
+      <p className="border-b px-3 py-2 text-xs font-medium text-subtle-foreground">{t('queue')}</p>
+      {pending.isPending ? (
+        <div className="p-3">
+          <Spinner />
+        </div>
+      ) : pending.error ? (
+        // A failed load is not an empty queue.
+        <div className="p-3">
+          <ErrorText>{errorMessage(pending.error)}</ErrorText>
+        </div>
+      ) : items.length === 0 ? (
+        <p className="px-3 py-3 text-xs text-subtle-foreground">{t('queueEmpty')}</p>
+      ) : (
+        <ul className="divide-y">
+          {items.map((item) => {
+            const open = item.id === current;
+            return (
+              <li key={item.id}>
+                <Link
+                  to="/o/$slug/inbox/$id"
+                  params={{ slug, id: item.id }}
+                  aria-current={open ? 'page' : undefined}
+                  className={`block px-3 py-2 text-sm hover:bg-muted/50 focus-visible:bg-muted/50 ${open ? 'bg-primary/10 font-medium text-foreground' : 'text-muted-foreground'}`}
+                >
+                  <span className="block truncate">{proposalName(item)}</span>
+                  {item.total ? <span className="block text-xs tabular-nums text-subtle-foreground">{f.money(item.total)}</span> : null}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <Link to="/o/$slug/inbox" params={{ slug }} className="block border-t px-3 py-2 text-xs text-link hover:underline">
+        {t('queueAll')}
+      </Link>
+    </section>
+  );
+}
+
+function InboxDetail({ slug, id, split }: { slug: string; id: string; split: boolean }) {
   const locale = useLocale();
   const navigate = useNavigate();
   const root = useTranslations();
@@ -364,9 +421,18 @@ function InboxDetail({ slug, id }: { slug: string; id: string }) {
   // once and its time starts when the Inbox is the page (holdUntil), so a slow screen change does not use it up
   // (#1547), and a navigation another one supersedes cannot lose it. The queries refetch in the background: waiting for
   // this page's refetches first is what used to outlast the toast. The shell's counters refetch now.
+  // With the list beside the proposal (#1514), the next one waiting opens in its place, as the reviewer moves down the
+  // list; without a next one, or on a narrower screen, the Inbox.
   const done = async (said: string) => {
+    let target: string | null = null;
+    if (split) {
+      const pendingKey = orpc.inbox.list.queryKey({ input: { status: 'pending' } });
+      const before = queryClient.getQueryData<{ id: string }[]>(pendingKey) ?? [];
+      const after = await queryClient.fetchQuery({ ...orpc.inbox.list.queryOptions({ input: { status: 'pending' } }), staleTime: 0 }).catch(() => null);
+      target = after ? nextAfterDecision(before, after, id) : null;
+    }
     void queryClient.invalidateQueries();
-    const going = navigate({ to: '/o/$slug/inbox', params: { slug } });
+    const going = target ? navigate({ to: '/o/$slug/inbox/$id', params: { slug, id: target } }) : navigate({ to: '/o/$slug/inbox', params: { slug } });
     toast(said, 'success', { holdUntil: going });
     await going;
   };
