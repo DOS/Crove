@@ -10,3 +10,4 @@ export * from './booking-feed.ts';
 
 export const crmCommands = [...eventTypeCommands, ...bookingCommands, ...bookingFeedCommands];
 export const crmQueries = [...eventTypeQueries, ...bookingQueries, ...crmAgentQueries, ...bookingFeedQueries];
+export { crmManifest } from './manifest.ts';

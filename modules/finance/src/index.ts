@@ -173,3 +173,4 @@ export const financeQueries = [
   ...misaGoodsCodeQueries,
   ...categorizationQueries,
 ];
+export { financeManifest } from './manifest.ts';
