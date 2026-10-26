@@ -258,7 +258,10 @@ const scheduled = (ctx: CommandContext, bookingId: string, startsAt: Date | stri
 export const bookingConfirm = defineCommand({
   name: 'crm.booking.confirm',
   input: z.strictObject({ bookingId: zId }),
-  risk: 'R1',
+  // It queues the confirmation mail to the visitor and the hosts (plan §4.7: a send derives R2; #1579). A system
+  // command, so the worker runs it as before.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input): Promise<Outcome> => {
     const booking = await ctx.trx
@@ -361,7 +364,9 @@ export interface BookingMailData {
 export const bookingMailData = defineCommand({
   name: 'crm.booking.mail_data',
   input: z.strictObject({ bookingId: zId, revision: z.number().int().min(0) }),
+  // It reads the merge data of a mail being sent and writes nothing (#1579).
   risk: 'R1',
+  sideEffect: 'none',
   access: 'system',
   handler: async (ctx, input): Promise<BookingMailData> => {
     const booking = await ctx.trx
@@ -496,7 +501,10 @@ async function moveHeld(
 export const bookingManage = defineCommand({
   name: 'crm.booking.manage',
   input: z.strictObject({ bookingId: zId, requestId: zId }),
-  risk: 'R1',
+  // It cancels or moves the booking and queues the mail to the visitor and the hosts (a send derives R2; #1579). A
+  // system command.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input): Promise<{ bookingId: string; outcome: ManageOutcome }> => {
     const booking = await lockBooking(ctx, input.bookingId);
@@ -542,7 +550,9 @@ async function hostBooking(ctx: CommandContext, bookingId: string): Promise<{ bo
 export const bookingCancel = defineCommand({
   name: 'crm.booking.cancel',
   input: zBookingCancel,
-  risk: 'R1',
+  // It queues the cancellation mail to the visitor (a send derives R2; #1579). No agent runs it.
+  risk: 'R2',
+  sideEffect: 'external',
   access: STAFF,
   handler: async (ctx, input): Promise<{ bookingId: string; status: 'cancelled' }> => {
     const { booking, type, held } = await hostBooking(ctx, input.bookingId);
@@ -555,7 +565,9 @@ export const bookingCancel = defineCommand({
 export const bookingMove = defineCommand({
   name: 'crm.booking.move',
   input: zBookingMove,
-  risk: 'R1',
+  // It queues the mail of the new time to the visitor (a send derives R2; #1579). No agent runs it.
+  risk: 'R2',
+  sideEffect: 'external',
   access: STAFF,
   handler: async (ctx, input): Promise<{ bookingId: string; startsAt: string }> => {
     const { booking, type, held } = await hostBooking(ctx, input.bookingId);
@@ -572,7 +584,9 @@ export const bookingMove = defineCommand({
 export const bookingRemind = defineCommand({
   name: 'crm.booking.remind',
   input: z.strictObject({ bookingId: zId, startsAt: z.iso.datetime(), lead: z.enum(['24h', '1h']) }),
-  risk: 'R1',
+  // It queues the reminder mail to the visitor (a send derives R2; #1579). A system command.
+  risk: 'R2',
+  sideEffect: 'external',
   access: 'system',
   handler: async (ctx, input): Promise<{ sent: boolean }> => {
     const booking = await ctx.trx
