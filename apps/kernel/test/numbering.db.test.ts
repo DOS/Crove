@@ -302,9 +302,11 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
       await c.query('SELECT crove_kernel.enter_context($1::uuid, $2::uuid)', [user, orgId]);
       return c;
     };
-    const first = await open(owner);
-    const change = await open(owner);
+    let first: pg.Client | undefined;
+    let change: pg.Client | undefined;
     try {
+      first = await open(owner);
+      change = await open(owner);
       // The first number of a new document type, under the default yearly reset, not committed yet.
       const { rows } = await first.query<{ period_key: string; number: string }>(
         `SELECT period_key, number::text AS number FROM crove_kernel.allocate_number(NULL, 'test.race', '2026-06-01', 'test.record', $1::uuid)`,
@@ -322,9 +324,9 @@ suite('gapless numbering on PostgreSQL (#1401)', () => {
       await first.query('COMMIT');
       await expect(switched).rejects.toMatchObject({ code: '55000', message: 'NUMBER_POLICY_IN_USE' });
     } finally {
-      await first.end();
-      await change.query('ROLLBACK').catch(() => {});
-      await change.end();
+      await first?.end().catch(() => {});
+      await change?.query('ROLLBACK').catch(() => {});
+      await change?.end().catch(() => {});
     }
   });
 });
