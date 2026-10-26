@@ -3,9 +3,10 @@
 // every table of a crove_* schema belongs to exactly one manifest, and every table a manifest names exists. Entities,
 // per-column classification, permissions and routes join the manifest later (§5.2).
 export interface ModuleManifest {
-  id: string;
+  readonly id: string;
   // Schema name -> the tables of that schema the module owns, sorted.
   tables: Readonly<Record<string, readonly string[]>>;
 }
 
-export const defineModule = <M extends ModuleManifest>(manifest: M): M => manifest;
+// `const` keeps each manifest's lists as readonly tuples, so an importer cannot change who owns a table.
+export const defineModule = <const M extends ModuleManifest>(manifest: M): M => manifest;
