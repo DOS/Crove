@@ -175,7 +175,7 @@ describe('columns()', () => {
   it('makes the listed columns internal and refuses a column given two classes', () => {
     expect(columns(['id', 'org_id'], { email: 'contact' })).toEqual({ id: 'internal', org_id: 'internal', email: 'contact' });
     expect(() => columns(['email'], { email: 'contact' })).toThrow(/email/);
-    expect(columns(['id'], { constructor: 'pii' })).toEqual({ id: 'internal', constructor: 'pii' });
+    expect(columns(['id'], Object.fromEntries([['constructor', 'pii' as const]]))).toEqual(Object.fromEntries([['id', 'internal'], ['constructor', 'pii']]));
     expect(DATA_CLASSES).toContain('national_id_if_individual');
   });
 });
