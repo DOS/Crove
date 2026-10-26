@@ -127,6 +127,9 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
 
   const entityOf = (table: string, id: string) =>
     admin(async (c) => (await c.query<{ e: string }>(`SELECT legal_entity_id AS e FROM ${table} WHERE org_id = $1 AND id = $2`, [org.orgId, id])).rows[0]?.e);
+  // The entity the Inbox list gives a proposal (#1543).
+  const listedEntityOf = async (proposalId: string) =>
+    (await runtime.query<Array<{ id: string; legalEntityId: string | null }>>('kernel.inbox.list', {}, as(owner))).find((p) => p.id === proposalId)?.legalEntityId;
 
   const payment = (date: string, amount: string, legalEntityId?: string): CashVoucherRequest => ({
     type: 'cash_payment',
@@ -304,6 +307,8 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
     const { proposalId } = await request('finance.voucher.record', fee);
     const asked = await runtime.query<{ voucher: { legalEntityId?: string } }>('kernel.inbox.get', { id: proposalId }, as(owner));
     expect(asked.voucher.legalEntityId).toBe(branch);
+    // The Inbox list names it too (#1543).
+    expect(await listedEntityOf(proposalId)).toBe(branch);
     const settled = await approve(proposalId);
     expect(settled.code).toBe('BN00001');
     expect(await entityOf('crove_finance.cash_voucher', settled.voucherId as string)).toBe(branch);
@@ -321,9 +326,12 @@ suite('finance books per legal entity, part 2b (#1280)', () => {
     );
     const proposal = await extractAndPropose({ runtime: workerRuntime, store, extractor: null, extract, today: () => '2026-10-13' }, org.orgId, fileId);
     const proposalId = String(proposal.proposalId);
+    // The Inbox list (#1543): no entity until a revision names one; approval would then use the approver's default.
+    expect(await listedEntityOf(proposalId)).toBeNull();
     // The editor names the branch: a new revision whose payload carries it.
     const edited = await rpc('inbox/edit', owner, { id: proposalId, revision: 1, legalEntityId: branch, idempotencyKey: randomUUID() });
     expect(edited).toMatchObject({ status: 200, body: { changed: true, revision: 2 } });
+    expect(await listedEntityOf(proposalId)).toBe(branch);
     expect((await rpc('inbox/edit', owner, { id: proposalId, revision: 2, legalEntityId: randomUUID(), idempotencyKey: randomUUID() })).body).toMatchObject({
       code: 'LEGAL_ENTITY_NOT_ALLOWED',
     });

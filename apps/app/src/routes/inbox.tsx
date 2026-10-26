@@ -11,11 +11,12 @@ import { Label } from '@crove/ui/components/label';
 import { TableCell, TableRow } from '@crove/ui/components/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@crove/ui/components/tabs';
 import { cn } from '@crove/ui/lib/utils';
-import { useChosenEntity } from '../components/entity-switcher.tsx';
+import { useChosenEntity, useLegalEntity } from '../components/entity-switcher.tsx';
 import { IntakePanel, useIntake } from '../components/intake.tsx';
 import { StepUpPrompt } from '../components/two-factor.tsx';
 import { DataTable, Empty, ErrorText, PageHeader, Spinner, TableSkeleton } from '../components/ui.tsx';
 import { client, errorMessage, isStepUpRequired, orpc, queryClient } from '../lib/api.ts';
+import { listedEntity } from '../lib/legal-entity-choice.ts';
 import { SM_UP, useMediaQuery } from '../lib/media.ts';
 import { useReviewShortcuts } from '../lib/review-shortcuts.ts';
 import { getConfig } from '../lib/auth.ts';
@@ -288,6 +289,11 @@ export function InboxPage() {
   const bulkNotSent = bulk ? bulk.total - bulk.progress.results.length : 0;
 
   const wide = useMediaQuery(SM_UP);
+  // Whose books each proposal goes to (#1543), when the caller sees several entities.
+  const books = useLegalEntity(slug);
+  const showEntity = books.entities.length > 1;
+  const entityOf = (item: InboxItem) =>
+    listedEntity(books.entities, item.legalEntityId, item.direction !== null || item.kind === VOUCHER_KIND || item.kind === JOURNAL_VOUCHER_KIND)?.name ?? '';
   // J and K (or N and P) move the focus through the list's proposals; Enter opens the focused one as any link does
   // (DESIGN.md §5.2, #1405). The keys mean the same on a proposal's own screen (useReviewShortcuts there).
   const moveFocus = (step: 1 | -1) => {
@@ -603,6 +609,7 @@ export function InboxPage() {
                 t('columns.document'),
                 t('columns.issueDate'),
                 t('columns.total'),
+                ...(showEntity ? [t('columns.entity')] : []),
                 t('columns.checks'),
                 t('columns.received'),
               ]}
@@ -625,6 +632,7 @@ export function InboxPage() {
                   </TableCell>
                   <TableCell className="px-4 py-3 text-muted-foreground">{f.date(item.issueDate)}</TableCell>
                   <TableCell className="px-4 py-3 text-right text-foreground tabular-nums">{f.money(item.total)}</TableCell>
+                  {showEntity && <TableCell className="px-4 py-3 text-muted-foreground">{entityOf(item)}</TableCell>}
                   <TableCell className="px-4 py-3">
                     {checkBadges(item)}
                   </TableCell>
@@ -646,6 +654,7 @@ export function InboxPage() {
                     </div>
                     <p className="text-xs text-subtle-foreground">{item.title}</p>
                     <p className="text-xs text-muted-foreground">{f.date(item.issueDate)}</p>
+                    {showEntity && entityOf(item) && <p className="text-xs text-muted-foreground">{entityOf(item)}</p>}
                     {item.status === 'expired' && item.expiredAfterDays !== null && (
                       <p className="text-xs text-warning">{t('expiredReason', { days: item.expiredAfterDays })}</p>
                     )}

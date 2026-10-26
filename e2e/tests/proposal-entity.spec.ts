@@ -1,7 +1,7 @@
 // A proposal's legal entity in the Inbox (issue #1542, the books per entity of #1280), end to end: with two entities,
 // an e-invoice's proposal shows the entity whose books it goes to (the default one until a revision names another),
 // offers the entity chosen in the sidebar, moves there in one click, and once approved its entry is in that entity's
-// journal only.
+// journal only. The Inbox list names the entity beside the proposal (#1543).
 import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import { sql } from '../lib/db.ts';
@@ -19,6 +19,8 @@ test('an invoice proposal moves to the entity chosen in the sidebar and posts in
   const slug = await createOrg(page, ORG);
   const nav = page.getByRole('navigation');
   const switcher = page.getByRole('complementary').getByLabel('Pháp nhân', { exact: true });
+  // The proposal's row in the Inbox list.
+  const row = page.getByRole('main').getByRole('row').filter({ has: page.getByRole('link', { name: SELLER }) });
 
   await test.step('add a second entity and work in it', async () => {
     await nav.getByRole('link', { name: 'Cài đặt' }).click();
@@ -34,6 +36,7 @@ test('an invoice proposal moves to the entity chosen in the sidebar and posts in
     await nav.getByRole('link', { name: 'Hộp thư chứng từ' }).click();
     await page.locator('input[type=file]').setInputFiles(INVOICE);
     await expect(page.getByRole('link', { name: SELLER })).toBeVisible({ timeout: 60_000 });
+    await expect(row.getByRole('cell', { name: ORG, exact: true })).toBeVisible();
     await page.getByRole('link', { name: SELLER }).click();
     const field = page.getByLabel('Ghi vào sổ của pháp nhân');
     await expect(field.locator('option:checked')).toHaveText(ORG);
@@ -42,6 +45,12 @@ test('an invoice proposal moves to the entity chosen in the sidebar and posts in
     await page.getByRole('button', { name: `Chuyển hóa đơn sang ${BRANCH}` }).click();
     await expect(field.locator('option:checked')).toHaveText(BRANCH);
     await expect(page.getByText(`Bạn đang làm việc với ${BRANCH}.`)).toHaveCount(0);
+  });
+
+  await test.step('the Inbox list names the entity it moved to', async () => {
+    await nav.getByRole('link', { name: 'Hộp thư chứng từ' }).click();
+    await expect(row.getByRole('cell', { name: BRANCH, exact: true })).toBeVisible();
+    await page.getByRole('link', { name: SELLER }).click();
   });
 
   await test.step('approve it', async () => {
