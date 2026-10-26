@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Outlet, useLocation, useNavigate, useParams } from '@tanstack/react-router';
 import { useTranslations } from 'use-intl';
@@ -20,6 +20,7 @@ import { proposalName } from '../lib/review.ts';
 import { THEMES } from '../lib/theme.ts';
 import { useThemeSetting } from '../lib/theme-runtime.ts';
 import { signOut } from '../lib/session-actions.ts';
+import { useScrollRoom } from '../lib/scroll-room.ts';
 import { SAFETY_POLL_MS, pollEvery, useInvalidationStream, useStreamLive } from '../lib/stream-hook.ts';
 import { unreadLabel } from '../lib/social-notifications.ts';
 import { useNotifications } from './social-notifications.tsx';
@@ -46,6 +47,9 @@ export function OrgLayout() {
   const [lastApp, setLastApp] = useState<AppId>('home');
   if (screenApp && screenApp !== lastApp) setLastApp(screenApp);
   const [menuOpen, setMenuOpen] = useState(false);
+  // The phone's header sticks to the top: a control the keyboard focuses stops below it, never under it (#1575).
+  const phoneHeader = useRef<HTMLElement>(null);
+  useScrollRoom(phoneHeader, 'top');
   const { slug } = useParams({ strict: false }) as { slug: string };
   const navigate = useNavigate();
   const t = useTranslations('nav');
@@ -215,7 +219,7 @@ export function OrgLayout() {
       <aside className="sticky top-0 hidden h-screen w-72 shrink-0 border-r bg-sidebar md:flex">{shellNav()}</aside>
       <div className="min-w-0 flex-1">
         {/* The phone's header (issue #1245): the menu button, the org's name and the palette; the rest is in the drawer. */}
-        <header className="sticky top-0 z-10 flex items-center gap-2 border-b bg-sidebar px-3 py-2 md:hidden">
+        <header ref={phoneHeader} className="sticky top-0 z-10 flex items-center gap-2 border-b bg-sidebar px-3 py-2 md:hidden">
           <button
             type="button"
             onClick={() => setMenuOpen(true)}
