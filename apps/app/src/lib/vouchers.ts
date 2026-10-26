@@ -7,11 +7,14 @@ import {
   isInflow,
   needsParty,
   VOUCHER_MAX_LINES,
+  VOUCHER_TYPES,
   type CashVoucherPage,
   type VoucherCursor,
   type VoucherType,
 } from '@crove/kernel-contract';
+import { z } from 'zod';
 import type { ChartAccount } from './accounts.ts';
+import { readSearch, type Defined } from './search.ts';
 import type { Translate } from '../i18n/runtime.ts';
 
 export { VOUCHER_KIND } from '@crove/kernel-contract';
@@ -123,3 +126,9 @@ export function nextVoucherCursor(page: CashVoucherPage): VoucherCursor | undefi
   const last = page.items.at(-1);
   return page.more && last ? { date: last.date, id: last.id } : undefined;
 }
+
+// ?type=&from=&to= of the vouchers list (#1513): one type and a date range, each left out when not set.
+const zDay = z.string().refine(isCalendarDate).optional().catch(undefined);
+const zVouchersSearch = z.object({ type: z.enum(VOUCHER_TYPES).optional().catch(undefined), from: zDay, to: zDay });
+export type VouchersSearch = Defined<z.output<typeof zVouchersSearch>>;
+export const parseVouchersSearch = (search: Record<string, unknown>): VouchersSearch => readSearch(zVouchersSearch, search);

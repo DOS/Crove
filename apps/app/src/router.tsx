@@ -43,6 +43,11 @@ import { SocialPlanPrintPage } from './routes/social-plan-print.tsx';
 import { parsePlanSearch } from './lib/social-plan-export.ts';
 import { parseSocialSearch } from './lib/social.ts';
 import { parseJournalSearch, parseTextSearch } from './lib/search.ts';
+import { parseTasksSearch } from './lib/agents.ts';
+import { parseLedgerSearch } from './lib/ledger.ts';
+import { parseInboxSearch } from './lib/review.ts';
+import { parsePeriodSearch } from './lib/vat.ts';
+import { parseVouchersSearch } from './lib/vouchers.ts';
 import { SocialChannelsPage } from './routes/social-channels.tsx';
 import { OAuthCallbackPage } from './routes/social-oauth.tsx';
 import { SocialComposePage, SocialPostPage } from './routes/social-post.tsx';
@@ -219,7 +224,8 @@ const orgIndexRoute = createRoute({
 
 // What waits for the user in this org today (#1249), first in the menu; opening an org still lands on its Inbox.
 const overviewRoute = createRoute({ getParentRoute: () => orgRoute, path: 'overview', component: OverviewPage });
-export const inboxRoute = createRoute({ getParentRoute: () => orgRoute, path: 'inbox', component: InboxPage });
+// ?status= keeps the Inbox tab other than pending (#1513).
+export const inboxRoute = createRoute({ getParentRoute: () => orgRoute, path: 'inbox', validateSearch: parseInboxSearch, component: InboxPage });
 export const inboxDetailRoute = createRoute({ getParentRoute: () => orgRoute, path: 'inbox/$id', component: InboxDetailPage });
 // Screens of the finance module; a deployment without it (CROVE_MODULES) sends them to the inbox.
 const requireFinance = ({ params }: { params: { slug: string } }) => {
@@ -238,16 +244,16 @@ const customersRoute = createRoute({
   component: CustomersPage,
 });
 const journalRoute = createRoute({ getParentRoute: () => orgRoute, path: 'journal', beforeLoad: requireFinance, validateSearch: parseJournalSearch, component: JournalPage });
-// Cash and bank vouchers (issue #327).
-const vouchersRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vouchers', beforeLoad: requireFinance, component: VouchersPage });
+// Cash and bank vouchers (issue #327); ?type=&from=&to= keep the list's filters (#1513).
+const vouchersRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vouchers', beforeLoad: requireFinance, validateSearch: parseVouchersSearch, component: VouchersPage });
 // The register of fixed assets and prepaid costs (issue #919).
 const fixedAssetsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'fixed-assets', beforeLoad: requireFinance, component: FixedAssetsPage });
-// VAT working per month or quarter (issue #316).
-const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', beforeLoad: requireFinance, component: VatPage });
+// VAT working per month or quarter (issue #316); ?period= keeps the one picked (#1513), as on the portal list.
+const vatRoute = createRoute({ getParentRoute: () => orgRoute, path: 'vat', beforeLoad: requireFinance, validateSearch: parsePeriodSearch, component: VatPage });
 // Reconciliation with the tax portal's purchase list (issue #465).
-const portalListRoute = createRoute({ getParentRoute: () => orgRoute, path: 'portal-invoices', beforeLoad: requireFinance, component: PortalListPage });
-// Ledger reports per month, quarter or year (issue #321).
-const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', beforeLoad: requireFinance, component: LedgerPage });
+const portalListRoute = createRoute({ getParentRoute: () => orgRoute, path: 'portal-invoices', beforeLoad: requireFinance, validateSearch: parsePeriodSearch, component: PortalListPage });
+// Ledger reports per month, quarter or year (issue #321); ?period=&report=&account= keep what is shown (#1513).
+const ledgerRoute = createRoute({ getParentRoute: () => orgRoute, path: 'ledger', beforeLoad: requireFinance, validateSearch: parseLedgerSearch, component: LedgerPage });
 // Bank statements per bank account (issue #326). ?account=1121&month=2026-09 opens that account and month (the Inbox
 // links its open lines here).
 const bankRoute = createRoute({
@@ -338,7 +344,8 @@ const personalDataRoute = createRoute({ getParentRoute: () => orgRoute, path: 'p
 // In-app notifications of the kernel and finance (#671).
 const notificationsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'notifications', component: NotificationsPage });
 const agentsRoute = createRoute({ getParentRoute: () => orgRoute, path: 'agents', component: AgentsPage });
-const tasksRoute = createRoute({ getParentRoute: () => orgRoute, path: 'tasks', component: TasksPage });
+// ?filter= keeps the tab of the tasks list (#1513).
+const tasksRoute = createRoute({ getParentRoute: () => orgRoute, path: 'tasks', validateSearch: parseTasksSearch, component: TasksPage });
 // The bookings of the public booking page (#1320), with the crm module; a deployment without it goes to the inbox.
 const bookingsRoute = createRoute({
   getParentRoute: () => orgRoute,

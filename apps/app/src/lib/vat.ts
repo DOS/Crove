@@ -1,6 +1,8 @@
 // The VAT working screen's period picker (issue #316): a month ("2026-09") or a quarter ("2026-Q3"). The server checks
 // the period again (zVatPeriod); these helpers only build it and pick a sensible default.
+import { z } from 'zod';
 import { toUnits } from './decimal.ts';
+import { readSearch, type Defined } from './search.ts';
 import { normalizeAmount } from './vouchers.ts';
 
 export type PeriodKind = 'month' | 'quarter';
@@ -35,6 +37,28 @@ export function switchKind(choice: PeriodChoice, kind: PeriodKind): PeriodChoice
 export function yearOptions(today: Date = new Date()): number[] {
   const year = today.getFullYear();
   return Array.from({ length: 6 }, (_, i) => year - i);
+}
+
+// A month or quarter key as the address carries it, read back into a choice (#1513); null for anything else and for a
+// year the picker does not offer.
+export function periodChoiceOf(key: string, today: Date = new Date()): PeriodChoice | null {
+  const match = /^(\d{4})-(?:(\d{2})|Q([1-4]))$/.exec(key);
+  if (!match) return null;
+  const year = Number(match[1]);
+  if (!yearOptions(today).includes(year)) return null;
+  if (match[3]) return { kind: 'quarter', year, index: Number(match[3]) };
+  const index = Number(match[2]);
+  return index >= 1 && index <= 12 ? { kind: 'month', year, index } : null;
+}
+
+// ?period= of the VAT and portal list screens (#1513): a month or a quarter, left out for the default one.
+const zPeriodSearch = z.object({ period: z.string().refine((key) => periodChoiceOf(key) !== null).optional().catch(undefined) });
+export type PeriodSearch = Defined<z.output<typeof zPeriodSearch>>;
+export const parsePeriodSearch = (search: Record<string, unknown>): PeriodSearch => readSearch(zPeriodSearch, search);
+
+// The search to write for a picked period: none when it is the default, so the address shows only a choice.
+export function periodSearch(key: string, defaultKey: string): PeriodSearch {
+  return key === defaultKey ? {} : { period: key };
 }
 
 // What the HTKK XML puts in [25] (#692, #917): 0 for the accountant to fill in HTKK, all of [24], or the working's

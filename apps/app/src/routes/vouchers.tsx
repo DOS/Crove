@@ -1,5 +1,5 @@
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query';
-import { Link, useParams } from '@tanstack/react-router';
+import { Link, useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useTranslations } from 'use-intl';
 import {
@@ -29,6 +29,7 @@ import { exportQuery } from '../lib/legal-entity-choice.ts';
 import { accountLabel, pickableAccounts } from '../lib/accounts.ts';
 import { isZeroAmount } from '../lib/decimal.ts';
 import { localToday } from '../lib/reversal.ts';
+import { withSearch } from '../lib/search.ts';
 import {
   canEnterVoucher,
   cashAccountChoices,
@@ -39,6 +40,7 @@ import {
   voucherProblem,
   voucherTotal,
   type VoucherForm,
+  type VouchersSearch,
 } from '../lib/vouchers.ts';
 
 interface Line {
@@ -330,9 +332,16 @@ export function VouchersPage() {
   const t = useTranslations('vouchers');
   const f = useFormat();
   const { slug } = useParams({ strict: false }) as { slug: string };
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const [type, setType] = useState<VoucherType | ''>('');
+  // The filters live in the address (#1513), each left out when not set.
+  const search: VouchersSearch = useSearch({ strict: false });
+  const navigate = useNavigate();
+  const setSearch = (next: Parameters<typeof withSearch<VouchersSearch>>[1]) => void navigate({ to: '/o/$slug/vouchers', params: { slug }, search: withSearch(search, next) });
+  const from = search.from ?? '';
+  const to = search.to ?? '';
+  const type: VoucherType | '' = search.type ?? '';
+  const setFrom = (value: string) => setSearch({ from: value || undefined });
+  const setTo = (value: string) => setSearch({ to: value || undefined });
+  const setType = (value: VoucherType | '') => setSearch({ type: value || undefined });
   const [entering, setEntering] = useState(false);
   const org = useQuery(orpc.org.get.queryOptions());
   // The vouchers of the entity chosen in the shell (#1280).
