@@ -109,7 +109,7 @@ docker compose exec db psql -U postgres -c "SELECT verified_at, ok, batches, row
 | `row_added` | A row sits in a window that was already archived: it was inserted with a backdated time. |
 | `chain_broken`, `window_gap`, `batch_hash_mismatch`, `chain_hash_mismatch`, `object_unreadable`, `object_out_of_order` | A batch in the store was changed, removed or replaced. With `s3` and Object Lock this should be impossible; check the bucket's lock and access logs. |
 | `object_missing` | The database recorded a batch the store does not have. |
-| `version_regressed`, `numbers_gap`, `entities_gap`, `allocations_gap` | A batch of a lower version follows a higher one, or a batch does not take its numbers (version 2 and 3) legal entities (version 3) or number allocations (version 4) from where the last one stopped: a worker older than #977, #1489 or #1594 wrote to the archive, or a batch was replaced. The numbers or entities in that stretch are not anchored. Find the deploy that ran the old worker. |
+| `version_regressed`, `numbers_gap`, `entities_gap`, `allocations_gap` | A batch of a lower version follows a higher one, or a batch does not take its numbers (versions 2 and up), legal entities (versions 3 and up) or number allocations (version 4) from where the last one stopped: a worker older than #977, #1489 or #1594 wrote to the archive, or a batch was replaced. The numbers or entities in that stretch are not anchored. Find the deploy that ran the old worker. |
 | `record_mismatch` | `crove_kernel.archive_batch` disagrees with the store. The store is the authority. |
 
 **What to do**
