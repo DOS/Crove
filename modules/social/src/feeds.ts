@@ -65,6 +65,7 @@ export const feedAdd = defineCommand({
   name: 'social.feed.add',
   input: z.strictObject({ url: zUrl, connectionIds: zConnections }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -90,6 +91,7 @@ export const feedUpdate = defineCommand({
   name: 'social.feed.update',
   input: z.strictObject({ feedId: zId, connectionIds: zConnections.optional(), paused: z.boolean().optional() }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'social.feed', id: input.feedId }),
   handler: async (ctx, input) => {
@@ -115,6 +117,7 @@ export const feedRemove = defineCommand({
   name: 'social.feed.remove',
   input: z.strictObject({ feedId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'social.feed', id: input.feedId }),
   handler: async (ctx, input) => {
@@ -232,6 +235,7 @@ export const feedRecord = defineCommand({
   name: 'social.feed.record',
   input: z.strictObject({ feedId: zId, result: zFeedResult }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: 'system',
   target: (input) => ({ type: 'social.feed', id: input.feedId }),
   handler: async (ctx, input): Promise<{ drafted: number; paused: boolean }> => {

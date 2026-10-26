@@ -193,6 +193,7 @@ export const channelAccessSet = defineCommand({
   name: 'social.channel_access.set',
   input: zSocialChannelAccessSet,
   risk: 'R2',
+  sideEffect: 'internal',
   access: ADMINS,
   target: (input) => ({ type: 'kernel.user', id: input.userId }),
   handler: async (ctx, input) => {

@@ -59,6 +59,7 @@ export const calendarNoteSave = defineCommand({
     color: z.enum(SOCIAL_LABEL_COLORS).optional(),
   }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -91,6 +92,7 @@ export const calendarNoteRemove = defineCommand({
   name: 'social.calendar_note.remove',
   input: z.strictObject({ noteId: zId }),
   risk: 'R1',
+  sideEffect: 'internal',
   access: MEMBERS,
   handler: async (ctx, input) => {
     requireUser(ctx);

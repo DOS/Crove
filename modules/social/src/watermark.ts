@@ -34,6 +34,7 @@ export const watermarkSave = defineCommand({
   name: 'social.watermark.save',
   input: zWatermarkSave,
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx, input) => {
     const userId = requireUser(ctx);
@@ -66,6 +67,7 @@ export const watermarkRemove = defineCommand({
   name: 'social.watermark.remove',
   input: z.strictObject({}),
   risk: 'R1',
+  sideEffect: 'internal',
   access: ADMINS,
   handler: async (ctx) => {
     requireUser(ctx);
